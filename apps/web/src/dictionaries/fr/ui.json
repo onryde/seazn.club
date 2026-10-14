@@ -4466,6 +4466,8 @@
   "pad.boardgame.tiebreak.score.narrow": "1½–½",
   "pad.boardgame.tiebreak.score.none": "Pas de score",
   "pad.boardgame.tiebreak.score.title": "Score du départage (facultatif)",
+  "pad.boardgame.tiebreak.who.black": "Noirs",
+  "pad.boardgame.tiebreak.who.white": "Blancs",
   "pad.boardgame.tiebreak.winner.title": "Qui a gagné le départage ?",
   "pad.carrom.action.adjustCredit": "Ajustement — crédit",
   "pad.carrom.action.adjustDeduct": "Ajustement — déduction",

@@ -4122,6 +4122,8 @@ export type DictionaryKey =
   | "pad.boardgame.tiebreak.score.narrow"
   | "pad.boardgame.tiebreak.score.none"
   | "pad.boardgame.tiebreak.score.title"
+  | "pad.boardgame.tiebreak.who.black"
+  | "pad.boardgame.tiebreak.who.white"
   | "pad.boardgame.tiebreak.winner.title"
   | "pad.carrom.action.adjustCredit"
   | "pad.carrom.action.adjustDeduct"

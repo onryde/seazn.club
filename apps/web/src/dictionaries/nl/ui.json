@@ -4466,6 +4466,8 @@
   "pad.boardgame.tiebreak.score.narrow": "1½–½",
   "pad.boardgame.tiebreak.score.none": "Geen stand",
   "pad.boardgame.tiebreak.score.title": "Tiebreakstand (optioneel)",
+  "pad.boardgame.tiebreak.who.black": "Zwart",
+  "pad.boardgame.tiebreak.who.white": "Wit",
   "pad.boardgame.tiebreak.winner.title": "Wie won de tiebreak?",
   "pad.carrom.action.adjustCredit": "Correctie — bijtelling",
   "pad.carrom.action.adjustDeduct": "Correctie — aftrek",

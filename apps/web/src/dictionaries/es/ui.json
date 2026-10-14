@@ -4466,6 +4466,8 @@
   "pad.boardgame.tiebreak.score.narrow": "1½–½",
   "pad.boardgame.tiebreak.score.none": "Sin resultado",
   "pad.boardgame.tiebreak.score.title": "Resultado del desempate (opcional)",
+  "pad.boardgame.tiebreak.who.black": "Negras",
+  "pad.boardgame.tiebreak.who.white": "Blancas",
   "pad.boardgame.tiebreak.winner.title": "¿Quién ganó el desempate?",
   "pad.carrom.action.adjustCredit": "Ajuste — abono",
   "pad.carrom.action.adjustDeduct": "Ajuste — descuento",

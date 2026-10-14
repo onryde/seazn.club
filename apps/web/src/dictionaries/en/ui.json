@@ -4466,6 +4466,8 @@
   "pad.boardgame.tiebreak.score.narrow": "1½–½",
   "pad.boardgame.tiebreak.score.none": "No score",
   "pad.boardgame.tiebreak.score.title": "Tie-break score (optional)",
+  "pad.boardgame.tiebreak.who.black": "Black",
+  "pad.boardgame.tiebreak.who.white": "White",
   "pad.boardgame.tiebreak.winner.title": "Who won the tie-break?",
   "pad.carrom.action.adjustCredit": "Adjustment — credit",
   "pad.carrom.action.adjustDeduct": "Adjustment — deduction",

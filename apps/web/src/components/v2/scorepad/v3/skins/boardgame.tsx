@@ -98,7 +98,9 @@ import {
   type PadPhase,
   type ScorebugHalf,
   type ScorebugSpec,
+  type SheetContextLine,
   type SkinDefV3,
+  type StepPredicate,
   type TileSpec,
   type WhoLine,
 } from "../types";
@@ -534,12 +536,12 @@ const SCORE_LABEL: Record<(typeof SCORES)[number], MessageKey> = {
 };
 
 /** The side a rapid/blitz winner step answered — the step the RUNG shows, never a stale answer left by a different rung. */
-function winnerSideOf(answers: Readonly<Record<string, string>>): Side {
+function winnerSideOf(answers: Readonly<Record<string, string>>, rung: string | undefined = answers.rung): Side {
   const answer = answers.winner;
   if (answer === "home" || answer === "away") return answer;
   // The chassis completes a sheet only once every shown step is answered, so this is unreachable from the pad —
   // and defaulting would record the wrong player as advancing.
-  throw new Error(`boardgame tie-break: no winner answered for rung "${String(answers.rung)}"`);
+  throw new Error(`boardgame tie-break: no winner answered for rung "${String(rung)}"`);
 }
 
 /** W2c Task 21 (S5) — the Armageddon sheet's option ids. Each step prefixes its own, so a page-wide
@@ -549,18 +551,18 @@ export const BLACK_OPTION_PREFIX = "black-";
 export const RESULT_OPTION_PREFIX = "result-";
 
 /** Who had Black — the Black step's answer, as a side. Never defaulted: the wrong colour would advance the wrong player. */
-function blackSideOf(answers: Readonly<Record<string, string>>): Side {
+function blackSideOf(answers: Readonly<Record<string, string>>, rung: string | undefined = answers.rung): Side {
   const answer = answers.black;
   if (answer === `${BLACK_OPTION_PREFIX}home`) return "home";
   if (answer === `${BLACK_OPTION_PREFIX}away`) return "away";
-  throw new Error(`boardgame tie-break: no Black answered for rung "${String(answers.rung)}"`);
+  throw new Error(`boardgame tie-break: no Black answered for rung "${String(rung)}"`);
 }
 
 /** How the Armageddon ended, from White's side — one of the ENGINE's results, never defaulted. */
-function armageddonResultOf(answers: Readonly<Record<string, string>>): (typeof ARMAGEDDON_RESULTS)[number] {
+function armageddonResultOf(answers: Readonly<Record<string, string>>, rung: string | undefined = answers.rung): (typeof ARMAGEDDON_RESULTS)[number] {
   const result = ARMAGEDDON_RESULTS.find((r) => answers.result === `${RESULT_OPTION_PREFIX}${r}`);
   if (result !== undefined) return result;
-  throw new Error(`boardgame tie-break: no result answered for rung "${String(answers.rung)}"`);
+  throw new Error(`boardgame tie-break: no result answered for rung "${String(rung)}"`);
 }
 
 /** The colour word the read-back names ("White won"). Literal keys, so the dictionary gate sees every one. */
@@ -571,11 +573,14 @@ const COLOUR_KEY: Record<"white" | "black", MessageKey> = {
 
 /**
  * W2a — the tie-break (spec §5.5; UI-2 option B; BG-KO-1; BG-KO-2 per ruling 82; D6), reshaped by W2c Task 21 (S5, owner
- * option A "facts, then the engine decides").
+ * option A "facts, then the engine decides"; design pass at the owner's sign-off).
  *
  * Step 1 the rung, OFFERED FROM THE STAGE: only the rungs its list plays, in the list's order (BG-KO-3; `effectiveRungs`
  * — absent means every rung), with a hint that sends lots to the organiser (lots is `core.settle {method: "lot"}`,
  * ruling 73 — never a rung here). The order is a menu, not a rule: the engine does not enforce it (open owner item).
+ * A stage that plays exactly ONE rung has nothing to ask: the sheet is built for that rung alone, opens on its first step,
+ * and names the round in its context line (design pass, owner question (b)). Back is then absent on the first screen, which
+ * is the chassis' own rule for step 0 — Cancel is the way out.
  *
  * Rapid and blitz are unchanged: who won (exactly the two entrants), then the optional score (D6).
  *
@@ -583,6 +588,10 @@ const COLOUR_KEY: Record<"white" | "black", MessageKey> = {
  * never names a winner and never applies the rule — the ENGINE derives who advances (a draw is Black's) — and a closing
  * read-back says what that will be ("Advances: Priya Menon — Black, Armageddon drawn") before the one Confirm writes.
  * Colour lives on the tie-break event and never touches the main game's `colorOfHome`.
+ *
+ * Every step after the rung pick carries a context block: the round, and — once Black is known — who is White and who is
+ * Black, so "White won" never asks the scorer to remember a mapping. Colour discs appear only where colour is a FACT (that
+ * legend and the three results), never on the Black step's own options, which would pre-judge a tap that has not said it yet.
  *
  * Each branch's steps are gated on the rung, so a hint or an answer left by another rung never reaches the payload. Option
  * labels are keys; a side option also carries a name (`labelText`): the player the lineup or pairing card SEATS, else the
@@ -607,69 +616,114 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
     const found = sides.find((s) => s.side === side)!;
     return found.labelText ?? t(found.label);
   };
+  const rungs = effectiveRungs(cfgOf(view));
+  /** The stage's ONLY rung, when it plays exactly one: there is nothing to ask, so the sheet never shows the pick. */
+  const only = rungs.length === 1 ? rungs[0] : undefined;
+  /** The rung the answers so far are about: the stage's only one, else the scorer's pick. */
+  const rungOf = (a: Readonly<Record<string, string>>): string | undefined => only ?? a.rung;
+  /** `when` for a branch's steps: gated on the pick when there is one, ungated (always shown) for a one-rung sheet, whose first
+   *  step must never declare `when` (types.ts `StepPredicate`) and whose other branch is not built at all. */
+  const gate = (shown: (rung: string | undefined) => boolean): { when?: StepPredicate } => (only === undefined ? { when: (a) => shown(a.rung) } : {});
+  const rungWord = (rung: string): string => {
+    const key = vocabKey("rung", rung);
+    return key === null ? rung : t(key);
+  };
+  /** The round line every step after the pick opens its context with. */
+  const roundLine = (a: Readonly<Record<string, string>>): SheetContextLine[] => {
+    const rung = rungOf(a);
+    return rung === undefined ? [] : [{ text: rungWord(rung) }];
+  };
+  /** Who is White and who is Black, once the Black step has been answered (BG-KO-2: the other entrant is White). */
+  const colourLines = (a: Readonly<Record<string, string>>): SheetContextLine[] => {
+    const black = blackSideOf(a, rungOf(a));
+    const white: Side = black === "home" ? "away" : "home";
+    return [
+      { label: t("pad.boardgame.tiebreak.who.white"), text: nameOf(white), disc: "white" },
+      { label: t("pad.boardgame.tiebreak.who.black"), text: nameOf(black), disc: "black" },
+    ];
+  };
+  const rungStep: GuidedSheetStep = {
+    id: "rung",
+    kind: "choice",
+    title: "pad.boardgame.tiebreak.rung.title",
+    hintKey: "pad.boardgame.tiebreak.lotsHint",
+    layout: "rows",
+    options: rungs.map((rung) => ({ id: rung, label: vocabKey("rung", rung) ?? rung })),
+  };
+  const timedSteps: GuidedSheetStep[] = [
+    {
+      id: "winner",
+      kind: "choice",
+      title: "pad.boardgame.tiebreak.winner.title",
+      ...gate((rung) => rung !== "armageddon"),
+      layout: "rows",
+      context: roundLine,
+      options: sideOptions((side) => side),
+    },
+    {
+      id: "score",
+      kind: "choice",
+      title: "pad.boardgame.tiebreak.score.title",
+      ...gate((rung) => rung !== "armageddon"),
+      context: roundLine,
+      options: SCORES.map((score) => ({ id: score, label: SCORE_LABEL[score] })),
+    },
+  ];
+  const armageddonSteps: GuidedSheetStep[] = [
+    {
+      id: "black",
+      kind: "choice",
+      title: "pad.boardgame.tiebreak.black.title",
+      ...gate((rung) => rung === "armageddon"),
+      layout: "rows",
+      context: roundLine,
+      options: sideOptions((side) => `${BLACK_OPTION_PREFIX}${side}`),
+    },
+    {
+      id: "result",
+      kind: "choice",
+      title: "pad.boardgame.tiebreak.result.title",
+      hintKey: "pad.boardgame.tiebreak.armageddonHint",
+      ...gate((rung) => rung === "armageddon"),
+      layout: "rows",
+      context: (a) => [...roundLine(a), ...colourLines(a)],
+      // The engine's own three results, in its order; the Draw's label carries its consequence ("Drawn — Black advances"), and
+      // each wears the colour it is about: White won, Black won, and a split disc for the draw.
+      options: ARMAGEDDON_RESULTS.map((result) => ({
+        id: `${RESULT_OPTION_PREFIX}${result}`,
+        label: vocabKey("result", result) ?? result,
+        disc: result === "draw" ? ("split" as const) : result,
+      })),
+    },
+    {
+      id: "confirm",
+      kind: "confirm",
+      title: "pad.boardgame.tiebreak.confirm.title",
+      ...gate((rung) => rung === "armageddon"),
+      context: (a) => [...roundLine(a), ...colourLines(a)],
+      summary: (a) => {
+        const black = blackSideOf(a, rungOf(a));
+        const result = armageddonResultOf(a, rungOf(a));
+        // BG-KO-2, as the scorer reads it: White won → the other entrant; Black won or drawn → Black. The ENGINE
+        // decides the real outcome from the same two facts; the seam test folds each pair and pins that they agree.
+        const advancer: Side = result === "white" ? (black === "home" ? "away" : "home") : black;
+        return result === "draw"
+          ? t("pad.boardgame.tiebreak.confirm.drawn", { name: nameOf(advancer) })
+          : t("pad.boardgame.tiebreak.confirm.won", { name: nameOf(advancer), colour: t(COLOUR_KEY[result]) });
+      },
+    },
+  ];
   return {
     event: TIEBREAK_TYPE,
-    steps: [
-      {
-        id: "rung",
-        kind: "choice",
-        title: "pad.boardgame.tiebreak.rung.title",
-        hintKey: "pad.boardgame.tiebreak.lotsHint",
-        options: effectiveRungs(cfgOf(view)).map((rung) => ({ id: rung, label: vocabKey("rung", rung) ?? rung })),
-      },
-      {
-        id: "winner",
-        kind: "choice",
-        title: "pad.boardgame.tiebreak.winner.title",
-        when: (a) => a.rung !== "armageddon",
-        options: sideOptions((side) => side),
-      },
-      {
-        id: "score",
-        kind: "choice",
-        title: "pad.boardgame.tiebreak.score.title",
-        when: (a) => a.rung !== "armageddon",
-        options: SCORES.map((score) => ({ id: score, label: SCORE_LABEL[score] })),
-      },
-      {
-        id: "black",
-        kind: "choice",
-        title: "pad.boardgame.tiebreak.black.title",
-        when: (a) => a.rung === "armageddon",
-        options: sideOptions((side) => `${BLACK_OPTION_PREFIX}${side}`),
-      },
-      {
-        id: "result",
-        kind: "choice",
-        title: "pad.boardgame.tiebreak.result.title",
-        hintKey: "pad.boardgame.tiebreak.armageddonHint",
-        when: (a) => a.rung === "armageddon",
-        // The engine's own three results, in its order; the Draw's label carries its consequence ("Drawn — Black advances").
-        options: ARMAGEDDON_RESULTS.map((result) => ({ id: `${RESULT_OPTION_PREFIX}${result}`, label: vocabKey("result", result) ?? result })),
-      },
-      {
-        id: "confirm",
-        kind: "confirm",
-        title: "pad.boardgame.tiebreak.confirm.title",
-        when: (a) => a.rung === "armageddon",
-        summary: (a) => {
-          const black = blackSideOf(a);
-          const result = armageddonResultOf(a);
-          // BG-KO-2, as the scorer reads it: White won → the other entrant; Black won or drawn → Black. The ENGINE
-          // decides the real outcome from the same two facts; the seam test folds each pair and pins that they agree.
-          const advancer: Side = result === "white" ? (black === "home" ? "away" : "home") : black;
-          return result === "draw"
-            ? t("pad.boardgame.tiebreak.confirm.drawn", { name: nameOf(advancer) })
-            : t("pad.boardgame.tiebreak.confirm.won", { name: nameOf(advancer), colour: t(COLOUR_KEY[result]) });
-        },
-      },
-    ],
+    // A one-rung sheet is built for that rung alone (no pick, no `when`); a several-rung sheet keeps both branches, gated on the pick.
+    steps: only === undefined ? [rungStep, ...timedSteps, ...armageddonSteps] : only === "armageddon" ? armageddonSteps : timedSteps,
     buildPayload: (a) => {
-      if (a.rung === "armageddon") return { rung: a.rung, black: entrantOf(state, blackSideOf(a)), result: armageddonResultOf(a) };
+      const rung = rungOf(a);
+      if (rung === "armageddon") return { rung, black: entrantOf(state, blackSideOf(a, rung)), result: armageddonResultOf(a, rung) };
       const score = a.score;
       return {
-        rung: a.rung,
-        winner: entrantOf(state, winnerSideOf(a)),
+        rung,
+        winner: entrantOf(state, winnerSideOf(a, rung)),
         ...(score !== undefined && score !== "none" ? { score } : {}),
       };
     },
