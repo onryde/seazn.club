@@ -9,6 +9,16 @@
 // A second start while joining or joined is a no-op; nothing starts after
 // stop, and a join that lands after stop is left at once.
 //
+// Moving meetings (final re-review 3, R3-1): a start may name the PARTICIPANT
+// its token is for. A re-pair's retire ends the meeting the camera joined and
+// deletes its participants, and the room's quiet re-claim answers with
+// another participant, in the new meeting: the session leaves the old join and
+// joins with the new token. The same participant's refreshed token (every
+// seat answer refreshes it) moves nothing, and a start that names no
+// participant behaves as before. The move is not our guard's fault: nothing
+// is stamped. A start while a join is in flight only records the latest; the
+// join that lands then moves if it is not the latest seat's.
+//
 // Recovering (T14 re-review 3, I-1, controller ruling 2026-10-12): when the
 // D7 guard cannot refuse a remote stream it leaves the meeting (onFault), or
 // a join rejects as the guard's (D7GuardError). That is Seazn's fault, never
@@ -69,6 +79,9 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
     for (const cb of [...linkListeners]) cb();
   };
   let token: string | null = null;
+  /** The participant the latest seat's token is for (R3-1), and the one the attached camera joined with. */
+  let key: string | null = null;
+  let joinedKey: string | null = null;
   let busy = false;
   let stopped = false;
   let faultOpen = false;
@@ -99,8 +112,9 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
     stampQueue = queued === 1 ? send() : stampQueue.then(send);
   };
 
-  const attach = (joined: OwnCamera) => {
+  const attach = (joined: OwnCamera, joinedFor: string | null) => {
     cam = joined;
+    joinedKey = joinedFor;
     const unlink = joined.onLinkChange(linkChanged);
     const unchange = joined.onChange((enabled, track) => {
       if (!stopped) emit({ status: enabled && track ? "live" : "off", track: enabled ? track : null });
@@ -142,6 +156,7 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
       await sleep(RECOVER_BACKOFF_MS[Math.min(attempt, RECOVER_BACKOFF_MS.length - 1)]!);
       if (stopped) break;
       let joined: OwnCamera;
+      const joiningFor = key;
       try {
         joined = await join(token!);
       } catch {
@@ -152,7 +167,8 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
         break;
       }
       busy = false;
-      attach(joined);
+      attach(joined, joiningFor);
+      if (key !== joiningFor) void start(token!, key);
       return;
     }
     busy = false;
@@ -163,31 +179,45 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
     emit({ status: "gave_up", track: null });
   }
 
-  return {
-    async start(authToken: string): Promise<void> {
-      if (stopped) return;
-      // The latest seat's token is the one any re-join uses.
-      token = authToken;
-      if (busy || cam !== null) return;
-      busy = true;
-      emit({ status: "joining", track: null });
-      let joined: OwnCamera;
-      try {
-        joined = await join(authToken);
-      } catch (err) {
-        busy = false;
-        if (stopped) return;
-        if (err instanceof D7GuardError) void recover(null);
-        else emit({ status: "failed", track: null });
-        return;
-      }
+  async function start(authToken: string, participantKey: string | null = null): Promise<void> {
+    if (stopped) return;
+    // The latest seat's token is the one any re-join uses.
+    token = authToken;
+    key = participantKey;
+    if (busy) return;
+    // Joined, and still the latest seat's participant: nothing to do. Another participant is another meeting (R3-1).
+    if (cam !== null && joinedKey === key) return;
+    busy = true;
+    const left = detach();
+    if (left !== null) await left.leave().catch(() => undefined);
+    if (stopped) {
       busy = false;
-      if (stopped) {
-        await joined.leave().catch(() => undefined);
-        return;
-      }
-      attach(joined);
-    },
+      return;
+    }
+    emit({ status: "joining", track: null });
+    const joiningFor = key;
+    let joined: OwnCamera;
+    try {
+      joined = await join(token);
+    } catch (err) {
+      busy = false;
+      if (stopped) return;
+      if (err instanceof D7GuardError) void recover(null);
+      else emit({ status: "failed", track: null });
+      return;
+    }
+    busy = false;
+    if (stopped) {
+      await joined.leave().catch(() => undefined);
+      return;
+    }
+    attach(joined, joiningFor);
+    // A newer seat for another participant arrived while this join was in flight: move on to it.
+    if (key !== joiningFor) void start(token, key);
+  }
+
+  return {
+    start,
     /** "Turn camera on" (card 9). The change arrives through onChange. */
     async enable(): Promise<void> {
       if (stopped || cam === null) return;

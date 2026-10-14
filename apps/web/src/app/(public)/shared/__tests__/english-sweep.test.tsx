@@ -1069,6 +1069,7 @@ async function renderMatchRooms(): Promise<Segment[]> {
     opponent: { colour: "black", name: "9zqada 8zqokonkwo", checkedIn: true },
     cameraPolicy: "required",
     opponentPresence: { participantId: "rtk-opp" },
+    ownParticipantId: null,
     frozen: null,
     canAct: true,
     otherAccount: null,

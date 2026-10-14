@@ -6,7 +6,18 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { Chess } from "chess.js";
-import { canMove, initialRoomState, moveNotice, parseRoomBroadcast, plyOfFen, roomReducer, type RoomBroadcastWire, type RoomEvent, type RoomState } from "../room-state";
+import {
+  canMove,
+  initialRoomState,
+  moveNotice,
+  ownMeetingRetired,
+  parseRoomBroadcast,
+  plyOfFen,
+  roomReducer,
+  type RoomBroadcastWire,
+  type RoomEvent,
+  type RoomState,
+} from "../room-state";
 import type { RoomActBody } from "../room-api";
 import { RoomAct, RoomActOut } from "@/server/api-v1/schemas";
 import { ROUTES } from "@/server/api-v1/openapi";
@@ -58,6 +69,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     opponent: { colour: "black", name: "Bo Lind", checkedIn: true },
     cameraPolicy: "off",
     opponentPresence: null,
+    ownParticipantId: null,
     frozen: null,
     canAct: true,
     otherAccount: null,
@@ -612,6 +624,40 @@ describe("notice routing: every failure × every action (the ruling, over the de
     expect(answers.some((x) => x.reconcile) && answers.some((x) => !x.reconcile), "both answer kinds").toBe(true);
     expect(rows).toBe(actions.length * (1 + statuses.length + answers.length));
     for (const [k, n] of Object.entries(tally)) expect(n, `rows expecting ${k}`).toBeGreaterThan(0);
+  });
+});
+
+describe("ownMeetingRetired (final re-review 3, R3-1): the server no longer holds the participant this room's camera joined with", () => {
+  const P = { participantId: "p-own", authToken: "tok" };
+  const seated = (snapOver: Partial<RoomSnapshot>, seat: RoomState["seat"] = { seated: true, participant: P }, extra: Partial<RoomState> = {}): RoomState => ({
+    ...initialRoomState(snap({ cameraPolicy: "required", ...snapOver }), T0),
+    seat,
+    ...extra,
+  });
+  // Expected from the ruling (re-claim only when the meeting the camera joined was retired under the player), never
+  // from the predicate: each row says why.
+  const rows: { why: string; s: RoomState; due: boolean }[] = [
+    { why: "the empty case: no seat answer yet (nothing joined)", s: initialRoomState(snap({ cameraPolicy: "required" }), T0), due: false },
+    { why: "seated, the same participant on file", s: seated({ ownParticipantId: "p-own" }), due: false },
+    { why: "retired: none on file", s: seated({ ownParticipantId: null }), due: true },
+    { why: "retired, and the new meeting already minted another", s: seated({ ownParticipantId: "p-new" }), due: true },
+    { why: "a camera refusal still holds a token: retired under it", s: seated({ ownParticipantId: null }, { seated: false, reason: "camera_required", participant: P }), due: true },
+    { why: "no token held (cameras off, or a refusal without one): nothing joined, nothing to move", s: seated({ ownParticipantId: null }, { seated: true, participant: null }), due: false },
+    { why: "no token held, someone on file", s: seated({ ownParticipantId: "p-x" }, { seated: false, reason: "video_unavailable", participant: null }), due: false },
+    { why: "a seat call in flight: its answer is the newer word", s: seated({ ownParticipantId: null }, undefined, { pending: { kind: "seat" } }), due: false },
+    { why: "a result is written", s: seated({ ownParticipantId: null, result: { outcome: "win", method: "resign", score: "1-0" } as never }), due: false },
+    { why: "the game is over", s: seated({ ownParticipantId: null, game: game(4, true) }), due: false },
+    { why: "online chess is not offered (the re-entry's own condition)", s: seated({ ownParticipantId: null, onlineChessOff: true }), due: false },
+  ];
+  it("every row of the rule, counted", () => {
+    let checked = 0;
+    for (const r of rows) {
+      expect(ownMeetingRetired(r.s), r.why).toBe(r.due);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(rows.length);
+    expect(rows.filter((r) => r.due).length, "both answers are exercised").toBeGreaterThan(0);
+    expect(rows.filter((r) => !r.due).length).toBeGreaterThan(0);
   });
 });
 

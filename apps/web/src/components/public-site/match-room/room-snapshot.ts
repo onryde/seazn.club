@@ -92,6 +92,12 @@ export type RoomSnapshot = {
    *  the vendor for it. null ⇒ no pill (policy off, an override, a board
    *  nobody may play on). */
   opponentPresence: { participantId: string | null } | null;
+  /** Final re-review 3, R3-1: the VIEWER's own player participant in the board's meeting, as the server holds it
+   *  (preflight's one rule, ended meeting or not), or null with none on file. Never a token. The room compares it
+   *  with the participant its camera joined with: the R2-2 retire deletes a re-paired board's meeting with its
+   *  participants, so the player who stayed reads null (then the new meeting's id) and re-claims the seat. A drop,
+   *  an arbiter's removal or the sweep's end of the meeting leaves it as it was. */
+  ownParticipantId: string | null;
   /** Which seat a seat hold (token_revoked, account_changed) froze, from the VIEWER's side. null
    *  once a result is written (the result outranks the freeze — review I1). */
   frozen: "you" | "opponent" | "both" | null;

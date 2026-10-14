@@ -277,6 +277,26 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
   }
 }
 
+/** Final re-review 3, R3-1: the server no longer holds the participant this room's camera joined with — none on file,
+ *  or another. That is the R2-2 retire: a re-pair's newcomer ends the earlier pairing's meeting under the player who
+ *  stayed, and its participants go with its row. The room re-claims the seat, once per change (room-shell), as the
+ *  re-entry claim does, and the answer's token moves the camera to the new meeting. Not this: a dropped connection, an
+ *  arbiter's removal, or the sweep ending the meeting — each leaves the participant on file. Never with no token held
+ *  (nothing joined), while a seat call is in flight (its answer is the newer word), or where the re-entry claims
+ *  nothing (a result, a game over, a club not offered online chess). */
+export function ownMeetingRetired(s: RoomState): boolean {
+  const held = s.seat?.participant?.participantId ?? null;
+  const snap = s.snap;
+  return (
+    held !== null &&
+    snap.ownParticipantId !== held &&
+    s.pending === null &&
+    snap.result === null &&
+    snap.game?.over !== true &&
+    !snap.onlineChessOff
+  );
+}
+
 /** The notice the live board shows for the room's error (C1–C3), or none.
  *  Offline is offline whatever was sent. C2/C3 say "that move", so they are
  *  a MOVE's; a refused resign, offer, answer or abort is never silent — it

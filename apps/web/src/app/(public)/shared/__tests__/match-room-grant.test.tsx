@@ -38,6 +38,7 @@ const SNAP: RoomSnapshot = {
   opponent: { colour: "black", name: "Bo", checkedIn: false },
   cameraPolicy: "off",
   opponentPresence: null,
+  ownParticipantId: null,
   frozen: null,
   canAct: false,
   otherAccount: null,
