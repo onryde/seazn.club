@@ -9,7 +9,7 @@
 // and waiting (the button becomes a disabled "You're checked in").
 import { OwnTile } from "./own-tile";
 import { CameraNotice } from "./camera-notice";
-import { firstName, spokenClock, type RoomPlural, type RoomT } from "./room-copy";
+import { spokenClock, type RoomPlural, type RoomT } from "./room-copy";
 import type { RoomSnapshot } from "./room-snapshot";
 
 type Props = {
@@ -55,7 +55,7 @@ export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, chec
         <>
           <OwnTile policy={snap.cameraPolicy} stream={stream} variant="checkin" cameraOn={cameraOn} t={t} />
           <p data-testid="room-checkin-privacy" className="m-0 text-xs leading-[1.45] text-[#6b5b8a]">
-            {t("externalPlay.room.checkin.privacy", { name: firstName(snap.opponent.name) })}
+            {t("externalPlay.room.checkin.privacy")}
           </p>
         </>
       ) : null}

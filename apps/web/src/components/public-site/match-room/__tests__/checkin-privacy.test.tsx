@@ -17,13 +17,14 @@ const DICTS = Object.fromEntries(
   LOCALES.map((l) => [l, JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>]),
 ) as Record<Locale, Record<string, string>>;
 
-/** Typed from the ruling, not read from the dictionaries. */
+/** Typed from the ruling, not read from the dictionaries. T17B fix 2 (D5, controller ruling): the line names nobody.
+ *  "{name}'s board" interpolated the opponent's first word, which on stg ("t17b Black") read as the club's name, and
+ *  "not set up to show your video" read like a broken camera. It is still the configuration, never a guarantee. */
 const RULED = {
-  en: "Ada's board is not set up to show your video. Your organiser can watch it live; it is not recorded.",
-  es: "El tablero de Ada no está configurado para mostrar tu vídeo. Tu organizador puede verlo en directo; no se graba.",
-  // "Côté {name}", not "L'échiquier de {name}": a template cannot elide "de" before a vowel ("de Ada").
-  fr: "Côté Ada, l'échiquier n'est pas configuré pour afficher votre vidéo. Votre organisateur peut la regarder en direct ; elle n'est pas enregistrée.",
-  nl: "Het bord van Ada is niet ingesteld om je video te tonen. Je organisator kan live meekijken; je video wordt niet opgenomen.",
+  en: "Your opponent's room isn't set up to show your camera. Your organiser can watch it live; it isn't recorded.",
+  es: "El tablero de tu rival no está configurado para mostrar tu cámara. Tu organizador puede verla en directo; no se graba.",
+  fr: "L'échiquier de votre adversaire n'est pas configuré pour afficher votre caméra. Votre organisateur peut la regarder en direct ; elle n'est pas enregistrée.",
+  nl: "Het bord van je tegenstander is niet ingesteld om je camera te tonen. Je organisator kan live meekijken; je beeld wordt niet opgenomen.",
 } as const satisfies Record<Locale, string>;
 
 /** The absolutes the old line made ("{name} never sees your video. Only your organiser can review it."), per locale. */
@@ -72,7 +73,10 @@ describe("check-in privacy line — the configuration, never a guarantee (fix ro
     let checked = 0;
     for (const locale of LOCALES) {
       for (const policy of ["required", "optional"] as const) {
-        expect(privacyLine(paint(locale, policy)), `${locale}/${policy}`).toBe(RULED[locale]);
+        const line = privacyLine(paint(locale, policy));
+        expect(line, `${locale}/${policy}`).toBe(RULED[locale]);
+        // It names nobody: neither of the opponent's names, nor the player's own.
+        for (const name of ["Ada", "Whitesworth", "Bo", "Lind"]) expect(line, `${locale}: no "${name}"`).not.toMatch(new RegExp(`\\b${name}\\b`));
         checked++;
       }
     }

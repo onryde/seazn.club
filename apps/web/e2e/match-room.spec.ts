@@ -1346,6 +1346,26 @@ test("T17B fix 2: the seat's camera verdicts in the browser — a camera still s
   await ctx.close();
 });
 
+test("T17B fix 2 (D5): under a camera policy the check-in's privacy line says what the opponent's room is set up to show — naming nobody — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`], cameraPolicy: "required" });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  expect(await screenOf(p)).toBe("checkin");
+  const line = p.getByTestId("room-checkin-privacy");
+  await expect(line).toHaveText(uiEn["externalPlay.room.checkin.privacy"]!);
+  // Typed from the controller's ruling, never read back from the dictionary alone.
+  await expect(line).toHaveText("Your opponent's room isn't set up to show your camera. Your organiser can watch it live; it isn't recorded.");
+  const text = (await line.textContent()) ?? "";
+  for (const name of [room.black.name, room.white.name, "Ada", "Bo"]) expect(text, `names nobody: ${name}`).not.toContain(name);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "checkin-privacy");
+  await ctx.close();
+});
+
 test("round not opened: the player, signed in, is told so — no check-in", async ({ page, browser }) => {
   test.setTimeout(120_000);
   const room = await seedMatchRoom(page.request, {
