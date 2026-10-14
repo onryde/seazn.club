@@ -24,10 +24,11 @@
 // board where the two ladders disagree. The ORDERING itself is pinned rung by
 // rung in `build-objectives.test.ts`; what this file pins is the WIRING — that
 // the gate is handed a day view at all, and that the name check is real.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildSchedule, TIER_COUNT, TIER_NAMES } from "./build.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
-import type { SolveBuildOutcome } from "./placement-client.ts";
+import type { SolveBuildOutcome } from "./solver-port.ts";
+import { fakeSolver, resolvingSolver, silentLogger } from "./__tests__/solver-fakes.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -84,15 +85,9 @@ const reply = (
   wallExhausted: false,
 });
 
-const stub = async (outcome: SolveBuildOutcome): Promise<void> => {
-  vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(outcome);
-};
+const stub = (outcome: SolveBuildOutcome) => resolvingSolver(outcome);
 
 describe("the day metrics reach the response", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("hands the day view to boardMetrics, so a shipped board reports real day metrics", async () => {
     // `boardMetrics` day fields are 0 unless a `DayView` is passed, and 0 is a
     // legal value — an unwired call therefore does not throw or fail a type
@@ -104,14 +99,14 @@ describe("the day metrics reach the response", () => {
     // — see its own note, and the C2 follow-up in the release-2 index for why
     // mirroring the solver's ladder into the acceptance gate is a separate,
     // still-open task rather than something this change does.
-    await stub(
+    const solve = stub(
       reply([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
       ]),
     );
 
-    const out = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const out = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve, log: silentLogger });
 
     expect(out.engine).toBe("optimized");
     expect(out.metrics.placed).toBe(2);
@@ -123,20 +118,16 @@ describe("the day metrics reach the response", () => {
 });
 
 describe("already_optimal requires OUR ladder, not merely a matching count", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("refuses the claim when the reply names a different ladder of the same length", async () => {
     // The deploy hazard as a test. A COUNT cannot tell one ladder from another,
     // and the two apps ship separately. This reply is fully proved and
     // correctly counted, and names the RETIRED ladder with `makespan` where
     // `days` belongs.
-    await stub(
+    const solve = stub(
       reply([], ["placed", "makespan", "idle_gap", "imbalance", "spare_one", "spare_two"]),
     );
 
-    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"] });
+    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"], solve, log: silentLogger });
 
     expect(out.status).not.toBe("already_optimal");
     // The count still says six, which is exactly why the count is not enough.
@@ -146,18 +137,18 @@ describe("already_optimal requires OUR ladder, not merely a matching count", () 
   it("refuses the claim when the reply is short a rung it never named", async () => {
     // The other shape of the same hazard: right names, too few of them. A
     // service that proved four of six rungs must not be read as a full ladder.
-    await stub(reply([], TIER_NAMES.slice(0, 4)));
+    const solve = stub(reply([], TIER_NAMES.slice(0, 4)));
 
-    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"] });
+    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"], solve, log: silentLogger });
 
     expect(out.status).not.toBe("already_optimal");
   });
 
   it("still claims already_optimal on our own ladder", async () => {
     // Without this the two above pass against a gate that simply never fires.
-    await stub(reply([]));
+    const solve = stub(reply([]));
 
-    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"] });
+    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"], solve, log: silentLogger });
 
     expect(out.status).toBe("already_optimal");
     expect(out.tiersCompleted).toBe(TIER_COUNT);
@@ -200,24 +191,20 @@ const twoCards: SchedulableFixture[] = [
 ];
 
 describe("the gate does not discard a board the service proved optimal", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("ships a proved board that beats the seed only on a rung isStrictlyBetter cannot see", async () => {
     // THE REGRESSION. Before this change the gate ranked
     // `placed → makespan → idleGap → imbalance`, so this reply — better on
     // `day_start`, tied on all four of those — lost to the greedy seed and was
     // thrown away. `engine` is the observable: "greedy" means the proved board
     // was discarded.
-    await stub(
+    const solve = stub(
       reply([
         { fixtureId: "a", court: "C1", startAtMs: DAY_OPEN },
         { fixtureId: "b", court: "C2", startAtMs: DAY_OPEN },
       ]),
     );
 
-    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig, solve, log: silentLogger });
 
     expect(out.engine).toBe("optimized");
     expect(out.status).toBe("ok");
@@ -230,11 +217,9 @@ describe("the gate does not discard a board the service proved optimal", () => {
     // The premise of the spec above, asserted rather than assumed, so it cannot
     // quietly become a test about a board that simply wins on makespan too.
     // This run takes the greedy fallback, so `out.metrics` IS the seed's.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(
-      new Error("no service"),
-    );
+    const solve = fakeSolver(() => Promise.reject(new Error("no service")));
 
-    const seed = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+    const seed = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig, solve, log: silentLogger });
 
     expect(seed.engine).toBe("greedy");
     // Greedy opens at `startAt`, nine hours after the day's first slot.
@@ -262,14 +247,14 @@ describe("the gate does not discard a board the service proved optimal", () => {
     // These two boards are not the same board — `a` and `b` swap courts — so a
     // gate comparing assignments ships this reply, reports `ok`, and moves
     // every card on a board nothing improved.
-    await stub(
+    const solve = stub(
       reply([
         { fixtureId: "a", court: "C2", startAtMs: dayOpenConfig.startAt },
         { fixtureId: "b", court: "C1", startAtMs: dayOpenConfig.startAt },
       ]),
     );
 
-    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig, solve, log: silentLogger });
 
     expect(out.engine).toBe("greedy");
     expect(out.status).toBe("already_optimal");
@@ -280,9 +265,9 @@ describe("the gate does not discard a board the service proved optimal", () => {
   it("still refuses a proved board that places fewer than the seed", async () => {
     // D6's floor, unchanged and checked before the proof in every arm: no
     // amount of proof outranks placing fewer fixtures.
-    await stub(reply([{ fixtureId: "a", court: "C1", startAtMs: DAY_OPEN }]));
+    const solve = stub(reply([{ fixtureId: "a", court: "C1", startAtMs: DAY_OPEN }]));
 
-    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig, solve, log: silentLogger });
 
     expect(out.engine).toBe("greedy");
     expect(out.metrics.placed).toBe(2);
@@ -296,14 +281,14 @@ describe("the gate does not discard a board the service proved optimal", () => {
     // meaningless number R20 warns about, and the one
     // `schedule-polish-current`'s "does not anchor a BUILD" spec exists to
     // refuse. Nothing to have moved FROM is zero, exactly as `lost` already is.
-    await stub(
+    const solve = stub(
       reply([
         { fixtureId: "a", court: "C1", startAtMs: DAY_OPEN },
         { fixtureId: "b", court: "C2", startAtMs: DAY_OPEN },
       ]),
     );
 
-    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig, solve, log: silentLogger });
 
     expect(out.engine).toBe("optimized");
     expect(out.moved).toBe(0);

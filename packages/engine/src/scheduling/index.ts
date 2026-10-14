@@ -2,17 +2,20 @@
 //
 // *** THIS BARREL IS SERVER-ONLY. A `"use client"` FILE MUST NEVER IMPORT IT. ***
 //
-// It re-exports `build.ts` (below), which reaches `placement-client.ts`, which
-// imports `@grpc/grpc-js`, which needs `net`/`tls`/`http2`/`dns`/`fs`. None of
-// those exist in a browser, so `next build` dies with
-// `Module not found: dns` — an error that names nothing near the real cause.
+// It re-exports `build.ts` (below). Until the solver port (engine-split D11)
+// that file reached `placement-client.ts`, which imports `@grpc/grpc-js`, which
+// needs `net`/`tls`/`http2`/`dns`/`fs`. None of those exist in a browser, so
+// `next build` died with `Module not found: dns` — an error that names nothing
+// near the real cause. `build.ts` now asks an injected solver and imports no
+// client, but the rule below stands until the client-import guard is rewritten
+// for the new layout: client code imports a LEAF.
 //
-// **A dynamic import does NOT protect you.** `build.ts` imports
-// `placement-client.ts` via `await import(...)`, and that looks like it keeps
-// it out of the bundle. It does not: a bundler still resolves and compiles a
-// dynamic import, it merely puts the result in a separate chunk. The chunk
-// still has to build. (That dynamic import exists for TEST MOCKING — see the
-// comment at its call site — not for bundle safety. It never provided any.)
+// **A dynamic import did NOT protect you** (the old arrangement, kept as the
+// lesson). `build.ts` imported `placement-client.ts` via `await import(...)`,
+// and that looked like it kept it out of the bundle. It did not: a bundler
+// still resolves and compiles a dynamic import, it merely puts the result in a
+// separate chunk. The chunk still has to build. (That dynamic import existed
+// for TEST MOCKING, not for bundle safety. It never provided any.)
 //
 // This is not hypothetical. It shipped: `bracket-panel.tsx` and `slideshow.tsx`
 // imported this barrel purely for bracket GEOMETRY helpers and dragged a gRPC
@@ -73,15 +76,18 @@ export * from "./build-grid.ts";
 // model it used to drive, and the LNS fallback over that model, went with the
 // solver in C8.
 export * from "./build.ts";
+// The solver and logger ports `buildSchedule` and `repairDecomposedCpsat` take
+// (engine-split D11, D25): the request/outcome types, `PlacementSolver`,
+// `EngineLogger`, and `silentLogger`. Nothing here opens a socket or reads env.
+export * from "./solver-port.ts";
 // The repair domain and the component graph beneath the decomposed driver.
 // Both solver-agnostic; the z3 encoder they used to feed is gone.
 export * from "./repair-domain.ts";
 export * from "./repair-decompose.ts";
 export * from "./repair-minimality.ts";
 // The decomposed CP-SAT driver (C9). Free to name here for the same reason
-// `repair-decompose.ts` is: it names no z3 at all, and `build.ts`'s own
-// dynamic import already keeps `placement-client.ts`'s gRPC dependency out of
-// a client bundle.
+// `repair-decompose.ts` is: it names no z3 at all, and, since D11, it reaches a
+// solver only through the injected `PlacementSolver` port.
 export * from "./repair-decompose-cpsat.ts";
 // P9 pass 2: candidate courts for a stage (tags ⊇ required, archived
 // excluded, id order preserved) — the ONE function both the build-input

@@ -19,13 +19,12 @@
 //   * the floor is not greedy's board, it is greedy's LEGAL board. Counting a
 //     card that carries a blocking conflict as "placed" is what let an illegal
 //     greedy board outrank every legal one D3 could reach.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_SOLVER_QUEUE,
   TIER_COUNT, TIER_NAMES,
   buildSchedule,
   rejectedBlockingConflicts,
-  type BuildInput,
 } from "./build.ts";
 import { boardMetrics, isStrictlyBetter } from "./build-objectives.ts";
 import { buildGrid } from "./build-grid.ts";
@@ -43,17 +42,8 @@ import {
 import { ConstraintScope } from "./constraints.ts";
 import type { HardConstraint, SchedulingConstraints } from "./constraints.ts";
 import { dayKeyInTz } from "./tz.ts";
-import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
-// Bound at file-load time, same as `buildSchedule` above — so it is the SAME
-// `./logger.ts` instance `build.ts`'s own internal `import { log }` resolved
-// to, for every test that calls the plain statically-imported `buildSchedule`.
-// Tests that instead re-import `./build.ts` dynamically after
-// `vi.resetModules()` (to see a `vi.doMock`'d dependency — see that test's own
-// comment) must NOT use this binding: the reset gives their fresh `build.ts` a
-// fresh `./logger.ts` too, and a spy on this stale object would watch
-// something that run never touches. Those tests re-import `./logger.ts`
-// dynamically, alongside their fresh `./build.ts`, instead.
-import { log } from "./logger.ts";
+import type { BuildProblem, SolveBuildInput, SolveBuildOutcome } from "./solver-port.ts";
+import { fakeSolver, recordingLogger, resolvingSolver, silentLogger, unavailableSolver } from "./__tests__/solver-fakes.ts";
 
 /** The six `(name, value)` rows a FULLY PROVED placement reply carries, in the
  *  ladder's order. Values are placeholders — nothing here reads them — but the
@@ -156,13 +146,13 @@ const overSubscribedFixtures = [fx("a", "E1", "E2"), fx("b", "E1", "E3"), fx("c"
 const overrunConfig = cfg({ window: { from: T0, to: T0 + 60 * MIN } });
 const overrunFixtures = [fx("a", "E1", "E2"), fx("b", "E3", "E4"), fx("c", "E5", "E6")];
 
-const rawSeedOf = (input: BuildInput) =>
+const rawSeedOf = (input: BuildProblem) =>
   slotFixtures({ fixtures: input.fixtures, config: input.config, existing: input.existing });
 
 /** Greedy's LEGAL board — the floor the solver is actually held to. A row
  *  carrying a blocking conflict was never legally placed, so counting it would
  *  hold the solver to a board nobody may publish. */
-const legalSeedOf = (input: BuildInput): Assignment[] => {
+const legalSeedOf = (input: BuildProblem): Assignment[] => {
   const raw = rawSeedOf(input);
   const bad = new Set(
     validateAssignments(raw.assignments, input.config, input.existing)
@@ -173,16 +163,6 @@ const legalSeedOf = (input: BuildInput): Assignment[] => {
 };
 
 describe("buildSchedule", () => {
-
-  // `isolate: false` (vitest.config.ts) shares module state across the whole
-  // file, and this repo has no global `restoreMocks`/`clearMocks` — a
-  // `vi.spyOn` left standing from one `it` here is still active in the
-  // next, and in every later describe block in this file. Every case below
-  // that mocks `placement-client.ts` relies on this to not leak into its
-  // neighbours.
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
 
   it("never returns a board the greedy floor beats", async () => {
     // The floor property, and the SOLE reason design D6 ships with no escape
@@ -200,7 +180,7 @@ describe("buildSchedule", () => {
     // `describe("buildSchedule — Placement path", ...)`'s "falls back to the
     // greedy floor when placement's own board is not strictly better (D6)",
     // which mocks a worse placement reply and asserts the seed ships instead.
-    const cases: BuildInput[] = [
+    const cases: BuildProblem[] = [
       { fixtures: cornerFixtures, config: cornerConfig },
       { fixtures: overSubscribedFixtures, config: overSubscribedConfig },
       { fixtures: overrunFixtures, config: overrunConfig },
@@ -215,7 +195,7 @@ describe("buildSchedule", () => {
     ];
     for (const input of cases) {
       const floor = boardMetrics(legalSeedOf(input), input.config.courts, input.fixtures.length);
-      const built = await buildSchedule(input);
+      const built = await buildSchedule({ ...input, solve: unavailableSolver, log: silentLogger });
       expect(isStrictlyBetter(floor, built.metrics)).toBe(false);
       expect(built.metrics.placed).toBeGreaterThanOrEqual(floor.placed);
     }
@@ -239,7 +219,7 @@ describe("buildSchedule", () => {
     expect(raw.assignments).toHaveLength(3);
     expect(raw.conflicts).toEqual([]);
 
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "a", court: "C1", startAtMs: T0 },
         { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -250,7 +230,7 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures: overrunFixtures, config: overrunConfig });
+    const built = await buildSchedule({ fixtures: overrunFixtures, config: overrunConfig, solve, log: silentLogger });
     expect(validateAssignments(built.assignments, overrunConfig)).toEqual([]);
     expect(built.metrics.placed).toBe(2);
     expect(built.status).toBe("already_optimal");
@@ -269,7 +249,7 @@ describe("buildSchedule", () => {
     expect(seed.assignments).toHaveLength(1);
     expect(seed.conflicts.map((c) => `${c.fixtureId}:${c.reason}`)).toEqual(["b:start_window"]);
 
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -280,7 +260,7 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const built = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve, log: silentLogger });
     expect(built.metrics.placed).toBe(2);
     expect(built.engine).toBe("optimized");
     expect(built.status).toBe("ok");
@@ -301,7 +281,7 @@ describe("buildSchedule", () => {
   it("returns a board the verifier accepts", async () => {
     const config = cfg({ courts: ["C1", "C2"], perEntrantMinRest: 45 });
     const fixtures = [fx("a", "E1", "E2"), fx("b", "E1", "E3"), fx("c", "E2", "E3")];
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "a", court: "C1", startAtMs: T0 },
         { fixtureId: "b", court: "C2", startAtMs: T0 + 75 * MIN },
@@ -313,7 +293,7 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(validateAssignments(built.assignments, config)).toEqual([]);
     // THIS CASE USED TO ASSERT `already_optimal`, and the comment explaining
     // why is worth keeping as a record of the defect it was describing:
@@ -351,7 +331,7 @@ describe("buildSchedule", () => {
     const seed = rawSeedOf(input);
     expect(seed.assignments).toHaveLength(2);
 
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: seed.assignments.map((a) => ({
         fixtureId: a.fixtureId,
         court: a.court,
@@ -363,7 +343,7 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule(input);
+    const built = await buildSchedule({ ...input, solve, log: silentLogger });
     expect(built.metrics.placed).toBe(2);
     // Greedy GUESSED that a third card would not fit; T0 walked `placed >= 3`
     // and came back unsat, which is a proof. That difference is the whole
@@ -380,7 +360,7 @@ describe("buildSchedule", () => {
       window: { from: T0, to: T0 + 400 * 86_400_000 },
       courts: ["C1", "C2", "C3", "C4"],
     });
-    const built = await buildSchedule({ fixtures: [fx("a", "E1", "E2")], config });
+    const built = await buildSchedule({ fixtures: [fx("a", "E1", "E2")], config, solve: unavailableSolver, log: silentLogger });
     expect(built.engine).toBe("greedy");
     expect(built.assignments).toHaveLength(1);
     expect(built.tiersCompleted).toBe(0);
@@ -403,7 +383,7 @@ describe("buildSchedule", () => {
       constraints: cons({ startWindows: [{ target: { kind: "entrant", id: "E3" }, notAfter: T0 }] }),
     });
     delete config.window;
-    const built = await buildSchedule({ fixtures: cornerFixtures, config });
+    const built = await buildSchedule({ fixtures: cornerFixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(built.assignments.every((a) => a.startAt >= T0)).toBe(true);
     expect(built.engine).toBe("greedy");
     expect(built.tiersCompleted).toBe(0);
@@ -429,7 +409,7 @@ describe("buildSchedule", () => {
       fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 } }),
       fx("b", "E3", "E4", { locked: { court: "C1", startAt: T0 } }),
     ];
-    const built = await buildSchedule({ fixtures, config, wallMs: 0 });
+    const built = await buildSchedule({ fixtures, config, wallMs: 0, solve: unavailableSolver, log: silentLogger });
     expect(built.status).not.toBe("infeasible");
     expect(built.budgetExpired).toBe(true);
   }, 180_000);
@@ -439,6 +419,8 @@ describe("buildSchedule", () => {
       fixtures: cornerFixtures,
       config: cornerConfig,
       wallMs: 0,
+      solve: unavailableSolver,
+      log: silentLogger,
     });
     expect(built.budgetExpired).toBe(true);
     // `not_searched`, and this case is the clearest statement of what that
@@ -464,7 +446,7 @@ describe("buildSchedule", () => {
       fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 } }),
       fx("b", "E3", "E4", { locked: { court: "C1", startAt: T0 } }),
     ];
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(built.status).toBe("infeasible");
     expect(built.engine).toBe("greedy");
     // Both cards are double-booked, so NEITHER is legally placed and the seed
@@ -508,7 +490,7 @@ describe("buildSchedule", () => {
         startWindows: [{ target: { kind: "entrant", id: "E1" }, notAfter: T0 - MIN }],
       }),
     });
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
@@ -516,7 +498,7 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures: [fx("a", "E1", "E2")], config });
+    const built = await buildSchedule({ fixtures: [fx("a", "E1", "E2")], config, solve, log: silentLogger });
     expect(built.status).toBe("infeasible");
     expect(built.metrics.placed).toBe(0);
     expect(built.contradictoryPins).toBeUndefined();
@@ -533,7 +515,7 @@ describe("buildSchedule", () => {
       fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 + 60 * MIN } }),
       fx("b", "E3", "E4"),
     ];
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(built.status).not.toBe("infeasible");
     expect(built.metrics.placed).toBe(2);
     expect(built.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 60 * MIN);
@@ -556,7 +538,7 @@ describe("buildSchedule", () => {
     // an entrant has already been told when they play, and a better board is
     // not worth breaking that promise. The unfrozen run is asserted first so
     // this cannot pass against a solver that never had the option.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -567,11 +549,11 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const free = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const free = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve, log: silentLogger });
     expect(free.metrics.placed).toBe(2);
     expect(free.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
 
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve2 = resolvingSolver({
       assignments: [],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
@@ -583,6 +565,8 @@ describe("buildSchedule", () => {
       fixtures: cornerFixtures,
       config: cornerConfig,
       frozen: ["a"],
+      solve: solve2,
+      log: silentLogger,
     });
     expect(built.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0);
     expect(built.metrics.placed).toBe(1);
@@ -624,7 +608,7 @@ describe("buildSchedule", () => {
     expect(seed.conflicts.map((c) => c.reason)).toEqual(["start_window"]);
 
     // Unfrozen, the solver takes the better board and `a` moves onto the grid.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -635,13 +619,13 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const free = await buildSchedule({ fixtures, config });
+    const free = await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(free.metrics.placed).toBe(2);
     expect(free.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
 
     // Frozen, 09:07 has to survive — and 09:07 is not a slot the lattice
     // generates, so it survives only because the anchor was pinned into it.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve2 = resolvingSolver({
       assignments: [],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
@@ -649,7 +633,7 @@ describe("buildSchedule", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures, config, frozen: ["a"] });
+    const built = await buildSchedule({ fixtures, config, frozen: ["a"], solve: solve2, log: silentLogger });
     expect(built.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 7 * MIN);
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
@@ -683,30 +667,26 @@ describe("buildSchedule", () => {
     // `person_overlap` too, which is the population `deltaConflicts` exists to
     // keep editable. The breach is greedy's, so it is not laid at the solver's
     // door — it is reported, and the better board still ships.
-    const spy = vi.spyOn(log, "error").mockImplementation(() => undefined);
-    try {
-      vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
-        assignments: [{ fixtureId: "b", court: "C1", startAtMs: T0 }],
-        status: "OPTIMAL",
-        tiersCompleted: TIER_COUNT,
-        objectiveValues: provedTiers(),
-        elapsedMs: 5,
-        wallExhausted: false,
-      });
-      const config = cfg({ courts: ["C1"], window: { from: T0, to: T0 + 60 * MIN } });
-      const fixtures = [
-        fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 + 120 * MIN } }),
-        fx("b", "E3", "E4"),
-      ];
-      const built = await buildSchedule({ fixtures, config });
-      expect(built.status).toBe("ok");
-      expect(built.engine).toBe("optimized");
-      expect(built.metrics.placed).toBe(2);
-      expect(built.conflicts.some((c) => c.fixtureId === "a" && c.reason === "window")).toBe(true);
-      expect(spy).not.toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
+    const { lines, log } = recordingLogger();
+    const solve = resolvingSolver({
+      assignments: [{ fixtureId: "b", court: "C1", startAtMs: T0 }],
+      status: "OPTIMAL",
+      tiersCompleted: TIER_COUNT,
+      objectiveValues: provedTiers(),
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
+    const config = cfg({ courts: ["C1"], window: { from: T0, to: T0 + 60 * MIN } });
+    const fixtures = [
+      fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 + 120 * MIN } }),
+      fx("b", "E3", "E4"),
+    ];
+    const built = await buildSchedule({ fixtures, config, solve, log });
+    expect(built.status).toBe("ok");
+    expect(built.engine).toBe("optimized");
+    expect(built.metrics.placed).toBe(2);
+    expect(built.conflicts.some((c) => c.fixtureId === "a" && c.reason === "window")).toBe(true);
+    expect(lines.filter((l) => l.level === "error")).toEqual([]);
   }, 180_000);
 
   // P10 review fix (A6, stranded-fixtures-and-capacity). Same pairwise/unary
@@ -736,7 +716,7 @@ describe("buildSchedule", () => {
       strandedCourtIds: ["C1"],
     };
     const fixtures = [fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 } }), fx("b", "E3", "E4")];
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(built.status).not.toBe("infeasible");
     expect(built.contradictoryPins).toBeUndefined();
     // Assert the conflict is REPORTED, not merely non-fatal — the `window`
@@ -767,24 +747,19 @@ describe("buildSchedule", () => {
     // greedy's one-card board. That is exactly the shape a future encoder
     // regression would take, and it is the only way to exercise the fallback
     // and the log without waiting for one.
-    vi.resetModules();
-    vi.doMock("./placement-client.ts", async () => {
-      const actual = await vi.importActual<typeof import("./placement-client.ts")>("./placement-client.ts");
-      return {
-        ...actual,
-        solveBuild: async () => ({
-          assignments: [
-            { fixtureId: "b", court: "C1", startAtMs: T0 },
-            { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
-          ],
-          status: "OPTIMAL",
-          tiersCompleted: TIER_COUNT,
-          objectiveValues: provedTiers(),
-          elapsedMs: 5,
-          wallExhausted: false,
-        }),
-      };
+    // The solver is injected now, so only `./calendar.ts` still needs a module mock.
+    const solve = resolvingSolver({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: TIER_COUNT,
+      objectiveValues: provedTiers(),
+      elapsedMs: 5,
+      wallExhausted: false,
     });
+    vi.resetModules();
     vi.doMock("./calendar.ts", async () => {
       const actual = await vi.importActual<typeof import("./calendar.ts")>("./calendar.ts");
       return {
@@ -802,26 +777,21 @@ describe("buildSchedule", () => {
     });
     try {
       const mod = await import("./build.ts");
-      // Spied AFTER the fresh import, matching it: `vi.resetModules()` gives
-      // this run's `build.ts` a fresh `./logger.ts` instance too (it is
-      // imported transitively), so a spy attached to a pre-reset `log` would
-      // watch an object this call never touches. Restoring it is left to the
-      // describe block's own `afterEach(() => vi.restoreAllMocks())` — this
-      // spy cannot outlive the `vi.resetModules()` below either way.
-      const { log } = await import("./logger.ts");
-      const spy = vi.spyOn(log, "error").mockImplementation(() => undefined);
-      const built = await mod.buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+      // A recording logger is a plain object, so it needs no matching fresh import: whichever `build.ts` instance runs
+      // hands its lines to the one it was given.
+      const { lines, log } = recordingLogger();
+      const built = await mod.buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve, log });
       expect(built.status).toBe("verifier_rejected");
       expect(built.engine).toBe("greedy");
       // The greedy seed, not the solver's better board: the organiser still
       // gets a board, and it is the one nothing new is wrong with.
       expect(built.assignments).toHaveLength(1);
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0]?.[1]).toContain("verifier rejected");
-      expect(spy.mock.calls[0]?.[0]).toMatchObject({ rejected: ["b:person_overlap"] });
+      const errors = lines.filter((l) => l.level === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toContain("verifier rejected");
+      expect(errors[0]?.fields).toMatchObject({ rejected: ["b:person_overlap"] });
     } finally {
       vi.doUnmock("./calendar.ts");
-      vi.doUnmock("./placement-client.ts");
       vi.resetModules();
     }
   }, 180_000);
@@ -976,13 +946,6 @@ describe("rejectedBlockingConflicts", () => {
 // others.
 describe("buildSchedule — lexicographic tiers", () => {
 
-  // See the identical comment in `describe("buildSchedule", ...)` above —
-  // `isolate: false` + no global mock-restore config means a `vi.spyOn` left
-  // standing here leaks into every later describe block in this file.
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   /** Four slots a side, two fixtures sharing E1. Greedy stacks both on C1 —
    *  it looks for the earliest legal TIME and takes the first court free at it,
    *  so the second card lands on C1 at 09:30 rather than beside the first. The
@@ -1001,7 +964,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     // makespan (60) and T2's idle gap (0, both already optimal on greedy's
     // own board) while balancing T3 to 0 — strictly better than greedy's
     // 60-minute imbalance from stacking both on C1.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "a", court: "C1", startAtMs: T0 },
         { fixtureId: "b", court: "C2", startAtMs: T0 + 30 * MIN },
@@ -1012,7 +975,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures: balanceFixtures, config: balanceConfig });
+    const built = await buildSchedule({ fixtures: balanceFixtures, config: balanceConfig, solve, log: silentLogger });
     expect(built.tiersCompleted).toBe(TIER_COUNT);
     expect(built.budgetExpired).toBe(false);
     expect(built.metrics.placed).toBe(2);
@@ -1044,7 +1007,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     // `b`/`c` unconstrained, `a` not before 09:45 — packing `a` last on the
     // one court (09:00/09:30/10:00) is one of the two 90-minute boards the
     // comment below names; either is a genuine improvement on greedy's 105.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "c", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -1056,7 +1019,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(built.metrics.placed).toBe(3);
     expect(built.metrics.makespanMinutes).toBe(90);
     // Forced, not incidental: 90 minutes over one court is three back-to-back
@@ -1109,7 +1072,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     // `a`/`d` share E1 — placing them back-to-back (rather than greedy's
     // a, c, d order) closes E1's idle gap to 0 without touching the
     // 90-minute makespan three back-to-back slots on one court already have.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "a", court: "C1", startAtMs: T0 },
         { fixtureId: "d", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -1121,7 +1084,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(built.metrics.placed).toBe(3);
     expect(built.metrics.worstIdleGapMinutes).toBe(0);
     expect(built.metrics.makespanMinutes).toBe(90);
@@ -1175,7 +1138,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     // asked", not to change the board, which is why D6 correctly reports
     // this as `already_optimal` via the greedy floor rather than `engine:
     // "optimized"`.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [
         { fixtureId: "a", court: "C1", startAtMs: T0 },
         { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -1186,7 +1149,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       elapsedMs: 5,
       wallExhausted: false,
     });
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(built.metrics.placed).toBe(2);
     expect(built.metrics.makespanMinutes).toBe(60);
     expect(built.metrics.courtImbalanceMinutes).toBe(60);
@@ -1229,14 +1192,6 @@ describe("buildSchedule — lexicographic tiers", () => {
 });
 
 describe("buildSchedule — the lattice is the configured courts", () => {
-  // Same reasoning as `describe("buildSchedule", ...)`'s own afterEach: with
-  // `isolate: false` a `vi.spyOn` left standing here is still active in
-  // "the solver queue cap" describe right below, whose own tests assert
-  // exact `solveBuild` call counts.
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   /** An immovable row parked on a court the organiser never configured. It is
    *  what drags "C2" into `repairCourts`, and therefore into the lattice. */
   const onC2: Assignment[] = [
@@ -1252,7 +1207,7 @@ describe("buildSchedule — the lattice is the configured courts", () => {
     // lattice does offer C2, and a solver allowed to use it places both cards.
     expect(buildGrid({ config, existing: onC2 }).slots.map((s) => s.court)).toEqual(["C1", "C2"]);
 
-    const built = await buildSchedule({ fixtures, config, existing: onC2 });
+    const built = await buildSchedule({ fixtures, config, existing: onC2, solve: unavailableSolver, log: silentLogger });
     expect(built.assignments.map((a) => a.court)).toEqual(["C1"]);
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
@@ -1266,7 +1221,7 @@ describe("buildSchedule — the lattice is the configured courts", () => {
       fx("a", "E1", "E2", { locked: { court: "C2", startAt: T0 } }),
       fx("b", "E3", "E4"),
     ];
-    const built = await buildSchedule({ fixtures, config, existing: onC2 });
+    const built = await buildSchedule({ fixtures, config, existing: onC2, solve: unavailableSolver, log: silentLogger });
     expect(built.status).not.toBe("infeasible");
     expect(built.metrics.placed).toBe(2);
     expect(built.assignments.find((x) => x.fixtureId === "a")).toMatchObject({
@@ -1291,7 +1246,7 @@ describe("buildSchedule — the lattice is the configured courts", () => {
     // eligibility for movable fixtures is governed separately by
     // `grid.slots`, unaffected by this list.
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return {
         assignments: [],
@@ -1304,7 +1259,7 @@ describe("buildSchedule — the lattice is the configured courts", () => {
     });
     const config = cfg({ courts: ["C1"], sessionWindows: [{ from: T0, to: T0 + 30 * MIN }] });
     const fixtures = [fx("a", "E1", "E2")];
-    await buildSchedule({ fixtures, config, existing: onC2 });
+    await buildSchedule({ fixtures, config, existing: onC2, solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.courts).toEqual(expect.arrayContaining(["C1", "C2"]));
   });
@@ -1328,7 +1283,7 @@ describe("buildSchedule — the solver queue cap", () => {
     // synchronously before it awaits anything, and nothing can decrement until a
     // solve finishes.
     const results = await Promise.all(
-      Array.from({ length: MAX_SOLVER_QUEUE + 2 }, () => buildSchedule({ fixtures, config })),
+      Array.from({ length: MAX_SOLVER_QUEUE + 2 }, () => buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger })),
     );
     const busy = results.filter((r) => r.status === "solver_busy");
 
@@ -1363,7 +1318,7 @@ describe("buildSchedule — the solver queue cap", () => {
     // through the public API rather than by exporting a reader: a fifth call
     // that is NOT refused is the same evidence, and it reds if the decrement is
     // dropped, which a reader export would only duplicate.
-    const after = await buildSchedule({ fixtures, config });
+    const after = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(after.status).not.toBe("solver_busy");
   }, 240_000);
 
@@ -1422,22 +1377,20 @@ describe("buildSchedule — the solver queue cap", () => {
       for (const resume of parked.splice(0)) resume();
     };
 
-    const spy = vi
-      .spyOn(await import("./placement-client.ts"), "solveBuild")
-      .mockImplementation((input: SolveBuildInput) => {
-        const ids = input.fixtures.map((f) => f.fixtureId).sort();
-        seen.push(ids.join(""));
-        // Keyed off the REQUEST, never off arrival order — an order-keyed stub
-        // hands back the right boards even when the caller/board pairing is
-        // wrong, which is the failure this case exists to catch.
-        if (openGate) return Promise.resolve(boardFor(ids));
-        return new Promise<SolveBuildOutcome>((resolve) => {
-          parked.push(() => resolve(boardFor(ids)));
-        });
+    const spy = fakeSolver((input: SolveBuildInput) => {
+      const ids = input.fixtures.map((f) => f.fixtureId).sort();
+      seen.push(ids.join(""));
+      // Keyed off the REQUEST, never off arrival order — an order-keyed stub
+      // hands back the right boards even when the caller/board pairing is
+      // wrong, which is the failure this case exists to catch.
+      if (openGate) return Promise.resolve(boardFor(ids));
+      return new Promise<SolveBuildOutcome>((resolve) => {
+        parked.push(() => resolve(boardFor(ids)));
       });
+    });
 
-    const first = buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
-    const second = buildSchedule({ fixtures: mirrorFixtures, config: mirrorConfig });
+    const first = buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve: spy, log: silentLogger });
+    const second = buildSchedule({ fixtures: mirrorFixtures, config: mirrorConfig, solve: spy, log: silentLogger });
     void first.catch(() => undefined);
     void second.catch(() => undefined);
     try {
@@ -1450,7 +1403,7 @@ describe("buildSchedule — the solver queue cap", () => {
       // instead of being refused cannot settle at all while the client is held
       // open, so without this the mutant that removes the cap fails by burning
       // the whole test timeout instead of by saying what went wrong.
-      const thirdCall = buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+      const thirdCall = buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve: spy, log: silentLogger });
       void thirdCall.catch(() => undefined);
       const third = await Promise.race([
         thirdCall.then((result) => ({ kind: "settled" as const, result })),
@@ -1485,7 +1438,7 @@ describe("buildSchedule — the solver queue cap", () => {
 
       // The slots were freed, and freed by the SOLVES settling rather than by
       // the refusal: a fourth call is admitted and reaches the client.
-      const fourth = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+      const fourth = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve: spy, log: silentLogger });
       expect(fourth.status).not.toBe("solver_busy");
       expect(spy).toHaveBeenCalledTimes(3);
     } finally {
@@ -1494,24 +1447,16 @@ describe("buildSchedule — the solver queue cap", () => {
       // so a build left in flight refuses the rest of the run's builds.
       release();
       await Promise.allSettled([first, second]);
-      spy.mockRestore();
     }
   }, 120_000);
 });
 
 // Task 06 — solveBuild now calls the placement service instead of z3. Every case
-// here mocks `placement-client.ts`'s `solveBuild` via `vi.spyOn(await
-// import(...))`, never `vi.doMock`: the recorded trap in this repo is that
-// `vi.doMock` (and this spy form too) is INERT if `build.ts` imports the
-// module STATICALLY, and it has previously passed 5/5 with the guard
-// deleted. `build.ts` loads `placement-client.ts` dynamically at the call site
-// for exactly this reason — see the comment there.
+// here hands `buildSchedule` an injected solver (`solve`), so there is no module
+// to mock and no spy to leak: since the solver port (engine-split D11) the engine
+// takes the solver as an argument instead of importing the client.
 describe("buildSchedule — Placement path", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  const minimalInput = (over: Partial<BuildInput> = {}): BuildInput => ({
+  const minimalInput = (over: Partial<BuildProblem> = {}): BuildProblem => ({
     fixtures: [fx("f1", "E1", "E2")],
     config: cfg(),
     ...over,
@@ -1537,13 +1482,13 @@ describe("buildSchedule — Placement path", () => {
     // header) to place only 1 of 2 via greedy and 2 of 2 via a real solve
     // (`[b@C1+0, a@C1+30]`) — a genuine, provable improvement, mocked here
     // rather than solved for real.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
       ]),
     );
-    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve, log: silentLogger });
     expect(result.engine).toBe("optimized");
     expect(result.assignments).toHaveLength(2);
     // proves `validateAssignments` still ran over the placement board — the
@@ -1563,10 +1508,10 @@ describe("buildSchedule — Placement path", () => {
     // `cornerConfig`/`cornerFixtures`, whose greedy floor places 1 of 2. 0
     // placed is strictly WORSE than greedy's 1, so the seed must ship, not
     // the empty board placement actually returned.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([]),
     );
-    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve, log: silentLogger });
     expect(result.engine).toBe("greedy");
     expect(result.assignments.map((a) => a.fixtureId)).toEqual(["a"]);
     expect(result.metrics.placed).toBe(1);
@@ -1574,9 +1519,9 @@ describe("buildSchedule — Placement path", () => {
 
   it("falls back to greedy on a Placement rejection, exactly like a z3 gate-reject", async () => {
     const rejection = new Error("placement solveBuild exceeded deadline");
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(rejection);
-    const spy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-    const result = await buildSchedule(minimalInput());
+    const solve = fakeSolver(() => Promise.reject(rejection));
+    const { lines, log } = recordingLogger();
+    const result = await buildSchedule({ ...minimalInput(), solve, log });
     expect(result.engine).toBe("greedy");
     expect(result.assignments.map((a) => a.fixtureId)).toEqual(["f1"]);
     // A plain (non-PlacementError) rejection — an unclassified bug at the call
@@ -1589,12 +1534,13 @@ describe("buildSchedule — Placement path", () => {
     // "placement is slow" with nothing anywhere naming the actual cause.
     // Curated fields, not the raw `Error` object — see the log call's own
     // comment — so this asserts on `message`/`failure`, not `err` itself.
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+    const warns = lines.filter((l) => l.level === "warn");
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.fields).toMatchObject({
       failure: undefined,
       message: rejection.message,
     });
-    expect(spy.mock.calls[0]?.[1]).toContain("placement service unavailable");
+    expect(warns[0]?.message).toContain("placement service unavailable");
   });
 
   it("logs the PlacementError's own `failure` reason when the rejection carries one", async () => {
@@ -1602,10 +1548,10 @@ describe("buildSchedule — Placement path", () => {
       name: "PlacementError",
       failure: "unauthenticated",
     });
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(rejection);
-    const spy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-    await buildSchedule(minimalInput());
-    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+    const solve = fakeSolver(() => Promise.reject(rejection));
+    const { lines, log } = recordingLogger();
+    await buildSchedule({ ...minimalInput(), solve, log });
+    expect(lines.filter((l) => l.level === "warn")[0]?.fields).toMatchObject({
       failure: "unauthenticated",
       message: rejection.message,
     });
@@ -1640,18 +1586,18 @@ describe("buildSchedule — Placement path", () => {
     "unavailable",
     "transport",
   ] as const)("maps a rejected PlacementError(%s) to solver_unavailable, never solver_busy", async (failure) => {
-    const { PlacementError } = await import("./placement-client.ts");
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(
-      new PlacementError(failure, `synthetic ${failure} for the mapping test`),
+    // The engine duck-types a rejection's `failure` (it knows no transport), so a plain Error carrying it is the whole shape.
+    const solve = fakeSolver(() =>
+      Promise.reject(Object.assign(new Error(`synthetic ${failure} for the mapping test`), { failure })),
     );
-    const result = await buildSchedule(minimalInput());
+    const result = await buildSchedule({ ...minimalInput(), solve, log: silentLogger });
     expect(result.engine).toBe("greedy");
     expect(result.status).toBe("solver_unavailable");
     expect(result.status).not.toBe("solver_busy");
   });
 
   it("reports a board Placement itself marks ERROR the same way as a rejection — never trusted, and defaults to solver_unavailable", async () => {
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [{ fixtureId: "f1", court: "C1", startAtMs: T0 }],
       status: "ERROR",
       tiersCompleted: 0,
@@ -1660,7 +1606,7 @@ describe("buildSchedule — Placement path", () => {
       wallExhausted: false,
       error: { code: "internal", message: "boom" },
     });
-    const result = await buildSchedule(minimalInput());
+    const result = await buildSchedule({ ...minimalInput(), solve, log: silentLogger });
     expect(result.engine).toBe("greedy");
     // "internal" is not "SOLVER_BUSY", so this is the DEFAULT arm — a genuine
     // outage, not admission-control contention (Task 06b, Correction 2).
@@ -1677,7 +1623,7 @@ describe("buildSchedule — Placement path", () => {
   // (`build.ts:369`, `result-strip.tsx`'s `statusKey` already handles it),
   // never the new `solver_unavailable`.
   it("maps ERROR + error.code SOLVER_BUSY to the existing solver_busy, not the new solver_unavailable", async () => {
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [],
       status: "ERROR",
       tiersCompleted: 0,
@@ -1686,7 +1632,7 @@ describe("buildSchedule — Placement path", () => {
       wallExhausted: false,
       error: { code: "SOLVER_BUSY", message: "admission control refused a concurrent solve" },
     });
-    const result = await buildSchedule(minimalInput());
+    const result = await buildSchedule({ ...minimalInput(), solve, log: silentLogger });
     expect(result.engine).toBe("greedy");
     expect(result.status).toBe("solver_busy");
     expect(result.status).not.toBe("solver_unavailable");
@@ -1703,7 +1649,7 @@ describe("buildSchedule — Placement path", () => {
   // `cornerConfig` (measured: greedy places 1 of 2, `[a]`) proves the
   // GREEDY FLOOR still ships, not an empty board and not a fabricated proof.
   it("maps an UNKNOWN outcome (the chain proved nothing) to not_searched, not ok", async () => {
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [],
       status: "UNKNOWN",
       tiersCompleted: 0,
@@ -1711,7 +1657,7 @@ describe("buildSchedule — Placement path", () => {
       elapsedMs: 5,
       wallExhausted: true,
     });
-    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve, log: silentLogger });
     expect(result.engine).toBe("greedy");
     expect(result.status).toBe("not_searched");
     expect(result.status).not.toBe("ok");
@@ -1721,13 +1667,11 @@ describe("buildSchedule — Placement path", () => {
 
   it("derives a dense dayIndex matching the verifier's own dayKeyInTz bucketing (obligation 1)", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
-    await buildSchedule(
-      minimalInput({ config: cfg({ window: { from: T0, to: T0 + 28 * 60 * MIN } }) }),
-    );
+    await buildSchedule({ ...minimalInput({ config: cfg({ window: { from: T0, to: T0 + 28 * 60 * MIN } }) }), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const slots = captured!.grid.slots;
     expect(slots.length).toBeGreaterThan(0);
@@ -1749,7 +1693,7 @@ describe("buildSchedule — Placement path", () => {
 
   it("sends dayIndex 0 for every slot and omits maxFixturesPerDay from every rule group when tz is undefined (obligation 1)", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -1760,9 +1704,7 @@ describe("buildSchedule — Placement path", () => {
         { type: "max_fixtures_per_day" as const, count: 1, scope: { kind: "division" as const, divisionId: "D1" } },
       ],
     };
-    await buildSchedule(
-      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
-    );
+    await buildSchedule({ ...minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }), solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.grid.slots.length).toBeGreaterThan(0);
     expect(captured!.grid.slots.every((s) => s.dayIndex === 0)).toBe(true);
@@ -1784,13 +1726,11 @@ describe("buildSchedule — Placement path", () => {
   // but not sufficient without this.
   it("forwards a fixture's people onto the wire, as data separate from entrantIds (C10)", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
-    await buildSchedule(
-      minimalInput({ fixtures: [fx("f1", "E1", "E2", { people: ["p1", "p2"] })] }),
-    );
+    await buildSchedule({ ...minimalInput({ fixtures: [fx("f1", "E1", "E2", { people: ["p1", "p2"] })] }), solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.fixtures).toEqual([
       { fixtureId: "f1", entrantIds: ["E1", "E2"], divisionId: "", roundNo: 1, people: ["p1", "p2"] },
@@ -1803,17 +1743,19 @@ describe("buildSchedule — Placement path", () => {
   // via `over` (`SchedulableFixture.home`/`.away` are themselves optional).
   it("forwards people for a fixture with no entrants at all (an undecided knockout slot)", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
-    await buildSchedule(
-      minimalInput({
+    await buildSchedule({
+      ...minimalInput({
         fixtures: [
           fx("f1", "E1", "E2", { home: undefined, away: undefined, people: ["p1", "p2", "p3", "p4"] }),
         ],
       }),
-    );
+      solve,
+      log: silentLogger,
+    });
     expect(captured).toBeDefined();
     expect(captured!.fixtures).toEqual([
       { fixtureId: "f1", entrantIds: [], divisionId: "", roundNo: 1, people: ["p1", "p2", "p3", "p4"] },
@@ -1827,18 +1769,18 @@ describe("buildSchedule — Placement path", () => {
   // slot concern at all).
   it("sends an empty people array, not undefined, when a fixture carries none", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
-    await buildSchedule(minimalInput());
+    await buildSchedule({ ...minimalInput(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.fixtures[0]?.people).toEqual([]);
   });
 
   it("derives a rule group's maxFixturesPerDay from a division-scoped max_fixtures_per_day hard rule", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -1848,9 +1790,7 @@ describe("buildSchedule — Placement path", () => {
         { type: "max_fixtures_per_day" as const, count: 2, scope: { kind: "division" as const, divisionId: "D1" } },
       ],
     };
-    await buildSchedule(
-      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
-    );
+    await buildSchedule({ ...minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }), solve, log: silentLogger });
     // `constraints.dayCapByDivision` (the OLDER, division-only field this used
     // to be checked against) is retired; `ruleGroups` is the only path left.
     expect(captured!.ruleGroups).toEqual([
@@ -1869,7 +1809,7 @@ describe("buildSchedule — Placement path", () => {
   // makes the obvious mistake a compile error.
   it("emits no divisionRules field and no constraints.restByDivision/dayCapByDivision", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -1877,9 +1817,7 @@ describe("buildSchedule — Placement path", () => {
       { type: "max_fixtures_per_day", count: 2, scope: { kind: "division", divisionId: "D1" } },
     ];
     const config = { ...cfg(), hard, restByDivision: { D1: 30 } };
-    await buildSchedule(
-      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
-    );
+    await buildSchedule({ ...minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }), solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured).not.toHaveProperty("divisionRules");
     expect(Object.keys(captured!.constraints).sort()).toEqual(["gapMinutes", "matchMinutes"]);
@@ -1891,16 +1829,18 @@ describe("buildSchedule — Placement path", () => {
 
   it("splits a locked fixture into an existing row and excludes it from fixtures (obligation 3)", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome([{ fixtureId: "free", court: "C1", startAtMs: T0 + 30 * MIN }]);
     });
     const locked = { court: "C1", startAt: T0 };
-    const result = await buildSchedule(
-      minimalInput({
+    const result = await buildSchedule({
+      ...minimalInput({
         fixtures: [fx("pinned", "E1", "E2", { locked }), fx("free", "E3", "E4")],
       }),
-    );
+      solve,
+      log: silentLogger,
+    });
     expect(captured).toBeDefined();
     // The pinned fixture must NOT be one of the fixtures placement is asked to
     // place — sending it there too is exactly what silently un-pins it
@@ -1931,15 +1871,13 @@ describe("buildSchedule — Placement path", () => {
     // `placement-cutover.spec.ts`'s e2e test (the same regression, against a
     // live, unmocked service) for the fuller picture this one unit doesn't
     // need to carry alone.
-    const spy = vi
-      .spyOn(await import("./placement-client.ts"), "solveBuild")
-      .mockResolvedValue(okOutcome([{ fixtureId: "f1", court: "C1", startAtMs: T0 }]));
+    const spy = resolvingSolver(okOutcome([{ fixtureId: "f1", court: "C1", startAtMs: T0 }]));
     const config = cfg({
       courts: ["C1", "C2"],
       window: { from: T0, to: T0 + 120 * MIN },
       blackouts: [{ court: "C1", from: T0 + 90 * MIN, to: T0 + 120 * MIN }],
     });
-    const result = await buildSchedule(minimalInput({ config }));
+    const result = await buildSchedule({ ...minimalInput({ config }), solve: spy, log: silentLogger });
     expect(spy).toHaveBeenCalledOnce();
     // The mocked reply ties greedy's own placement of the single, otherwise
     // unconstrained fixture (both land it on C1 at T0, the earliest legal
@@ -1998,7 +1936,7 @@ describe("buildSchedule — Placement path", () => {
 
   it("expands a universal scope into one RuleGroup per entity, not one over the board", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2013,7 +1951,7 @@ describe("buildSchedule — Placement path", () => {
       { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } },
     ];
 
-    await buildSchedule({ fixtures, config: { ...cfg(), hard } });
+    await buildSchedule({ fixtures, config: { ...cfg(), hard }, solve, log: silentLogger });
     expect(captured).toBeDefined();
 
     // ONE group per entrant, not one group holding all three fixtures. The
@@ -2034,7 +1972,7 @@ describe("buildSchedule — Placement path", () => {
 
   it("expands every_person across entrants, catching the player in two divisions", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2050,7 +1988,7 @@ describe("buildSchedule — Placement path", () => {
       { type: "max_fixtures_per_day", count: 1, scope: { kind: "every_person" } },
     ];
 
-    await buildSchedule({ fixtures, config: { ...cfg(), hard } });
+    await buildSchedule({ fixtures, config: { ...cfg(), hard }, solve, log: silentLogger });
     expect(captured).toBeDefined();
 
     const groups = captured!.ruleGroups!;
@@ -2072,7 +2010,7 @@ describe("buildSchedule — Placement path", () => {
   // this comparing against the real thing.
   it("derives a rule group's fixture set from scopeCoversFixture itself, for every scope kind", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2097,7 +2035,7 @@ describe("buildSchedule — Placement path", () => {
     }));
     const config = { ...cfg(), hard };
 
-    await buildSchedule({ fixtures, config });
+    await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.ruleGroups).toHaveLength(scopes.length);
 
@@ -2127,7 +2065,7 @@ describe("buildSchedule — Placement path", () => {
   // a scope the OLD, division-only field could never have carried at all.
   it("sends a competition-scoped max_fixtures_per_day rule via ruleGroups, covering every division", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2137,7 +2075,7 @@ describe("buildSchedule — Placement path", () => {
     ];
     const config = { ...cfg(), hard };
 
-    await buildSchedule({ fixtures, config });
+    await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.ruleGroups).toEqual([
       { fixtureIds: ["f1", "f2"], minRestMinutes: undefined, maxFixturesPerDay: 3 },
@@ -2153,7 +2091,7 @@ describe("buildSchedule — Placement path", () => {
   // this run's own pinned fixture correctly reference positions 0 and 1.
   it("keeps an empty-fixture-set rule group at its own array position, and attributes both an obstacle and a pin to it", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2181,7 +2119,7 @@ describe("buildSchedule — Placement path", () => {
     ];
     const config = { ...cfg(), hard };
 
-    await buildSchedule({ fixtures, config, existing: [obstacle] });
+    await buildSchedule({ fixtures, config, existing: [obstacle], solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.ruleGroups).toEqual([
       { fixtureIds: [], minRestMinutes: 15, maxFixturesPerDay: undefined },
@@ -2222,7 +2160,7 @@ describe("buildSchedule — Placement path", () => {
   it("leaves every pre-#21 field of the request unchanged whether ruleGroups is populated or not", async () => {
     const capture = async (hard: HardConstraint[] | undefined): Promise<SolveBuildInput> => {
       let captured: SolveBuildInput | undefined;
-      vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      const solve = fakeSolver(async (input) => {
         captured = input;
         return okOutcome();
       });
@@ -2231,8 +2169,7 @@ describe("buildSchedule — Placement path", () => {
         fx("f2", "E3", "E4", { divisionId: "D1", locked: { court: "C1", startAt: T0 } }),
       ];
       const config = { ...cfg(), ...(hard !== undefined ? { hard } : {}) };
-      await buildSchedule({ fixtures, config });
-      vi.restoreAllMocks();
+      await buildSchedule({ fixtures, config, solve, log: silentLogger });
       return captured!;
     };
 
@@ -2276,7 +2213,7 @@ describe("buildSchedule — Placement path", () => {
   // rule would.
   it("turns a settings-level restByDivision with no typed rest rule into a rule group scoped to that division", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2289,7 +2226,7 @@ describe("buildSchedule — Placement path", () => {
       fx("f3", "E5", "E6", { divisionId: "D2" }),
     ];
     const config = { ...cfg(), restByDivision: { D1: 25 } };
-    await buildSchedule({ fixtures, config });
+    await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.ruleGroups).toEqual([{ fixtureIds: ["f1", "f2"], minRestMinutes: 25, maxFixturesPerDay: undefined }]);
   });
@@ -2300,7 +2237,7 @@ describe("buildSchedule — Placement path", () => {
   // `ruleGroups` and orphaned.
   it("carries a pin's synthetic division-rest group index in its ruleGroupIndices on the wire", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2310,7 +2247,7 @@ describe("buildSchedule — Placement path", () => {
       fx("free", "E3", "E4", { divisionId: "D1" }),
     ];
     const config = { ...cfg(), restByDivision: { D1: 20 } };
-    await buildSchedule({ fixtures, config });
+    await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(captured).toBeDefined();
     expect(captured!.ruleGroups).toEqual([{ fixtureIds: ["free"], minRestMinutes: 20, maxFixturesPerDay: undefined }]);
     const pinnedRow = captured!.existing.find((e) => e.fixtureId === "pinned");
@@ -2324,7 +2261,7 @@ describe("buildSchedule — Placement path", () => {
   // that matches BOTH sources ending up with BOTH indices, in order.
   it("keeps a typed rule's index stable when a synthetic division-rest group is appended after it", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2335,7 +2272,7 @@ describe("buildSchedule — Placement path", () => {
     ];
     const hard: HardConstraint[] = [{ type: "max_fixtures_per_day", count: 3, scope: { kind: "competition" } }];
     const config = { ...cfg(), hard, restByDivision: { D1: 20 } };
-    await buildSchedule({ fixtures, config });
+    await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect(captured).toBeDefined();
     // Index 0 is still the typed, competition-scoped rule (covers the one free
     // fixture, "free"); index 1 is the new synthetic D1 group, appended after
@@ -2362,7 +2299,7 @@ describe("buildSchedule — Placement path", () => {
   it("omits maxFixturesPerDay from a rule group when tz is undefined, and includes it when tz is set", async () => {
     const run = async (tz: string | undefined): Promise<SolveBuildInput> => {
       let captured: SolveBuildInput | undefined;
-      vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      const solve = fakeSolver(async (input) => {
         captured = input;
         return okOutcome();
       });
@@ -2371,8 +2308,7 @@ describe("buildSchedule — Placement path", () => {
         { type: "max_fixtures_per_day", count: 2, scope: { kind: "division", divisionId: "D1" } },
       ];
       const config = { ...cfg(), tz, hard };
-      await buildSchedule({ fixtures, config });
-      vi.restoreAllMocks();
+      await buildSchedule({ fixtures, config, solve, log: silentLogger });
       return captured!;
     };
 
@@ -2389,7 +2325,7 @@ describe("buildSchedule — Placement path", () => {
 
   it("forwards roundNo on the wire for a round-bearing fixture, omits it for a round-less one", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2397,7 +2333,7 @@ describe("buildSchedule — Placement path", () => {
       fx("with-round", "E1", "E2", { roundNo: 3 }),
       fx("no-round", "E3", "E4", { roundNo: undefined }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
     expect(byId.get("with-round")?.roundNo).toBe(3);
@@ -2406,7 +2342,7 @@ describe("buildSchedule — Placement path", () => {
 
   it("forwards a pin's round when exactly one round-robin division is in play", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2415,7 +2351,7 @@ describe("buildSchedule — Placement path", () => {
       fx("movable", "E1", "E2", { roundNo: 1, divisionId: "D1" }),
       fx("pinned", "E3", "E4", { roundNo: 2, divisionId: "D1", locked }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
     expect(pinnedRow?.roundNo).toBe(2);
@@ -2428,7 +2364,7 @@ describe("buildSchedule — Placement path", () => {
     // the one case build.ts itself cannot guarantee is unambiguous, and it
     // must not guess.
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2438,7 +2374,7 @@ describe("buildSchedule — Placement path", () => {
       fx("d2-movable", "E5", "E6", { roundNo: 1, divisionId: "D2" }),
       fx("d1-pinned", "E3", "E4", { roundNo: 2, divisionId: "D1", locked }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
     expect(pinnedRow?.roundNo).toBeUndefined();
@@ -2463,7 +2399,7 @@ describe("buildSchedule — Placement path", () => {
   // no business being compared against stage A's.
   it("does not forward a pin's round when it belongs to a DIFFERENT round-robin stage than the single clean movable one", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2472,7 +2408,7 @@ describe("buildSchedule — Placement path", () => {
       fx("stageA-movable", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
       fx("stageB-pinned", "E3", "E4", { roundNo: 1, divisionId: "D1", stageId: "B", locked }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
     expect(pinnedRow?.roundNo).toBeUndefined();
@@ -2487,7 +2423,7 @@ describe("buildSchedule — Placement path", () => {
   // load-bearing, not merely along for the ride behind stageId.
   it("does not forward a pin's round when it belongs to a DIFFERENT pool of the same round-robin stage than the single clean movable one", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
@@ -2496,7 +2432,7 @@ describe("buildSchedule — Placement path", () => {
       fx("poolA-movable", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "S", poolId: "A" }),
       fx("poolB-pinned", "E3", "E4", { roundNo: 1, divisionId: "D1", stageId: "S", poolId: "B", locked }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
     expect(pinnedRow?.roundNo).toBeUndefined();
@@ -2514,11 +2450,11 @@ describe("buildSchedule — Placement path", () => {
     // `innocent` third fixture in the SAME division, sharing no dependency
     // edge of its own, whose round is stripped too.
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver((input) => {
       captured = input;
-      return okOutcome();
+      return Promise.resolve(okOutcome());
     });
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const { lines, log } = recordingLogger();
     const fixtures = [
       fx("semi", "E1", "E2", { roundNo: 1, divisionId: "D1" }),
       fx("final", "E3", "E4", { roundNo: 2, divisionId: "D1" }),
@@ -2528,24 +2464,26 @@ describe("buildSchedule — Placement path", () => {
       fixtures,
       config: cfg(),
       dependencies: [{ fixtureId: "final", dependsOn: "semi", direct: true }],
+      solve,
+      log,
     });
     expect(captured).toBeDefined();
     const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
     expect(byId.get("semi")?.roundNo).toBeUndefined();
     expect(byId.get("final")?.roundNo).toBeUndefined();
     expect(byId.get("innocent")?.roundNo).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0]?.[1]).toContain("stripping round");
-    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+    const warns = lines.filter((l) => l.level === "warn");
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.message).toContain("stripping round");
+    expect(warns[0]?.fields).toMatchObject({ divisions: ["D1"] });
   });
 
   it("does not strip an untouched division's rounds when a different division is contaminated", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
-    vi.spyOn(log, "warn").mockImplementation(() => undefined);
     const fixtures = [
       fx("d1-semi", "E1", "E2", { roundNo: 1, divisionId: "D1" }),
       fx("d1-final", "E3", "E4", { roundNo: 2, divisionId: "D1" }),
@@ -2555,6 +2493,8 @@ describe("buildSchedule — Placement path", () => {
       fixtures,
       config: cfg(),
       dependencies: [{ fixtureId: "d1-final", dependsOn: "d1-semi", direct: true }],
+      solve,
+      log: silentLogger,
     });
     expect(captured).toBeDefined();
     const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
@@ -2574,40 +2514,40 @@ describe("buildSchedule — Placement path", () => {
   // mechanism the dependency-edge contamination guard already uses.
   it("strips rounds for a division whose round-bearing fixtures span more than one pool", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver((input) => {
       captured = input;
-      return okOutcome();
+      return Promise.resolve(okOutcome());
     });
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const { lines, log } = recordingLogger();
     const fixtures = [
       fx("poolA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", poolId: "A" }),
       fx("poolA-r2", "E3", "E4", { roundNo: 2, divisionId: "D1", poolId: "A" }),
       fx("poolB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", poolId: "B" }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log });
     expect(captured).toBeDefined();
     const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
     expect(byId.get("poolA-r1")?.roundNo).toBeUndefined();
     expect(byId.get("poolA-r2")?.roundNo).toBeUndefined();
     expect(byId.get("poolB-r1")?.roundNo).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0]?.[1]).toContain("span more than one pool");
-    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+    const warns = lines.filter((l) => l.level === "warn");
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.message).toContain("span more than one pool");
+    expect(warns[0]?.fields).toMatchObject({ divisions: ["D1"] });
   });
 
   it("does not strip a single-pool division when a DIFFERENT division has multiple pools", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
-    vi.spyOn(log, "warn").mockImplementation(() => undefined);
     const fixtures = [
       fx("d1-poolA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", poolId: "A" }),
       fx("d1-poolB-r1", "E3", "E4", { roundNo: 1, divisionId: "D1", poolId: "B" }),
       fx("d2-clean", "E5", "E6", { roundNo: 1, divisionId: "D2" }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
     expect(byId.get("d1-poolA-r1")?.roundNo).toBeUndefined();
@@ -2626,40 +2566,40 @@ describe("buildSchedule — Placement path", () => {
   // fix-loop named. `stageId` differs, which is now enough on its own.
   it("strips rounds for a division whose round-bearing fixtures span more than one round-robin STAGE, even with no pool on either side", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver((input) => {
       captured = input;
-      return okOutcome();
+      return Promise.resolve(okOutcome());
     });
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const { lines, log } = recordingLogger();
     const fixtures = [
       fx("stageA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
       fx("stageA-r2", "E3", "E4", { roundNo: 2, divisionId: "D1", stageId: "A" }),
       fx("stageB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", stageId: "B" }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log });
     expect(captured).toBeDefined();
     const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
     expect(byId.get("stageA-r1")?.roundNo).toBeUndefined();
     expect(byId.get("stageA-r2")?.roundNo).toBeUndefined();
     expect(byId.get("stageB-r1")?.roundNo).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0]?.[1]).toContain("span more than one pool");
-    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+    const warns = lines.filter((l) => l.level === "warn");
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.message).toContain("span more than one pool");
+    expect(warns[0]?.fields).toMatchObject({ divisions: ["D1"] });
   });
 
   it("does not strip a single-stage division when a DIFFERENT division has multiple round-robin stages", async () => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       captured = input;
       return okOutcome();
     });
-    vi.spyOn(log, "warn").mockImplementation(() => undefined);
     const fixtures = [
       fx("d1-stageA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
       fx("d1-stageB-r1", "E3", "E4", { roundNo: 1, divisionId: "D1", stageId: "B" }),
       fx("d2-clean", "E5", "E6", { roundNo: 1, divisionId: "D2", stageId: "A" }),
     ];
-    await buildSchedule({ fixtures, config: cfg() });
+    await buildSchedule({ fixtures, config: cfg(), solve, log: silentLogger });
     expect(captured).toBeDefined();
     const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
     expect(byId.get("d1-stageA-r1")?.roundNo).toBeUndefined();
@@ -2688,8 +2628,8 @@ describe("buildSchedule — Placement path", () => {
   // rest) has anything to say — round order is the only rule that could
   // possibly fire either way.
   it("does not reject a genuinely valid placement board over a false cross-stage round comparison in its OWN encoder/verifier self-check", async () => {
-    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => undefined);
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async () =>
+    const { lines, log } = recordingLogger();
+    const solve = resolvingSolver(
       okOutcome([
         { fixtureId: "stageB-r1", court: "C1", startAtMs: T0 },
         { fixtureId: "stageB-r2", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -2703,13 +2643,13 @@ describe("buildSchedule — Placement path", () => {
       fx("stageB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", stageId: "B" }),
       fx("stageB-r2", "E7", "E8", { roundNo: 2, divisionId: "D1", stageId: "B" }),
     ];
-    const result = await buildSchedule({ fixtures, config: cfg({ courts: ["C1"] }) });
+    const result = await buildSchedule({ fixtures, config: cfg({ courts: ["C1"] }), solve, log });
     // The exact symptom the review named: a valid solver board quietly
     // discarded, and a false "verifier rejected" error logged nobody would
     // ever see. Without the `stageId` line on `assignmentOf`, this fails —
-    // `status` comes back `"verifier_rejected"` and `errorSpy` is called
+    // `status` comes back `"verifier_rejected"` and an error line is logged
     // with the false-positive pair.
-    expect(errorSpy).not.toHaveBeenCalled();
+    expect(lines.filter((l) => l.level === "error")).toEqual([]);
     expect(result.status).not.toBe("verifier_rejected");
     expect(result.conflicts.filter((c) => c.reason === "order")).toEqual([]);
   });

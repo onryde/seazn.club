@@ -7,6 +7,8 @@
 //
 // src/testkit/** is excluded: it is a test harness, imported only from a
 // consumer's own test files, so vitest/fast-check stay devDependencies.
+// So is every `__tests__/` directory: its non-`.test.ts` files (fakes, scenario
+// tables) are helpers imported only by tests, and `solver-fakes.ts` imports `vi`.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -24,7 +26,7 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      if (entry !== "testkit") walk(full, out);
+      if (entry !== "testkit" && entry !== "__tests__") walk(full, out);
     } else if (entry.endsWith(".ts") && !entry.endsWith(".test.ts")) {
       out.push(full);
     }

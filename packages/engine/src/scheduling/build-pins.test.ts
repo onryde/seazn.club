@@ -17,6 +17,7 @@
 // exactly why it needs a test: nothing else covers it.
 import { describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
+import { silentLogger, unavailableSolver } from "./__tests__/solver-fakes.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 
 const MIN = 60_000;
@@ -62,6 +63,8 @@ describe("a frozen id that names no fixture in this run", () => {
       config,
       current: [ghost],
       frozen: ["ghost"],
+      solve: unavailableSolver,
+      log: silentLogger,
     });
 
     // The whole assertion. C9 is not a court the organiser configured, and a
@@ -83,8 +86,10 @@ describe("a frozen id that names no fixture in this run", () => {
       config,
       current: [ghost],
       frozen: ["ghost"],
+      solve: unavailableSolver,
+      log: silentLogger,
     });
-    const without = await buildSchedule({ fixtures, config });
+    const without = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(withGhost.assignments).toEqual(without.assignments);
     expect(withGhost.metrics).toEqual(without.metrics);
   }, 120_000);

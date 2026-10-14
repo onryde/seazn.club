@@ -151,12 +151,13 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
   });
 
   it("the scheduling files ruling 67 names as excluded are each excluded by name, and nothing else under scheduling/ is (the seven draw generators stay in)", () => {
-    for (const n of ["index", "logger", "solver-test-bounds", "placement-client", "payload-fixtures"]) {
+    // `solver-port` is not ruling 67's: the engine split (D11) added it, a file of interfaces and a no-op logger
+    for (const n of ["index", "logger", "solver-test-bounds", "placement-client", "payload-fixtures", "solver-port"]) {
       expect(Object.keys(STRYKER_EXCLUDED), n).toContain(`src/scheduling/${n}.ts`);
     }
     expect(Object.keys(STRYKER_EXCLUDED)).toContain("src/scheduling/generated/**");
     const scheduling = Object.keys(STRYKER_EXCLUDED).filter((k) => k.startsWith("src/scheduling/"));
-    expect(scheduling).toHaveLength(6);
+    expect(scheduling).toHaveLength(7);
     // the seven draw generators are not excluded and not placement, and the draws legs hold exactly those seven
     const draws = STRYKER_FAMILIES.draws.flatMap((g) => STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS]);
     for (const n of ["bracket", "bracket-layout", "roundrobin", "swiss", "americano", "participants", "feedgraph"]) {

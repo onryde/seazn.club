@@ -145,6 +145,7 @@ import {
   type RepairComponentReport,
 } from "./repair-decompose.ts";
 import { buildSchedule, type BuildInput } from "./build.ts";
+import type { EngineLogger, PlacementSolver } from "./solver-port.ts";
 
 /**
  * The largest component this driver will attempt, in fixtures (violators and
@@ -209,6 +210,10 @@ export interface DecomposedCpsatRepairInput {
   componentLimit?: number;
   /** Fires once per component, in solve order. */
   onComponent?: (report: RepairComponentReport) => void;
+  /** The solver every component's `buildSchedule` call asks (engine-split D11). REQUIRED, as on `BuildInput`. */
+  solve: PlacementSolver;
+  /** Where every component's `buildSchedule` call logs (engine-split D25). REQUIRED, as on `BuildInput`. */
+  log: EngineLogger;
 }
 
 const hasDayCap = (config: VerifyConfig): boolean =>
@@ -328,12 +333,12 @@ function nudgeForward(
  * coupling to `repair.ts`).
  *
  * SEQUENTIAL, one component at a time, one `buildSchedule` call per component
- * — never parallel. `build.ts:1196` still wraps every `buildSchedule` call in
- * the process-wide `withZ3LockAndReset` mutex (its own comment: the lock
- * "buys this call NOTHING correctness-wise" on the placement path but stays
- * because removing it is REFLOW's call too and the throughput cost is
- * unmeasured); parallel dispatch is a separate, benched task that has to
- * settle that question first.
+ * — never parallel. `buildSchedule` has no process-wide lock any more (the
+ * z3 mutex went with the solver); what bounds concurrent requests to the
+ * service is its per-process queue cap (`MAX_SOLVER_QUEUE` and the `queued`
+ * counter in `build.ts`, ahead of `buildSchedule`). Parallel dispatch is a
+ * separate, benched task that has to settle how that cap and the service's
+ * own admission control interact first.
  */
 export async function repairDecomposedCpsat(
   input: DecomposedCpsatRepairInput,
@@ -475,6 +480,8 @@ export async function repairDecomposedCpsat(
         dependencies,
         current: currentForComponent,
         wallMs: thisBudget,
+        solve: input.solve,
+        log: input.log,
       });
     } catch {
       // `buildSchedule` itself never throws in production use (every path

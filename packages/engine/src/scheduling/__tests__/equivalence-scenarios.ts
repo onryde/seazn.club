@@ -6,12 +6,9 @@
 //
 // A scenario is a request WITHOUT its ports plus a solver that answers it. What the solver is asked, what the logger is
 // told and what the engine returns are what `build-port-equivalence.test.ts` records; this file only declares the inputs.
-import { TIER_COUNT, TIER_NAMES, type BuildInput } from "../build.ts";
+import { TIER_COUNT, TIER_NAMES } from "../build.ts";
 import type { SchedulableFixture, SlotConfig } from "../calendar.ts";
-import type { SolveBuildInput, SolveBuildOutcome } from "../placement-client.ts";
-
-/** A build request without its ports — the shape tests and callers assemble before choosing a solver [R23]. */
-export type BuildProblem = BuildInput;
+import type { BuildProblem, SolveBuildInput, SolveBuildOutcome } from "../solver-port.ts";
 
 /** What the ORIGINAL test asserted about this case — never read back from the code under test. A field is present only
  *  where the source test pins it; `calls` is the number of times the solver must have been asked. */

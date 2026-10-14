@@ -37,7 +37,7 @@
 // that ends before the run starts holds nothing at all. Those still leave the
 // solver unable to search, and the fix there is to say so
 // (`status: "not_searched"`) rather than to claim a proof.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildSchedule, seedPinsOf, solveBuildForTests, TIER_COUNT, TIER_NAMES } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
 // `gridStepMinutes` moved out of `build-grid.ts` into its own module on main
@@ -53,7 +53,8 @@ import type { SchedulingConstraints } from "./constraints.ts";
 // expectation from it rather than restating its arithmetic — the second
 // implementation is the recurring defect in this subsystem.
 import { restFloor } from "./rest-floor.ts";
-import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
+import type { PlacementSolver, SolveBuildInput, SolveBuildOutcome } from "./solver-port.ts";
+import { fakeSolver, resolvingSolver, silentLogger, unavailableSolver } from "./__tests__/solver-fakes.ts";
 
 /** The six `(name, value)` rows a FULLY PROVED placement reply carries, in the
  *  ladder's order. Values are placeholders — nothing here reads them — but the
@@ -221,8 +222,8 @@ describe("the lattice holds the seed", () => {
 // --- end to end -------------------------------------------------------------
 
 describe("a rest-configured board is actually searched", () => {
-  // UN-SKIPPED (fix round 1), all three: each now mocks the file's own
-  // documented board directly. `seedPinsOf`/`pinned` are NOT part of the
+  // UN-SKIPPED (fix round 1), all three: each now answers with the file's own
+  // documented board via an injected solver. `seedPinsOf`/`pinned` are NOT part of the
   // grid `solveBuild` sends to placement any more (see build.ts's comment on
   // that removal) — placement does not need the incumbent representable in its
   // own lattice the way z3's incremental bound-walk did, and `build.ts`
@@ -232,10 +233,6 @@ describe("a rest-configured board is actually searched", () => {
   // these cases verify — does `solveBuild` correctly turn a returned board
   // into the right `BuildResult` — does not depend on the mechanism that
   // used to make such a board SEARCHABLE for z3.
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("greedy stacks both cards on one court, off the lattice", () => {
     // The premise, pinned so a change in `slotFixtures` cannot quietly make the
     // case below vacuous by handing z3 a board it has nothing to improve.
@@ -250,13 +247,13 @@ describe("a rest-configured board is actually searched", () => {
   it("z3 balances the courts instead of calling the seed optimal", async () => {
     // Note WHICH card moves in the mock: `a` to C2 at +0, `b` keeps the
     // seed's own +65 on C1 — the file's own documented board.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([
         { fixtureId: "a", court: "C2", startAtMs: T0 },
         { fixtureId: "b", court: "C1", startAtMs: T0 + 65 * MIN },
       ]),
     );
-    const out = await buildSchedule({ fixtures: restFixtures, config: restConfig });
+    const out = await buildSchedule({ fixtures: restFixtures, config: restConfig, solve, log: silentLogger });
     // The board, not the provenance: a run that finds nothing better
     // legitimately reports `engine: "greedy"`. This is a strictly better
     // board on D3's third tier, at no cost on the two above it.
@@ -277,14 +274,14 @@ describe("a rest-configured board is actually searched", () => {
     // the chained board greedy already reaches (+0/+65/+130), which is what
     // makes the honest verdict `already_optimal` rather than `ok`: the
     // reply ties the seed, not beats it.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([
         { fixtureId: "a", court: "C1", startAtMs: T0 },
         { fixtureId: "b", court: "C1", startAtMs: T0 + 65 * MIN },
         { fixtureId: "c", court: "C1", startAtMs: T0 + 130 * MIN },
       ]),
     );
-    const out = await buildSchedule({ fixtures: chainFixtures, config: chainConfig });
+    const out = await buildSchedule({ fixtures: chainFixtures, config: chainConfig, solve, log: silentLogger });
     expect({ status: out.status, tiers: out.tiersCompleted, placed: out.metrics.placed }).toEqual({
       status: "already_optimal",
       tiers: TIER_COUNT,
@@ -330,10 +327,10 @@ describe("a rest-configured board is actually searched", () => {
     // Mocked as EXACTLY greedy's own +7 anchor — the tie is the point (see
     // the block comment above): placement neither validates nor needs the
     // returned position to be "on grid" the way z3's own lattice did.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 + 7 * MIN }]),
     );
-    const out = await buildSchedule({ fixtures, config });
+    const out = await buildSchedule({ fixtures, config, solve, log: silentLogger });
     expect({ status: out.status, tiers: out.tiersCompleted }).toEqual({
       status: "already_optimal",
       tiers: TIER_COUNT,
@@ -361,7 +358,7 @@ describe("a board the lattice cannot hold is never called optimal", () => {
     };
     const fixtures: SchedulableFixture[] = [{ id: "a", home: "E1", away: "E2", roundNo: 1 }];
     expect(buildGrid({ config }).overCap).toBe(true);
-    const out = await buildSchedule({ fixtures, config });
+    const out = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(out.status).toBe("not_searched");
     expect(out.engine).toBe("greedy");
     expect(out.assignments).toHaveLength(1);
@@ -392,7 +389,7 @@ describe("a board the lattice cannot hold is never called optimal", () => {
     };
     const fixtures: SchedulableFixture[] = [{ id: "a", home: "E1", away: "E2", roundNo: 1 }];
     expect(buildGrid({ config }).overCap).toBe(true);
-    const out = await solveBuildForTests({ fixtures, config });
+    const out = await solveBuildForTests({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(out.status).toBe("not_searched");
     expect(out.notSearchedReason).toBe("lattice_unusable");
     expect(out.engine).toBe("greedy");
@@ -431,7 +428,7 @@ describe("a board the lattice cannot hold is never called optimal", () => {
       empty: false,
     });
 
-    const out = await buildSchedule({ fixtures, config });
+    const out = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect({
       status: out.status,
       reason: out.notSearchedReason,
@@ -496,11 +493,9 @@ describe("a board split across mismatched court grids now reaches the solver", (
     expect(c1Starts.size).toBeGreaterThan(0);
     expect(c2Starts.size).toBeGreaterThan(c1Starts.size);
 
-    const solveBuildSpy = vi
-      .spyOn(await import("./placement-client.ts"), "solveBuild")
-      .mockResolvedValue(okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 }]));
+    const solveBuildSpy = resolvingSolver(okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 }]));
 
-    const out = await buildSchedule({ fixtures, config });
+    const out = await buildSchedule({ fixtures, config, solve: solveBuildSpy, log: silentLogger });
 
     // THE REGRESSION THIS TEST GUARDS: the request reached the solver at
     // all. Before C2, `everyCourtSharesGrid` refused this exact grid before
@@ -541,10 +536,6 @@ describe("a board split across mismatched court grids now reaches the solver", (
 // a fifth source moves the tests with the resolver instead of leaving them
 // asserting yesterday's arithmetic.
 describe("the CP-SAT wire payload uses the shared rest resolver", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   /** The reproduction config: the two organiser-facing controls disagree, and
    *  the WRONG answer (30) is a different number from the RIGHT one (35), so a
    *  test that accidentally reads `perEntrantMinRest` cannot pass by
@@ -567,13 +558,14 @@ describe("the CP-SAT wire payload uses the shared rest resolver", () => {
     { id: "b", home: "E1", away: "E3", roundNo: 1, ...(divisionId !== undefined ? { divisionId } : {}) },
   ];
 
-  const captureWire = async (): Promise<{ read: () => SolveBuildInput }> => {
+  const captureWire = (): { solve: PlacementSolver; read: () => SolveBuildInput } => {
     let captured: SolveBuildInput | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver((input) => {
       captured = input;
-      return okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 }]);
+      return Promise.resolve(okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 }]));
     });
     return {
+      solve,
       read: (): SolveBuildInput => {
         expect(captured).toBeDefined();
         return captured!;
@@ -603,8 +595,8 @@ describe("the CP-SAT wire payload uses the shared rest resolver", () => {
     expect(expected).not.toBe(config.perEntrantMinRest);
     expect({ expected, raw: config.perEntrantMinRest }).toEqual({ expected: 35, raw: 30 });
 
-    const wire = await captureWire();
-    await buildSchedule({ fixtures, config });
+    const wire = captureWire();
+    await buildSchedule({ fixtures, config, solve: wire.solve, log: silentLogger });
     expect(wireRestFor(wire.read(), "b")).toBe(expected);
   }, 120_000);
 
@@ -615,8 +607,8 @@ describe("the CP-SAT wire payload uses the shared rest resolver", () => {
     const expected = restFloor(config, { divisionId: "D1" }).minutes;
     expect(expected).toBe(45);
 
-    const wire = await captureWire();
-    await buildSchedule({ fixtures: chained("D1"), config });
+    const wire = captureWire();
+    await buildSchedule({ fixtures: chained("D1"), config, solve: wire.solve, log: silentLogger });
     expect(wireRestFor(wire.read(), "b")).toBe(expected);
   }, 120_000);
 
@@ -628,8 +620,8 @@ describe("the CP-SAT wire payload uses the shared rest resolver", () => {
     expect(expected).toBe(config.matchMinutes + config.gapMinutes);
     expect(expected).toBeGreaterThan(config.perEntrantMinRest);
 
-    const wire = await captureWire();
-    await buildSchedule({ fixtures: chained("D1"), config });
+    const wire = captureWire();
+    await buildSchedule({ fixtures: chained("D1"), config, solve: wire.solve, log: silentLogger });
     expect(wireRestFor(wire.read(), "b")).toBe(expected);
   }, 120_000);
 
@@ -648,8 +640,8 @@ describe("the CP-SAT wire payload uses the shared rest resolver", () => {
     const d2 = restFloor(config, { divisionId: "D2" }).minutes;
     expect({ d1, d2 }).toEqual({ d1: 50, d2: 35 });
 
-    const wire = await captureWire();
-    await buildSchedule({ fixtures, config });
+    const wire = captureWire();
+    await buildSchedule({ fixtures, config, solve: wire.solve, log: silentLogger });
     const sent = wire.read();
     expect({ b: wireRestFor(sent, "b"), c: wireRestFor(sent, "c") }).toEqual({ b: d1, c: d2 });
   }, 120_000);
@@ -669,7 +661,7 @@ describe("the CP-SAT wire payload uses the shared rest resolver", () => {
     expect(owed).not.toBe(config.perEntrantMinRest);
 
     let wireRest: number | undefined;
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+    const solve = fakeSolver(async (input) => {
       // A solver that honours precisely what it was told, and nothing else.
       // `Math.max(0, ...[])` is 0, so a payload carrying no rest group at all
       // stacks the two cards back to back — the loudest possible failure.
@@ -680,7 +672,7 @@ describe("the CP-SAT wire payload uses the shared rest resolver", () => {
       ]);
     });
 
-    const out = await buildSchedule({ fixtures, config });
+    const out = await buildSchedule({ fixtures, config, solve, log: silentLogger });
 
     // THE ORGANISER-VISIBLE CLAIM, asserted FIRST so a regression reports the
     // defect the way the toolbar does rather than an internal precondition.

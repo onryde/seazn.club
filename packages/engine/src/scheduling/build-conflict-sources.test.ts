@@ -19,6 +19,7 @@
 // which names nobody and is fed verbatim to the repair prompt.
 import { describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
+import { silentLogger, unavailableSolver } from "./__tests__/solver-fakes.ts";
 import { slotFixtures } from "./calendar.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
 
@@ -55,7 +56,7 @@ describe("a card that greedy placed and something later dropped", () => {
       ["b", { kind: "locked_slot_clash", court: "C1" }],
     ]);
 
-    const out = await buildSchedule({ fixtures: collide, config });
+    const out = await buildSchedule({ fixtures: collide, config, solve: unavailableSolver, log: silentLogger });
     // Two pins on one slot is the one thing that can make this model globally
     // unsat, so the board comes back empty and both cards need a reason.
     expect(out.assignments).toEqual([]);
@@ -90,7 +91,7 @@ describe("a card that greedy placed and something later dropped", () => {
     const greedySaid = seed.conflicts.filter((c) => c.fixtureId === "b");
     expect(greedySaid).toHaveLength(1);
 
-    const out = await buildSchedule({ fixtures, config: tight });
+    const out = await buildSchedule({ fixtures, config: tight, solve: unavailableSolver, log: silentLogger });
     const forB = out.conflicts.filter((c) => c.fixtureId === "b");
     expect(forB).toEqual(greedySaid);
   }, 120_000);

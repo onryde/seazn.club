@@ -288,12 +288,15 @@ export const STRYKER_PLACEMENT_OUT_OF_SCOPE = Object.fromEntries(
 );
 
 /** Globs (relative to packages/engine) that are never measured, each with its OWN reason. Every src/scheduling/ entry is
- *  named by ruling 67's last bullet. */
+ *  named by ruling 67's last bullet, except `solver-port.ts` (the engine split, D11). */
 export const STRYKER_EXCLUDED = {
   "src/scheduling/index.ts": "a barrel: re-exports only, no logic to mutate",
   "src/scheduling/logger.ts": "holds no logic: it builds the pino logger and nothing else",
   "src/scheduling/solver-test-bounds.ts": "a test helper: the bounds the solver tests run under, not product code",
   "src/scheduling/placement-client.ts": "the gRPC client, covered only by integration tests that need the placement service",
+  // Added by the engine split (D11), not named by ruling 67: the engine's side of the solver boundary. Interfaces and one
+  // no-op logger, so there is no logic for a mutant to land on.
+  "src/scheduling/solver-port.ts": "the engine's solver and logger ports: interfaces and a no-op logger, no logic to mutate",
   // Decided from the file itself (opened 2026-10-04; ruling 67 conditions the exclusion on it "only building the placement
   // request"): it builds no request, it is test fixtures for the calendar and repair tests, which is the stated reason. It builds
   // frozen calendar `Assignment`s, golden slots and order dependencies, and only calendar-*.test.ts, repair-domain.test.ts,

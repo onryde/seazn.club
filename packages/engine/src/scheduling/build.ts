@@ -115,15 +115,9 @@ import type { HardConstraint } from "./constraints.ts";
 import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
-// `placement-client.ts` is imported dynamically at the call site inside
-// `solveBuild`, never statically — see the comment there. This is a
-// TYPE-only import: `import type` is erased at compile time, so it creates
-// no runtime module binding and does not defeat the dynamic-import mocking
-// seam `build.test.ts` relies on (the repo's own recorded trap: `vi.doMock`/
-// `vi.spyOn(await import(...))` is inert against a module the file under
-// test also imports statically).
-import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
-import { log } from "./logger.ts";
+// The engine reaches a solver and a logger only through the ports in `solver-port.ts` (engine-split D11, D25): this file
+// imports no transport, reads no env and opens no socket. Type-only, so nothing here binds at runtime.
+import type { EngineLogger, PlacementSolver, SolveBuildInput, SolveBuildOutcome } from "./solver-port.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -559,6 +553,14 @@ export interface BuildInput {
   current?: readonly Assignment[];
   rlimit?: number;
   wallMs?: number;
+  /**
+   * How the engine reaches a placement solver (engine-split D11). REQUIRED, never optional: an optional `solve` that
+   * defaulted to greedy would be an inert seam, a build that quietly never asks anyone. A caller with no solver passes
+   * one that rejects, and gets the greedy board with `solver_unavailable`.
+   */
+  solve: PlacementSolver;
+  /** Where the engine's structured log lines go (engine-split D25). REQUIRED: the engine owns no logger of its own. */
+  log: EngineLogger;
 }
 
 export interface BuildResult {
@@ -1155,7 +1157,7 @@ export const MAX_SOLVER_QUEUE = 2;
 let queued = 0;
 
 export function buildSchedule(input: BuildInput): Promise<BuildResult> {
-  log.info(
+  input.log.info(
     { fixtures: input.fixtures.length, courts: input.config.courts.length },
     "buildSchedule: start",
   );
@@ -1912,7 +1914,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       .map((f) => f.divisionId ?? ""),
   );
   if (dependencyContaminated.size > 0) {
-    log.warn(
+    input.log.warn(
       { divisions: [...dependencyContaminated] },
       "buildSchedule: round-bearing fixture also carries a feed dependency — stripping round for its division rather than emit a false order",
     );
@@ -1950,7 +1952,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     [...roundBearingPoolsByDivision.entries()].filter(([, pools]) => pools.size > 1).map(([d]) => d),
   );
   if (multiPoolContaminated.size > 0) {
-    log.warn(
+    input.log.warn(
       { divisions: [...multiPoolContaminated] },
       "buildSchedule: round-bearing fixtures span more than one pool or round-robin stage in the same division — stripping round for its division rather than compare two independent round-robin sequences",
     );
@@ -2096,16 +2098,6 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     wallSeconds: Math.max(1, Math.round((wallMs - elapsed()) / 1000)),
   };
 
-  // Loaded dynamically, never `import { solveBuild } from "./placement-client.ts"`
-  // at the top of this file: this repo has a recorded trap where a mock
-  // against a module the file under test also imports statically is INERT,
-  // and it has previously passed 5/5 with the guard deleted. `build.test.ts`
-  // mocks this exact call via `vi.spyOn(await import("./placement-client.ts"),
-  // "solveBuild")`, which only observes what THIS line does if this line
-  // resolves the same module namespace object dynamically too — mirroring
-  // how `z3-load.ts` defers its own WASM import to inside `loadZ3`, one call
-  // site removed from this file. See the (type-only) import of
-  // `SolveBuildInput`/`SolveBuildOutcome` above for the rest of the reasoning.
   // `requestId` is caller-supplied by design (`_RULES.md` §2.3): the client
   // defaults it to empty rather than generating one itself, specifically
   // because `packages/engine/src` may not read ambient time or randomness —
@@ -2120,11 +2112,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const requestId = `build-${fixtures.length}f${config.courts.length}c-${Math.trunc(t0)}`;
   let outcome: SolveBuildOutcome;
   try {
-    const placementClient = await import("./placement-client.ts");
-    outcome = await placementClient.solveBuild(placementInput, {
-      secret: process.env.PLACEMENT_SERVICE_SECRET ?? "",
-      requestId,
-    });
+    outcome = await input.solve(placementInput, { requestId });
   } catch (err) {
     // Any rejection — deadline, unavailable, transport, invalid_request
     // (`PlacementError["failure"]`, `placement-client.ts`'s `failureFor`), an
@@ -2143,11 +2131,10 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     // needs the specific reason still has it on the rejected error's
     // `.failure`/`.message`, this function only decides the fallback board.
     // Curated fields, not the raw `err`: `failure` (when present — a
-    // `PlacementError`, duck-typed rather than imported, matching this file's
-    // no-static-coupling-to-placement-client convention above) and `message`
+    // `PlacementError`, duck-typed rather than imported, because the engine knows no transport) and `message`
     // only, same idiom `placement-client.ts`'s own log sites use.
     const failure = err && typeof err === "object" && "failure" in err ? err.failure : undefined;
-    log.warn(
+    input.log.warn(
       { failure, message: err instanceof Error ? err.message : String(err) },
       "buildSchedule: placement service unavailable, falling back to greedy",
     );
@@ -2190,7 +2177,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     //
     // Same curated shape as the `catch` arm's log: the service's fields, not a
     // raw dump of the response.
-    log.warn(
+    input.log.warn(
       { code: outcome.error?.code, message: outcome.error?.message },
       "buildSchedule: the placement service refused the request, falling back to greedy",
     );
@@ -2249,7 +2236,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     // VALID board and a status field they may never read, so an
     // encoder/verifier fork would otherwise reach nobody until an organiser
     // filed a ticket about it.
-    log.error(
+    input.log.error(
       { rejected: rejected.map((c) => `${c.fixtureId}:${c.reason}`) },
       "buildSchedule: verifier rejected the placement solver's board — falling back to the greedy seed",
     );

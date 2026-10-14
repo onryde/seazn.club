@@ -13,6 +13,12 @@ import { describe, expect, it } from "vitest";
 import { repairDecomposedCpsat } from "../repair-decompose-cpsat.ts";
 import { isBlockingConflict, validateAssignments } from "../calendar.ts";
 import type { Assignment, OrderDependency, SchedulableFixture, VerifyConfig } from "../calendar.ts";
+import { solveBuild } from "../placement-client.ts";
+import { silentLogger, type PlacementSolver } from "../solver-port.ts";
+
+// Reaches the REAL service through the REAL transport function, host and secret from the environment as before the port.
+const liveSolve: PlacementSolver = (input, ctx) =>
+  solveBuild(input, { secret: process.env.PLACEMENT_SERVICE_SECRET ?? "", requestId: ctx.requestId });
 
 // Same gate `placement-integration.test.ts` uses.
 const RUN_INTEGRATION = process.env.PLACEMENT_SERVICE_HOST !== undefined;
@@ -57,6 +63,8 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           callerFrozen: new Set(),
           config: cfg(),
           budgetMs: 20_000,
+          solve: liveSolve,
+          log: silentLogger,
         });
         expect(r.status).toBe("repaired");
         expect(r.moved.length).toBeGreaterThan(0);
@@ -101,6 +109,8 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           dependencies,
           config: cfg(),
           budgetMs: 20_000,
+          solve: liveSolve,
+          log: silentLogger,
         });
 
         expect(r.status).toBe("repaired");
@@ -141,6 +151,8 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           current: proposal,
           frozen: ["feeder"],
           wallMs: 20_000,
+          solve: liveSolve,
+          log: silentLogger,
         });
         // The monolithic C5 shape drops the dependency edge on the wire
         // (`feeder` never reaches `freeFixtureIds`) — the encoder places
