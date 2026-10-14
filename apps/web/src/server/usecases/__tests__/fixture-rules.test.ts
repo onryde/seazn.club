@@ -352,16 +352,48 @@ describe.skipIf(!HAS_DB)("X-SR-2 every sport family through the one writer", () 
     expect(String((err as Error).message)).toContain(engine.success ? "<premise: the engine refuses it>" : engine.error.issues[0]!.message);
   });
 
-  it("boardgame declares no match key, so every key it has is refused per match (RULE_NOT_SETTABLE)", async () => {
+  it("boardgame declares no match key: a value that differs from the stage's is refused per match (RULE_NOT_SETTABLE); the stage's own value is a no-op that stores nothing", async () => {
     const bg = mod("boardgame");
     expect(fixtureKeysFor(bg, "knockout", "classical"), "the premise: no match-scope key").toEqual([]);
     const b = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     const id = b.fixtureIds[0]!;
-    const stage = bg.configSchema.parse(await padCfg(b, id)) as { tiebreak?: unknown };
-    await expect(writeFixtureRulesOverride(b.auth, [id], { tiebreak: stage.tiebreak !== true })).rejects.toMatchObject({
-      status: 400,
-      code: "RULE_NOT_SETTABLE",
-    });
+    const stage = bg.configSchema.parse(await padCfg(b, id)) as Record<string, unknown>;
+    // Every key the engine declares for boardgame outside points (W2c Task 8 retired `tiebreak` for the stage's
+    // `tiebreakRungs` list). The writer judges what a write CHANGES (`checkFixtureOverride` reads changed leaves; step 6
+    // stores only changed leaves), so each key is sent a value that DIFFERS from the stage's, taken from the engine's own
+    // declarations: another declared preset's variant, the rung list's off state (the empty list; absent = every rung),
+    // the schema's smallest clock. A key with no derivation fails here, never skipped.
+    const differing = (key: string): unknown => {
+      const at = stage[key];
+      if (key === "variant") return Object.values(bg.variants ?? {}).map((p) => (p as { variant?: unknown }).variant).find((v) => v !== undefined && v !== at);
+      if (key === "tiebreakRungs") {
+        expect(at, "the premise: the stage plays at least one rung (absent = every rung)").not.toEqual([]);
+        return [];
+      }
+      if (key === "clock") return { base: (at as { base?: number } | undefined)?.base === 0 ? 1 : 0 };
+      throw new Error(`no differing value derived for boardgame's declared key "${key}"`);
+    };
+    const keys = [...new Set(Object.entries(bg.ruleKeys ?? {}).filter(([, f]) => f.scope !== "points").map(([k]) => k.split(".")[0]!))];
+    let refused = 0;
+    for (const key of keys) {
+      const v = differing(key);
+      expect(v, `${key}: a value was derived`).toBeDefined();
+      expect(canonicalJson(v), `${key}: the premise: it differs from the stage's`).not.toBe(canonicalJson(stage[key] ?? null));
+      expect(bg.configSchema.safeParse({ ...stage, [key]: v }).success, `${key}: the premise: a valid format, so the refusal is the scope`).toBe(true);
+      const err = await writeFixtureRulesOverride(b.auth, [id], { [key]: v }).catch((e: unknown) => e);
+      expect(err, key).toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { fixture_id: id } });
+      expect(String((err as { extra?: { field?: unknown } }).extra?.field).split(".")[0], key).toBe(key);
+      expect((await row(id)).rules_override, `${key}: nothing written`).toBeNull();
+      refused++;
+    }
+    expect(refused, "every declared boardgame rule key was refused").toBe(keys.length);
+    expect(refused, "boardgame declares at least one rule key").toBeGreaterThan(0);
+    // The positive pair: the stage's own values restate its format — nothing to refuse, and nothing stored, so the stage
+    // keeps every one of these keys (a later stage edit still reaches the match).
+    const restated = Object.fromEntries(keys.filter((k) => stage[k] !== undefined).map((k) => [k, stage[k]]));
+    expect(Object.keys(restated).length, "the premise: the stage has a value to restate").toBeGreaterThan(0);
+    await expect(writeFixtureRulesOverride(b.auth, [id], restated)).resolves.toEqual({ fixtures: [{ id, started: false, rules_version: 0 }] });
+    expect((await row(id)).rules_override).toBeNull();
   });
 
   it("a competition frozen by a downgrade refuses 402 and writes nothing; the same write went through before the freeze", async () => {
