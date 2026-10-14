@@ -46,8 +46,9 @@ export async function seedBracket(opts: {
   /** The stage's own config; a swiss stage must declare `rounds` (assertSwissRoundsDeclared). */
   stageConfig?: Record<string, unknown>;
   /** W2c — the stage's own match rules (`stages.config.rules`). `createStages` refuses `rules` in a stage body (D2a:
-   *  `PUT /stages/{id}/rules` is its one writer, and it serves the set sports only until Task 11), so a seed writes it
-   *  straight onto the row, before the fixtures are generated. */
+   *  `PUT /stages/{id}/rules` is its one writer, and it serves every sport since Task 11), so a seed writes it
+   *  straight onto the row, before the fixtures are generated: the seed needs no allowlist or merge of its own, and a
+   *  test may seed rules the endpoint would refuse. */
   stageRules?: Record<string, unknown>;
 }): Promise<SeededBracket> {
   const variant = declaredVariant(opts.sport, opts.variant);

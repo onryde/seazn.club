@@ -98,6 +98,19 @@ describe.skipIf(!HAS_DB)("I-A: a division format save never leaves a stage's own
     await expect(patchDivision(s.auth, s.divisionId, { config: moved })).resolves.toBeDefined();
   });
 
+  it("a null STORED in a stage's rules is 'inherit', not a value: it is dropped before the division save is judged (M3)", async () => {
+    const s = await seed(SHORT, ["Pool A", "Pool B"]);
+    const stillFits = { ...SHORT, setTo: 15, finalSetTo: 15, cap: 30 };
+    // The premise, off the engine: a null carried into the merge WOULD be refused, so a pass below proves the drop.
+    expect(badminton.configSchema.safeParse({ ...stillFits, cap: POOL_CAP }).success, "a fitting cap is valid").toBe(true);
+    expect(badminton.configSchema.safeParse({ ...stillFits, cap: POOL_CAP, bestOf: null }).success, "the premise: a null bestOf is not").toBe(false);
+    // Raw-seeded (the endpoint never writes a null): Pool A holds only nulls, Pool B a null beside a fitting cap.
+    await sql`update stages set config = config || ${sql.json({ rules: { bestOf: null } } as never)} where id = ${s.stages[0]!}`;
+    await sql`update stages set config = config || ${sql.json({ rules: { bestOf: null, cap: POOL_CAP } } as never)} where id = ${s.stages[1]!}`;
+    await expect(patchDivision(s.auth, s.divisionId, { config: stillFits })).resolves.toBeDefined();
+    expect((await divisionConfigOf(s.divisionId) as Record<string, unknown>).setTo, "the save landed").toBe(15);
+  });
+
   it("a save that does not move the config is not asked (a stage already invalid is not this save's doing)", async () => {
     const s = await seed(SHORT, ["Pool A"]);
     // Raw-seeded: the stage PUT would refuse this, so it can only exist as a row written before the guard.

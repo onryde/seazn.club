@@ -7,13 +7,15 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * Per-stage match-format override (design 2026-09-17 §T3) — Best-of-1 in the
- * league stage, Best-of-3 in the playoff of the same division. Sets-based
- * sports only (tennis, badminton, tabletennis, volleyball).
+ * league stage, Best-of-3 in the playoff of the same division. Every sport
+ * (W2c Task 11): what a stage can set is the ENGINE's declaration for its kind
+ * and variant (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE otherwise).
  *
- * A WHOLE-FRAGMENT replace: what you send is what the stage carries, and
- * `{"rules": null}` clears it back to the division's format. "Inherit" is key
- * ABSENCE — a null VALUE inside `rules` is stripped rather than stored, since
- * the resolver's overlay would otherwise copy it over the division's value.
+ * The body is a FRAGMENT that MERGES into the stage's stored rules: a key it
+ * omits is kept, a null VALUE removes that key ("inherit" is key ABSENCE — a
+ * stored null would be copied over the division's value by the resolver's
+ * overlay), `[]` is a value, and `{"rules": null}` or `{}` clears it all back to
+ * the division's format.
  */
 export async function PUT(req: Request, { params }: Ctx) {
   return v1(async () => {

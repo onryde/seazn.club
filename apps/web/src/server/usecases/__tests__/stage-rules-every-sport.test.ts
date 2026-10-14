@@ -8,7 +8,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { randomUUID } from "node:crypto";
-import { BRACKET_KINDS, DRAW_KINDS, type StageKind } from "@seazn/engine/core";
+import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
 import { SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS, sportTopKeys, stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
@@ -76,7 +76,9 @@ async function seedDivision(
 }
 
 async function seedStage(auth: AuthCtx, divisionId: string, seq: number, kind: StageKind = "league"): Promise<string> {
-  const [stage] = await createStages(auth, divisionId, { seq, kind, name: "S" + seq, config: {}, progression: null });
+  // A swiss stage must declare its round count (assertSwissRoundsDeclared); every other kind takes an empty config.
+  const config = kind === "swiss" ? { rounds: 3 } : {};
+  const [stage] = await createStages(auth, divisionId, { seq, kind, name: "S" + seq, config, progression: null });
   return stage!.id;
 }
 
@@ -91,43 +93,110 @@ const mod = (key: string): AnySportModule => {
   return m as AnySportModule;
 };
 
+/** The sports the registry held when W2c Task 11 was written: football, cricket, boardgame, carrom, generic, volleyball,
+ *  badminton, tabletennis, tennis, icehockey, hockey. A literal on purpose (review M6): `builtinModules.length` as the
+ *  expected count is the loop's own bound, so a sport that fell out of the registry would shrink both sides and read
+ *  green. A NEW sport is a deliberate edit here, and the sweeps below then cover it. Pinned once. */
+const SPORTS_AT_W2C = 11;
+
 describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
-  it("every sport accepts every stage key it declares for a league stage, and stores it (counted)", async () => {
-    let checked = 0;
-    let declared = 0;
+  it(`the registry holds the ${SPORTS_AT_W2C} sports these sweeps were written for`, () => {
+    expect(builtinModules.length).toBe(SPORTS_AT_W2C);
+  });
+
+  it("every sport x EVERY variant x EVERY stage kind: a declared key is saved, an undeclared-for-this-kind one is RULE_NOT_SETTABLE (counted)", async () => {
+    let combos = 0;
+    let accepted = 0;
+    let refused = 0;
+    let declaredTotal = 0;
     let viaEditor = 0;
     const unprobed: string[] = [];
-    const swept: string[] = [];
+    const sportsSeen = new Set<string>();
+    const kindsWithAKey = new Set<string>();
     for (const m of builtinModules) {
-      const variant = Object.keys(m.variants)[0]!;
+      const sport = m as AnySportModule;
       const auth = await seedOrg();
-      const { divisionId } = await seedDivision(auth, m.key, variant, 0);
-      const stageId = await seedStage(auth, divisionId, 1, "league");
-      for (const top of stageTopKeysFor(m as AnySportModule, "league", variant)) {
-        declared++;
-        let frag = builtFor(m as AnySportModule, variant, top);
-        if (Object.keys(frag).length > 0) viaEditor++;
-        else frag = engineValueFor(m as AnySportModule, variant, top); // no editor field builds this key (yet)
-        if (Object.keys(frag).length === 0) {
-          unprobed.push(`${m.key}.${top}`);
-          continue;
+      const known = sportTopKeys(sport);
+      for (const variant of Object.keys(m.variants)) {
+        const { divisionId } = await seedDivision(auth, m.key, variant, 0);
+        for (const kind of StageKind.options) {
+          // One stage at a time: all nine kinds in one division would outrun the plan's stages-per-division cap, and a
+          // stage that is removed after its kind is swept leaves the next kind a clean division.
+          const stageId = await seedStage(auth, divisionId, 1, kind);
+          const settable = stageTopKeysFor(sport, kind, variant);
+          combos++;
+          sportsSeen.add(m.key);
+          if (settable.size > 0) kindsWithAKey.add(kind);
+          for (const top of settable) {
+            declaredTotal++;
+            let frag = builtFor(sport, variant, top);
+            if (Object.keys(frag).length > 0) viaEditor++;
+            else frag = engineValueFor(sport, variant, top); // no editor field builds this key (yet)
+            if (Object.keys(frag).length === 0) {
+              unprobed.push(`${m.key}/${variant}/${kind}.${top}`);
+              continue;
+            }
+            await putStageRules(auth, stageId, { rules: {} }); // each key alone: a clear first (the merge tests are below)
+            await putStageRules(auth, stageId, { rules: frag }).catch((e: unknown) => {
+              // Name the key and the engine's reason: a bare "invalid cricket config" says neither.
+              throw new Error(`${m.key}/${variant}/${kind}.${top} ${JSON.stringify(frag)}: ${(e as Error).message} ${JSON.stringify((e as { data?: unknown }).data)}`);
+            });
+            expect(await rulesOf(stageId), `${m.key}/${variant}/${kind}.${top}`).toMatchObject(frag);
+            accepted++;
+          }
+          await putStageRules(auth, stageId, { rules: {} });
+          for (const top of known) {
+            if (settable.has(top)) continue;
+            // The mirror: every key the sport declares that THIS kind and variant cannot set - including the ones a
+            // sibling variant can (cricket test vs t20) - is refused, and nothing is written.
+            await expect(putStageRules(auth, stageId, { rules: { [top]: null } }), `${m.key}/${variant}/${kind}.${top}`).rejects.toMatchObject({
+              status: 400,
+              code: "RULE_NOT_SETTABLE",
+              extra: { field: top },
+            });
+            refused++;
+          }
+          expect((await rulesOf(stageId)) ?? null, `${m.key}/${variant}/${kind}: nothing written by a refusal`).toBeNull();
+          await sql`delete from stages where id = ${stageId}`;
         }
-        await putStageRules(auth, stageId, { rules: {} }); // each key alone: a clear first (the merge test is below)
-        await putStageRules(auth, stageId, { rules: frag }).catch((e: unknown) => {
-          // Name the key and the engine's reason: a bare "invalid cricket config" says neither.
-          throw new Error(`${m.key}.${top} ${JSON.stringify(frag)}: ${(e as Error).message} ${JSON.stringify((e as { data?: unknown }).data)}`);
-        });
-        expect(await rulesOf(stageId), `${m.key}.${top}`).toMatchObject(frag);
-        checked++;
-        swept.push(`${m.key}.${top}`);
       }
     }
     expect(unprobed, "every declared stage key got a value the engine accepts").toEqual([]);
-    expect(checked, "every declared stage key was saved and read back").toBe(declared);
-    expect(viaEditor, "most keys ride the editor's own builders").toBeGreaterThan(builtinModules.length);
-    expect(declared, `anti-vacuity: ${swept.length} keys swept`).toBeGreaterThan(2 * builtinModules.length);
-    expect(new Set(swept.map((s) => s.split(".")[0])).size, "every sport saved at least one key").toBe(builtinModules.length);
-  }, Math.max(60_000, builtinModules.length * 30_000));
+    expect(accepted, "every declared (kind, variant, key) was saved and read back").toBe(declaredTotal - unprobed.length);
+    // Anti-vacuity, from the engine's declarations (a sport has at least one variant and the kinds are the engine's):
+    expect(combos, `${combos} (sport, variant, kind) combinations visited`).toBe(
+      builtinModules.reduce((n, m) => n + Object.keys(m.variants).length, 0) * StageKind.options.length,
+    );
+    expect(sportsSeen.size, "every sport was visited").toBe(SPORTS_AT_W2C);
+    expect(kindsWithAKey.size, "most kinds settle at least one key somewhere").toBeGreaterThan(1);
+    expect(viaEditor, "most keys ride the editor's own builders").toBeGreaterThan(SPORTS_AT_W2C);
+    expect(accepted, `${accepted} saves`).toBeGreaterThan(2 * SPORTS_AT_W2C * StageKind.options.length);
+    expect(refused, `${refused} refusals`).toBeGreaterThan(SPORTS_AT_W2C);
+  }, 600_000);
+
+  it("a cricket TEST stage refuses superOver and dls (they belong to the limited-overs variants); the same keys save on t20 (I1: the variant is witnessed)", async () => {
+    const cricket = mod("cricket");
+    const testOnly = [...stageTopKeysFor(cricket, "league", "t20")].filter((k) => !stageTopKeysFor(cricket, "league", "test").has(k));
+    // The premise, from the engine's declaration: the keys t20 settles and test does not include both of these.
+    expect(testOnly, "the premise: the engine narrows superOver and dls to the limited-overs variants").toEqual(expect.arrayContaining(["superOver", "dls"]));
+    const auth = await seedOrg();
+    const { divisionId: testDiv } = await seedDivision(auth, "cricket", "test", 0);
+    const { divisionId: t20Div } = await seedDivision(auth, "cricket", "t20", 0);
+    const onTest = await seedStage(auth, testDiv, 1, "league");
+    const onT20 = await seedStage(auth, t20Div, 1, "league");
+    let checked = 0;
+    for (const top of testOnly) {
+      const frag = builtFor(cricket, "t20", top);
+      const value = Object.keys(frag).length > 0 ? frag : engineValueFor(cricket, "t20", top);
+      expect(Object.keys(value).length, `the premise: a t20 value for ${top}`).toBeGreaterThan(0);
+      await expect(putStageRules(auth, onTest, { rules: value }), top).rejects.toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: top } });
+      expect((await rulesOf(onTest)) ?? null, `${top}: the refused save wrote nothing`).toBeNull();
+      await expect(putStageRules(auth, onT20, { rules: value }), `${top} on t20`).resolves.toBeDefined(); // the positive pair
+      expect(await rulesOf(onT20), `${top} on t20 is stored`).toMatchObject(value);
+      checked++;
+    }
+    expect(checked, `anti-vacuity: ${checked} test-only keys paired`).toBeGreaterThanOrEqual(2);
+  });
 
   it("UNKNOWN_RULE_KEY for an undeclared key; RULE_NOT_SETTABLE for a key this kind cannot set", async () => {
     const auth = await seedOrg();
@@ -158,6 +227,25 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
     await expect(putStageRules(auth, ko, { rules: { tieBoard: null } })).rejects.toMatchObject({ code: "RULE_NOT_SETTABLE" });
   });
 
+  it("chess has no `tiebreak` key: the decider is `tiebreakRungs`, so `tiebreak` is UNKNOWN_RULE_KEY on every kind, while the rung list is declared (M3)", async () => {
+    const auth = await seedOrg();
+    const chess = mod("boardgame");
+    const variant = Object.keys(chess.variants)[0]!;
+    expect(sportTopKeys(chess).has("tiebreak"), "the premise: the engine declares no `tiebreak` for chess").toBe(false);
+    expect(sportTopKeys(chess).has("tiebreakRungs"), "the premise: ... but declares tiebreakRungs").toBe(true);
+    const { divisionId } = await seedDivision(auth, "boardgame", variant, 0);
+    let refused = 0;
+    let seq = 0;
+    for (const kind of ["league", "knockout"] as const) {
+      const stage = await seedStage(auth, divisionId, ++seq, kind);
+      await expect(putStageRules(auth, stage, { rules: { tiebreak: "armageddon" } }), kind).rejects.toMatchObject({ status: 400, code: "UNKNOWN_RULE_KEY" });
+      await expect(putStageRules(auth, stage, { rules: { tiebreak: null } }), `${kind} null`).rejects.toMatchObject({ code: "UNKNOWN_RULE_KEY" });
+      expect((await rulesOf(stage)) ?? null, `${kind}: nothing written`).toBeNull();
+      refused++;
+    }
+    expect(refused, "both kinds were driven").toBe(2);
+  });
+
   it("points keys belong to the Points section, never stage rules (football points)", async () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
@@ -186,7 +274,7 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
       await expect(putStageRules(auth, s, { rules: { notARuleOf_ever: 1 } }), m.key).rejects.toMatchObject({ code: "UNKNOWN_RULE_KEY" });
       expect((await rulesOf(s)) ?? null, `${m.key}: nothing written`).toBeNull();
     }
-    expect(points, "anti-vacuity: some declared-but-unsettable key was refused").toBeGreaterThan(builtinModules.length);
+    expect(points, "anti-vacuity: some declared-but-unsettable key was refused").toBeGreaterThan(SPORTS_AT_W2C);
   }, 120_000);
 
   it("P-5 share needs draws: a generic stage refuses share while its division forbids draws", async () => {
@@ -207,6 +295,8 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
     const { divisionId } = await seedDivision(auth, "boardgame", Object.keys(chess.variants)[0]!, 2);
     const s = await seedStage(auth, divisionId, 1, "league");
     await generateStageFixtures(auth, s);
+    // One fixture is enough: the lock (`lockedStageIdsAmong`, shared with the panel's read half) counts ANY match of the
+    // stage - one event on any one fixture locks the whole stage, however many it holds.
     const [f] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${s} limit 1`;
     await putStageRules(auth, s, { rules: { variant: "rapid" } });
     const started = await appendEvent(auth.orgId, f!.id, 0, { type: "core.start", payload: {} });
@@ -281,6 +371,24 @@ describe.skipIf(!HAS_DB)("carry I2 (Task 8 review): a stage save MERGES into the
     expect(Object.hasOwn(await stageConfig(s), "rules"), "null clears everything").toBe(false);
   });
 
+  it("a null already STORED (written by an older build, not by this endpoint) is dropped by the next save, never carried (M3)", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 0);
+    const s = await seedStage(auth, divisionId, 1, "league");
+    // The endpoint never writes a null, so seed one straight onto the row: this is the pre-merge replace era's shape.
+    await sql`update stages set config = config || ${sql.json({ rules: { bestOf: null, setTo: 15 } } as never)} where id = ${s}`;
+    expect(await rulesOf(s), "the premise: the null is stored").toEqual({ bestOf: null, setTo: 15 });
+    await putStageRules(auth, s, { rules: { finalSetTo: 15 } });
+    expect(await rulesOf(s), "the stored null is gone, the stored value and the new one stay").toEqual({ setTo: 15, finalSetTo: 15 });
+    // Only nulls: the merge empties and the stage returns to the division's format.
+    await sql`update stages set config = config || ${sql.json({ rules: { bestOf: null } } as never)} where id = ${s}`;
+    await putStageRules(auth, s, { rules: {} });
+    expect(Object.hasOwn(await stageConfig(s), "rules"), "an emptied merge clears the key").toBe(false);
+    await sql`update stages set config = config || ${sql.json({ rules: { bestOf: null } } as never)} where id = ${s}`;
+    await putStageRules(auth, s, { rules: { setTo: 15 } });
+    expect(await rulesOf(s), "the null beside a fresh key is dropped, not stored").toEqual({ setTo: 15 });
+  });
+
   it("the merge is what is validated: a stored cap and a new setTo that break the schema together are refused, nothing written", async () => {
     const auth = await seedOrg();
     const bad = mod("badminton");
@@ -293,6 +401,79 @@ describe.skipIf(!HAS_DB)("carry I2 (Task 8 review): a stage save MERGES into the
     expect(bad.configSchema.safeParse({ setTo: 25, finalSetTo: 25 }).success, "the premise: setTo 25 alone is fine").toBe(true);
     await expect(putStageRules(auth, s, { rules: { setTo: 25, finalSetTo: 25 } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     expect(await rulesOf(s), "the refused save wrote nothing").toEqual({ cap: 21 });
+  });
+});
+
+describe.skipIf(!HAS_DB)("I2 (Task 11 review): a stage save validates against the division AS COMMITTED under the lock", () => {
+  /** Hold the division's advisory lock on ONE connection, start the stage save on another, wait until it is queued
+   *  behind the lock (pg_locks, so its first read has certainly happened - it precedes the lock), run `commit` on the
+   *  holder's connection, release, and return how the save ended. Deterministic: no sleep stands in for an ordering. */
+  async function saveBehindADivisionCommit(
+    auth: AuthCtx,
+    divisionId: string,
+    stageId: string,
+    rules: Record<string, unknown>,
+    commit: (tx: typeof sql) => Promise<void>,
+  ): Promise<unknown> {
+    let saved: Promise<unknown> | undefined;
+    await sql.begin(async (holder) => {
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+      saved = putStageRules(auth, stageId, { rules }).then(
+        (v) => v,
+        (e: unknown) => e,
+      );
+      // The key as pg_locks shows it: a single bigint splits into classid (high 32) and objid (low 32), objsubid 1.
+      let queued = 0;
+      for (let i = 0; i < 400 && queued === 0; i++) {
+        const [{ n }] = await holder<{ n: number }[]>`
+          select count(*)::int as n from pg_locks
+           where locktype = 'advisory' and not granted and objsubid = 1
+             and ((classid::bigint << 32) | objid::bigint) = hashtext(${"division:" + divisionId})::bigint`;
+        queued = n;
+        if (queued === 0) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(queued, "the stage save is queued behind the division lock (it has read, and is waiting)").toBe(1);
+      await commit(holder as unknown as typeof sql);
+    });
+    return saved;
+  }
+
+  it("a division CONFIG committed while the save waits is the config it is judged against: cap 21 under a setTo moved to 25 is refused, nothing stored", async () => {
+    const auth = await seedOrg();
+    const bad = mod("badminton");
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 0);
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const base = bad.variants["bwf"] as Record<string, unknown>;
+    expect(bad.configSchema.safeParse({ ...base, cap: 21 }).success, "the premise: cap 21 is fine on the division as first read").toBe(true);
+    expect(bad.configSchema.safeParse({ ...base, setTo: 25, finalSetTo: 25, cap: 21 }).success, "the premise: ... and not once its setTo is 25").toBe(false);
+    const outcome = await saveBehindADivisionCommit(auth, divisionId, s, { cap: 21 }, async (tx) => {
+      await tx`update divisions set config = config || ${tx.json({ setTo: 25, finalSetTo: 25 } as never)} where id = ${divisionId}`;
+    });
+    expect(outcome, "refused: the merged parse ran on the committed division, not the one read before the lock").toMatchObject({ code: "CONFIG_INVALID" });
+    expect((await rulesOf(s)) ?? null, "a refused save writes nothing").toBeNull();
+  });
+
+  it("a division VARIANT committed while the save waits is the variant the allowlist reads: superOver on a division moved to test is refused", async () => {
+    const auth = await seedOrg();
+    const cricket = mod("cricket");
+    expect(stageTopKeysFor(cricket, "league", "t20").has("superOver"), "the premise: t20 settles superOver").toBe(true);
+    expect(stageTopKeysFor(cricket, "league", "test").has("superOver"), "the premise: test does not").toBe(false);
+    const { divisionId } = await seedDivision(auth, "cricket", "t20", 0);
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const outcome = await saveBehindADivisionCommit(auth, divisionId, s, { superOver: true }, async (tx) => {
+      await tx`update divisions set variant_key = 'test' where id = ${divisionId}`;
+    });
+    expect(outcome).toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: "superOver" } });
+    expect((await rulesOf(s)) ?? null, "a refused save writes nothing").toBeNull();
+  });
+
+  it("the positive pair: with NO division change in between, the same waiting save lands", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 0);
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const outcome = await saveBehindADivisionCommit(auth, divisionId, s, { cap: 21 }, async () => {});
+    expect(outcome).toEqual({ rules: { cap: 21 } });
+    expect(await rulesOf(s)).toEqual({ cap: 21 });
   });
 });
 

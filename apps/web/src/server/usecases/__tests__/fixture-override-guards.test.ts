@@ -235,10 +235,22 @@ const BOUND_CASES: BoundCase[] = [
     tooShort: { attempts: 2, suddenDeath: true, clockSeconds: 8 }, fits: { attempts: 4, suddenDeath: true, clockSeconds: 8 },
   },
 ];
-const noLongerFits = (id: string, no: number) => ({
-  status: 409, code: "FIXTURE_OWN_FORMAT_NO_LONGER_FITS", extra: { fixture_id: id, fixture_no: no },
+/** The refusal, with the cfg path it names (`field`, M3: the client says WHICH rule no longer fits with it). */
+const noLongerFits = (id: string, no: number, field: string) => ({
+  status: 409, code: "FIXTURE_OWN_FORMAT_NO_LONGER_FITS", extra: { fixture_id: id, fixture_no: no, field },
   message: expect.stringContaining(`Match ${no} has its own format that no longer fits`),
 });
+/** The path the ENGINE names for a refused decider: the one rule key of the case's sport that carries the `matchBound`
+ *  and sits under the case's top-level key (X-SR-2 `checkFixtureOverride` reports `owner.key`). Read from the sport's
+ *  own declaration, never from the refusal under test. */
+const boundFieldOf = (c: BoundCase): string => {
+  const m = builtinModules.find((x) => x.key === c.sport)!;
+  const keys = Object.entries(m.ruleKeys as Record<string, { matchBound?: unknown }>)
+    .filter(([k, f]) => f.matchBound !== undefined && k.split(".")[0] === c.key)
+    .map(([k]) => k);
+  expect(keys, `${c.sport}.${c.key}: exactly one bounded rule key under it`).toHaveLength(1);
+  return keys[0]!;
+};
 const storedRules = async (stageId: string) => (await sql<{ r: unknown }[]>`select config -> 'rules' as r from stages where id = ${stageId}`)[0]!.r;
 const divisionConfigOf = async (id: string) => (await sql<{ c: unknown }[]>`select config as c from divisions where id = ${id}`)[0]!.c;
 /** The sports the ENGINE gives a match-scoped decider bound (`matchBound`), by their declarations. */
@@ -269,9 +281,7 @@ describe("Task 11: the bound cases cover every sport the engine bounds (anti-vac
 describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match's own format unable to fit", () => {
   for (const c of BOUND_CASES) {
     const seed = async () => {
-      const m = builtinModules.find((x) => x.key === c.sport)!;
       const b = await seedBracket({ sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2, stageRules: { [c.key]: c.wide } });
-      void m;
       const id = b.fixtureIds[0]!;
       await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
       expect((await sql<{ o: unknown }[]>`select rules_override o from fixtures where id = ${id}`)[0]!.o, `${c.sport}: the premise, the override is stored`).not.toBeNull();
@@ -281,7 +291,7 @@ describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match'
     it(`${c.sport}: shortening the stage under the match's own ${c.key} is refused naming the match, and nothing is written`, async () => {
       const { b, id, no } = await seed();
       const before = await storedRules(b.stageId);
-      await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.tooShort } })).rejects.toMatchObject(noLongerFits(id, no));
+      await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.tooShort } })).rejects.toMatchObject(noLongerFits(id, no, boundFieldOf(c)));
       expect(await storedRules(b.stageId), "the refused save rolled back whole").toEqual(before);
       expect((await sql<{ o: unknown }[]>`select rules_override o from fixtures where id = ${id}`)[0]!.o, "and the override was not dropped").not.toBeNull();
     });
@@ -304,7 +314,7 @@ describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match'
     });
     const id = b.fixtureIds[0]!;
     await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
-    await expect(putStageRules(b.auth, b.stageId, { rules: null })).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id)));
+    await expect(putStageRules(b.auth, b.stageId, { rules: null })).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id), boundFieldOf(c)));
     expect(await storedRules(b.stageId), "the clear rolled back").toEqual({ [c.key]: c.wide });
     // …and with the match's format set back, the same clear goes through.
     await writeFixtureRulesOverride(b.auth, [id], null);
@@ -363,7 +373,7 @@ describe.skipIf(!HAS_DB)("Task 11: the guard asks the engine about the division'
     await writeFixtureRulesOverride(b.auth, [id], { cap: SHORT.setTo + 9 }); // the real module lets a match set its cap
     const config = (await sql<{ c: unknown }[]>`select config c from divisions where id = ${b.divisionId}`)[0]!.c;
     const ask = (variant: string | null) => withTenant(b.auth.orgId, (tx) => refuseInvalidatedOverrides(tx, b.divisionId, config, narrowed, variant));
-    await expect(ask("short")).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id)));
+    await expect(ask("short")).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id), "cap"));
     await expect(ask("bwf"), "the variant that allows the key").resolves.toBeUndefined();
     await expect(ask(null), "no variant narrows nothing").resolves.toBeUndefined();
   });
@@ -384,7 +394,7 @@ describe.skipIf(!HAS_DB)("Task 11: a DIVISION save never leaves an unstarted mat
     it(`${c.sport}: shortening the division's ${c.key} under the match's own is refused naming the match; the division is unchanged`, async () => {
       const { b, id, base, no } = await seed();
       const before = await divisionConfigOf(b.divisionId);
-      await expect(patchDivision(b.auth, b.divisionId, { config: { ...base, [c.key]: c.tooShort } })).rejects.toMatchObject(noLongerFits(id, no));
+      await expect(patchDivision(b.auth, b.divisionId, { config: { ...base, [c.key]: c.tooShort } })).rejects.toMatchObject(noLongerFits(id, no, boundFieldOf(c)));
       expect(await divisionConfigOf(b.divisionId)).toEqual(before);
     });
 

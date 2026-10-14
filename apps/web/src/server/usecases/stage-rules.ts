@@ -72,26 +72,14 @@ export async function putStageRules(
   const frozen = await frozenCompetitionIds(auth.orgId);
 
   const out = await withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<
-      {
-        division_id: string;
-        stage_name: string;
-        stage_kind: StageKind;
-        competition_id: string;
-        sport_key: string;
-        variant_key: string;
-        module_version: string;
-        division_config: Record<string, unknown> | null;
-      }[]
-    >`
-      select s.division_id, s.name as stage_name, s.kind as stage_kind, d.competition_id, d.sport_key, d.variant_key,
-             d.module_version, d.config as division_config
-        from stages s join divisions d on d.id = s.division_id
+    // FIRST read: only what cannot move under us - which division this stage belongs to, and its competition (a stage
+    // never changes division). `withTenant` scopes the read to this org, so another tenant's stage is
+    // indistinguishable from a missing one - 404, never 403.
+    const [first] = await tx<{ division_id: string; competition_id: string }[]>`
+      select s.division_id, d.competition_id from stages s join divisions d on d.id = s.division_id
        where s.id = ${stageId}`;
-    // `withTenant` scopes the read to this org, so another tenant's stage is
-    // indistinguishable from a missing one — 404, never 403.
-    if (!stage) throw new HttpError(404, "stage not found");
-    assertNotFrozen(frozen, stage.competition_id);
+    if (!first) throw new HttpError(404, "stage not found");
+    assertNotFrozen(frozen, first.competition_id);
 
     // The division advisory lock every sibling stage writer takes
     // (`stages.ts` replaceStages/deleteStage, overrideStandings, issueChallenge)
@@ -104,7 +92,34 @@ export async function putStageRules(
     // save worked, the pad disagrees, and there is no retry that fixes it.
     // Taken BEFORE the read it guards, so the predicate and the write are one
     // atomic decision.
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    //
+    // It pairs with `patchDivision`'s lock on the SAME key (divisions.ts, "division:<id>", taken before it reads the
+    // division's config): a division config or variant save and a stage rules save serialise on it, so the division
+    // config this save validates against, and the variant its allowlist reads, are the ones that stand when it commits.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + first.division_id}))`;
+
+    // SECOND read, UNDER the lock: everything that is validated against - the division's config and variant, the stage's
+    // kind and name, and the rules it stores now. (Read before the lock, a division save committing in between would
+    // have the merged parse and the override guard below run on a stale config and store `{division + rules}` that the
+    // sport refuses, the D10 crash class.) Each is a new statement, so READ COMMITTED sees what the other writer committed.
+    const [stage] = await tx<
+      {
+        division_id: string;
+        stage_name: string;
+        stage_kind: StageKind;
+        competition_id: string;
+        sport_key: string;
+        variant_key: string;
+        module_version: string;
+        division_config: Record<string, unknown> | null;
+        stored_rules: unknown;
+      }[]
+    >`
+      select s.division_id, s.name as stage_name, s.kind as stage_kind, d.competition_id, d.sport_key, d.variant_key,
+             d.module_version, d.config as division_config, s.config -> 'rules' as stored_rules
+        from stages s join divisions d on d.id = s.division_id
+       where s.id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found"); // deleted while this save waited for the lock
 
     // D1 — the lock is per stage. The predicate itself lives in
     // `lockedStageIdsAmong` above, shared with the panel's read half so the
@@ -125,9 +140,9 @@ export async function putStageRules(
     const module_ = resolveModule(stage.sport_key, stage.module_version);
     if (input.rules !== null) refuseUnsettableKeys(module_, stage.sport_key, stage.stage_kind, stage.variant_key, Object.keys(input.rules));
 
-    // The stored rules, read UNDER the division lock (the read above this lock could be stale). The merge is computed
-    // here, on the JS side, and written whole: every stage writer takes this lock, so nothing moves in between.
-    const [{ rules: stored }] = await tx<{ rules: unknown }[]>`select config -> 'rules' as rules from stages where id = ${stageId}`;
+    // The merge is computed here, on the JS side, from the rules read under the lock above, and written whole: every
+    // stage writer takes that lock, so nothing moves in between.
+    const stored = stage.stored_rules;
 
     // "Inherit" is key ABSENCE, never an explicit null — the overlay spreads
     // what it is given, so a null reaching the column blanks the division's
