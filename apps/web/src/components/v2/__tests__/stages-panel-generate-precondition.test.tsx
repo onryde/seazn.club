@@ -153,6 +153,12 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     it("an unreadable list keeps the code's own copy (null), never a guess; the Swiss reason is not mistaken for it", () => {
       for (const abandoned of [undefined, [], [{ fixtureId: "f", round: 0, board: 1 }], "x"])
         expect(generatePreconditionMessage(refusal(abandoned), msg, undefined, lookup), JSON.stringify(abandoned)).toBeNull();
+      // A readable list under ANOTHER reason is not this refusal (the branch keys on the reason, not on the list's shape).
+      for (const reason of ["swiss_abandoned_boards", "group_too_few_entrants", "something_else"]) {
+        const other = new ApiV1Error("x", 422, "STAGE_NOT_READY", { reason, abandoned: [m(1, 2)] });
+        expect(generatePreconditionMessage(other, msg, undefined, lookup), reason).not.toBe(msg("schedule.error.completeHeldOne", { matches: "Ana – Ben" }));
+      }
+      expect(generatePreconditionMessage(new ApiV1Error("x", 422, "STAGE_NOT_READY", { reason: "something_else", abandoned: [m(1, 2)] }), msg, undefined, lookup), "an unknown reason keeps the code's own copy").toBeNull();
       const swiss = new ApiV1Error("x", 422, "STAGE_NOT_READY", { reason: "swiss_abandoned_boards", abandoned: [m(1, 2)] });
       expect(generatePreconditionMessage(swiss, msg, undefined, lookup)).not.toBe(msg("schedule.error.completeHeldOne", { matches: "Ana – Ben" }));
     });

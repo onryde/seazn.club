@@ -542,15 +542,15 @@
   {
     "id": "desk-bracket-only",
     "file": "apps/web/src/server/usecases/competition-desk.ts",
-    "find": "return BRACKET_KINDS.has(stageKind as StageKind) && abandonAwaitsSettle(f);",
-    "replace": "return abandonAwaitsSettle(f);",
+    "find": "  return rowAwaitsSettle(stageKind, f);",
+    "replace": "  return stageKind === \"knockout\" && rowAwaitsSettle(stageKind, f);",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/server/usecases/__tests__/competition-desk-held.test.ts"
         ],
-        "name": "a TABLE stage's recorded abandon is a void: no row, and the page's read stays empty"
+        "name": "I1 / X-AB-5: a TABLE stage's recorded abandon"
       }
     ]
   },

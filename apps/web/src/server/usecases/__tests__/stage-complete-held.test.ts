@@ -153,6 +153,9 @@ describe.skipIf(!HAS_DB)("a table stage does not complete while a match is held 
     await scorerAbandon(t, a);
     await scorerAbandon(t, b);
     await playOutExcept(t, new Set([a, b]));
+    // Premise: the second match's number in its round differs from its round, so a refusal that named the round twice
+    // (or the number twice) cannot pass for the right one.
+    expect(named(t, [b])[0]!.board, "rig: round and number differ").not.toBe(named(t, [b])[0]!.round);
     expect(await tryComplete(t), "both named").toMatchObject({ refused: "STAGE_NOT_READY", data: { reason: "abandoned_matches", abandoned: named(t, [a, b]) } });
     await post(t.auth, a, "core.settle", { winner: t.rows[0]!.away_entrant_id, method: SETTLE_BY_ORGANISER });
     expect(await tryComplete(t), "only the second is named now").toMatchObject({ refused: "STAGE_NOT_READY", data: { abandoned: named(t, [b]) } });

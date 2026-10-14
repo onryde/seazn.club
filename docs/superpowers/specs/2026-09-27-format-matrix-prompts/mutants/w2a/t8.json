@@ -305,8 +305,8 @@
   {
     "id": "finalize-abandoned",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "abandoned: resolveVoids(prior).some((e) => e.type === \"core.abandon\"),",
-    "replace": "abandoned: false,",
+    "find": "abandoned: resolveVoids(prior).some((e) => e.type === \"core.abandon\"),\n      state: before.state,",
+    "replace": "abandoned: false,\n      state: before.state,",
     "killers": [
       {
         "cwd": "apps/web",
@@ -320,8 +320,8 @@
   {
     "id": "finalize-folds-candidate",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq })",
-    "replace": "foldMatchWithStoppage(sportModule, cfg, lineups, stream, { strictFromSeq: candidate.seq })",
+    "find": "foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq });\n    const facts = {",
+    "replace": "foldMatchWithStoppage(sportModule, cfg, lineups, stream, { strictFromSeq: candidate.seq });\n    const facts = {",
     "killers": [
       {
         "cwd": "apps/web",
@@ -350,8 +350,8 @@
   {
     "id": "settle-not-bracket",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "    if (!forbidsLevelResult(stageKind)) {\n      throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
-    "replace": "    if (false) {\n      throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
+    "find": "if (!offered) {\n        throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
+    "replace": "if (false) {\n        throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
     "killers": [
       {
         "cwd": "apps/web",

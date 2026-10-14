@@ -119,8 +119,8 @@
   {
     "id": "bracket-status-plain",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "    status: bracketEngineStatus(f),",
-    "replace": "    status: toEngineStatus(f.status),",
+    "find": "    status: completionEngineStatus(stageKind, f),",
+    "replace": "    status: completionEngineStatus(stageKind, { ...f, has_active_abandon: false }),",
     "killers": [
       {
         "cwd": "apps/web",
@@ -141,8 +141,8 @@
   {
     "id": "ladder-status-plain",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "const status = bracketEngineStatus(f);",
-    "replace": "const status = toEngineStatus(f.status);",
+    "find": "const status = completionEngineStatus(inputs.kind, f);",
+    "replace": "const status = completionEngineStatus(inputs.kind, { ...f, has_active_abandon: false });",
     "killers": [
       {
         "cwd": "apps/web",
@@ -163,8 +163,8 @@
   {
     "id": "awaits-null-only",
     "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "(f.outcome == null || isLevelOutcome(f.outcome as never))",
-    "replace": "f.outcome == null",
+    "find": "outcome: f.outcome as MatchOutcome | null, abandoned: true,",
+    "replace": "outcome: null, abandoned: true,",
     "killers": [
       {
         "cwd": "apps/web",
@@ -172,14 +172,21 @@
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
         "name": "D-G1: every sport — a final its scorer abandoned"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/row-awaits-settle.test.ts"
+        ],
+        "name": "every kind x every row"
       }
     ]
   },
   {
     "id": "awaits-ignores-ledger",
     "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "f.status === \"abandoned\" && f.has_active_abandon && ",
-    "replace": "f.status === \"abandoned\" && ",
+    "find": "f.status === \"abandoned\" &&\n    f.has_active_abandon &&\n    settleOffered(",
+    "replace": "f.status === \"abandoned\" &&\n    settleOffered(",
     "killers": [
       {
         "cwd": "apps/web",
@@ -187,6 +194,13 @@
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
         "name": "D-G1 guard: the unbeaten default never ranks a FIELD entrant"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/row-awaits-settle.test.ts"
+        ],
+        "name": "every kind x every row"
       }
     ]
   },
@@ -275,15 +289,22 @@
   {
     "id": "table-status-bracket",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "      status: toEngineStatus(f.status),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
-    "replace": "      status: bracketEngineStatus(f),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
+    "find": "      status: completionEngineStatus(kind, f),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
+    "replace": "      status: completionEngineStatus(kind, { ...f, has_active_abandon: false }),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
-        "name": "table stages keep the void: a league with a scorer's abandon AND an expunge withdrawal"
+        "name": "table stages: a scorer's abandon HOLDS completion"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/stage-complete-held.test.ts"
+        ],
+        "name": "a plain abandon holds the explicit Complete"
       }
     ]
   }
