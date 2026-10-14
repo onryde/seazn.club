@@ -12,7 +12,6 @@ import { anyRoundOpened, roundOpenFor } from "@/server/external-play/round-open"
 import {
   CAMERA_POLICIES,
   competitionCameraPolicy,
-  effectivePolicy,
   fixtureCameraPolicy,
   type CameraPolicy,
 } from "@/server/external-play/camera-policy";
@@ -347,7 +346,9 @@ describe.skipIf(!HAS_DB)("camera_policy through patchDivision — downgrade-only
       from: "required",
       to: null,
       effectiveFrom: "required",
-      effectiveTo: effectivePolicy({ stage: null, division: null, competition: "off" }),
+      // Final review M-7: the literal, never effectivePolicy's own answer — the division now inherits the
+      // competition's stored "off" (the seed's), and nothing above it is stricter.
+      effectiveTo: "off",
     });
   });
 
