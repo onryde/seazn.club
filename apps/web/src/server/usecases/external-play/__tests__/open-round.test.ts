@@ -1614,6 +1614,56 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(checked, "2 policies × 2 states of the old meeting").toBe(4);
   });
 
+  it("m3: the re-open is the R3-1 trigger's second producer — a player who STAYED on a re-paired board reads no participant on file once the re-open retires the old pairing's meeting (so their open room re-claims, ownMeetingRetired), and that re-claim seats them in the NEW meeting under a new id; counted", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "required" });
+    const t0 = new Date();
+    expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+    const boardOf = (round: BoardSeat[], entrantId: string) => round.find((b) => b.home === entrantId || b.away === entrantId)?.fixtureId ?? null;
+    const ownOnFile = async (fixtureId: string, userId: string, at: Date) =>
+      (await readRoom({ kind: "session", userId }, fixtureId, { now: at, mintRealtime: async () => "rt-token" })).ownParticipantId;
+
+    // The first pairing: every player seated, so every room holds a participant.
+    const first = await swissRound1(s.stageId);
+    const atSeat = new Date(t0.getTime() + MIN);
+    const held = new Map<string, { fixtureId: string; participantId: string; meetingId: string }>();
+    for (const p of s.players) {
+      const fixtureId = boardOf(first, p.entrantId)!;
+      const seat = await seatPlayer({ fixtureId, personId: p.personId }, { now: atSeat, video: rtk.video });
+      expect(seat, "premise — the first pairing seats, with a participant").toMatchObject({ seated: true, participant: { participantId: expect.any(String) } });
+      const participantId = (seat as { participant: { participantId: string } }).participant.participantId;
+      expect(await ownOnFile(fixtureId, p.userId, atSeat), "premise — the room reads its own participant").toBe(participantId);
+      held.set(p.entrantId, { fixtureId, participantId, meetingId: (await meetingsOf(fixtureId))[0]!.meeting_id });
+    }
+
+    // Unpair → re-pair → the re-open that re-stamps the window (N-2: the game-less boards' meetings go).
+    await unpairSwissRound(s.owner, s.stageId);
+    await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+    const reopenAt = new Date(t0.getTime() + 3 * MIN);
+    expect(await reopen(s, reopenAt, rtk.end)).toMatchObject({ opened: true });
+    const after = await swissRound1(s.stageId);
+    const stayers = s.players.filter((p) => boardOf(after, p.entrantId) === held.get(p.entrantId)!.fixtureId);
+    expect(stayers.length, "anti-vacuity: the re-pair leaves a player on their board").toBeGreaterThan(0);
+
+    let checked = 0;
+    const atRoom = new Date(reopenAt.getTime() + MIN);
+    for (const p of stayers) {
+      const was = held.get(p.entrantId)!;
+      // The R3-1 trigger: the room holds `was.participantId`, the server names none.
+      expect(await ownOnFile(was.fixtureId, p.userId, atRoom), "the re-open retired the stayer's participant with its meeting").toBeNull();
+      // The room's re-claim (room-shell: once per change, as the re-entry claim does).
+      const seat = await seatPlayer({ fixtureId: was.fixtureId, personId: p.personId }, { now: atRoom, video: rtk.video });
+      expect(seat).toMatchObject({ seated: true, participant: { participantId: expect.any(String) } });
+      const now1 = (seat as { participant: { participantId: string } }).participant.participantId;
+      expect(now1, "a NEW participant").not.toBe(was.participantId);
+      expect(await ownOnFile(was.fixtureId, p.userId, atRoom), "the room reads it back").toBe(now1);
+      const [meeting] = await meetingsOf(was.fixtureId);
+      expect(meeting!.meeting_id, "in the NEW meeting").not.toBe(was.meetingId);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: stayers re-claimed").toBe(stayers.length);
+  });
+
   it("never silent, never blocking: RealtimeKit refusing the old meeting's end is logged by meeting, and the re-open and its invites stand", async () => {
     const rtk = fakeRtk();
     const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });

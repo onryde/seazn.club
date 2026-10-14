@@ -180,7 +180,8 @@ export function RoomShell({
   }, [refusedForCamera, camera.status, state.pending, retries, participantId, claim]);
 
   // Final re-review 3, R3-1: the meeting this room's camera joined was retired under the player — a re-pair's
-  // newcomer ended it, and its participants went with its row (ownMeetingRetired reads the server's word). Re-claim
+  // newcomer ended it, or a re-open of the round did (m3: the N-2 re-open drops the round's game-less meetings), and
+  // its participants went with its row (ownMeetingRetired reads the server's word). Re-claim
   // the seat ONCE per change, quietly, as the re-entry does: the answer's token moves the camera to the new meeting.
   // A refused re-claim leaves the server's answer as it was, so nothing is asked again until that answer changes.
   const retiredKey = ownMeetingRetired(state) ? `${state.seat?.participant?.participantId ?? ""}>${snap.ownParticipantId ?? ""}` : null;
