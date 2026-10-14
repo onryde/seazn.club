@@ -6033,7 +6033,7 @@
   "externalPlay.reason.providerError": "Seazn kon deze partij niet van Lichess lezen, dus de uitslag is hier niet bekend.",
   "externalPlay.reason.tokenRevokedWhite": "{name} (Wit) heeft de toegang van Seazn tot het Lichess-account ingetrokken. Dit is geen no-show. De partij loopt misschien nog op Lichess.",
   "externalPlay.reason.tokenRevokedBlack": "{name} (Zwart) heeft de toegang van Seazn tot het Lichess-account ingetrokken. Dit is geen no-show. De partij loopt misschien nog op Lichess.",
-  "externalPlay.reason.tokenRevokedBoth": "Beide spelers hebben de toegang van Seazn tot hun Lichess-account ingetrokken. Dit is geen no-show. De partij loopt misschien nog op Lichess.",
+  "externalPlay.reason.tokenRevokedBoth": "Geen van beide spelers kan nog zetten doen vanuit Seazn. Dit is geen no-show. De partij loopt misschien nog op Lichess.",
   "externalPlay.reason.tokenRevoked": "Een speler heeft de toegang van Seazn tot het Lichess-account ingetrokken. Dit is geen no-show. De partij loopt misschien nog op Lichess.",
   "externalPlay.reason.doubleWalkoverBlocked": "Geen van beide spelers heeft ingecheckt en deze wedstrijd leidt naar geen volgende, dus een dubbele walk-over kan niet worden vastgelegd.",
   "externalPlay.reason.tiebreakOwed": "Remise in een knock-out. Een knock-out heeft een winnaar nodig, en deze remise geldt niet als uitslag.",

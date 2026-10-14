@@ -6033,7 +6033,7 @@
   "externalPlay.reason.providerError": "Seazn n'a pas pu lire cette partie sur Lichess : son résultat n'est pas connu ici.",
   "externalPlay.reason.tokenRevokedWhite": "{name} (Blancs) a retiré à Seazn l'accès à son compte Lichess. Ce n'est pas un forfait. La partie se poursuit peut-être sur Lichess.",
   "externalPlay.reason.tokenRevokedBlack": "{name} (Noirs) a retiré à Seazn l'accès à son compte Lichess. Ce n'est pas un forfait. La partie se poursuit peut-être sur Lichess.",
-  "externalPlay.reason.tokenRevokedBoth": "Les deux joueurs ont retiré à Seazn l'accès à leur compte Lichess. Ce n'est pas un forfait. La partie se poursuit peut-être sur Lichess.",
+  "externalPlay.reason.tokenRevokedBoth": "Aucun des deux joueurs ne peut plus jouer de coups depuis Seazn. Ce n'est pas un forfait. La partie se poursuit peut-être sur Lichess.",
   "externalPlay.reason.tokenRevoked": "Un joueur a retiré à Seazn l'accès à son compte Lichess. Ce n'est pas un forfait. La partie se poursuit peut-être sur Lichess.",
   "externalPlay.reason.doubleWalkoverBlocked": "Aucun des deux joueurs n'a confirmé sa présence et ce match ne mène à aucun autre : un double forfait ne peut pas être enregistré.",
   "externalPlay.reason.tiebreakOwed": "Nulle en élimination directe. Il faut un vainqueur, et cette nulle n'est pas enregistrée comme résultat.",
