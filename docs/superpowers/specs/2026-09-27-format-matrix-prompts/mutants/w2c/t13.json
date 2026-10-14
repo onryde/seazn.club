@@ -2,8 +2,8 @@
  {
   "id": "t13-gate-put",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "if (points !== undefined && points !== null) await assertCustomPointsAllowed(auth, points);",
-  "replace": "",
+  "find": "    await assertCustomPointsAllowed(auth, points);\n  }",
+  "replace": "  }",
   "killers": [
    {
     "cwd": "apps/web",
@@ -262,7 +262,7 @@
  {
   "id": "t13-division-recheck",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "await refuseInexpressibleStagePoints(tx, id, nextConfig, sportModule);",
+  "find": "await refuseInexpressibleStagePoints(tx, id, currentConfig, nextConfig, sportModule);",
   "replace": "",
   "killers": [
    {
@@ -510,6 +510,214 @@
      "src/server/usecases/__tests__/stage-points.test.ts"
     ],
     "name": "a top-level decider is refused NAMING the key"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-gates-before-delete",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  await assertStageBatchGates(auth, divComp, inputs);\n  // Resolved BEFORE the transaction",
+  "replace": "  // Resolved BEFORE the transaction",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "a custom_points 402 leaves the original stages untouched"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "a formats.double_elim 402 leaves"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "a duplicate seq inside the body is 409"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-dup-seq",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "if (seen.has(s.seq)) throw new HttpError(409",
+  "replace": "if (false) throw new HttpError(409",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "a duplicate seq inside the body is 409"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-cap-batch",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  assertWithinLimit(stageCap, \"stages.per_division.max\", inputs.length);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "the stage cap's 402, counted against the batch"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-replace-404-first",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  if (!divComp) throw new HttpError(404, \"division not found\");\n  await assertStageBatchGates",
+  "replace": "  await assertStageBatchGates",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "is 404 before any gate"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-replace-org-scoped",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "     where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;",
+  "replace": "     where d.id = ${divisionId}`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "is 404 before any gate"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-carry-read",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "        ...(points !== undefined && points !== null ? { points } : {}),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Apply keeps a matched slot's points"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a carried rule the division can no longer express"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-carry-applied",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "const config = carry?.points !== undefined && sent.points === undefined ? { ...sent, points: carry.points } : sent;",
+  "replace": "const config = sent;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Apply keeps a matched slot's points"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-body-points-win",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "const config = carry?.points !== undefined && sent.points === undefined ? { ...sent, points: carry.points } : sent;",
+  "replace": "const config = carry?.points !== undefined ? { ...sent, points: carry.points } : sent;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Apply keeps a matched slot's points"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-put-404-before-402",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    if (!exists) throw new HttpError(404, \"stage not found\");\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a stage that is not there answers 404 before the gate"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-recheck-standing-skip",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "  if (!standing.ok && expressible.keys.every((k) => standing.keys.includes(k))) return;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a save that did not cause the split is not blamed"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-recheck-new-key-still-asked",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "  if (!standing.ok && expressible.keys.every((k) => standing.keys.includes(k))) return;\n",
+  "replace": "  if (!standing.ok) return;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a save that did not cause the split is not blamed"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr1-template-door",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "if (config.points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(config.points));",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/templates.test.ts"
+    ],
+    "name": "the template door asks a stage's points"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "replaceStages asks the same questions of a body's points BEFORE its delete"
    }
   ]
  }

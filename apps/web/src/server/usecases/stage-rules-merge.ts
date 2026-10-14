@@ -278,15 +278,23 @@ export function refuseStagePoints(module: AnySportModule, kind: StageKind, divis
  * block every other stage's change for good; and the division's `points` never reach it (its own rule REPLACES them,
  * `STAGE_POINTS_REPLACES`, which is why the lock lets the change through for it). The empty case first: a config whose
  * points a rule can express asks nothing and costs no query.
+ *
+ * Fix round 1: a save is asked only about a split it ADDS. When every split key of the next config is already a split key
+ * of the config as it stands, this save did not cause the split (a legacy stage's points over a division that already
+ * split them, then an unrelated `periods` edit): refusing it would block every edit to the division for a state no door
+ * writes now. A save that adds a split key (or splits a division that did not) is asked as before.
  */
 export async function refuseInexpressibleStagePoints(
   tx: Tx,
   divisionId: string,
+  currentDivisionConfig: unknown,
   nextDivisionConfig: unknown,
   module: AnySportModule,
 ): Promise<void> {
   const expressible = pointsRuleExpressible(parsedDivisionCfg(module, nextDivisionConfig));
   if (expressible.ok) return;
+  const standing = pointsRuleExpressible(parsedDivisionCfg(module, currentDivisionConfig));
+  if (!standing.ok && expressible.keys.every((k) => standing.keys.includes(k))) return;
   const stages = await tx<{ id: string; name: string }[]>`
     select id, name from stages
      where division_id = ${divisionId} and jsonb_typeof(config -> 'points') = 'object' order by seq`;

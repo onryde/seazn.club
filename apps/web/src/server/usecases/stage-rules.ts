@@ -78,7 +78,13 @@ export async function putStageRules(
   // this usecase with no schema in front of it.
   const points = input.points === undefined || input.points === null ? input.points : PointsRule.parse(input.points);
   // The entitlement gate is a pooled read: asked BEFORE the transaction opens (createStages does the same), never inside.
-  if (points !== undefined && points !== null) await assertCustomPointsAllowed(auth, points);
+  // A stage that is not there (or is another org's) answers 404 before it, never the gate's 402: one short tenant-scoped
+  // read first (fix round 1), only when there is a rule to gate.
+  if (points !== undefined && points !== null) {
+    const exists = await withTenant(auth.orgId, async (tx) => (await tx`select 1 from stages where id = ${stageId}`).length > 0);
+    if (!exists) throw new HttpError(404, "stage not found");
+    await assertCustomPointsAllowed(auth, points);
+  }
   // Resolved BEFORE the transaction: `frozenCompetitionIds` runs its own
   // pooled query, and issuing that inside a `withTenant` callback that already
   // pins a connection is the nesting `entitlement-freeze.ts`'s header warns

@@ -39,6 +39,19 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
     expect(op.summary).toContain("a new slot, or one whose kind changed, starts from its own kind's preset");
   });
 
+  it("PUT /divisions/{id}/stages documents R-T13-1's points carry and R-T13-2's refusals before the delete (Task 13 fix round 1)", () => {
+    const op = (buildOpenApiDocument().paths as Record<string, Record<string, Op>>)["/api/v1/divisions/{id}/stages"]!.put!;
+    for (const claim of [
+      "A matched slot also keeps its own `points`",
+      "402 PAYMENT_REQUIRED",
+      "409 for a `seq` the body names twice",
+      "POINTS_RULE_INEXPRESSIBLE",
+      "is raised BEFORE the existing graph is deleted",
+    ])
+      expect(op.summary, claim).toContain(claim);
+    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(["400", "402", "409", "422"]));
+  });
+
   it("PUT /stages/{id}/rules documents the points arm (W2c Task 13): its body, null, and every refusal by code", () => {
     const op = (buildOpenApiDocument().paths as Record<string, Record<string, Op>>)["/api/v1/stages/{id}/rules"]!.put!;
     for (const claim of [

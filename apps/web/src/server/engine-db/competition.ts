@@ -347,11 +347,16 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // NOT snapshotted, and that is not an oversight. `stage.config.points`
   // (Jul3/05 §2) is a competition-level re-derivation applied on top of the
   // sport ledger, not an input to any fold, so it is not part of the resolved
-  // cfg `stageScopedCfg` produces and no fixture froze it. It is safe today
-  // because a stage's config is locked the moment fixtures exist
-  // (`usecases/stages.ts` FORMAT_LOCKED) except for `qualified`,
-  // `carry_deltas`, `rank_overrides` and `ladder_order` — `points` is not on
-  // that list. Relax that lock and this line becomes the same defect again.
+  // cfg `stageScopedCfg` produces and no fixture froze it. Since W2c Task 13
+  // it IS editable after fixtures exist — `PUT /stages/{id}/rules`' points arm
+  // — but only until the stage STARTS: the first frozen config snapshot or
+  // score event in that stage locks it (STAGE_FORMAT_LOCKED, the monotonic
+  // `lockedStageIdsAmong` pair, never `fixtures.status`). Until then no result
+  // in the stage exists to have been ranked under the old rule, and a save that
+  // moves the rule re-folds a table already cached for the stage (a Swiss bye,
+  // an event-less walkover — `putStageRules` calls `recomputeStandings`). Let a
+  // points save through after the stage starts, or drop that re-fold, and
+  // this line becomes the same defect again: a table ranked under two rules.
   //
   // Per-stage match rules (design 2026-09-17 §T1) widened what the resolved
   // cfg can contain: `stageScopedCfg` now also overlays `stage.config.rules`

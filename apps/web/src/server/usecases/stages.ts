@@ -363,27 +363,42 @@ interface StageRulesScope {
   config: Record<string, unknown> | null;
 }
 
+/** What a stage SLOT keeps across `replaceStages`' delete-and-recreate, keyed `seq:kind`: its stored rules (R-T12-4,
+ *  `{}` for a cleared slot) and its own points rule when it has one (R-T13-1). */
+export interface StageCarry {
+  rules: Record<string, unknown>;
+  points?: unknown;
+}
+
 /** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
  *  laid over its kind's preset (`validatedStageConfig`) or, for a slot `replaceStages` matched (`carried`, keyed
  *  `seq:kind`), over that slot's carried rules in the preset's place (R-T12-4). In input order; throws before anything
- *  is written. */
+ *  is written.
+ *
+ *  R-T13-1: a matched slot also keeps its own POINTS, unless the body sends its own (a rule is one sentence: the body's
+ *  replaces the carry whole). The carried rule is asked the stage PUT's points questions like any other
+ *  (`refuseStagePoints`, inside `validatedStageConfig`), so a rule the division can no longer express refuses the Apply
+ *  here, before `replaceStages` deletes anything. A new slot, or one whose kind changed, carries none. */
 function stageConfigsAtCreate(
   division: StageRulesScope,
   inputs: readonly StageInput[],
-  carried: ReadonlyMap<string, Record<string, unknown>> = new Map(),
+  carried: ReadonlyMap<string, StageCarry> = new Map(),
 ): Record<string, unknown>[] {
   const sportModule = resolveModule(division.sport_key, division.module_version);
-  return inputs.map((s) =>
-    validatedStageConfig(
+  return inputs.map((s) => {
+    const carry = carried.get(`${s.seq}:${s.kind}`);
+    const sent = (s.config ?? {}) as Record<string, unknown>;
+    const config = carry?.points !== undefined && sent.points === undefined ? { ...sent, points: carry.points } : sent;
+    return validatedStageConfig(
       sportModule,
       division.sport_key,
       s.kind,
       division.variant_key,
       division.config,
-      (s.config ?? {}) as Record<string, unknown>,
-      carried.get(`${s.seq}:${s.kind}`) ?? null,
-    ),
-  );
+      config,
+      carry?.rules ?? null,
+    );
+  });
 }
 
 /**
@@ -396,21 +411,20 @@ export async function assertCustomPointsAllowed(auth: AuthCtx, rule: PointsRule)
   if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature(auth.orgId, "standings.custom_points");
 }
 
-/** Define (part of) the stage graph for a division. Each stage is written with its kind's preset match rules
- *  (`stage-defaults.ts`, X-SR-6) under any `config.rules` sent with it, validated as `PUT /stages/{id}/rules` validates
- *  a save (SC-P8). `carried` is replaceStages' own: the rules a slot kept across its delete-and-recreate. */
-export async function createStages(
+/**
+ * W2c Task 13 fix round 1 (R-T13-2) — every refusal a stage BATCH earns from its input alone, before anything is written:
+ * the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.custom_points` on a body's own points,
+ * `tiebreakers.custom`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
+ * batch names twice. `createStages` asks it first; `replaceStages` asks it BEFORE its delete, which commits on its own,
+ * so a 402 or a 409 on Apply no longer leaves the division with no stages. Pooled reads (`requireFeature`, `getLimit`):
+ * call it OUTSIDE `withTenant`, never inside one. Returns the stage cap (`createStages` re-counts it inside its insert
+ * transaction against the stages that stand then).
+ */
+export async function assertStageBatchGates(
   auth: AuthCtx,
-  divisionId: string,
-  input: CreateStages,
-  carried?: ReadonlyMap<string, Record<string, unknown>>,
-): Promise<StageRow[]> {
-  const inputs: StageInput[] = Array.isArray(input) ? input : [input];
-  assertSwissRoundsDeclared(inputs);
-  // Format gates honour an Event Pass on this division's competition
-  // (v3/07 §3), so resolve the competition before gating.
-  const [divComp] = await sql<{ competition_id: string }[]>`
-    select competition_id from divisions where id = ${divisionId}`;
+  divComp: { competition_id: string } | undefined,
+  inputs: readonly StageInput[],
+): Promise<number | null> {
   // Doc 10 §1: `formats.double_elim` is Pro — gate before any insert.
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {
     await requireFeature(auth.orgId, "formats.double_elim", divComp?.competition_id);
@@ -450,11 +464,6 @@ export async function createStages(
       await requireFeature(auth.orgId, "standings.carry_over");
     }
   }
-  // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
-  // (`getLimit`), and `withTenant` pins a pooled connection for its whole
-  // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
-  // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
-  const frozen = await frozenCompetitionIds(auth.orgId);
   // The plan LOOKUP is resolved out here; the COUNT stays inside the
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
@@ -463,6 +472,38 @@ export async function createStages(
   // pass overlay only applies when a competition is in scope — `divComp` is
   // already resolved above for the format gates, so the same id gates the cap.
   const stageCap = await getLimit(auth.orgId, "stages.per_division.max", divComp?.competition_id);
+  // The batch alone must fit (a lower bound of the in-transaction count: the stages that already stand add to it).
+  assertWithinLimit(stageCap, "stages.per_division.max", inputs.length);
+  // A seq the batch names twice can never insert: refused here, not by the second insert after a delete.
+  const seen = new Set<number>();
+  for (const s of inputs) {
+    if (seen.has(s.seq)) throw new HttpError(409, `stage seq ${s.seq} already exists`);
+    seen.add(s.seq);
+  }
+  return stageCap;
+}
+
+/** Define (part of) the stage graph for a division. Each stage is written with its kind's preset match rules
+ *  (`stage-defaults.ts`, X-SR-6) under any `config.rules` sent with it, validated as `PUT /stages/{id}/rules` validates
+ *  a save (SC-P8). `carried` is replaceStages' own: what a slot kept across its delete-and-recreate (`StageCarry`). */
+export async function createStages(
+  auth: AuthCtx,
+  divisionId: string,
+  input: CreateStages,
+  carried?: ReadonlyMap<string, StageCarry>,
+): Promise<StageRow[]> {
+  const inputs: StageInput[] = Array.isArray(input) ? input : [input];
+  assertSwissRoundsDeclared(inputs);
+  // Format gates honour an Event Pass on this division's competition
+  // (v3/07 §3), so resolve the competition before gating.
+  const [divComp] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  const stageCap = await assertStageBatchGates(auth, divComp, inputs);
+  // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
+  // (`getLimit`), and `withTenant` pins a pooled connection for its whole
+  // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
+  // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
+  const frozen = await frozenCompetitionIds(auth.orgId);
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
       select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
@@ -517,7 +558,9 @@ export async function createStages(
  *  Delete + recreate runs as two steps (createStages owns its validation and
  *  tx); a failed create leaves the division stage-less, recoverable exactly
  *  like the manual Fixtures-tab delete-then-add flow — which is why every
- *  refusal the create can raise from its input is raised here first. */
+ *  refusal the create can raise from its input is raised here first: the
+ *  rules and points questions (`stageConfigsAtCreate`) inside the delete's
+ *  transaction, every batch gate (`assertStageBatchGates`, R-T13-2) before it. */
 export async function replaceStages(
   auth: AuthCtx,
   divisionId: string,
@@ -531,6 +574,15 @@ export async function replaceStages(
   // this is the PUT the Format tab's Apply calls, so a bad round count would
   // otherwise cost the organiser their whole stage graph.
   assertSwissRoundsDeclared(inputs);
+  // R-T13-2: every gate `createStages` asks of the batch, asked HERE, before the delete below commits on its own — a
+  // 402 (a plan feature, the stage cap) or a 409 (a seq named twice) on Apply used to land after it and leave the
+  // division with no stages. Pooled reads, so outside the transaction; a missing division answers 404 before any of them.
+  // Scoped to the caller's org by hand (a pooled read has no tenant): another org's division is a missing one, 404.
+  const [divComp] = await sql<{ competition_id: string }[]>`
+    select d.competition_id from divisions d join competitions c on c.id = d.competition_id
+     where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;
+  if (!divComp) throw new HttpError(404, "division not found");
+  await assertStageBatchGates(auth, divComp, inputs);
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
@@ -562,7 +614,7 @@ export async function replaceStages(
     // genuinely new slot (no entry here) starts from its preset.
     const rows = await tx<{ seq: number; kind: string; config: Record<string, unknown> }[]>`
       select seq, kind, config from stages where division_id = ${divisionId}`;
-    const keep = new Map<string, Record<string, unknown>>();
+    const keep = new Map<string, StageCarry>();
     for (const r of rows) {
       const rules = r.config?.rules;
       // Keyed on seq AND kind. A format override belongs to a stage SLOT, and
@@ -576,9 +628,16 @@ export async function replaceStages(
       // sport, kind and variant, and none of them changes for a matched slot.
       // No stored rules object is the organiser's clear: carried as `{}`.
       const cleared = rules === null || rules === undefined || typeof rules !== "object" || Array.isArray(rules);
-      keep.set(`${r.seq}:${r.kind}`, cleared ? {} : (rules as Record<string, unknown>));
+      // R-T13-1: the slot's own points ride the same carry (an organiser's choice on the same screen, not the
+      // template's), and are re-asked below with the body; a slot that has none carries none.
+      const points = r.config?.points;
+      keep.set(`${r.seq}:${r.kind}`, {
+        rules: cleared ? {} : (rules as Record<string, unknown>),
+        ...(points !== undefined && points !== null ? { points } : {}),
+      });
     }
-    // Every rules fragment in the body, judged as the create will judge it, before anything is dropped.
+    // Every rules fragment and points rule in the body or the carry, judged as the create will judge it, before anything
+    // is dropped.
     stageConfigsAtCreate(division, inputs, keep);
     await tx`delete from stages where division_id = ${divisionId}`;
     return keep;

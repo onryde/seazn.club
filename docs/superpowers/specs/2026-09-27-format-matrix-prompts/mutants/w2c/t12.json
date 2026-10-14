@@ -158,8 +158,8 @@
  {
   "id": "t12-carry-lookup",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "carried.get(`${s.seq}:${s.kind}`) ?? null,",
-  "replace": "null,",
+  "find": "      carry?.rules ?? null,\n",
+  "replace": "      null,\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -714,8 +714,8 @@
  {
   "id": "t12-fr4-cleared",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "keep.set(`${r.seq}:${r.kind}`, cleared ? {} : (rules as Record<string, unknown>));",
-  "replace": "if (!cleared) keep.set(`${r.seq}:${r.kind}`, rules as Record<string, unknown>);",
+  "find": "      keep.set(`${r.seq}:${r.kind}`, {",
+  "replace": "      if (!cleared) keep.set(`${r.seq}:${r.kind}`, {",
   "killers": [
    {
     "cwd": "apps/web",

@@ -139,9 +139,16 @@ describe.skipIf(!HAS_DB)("R-T13-2 replaceStages asks every batch gate BEFORE its
     expect(await stageIds(divisionId)).toEqual(before);
   });
 
-  it("a nonexistent division is 404 before any gate's 402", async () => {
+  it("a nonexistent division, or another org's, is 404 before any gate's 402; the other org's stages untouched", async () => {
     const auth = await seedOrg("pro");
     await denyFeature(auth.orgId, "standings.custom_points");
     await expect(replaceStages(auth, randomUUID(), [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 404 });
+    const other = await seedOrg("pro");
+    const theirs = await seededGraph(other);
+    await expect(replaceStages(auth, theirs.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 404 });
+    expect(await stageIds(theirs.divisionId)).toEqual(theirs.before);
+    // The positive pair: the same body on the denied org's OWN division answers the gate's 402.
+    const own = await seededGraph(auth);
+    await expect(replaceStages(auth, own.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 402 });
   });
 });
