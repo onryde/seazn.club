@@ -18,7 +18,7 @@
 // (its behaviour is pinned in ../../__tests__/token-rate-limits.test.ts).
 //
 // Sport: not applicable — this path is sport-agnostic auth.
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
@@ -43,31 +43,23 @@ vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { sql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { routes } from "@/lib/routes";
 import { signupSchema } from "@/lib/types";
 import { createVerificationToken } from "@/lib/verification";
 import { VerifyEmail } from "@/components/verify-email";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/ui.json";
+import {
+  CLAIM_NEXT,
+  FIRST_RUN_WIZARD,
+  INVITE_NEXT,
+  ORIGIN,
+  PRODUCER_NEXTS,
+  UNSAFE_NEXTS,
+  warmDefaultLanding,
+} from "../../__tests__/_verify-link";
 import { POST } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const ORIGIN = "https://seazn.club";
-
-/** The four real producers of a signup `next` — the pages that hand `AuthForm`
- *  one: join/[token]/page.tsx, claim/[token]/page.tsx, checkin/[token]/page.tsx,
- *  and login/page.tsx, which forwards whatever safe `?next=` it arrived with
- *  (the settings destination page-auth's org-less bounce carries is one). */
-const INVITE_NEXT = "/join/inv0123456789";
-const CLAIM_NEXT = routes.claim("clm0123456789");
-const CHECKIN_NEXT = "/checkin/chk0123456789";
-const LOGIN_CARRIED_NEXT = "/settings?tab=account&email_change=success";
-const PRODUCER_NEXTS = [INVITE_NEXT, CLAIM_NEXT, CHECKIN_NEXT, LOGIN_CARRIED_NEXT];
-
-/** The first-run wizard (app/onboarding/page.tsx). postAuthLanding's rule:
- *  without a safe `next` a user is guaranteed an org, and a NEW user
- *  (onboarding not completed) goes to the wizard. */
-const FIRST_RUN_WIZARD = "/onboarding";
 
 interface Envelope {
   ok: boolean;
@@ -114,6 +106,10 @@ async function expiredToken(userId: string): Promise<string> {
     values (${userId}, ${token}, now() - interval '1 hour')`;
   return token;
 }
+
+beforeAll(async () => {
+  if (HAS_DB) await warmDefaultLanding();
+});
 
 beforeEach(() => {
   jar.values.clear();
@@ -234,9 +230,8 @@ describe.skipIf(!HAS_DB)("POST /api/auth/verify-email — a link that carries ne
   });
 
   it("an unsafe next is ignored — 200 and the default landing, never 400 and never the attacker's URL", async () => {
-    const UNSAFE = ["https://evil.example", "//evil.example", "/\\evil", "javascript:alert(1)"];
     let checked = 0;
-    for (const evil of UNSAFE) {
+    for (const evil of UNSAFE_NEXTS) {
       // The hazard, proven rather than asserted: each one leaves the origin
       // once a browser resolves it (`/\evil` becomes `https://evil/`, and a
       // `javascript:` URL has an opaque "null" origin).
@@ -253,7 +248,8 @@ describe.skipIf(!HAS_DB)("POST /api/auth/verify-email — a link that carries ne
       expect((await getCurrentUser())?.id, `${evil}: signed in`).toBe(userId);
       checked++;
     }
-    expect(checked).toBe(UNSAFE.length);
+    expect(checked).toBe(UNSAFE_NEXTS.length);
+    expect(checked).toBe(4);
   });
 
   it("a USED token is refused exactly as before — with next or without — and signs nobody in", async () => {

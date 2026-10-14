@@ -1,5 +1,5 @@
 import { sql } from "@/lib/db";
-import { createSession, postAuthLanding, verifyPassword } from "@/lib/auth";
+import { createSession, postAuthLanding, safeNextPath, verifyPassword } from "@/lib/auth";
 import { stampTermsAcceptance } from "@/lib/legal";
 import { handler } from "@/lib/http";
 import { baseUrl } from "@/lib/oauth";
@@ -14,9 +14,7 @@ export async function POST(req: Request) {
     const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
     await rateLimit(`login:${ip}`, AUTH_LIMIT);
 
-    const body = await req.json();
-    const { email, password } = loginSchema.parse(body);
-    const next = (body as { next?: unknown })?.next;
+    const { email, password, next } = loginSchema.parse(await req.json());
     const rows = await sql<
       {
         id: string;
@@ -33,12 +31,16 @@ export async function POST(req: Request) {
     }
 
     // Password accounts must verify their email first. Re-send the link so a
-    // user who lost the email can recover without a separate step.
+    // user who lost the email can recover without a separate step. A safe
+    // `next` (e.g. the invite they are signing in from) rides along exactly as
+    // signup/route.ts carries it, or verifying lands them on onboarding instead.
     if (!user.email_verified) {
       const token = await createVerificationToken(user.id);
+      const safeNext = safeNextPath(next);
+      const nextQuery = safeNext ? `&next=${encodeURIComponent(safeNext)}` : "";
       await sendVerificationEmail(
         user.email,
-        `${baseUrl(req)}/verify-email?token=${token}`,
+        `${baseUrl(req)}/verify-email?token=${token}${nextQuery}`,
       );
       throw new Error(
         "Your email isn't verified yet — we've re-sent the verification link.",
