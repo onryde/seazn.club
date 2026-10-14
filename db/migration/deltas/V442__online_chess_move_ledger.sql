@@ -29,8 +29,10 @@
 --   controller ruling M7, 2026-10-11): 'white', 'black' or 'both'. A revoked
 --   token freezes only its own seat; the other player keeps playing (T10) and
 --   can still win on the clock — freezing the innocent side would hand the
---   flag to the player whose token broke. Null on every other reason. Null on
---   a token_revoked hold is a seat nobody recorded (T9's create/accept
+--   flag to the player whose token broke. An `account_changed` hold (final
+--   re-review P11, 2026-10-14: a player re-linked another Lichess account
+--   mid-game) records its seat the same way. Null on every other reason.
+--   Null on a seat hold is a seat nobody recorded (T9's create/accept
 --   refusal, before a game ran): both seats are frozen.
 --
 -- sweep_no_truth_reads — how many CONSECUTIVE reads by the external-play sweep
@@ -109,13 +111,15 @@ alter table fixture_external_play
   add constraint fixture_external_play_draw_offer_ply_check
     check ((white_draw_offer_ply is null or white_draw_offer_ply between 2 and move_count)
            and (black_draw_offer_ply is null or black_draw_offer_ply between 2 and move_count)),
-  -- A recorded seat belongs to a token_revoked hold and to nothing else.
+  -- A recorded seat belongs to a seat hold (token_revoked, account_changed —
+  -- types.ts SEAT_HOLD_REASONS) and to nothing else.
   -- `is not distinct from`, not `=`: a NULL needs_reason would make `=` NULL,
   -- and a NULL CHECK passes.
   add constraint fixture_external_play_revoked_seat_check
     check (revoked_seat is null
            or (revoked_seat in ('white', 'black', 'both')
-               and needs_reason is not distinct from 'token_revoked')),
+               and (needs_reason is not distinct from 'token_revoked'
+                    or needs_reason is not distinct from 'account_changed'))),
   -- A count of reads: never negative.
   add constraint fixture_external_play_sweep_no_truth_reads_check
     check (sweep_no_truth_reads >= 0),

@@ -32,6 +32,7 @@ import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlay
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { roundOpenFor, type RoundOpenRow } from "@/server/external-play/round-open";
 import { checkInCounts } from "@/server/external-play/window";
+import { isSeatHold } from "@/server/external-play/types";
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, GUARD_FAULT_MAX_STAMPS, hasOpenGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { verifyMatchRoomToken } from "@/server/usecases/match-room-token";
@@ -67,7 +68,7 @@ import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } fr
 import { fenAfter } from "@/server/external-play/fen";
 import { isPlayableFixtureStatus, seatPlayer, type SeatResult } from "./preflight";
 import { lichessGrantDowngraded } from "../external-accounts";
-import { reconcile } from "./reconcile";
+import { RECONCILED_WHILE_HELD, reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
 
 /** The caller identifies as either a signed-in session (must be one of the
@@ -298,13 +299,14 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
         ? null
         : withSettle(decisiveResultFor(recorded, seats), await settledWinner(f.fixtureId, recorded.seq), seats);
 
-  // T11 M7: a token_revoked hold freezes a seat (or both, when none was
-  // recorded); the other player's board stays live. A WRITTEN result ends
+  // T11 M7: a seat hold (token_revoked; account_changed since the final
+  // re-review, P11 (1)) freezes a seat (or both, when none was recorded);
+  // the other player's board stays live. A WRITTEN result ends
   // the freeze for the room (T14 review I1, controller ruling): reconcile
   // writes a held game's result without closing the hold (finish() closes
   // only ready/live), and the frozen player must see how the game ended.
   const frozen =
-    result === null && bridge?.status === "needs_organiser" && bridge.needs_reason === "token_revoked"
+    result === null && bridge?.status === "needs_organiser" && isSeatHold(bridge.needs_reason)
       ? frozenFor(bridge.revoked_seat ?? "both", mine)
       : null;
 
@@ -323,9 +325,10 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   // the browser is signed in to, so the player must know which to sign in as.
   const otherAccount = seat?.refused === "account" ? seat.recorded : null;
   // A hold the game is not still playing through (T12's mid-game diagnoses
-  // are token_revoked / provider_error; anything else, or any hold once the
-  // game is over, waits on the organiser).
-  const midGameHold = bridge?.needs_reason === "token_revoked" || bridge?.needs_reason === "provider_error";
+  // are reconcile's RECONCILED_WHILE_HELD — token_revoked, provider_error
+  // and, final re-review P11 (1), account_changed; anything else, or any
+  // hold once the game is over, waits on the organiser).
+  const midGameHold = bridge !== null && (RECONCILED_WHILE_HELD as readonly (string | null)[]).includes(bridge.needs_reason);
   const held = bridge?.status === "needs_organiser" && result === null && (over || !midGameHold || !gameOnFile);
 
   // T20: online play STARTS only for a club offered it; a board with a game

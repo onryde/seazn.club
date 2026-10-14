@@ -1022,6 +1022,33 @@ describe.runIf(HAS_DB)("reconcile — a game end is written once and closes the 
     expect(await rowOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", finished_at: null });
     expect((await resultsOf(g.fixtureId)).length).toBe(1);
   });
+
+  it("final re-review P11 (1): a board held account_changed is read like a token_revoked one — its game's real end lands the same result, or the same final hold — counted", async () => {
+    // The ruling: account_changed is not terminal; "a held board whose Lichess game ends still lands its result path or
+    // hold, matching how token_revoked behaves". Each ending runs on BOTH reasons and must answer alike.
+    const ENDS: [string, (g: Game) => void, object][] = [
+      ["White out of time", (g) => serveStream(gameFull(g, EXPIRED_2)), { result: { wrote: "decided" }, finished: false }],
+      ["an abort after White's first move", (g) => serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), status: "aborted" })), { result: { wrote: "aborted" }, finished: false }],
+    ];
+    let checked = 0;
+    for (const [label, end, wrote] of ENDS) {
+      const answers: unknown[] = [];
+      for (const reason of ["token_revoked", "account_changed"] as const) {
+        const g = await liveGame();
+        await holdForOrganiser({ fixtureId: g.fixtureId, reason, seat: "white" });
+        lichess.reset();
+        end(g);
+        const out = await reconcile(g.fixtureId, "sweep", observed().deps);
+        expect(streams().length, `${label} ${reason}: the game was read`).toBe(1);
+        expect(out, `${label} ${reason}`).toMatchObject(wrote);
+        const row = await rowOf(g.fixtureId);
+        answers.push([(await resultsOf(g.fixtureId)).length, row.status, row.needs_reason === reason ? "kept" : row.needs_reason, row.finished_at]);
+        checked++;
+      }
+      expect(answers[1], `${label}: account_changed answers as token_revoked does`).toEqual(answers[0]);
+    }
+    expect(checked).toBe(ENDS.length * 2);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1396,7 +1423,8 @@ describe.runIf(HAS_DB)("reconcile — trigger × bridge status, and the held rea
     // T12 (result.ts): token_revoked and provider_error are the mid-game
     // diagnoses a final snapshot replaces; every other reason ends the game
     // or never began it.
-    const MID_GAME = new Set(["token_revoked", "provider_error"]);
+    // Final re-review P11 (1): account_changed joins them — a re-link moves no game at Lichess.
+    const MID_GAME = new Set(["token_revoked", "provider_error", "account_changed"]);
     let read = 0;
     let skipped = 0;
     for (const reason of NEEDS_REASONS) {

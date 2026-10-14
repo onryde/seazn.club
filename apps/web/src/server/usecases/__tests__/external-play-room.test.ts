@@ -411,16 +411,21 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(v.game!.clockRunning).toBe(false);
   });
 
-  it("T11 M7: a token_revoked hold freezes ONE seat — its player reads `you`, the opponent `opponent` and keeps a live board and the watch link", async () => {
-    const s = await seed();
-    await gameOnFile(s, { status: "needs_organiser", needsReason: "token_revoked", revokedSeat: "white", moves: ["e2e4", "e7e5"] });
-    const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
-    const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
-    expect(white.frozen).toBe("you");
-    expect(black.frozen).toBe("opponent");
-    expect(black.held, "the opponent's board is not held").toBe(false);
-    expect(black.game?.over).toBe(false);
-    expect(black.watchUrl, "a held board still moving keeps its link").not.toBeNull();
+  it("T11 M7 (+ final re-review P11 (1)): a seat hold — token_revoked or account_changed — freezes ONE seat: its player reads `you`, the opponent `opponent` and keeps a live board and the watch link — counted", async () => {
+    let checked = 0;
+    for (const needsReason of ["token_revoked", "account_changed"] as const) {
+      const s = await seed();
+      await gameOnFile(s, { status: "needs_organiser", needsReason, revokedSeat: "white", moves: ["e2e4", "e7e5"] });
+      const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+      const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+      expect(white.frozen, needsReason).toBe("you");
+      expect(black.frozen, needsReason).toBe("opponent");
+      expect(black.held, `${needsReason}: the opponent's board is not held`).toBe(false);
+      expect(black.game?.over, needsReason).toBe(false);
+      expect(black.watchUrl, `${needsReason}: a held board still moving keeps its link`).not.toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a token_revoked hold with NO recorded seat freezes both", async () => {
@@ -522,6 +527,9 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
       { label: "live", bridge: { status: "live", moves }, white: true, black: true, held: false, clockRunning: true },
       { label: "token_revoked, White's seat", bridge: { status: "needs_organiser", needsReason: "token_revoked", revokedSeat: "white", moves }, white: false, black: true, held: false, clockRunning: true },
       { label: "token_revoked, no seat recorded", bridge: { status: "needs_organiser", needsReason: "token_revoked", moves }, white: false, black: false, held: false, clockRunning: true },
+      // Final re-review P11 (1): account_changed freezes its seat the same way (ruling M7's reasoning).
+      { label: "account_changed, White's seat", bridge: { status: "needs_organiser", needsReason: "account_changed", revokedSeat: "white", moves }, white: false, black: true, held: false, clockRunning: true },
+      { label: "account_changed, no seat recorded", bridge: { status: "needs_organiser", needsReason: "account_changed", moves }, white: false, black: false, held: false, clockRunning: true },
       // A mid-game diagnosis is not an organiser hold of a game still being
       // played (`held` false) — but play.ts refuses every act on it.
       // Clocks are Lichess's: a hold of OURS does not stop them there.

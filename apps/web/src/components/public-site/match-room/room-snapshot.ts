@@ -92,7 +92,7 @@ export type RoomSnapshot = {
    *  the vendor for it. null ⇒ no pill (policy off, an override, a board
    *  nobody may play on). */
   opponentPresence: { participantId: string | null } | null;
-  /** Which seat a token_revoked hold froze, from the VIEWER's side. null
+  /** Which seat a seat hold (token_revoked, account_changed) froze, from the VIEWER's side. null
    *  once a result is written (the result outranks the freeze — review I1). */
   frozen: "you" | "opponent" | "both" | null;
   /** The server would accept an act from YOU on the game on file — T10's

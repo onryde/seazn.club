@@ -50,8 +50,9 @@ export const PUBLIC_HOLD: Record<NeedsReason, PublicHold | null> = {
   create_outcome_unknown: "confirm",
   tiebreak_owed: "tiebreak",
   fair_play: "confirm",
-  // P11: the organiser's to settle — reconcile no longer reads the game, so the board is not shown live.
-  account_changed: "confirm",
+  // Final re-review P11 (1): one seat's link, like a revoked token — the game plays on at Lichess and reconcile
+  // keeps reading it, so the spectators keep the live board.
+  account_changed: null,
 };
 
 /** The fixture's recorded result, for the finished board's header ("X won · Checkmate · move 30 · 1–0"). Read

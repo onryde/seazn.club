@@ -8,10 +8,11 @@ import { PUBLIC_HOLD, overFromStatus, plyOfFen, type PublicHold } from "../publi
 import { LICHESS_STATUSES, NEEDS_REASONS, type NeedsReason } from "../types";
 
 describe("PUBLIC_HOLD — what a spectator is told about a board held for the organiser", () => {
-  it("every hold reason is read: a knockout draw is 'winner to be decided', a revoked token is no hold (the game goes on), the rest 'to be confirmed'", () => {
-    // The rulebook: tiebreak_owed is the one hold whose game is already decided as a draw (T13); token_revoked
-    // holds one seat's link, not the game (RECONCILED_WHILE_HELD). Every other reason waits on the organiser.
-    const SPECIAL: Partial<Record<NeedsReason, PublicHold | null>> = { tiebreak_owed: "tiebreak", token_revoked: null };
+  it("every hold reason is read: a knockout draw is 'winner to be decided', a revoked token or a re-linked account is no hold (the game goes on), the rest 'to be confirmed'", () => {
+    // The rulebook: tiebreak_owed is the one hold whose game is already decided as a draw (T13); token_revoked and,
+    // since the final re-review's P11 (1), account_changed hold one seat's link, not the game (RECONCILED_WHILE_HELD).
+    // Every other reason waits on the organiser.
+    const SPECIAL: Partial<Record<NeedsReason, PublicHold | null>> = { tiebreak_owed: "tiebreak", token_revoked: null, account_changed: null };
     let checked = 0;
     for (const reason of NEEDS_REASONS) {
       expect(PUBLIC_HOLD[reason], reason).toBe(reason in SPECIAL ? SPECIAL[reason] : "confirm");

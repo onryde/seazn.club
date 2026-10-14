@@ -108,11 +108,13 @@ const IS_TERMINAL: Record<LichessStatus | "unrecognised", boolean> = {
 };
 
 /** The holds whose game may still be running — T12's mid-game diagnoses
- *  (result.ts MID_GAME_REASONS), which a final snapshot replaces. Every other
+ *  (result.ts MID_GAME_REASONS), which a final snapshot replaces — final
+ *  re-review P11 (1): account_changed among them, since a re-link moves no
+ *  game at Lichess and its natural end must still be recorded. Every other
  *  held row is the organiser's: its game is over (aborted, fair_play, a
  *  tie-break owed) or never ran (no-shows, not_started, a blocked double
  *  walkover, an unknown create), so reconcile neither reads nor writes it. */
-export const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error"] as const satisfies readonly HoldReason[];
+export const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error", "account_changed"] as const satisfies readonly HoldReason[];
 
 /** lila registers no draw offer before ply 2 (Game.scala `playerCanOfferDraw`,
  *  lila 3747530a1 — source, as T10 cites it); V442's CHECKs refuse one. */

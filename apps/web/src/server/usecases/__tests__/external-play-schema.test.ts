@@ -582,24 +582,29 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V439/V440)", (
   }
   const seatRefused = { accepted: false, code: CHECK_VIOLATION, constraint: SEAT_CHECK };
 
-  it("V442 (M7): a token_revoked hold records white, black, both — or no seat (unknown: both frozen)", async () => {
+  // The rulings: M7 (token_revoked) and the final re-review's P11 (1) (account_changed).
+  const SEAT_HOLDS: readonly string[] = ["token_revoked", "account_changed"];
+
+  it("V442 (M7, P11 (1)): a seat hold — token_revoked or account_changed — records white, black, both, or no seat (unknown: both frozen)", async () => {
     let checked = 0;
-    for (const seat of ["white", "black", "both", null]) {
-      expect(await trySeat({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: seat }), String(seat))
-        .toEqual({ accepted: true, row: { needs_reason: "token_revoked", revoked_seat: seat } });
-      checked++;
+    for (const reason of SEAT_HOLDS) {
+      for (const seat of ["white", "black", "both", null]) {
+        expect(await trySeat({ status: "needs_organiser", needs_reason: reason, revoked_seat: seat }), `${reason} ${String(seat)}`)
+          .toEqual({ accepted: true, row: { needs_reason: reason, revoked_seat: seat } });
+        checked++;
+      }
     }
-    expect(checked, "anti-vacuity: three seats and none").toBe(4);
+    expect(checked, "anti-vacuity: two reasons × three seats and none").toBe(8);
   });
 
   it("V442 (M7): a seat on ANY other reason is refused — counted over NEEDS_REASONS", async () => {
-    const others = NEEDS_REASONS.filter((r) => r !== "token_revoked");
+    const others = NEEDS_REASONS.filter((r) => !SEAT_HOLDS.includes(r));
     let checked = 0;
     for (const reason of others) {
       expect(await trySeat({ status: "needs_organiser", needs_reason: reason, revoked_seat: "white" }), reason).toEqual(seatRefused);
       checked++;
     }
-    expect(checked, "anti-vacuity: every other reason").toBe(NEEDS_REASONS.length - 1);
+    expect(checked, "anti-vacuity: every other reason").toBe(NEEDS_REASONS.length - SEAT_HOLDS.length);
     expect(checked).toBeGreaterThan(0);
   });
 

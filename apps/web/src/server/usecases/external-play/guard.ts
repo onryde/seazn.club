@@ -57,9 +57,9 @@ export type BridgeRow = {
   draw_offer_by: "white" | "black" | null;
   white_draw_offer_ply: number | null;
   black_draw_offer_ply: number | null;
-  /** V442 (T11 fix round 1, ruling M7): the seat a `token_revoked` hold
-   *  froze; null on any other row, and on a token_revoked hold whose seat
-   *  nobody recorded (both frozen). */
+  /** V442 (T11 fix round 1, ruling M7): the seat a seat hold
+   *  (SEAT_HOLD_REASONS: token_revoked, account_changed) froze; null on any
+   *  other row, and on a seat hold whose seat nobody recorded (both frozen). */
   revoked_seat: "white" | "black" | "both" | null;
   /** V442 (T13 fix round 1, ruling I4): the move T10 is submitting — the
    *  ply it was sent at, the canonical UCI, and when — recorded BEFORE the
