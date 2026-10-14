@@ -32,6 +32,7 @@ import {
   RESERVED_ENTITY_SLUGS,
 } from "./slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
+import { log } from "@/server/logger";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import {
   dropNamedPublicDocuments,
@@ -203,6 +204,35 @@ export async function fireDivisionCreated(
   });
 }
 
+/**
+ * Every public division and fixture page finds its division by slug in the
+ * competition shell (`getPublicCompetition`, data.ts `pub-comp`), which is
+ * cached under the ORG tag alone. A write that adds a division to the shell
+ * (create, restore), takes one out (delete, archive) or moves one to a new
+ * slug (rename) must expire that tag, or the new page answers "This link is no
+ * longer valid" (cached in turn) until the entry ages out: ~32 minutes on stg,
+ * 2026-10-14, where a suspended machine's cache clock does not run.
+ * `{ expire: 0 }` (`fireOrgRevalidate`): the organiser's next look at the
+ * public page is the read that must be fresh.
+ *
+ * AWAIT it after the commit, before the use-case resolves: Next flushes a
+ * request's revalidations once, when the handler resolves, and drops any that
+ * arrive later. Never rejects: the write has committed, so a failed slug read
+ * is logged rather than turned into a 500 that invites a retry (and a retried
+ * create is a second division).
+ */
+async function expireCompetitionShell(orgId: string, context: Record<string, unknown>): Promise<void> {
+  try {
+    const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${orgId}`;
+    if (org) fireOrgRevalidate(org.slug);
+  } catch (err) {
+    log.error(
+      { err, orgId, ...context },
+      "divisions: the public competition shell could not be expired (the write stands)",
+    );
+  }
+}
+
 export async function createDivision(
   auth: AuthCtx,
   competitionId: string,
@@ -327,6 +357,7 @@ export async function createDivision(
       insert,
     );
   });
+  await expireCompetitionShell(auth.orgId, { competitionId, divisionId: row.id });
   // Activation funnel (feature 1): step after competition_created.
   await fireDivisionCreated(auth, input.sport_key, competitionId);
   return row;
@@ -400,7 +431,7 @@ async function assertRegistrationClosed(
  * over-quota freeze.
  */
 export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
-  await withTenant(auth.orgId, async (tx) => {
+  const deleted = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<DeleteTarget[]>`
       select id, competition_id, name, slug, sport_key, status, archived_at
       from divisions where id = ${id}`;
@@ -488,12 +519,19 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
       auth.userId,
     );
     await tx`delete from divisions where id = ${id}`;
+    return division;
   });
+  // A purge removes a division the shell stopped listing when it was archived.
+  if (deleted.archived_at === null) {
+    await expireCompetitionShell(auth.orgId, { competitionId: deleted.competition_id, divisionId: id });
+  }
 }
 
 /** Archive: hide from console/public/quota, restorable. Idempotent. */
 export async function archiveDivision(auth: AuthCtx, id: string): Promise<DivisionRow> {
-  return withTenant(auth.orgId, async (tx) => {
+  let archived = false;
+  const result = await withTenant(auth.orgId, async (tx) => {
+    archived = false;
     const [existing] = await tx<DivisionRow[]>`
       select ${tx(COLS)} from divisions where id = ${id}`;
     if (!existing) throw new HttpError(404, "division not found");
@@ -509,8 +547,11 @@ export async function archiveDivision(auth: AuthCtx, id: string): Promise<Divisi
       { division_id: id, name: existing.name, slug: existing.slug },
       auth.userId,
     );
+    archived = true;
     return row as DivisionRow;
   });
+  if (archived) await expireCompetitionShell(auth.orgId, { competitionId: result.competition_id, divisionId: id });
+  return result;
 }
 
 /** Restore an archived division. Re-checks the divisions quota — restoring
@@ -531,7 +572,9 @@ export async function restoreDivision(auth: AuthCtx, id: string): Promise<Divisi
     "divisions.per_competition.max",
     ref?.competition_id,
   );
-  return withTenant(auth.orgId, async (tx) => {
+  let restored = false;
+  const result = await withTenant(auth.orgId, async (tx) => {
+    restored = false;
     const [existing] = await tx<DivisionRow[]>`
       select ${tx(COLS)} from divisions where id = ${id}`;
     if (!existing) throw new HttpError(404, "division not found");
@@ -563,8 +606,11 @@ export async function restoreDivision(auth: AuthCtx, id: string): Promise<Divisi
       { division_id: id, name: existing.name, slug: existing.slug },
       auth.userId,
     );
+    restored = true;
     return row as DivisionRow;
   });
+  if (restored) await expireCompetitionShell(auth.orgId, { competitionId: result.competition_id, divisionId: id });
+  return result;
 }
 
 // Structural comparison for the format-lock exemption below. Sorts object keys
@@ -683,6 +729,9 @@ export async function patchDivision(
   // `for no key update` for the same reason — the public expiry below fires
   // only when the STORED value actually flips, never on a re-send.
   let seedsBefore: boolean | undefined;
+  // The stored name a rename replaces: a changed name moves the division in the
+  // public competition shell (`expireCompetitionShell`), a re-sent one does not.
+  let nameBefore: string | undefined;
   const row = await withTenant(auth.orgId, async (tx) => {
     const effective: Record<string, unknown> = { ...patch };
     if (patch.youth !== undefined || patch.player_name_display !== undefined || patch.age_max !== undefined) {
@@ -879,6 +928,7 @@ export async function patchDivision(
       [before] = await tx<{ name: string; slug: string; competition_id: string }[]>`
         select name, slug, competition_id from divisions where id = ${id}`;
       if (!before) throw new HttpError(404, "division not found");
+      nameBefore = before.name;
     }
     const regenerating = !!patch.name && !!before && patch.name !== before.name;
 
@@ -957,12 +1007,12 @@ export async function patchDivision(
   if (previousSlug) {
     await invalidateSlugCache("division", previousCompetitionId, previousSlug, row.slug);
   }
+  const maskingChanged =
+    !!maskingBefore &&
+    (maskingBefore.youth !== row.youth || maskingBefore.player_name_display !== row.player_name_display);
   // Fail-open: the helper logs a failed list or DEL and never throws, so the
   // organiser's committed write stands (player-matches-cache-keys.ts).
-  if (
-    maskingBefore &&
-    (maskingBefore.youth !== row.youth || maskingBefore.player_name_display !== row.player_name_display)
-  ) {
+  if (maskingChanged) {
     await retireOrgPlayerMatches(auth.orgId, { division: id });
     // Privacy hotfix (2026-09-16): a name-policy change must reach public pages
     // now, not after their TTL. The player card reads every division the person
@@ -998,6 +1048,12 @@ export async function patchDivision(
       { divisionId: row.id },
       peersExpired,
     );
+  }
+  // A rename changes the name the shell lists and, with it, the slug every
+  // public page of this division is found by. The name-policy block above has
+  // already expired the org tag when it ran.
+  if (nameBefore !== undefined && nameBefore !== row.name && !maskingChanged) {
+    await expireCompetitionShell(auth.orgId, { competitionId: row.competition_id, divisionId: row.id });
   }
   // V416: seeds on or off must reach the public site now, not after a TTL —
   // turning them OFF is the organiser saying "take these numbers down". The

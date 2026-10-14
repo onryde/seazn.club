@@ -862,5 +862,12 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
   // Public hub perf T2: a deleted competition must stop answering the polled
   // public readers' cached slug lookup (`findCompetitionRef`, usecases/public.ts)
   // now, not at its TTL. After the commit; never throws.
-  if (gone.org_slug) await dropPublicCompetitionRefs(gone.org_slug, gone.slug);
+  if (gone.org_slug) {
+    await dropPublicCompetitionRefs(gone.org_slug, gone.slug);
+    // Its public pages are found through the competition shell (`pub-comp`),
+    // cached under the org tag alone: expired here, in the request, or they keep
+    // serving the deleted competition until the entry ages out
+    // (`expireCompetitionShell`, divisions.ts). Never throws.
+    fireOrgRevalidate(gone.org_slug);
+  }
 }
