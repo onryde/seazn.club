@@ -5,6 +5,7 @@ import { api } from "@/lib/client";
 import { Avatar } from "@/components/avatar";
 import { ClientTime } from "@/components/client-time";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { useNow } from "@/components/public-site/match-centre/use-now";
 import type { MessageKey } from "@/lib/messages";
 import {
   ORG_ROLES,
@@ -33,6 +34,10 @@ type InviteRole = "admin" | "viewer";
  *  invites keep their own 1-hour TTL server-side. */
 const LINK_INVITE_DAYS = 1;
 
+/** How often the invite list re-reads the clock, so an invite that expires
+ *  while the panel is open leaves the active list without a reload. */
+const NOW_TICK_MS = 60_000;
+
 function RoleOptions() {
   const msg = useMsg();
   return (
@@ -57,6 +62,7 @@ export function OrgTeam({
   const msg = useMsg();
   const isOwner = role === "owner";
   const isEditor = role === "owner" || role === "admin";
+  const now = useNow(NOW_TICK_MS);
 
   const [members, setMembers] = useState<OrgMember[] | null>(null);
   const [invites, setInvites] = useState<OrgInvite[]>([]);
@@ -150,7 +156,7 @@ export function OrgTeam({
     (i) =>
       !i.revoked &&
       (i.max_uses === 0 || i.used_count < i.max_uses) &&
-      (!i.expires_at || new Date(i.expires_at).getTime() > Date.now()),
+      (!i.expires_at || new Date(i.expires_at).getTime() > now),
   );
   const emailInvites = activeInvites.filter((i) => i.email);
   const linkInvites = activeInvites.filter((i) => !i.email);

@@ -20,6 +20,7 @@ import type { HoldState } from "@/server/relay/domain/session";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useNow } from "@/components/public-site/match-centre/use-now";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { Locale } from "@/lib/i18n-constants";
@@ -456,6 +457,11 @@ export function boardSlotOptionsFor(
 // has the full implementations if the pre-check is ever wanted on the
 // Schedule page, where the control now lives.
 
+/** How often the run sheet re-reads the clock. Its NOW line and "result
+ *  missing" turn on kick-off times and match length, both whole minutes, so a
+ *  minute tick is as fresh as anything it can show without re-rendering this
+ *  whole panel every second. */
+const RUN_SHEET_NOW_TICK_MS = 60_000;
 
 export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle }: Props) {
   const msg = useMsg();
@@ -564,6 +570,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // `RunSheetFilter` — see `<RunSheet>`'s own `stageId` prop doc for why.
   // Set from a stage card's own "View N fixtures" control, below.
   const [stageFilter, setStageFilter] = useState<string | null>(null);
+  // Competition Desk W2 (Task 4/C5) — the run sheet's NOW rule. Never at
+  // module scope (that freezes at first import, so NOW would stick to deploy
+  // time), and never a bare `Date.now()` in this body either: that only moved
+  // when something unrelated re-rendered the panel. `useNow` re-reads it on a
+  // tick, so the NOW line and "result missing" advance on their own. Declared
+  // above the empty-stages early return, as every hook must be.
+  const nowMs = useNow(RUN_SHEET_NOW_TICK_MS);
 
   async function undoLast() {
     setError(null);
@@ -722,10 +735,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   }
 
   const nowPlaying = fixtures.filter((f) => f.status === "in_play");
-  // Competition Desk W2 (Task 4/C5) — computed HERE, in the render body,
-  // never at module scope: a module-scope `Date.now()` freezes at first
-  // import and the run sheet's NOW rule would stick to deploy time forever.
-  const nowMs = Date.now();
 
   return (
     <div className="space-y-6">
@@ -1424,8 +1433,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           `buildRunSheet` over EVERY stage's fixtures (day groups merged
           across every non-bracket stage, one bracket block per bracket
           stage, one "Not yet scheduled" group last — owner rulings A2/3).
-          `nowMs` is computed HERE, in the render body, never at module scope
-          (C5) — a module-scope `Date.now()` freezes at first import and the
+          `nowMs` is the panel's ticking `useNow` clock (C5), never a
+          module-scope `Date.now()` — that freezes at first import and the
           NOW rule would stick to deploy time. */}
       <RunSheet
         blocks={buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs })}

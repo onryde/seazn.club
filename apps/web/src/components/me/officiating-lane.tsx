@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { useNow } from "@/components/public-site/match-centre/use-now";
 import { Zoned } from "@/components/client-time";
 import { routes } from "@/lib/routes";
 import { MarkBadge } from "@/components/officials/mark-badge";
@@ -276,9 +277,15 @@ function PendingInvites({ claims }: { claims: PendingOfficiatingClaim[] }) {
   );
 }
 
+/** How often an assignment card re-reads the clock, so Accept leaves a
+ *  declined card once its match has started without a reload. Kick-offs are
+ *  whole minutes, so a minute is as fresh as the rule can be. */
+const NOW_TICK_MS = 60_000;
+
 function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
   const msg = useMsg();
   const router = useRouter();
+  const now = useNow(NOW_TICK_MS);
   const [response, setResponse] = useState<OfficiatingResponse>(a.response);
   const [reason, setReason] = useState("");
   const [declining, setDeclining] = useState(false);
@@ -304,7 +311,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
   }
 
   const matchdayPassed =
-    a.scheduled_at !== null && new Date(a.scheduled_at).getTime() <= Date.now();
+    a.scheduled_at !== null && new Date(a.scheduled_at).getTime() <= now;
 
   return (
     <li

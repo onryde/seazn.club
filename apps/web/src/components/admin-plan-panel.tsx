@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ui/confirm-provider";
+import { useNow } from "@/components/public-site/match-centre/use-now";
 import { hasLiveSubscription } from "@/lib/subscription-status";
 import { cardRemovalConsequence, type PaymentMethodRow } from "@/lib/billing-manage";
 
@@ -41,6 +42,11 @@ interface Override {
   reason: string | null;
 }
 
+/** How often the overrides table re-reads the clock, so an override that
+ *  expires while the panel is open shows "(lapsed)" without a reload. Expiry is
+ *  a date, so a minute is ample. */
+const NOW_TICK_MS = 60_000;
+
 const inputCls =
   "rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder:text-slate-500";
 
@@ -61,6 +67,7 @@ export function AdminPlanPanel({
 }) {
   const router = useRouter();
   const confirmDialog = useConfirm();
+  const now = useNow(NOW_TICK_MS);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -515,7 +522,7 @@ export function AdminPlanPanel({
             </thead>
             <tbody className="divide-y divide-slate-700/60">
               {overrides.map((o) => {
-                const lapsed = o.expires_at && new Date(o.expires_at).getTime() <= Date.now();
+                const lapsed = o.expires_at && new Date(o.expires_at).getTime() <= now;
                 return (
                   <tr key={o.feature_key} className={lapsed ? "opacity-50" : ""}>
                     <td className="py-1.5 pr-3 font-mono text-xs text-purple-300">
