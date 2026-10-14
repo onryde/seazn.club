@@ -47,6 +47,14 @@ import { log } from "@/server/logger";
 import { makeUser } from "./_seed";
 import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
 
+// M-9: a settle on a game on file ends the game at Lichess, after the response. That is proven against the Lichess
+// fixture in external-play-settle-ends-game.test.ts; here it would reach lichess.org itself with a seed token, so the
+// ending is stubbed (the read of the game to end stays real).
+vi.mock("../external-play/end-game", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../external-play/end-game")>()),
+  endLichessGame: vi.fn(async () => true),
+}));
+
 // `stampFixtureCheckIn` stamps the DB's own now() (real wall clock) and
 // `checkInCounts` judges THAT stamp against the open's window, so the open is
 // anchored to the real clock: T five minutes ahead, the window T-10..T+20.

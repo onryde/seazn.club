@@ -42,12 +42,14 @@ import "server-only";
 //     organiser's settle (`core.settle {method: organiser}`, W2a).
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { sql } from "@/lib/db";
+import { deferred } from "@/lib/deferred";
 import { HttpError } from "@/lib/errors";
 import { toLocale } from "@/lib/i18n-constants";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { getFixtureState } from "../fixtures";
 import { EngineError } from "@seazn/engine/core";
 import { scoreEvent } from "../scoring";
+import { endLichessGame, gameToEnd, type EndDecision, type EndGameDeps } from "./end-game";
 import { whiteSideOf, type Side } from "./guard";
 import { NO_RESULT_CHANGED, NO_RESULT_REFUSAL, noResultEvent, noResultOffer } from "./no-result";
 import { isPlayableFixtureStatus } from "./preflight";
@@ -64,6 +66,12 @@ export type ResolveKind = (typeof RESOLVE_KINDS)[number];
 /** `finished`: the board has its result. `tiebreak_owed`: the organiser's
  *  draw opened a bracket tie-break — the board stays held for the winner. */
 export type ResolveOutcome = { status: "finished" | "tiebreak_owed" };
+
+export type ResolveDeps = {
+  /** Where the Lichess game's ending runs: `deferred` (after the response) by default. */
+  defer?: (fn: () => Promise<unknown>) => void;
+  lichess?: EndGameDeps;
+};
 
 /** The holds whose colour stayed away (sweep.ts, result.ts NO_SHOW_REASONS):
  *  a win against that colour is a default. Both absent: every loser is one. */
@@ -187,7 +195,12 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *  - 409 SWISS_NEEDS_RESULT (I-3, fix round 3): No result where a void would hold the next round up — a Swiss (and
  *    americano). The board stays held.
  */
-export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind: ResolveKind): Promise<ResolveOutcome> {
+export async function resolveExternalPlay(
+  auth: AuthCtx,
+  fixtureId: string,
+  kind: ResolveKind,
+  deps: ResolveDeps = {},
+): Promise<ResolveOutcome> {
   if (!(RESOLVE_KINDS as readonly string[]).includes(kind)) {
     throw new HttpError(422, `not a way to settle a board: ${JSON.stringify(kind)}`, "RESOLVE_KIND_UNKNOWN");
   }
@@ -217,6 +230,14 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     throw new HttpError(409, "This board has no opponent to settle against", "FIXTURE_NOT_PLAYABLE");
   }
   const reason = readReason(b.needsReason);
+
+  // M-9 (final review): the Lichess game, read BEFORE the settle closes the bridge, and ended after the result is
+  // written — best effort, after the response, never blocking or failing the settle (end-game.ts). Not on a
+  // tie-break's settle below: that board's game already ended in the draw on file.
+  const toEnd = await gameToEnd(fixtureId);
+  const endTheGame = (decision: EndDecision) => {
+    if (toEnd !== null) (deps.defer ?? deferred)(() => endLichessGame(toEnd, decision, deps.lichess));
+  };
 
   const fs = await getFixtureState(auth, fixtureId);
   const winnerOf = (k: ResolveKind) => (k === "home_wins" ? b.homeEntrantId : k === "away_wins" ? b.awayEntrantId : null);
@@ -260,6 +281,7 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
       idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
     });
     await closeBridge(fixtureId);
+    endTheGame({ kind: "void" });
     return { status: "finished" };
   }
 
@@ -281,6 +303,7 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
         idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
       });
       await closeBridge(fixtureId);
+      endTheGame({ kind: "win", loser: loserSide });
       return { status: "finished" };
     }
   }
@@ -305,9 +328,12 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     idempotency_key: decisionKey(fixtureId, seq, kind),
   });
 
+  const decision: EndDecision = kind === "draw" ? { kind: "draw" } : { kind: "win", loser: kind === "home_wins" ? "away" : "home" };
   if (kind === "draw" && (await holdOwedTiebreak(fixtureId, auth, "the organiser recorded a draw in a bracket: the tie-break is owed"))) {
+    endTheGame(decision);
     return { status: "tiebreak_owed" };
   }
   await closeBridge(fixtureId);
+  endTheGame(decision);
   return { status: "finished" };
 }
