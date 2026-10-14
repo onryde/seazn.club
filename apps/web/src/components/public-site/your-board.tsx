@@ -62,6 +62,8 @@ export function YourBoardCard({ view }: { view: ExternalPlayLobby }) {
         <p className="m-0 text-sm text-ink-muted">{t(`externalPlay.yourBoard.state.${view.state}`)}</p>
       </div>
       {view.roomPath !== null && (
+        // A plain <a>, never next/link: the room's camera policy is its DOCUMENT's (camera=(self) on the room only),
+        // so the door must be a full load — a soft navigation keeps this page's camera=() (online-chess-desk.spec).
         <a
           data-testid="your-board-link"
           href={view.roomPath}

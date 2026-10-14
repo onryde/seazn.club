@@ -598,6 +598,14 @@ test.describe("online chess — the public fixture page", () => {
     await card.getByTestId("your-board-link").click();
     await p.waitForURL((u) => u.pathname === room.roomPath);
     await expect(p.getByTestId("match-room")).toBeVisible();
+    // T17B fix 2 (m1): the room's camera policy is its DOCUMENT's (next.config: camera=(self) on the room only), so
+    // this door must be a full document load — a soft navigation would keep the fixture page's camera=().
+    const doc = await p.evaluate(() => {
+      const d = document as Document & { featurePolicy?: { allowsFeature(f: string): boolean } };
+      const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+      return { camera: d.featurePolicy?.allowsFeature("camera") ?? null, loaded: nav ? new URL(nav.name).pathname : null };
+    });
+    expect(doc, "the room was loaded as its own document, and may use the camera").toEqual({ camera: true, loaded: room.roomPath });
     await ctx.close();
 
     // Anonymous (R2): no session hint, so the island never asks the lobby — no 401 in a spectator's console — and
