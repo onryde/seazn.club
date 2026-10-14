@@ -51,11 +51,17 @@ export function stageRulesOverlay(module: DeciderOffSource | null, divisionCfg: 
   return overlay;
 }
 
-/** `config.rules` for a stage of `kind` with EVERY decider off (X-SR-6's held arm, an organiser's own choice): `false`
- *  where the engine's off is null (`offByFalse`), else the division variant's own value, which is off in every variant
- *  today (football's and cricket's booleans; a null there removes the preset key, so the stage inherits it). From the
- *  engine's declarations (`deciderKeysFor`, the variant's parsed config), never a literal. Throws for a variant the
- *  module does not declare. */
+/** `config.rules` for a stage of `kind` with every decider the stage can switch off switched off (X-SR-6's held arm, an
+ *  organiser's own choice). Built from the engine's declarations (`deciderKeysFor`, the variant's parsed config), never
+ *  a literal:
+ *  - `false` where the engine's off is null (`offByFalse`: ice hockey's overtime and shoot-out, hockey's shoot-out);
+ *  - else the division variant's OWN value: football's and cricket's deciders are off in their variants' configs;
+ *  - else null, where the variant sets no value. That removes the preset key, so the stage inherits the engine's
+ *    default, which may PLAY (boardgame's tie-break rungs: a chess knockout always takes its tie-break, BG-KO-1).
+ *  So this is "held" only where the result can actually end level. Callers that need a held level result must check
+ *  that. The matrix's positive-pairs test (tools/matrix/__tests__/sport-cfg-stage-presets.test.ts) pins the variants
+ *  whose held cfg reaches level, and fails an unnamed one that does not. Throws for a variant the module does not
+ *  declare. */
 export function decidersOffRules(module: AnySportModule, variant: string, kind: StageKind = "knockout"): Record<string, unknown> {
   if (!Object.hasOwn(module.variants, variant)) throw new Error(`decidersOffRules: ${module.key} declares no variant '${variant}'`);
   const division = module.configSchema.parse(module.variants[variant]) as Record<string, unknown>;

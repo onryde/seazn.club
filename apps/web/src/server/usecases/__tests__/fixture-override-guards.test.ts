@@ -384,9 +384,9 @@ describe.skipIf(!HAS_DB)("Task 11: a DIVISION save never leaves an unstarted mat
     const seed = async () => {
       const m = builtinModules.find((x) => x.key === c.sport)!;
       const base = m.variants[c.variant] as Record<string, unknown>;
-      // The stage inherits the division's value: no stage rules (`stageRules: {}` clears the knockout preset a new stage
-      // is created with, W2c X-SR-6), the decider lives on the division.
-      const b = await seedBracket({ sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2, divisionConfig: { ...base, [c.key]: c.wide }, stageRules: {} });
+      // The stage inherits the division's value: no stage rules (`stageRules: "division"` clears the knockout preset a new
+      // stage is created with, W2c X-SR-6, and keeps the division's deciders on purpose), the decider lives on the division.
+      const b = await seedBracket({ sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2, divisionConfig: { ...base, [c.key]: c.wide }, stageRules: "division" });
       const id = b.fixtureIds[0]!;
       await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
       return { b, id, base, no: await fixtureNo(id) };

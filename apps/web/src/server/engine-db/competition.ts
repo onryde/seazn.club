@@ -359,9 +359,10 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // Two things keep the paragraph above true. This line reads the TOP-LEVEL
   // `stage.config.points`, which the overlay still never touches; and a
   // `rules.points` — which the overlay WOULD copy through — is barred at the
-  // only write path by the per-sport allowlist and the sets-sports-only gate
-  // (design D2/D2a), with `createStages`/`replaceStages` refusing a `rules`
-  // key outright. `rules` is also a fifth key editable after fixtures exist,
+  // write paths by the per-sport allowlist and the sets-sports-only gate
+  // (design D2/D2a): the stage PUT and, since W2c Task 12, `createStages` /
+  // `replaceStages` / template instantiation, which take `config.rules` on the
+  // PUT's own terms (`validatedStageConfig`). `rules` is also a fifth key editable after fixtures exist,
   // under its own per-stage lock (D1), so "locked the moment fixtures exist"
   // now describes the format keys rather than the whole column. Let `points`
   // into `rules`, or drop D1's lock, and this line is the same defect again.

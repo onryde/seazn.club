@@ -3,8 +3,10 @@
 // callers skip without DATABASE_URL.
 import { randomUUID } from "node:crypto";
 import type { StageKind } from "@seazn/engine/core";
+import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
+import { decidersOffRules, stageRulesOverlay } from "@/lib/stage-decider-off";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -28,6 +30,28 @@ export function declaredVariant(sport: string, key: string): string {
   return key;
 }
 
+/** Key-order-blind JSON, so a parsed division value and a builder's value compare by content. */
+const canonical = (v: unknown): string =>
+  JSON.stringify(v, (_k, x: unknown) =>
+    x !== null && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+      : x,
+  );
+
+/** Review M-4 — the deciders a stage with NO rules of its own still plays because its DIVISION plays them: each decider
+ *  key at which every-decider-off (`decidersOffRules`, through the product's one mapping) differs from the division's
+ *  own value. Empty for every football and cricket variant (their divisions play none); ice hockey iihf and hockey
+ *  fih-shootout play theirs. A decider the stage cannot switch off (boardgame's rungs, inherited) never appears. */
+export function divisionPlayedDeciders(sport: string, variant: string, kind: StageKind, divisionConfig?: Record<string, unknown>): string[] {
+  const m = builtinModules.find((x) => x.key === sport) as AnySportModule | undefined;
+  if (m === undefined) throw new Error(`seedBracket: no sport ${sport}`);
+  const raw = divisionConfig ?? (m.variants[declaredVariant(sport, variant)] as Record<string, unknown>);
+  const parsed = m.configSchema.safeParse(raw);
+  const division = (parsed.success ? parsed.data : raw) as Record<string, unknown>;
+  const off = stageRulesOverlay(m, division, decidersOffRules(m, variant, kind));
+  return deciderKeysFor(m, kind, variant).filter((k) => Object.hasOwn(off, k) && canonical(off[k]) !== canonical(division[k]));
+}
+
 export interface SeededBracket {
   auth: AuthCtx;
   competitionId: string;
@@ -47,14 +71,28 @@ export async function seedBracket(opts: {
   stageConfig?: Record<string, unknown>;
   /** W2c — the stage's own match rules (`stages.config.rules`), written straight onto the row AFTER `createStages`
    *  and before the fixtures are generated, REPLACING what the create stored: since Task 12 a new bracket stage stores
-   *  its sport's preset (football's extra time and penalties, ice hockey's overtime and shoot-out, the super over), so
-   *  absent = that preset, `{}` = no stage rules at all (the stage plays its division's config: every preset decider
-   *  switched off, how a rig reaches a HELD level knockout), anything else = exactly those rules. Raw SQL on purpose:
-   *  a test may seed rules the endpoint would refuse. */
-  stageRules?: Record<string, unknown>;
+   *  its sport's preset (football's extra time and penalties, ice hockey's overtime and shoot-out, the super over).
+   *  - absent: that preset;
+   *  - `{}`: no stage rules at all, so the stage plays its division's config. This is the HELD rig's shorthand (every
+   *    preset decider off), and it holds only where the division plays no decider of its own: every football and
+   *    cricket variant. Where the division DOES play one (ice hockey iihf, hockey fih-shootout), `{}` is refused by
+   *    name before anything is written (review M-4). Pass `decidersOffRules(sport, variant, kind)` for a held rig there;
+   *  - `"division"`: no stage rules, the division's own deciders kept on purpose (unchecked);
+   *  - anything else: exactly those rules.
+   *  Raw SQL on purpose: a test may seed rules the endpoint would refuse. */
+  stageRules?: Record<string, unknown> | "division";
 }): Promise<SeededBracket> {
   const variant = declaredVariant(opts.sport, opts.variant);
   const sportModule = builtinModules.find((x) => x.key === opts.sport)!;
+  if (opts.stageRules !== undefined && opts.stageRules !== "division" && Object.keys(opts.stageRules).length === 0) {
+    const played = divisionPlayedDeciders(opts.sport, variant, opts.stageKind, opts.divisionConfig);
+    if (played.length > 0) {
+      throw new Error(
+        `seedBracket: stageRules {} is not every decider off for ${opts.sport}/${variant} — its division plays ${played.join(", ")}. ` +
+          `Pass decidersOffRules(sport, variant, kind) for a held rig, or "division" to keep the division's deciders on purpose.`,
+      );
+    }
+  }
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Bo " + suffix}, ${"bo-" + suffix}) returning id`;
@@ -101,7 +139,7 @@ export async function seedBracket(opts: {
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: opts.stageKind, name: "S1", config: opts.stageConfig ?? {}, progression: null });
   if (opts.stageRules !== undefined) {
     const n =
-      Object.keys(opts.stageRules).length === 0
+      opts.stageRules === "division" || Object.keys(opts.stageRules).length === 0
         ? await sql`update stages set config = config - 'rules' where id = ${stage!.id}`
         : await sql`update stages set config = config || ${sql.json({ rules: opts.stageRules } as never)} where id = ${stage!.id}`;
     if (n.count !== 1) throw new Error("seedBracket: the stage rules were not written"); // R13
