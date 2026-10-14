@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan batch by batch. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Execution note (2026-10-14, batch 1a):** the parity script lives at `scripts/lib/test-parity.mjs` (moved from `scripts/` because `tools-tests-typecheck` requires every `scripts` declaration twin under `scripts/lib`). Live scheduler tests are under `packages/scheduler/src/__tests__/`.
+
 **Revision 2 (2026-10-14)** — rewritten after the Opus plan review (`docs/superpowers/specs/engine-split/reviews/plan-phase1.md`: 1 BLOCKER, 19 MAJOR, 24 MINOR). Each fix cites its finding as `[R#]`.
 
 **Goal:** Inside the monorepo, make `@seazn/engine` a pure, publishable, phone-safe library: the placement client moves out behind a port, a compiled `dist/` is published as canaries, the tests that read across the package boundary are rehomed in both directions, fold epochs are pinned to the golden corpora, and the server refuses outdated engine epochs. After this, Phases 2a and 2b are pure relocations.
@@ -66,10 +68,10 @@ Worktree `engine-split-1a`.
 This is the script every later batch uses to prove "the same tests, nothing lost" (spec §5.4, D32a).
 
 **Files:**
-- Create: `scripts/test-parity.mjs`, `scripts/test-parity.d.mts`, `scripts/__tests__/test-parity.test.ts`
+- Create: `scripts/lib/test-parity.mjs`, `scripts/lib/test-parity.d.mts`, `scripts/__tests__/test-parity.test.ts`
 
 **Interfaces:**
-- Produces: CLI `node scripts/test-parity.mjs --before <report.json>=<root> [--before …] --after <report.json>=<root> [--after …] [--ledger <ledger.json>]`.
+- Produces: CLI `node scripts/lib/test-parity.mjs --before <report.json>=<root> [--before …] --after <report.json>=<root> [--after …] [--ledger <ledger.json>]`.
   - Exit codes: 0 when everything is accounted for, 1 when ids are unaccounted, 2 when the input is invalid or vacuous.
   - Exports `testIds(report, root): string[]` and `diffIds(before: string[], after: string[], ledger): { onlyBefore, onlyAfter, both, unaccounted }`.
 - **Collection command** (runs no test bodies, but reports every collected test, skipped ones included) [R4]: `./node_modules/.bin/vitest run -t "__parity_collect_only__" --reporter=json --outputFile "$(mktemp)" <paths>`.
@@ -141,7 +143,7 @@ describe("test-parity", () => {
 - [ ] **Step 3: Implement**
 
 ```js
-// scripts/test-parity.mjs
+// scripts/lib/test-parity.mjs
 // The same tests before and after a move, or every difference accounted for in a ledger (engine-split spec §5.4, D23, D32a).
 // Collect ids with `vitest run -t "__parity_collect_only__" --reporter=json`: no test body runs, every collected test
 // (it.skip / skipIf / todo included) is reported. `vitest list --json` drops skipped tests, so it is not used.
@@ -211,7 +213,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 ```
 
 ```ts
-// scripts/test-parity.d.mts — declaration twin; scripts/__tests__ is type-checked by tsc -p tsconfig.tools-tests.json (ci.yml:123) [R6]
+// scripts/lib/test-parity.d.mts — declaration twin; scripts/__tests__ is type-checked by tsc -p tsconfig.tools-tests.json (ci.yml:123) [R6]
 export interface ParityReport { numTotalTests?: number; testResults?: { name: string; assertionResults?: { ancestorTitles?: string[]; title: string; status?: string }[] }[] }
 export interface LedgerEntry { id: string; fate: "moved" | "rehomed" | "split" | "rewritten" | "added" | "retired"; to?: string; reason: string }
 export function testIds(report: ParityReport, root: string): string[];
@@ -374,7 +376,7 @@ expect(solve).toHaveBeenCalledTimes(1);
   - **`placement-integration.test.ts`** passes a live solve while it still sits in the engine: `const liveSolve: PlacementSolver = (i, c) => solveBuild(i, { secret: process.env.PLACEMENT_SERVICE_SECRET ?? "", requestId: c.requestId })`, with `solveBuild` imported from `../placement-client.ts`, and `log: silentLogger`. Add a guard in an `afterEach`: when `PLACEMENT_SERVICE_HOST` is set, any result with `status === "solver_unavailable"` fails the test, **except** the :317 deliberate-localhost:1 case. This stops the live seam testing greedy silently. [R3]
   - **Titles do not change. No test is added or removed.**
 - [ ] **Step 6: Point the equivalence test at the port.** Replace its `vi.spyOn` with `fakeSolver(async (i) => { calls.push(i); return s.solver(i); })`, pass `{ ...s.problem(), solve, log: silentLogger }`, and run the file ALONE, without `-u`. Expect all pass and `git diff --exit-code packages/engine/src/scheduling/__snapshots__/`. Any diff means the port changed behaviour: stop and report.
-- [ ] **Step 7: Parity.** In a detached scratch worktree at the Step-3 commit (`git worktree add --detach <scratch> <sha> && cd <scratch> && pnpm install`), run the collection command over `packages/engine/src/scheduling` into `B=$(mktemp)`. On the branch, the same into `A=$(mktemp)`. Then `node scripts/test-parity.mjs --before "$B=<scratch>/packages/engine" --after "$A=<wt>/packages/engine"` and expect `unaccounted 0`. Paste the counts into the commit body.
+- [ ] **Step 7: Parity.** In a detached scratch worktree at the Step-3 commit (`git worktree add --detach <scratch> <sha> && cd <scratch> && pnpm install`), run the collection command over `packages/engine/src/scheduling` into `B=$(mktemp)`. On the branch, the same into `A=$(mktemp)`. Then `node scripts/lib/test-parity.mjs --before "$B=<scratch>/packages/engine" --after "$A=<wt>/packages/engine"` and expect `unaccounted 0`. Paste the counts into the commit body.
 - [ ] **Step 8: Typecheck the engine:** `cd <wt>/packages/engine && pnpm typecheck` and expect exit 0. The apps/web callers are fixed in 1a-4.
 - [ ] **Step 9: Mutate once.** Replace `await input.solve(...)` with `await Promise.reject(new Error("x"))`. The `optimized` equivalence case and `build.test.ts` ~:265 must go red. Revert.
 - [ ] **Four types:**
@@ -495,7 +497,7 @@ export const schedulerLog: EngineLogger = {
 - [ ] **Step 7: Parity ledger.**
   - Collect before (scratch at the 1a-2 commit, engine `src/scheduling`) and after (engine `src/scheduling` plus `packages/scheduler`). The collection command reports the 4 skipped integration ids. [R4]
   - Write `docs/superpowers/specs/engine-split/ledgers/1a.json`: 28 `rehomed` entries (`placement-client.test.ts` ×24, `placement-integration.test.ts` ×4), plus `added` entries for `solver.test.ts` ×2 and the runtime-deps test.
-  - Run `node scripts/test-parity.mjs --before "$B=<scratch>/packages/engine" --after "$A1=<wt>/packages/engine" --after "$A2=<wt>/packages/scheduler" --ledger …/1a.json`, using a different root per package, and expect `unaccounted 0`.
+  - Run `node scripts/lib/test-parity.mjs --before "$B=<scratch>/packages/engine" --after "$A1=<wt>/packages/engine" --after "$A2=<wt>/packages/scheduler" --ledger …/1a.json`, using a different root per package, and expect `unaccounted 0`.
 - [ ] **Step 8: Mutate once.** Delete `@grpc/grpc-js` from the scheduler's `dependencies`; its runtime-deps test names it. Restore.
 - [ ] **Four types:**
   - unit: `solver.test.ts`, runtime-deps;
@@ -952,7 +954,7 @@ export const ENGINE_PREFIX = git("rev-parse", "--show-prefix"); // "packages/eng
 
 ### Task 1d-6: Both-direction inventory and the ledger check [R19, D32i]
 
-- [ ] **Engine → monorepo.** Collect the engine package at the batch base and head, plus the new root and app files, then run `node scripts/test-parity.mjs` with several `--before`/`--after` pairs and the ledger. Expect `unaccounted 0`.
+- [ ] **Engine → monorepo.** Collect the engine package at the batch base and head, plus the new root and app files, then run `node scripts/lib/test-parity.mjs` with several `--before`/`--after` pairs and the ledger. Expect `unaccounted 0`.
 - [ ] **Monorepo → engine (reverse)** [R19]. Find every non-engine test file that reads an engine-owned path: `grep -rlaE "packages/engine|mutation\.yml|stryker-" apps/web/src scripts/__tests__ tools/*/__tests__ packages/reference packages/scheduler --include=*.ts`, then open each hit. Write `docs/superpowers/specs/engine-split/reverse-inventory.md`: one row per file, giving what it reads (path and line), how many tests depend on it, and its **planned 2b fate**. The fates are:
   - moves to the engine repo, e.g. `matrix-workflow.test.ts`'s ~28 `mutation.yml` tests;
   - reads from the installed package;
