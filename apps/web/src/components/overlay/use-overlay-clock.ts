@@ -53,9 +53,9 @@ export function useOverlayClock(
   //  - `shown`: the clock the cell is showing. A push replaces it; an absent
   //    clock (half-time / full-time) keeps the last one — the HOLD; a status
   //    with no clock clears it. Adjusted during render on a real change.
-  //  - `tickAt`: the wall time of the last 1 Hz tick, set only from the
-  //    interval's own callback (and once at mount, lazily — `Date.now()` never
-  //    runs in render).
+  //  - `tickAt`: the wall time of the last 1 Hz tick, set only from timer
+  //    callbacks (the interval, and one zero-delay re-read each time a push
+  //    re-arms it) and once at mount, lazily — `Date.now()` never runs in render.
   //  - the presentation offset.
   // So the held reading is EXACTLY what was last shown (same clock, same tick
   // time), not whatever the last tick happened to store.
@@ -74,8 +74,20 @@ export function useOverlayClock(
   const advances = !!live && live.running !== false && live.nominalSeconds !== undefined;
   useEffect(() => {
     if (!advances) return;
+    // This effect re-runs on every push that moves the anchor, but `tickAt`
+    // predates the push: after a pause or before a first live push it can be
+    // minutes old, and a stale tick clamps the elapsed time to zero, so the
+    // cell would show the bare anchor ("45:00" for a true "45:03") until the
+    // first interval tick. Read the wall clock once right after the commit —
+    // from a timer callback, because setting state straight from an effect body
+    // is what react-hooks/set-state-in-effect forbids and `Date.now()` in the
+    // render branch above is what react-hooks/purity forbids.
+    const reanchor = setTimeout(() => setTickAt(Date.now()), 0);
     const id = setInterval(() => setTickAt(Date.now()), 1000);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(reanchor);
+      clearInterval(id);
+    };
   }, [advances, live?.phase, live?.anchorSeconds, live?.anchorAtWallMs, presentationNowOffsetMs]);
 
   return next ? clockLabelAt(next, tickAt, presentationNowOffsetMs) : null;
