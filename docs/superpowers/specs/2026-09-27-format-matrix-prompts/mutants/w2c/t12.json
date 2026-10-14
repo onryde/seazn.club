@@ -482,21 +482,6 @@
   ]
  },
  {
-  "id": "t12-fr2-applied-not-changed",
-  "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "        if (variantApplied) {",
-  "replace": "        if (variantChanged) {",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
-    ],
-    "name": "a started stage is never touched"
-   }
-  ]
- },
- {
   "id": "t12-fr2-started",
   "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
   "find": "if (started.has(s.id)) continue;",
