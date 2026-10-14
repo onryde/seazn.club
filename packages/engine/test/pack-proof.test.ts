@@ -3,14 +3,31 @@
 // held here, with no network, is every decision inside it that could quietly stop being a decision: the scratch directory is
 // refused when it is inside the repo, a fixture that checked nothing is a failure, the tarball's exports are judged for
 // source/dangling targets, the right pnpm is picked, and the Metro module count is read from a bundle that actually parses.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
-import { assertOutsideRepo, checkTarballExports, devBundleModules, engineModules, pickPnpm, requireChecked, runFixtures } from "../pack-proof/lib.mjs";
+import {
+  assertExactVersions,
+  assertOutsideRepo,
+  assertSameSet,
+  checkTarballExports,
+  declaredAppRoutes,
+  devBundleModules,
+  engineModules,
+  exportSpecifiers,
+  installSignalCleanup,
+  installedVersion,
+  pickPnpm,
+  requireChecked,
+  runFixtures,
+  sourceSportDirs,
+  sportDirsOf,
+} from "../pack-proof/lib.mjs";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(ENGINE, "..", "..");
@@ -243,6 +260,198 @@ describe("runFixtures: every fixture runs, and only a positive count passes", ()
   });
 });
 
+describe("exportSpecifiers: the proof imports every key and every sport directory", () => {
+  const srcDirs = sourceSportDirs(ENGINE);
+  const nonPattern = keys.filter((k) => !k.includes("*"));
+
+  it("lists each non-pattern export key plus each sport directory with an index (the engine's own declarations, counted)", () => {
+    const got = exportSpecifiers({ manifest: { exports: pkg.publishConfig.exports }, sportDirs: srcDirs });
+    expect(srcDirs.length).toBeGreaterThan(0);
+    expect(nonPattern.length).toBeGreaterThan(0);
+    expect(got.length).toBe(nonPattern.length + srcDirs.length);
+    expect(new Set(got).size).toBe(got.length);
+    for (const k of nonPattern) expect(got, k).toContain(`@seazn/engine/${k.slice(2)}`);
+    for (const d of srcDirs) expect(got, d).toContain(`@seazn/engine/sports/${d}`);
+    // the pattern itself is never a specifier
+    expect(got.some((x) => x.includes("*"))).toBe(false);
+  });
+
+  it("refuses a pattern it cannot expand, a `*` with no directory, an empty manifest, and a key that is not a subpath", () => {
+    const base = { "./core": { default: "./dist/core/index.js" } };
+    expect(() => exportSpecifiers({ manifest: { exports: { ...base, "./other/*": {} } }, sportDirs: ["a"] })).toThrow(/no known expansion/);
+    expect(() => exportSpecifiers({ manifest: { exports: { ...base, "./sports/*": {} } }, sportDirs: [] })).toThrow(/no sport directory/);
+    expect(() => exportSpecifiers({ manifest: { exports: {} }, sportDirs: ["a"] })).toThrow(/no exports/);
+    expect(() => exportSpecifiers({ manifest: {}, sportDirs: ["a"] })).toThrow(/no exports/);
+    expect(() => exportSpecifiers({ manifest: { exports: { core: {} } }, sportDirs: ["a"] })).toThrow(/not a \.\/ subpath/);
+  });
+
+  it("honours the alias name, and expands the pattern in the directories' order", () => {
+    expect(exportSpecifiers({ manifest: { exports: { "./core": {}, "./sports/*": {} } }, sportDirs: ["x", "y"], name: "pkg" })).toEqual(["pkg/core", "pkg/sports/x", "pkg/sports/y"]);
+  });
+});
+
+describe("sport directories: the tarball's dist/sports must mirror the source's", () => {
+  it("reads <dir> from dist/sports/<dir>/index.js only (not a .d.ts, a deeper index, a bare index or a sibling file)", () => {
+    const files = ["dist/sports/b/index.js", "dist/sports/a/index.js", "dist/sports/a/index.d.ts", "dist/sports/c/d/index.js", "dist/sports/index.js", "dist/sports/period/suspensions.js", "src/sports/z/index.js"];
+    expect(sportDirsOf(files)).toEqual(["a", "b"]);
+    expect(sportDirsOf([])).toEqual([]);
+  });
+
+  it("reads the source's directories with an index.ts, and leaves out the one that has none", () => {
+    const base = join(ENGINE, "src", "sports");
+    const all = readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    const without = all.filter((d) => !existsSync(join(base, d, "index.ts")));
+    const got = sourceSportDirs(ENGINE);
+    expect(without.length, "a sport directory without an index (period/) is the control").toBeGreaterThan(0);
+    for (const d of without) expect(got).not.toContain(d);
+    expect(got.length).toBe(all.length - without.length);
+    const t = scratch();
+    try {
+      mkdirSync(join(t, "src", "sports", "a"), { recursive: true });
+      mkdirSync(join(t, "src", "sports", "b"), { recursive: true });
+      writeFileSync(join(t, "src", "sports", "a", "index.ts"), "");
+      writeFileSync(join(t, "src", "sports", "b", "other.ts"), "");
+      writeFileSync(join(t, "src", "sports", "index.ts"), "");
+      expect(sourceSportDirs(t)).toEqual(["a"]);
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
+  });
+
+  it("assertSameSet: equal in any order passes; a missing member, an extra one, a duplicate and an empty expectation each refuse", () => {
+    expect(() => assertSameSet("x", ["b", "a"], ["a", "b"])).not.toThrow();
+    expect(() => assertSameSet("x", ["a"], ["a", "b"])).toThrow(/x: missing \[b\], extra \[\]/);
+    expect(() => assertSameSet("x", ["a", "b", "c"], ["a", "b"])).toThrow(/x: missing \[\], extra \[c\]/);
+    expect(() => assertSameSet("x", ["a", "a", "b"], ["a", "b"])).toThrow(/duplicates/);
+    expect(() => assertSameSet("x", [], [])).toThrow(/nothing to compare/);
+    expect(() => assertSameSet("x", ["a"], [])).toThrow(/nothing to compare/);
+  });
+});
+
+describe("declaredAppRoutes: only the routes the fixture declares are counted", () => {
+  it("maps page and route files to Next's manifest keys, and ignores layouts and everything else", () => {
+    expect(declaredAppRoutes(["layout.tsx", "page.tsx", "api/probe/route.ts", "api/probe/helper.ts", "x/page.jsx", "nested/deep/route.js", "x/loading.tsx", "page.css"])).toEqual(["/api/probe/route", "/nested/deep/route", "/page", "/x/page"]);
+    expect(declaredAppRoutes([])).toEqual([]);
+    expect(declaredAppRoutes(["layout.tsx"])).toEqual([]);
+  });
+
+  it("finds exactly the two routes the Next fixture declares (the page and /api/probe), never the framework's", () => {
+    const files: string[] = [];
+    const walk = (dir: string, rel = "") => {
+      for (const d of readdirSync(dir, { withFileTypes: true })) {
+        if (d.isDirectory()) walk(join(dir, d.name), `${rel}${d.name}/`);
+        else files.push(`${rel}${d.name}`);
+      }
+    };
+    walk(join(PROOF, "next", "app"));
+    expect(declaredAppRoutes(files)).toEqual(["/api/probe/route", "/page"]);
+  });
+});
+
+describe("fixture pins: every version is exact, and comes from the repo", () => {
+  it("assertExactVersions accepts x.y.z (and a pre-release) and the tarball's file: spec, and refuses every range", () => {
+    expect(assertExactVersions("d", { zod: "4.4.3", a: "1.0.0-beta.1", "@seazn/engine": "file:/tmp/x.tgz" })).toBe(3);
+    expect(assertExactVersions("d", undefined)).toBe(0);
+    for (const bad of ["^4.4.3", "~4.4.3", "*", "latest", ">=4", "4.4", "4", "", "workspace:*", "npm:zod@4.4.3", "4.4.3 || 5"]) {
+      expect(() => assertExactVersions("d", { zod: bad }), JSON.stringify(bad)).toThrow(/zod is .* not an exact x\.y\.z/);
+    }
+    // a file: spec is only the tarball's
+    expect(() => assertExactVersions("d", { zod: "file:/tmp/x.tgz" })).toThrow(/not an exact/);
+    expect(() => assertExactVersions("d", { "@seazn/engine": "^1.0.0" })).toThrow(/not an exact/);
+  });
+
+  it("installedVersion reads the installed package's version, and refuses a package that is absent or has no x.y.z", () => {
+    const t = scratch();
+    try {
+      mkdirSync(join(t, "node_modules", "@types", "node"), { recursive: true });
+      mkdirSync(join(t, "node_modules", "odd"), { recursive: true });
+      writeFileSync(join(t, "node_modules", "@types", "node", "package.json"), JSON.stringify({ version: "26.1.2" }));
+      writeFileSync(join(t, "node_modules", "odd", "package.json"), JSON.stringify({ version: "latest" }));
+      expect(installedVersion(t, "@types/node")).toBe("26.1.2");
+      expect(() => installedVersion(t, "absent")).toThrow(/absent is not installed/);
+      expect(() => installedVersion(t, "odd")).toThrow(/expected x\.y\.z/);
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
+    // and the real ones the fixtures take
+    for (const name of ["zod", "vitest", "fast-check", "@types/node"]) expect(installedVersion(ENGINE, name), name).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("the fixtures' own package.json files pin exactly (rn carries its whole toolchain), and rn's @babel/core is the version the repo pins", () => {
+    let checked = 0;
+    for (const f of FIXTURES) {
+      const p = JSON.parse(readFileSync(join(PROOF, f, "package.json"), "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      checked += assertExactVersions(`${f} dependencies`, p.dependencies);
+      checked += assertExactVersions(`${f} devDependencies`, p.devDependencies);
+    }
+    expect(checked, "rn's react, react-native and tooling are the ones with literals").toBeGreaterThanOrEqual(9);
+    const workspace = readFileSync(join(REPO, "pnpm-workspace.yaml"), "utf8");
+    const repoBabel = /"@babel\/helper-module-transforms@<8>@babel\/core": "(\d+\.\d+\.\d+)"/.exec(workspace)?.[1];
+    expect(repoBabel, "the workspace's @babel/core 7 override").toBeDefined();
+    const rn = JSON.parse(readFileSync(join(PROOF, "rn", "package.json"), "utf8")) as { devDependencies: Record<string, string> };
+    expect(rn.devDependencies["@babel/core"]).toBe(repoBabel);
+  });
+
+  it("run.mjs takes no version from a manifest range", () => {
+    const source = readFileSync(join(PROOF, "run.mjs"), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(source).not.toMatch(/peerDependencies\.(zod|vitest|fast-check)|peerDependencies\[|devDependencies\[|webPkg\./);
+  });
+});
+
+describe("installSignalCleanup", () => {
+  const fakeProcess = () => {
+    const proc = Object.assign(new EventEmitter(), { codes: [] as number[], exit(code: number) { this.codes.push(code); } });
+    return proc;
+  };
+
+  it.each([["SIGINT", 130], ["SIGTERM", 143]] as const)("%s removes the scratch directory and exits %i, once", (signal, code) => {
+    const t = scratch();
+    const proc = fakeProcess();
+    try {
+      writeFileSync(join(t, "marker"), "x");
+      installSignalCleanup({ dir: t, keep: () => false, proc });
+      expect(proc.listenerCount("SIGINT")).toBe(1);
+      expect(proc.listenerCount("SIGTERM")).toBe(1);
+      proc.emit(signal);
+      expect(existsSync(t)).toBe(false);
+      expect(proc.codes).toEqual([code]);
+      proc.emit(signal);
+      expect(proc.codes, "the handler is `once`").toEqual([code]);
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
+  });
+
+  it("runs `before` first, while the directory still exists, and again for each signal only once", () => {
+    const t = scratch();
+    const proc = fakeProcess();
+    const seen: boolean[] = [];
+    try {
+      installSignalCleanup({ dir: t, keep: () => false, before: () => seen.push(existsSync(t)), proc });
+      proc.emit("SIGTERM");
+      expect(seen).toEqual([true]);
+      expect(existsSync(t)).toBe(false);
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the directory when --keep was given (asked at signal time, not at install time), but still exits", () => {
+    const t = scratch();
+    const proc = fakeProcess();
+    let keep = false;
+    try {
+      installSignalCleanup({ dir: t, keep: () => keep, proc });
+      keep = true;
+      proc.emit("SIGTERM");
+      expect(existsSync(t)).toBe(true);
+      expect(proc.codes).toEqual([143]);
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("run.mjs, as the command line sees it (no network: both refusals come before anything is built)", () => {
   const run = (args: string[], env: Record<string, string> = {}) =>
     spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, ...env }, timeout: 60_000 });
@@ -270,6 +479,92 @@ describe("run.mjs, as the command line sees it (no network: both refusals come b
   });
 });
 
+describe("run.mjs removes its scratch directory when it is killed, and stops its child", () => {
+  // A fake `pnpm` that answers --version, and otherwise records its pid and sleeps: the run is then waiting on a child.
+  const fakePnpm = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "pnpm"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 10.34.5; exit 0; fi\necho $$ > "$FAKE_PID_FILE"\nexec sleep 120\n', { mode: 0o755 });
+  };
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it.each([["SIGTERM", 143], ["SIGINT", 130]] as const)("%s while a child runs: scratch gone, child stopped, exit %i", async (signal, code) => {
+    const base = scratch();
+    const bin = join(base, "bin");
+    const tmp = join(base, "tmp");
+    mkdirSync(tmp);
+    fakePnpm(bin);
+    const pidFile = join(base, "child.pid");
+    try {
+      const run = spawn(process.execPath, [join(PROOF, "run.mjs"), "--only", "node"], { env: { ...process.env, TMPDIR: tmp, PATH: `${bin}:/bin:/usr/bin`, FAKE_PID_FILE: pidFile }, stdio: "ignore" });
+      const exited = new Promise<number | null>((resolve) => run.once("exit", (c) => resolve(c)));
+      for (let i = 0; i < 300 && !existsSync(pidFile); i++) await sleepMs(100);
+      expect(existsSync(pidFile), "the fake pnpm never started: the run did not reach its first child").toBe(true);
+      const childPid = Number(readFileSync(pidFile, "utf8").trim());
+      expect(alive(childPid)).toBe(true);
+      expect(readdirSync(tmp).filter((d) => d.startsWith("engine-pack-"))).toHaveLength(1);
+      run.kill(signal);
+      expect(await exited).toBe(code);
+      expect(readdirSync(tmp).filter((d) => d.startsWith("engine-pack-"))).toEqual([]);
+      for (let i = 0; i < 50 && alive(childPid); i++) await sleepMs(100);
+      expect(alive(childPid), "the child outlived the run").toBe(false);
+    } finally {
+      if (existsSync(pidFile)) {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8").trim()), "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+      rmSync(base, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("run.mjs removes its scratch directory on failure, and keeps it only for --keep", () => {
+  // No pnpm on PATH (an empty directory): the run fails right after it made its scratch directory, before any build.
+  const failing = (args: string[]) => {
+    const base = scratch();
+    const empty = scratch();
+    try {
+      const r = spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, TMPDIR: base, PATH: empty }, timeout: 60_000 });
+      return { r, left: readdirSync(base).filter((d) => d.startsWith("engine-pack-")), base };
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  };
+
+  it("a failed run leaves nothing behind", () => {
+    const { r, left, base } = failing(["--only", "node"]);
+    try {
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(1);
+      expect(r.stderr).toMatch(/no pnpm 10\.34\.5 is available/);
+      expect(left).toEqual([]);
+      expect(r.stdout).not.toContain("scratch kept");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("--keep keeps it, and prints where", () => {
+    const { r, left, base } = failing(["--only", "node", "--keep"]);
+    try {
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(1);
+      expect(left).toHaveLength(1);
+      expect(r.stdout).toContain(`scratch kept at ${join(base, left[0] ?? "")}`);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the fixtures and wiring that make the run a proof", () => {
   const read = (...p: string[]) => readFileSync(join(PROOF, ...p), "utf8");
   const code = (text: string) => text.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
@@ -285,12 +580,15 @@ describe("the fixtures and wiring that make the run a proof", () => {
   });
 
   it("type-checks with skipLibCheck OFF under both resolutions, and the consumer carries a @ts-expect-error and a not-any assertion", () => {
-    const bundler = JSON.parse(read("types", "tsconfig.bundler.json")) as { compilerOptions: Record<string, unknown> };
-    const nodenext = JSON.parse(read("types", "tsconfig.nodenext.json")) as { compilerOptions: Record<string, unknown> };
+    const bundler = JSON.parse(read("types", "tsconfig.bundler.json")) as { compilerOptions: Record<string, unknown>; include: string[] };
+    const nodenext = JSON.parse(read("types", "tsconfig.nodenext.json")) as { compilerOptions: Record<string, unknown>; include: string[] };
     expect(bundler.compilerOptions.skipLibCheck).toBe(false);
     expect(nodenext.compilerOptions.skipLibCheck).toBe(false);
     expect(String(bundler.compilerOptions.moduleResolution).toLowerCase()).toBe("bundler");
     expect(String(nodenext.compilerOptions.moduleResolution).toLowerCase()).toBe("nodenext");
+    // the generated all-exports.ts (one `import type * as` per specifier) is part of the program
+    expect(bundler).toMatchObject({ include: expect.arrayContaining(["consumer.ts", "all-exports.ts"]) });
+    expect(nodenext).toMatchObject({ include: expect.arrayContaining(["consumer.ts", "all-exports.ts"]) });
     const consumer = read("types", "consumer.ts");
     expect(consumer.match(/\/\/ @ts-expect-error/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
     expect(consumer).toMatch(/IsAny</);

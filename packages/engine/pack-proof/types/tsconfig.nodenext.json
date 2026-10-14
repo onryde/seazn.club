@@ -9,5 +9,5 @@
     "skipLibCheck": false,
     "types": ["node"]
   },
-  "include": ["consumer.ts"]
+  "include": ["consumer.ts", "all-exports.ts"]
 }

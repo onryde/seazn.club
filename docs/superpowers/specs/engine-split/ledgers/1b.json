@@ -1,6 +1,6 @@
 {
   "batch": "1b",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file. Task 1b-2 (compiled dist and the publish manifest) appends its own entries, built against the same base 604e66ace: engine root (test/publish-manifest.test.ts new, so all `added`; test/runtime-deps.test.ts as the retitled file, one `rewritten`), apps/web (src/__tests__/toolchain.test.ts, the zod pin: values changed, no title changed), and the repo root (scripts/__tests__/engine-bare-imports.test.ts new, `added`; main-module.test.ts the untouched control; engine-package-identity.test.ts collected on the after side so its 1b-1 entries stay used). Collection for 1b-2 per side: engine = test/publish-manifest.test.ts + test/runtime-deps.test.ts, apps/web = src/__tests__/toolchain.test.ts, root = the three scripts/__tests__ files above. Review fixes of 1b-2 (clean dist, inlined sources, derived prod-peer pin, README, wider bare-import matcher) added the engine tests for the clean-first build, the inlined sources and the README, and the apps/web test for the derived required-peer pin, all `added`; the bare-imports scan test was retitled before the batch merged, so its `added` id is the final title. Task 1b-3 (the packed-tarball proof) appends `added` entries only, built against the same base 604e66ace: engine root test/pack-proof.test.ts (new, all `added`; collected with publish-manifest.test.ts and runtime-deps.test.ts so the 1b-2 entries stay used) and the four `engine-pack CI wiring` tests appended to tools/matrix/__tests__/ci-wiring.test.ts (collected whole on both sides; the 45 earlier ids are unchanged on both). Collection for 1b-3 per side: engine = the three engine files above, apps/web = src/__tests__/toolchain.test.ts, tools/matrix = __tests__/ci-wiring.test.ts, repo root = main-module.test.ts, engine-package-identity.test.ts and engine-bare-imports.test.ts.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file. Task 1b-2 (compiled dist and the publish manifest) appends its own entries, built against the same base 604e66ace: engine root (test/publish-manifest.test.ts new, so all `added`; test/runtime-deps.test.ts as the retitled file, one `rewritten`), apps/web (src/__tests__/toolchain.test.ts, the zod pin: values changed, no title changed), and the repo root (scripts/__tests__/engine-bare-imports.test.ts new, `added`; main-module.test.ts the untouched control; engine-package-identity.test.ts collected on the after side so its 1b-1 entries stay used). Collection for 1b-2 per side: engine = test/publish-manifest.test.ts + test/runtime-deps.test.ts, apps/web = src/__tests__/toolchain.test.ts, root = the three scripts/__tests__ files above. Review fixes of 1b-2 (clean dist, inlined sources, derived prod-peer pin, README, wider bare-import matcher) added the engine tests for the clean-first build, the inlined sources and the README, and the apps/web test for the derived required-peer pin, all `added`; the bare-imports scan test was retitled before the batch merged, so its `added` id is the final title. Task 1b-3 (the packed-tarball proof) appends `added` entries only, built against the same base 604e66ace: engine root test/pack-proof.test.ts (new, all `added`; collected with publish-manifest.test.ts and runtime-deps.test.ts so the 1b-2 entries stay used) and the four `engine-pack CI wiring` tests appended to tools/matrix/__tests__/ci-wiring.test.ts (collected whole on both sides; the 45 earlier ids are unchanged on both). Collection for 1b-3 per side: engine = the three engine files above, apps/web = src/__tests__/toolchain.test.ts, tools/matrix = __tests__/ci-wiring.test.ts, repo root = main-module.test.ts, engine-package-identity.test.ts and engine-bare-imports.test.ts. Task 1b-3 fix round (the proof loads every export, pins its fixture dependencies and folds every sport) only appends further `added` ids to test/pack-proof.test.ts; no existing id changed title.",
   "entries": [
     {
       "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › is published under the GitHub owner's scope",
@@ -278,6 +278,86 @@
     },
     {
       "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › runs the proof exactly once, as the command the engine's package script also runs, with nothing that could make it advisory",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › declaredAppRoutes: only the routes the fixture declares are counted › finds exactly the two routes the Next fixture declares (the page and /api/probe), never the framework's",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › declaredAppRoutes: only the routes the fixture declares are counted › maps page and route files to Next's manifest keys, and ignores layouts and everything else",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › exportSpecifiers: the proof imports every key and every sport directory › honours the alias name, and expands the pattern in the directories' order",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › exportSpecifiers: the proof imports every key and every sport directory › lists each non-pattern export key plus each sport directory with an index (the engine's own declarations, counted)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › exportSpecifiers: the proof imports every key and every sport directory › refuses a pattern it cannot expand, a `*` with no directory, an empty manifest, and a key that is not a subpath",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › fixture pins: every version is exact, and comes from the repo › assertExactVersions accepts x.y.z (and a pre-release) and the tarball's file: spec, and refuses every range",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › fixture pins: every version is exact, and comes from the repo › installedVersion reads the installed package's version, and refuses a package that is absent or has no x.y.z",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › fixture pins: every version is exact, and comes from the repo › run.mjs takes no version from a manifest range",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › fixture pins: every version is exact, and comes from the repo › the fixtures' own package.json files pin exactly (rn carries its whole toolchain), and rn's @babel/core is the version the repo pins",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › installSignalCleanup › SIGINT removes the scratch directory and exits 130, once",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › installSignalCleanup › SIGTERM removes the scratch directory and exits 143, once",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › installSignalCleanup › keeps the directory when --keep was given (asked at signal time, not at install time), but still exits",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › run.mjs removes its scratch directory on failure, and keeps it only for --keep › --keep keeps it, and prints where",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › run.mjs removes its scratch directory on failure, and keeps it only for --keep › a failed run leaves nothing behind",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › sport directories: the tarball's dist/sports must mirror the source's › assertSameSet: equal in any order passes; a missing member, an extra one, a duplicate and an empty expectation each refuse",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › sport directories: the tarball's dist/sports must mirror the source's › reads <dir> from dist/sports/<dir>/index.js only (not a .d.ts, a deeper index, a bare index or a sibling file)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › sport directories: the tarball's dist/sports must mirror the source's › reads the source's directories with an index.ts, and leaves out the one that has none",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › installSignalCleanup › runs `before` first, while the directory still exists, and again for each signal only once",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › run.mjs removes its scratch directory when it is killed, and stops its child › SIGINT while a child runs: scratch gone, child stopped, exit 130",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › run.mjs removes its scratch directory when it is killed, and stops its child › SIGTERM while a child runs: scratch gone, child stopped, exit 143",
       "fate": "added"
     }
   ]

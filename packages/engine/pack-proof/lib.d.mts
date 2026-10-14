@@ -26,3 +26,16 @@ export declare function runFixtures<Ctx>(
   ctx: Ctx,
   log: (line: string) => void,
 ): Promise<{ results: { name: string; n: number }[]; failures: { name: string; error: Error }[] }>;
+export declare function exportSpecifiers(input: { manifest: { exports?: unknown }; sportDirs: readonly string[]; name?: string }): string[];
+export declare function sportDirsOf(files: Iterable<string>): string[];
+export declare function sourceSportDirs(engineDir: string): string[];
+export declare function assertSameSet(label: string, actual: readonly string[], expected: readonly string[]): void;
+export declare function declaredAppRoutes(files: readonly string[]): string[];
+export declare function installedVersion(dir: string, name: string): string;
+export declare function assertExactVersions(label: string, deps: Record<string, unknown> | undefined, opts?: { fileSpecs?: readonly string[] }): number;
+export declare function installSignalCleanup(input: {
+  dir: string;
+  keep: () => boolean;
+  before?: () => void;
+  proc?: { once(signal: string, handler: () => void): unknown; exit(code: number): unknown };
+}): void;

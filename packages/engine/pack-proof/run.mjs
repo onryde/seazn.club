@@ -11,15 +11,31 @@
 // `exports` -> ./src/*.ts into a tarball with no src. And the pnpm that runs must be the repo's pin (root `packageManager`):
 // asked from a scratch directory, a bare `pnpm` answers with whatever is global (11.x on a dev machine), which packs and
 // installs differently. The version is asserted, not assumed.
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import console from "node:console";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
-import { assertOutsideRepo, checkTarballExports, devBundleModules, engineModules, pickPnpm, requireChecked, runFixtures } from "./lib.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  assertExactVersions,
+  assertOutsideRepo,
+  assertSameSet,
+  checkTarballExports,
+  declaredAppRoutes,
+  devBundleModules,
+  engineModules,
+  exportSpecifiers,
+  installSignalCleanup,
+  installedVersion,
+  pickPnpm,
+  requireChecked,
+  runFixtures,
+  sourceSportDirs,
+  sportDirsOf,
+} from "./lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE = path.resolve(HERE, "..");
@@ -36,9 +52,13 @@ const RN_PLATFORM = "android";
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
 const rootPkg = readJson(path.join(REPO, "package.json"));
 const enginePkg = readJson(path.join(ENGINE, "package.json"));
-const webPkg = readJson(path.join(REPO, "apps/web/package.json"));
 
 const info = (line) => console.log(`  ${line}`);
+
+/** Every version a fixture installs is the one THIS repo resolved (read from its installed packages, never a range typed here), so
+ *  the proof runs against what the repo's own tests run against. The rn fixture's toolchain is pinned in rn/package.json. */
+const enginePins = () => ({ zod: installedVersion(ENGINE, "zod"), "fast-check": installedVersion(ENGINE, "fast-check"), vitest: installedVersion(ENGINE, "vitest"), "@types/node": installedVersion(ENGINE, "@types/node") });
+const WEB = path.join(REPO, "apps/web");
 
 // ---------------------------------------------------------------------------------------------------------------- processes
 
@@ -50,14 +70,38 @@ function childEnv(extra = {}) {
   return { ...env, ...extra };
 }
 
-/** Run a command, return stdout. On failure throw with the command and the tail of what it printed. */
-function run(label, command, args, { cwd, env, timeoutMs = 10 * 60_000 } = {}) {
+const MAX_BUFFER = 512 * 1024 * 1024;
+const failure = (label, command, args, e) => {
+  const out = `${e.stdout ?? ""}${e.stderr ?? ""}`.trimEnd().split("\n").slice(-60).join("\n");
+  const status = typeof e.status === "number" ? e.status : typeof e.code === "number" ? e.code : undefined;
+  return new Error(`${label} failed (${status !== undefined ? `exit ${status}` : e.signal ?? e.code ?? "no status"}): ${command} ${args.join(" ")}\n${out}`);
+};
+
+/** Run a command to completion and return stdout, BLOCKING this process. Only for the startup probe: a blocked process cannot
+ *  act on a signal, so everything that takes time goes through `run`. On failure throw with the command and the tail of its output. */
+function runSync(label, command, args, { cwd, env, timeoutMs = 10 * 60_000 } = {}) {
   try {
-    return execFileSync(command, args, { cwd, env: childEnv(env), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 512 * 1024 * 1024, timeout: timeoutMs });
+    return execFileSync(command, args, { cwd, env: childEnv(env), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_BUFFER, timeout: timeoutMs });
   } catch (e) {
-    const out = `${e.stdout ?? ""}${e.stderr ?? ""}`.trimEnd().split("\n").slice(-60).join("\n");
-    throw new Error(`${label} failed (${e.status !== null && e.status !== undefined ? `exit ${e.status}` : e.signal ?? e.code ?? "no status"}): ${command} ${args.join(" ")}\n${out}`);
+    throw failure(label, command, args, e);
   }
+}
+
+/** The children `run` has started and not yet seen finish: what a SIGINT/SIGTERM must stop before it removes their directory. */
+const running = new Set();
+
+/** Run a command, resolve with stdout. Asynchronous on purpose: while a child runs this process is free to take a signal.
+ *  On failure reject with the command and the tail of what it printed. */
+function run(label, command, args, { cwd, env, timeoutMs = 10 * 60_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(command, args, { cwd, env: childEnv(env), encoding: "utf8", maxBuffer: MAX_BUFFER, timeout: timeoutMs }, (e, stdout, stderr) => {
+      running.delete(child);
+      if (e === null) resolve(stdout);
+      else reject(failure(label, command, args, Object.assign(e, { stdout, stderr })));
+    });
+    running.add(child);
+    child.stdin?.end(); // nothing is ever typed at a child
+  });
 }
 
 // -------------------------------------------------------------------------------------------------------------- arguments
@@ -92,7 +136,7 @@ function resolvePnpm(scratchRoot) {
     { label: `corepack pnpm@${pinned}`, command: "corepack", prefix: [`pnpm@${pinned}`] },
   ];
   // asked from the scratch directory, where the fixtures will run it
-  return pickPnpm(pinned, candidates, (c) => run("pnpm --version", c.command, [...c.prefix, "--version"], { cwd: scratchRoot, timeoutMs: 120_000 }));
+  return pickPnpm(pinned, candidates, (c) => runSync("pnpm --version", c.command, [...c.prefix, "--version"], { cwd: scratchRoot, timeoutMs: 120_000 }));
 }
 
 /** Every file under `dir`, as `/`-separated paths relative to `base`. */
@@ -104,9 +148,9 @@ function listFiles(dir, base = dir) {
 }
 
 /** Build dist/, check it is whole, pack it with pnpm, unpack the tarball and check its manifest. */
-function buildAndPack(ctx) {
+async function buildAndPack(ctx) {
   const { pnpm, scratchRoot } = ctx;
-  run("build:dist", pnpm.command, [...pnpm.prefix, "run", "build:dist"], { cwd: ENGINE });
+  await run("build:dist", pnpm.command, [...pnpm.prefix, "run", "build:dist"], { cwd: ENGINE });
 
   // An empty or partial dist/ packs a ~15-file tarball whose exports all dangle, and pnpm exits 0. Check the emit itself first,
   // against the workspace's own export list, so a broken build says so before it is packed.
@@ -117,97 +161,132 @@ function buildAndPack(ctx) {
 
   const destination = path.join(scratchRoot, "tarball");
   mkdirSync(destination, { recursive: true });
-  run("pnpm pack", pnpm.command, [...pnpm.prefix, "pack", "--pack-destination", destination], { cwd: ENGINE });
+  await run("pnpm pack", pnpm.command, [...pnpm.prefix, "pack", "--pack-destination", destination], { cwd: ENGINE });
   const tarballs = readdirSync(destination).filter((f) => f.endsWith(".tgz"));
   if (tarballs.length !== 1) throw new Error(`expected exactly one tarball in ${destination}, found ${tarballs.length}`);
   const tgz = path.join(destination, tarballs[0]);
 
   const unpacked = path.join(scratchRoot, "unpacked");
   mkdirSync(unpacked, { recursive: true });
-  run("tar -xzf", "tar", ["-xzf", tgz, "-C", unpacked]);
+  await run("tar -xzf", "tar", ["-xzf", tgz, "-C", unpacked]);
   const files = new Set(listFiles(path.join(unpacked, "package")));
   const manifest = readJson(path.join(unpacked, "package", "package.json"));
   if (manifest.name !== enginePkg.name) throw new Error(`the tarball is ${manifest.name}, expected ${enginePkg.name}`);
   const checked = checkTarballExports({ manifest, files, expectedKeys: Object.keys(enginePkg.exports) });
   requireChecked("tarball", checked);
   info(`tarball: ${checked} export targets checked in ${files.size} files (${path.basename(tgz)})`);
-  return { tgz, manifest, files };
+
+  // The sport directories the packed dist/ holds an index for must be exactly the workspace source's: a sport that lost its
+  // index (or a stray one) would otherwise just shrink every count below it.
+  const sportDirs = sportDirsOf(files);
+  assertSameSet("dist/sports/<dir> in the tarball vs src/sports/<dir> with an index.ts", sportDirs, sourceSportDirs(ENGINE));
+  // Everything a consumer can import: each non-pattern export key, and `./sports/*` expanded over those directories.
+  const specifiers = exportSpecifiers({ manifest, sportDirs });
+  info(`tarball: ${specifiers.length} importable specifiers (${specifiers.length - sportDirs.length} export keys + ${sportDirs.length} sport directories)`);
+  return { tgz, manifest, files, sportDirs, specifiers };
 }
 
-/** Copy a fixture to a scratch directory outside the repo, add the tarball (under the `@seazn/engine` alias) and zod, and install. */
-function installFixture(name, ctx, extraDependencies = {}, extraDevDependencies = {}) {
-  const dir = path.join(ctx.scratchRoot, name);
+/** Copy a fixture to a scratch directory outside the repo, add the tarball (under the `@seazn/engine` alias) and the repo's own
+ *  zod, and install. Every other version is exact: `extra*` come from `enginePins()` / apps/web's installed packages, and the
+ *  fixture's own package.json pins its toolchain. `dest` names the scratch directory when one fixture installs twice. */
+async function installFixture(name, ctx, extraDependencies = {}, extraDevDependencies = {}, dest = name) {
+  const dir = path.join(ctx.scratchRoot, dest);
   assertOutsideRepo(ctx.scratchRoot, REPO);
   cpSync(path.join(HERE, name), dir, { recursive: true, filter: (src) => !/(^|[\\/])(node_modules|\.next)([\\/]|$)/.test(src) });
   assertOutsideRepo(dir, REPO);
   const pkgFile = path.join(dir, "package.json");
   const pkg = readJson(pkgFile);
-  pkg.dependencies = { ...pkg.dependencies, "@seazn/engine": `file:${ctx.tarball.tgz}`, zod: enginePkg.peerDependencies.zod, ...extraDependencies };
+  pkg.dependencies = { ...pkg.dependencies, "@seazn/engine": `file:${ctx.tarball.tgz}`, zod: installedVersion(ENGINE, "zod"), ...extraDependencies };
   pkg.devDependencies = { ...pkg.devDependencies, ...extraDevDependencies };
+  assertExactVersions(`${dest} dependencies`, pkg.dependencies);
+  assertExactVersions(`${dest} devDependencies`, pkg.devDependencies);
   writeFileSync(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`);
   const { pnpm } = ctx;
-  run(`${name}: pnpm install`, pnpm.command, [...pnpm.prefix, "install", "--no-frozen-lockfile", "--ignore-workspace"], { cwd: dir });
+  await run(`${dest}: pnpm install`, pnpm.command, [...pnpm.prefix, "install", "--no-frozen-lockfile", "--ignore-workspace"], { cwd: dir });
   // the install must really be the tarball under the alias: its manifest is the packed one
   const installed = readJson(path.join(dir, "node_modules", "@seazn", "engine", "package.json"));
-  if (installed.name !== enginePkg.name || installed.exports["./core"].default !== "./dist/core/index.js") throw new Error(`${name}: node_modules/@seazn/engine is not the packed ${enginePkg.name}`);
+  if (installed.name !== enginePkg.name || installed.exports["./core"].default !== "./dist/core/index.js") throw new Error(`${dest}: node_modules/@seazn/engine is not the packed ${enginePkg.name}`);
   return dir;
 }
 
 // ---------------------------------------------------------------------------------------------------------------- fixtures
 
+/** Parse the JSON-array line `<TAG> [..]` strip.ts prints. */
+function printedList(out, tag, what) {
+  const m = new RegExp(`^${tag} (\\[.*\\])$`, "m").exec(out);
+  if (m === null) throw new Error(`${what} printed no ${tag} line:\n${out}`);
+  return JSON.parse(m[1]);
+}
+
 async function nodeFixture(ctx) {
-  const dir = installFixture("node", ctx);
-  const out = run("node: strip.ts", process.execPath, ["--experimental-strip-types", "strip.ts"], { cwd: dir, timeoutMs: 120_000 });
-  const m = /^builtinModules: (\d+)$/m.exec(out);
-  if (m === null) throw new Error(`node: strip.ts did not report a builtinModules count:\n${out}`);
-  const builtins = Number(m[1]);
+  const optionalPeers = Object.entries(enginePkg.peerDependenciesMeta ?? {}).filter(([, v]) => v.optional === true).map(([k]) => k);
+  // 1. zod ONLY: every export but ./testkit, and every sport directory, loaded with `import()`. The optional peers are not
+  //    installed here, so an `import "fast-check"` (or vitest) anywhere outside the testkit fails this run.
+  const core = await installFixture("node", ctx);
+  for (const peer of optionalPeers) if (existsSync(path.join(core, "node_modules", peer))) throw new Error(`node: the zod-only install holds the optional peer ${peer}`);
+  const coreOut = await run("node: strip.ts core", process.execPath, ["--experimental-strip-types", "strip.ts", "core"], { cwd: core, timeoutMs: 180_000 });
+  const imported = printedList(coreOut, "SPECIFIERS", "node: strip.ts core");
+  // ... and the tarball's own export list is the oracle: what strip.ts read from the INSTALLED package must be the same set
+  assertSameSet("node: specifiers imported from the zod-only install", imported, ctx.tarball.specifiers.filter((x) => x !== "@seazn/engine/testkit"));
+
+  // 2. + fast-check and vitest: the testkit imported, and every builtin sport folded for real from the packed build.
+  const pins = enginePins();
+  const kit = await installFixture("node", ctx, {}, { "fast-check": pins["fast-check"], vitest: pins.vitest }, "node-testkit");
+  const kitOut = await run("node: strip.ts testkit", process.execPath, ["--experimental-strip-types", "strip.ts", "testkit"], { cwd: kit, timeoutMs: 180_000 });
+  assertSameSet("node: specifiers imported from the testkit install", printedList(kitOut, "SPECIFIERS", "node: strip.ts testkit"), ["@seazn/engine/testkit"]);
+  const sports = printedList(kitOut, "SPORTS", "node: strip.ts testkit");
+  const folds = Number(/^FOLDS (\d+)$/m.exec(kitOut)?.[1]);
+  // the sports to fold come from the WORKSPACE source's own builtinModules; what was folded came from the tarball
+  const expectedSports = (await import(pathToFileURL(path.join(ENGINE, "src", "sports", "index.ts")).href)).builtinModules.map((m) => m.key);
+  assertSameSet("node: sports folded from the tarball vs the workspace's builtinModules", sports, expectedSports);
+  if (!(folds >= sports.length)) throw new Error(`node: ${folds} folds for ${sports.length} sports`);
+  const total = imported.length + 1;
+  info(`node: ${total} specifiers imported (${total - ctx.tarball.sportDirs.length} export keys + ${ctx.tarball.sportDirs.length} sport directories), ${sports.length} sports folded over ${folds} declared configs`);
+
   // rules.mjs: skipped, loudly, until Task 1d-5 gives it a parser to call
-  const rules = run("node: rules.mjs", process.execPath, ["rules.mjs"], { cwd: dir, timeoutMs: 120_000 });
+  const rules = await run("node: rules.mjs", process.execPath, ["rules.mjs"], { cwd: kit, timeoutMs: 120_000 });
   const skipped = /^SKIPPED: (.+)$/m.exec(rules);
   if (skipped !== null) {
     info(`node: rules.mjs skipped - ${skipped[1]}`);
-    return builtins;
+    return total + sports.length;
   }
   const r = /^rules: (\d+)$/m.exec(rules);
   if (r === null) throw new Error(`node: rules.mjs neither skipped nor reported a rules count:\n${rules}`);
-  return builtins + requireChecked("node: rules.mjs", Number(r[1]));
+  return total + sports.length + requireChecked("node: rules.mjs", Number(r[1]));
 }
 
 async function nextFixture(ctx) {
-  const webNext = createRequire(path.join(REPO, "apps/web/package.json"))("next/package.json").version;
-  const dir = installFixture(
+  const webNext = installedVersion(WEB, "next");
+  const react = installedVersion(WEB, "react");
+  const dir = await installFixture(
     "next",
     ctx,
-    { next: webNext, react: webPkg.dependencies.react, "react-dom": webPkg.dependencies["react-dom"] },
-    { typescript: webPkg.devDependencies.typescript, "@types/react": webPkg.devDependencies["@types/react"], "@types/react-dom": webPkg.devDependencies["@types/react-dom"], "@types/node": enginePkg.devDependencies["@types/node"] },
+    { next: webNext, react, "react-dom": installedVersion(WEB, "react-dom") },
+    { typescript: installedVersion(WEB, "typescript"), "@types/react": installedVersion(WEB, "@types/react"), "@types/react-dom": installedVersion(WEB, "@types/react-dom"), "@types/node": enginePins()["@types/node"] },
   );
-  info(`next: ${webNext} (apps/web's), react ${webPkg.dependencies.react}`);
-  const out = run("next: next build", process.execPath, [path.join("node_modules", "next", "dist", "bin", "next"), "build"], { cwd: dir, env: { NEXT_TELEMETRY_DISABLED: "1" } });
-  const manifest = readJson(path.join(dir, ".next", "server", "app-paths-manifest.json"));
-  const routes = Object.keys(manifest);
-  // the two routes the fixture declares must be among the ones built (a build that built something else is not this proof)
-  for (const want of ["/page", "/api/probe/route"]) if (!routes.includes(want)) throw new Error(`next: the build did not produce ${want} (built: ${routes.join(", ")})\n${out}`);
-  info(`next: built ${routes.join(", ")}`);
+  info(`next: ${webNext} (apps/web's), react ${react}`);
+  const out = await run("next: next build", process.execPath, [path.join("node_modules", "next", "dist", "bin", "next"), "build"], { cwd: dir, env: { NEXT_TELEMETRY_DISABLED: "1" } });
+  const built = Object.keys(readJson(path.join(dir, ".next", "server", "app-paths-manifest.json")));
+  // The routes the fixture DECLARES (its page and route files) are what is counted; the framework adds /_not-found and
+  // /_global-error, which say nothing about the engine. Every declared route must be among the built ones.
+  const declared = declaredAppRoutes(listFiles(path.join(HERE, "next", "app")));
+  for (const want of declared) if (!built.includes(want)) throw new Error(`next: the build did not produce ${want} (built: ${built.join(", ")})\n${out}`);
+  info(`next: built ${built.join(", ")}; counting the ${declared.length} declared (${declared.join(", ")})`);
   // Prerendering RAN the imports: the page printed `typeof` of two engine values and the route body lists the shipped sports.
   const html = readFileSync(path.join(dir, ".next", "server", "app", "index.html"), "utf8");
   if (!html.includes("<p>function</p><p>function</p>")) throw new Error("next: the prerendered page does not show the engine's EngineError and registry.register as functions");
   const body = JSON.parse(readFileSync(path.join(dir, ".next", "server", "app", "api", "probe.body"), "utf8"));
   if (!Array.isArray(body.sports) || body.sports.length === 0) throw new Error(`next: the prerendered route lists no sports: ${JSON.stringify(body)}`);
   info(`next: the route handler listed ${body.sports.length} sports at build time`);
-  return routes.length;
+  return declared.length;
 }
 
-/** Every phone subpath the packed manifest exports under core/sport/sports and every sport directory that has an index. */
+/** Every phone subpath: core, sport and sports, and every sport directory (already checked against the workspace source). */
 function phoneSubpaths(ctx) {
   const exportsMap = ctx.tarball.manifest.exports;
-  const fixed = ["./core", "./sport", "./sports"].filter((k) => k in exportsMap).map((k) => k.slice(2));
-  // `./sports/*` expands over the directories the packed dist/ holds an index for
-  const dirs = [...ctx.tarball.files]
-    .map((f) => /^dist\/sports\/([^/]+)\/index\.js$/.exec(f)?.[1])
-    .filter((d) => d !== undefined)
-    .sort();
-  if (!("./sports/*" in exportsMap)) throw new Error("the packed manifest has no ./sports/*");
-  return [...fixed, ...dirs.map((d) => `sports/${d}`)];
+  const fixed = ["./core", "./sport", "./sports"];
+  for (const k of [...fixed, "./sports/*"]) if (!(k in exportsMap)) throw new Error(`the packed manifest has no ${k}`);
+  return [...fixed.map((k) => k.slice(2)), ...ctx.tarball.sportDirs.map((d) => `sports/${d}`)];
 }
 
 function hermescPath(dir) {
@@ -216,14 +295,15 @@ function hermescPath(dir) {
 }
 
 async function rnFixture(ctx) {
-  const dir = installFixture("rn", ctx);
+  const dir = await installFixture("rn", ctx);
   const subpaths = phoneSubpaths(ctx);
   const imports = subpaths.map((s, i) => `import * as m${i} from "@seazn/engine/${s}";`);
   const index = [
     ...imports,
     'import { badminton } from "@seazn/engine/sports/setbased";',
     "",
-    "// a real fold, not just an import: badminton at its schema-default config over an empty ledger",
+    "// a fold, so the fold kernel and a sport module are in the closure: badminton at its schema-default config over an empty",
+    "// ledger. Nothing here is EXECUTED: Metro resolves and transforms it, and hermesc compiles the production bundle.",
     "const cfg = badminton.configSchema.parse({});",
     'const lineups = { home: { entrantId: "H", slots: [] }, away: { entrantId: "A", slots: [] } };',
     "const state = m0.foldMatch(badminton, cfg, lineups, []);",
@@ -244,21 +324,21 @@ async function rnFixture(ctx) {
   // The toolchain first, on an entry that imports nothing of ours. A red here is a missing CLI or a broken install, which is
   // NOT a finding about the engine - and it must not be reported as one.
   try {
-    bundle("control.js", "control.bundle.js", true);
-    compile("control-hermes.js", "control.hbc");
+    await bundle("control.js", "control.bundle.js", true);
+    await compile("control-hermes.js", "control.hbc");
   } catch (e) {
     throw new Error(`rn: TOOLCHAIN FAILURE - Metro/Hermes could not bundle or compile a file that imports nothing of the engine, so this is not an engine finding.\n${e.message}`);
   }
   info("rn: toolchain ran (control entry bundled by Metro, control file compiled by hermesc)");
 
-  bundle("index.js", "dev.bundle.js", true);
+  await bundle("index.js", "dev.bundle.js", true);
   const paths = devBundleModules(readFileSync(path.join(dir, "dev.bundle.js"), "utf8"));
   const engine = engineModules(paths, ["@seazn/engine", enginePkg.name]);
   info(`rn: dev bundle ${paths.length} modules, ${engine.length} from @seazn/engine/dist (${subpaths.length} subpaths imported)`);
   if (engine.length < RN_ENGINE_MODULE_FLOOR) throw new Error(`rn: only ${engine.length} engine modules reached the dev bundle, expected at least ${RN_ENGINE_MODULE_FLOOR}:\n${engine.join("\n")}`);
 
-  bundle("index.js", "out.js", false);
-  compile("out.js", "out.hbc");
+  await bundle("index.js", "out.js", false);
+  await compile("out.js", "out.hbc");
   const hbc = path.join(dir, "out.hbc");
   if (!existsSync(hbc)) throw new Error("rn: hermesc exited 0 but wrote no out.hbc");
   info(`rn: hermesc compiled the production bundle (${readFileSync(hbc).length} bytes of bytecode)`);
@@ -266,27 +346,31 @@ async function rnFixture(ctx) {
 }
 
 async function typesFixture(ctx) {
-  const dir = installFixture(
-    "types",
-    ctx,
-    {},
-    { "fast-check": enginePkg.peerDependencies["fast-check"], vitest: enginePkg.peerDependencies.vitest, "@types/node": enginePkg.devDependencies["@types/node"] },
-  );
+  const pins = enginePins();
+  const dir = await installFixture("types", ctx, {}, { "fast-check": pins["fast-check"], vitest: pins.vitest, "@types/node": pins["@types/node"] });
+  // One `import type * as` per importable specifier (every export key and every sport directory), generated from the packed
+  // manifest. An unresolved one is TS2307 under skipLibCheck false, and a resolved one is checked against its .d.ts.
+  const lines = ctx.tarball.specifiers.map((specifier, i) => `import type * as m${i} from "${specifier}";`);
+  writeFileSync(path.join(dir, "all-exports.ts"), `${lines.join("\n")}\nexport type All = [${lines.map((_, i) => `typeof m${i}`).join(", ")}];\n`);
+  const written = readFileSync(path.join(dir, "all-exports.ts"), "utf8").split("\n").filter((l) => l.startsWith("import type * as ")).length;
+  if (written !== ctx.tarball.specifiers.length || written === 0) throw new Error(`types: all-exports.ts has ${written} imports for ${ctx.tarball.specifiers.length} specifiers`);
   const compilers = [
     { label: "TS 7", bin: path.join(REPO, "node_modules", "typescript-native", "bin", "tsc"), major: 7 },
     { label: "TS 6", bin: path.join(REPO, "node_modules", "typescript", "bin", "tsc"), major: 6 },
   ];
+  const configs = ["tsconfig.bundler.json", "tsconfig.nodenext.json"];
   let passed = 0;
   for (const c of compilers) {
-    const version = run(`types: ${c.label} --version`, process.execPath, [c.bin, "--version"], { cwd: dir, timeoutMs: 60_000 }).trim();
+    const version = (await run(`types: ${c.label} --version`, process.execPath, [c.bin, "--version"], { cwd: dir, timeoutMs: 60_000 })).trim();
     if (!version.startsWith(`Version ${c.major}.`)) throw new Error(`types: ${c.bin} reports "${version}", expected a ${c.major}.x`);
-    for (const config of ["tsconfig.bundler.json", "tsconfig.nodenext.json"]) {
-      run(`types: ${c.label} -p ${config}`, process.execPath, [c.bin, "-p", config], { cwd: dir, timeoutMs: 5 * 60_000 });
-      info(`types: ${version} -p ${config} exit 0 (skipLibCheck false)`);
+    for (const config of configs) {
+      await run(`types: ${c.label} -p ${config}`, process.execPath, [c.bin, "-p", config], { cwd: dir, timeoutMs: 5 * 60_000 });
+      info(`types: ${version} -p ${config} exit 0 (skipLibCheck false, ${written} specifiers)`);
       passed++;
     }
   }
-  return passed;
+  if (passed !== compilers.length * configs.length) throw new Error(`types: ${passed} of ${compilers.length * configs.length} compiler runs passed`);
+  return written;
 }
 
 const FIXTURES = { node: nodeFixture, next: nextFixture, rn: rnFixture, types: typesFixture };
@@ -310,28 +394,30 @@ async function main() {
     console.error(`pack-proof: ${e.message}`);
     return 1;
   }
-  let keep = args.keep;
+  // The scratch directory is removed on success AND on failure (a killed run too, best effort); `--keep` keeps it, and says where.
+  // A failure prints the tail of what failed, so nothing needs the directory to be read.
+  const keep = args.keep;
+  installSignalCleanup({ dir: scratchRoot, keep: () => keep, before: () => { for (const child of running) child.kill("SIGTERM"); } });
   try {
     const pnpm = resolvePnpm(scratchRoot);
     console.log(`pack-proof: pnpm ${pnpm.version} (${pnpm.label}), node ${process.version}, scratch ${scratchRoot}`);
     const ctx = { pnpm, scratchRoot, tarball: undefined };
-    ctx.tarball = buildAndPack(ctx);
+    ctx.tarball = await buildAndPack(ctx);
     const names = args.only === undefined ? FIXTURE_NAMES : [args.only];
     const { results, failures } = await runFixtures(names, FIXTURES, ctx, (line) => console.log(line));
     for (const f of failures) console.error(`\n${f.name}: FAILED\n${f.error.message}`);
     if (failures.length > 0) {
-      keep = true;
-      console.error(`\npack-proof: ${failures.length} of ${names.length} fixture(s) failed (${failures.map((f) => f.name).join(", ")}); scratch kept at ${scratchRoot}`);
+      console.error(`\npack-proof: ${failures.length} of ${names.length} fixture(s) failed (${failures.map((f) => f.name).join(", ")}); re-run with --keep to keep the scratch directory`);
       return 1;
     }
     console.log(`pack-proof: ${results.length} fixture(s) green in ${Math.round((Date.now() - started) / 1000)}s`);
     return 0;
   } catch (e) {
-    keep = true;
-    console.error(`pack-proof: ${e instanceof Error ? e.message : String(e)}\n(scratch kept at ${scratchRoot})`);
+    console.error(`pack-proof: ${e instanceof Error ? e.message : String(e)}\n(re-run with --keep to keep the scratch directory)`);
     return 1;
   } finally {
-    if (!keep) rmSync(scratchRoot, { recursive: true, force: true });
+    if (keep) console.log(`pack-proof: scratch kept at ${scratchRoot}`);
+    else rmSync(scratchRoot, { recursive: true, force: true });
   }
 }
 
