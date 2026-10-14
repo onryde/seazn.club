@@ -67,17 +67,38 @@ export function ApiKeysPanel({
   const [minted, setMinted] = useState<{ name: string; secret: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const fetchKeys = useCallback(() => v1<ApiKeyRow[]>(`/api/v1/orgs/${orgId}/api-keys`), [orgId]);
+  const loadFailed = useCallback(
+    (err: unknown) => setError(err instanceof Error ? err.message : msg("apiKeys.loadFailed")),
+    [msg],
+  );
+
+  /** Re-read after a create/revoke (an event, so awaiting in place is fine). */
   const load = useCallback(async () => {
     try {
-      setKeys(await v1<ApiKeyRow[]>(`/api/v1/orgs/${orgId}/api-keys`));
+      setKeys(await fetchKeys());
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("apiKeys.loadFailed"));
+      loadFailed(err);
     }
-  }, [orgId, msg]);
+  }, [fetchKeys, loadFailed]);
 
+  // The first read: the effect owns the request and sets state only from its
+  // callbacks, and a superseded request (another org, an unmount) is ignored
+  // rather than landing on whatever is mounted now.
   useEffect(() => {
-    void load();
-  }, [load]);
+    let ignore = false;
+    fetchKeys().then(
+      (rows) => {
+        if (!ignore) setKeys(rows);
+      },
+      (err: unknown) => {
+        if (!ignore) loadFailed(err);
+      },
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [fetchKeys, loadFailed]);
 
   async function create() {
     setBusy(true);

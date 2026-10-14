@@ -116,6 +116,22 @@ async function api(path: string, body: unknown): Promise<{ ok: boolean; error?: 
   return { ok: res.ok && json.ok !== false, error: json.error };
 }
 
+/** The panel's two reads, as data — no state. */
+async function fetchGroupsAndOffers(): Promise<{ groups: Group[]; offers: Offer[] }> {
+  const [gRes, oRes] = await Promise.all([
+    fetch("/api/billing/groups"),
+    fetch("/api/billing/group/transfer"),
+  ]);
+  const gJson = (await gRes.json().catch(() => ({}))) as { ok?: boolean; data?: Group[] };
+  const oJson = (await oRes.json().catch(() => ({}))) as { ok?: boolean; data?: Offer[] };
+  return {
+    groups: gJson.ok ? (gJson.data ?? []) : [],
+    // Offers are a Stripe round trip and can fail on their own; a broken offer
+    // list must not blank the organisation list, which is the panel's main job.
+    offers: oJson.ok ? (oJson.data ?? []) : [],
+  };
+}
+
 export function BillingGroupPanel({
   subscriptionId,
   currentUserId,
@@ -130,21 +146,26 @@ export function BillingGroupPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    const [gRes, oRes] = await Promise.all([
-      fetch("/api/billing/groups"),
-      fetch("/api/billing/group/transfer"),
-    ]);
-    const gJson = (await gRes.json().catch(() => ({}))) as { ok?: boolean; data?: Group[] };
-    const oJson = (await oRes.json().catch(() => ({}))) as { ok?: boolean; data?: Offer[] };
-    setGroups(gJson.ok ? (gJson.data ?? []) : []);
-    // Offers are a Stripe round trip and can fail on their own; a broken offer
-    // list must not blank the organisation list, which is the panel's main job.
-    setOffers(oJson.ok ? (oJson.data ?? []) : []);
+  function apply(loaded: { groups: Group[]; offers: Offer[] }) {
+    setGroups(loaded.groups);
+    setOffers(loaded.offers);
   }
 
+  /** Re-read after an action (an event, so awaiting in place is fine). */
+  async function load() {
+    apply(await fetchGroupsAndOffers());
+  }
+
+  // The first read: set from the request's own callback (never synchronously
+  // in the effect), and ignored if the panel unmounted while it was in flight.
   useEffect(() => {
-    void load();
+    let ignore = false;
+    void fetchGroupsAndOffers().then((loaded) => {
+      if (!ignore) apply(loaded);
+    });
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   if (groups === null) return null;

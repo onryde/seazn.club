@@ -706,13 +706,11 @@ function AddEntrantForm({
   // import). Otherwise the form is exactly the old "new entrant" flow.
   const teamKindAllowed = entrantModel.kinds.includes("team");
   const canExisting = teamKindAllowed && teams.length > 0;
-  const [mode, setMode] = useState<"existing" | "new">("new");
-  const [touched, setTouched] = useState(false);
   // Teams load after first paint; default to "existing" once available, but
-  // never override a mode the organiser explicitly picked.
-  useEffect(() => {
-    if (!touched) setMode(canExisting ? "existing" : "new");
-  }, [canExisting, touched]);
+  // never override a mode the organiser explicitly picked. Derived — the
+  // default follows `canExisting` in the same render, never one effect late.
+  const [picked, setPicked] = useState<"existing" | "new" | null>(null);
+  const mode = picked ?? (canExisting ? "existing" : "new");
 
   return (
     <form className="card space-y-3 p-4">
@@ -726,8 +724,7 @@ function AddEntrantForm({
                 type="button"
                 aria-pressed={mode === m}
                 onClick={() => {
-                  setTouched(true);
-                  setMode(m);
+                  setPicked(m);
                 }}
                 className={`rounded-md px-2.5 py-1 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 ${
                   mode === m ? "bg-purple-600 text-white" : "text-slate-500 hover:text-slate-800"

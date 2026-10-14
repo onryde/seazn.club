@@ -83,17 +83,37 @@ export function DeviceLinkPanel({
     }
   }
 
+  const fetchActive = useCallback(
+    () => apiV1<ActiveLink | null>(`/api/v1/fixtures/${fixtureId}/device-links`),
+    [fixtureId],
+  );
+
+  /** Re-read after an action (an event, so awaiting in place is fine). */
   const refresh = useCallback(async () => {
     try {
-      setActive(await apiV1<ActiveLink | null>(`/api/v1/fixtures/${fixtureId}/device-links`));
+      setActive(await fetchActive());
     } catch {
       // non-editor or transient — panel just shows the create button
     }
-  }, [fixtureId]);
+  }, [fetchActive]);
 
+  // The first read: set from the request's own callback (never synchronously
+  // in the effect); a superseded one — another fixture, an unmount — is
+  // ignored rather than showing the wrong fixture's link.
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let ignore = false;
+    fetchActive().then(
+      (link) => {
+        if (!ignore) setActive(link);
+      },
+      () => {
+        // non-editor or transient — panel just shows the create button
+      },
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [fetchActive]);
 
   async function showLink(link: ActiveLink & { secret: string }) {
     const url = `${window.location.origin}/score/${link.secret}`;

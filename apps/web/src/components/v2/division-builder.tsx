@@ -4,7 +4,7 @@
 // eligibility template → stage graph. Creates the division, then its stages,
 // then lands on the division console. Match-rule fields build the config
 // override object, validated server-side by the pinned module's configSchema.
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MatchRuleFields, SPORT_RULES, buildRuleOverride } from "./match-rules";
 import {
@@ -317,7 +317,8 @@ export function DivisionBuilder({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [explainOpen, setExplainOpen] = useState(false);
   const [previewCount, setPreviewCount] = useState(8);
-  const [preview, setPreview] = useState<PreviewPhase[] | null>(null);
+  /** The example on screen, tagged with the format knobs it was drawn for. */
+  const [shownPreview, setPreview] = useState<{ knobs: string; phases: PreviewPhase[] } | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
@@ -536,20 +537,25 @@ export function DivisionBuilder({
     setTab(TAB_ORDER[Math.min(tabIndex + 1, TAB_ORDER.length - 1)]!);
   }
 
-  // Any change to the format or its knobs invalidates a shown example.
-  useEffect(() => {
-    setPreview(null);
-  }, [template, qualified, swissRounds, poolCount, legs, standingsCarry]);
+  // Any change to the format or its knobs invalidates a shown example. The
+  // example carries the knobs it was drawn for, and one drawn for other knobs
+  // is dropped during render (not from an effect) — which also drops an answer
+  // that was still in flight when a knob moved, instead of showing the old
+  // format's draw under the new format's settings.
+  const knobs = JSON.stringify([template, qualified, swissRounds, poolCount, legs, standingsCarry]);
+  if (shownPreview && shownPreview.knobs !== knobs) setPreview(null);
+  const preview = shownPreview?.knobs === knobs ? shownPreview.phases : null;
 
   async function runPreview() {
     setPreviewError(null);
     setPreviewBusy(true);
+    const drawnFor = knobs;
     try {
       const { phases } = await apiV1<{ phases: PreviewPhase[] }>("/api/v1/format-preview", {
         method: "POST",
         json: { count: previewCount, stages: buildStages() },
       });
-      setPreview(phases);
+      setPreview({ knobs: drawnFor, phases });
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : msg("wizard.previewError"));
     } finally {

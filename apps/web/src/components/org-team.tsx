@@ -76,24 +76,52 @@ export function OrgTeam({
   >(null);
   const [linkRole, setLinkRole] = useState<InviteRole>("viewer");
 
-  const load = useCallback(async () => {
-    try {
-      const [m, inv] = await Promise.all([
+  /** Members, plus invites for an editor — as data, no state. */
+  const fetchTeam = useCallback(
+    () =>
+      Promise.all([
         api<OrgMember[]>(`/api/orgs/${orgId}/members`),
         isEditor
           ? api<OrgInvite[]>(`/api/orgs/${orgId}/invites`)
           : Promise.resolve([] as OrgInvite[]),
-      ]);
+      ]),
+    [orgId, isEditor],
+  );
+  const loadFailed = useCallback(
+    (e: unknown) => setError(e instanceof Error ? e.message : msg("settings.team.loadFailed")),
+    [msg],
+  );
+
+  /** Re-read after an action (an event, so awaiting in place is fine). */
+  const load = useCallback(async () => {
+    try {
+      const [m, inv] = await fetchTeam();
       setMembers(m);
       setInvites(inv);
     } catch (e) {
-      setError(e instanceof Error ? e.message : msg("settings.team.loadFailed"));
+      loadFailed(e);
     }
-  }, [orgId, isEditor, msg]);
+  }, [fetchTeam, loadFailed]);
 
+  // The first read: set from the request's own callbacks (never synchronously
+  // in the effect); a superseded request — another org, a role change, an
+  // unmount — is ignored instead of overwriting the current one.
   useEffect(() => {
-    load();
-  }, [load]);
+    let ignore = false;
+    fetchTeam().then(
+      ([m, inv]) => {
+        if (ignore) return;
+        setMembers(m);
+        setInvites(inv);
+      },
+      (e: unknown) => {
+        if (!ignore) loadFailed(e);
+      },
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [fetchTeam, loadFailed]);
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);

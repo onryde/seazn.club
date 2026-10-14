@@ -114,18 +114,41 @@ export function SponsorPackages({
     [orgId],
   );
 
+  /** Packages and orders, as data — no state. */
+  const fetchSponsorship = useCallback(
+    () =>
+      Promise.all([
+        api("/sponsor-packages") as Promise<PackageItem[]>,
+        api("/sponsor-orders") as Promise<OrderItem[]>,
+      ]),
+    [api],
+  );
+
+  /** Re-read after an action (an event, so awaiting in place is fine). */
   const load = useCallback(async () => {
-    const [pkgs, ords] = await Promise.all([
-      api("/sponsor-packages") as Promise<PackageItem[]>,
-      api("/sponsor-orders") as Promise<OrderItem[]>,
-    ]);
+    const [pkgs, ords] = await fetchSponsorship();
     setPackages(pkgs);
     setOrders(ords);
-  }, [api]);
+  }, [fetchSponsorship]);
 
+  // The first read, for a plan that has the feature: set from the request's
+  // own callback (never synchronously in the effect), ignored once
+  // superseded. A failed first read stays silent, as before.
   useEffect(() => {
-    if (hasMonetize) void load().catch(() => {});
-  }, [hasMonetize, load]);
+    if (!hasMonetize) return;
+    let ignore = false;
+    fetchSponsorship().then(
+      ([pkgs, ords]) => {
+        if (ignore) return;
+        setPackages(pkgs);
+        setOrders(ords);
+      },
+      () => {},
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [hasMonetize, fetchSponsorship]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);

@@ -62,24 +62,37 @@ export function incomingOnly<T extends { direction: "made_by_me" | "made_to_me" 
   return offers.filter((o) => o.direction === "made_to_me");
 }
 
+/** The offers addressed to this user, as data — no state. */
+async function fetchIncoming(): Promise<IncomingOffer[]> {
+  const res = await fetch("/api/billing/group/transfer");
+  const json = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    data?: IncomingOffer[];
+  };
+  return incomingOnly(json.ok ? (json.data ?? []) : []);
+}
+
 export function IncomingTransferOffers() {
   const msg = useMsg();
   const [incoming, setIncoming] = useState<IncomingOffer[]>([]);
   // The incoming offer whose card form is open (setup_intent_id), if any.
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
+  /** Re-read after an accept (an event, so awaiting in place is fine). */
   async function load() {
-    const res = await fetch("/api/billing/group/transfer");
-    const json = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      data?: IncomingOffer[];
-    };
-    const offers = json.ok ? (json.data ?? []) : [];
-    setIncoming(incomingOnly(offers));
+    setIncoming(await fetchIncoming());
   }
 
+  // The first read: set from the request's own callback (never synchronously
+  // in the effect), and ignored if the card unmounted while it was in flight.
   useEffect(() => {
-    void load();
+    let ignore = false;
+    void fetchIncoming().then((offers) => {
+      if (!ignore) setIncoming(offers);
+    });
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   // Nothing to hand you: the recipient card only exists while a live offer does.

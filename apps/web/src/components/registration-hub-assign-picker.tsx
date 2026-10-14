@@ -208,9 +208,13 @@ export function RegistrationHubAssignPicker({
     }
   }, [registrationId]);
 
-  useEffect(() => {
-    if (open) void load();
-  }, [open, load]);
+  // Opening the sheet is the event that reads the targets — fetched from the
+  // click itself, not from an effect watching `open`. One instance per
+  // registrant row, so `registrationId` is fixed for an open sheet.
+  function openSheet() {
+    setOpen(true);
+    void load();
+  }
 
   // Esc closes and focus returns to the button that opened it — the same
   // contract ConfirmProvider gives, so the two sheets behave identically.
@@ -312,7 +316,7 @@ export function RegistrationHubAssignPicker({
             ref={openerRef}
             data-registration-hub-assign-action="open"
             className="btn btn-primary text-xs"
-            onClick={() => setOpen(true)}
+            onClick={openSheet}
           >
             {msg("reg.hub.registrants.assign.cta")}
           </button>
