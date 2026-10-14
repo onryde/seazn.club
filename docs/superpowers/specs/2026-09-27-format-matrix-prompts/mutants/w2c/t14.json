@@ -218,7 +218,7 @@
  {
   "id": "t14-award-bye",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id);",
+  "find": "if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id, \"decided\");",
   "replace": "",
   "killers": [
    {
@@ -1080,6 +1080,231 @@
      "src/server/usecases/__tests__/fixture-rules.test.ts"
     ],
     "name": "a match PLAYED with no frozen cfg"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-undo-reads-code",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg(\"schedule.error.undoFailed\"));",
+  "replace": "return err instanceof Error ? err.message : msg(\"schedule.error.undoFailed\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "Undo: the refusal reads its dictionary sentence"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-rebuild-reads-code",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg(\"schedule.error.failed\"));",
+  "replace": "return err instanceof Error ? err.message : msg(\"schedule.error.failed\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "Rebuild: the refusal reads its dictionary sentence"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-act-reads-code",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "  if (rule !== null) return { tone: \"error\", text: rule, refresh: false };\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "classifyActError"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-lock-decided-bye",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id, \"decided\");",
+  "replace": "if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id, \"finished\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a bye \\(awardSeededByes"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-lock-finished",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "throw lockedRefusal(id, \"finished\");",
+  "replace": "throw lockedRefusal(id, \"decided\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "finalized → FIXTURE_FORMAT_LOCKED"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-fit-reason",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "    fit_reason: fitReasonOf(reason),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "P-4: a correction that would END the match is refused"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-own-format-no",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "{ fixture_id: hit.id, fixture_no: hit.fixture_no }",
+  "replace": "{ fixture_id: hit.id }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "rebuild: refused naming the match"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-save-refusal-no",
+  "file": "apps/web/src/server/usecases/award-rewrite.ts",
+  "find": "{ fixture_id: h.id, fixture_no: h.fixtureNo, fit_reason: fitReasonOf(reason) }",
+  "replace": "{ fixture_id: h.id }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "both doors refuse by name"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-stage-name",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "        { stage_name: stage.stage_name },\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules.test.ts"
+    ],
+    "name": "locks once a fixture in THAT stage has an event"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-reader-lock-reason",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "return sentence(code, { lock: x.reason === \"decided\" ? \"decided\" : \"finished\" }, m);",
+  "replace": "return sentence(code, {}, m);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "each code, with the extra its emitter sends"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-reader-fit-match",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "return match === undefined ? fit : m(RULE_ERROR_SUPPORT_KEYS.matchSays, { match, reason: fit });",
+  "replace": "return fit;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "each code, with the extra its emitter sends"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-reader-unknown-code",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "if (code === undefined || !isCode(code)) return null;",
+  "replace": "if (code === undefined) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "empty case first"
+   }
+  ]
+ },
+ {
+  "id": "b3-m1-server-is-dictionary",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "export const ruleErrorMessage = (code: RuleErrorCode, p: RuleErrorParams): string => sentence(code, p, enMsg);",
+  "replace": "export const ruleErrorMessage = (code: RuleErrorCode, p: RuleErrorParams): string => sentence(code, p, (key) => key);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "ruleErrorMessage reads each code's en sentence"
+   }
+  ]
+ },
+ {
+  "id": "b3-m2-writer-issues",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "issues: configIssuesOf({ issues }) ?? undefined",
+  "replace": "issues",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "cricket: a shorter innings is a format key per match"
+   }
+  ]
+ },
+ {
+  "id": "b3-m2-guard-issues",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "issues: configIssuesOf(parsed.error) ?? undefined",
+  "replace": "issues: parsed.error.issues",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "refused 422 naming the match"
    }
   ]
  }
