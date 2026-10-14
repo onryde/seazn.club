@@ -5,10 +5,12 @@
 // (R2) — and only one of the two players gets an answer. Every
 // refusal (anonymous 401, a stranger or another club's player 404, a fault) shows nothing. One venue (D3): the door
 // leads to OUR room, never to lichess.org.
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
 import { LOBBY_STATES, type ExternalPlayLobby } from "@/lib/external-play-lobby";
+import { routes } from "@/lib/routes";
 import { hasSessionHint } from "@/lib/session-hint";
 
 type Get = (url: string, init: RequestInit) => Promise<unknown>;
@@ -61,17 +63,28 @@ export function YourBoardCard({ view }: { view: ExternalPlayLobby }) {
         <p className="m-0 text-sm font-semibold text-ink">{t("externalPlay.yourBoard.title")}</p>
         <p className="m-0 text-sm text-ink-muted">{t(`externalPlay.yourBoard.state.${view.state}`)}</p>
       </div>
-      {view.roomPath !== null && (
-        // A plain <a>, never next/link: the room's camera policy is its DOCUMENT's (camera=(self) on the room only),
-        // so the door must be a full load — a soft navigation keeps this page's camera=() (online-chess-desk.spec).
-        <a
-          data-testid="your-board-link"
-          href={view.roomPath}
-          className="inline-flex min-h-11 shrink-0 items-center rounded-full bg-accent px-5 text-sm font-semibold text-accent-ink shadow-sm transition hover:opacity-90"
+      {/* T17B fix 2, D14: the room door first, the player's own home after it — side by side from sm, stacked
+          full-width on a phone. Player home shows in every state the card renders (it is the player's own card). */}
+      <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+        {view.roomPath !== null && (
+          // A plain <a>, never next/link: the room's camera policy is its DOCUMENT's (camera=(self) on the room only),
+          // so the door must be a full load — a soft navigation keeps this page's camera=() (online-chess-desk.spec).
+          <a
+            data-testid="your-board-link"
+            href={view.roomPath}
+            className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-accent px-5 text-sm font-semibold text-accent-ink shadow-sm transition hover:opacity-90"
+          >
+            {t("externalPlay.yourBoard.cta")}
+          </a>
+        )}
+        <Link
+          data-testid="your-board-home"
+          href={routes.me()}
+          className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-full border border-zinc-300 bg-surface px-5 text-sm font-semibold text-ink transition hover:border-accent hover:text-accent-strong"
         >
-          {t("externalPlay.yourBoard.cta")}
-        </a>
-      )}
+          {t("externalPlay.yourBoard.home")}
+        </Link>
+      </div>
     </section>
   );
 }

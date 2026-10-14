@@ -5974,6 +5974,7 @@
   "externalPlay.watch.list.starting": "A punto de empezar",
   "externalPlay.yourBoard.title": "Tu tablero",
   "externalPlay.yourBoard.cta": "Ir a tu tablero",
+  "externalPlay.yourBoard.home": "Página de jugador",
   "externalPlay.yourBoard.state.online_chess_off": "El juego en línea no está disponible para esta partida ahora mismo.",
   "externalPlay.yourBoard.state.not_opened": "Tu ronda aún no se ha abierto. Recibirás un correo cuando se abra.",
   "externalPlay.yourBoard.state.before": "Tu tablero se abre poco antes de tu partida.",

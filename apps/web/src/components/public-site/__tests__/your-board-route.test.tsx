@@ -105,7 +105,10 @@ describe.skipIf(!HAS_DB)("Your board ← the real lobby route", () => {
     const off = await island(s.fixtureId);
     expect(off.view).toEqual({ state: "online_chess_off", roomPath: null });
     expect(off.html).toContain('data-state="online_chess_off"');
-    expect(off.html).not.toContain("<a");
+    // No door into a room; D14's Player home link is in every state, so "no <a> at all" no longer holds.
+    expect(off.html).not.toContain('data-testid="your-board-link"');
+    expect(off.html).not.toContain('="/shared/');
+    expect(off.html).toContain('data-testid="your-board-home"');
 
     await gameOnFile(s);
     const on = await island(s.fixtureId);

@@ -5974,6 +5974,7 @@
   "externalPlay.watch.list.starting": "Va commencer",
   "externalPlay.yourBoard.title": "Votre échiquier",
   "externalPlay.yourBoard.cta": "Aller à votre échiquier",
+  "externalPlay.yourBoard.home": "Espace joueur",
   "externalPlay.yourBoard.state.online_chess_off": "Le jeu en ligne n'est pas disponible pour ce match pour le moment.",
   "externalPlay.yourBoard.state.not_opened": "Votre ronde n'a pas encore été ouverte. Vous recevrez un e-mail à son ouverture.",
   "externalPlay.yourBoard.state.before": "Votre échiquier ouvre peu avant votre partie.",

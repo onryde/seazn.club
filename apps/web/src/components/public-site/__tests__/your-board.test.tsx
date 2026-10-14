@@ -20,6 +20,7 @@ import { t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { ApiV1Error } from "@/lib/client-v1";
 import { LOBBY_STATES, type ExternalPlayLobby } from "@/lib/external-play-lobby";
+import { routes } from "@/lib/routes";
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 type Loc = (typeof LOCALES)[number];
@@ -107,7 +108,9 @@ describe("YourBoardCard — every lobby state", () => {
       expect(h, state).toContain(`data-testid="your-board" data-state="${state}"`);
       expect(h, state).toContain(esc(s("en", `externalPlay.yourBoard.state.${state}`)));
       if (state === "online_chess_off") {
-        expect(h, `${state}: a plain state, no door`).not.toContain("<a");
+        // No door into a room (D14 adds the player-home link to every state, so "no <a> at all" no longer holds).
+        expect(h, `${state}: a plain state, no door`).not.toContain('data-testid="your-board-link"');
+        expect(h, `${state}: no room path`).not.toContain('="/shared/');
       } else {
         expect(h, state).toMatch(new RegExp(`<a[^>]*data-testid="your-board-link"[^>]*href="${ROOM}"|<a[^>]*href="${ROOM}"[^>]*data-testid="your-board-link"`));
         expect(h, state).toContain(esc(s("en", "externalPlay.yourBoard.cta")));
@@ -116,6 +119,38 @@ describe("YourBoardCard — every lobby state", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every lobby state").toBe(LOBBY_STATES.length);
+  });
+
+  // T17B fix 2, D14 (owner, 2026-10-14): a second, quieter way out — the signed-in player's own home. Shown in EVERY
+  // state the card renders (it is the player's, whatever the board is doing — "off" included), after the room door.
+  it("D14: in every lobby state the card also leads to the player's home — routes.me(), after the room door", () => {
+    let checked = 0;
+    for (const state of LOBBY_STATES) {
+      const h = card(answer(state));
+      const tags = h.match(/<a[^>]*data-testid="your-board-home"[^>]*>/g) ?? [];
+      expect(tags, `${state}: one player-home link`).toHaveLength(1);
+      expect(tags[0], state).toContain(`href="${routes.me()}"`);
+      expect(h, state).toContain(`>${esc(s("en", "externalPlay.yourBoard.home"))}</a>`);
+      if (state !== "online_chess_off") {
+        expect(h.indexOf('data-testid="your-board-link"'), `${state}: the room door comes first`).toBeGreaterThan(-1);
+        expect(h.indexOf('data-testid="your-board-link"'), `${state}: the room door comes first`).toBeLessThan(
+          h.indexOf('data-testid="your-board-home"'),
+        );
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every lobby state").toBe(LOBBY_STATES.length);
+  });
+
+  it("D14: the link is named as the player home names itself, in all four locales (the owner's words in English)", () => {
+    expect(s("en", "externalPlay.yourBoard.home")).toBe("Player home");
+    let checked = 0;
+    for (const loc of LOCALES) {
+      expect(s(loc, "externalPlay.yourBoard.home"), loc).toBe(s(loc, "me.eyebrow"));
+      expect(card(answer("check_in"), loc), loc).toContain(`>${esc(s(loc, "externalPlay.yourBoard.home"))}</a>`);
+      checked += 1;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 
   it("every state's sentence exists in all four locales, each in its own words", () => {
