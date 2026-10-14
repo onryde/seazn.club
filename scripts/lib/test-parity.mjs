@@ -1,11 +1,11 @@
-// scripts/test-parity.mjs
+// scripts/lib/test-parity.mjs
 // The same tests before and after a move, or every difference accounted for in a ledger (engine-split spec §5.4, D23, D32a).
 // Collect ids with `vitest run -t "__parity_collect_only__" --reporter=json`: no test body runs, every collected test
 // (it.skip / skipIf / todo included) is reported. `vitest list --json` drops skipped tests, so it is not used.
 // Exit codes: 0 everything accounted, 1 ids unaccounted, 2 invalid or vacuous input.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "./main-module.ts";
 
 const SEP = " › ";
 const NEEDS_TARGET = new Set(["moved", "rehomed", "split", "rewritten"]);

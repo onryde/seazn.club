@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { diffIds, testIds, type LedgerEntry } from "../test-parity.mjs";
+import { diffIds, testIds, type LedgerEntry } from "../lib/test-parity.mjs";
 
 type T = { path: string[]; status?: string };
 const report = (root: string, files: Record<string, T[]>) => ({
@@ -222,7 +222,7 @@ describe("testIds — a collection that did not collect is not a collection", ()
 // The CLI is the product: the library functions are exercised above, but exit codes, the `--ledger` plumbing, the
 // argument grammar and the entry-script check are only real when the script is spawned.
 describe("test-parity CLI (spawned)", () => {
-  const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "test-parity.mjs");
+  const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "lib", "test-parity.mjs");
   // One spawn's cap, and the budget derived from it (AGENTS.md class 20): a flat test timeout beside a derived cost is a latent red.
   const SPAWN_MS = 25_000;
   const SLACK_MS = 5_000;
