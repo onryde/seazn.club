@@ -514,7 +514,7 @@
   ]
  },
  {
-  "id": "t13-fr1-gates-before-delete",
+  "id": "t13-fr1-replace-gates-removed",
   "file": "apps/web/src/server/usecases/stages.ts",
   "find": "never in one.\n  const stageCap = await assertStageBatchGates(auth, divComp, inputs);\n",
   "replace": "never in one.\n  const stageCap = await getLimit(auth.orgId, \"stages.per_division.max\", divComp.competition_id);\n",
@@ -710,7 +710,7 @@
     "files": [
      "src/server/usecases/__tests__/stage-points.test.ts"
     ],
-    "name": "replaceStages asks the same questions of a body's points BEFORE its delete"
+    "name": "replaceStages asks the same questions of a body's points: refused"
    }
   ]
  },
@@ -739,7 +739,7 @@
     "files": [
      "src/server/usecases/__tests__/stage-defaults.test.ts"
     ],
-    "name": "refuses an invalid rules body BEFORE the delete"
+    "name": "refuses an invalid rules body: the existing graph stands"
    }
   ]
  },
@@ -770,6 +770,51 @@
      "src/server/usecases/__tests__/stage-points.test.ts"
     ],
     "name": "the removal arm"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr3-in-tx-lock-recheck",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await assertFormatUnlocked(tx, divisionId);\n    // Per-stage match-rules overrides survive the delete",
+  "replace": "    // Per-stage match-rules overrides survive the delete",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "a fixture committed while Apply waits on the division lock"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr3-advisory-lock",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await tx`select pg_advisory_xact_lock(hashtext(${\"division:\" + divisionId}))`;\n    await assertFormatUnlocked(tx, divisionId);\n",
+  "replace": "    await assertFormatUnlocked(tx, divisionId);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "a fixture committed while Apply waits on the division lock"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr3-pooled-read-in-tx",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await tx`delete from stages where division_id = ${divisionId}`;\n    // R-T13-3:",
+  "replace": "    await sql`select 1`;\n    await tx`delete from stages where division_id = ${divisionId}`;\n    // R-T13-3:",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/pool-nesting-tripwire.test.ts"
+    ],
+    "name": "replaceStages completes against a one-slot pool"
    }
   ]
  }

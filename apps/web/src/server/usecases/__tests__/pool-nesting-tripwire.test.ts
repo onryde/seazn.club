@@ -36,7 +36,7 @@ import {
   setEntrantBadge,
   syncEntrantRosterFromSquad,
 } from "@/server/usecases/entrants";
-import { createStages, deleteStage } from "@/server/usecases/stages";
+import { createStages, deleteStage, replaceStages } from "@/server/usecases/stages";
 import { putScheduleSettings } from "@/server/usecases/schedule";
 import { buildDivisionDocModel } from "@/server/usecases/exports";
 import { importEvents } from "@/server/usecases/event-import";
@@ -317,6 +317,23 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
     );
 
     expect(stages[0]?.name).toBe("L2");
+  });
+
+  it("replaceStages completes against a one-slot pool", async () => {
+    const { auth, divisionId, stageId } = await seedDivision();
+
+    // The pre-read, the pooled gates and the one delete-and-recreate transaction, each finished before the next.
+    const stages = await withOneSlotPool("replaceStages", () =>
+      replaceStages(auth, divisionId, [
+        { seq: 1, kind: "league", name: "R1", config: {} },
+        { seq: 2, kind: "league", name: "R2", config: {} },
+      ]),
+    );
+
+    expect(stages.map((s) => s.name)).toEqual(["R1", "R2"]);
+    const ids = (await sql<{ id: string }[]>`select id from stages where division_id = ${divisionId}`).map((r) => r.id);
+    expect(ids.length).toBe(2);
+    expect(ids, "the seeded stage was replaced").not.toContain(stageId);
   });
 
   it("deleteStage completes against a one-slot pool", async () => {

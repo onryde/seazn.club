@@ -267,7 +267,7 @@ describe("the API takes config.rules and refuses a top-level stage decider (gree
 });
 
 describe.skipIf(!HAS_DB)("gap hunt: createStages and replaceStages refuse a top-level decider from an internal caller, writing nothing", () => {
-  it("createStages refuses config.shootout (no stage written); replaceStages refuses it BEFORE the delete (the graph stands)", async () => {
+  it("createStages refuses config.shootout (no stage written); replaceStages refuses it and the graph stands (the delete rolls back)", async () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
     // An internal caller passes the config the API schema would have refused (no zod in front of a usecase).
@@ -586,7 +586,7 @@ describe.skipIf(!HAS_DB)("Review Focus 5: replaceStages carries the organiser's 
     expect(bySeq2.get(3), "a new table slot carries nothing").toBeUndefined();
   });
 
-  it("refuses an invalid rules body BEFORE the delete: the existing graph stands", async () => {
+  it("refuses an invalid rules body: the existing graph stands (the delete rolls back with the refusal)", async () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
     const created = await createStages(auth, divisionId, [

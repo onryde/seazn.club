@@ -430,7 +430,7 @@ describe.skipIf(!HAS_DB)("ST-G8 the create door asks the same questions, writing
     expect((await stageConfig(ok!.id)).points).toMatchObject(base);
   });
 
-  it("replaceStages asks the same questions of a body's points BEFORE its delete: refused, the original stages untouched", async () => {
+  it("replaceStages asks the same questions of a body's points: refused, the delete rolls back, the original stages untouched", async () => {
     const auth = await seedOrg("pro");
     const bd = await seedDivision(auth, "badminton", "short");
     await seedStage(auth, bd.divisionId, 1, "league");
@@ -519,7 +519,7 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
     expect(await stageIds(divisionId), "the 402 left the stage as it was").toEqual(before);
   });
 
-  it("a carried rule the division can no longer express is refused BEFORE the delete, the stages untouched; cleared, Apply lands", async () => {
+  it("a carried rule the division can no longer express is refused and the delete rolls back, the stages untouched; cleared, Apply lands", async () => {
     const auth = await seedOrg("pro");
     const ih = mod("icehockey");
     expect(pointsRuleExpressible(variantCfg(ih, "recreational")).ok, "premise").toBe(true);
@@ -537,7 +537,7 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
       code: "POINTS_RULE_INEXPRESSIBLE",
       extra: { keys: want.ok ? [] : want.keys },
     });
-    expect(await stageIds(divisionId), "refused before the delete: the same stage row").toEqual(before);
+    expect(await stageIds(divisionId), "refused, the delete rolled back: the same stage row").toEqual(before);
     expect((await stageConfig(s)).points).toMatchObject(base);
     // Sequence: the organiser clears the stage's points, and the same Apply lands.
     await putStageRules(auth, s, { points: null });

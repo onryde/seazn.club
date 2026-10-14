@@ -219,3 +219,50 @@ describe.skipIf(!HAS_DB)("fix round 2 (c): Apply on a LOCKED division answers FO
     await expect(replaceStages(auth, open.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 402 });
   });
 });
+
+/** Backends waiting on a lock `pid` holds (the departed-seat-stage-lock.test.ts witness). */
+async function waitersOn(pid: number): Promise<number[]> {
+  const rows = await sql<{ pid: number }[]>`select pid from pg_locks where not granted and ${pid} = any(pg_blocking_pids(pid))`;
+  return [...new Set(rows.map((r) => r.pid))];
+}
+
+/** A bounded poll on database state — it proves a wait, it never stands in for one. */
+async function until(what: string, done: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!(await done())) {
+    if (Date.now() > deadline) throw new Error(`timed out: ${what}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+describe.skipIf(!HAS_DB)("fix round 3 N1: the FORMAT_LOCKED check UNDER the division lock is the guard, not the pre-read", () => {
+  it("a fixture committed while Apply waits on the division lock is read under it: 409 FORMAT_LOCKED, the stages and the fixture intact", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId, before } = await seededGraph(auth);
+    let apply!: Promise<unknown>;
+    let settled = false;
+    let fixtureId = "";
+    await sql.begin(async (holder) => {
+      // The exact key replaceStages takes (and patchDivision, and the generators): hashtext('division:' || id).
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+      const [held] = await holder<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      apply = replaceStages(auth, divisionId, [league(1)]);
+      apply.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      // Its pre-read finds no fixture (none exists yet) and lets it through to the gates; it then parks on this lock.
+      await until("Apply parks behind the held division lock", async () => (await waitersOn(held!.pid)).length === 1);
+      expect(settled, "Apply is blocked on the lock, not finished").toBe(false);
+      // A fixture lands while Apply waits, as a generator holding the same lock writes one.
+      const [f] = await holder<{ id: string }[]>`
+        insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+        values (${before[0]!}, ${divisionId}, ${auth.orgId}, 1, 0, 'race', 'scheduled') returning id`;
+      fixtureId = f!.id;
+    }); // commits: Apply takes the lock and must read the fixture that exists now
+    await expect(apply).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+    expect(await stageIds(divisionId), "the stage graph stands").toEqual(before);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where id = ${fixtureId}`;
+    expect(n, "the fixture the delete would have cascaded away is still there").toBe(1);
+  });
+});

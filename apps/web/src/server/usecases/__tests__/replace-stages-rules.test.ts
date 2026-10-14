@@ -6,7 +6,8 @@
 // The ruling: preserve inside `replaceStages` itself, keyed on the stage SLOT,
 // so it holds for every caller rather than for whichever screen we remembered
 // to patch. Since W2c Task 12 a body MAY carry `config.rules` (validated as the
-// stage PUT validates a save, BEFORE the delete), laid over the carried rules;
+// stage PUT validates a save, in the delete's own transaction, so a refusal
+// rolls the delete back — R-T13-3), laid over the carried rules;
 // a matched slot's carry takes the place of its preset, so a cleared key stays
 // cleared, and only a new slot starts from the preset (stage-defaults.test.ts,
 // Review Focus 5 and R-T12-4; tennis, here, has no preset).
@@ -148,10 +149,9 @@ describe.skipIf(!HAS_DB)("replaceStages carries per-stage rules forward", () => 
     const before = await stageBySeq(divisionId);
     await putStageRules(auth, before.get(1)!.id, { rules: { bestOf: 1 } });
 
-    // The refusal has to happen BEFORE the delete, not inside the createStages
-    // this function delegates to: that call runs in its own transaction, so a
-    // refusal there would land after every stage in the division was already
-    // dropped.
+    // The refusal rolls the delete back: replaceStages deletes and recreates in
+    // ONE transaction (R-T13-3), so a refusal raised by the recreate leaves
+    // every stage the division had.
     await expect(
       replaceStages(auth, divisionId, [
         { seq: 1, kind: "league" as const, name: "League", config: { rules: { bestOff: 3 } }, progression: null },
