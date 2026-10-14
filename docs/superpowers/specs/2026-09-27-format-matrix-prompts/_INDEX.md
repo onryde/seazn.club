@@ -1427,6 +1427,22 @@ Elsewhere the text is the controller's record.
      Prep: `.superpowers/handoff/2026-10-08-w1d-close/` (split prompt, per-wave engine/web map, runner research).
      Rule rows: none (sequencing).
 
+132. **The chess tie-break list is an ordered menu** (2026-10-14, owner "2 Ok"). BG-KO-1 says a drawn game goes to the
+     stage's rungs "in order". The engine cannot enforce that order: rapid and blitz events always carry a winner and an
+     Armageddon always decides, so it never learns a rung ended level, and enforcing would accept only the first rung.
+     The pad offers the rungs in the organiser's order; the engine refuses a rung NOT in the list, not one out of order.
+     A "rung ended level" fact (event schema + goldens + pad + matrix) was offered and not taken.
+     Rule rows: BG-KO-1 citation amended.
+133. **"Share the points" on an abandon is a table stage's** (2026-10-14, owner "3. Ok"). In a bracket stage the
+     `share` policy is ignored and the abandon is held for the organiser to settle (W2a ruling 72), never refused or
+     drawn (W2c Task 7 fix round, I3).
+     Rule rows: GN-AB-2 and CA-AB-2 re-worded "in a table stage … in a knockout the abandon is held for the organiser to
+     settle".
+134. **Run-sheet filters hiding untimed held rows go to the competition desk** (2026-10-14, owner "4 Ok"). Pre-existing:
+     "Today" and "Needs result" never show an untimed held row. Owed in
+     `docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md`.
+     Rule rows: none.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.

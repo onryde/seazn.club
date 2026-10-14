@@ -919,7 +919,7 @@ async function awardFold(w: Awaited<ReturnType<typeof withdrawnWinnerWalkover>>,
   return awardedMatchState(mod("badminton"), cfg, lineups, outcome, { fixtureId: w.id, recordedAt: new Date().toISOString() });
 }
 
-describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 1 ruling)", () => {
+describe.skipIf(!HAS_DB)("X-SR-5 I1 a match decided without play is started (fix round 1 ruling)", () => {
   it("a bye (awardSeededByes, an odd draw) credits no score and records nothing: fitting does not apply — FIXTURE_FORMAT_LOCKED, nothing written", async () => {
     const odd = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 6 });
     const byes = (await rowsOf(odd.stageId)).filter((r) => r.outcome?.reason === "bye");

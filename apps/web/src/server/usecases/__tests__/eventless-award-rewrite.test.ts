@@ -141,7 +141,7 @@ async function expectStoredIsTheFold(w: Walkover, label: string) {
 const currentConfig = async (divisionId: string) =>
   (await sql<{ c: Record<string, unknown> }[]>`select config c from divisions where id = ${divisionId}`)[0]!.c;
 
-describe.skipIf(!HAS_DB)("I1 a format save re-writes the walkovers no event records", () => {
+describe.skipIf(!HAS_DB)("X-SR-5 I1 a format save re-writes the walkovers no event records", () => {
   it("badminton, the STAGE door: a stage-rules save moving bestOf re-writes the F14 walkover's score under the new format; clearing the rules re-writes it back", async () => {
     // single-sport: the stage door serves the set sports only (STAGE_RULES_SPORTS) until Task 11; the division door is swept below.
     const w = await f14Walkover("badminton", "bwf");
