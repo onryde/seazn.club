@@ -17,7 +17,7 @@ import { sql, withTenant } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { CreateStage } from "@/server/api-v1/schemas";
+import { CreateStage, StageConfig } from "@/server/api-v1/schemas";
 import { appendEvent, type AppendResult } from "@/server/engine-db";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { createCompetition } from "../competitions";
@@ -25,7 +25,6 @@ import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { validatedStageConfig } from "../stage-defaults";
-import { STAGE_DECIDER_KEYS } from "@/server/engine-db/stage-cfg";
 import { putStageRules } from "../stage-rules";
 import { decidersOffRules } from "../../../../e2e/stage-deciders";
 
@@ -249,20 +248,42 @@ describe("the API takes config.rules and refuses a top-level stage decider (gree
 
   // Fix round 2 (review gap hunt): zod guards the API only. An INTERNAL caller (a usecase, a script, a template) reaches
   // `validatedStageConfig` with no schema in front of it, so the door itself refuses a top-level decider by name.
-  it("gap hunt: the create door itself refuses a top-level stage decider from any caller, by name; inside `rules` it lands", () => {
+  // W2c Task 13b (R-13b-1): the refused set is the ENGINE's — every whole decider any sport declares — not the retired
+  // bridge list, so a key that is a decider only through the engine (ice hockey's `overtime`, carrom's `tieBoard`) is
+  // refused the same way. Swept over every sport, each with every decider key.
+  it("gap hunt: the create door itself refuses a top-level stage decider from any caller, by name, for every decider the engine declares; inside `rules` it lands", () => {
+    const deciders = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))];
+    expect(deciders, "the API schema's two named keys are engine deciders").toEqual(expect.arrayContaining(["shootout", "extraTime"]));
+    expect(deciders.filter((k) => k !== "shootout" && k !== "extraTime"), "a decider only through the engine").toContain("overtime");
     let checked = 0;
-    const division = football.configSchema.parse(football.variants["11-a-side"]);
-    for (const key of STAGE_DECIDER_KEYS) {
-      expect(() => validatedStageConfig(football, "football", "knockout", "11-a-side", division, { [key]: false }), key).toThrow(
-        expect.objectContaining({ status: 400, code: "VALIDATION", extra: { field: `config.${key}` } }),
-      );
-      expect(() => validatedStageConfig(football, "football", "knockout", "11-a-side", division, { [key]: false }), key).toThrow(/config\.rules/);
-      checked++;
+    for (const m of builtinModules as readonly AnySportModule[]) {
+      const variant = Object.keys(m.variants)[0]!;
+      const division = m.configSchema.parse(m.variants[variant]);
+      for (const key of deciders) {
+        const call = () => validatedStageConfig(m, m.key, "knockout", variant, division, { [key]: false });
+        expect(call, `${m.key}: ${key}`).toThrow(expect.objectContaining({ status: 400, code: "VALIDATION", extra: { field: `config.${key}` } }));
+        expect(call, `${m.key}: ${key}`).toThrow(/config\.rules/);
+        checked++;
+      }
     }
-    expect(checked, "anti-vacuity").toBe(STAGE_DECIDER_KEYS.length);
+    expect(checked, "anti-vacuity: every sport x every decider").toBe(builtinModules.length * deciders.length);
     expect(checked).toBeGreaterThan(0);
+    const division = football.configSchema.parse(football.variants["11-a-side"]);
     const ok = validatedStageConfig(football, "football", "knockout", "11-a-side", division, { rules: { shootout: false } });
     expect((ok.rules as Record<string, unknown>).shootout, "the positive pair: the same decider inside rules").toBe(false);
+    const plain = validatedStageConfig(football, "football", "knockout", "11-a-side", division, { thirdPlace: true });
+    expect(plain.thirdPlace, "a top-level key that is no decider passes the door").toBe(true);
+  });
+
+  // The assumption the door's engine-derived set rests on, as a guard: no decider any sport declares is a stage config
+  // key of its own (a sport declaring a decider named `rounds` would make the door refuse every Swiss stage). The only
+  // overlap is the API's two named refusals, `z.never` in StageConfig.
+  it("guard: the engine's deciders never collide with a stage config key; only the two named refusals share a name", () => {
+    const deciders = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))];
+    const shape = StageConfig.unwrap().shape as Record<string, unknown>;
+    expect(Object.keys(shape).length, "anti-vacuity: the stage config declares keys").toBeGreaterThan(5);
+    expect(deciders.filter((k) => Object.hasOwn(shape, k)).sort()).toEqual(["extraTime", "shootout"]);
+    for (const k of ["shootout", "extraTime"]) expect(StageConfig.safeParse({ [k]: false }).success, `${k} is refused`).toBe(false);
   });
 });
 

@@ -11,7 +11,8 @@ import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
 import { hasFrozenCfg, resolveFixtureCfg } from "../fixture-cfg";
 
 const DIVISION = { bestOf: 3, points: { w: 3, d: 1, l: 0 }, shootout: null } as const;
-const STAGE = { shootout: { bestOf: 5 }, placements: { "1": [1, 2] } };
+/** W2c Task 13b (D3): a stage's decider lives in its `rules`; a top-level one is read by nothing. */
+const STAGE = { rules: { shootout: { bestOf: 5 } }, placements: { "1": [1, 2] } };
 /** The pre-W2a cases ride a LEAGUE stage: no bracket overlay, so they keep pinning the snapshot/live decision alone. */
 const league = (config: Record<string, unknown> | null | undefined) => ({ kind: "league", config });
 /** W2c D4: the resolver takes the fixture ROW. The pre-W2c cases carry no override (null), so they pin exactly what
@@ -44,7 +45,7 @@ describe("resolveFixtureCfg", () => {
     // stage now overlays a different shootout; a scored fixture must not notice.
     const snapshot = { bestOf: 3, points: { w: 3, d: 1, l: 0 }, shootout: { bestOf: 5 } };
     const movedDivision = { bestOf: 1, points: { w: 2, d: 0, l: 0 } };
-    const movedStage = { shootout: { bestOf: 9 } };
+    const movedStage = { rules: { shootout: { bestOf: 9 } } };
     expect(resolveFixtureCfg(row(snapshot), movedDivision, league(movedStage), generic)).toBe(snapshot);
   });
 

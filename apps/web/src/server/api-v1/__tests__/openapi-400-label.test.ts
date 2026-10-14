@@ -39,16 +39,19 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
     expect(op.summary).toContain("a new slot, or one whose kind changed, starts from its own kind's preset");
   });
 
-  it("PUT /divisions/{id}/stages documents R-T13-1's points carry and R-T13-2's refusals before the delete (Task 13 fix round 1)", () => {
+  // The refusal claim is the OBSERVABLE one (R-T13-3 made Apply one transaction, so "before the delete" no longer names the
+  // mechanism; Task 13b carry): whatever refuses, the stages the division had are still there.
+  it("PUT /divisions/{id}/stages documents R-T13-1's points carry and that a refused save leaves the existing stages untouched (Task 13 fix round 1, R-T13-3)", () => {
     const op = (buildOpenApiDocument().paths as Record<string, Record<string, Op>>)["/api/v1/divisions/{id}/stages"]!.put!;
     for (const claim of [
       "A matched slot also keeps its own `points`",
       "402 PAYMENT_REQUIRED",
       "409 for a `seq` the body names twice",
       "POINTS_RULE_INEXPRESSIBLE",
-      "is raised BEFORE the existing graph is deleted",
+      "a refused save leaves the existing stages untouched",
     ])
       expect(op.summary, claim).toContain(claim);
+    expect(op.summary, "the retired mechanism is not claimed").not.toContain("BEFORE the existing graph is deleted");
     expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(["400", "402", "409", "422"]));
   });
 

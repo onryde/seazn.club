@@ -16,6 +16,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
+import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -412,6 +413,32 @@ describe.skipIf(!HAS_DB)("carry I2 (Task 8 review): a stage save MERGES into the
     expect(bad.configSchema.safeParse({ setTo: 25, finalSetTo: 25 }).success, "the premise: setTo 25 alone is fine").toBe(true);
     await expect(putStageRules(auth, s, { rules: { setTo: 25, finalSetTo: 25 } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     expect(await rulesOf(s), "the refused save wrote nothing").toEqual({ cap: 21 });
+  });
+});
+
+// W2c Task 13b (D3): a stage's deciders are stored AND read under `config.rules` only. Football alone, because its
+// `shootout` is one of the two keys the retired top-level overlay read (the every-sport sweep is stage-cfg.test.ts's).
+describe.skipIf(!HAS_DB)("D3 (Task 13b): a stage's deciders resolve from its rules alone", () => {
+  it("D3 deciders live in rules; a top-level decider no longer reaches the resolved cfg", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
+    const s = await seedStage(auth, divisionId, 1, "knockout");
+    await putStageRules(auth, s, { rules: { shootout: false } });
+    expect((await stageConfig(s)).rules).toMatchObject({ shootout: false });
+    // A top-level value written straight to the row (no current writer can: the create door refuses it) is ignored.
+    await sql`update stages set config = config || ${sql.json({ shootout: true } as never)} where id = ${s}`;
+    expect((await stageConfig(s)).shootout, "the premise: the row carries a top-level shootout").toBe(true);
+    const football = mod("football");
+    const resolved = async (): Promise<{ shootout: boolean }> => {
+      const [row] = await sql<{ kind: string; config: Record<string, unknown>; division_config: unknown }[]>`
+        select s.kind, s.config, d.config as division_config from stages s join divisions d on d.id = s.division_id
+        where s.id = ${s}`;
+      return resolveFixtureCfg({ config_snapshot: null, rules_override: null }, row!.division_config, row!, football) as { shootout: boolean };
+    };
+    expect(await resolved()).toMatchObject({ shootout: false });
+    // The positive pair: the same decider saved under rules is what the stage plays, the top-level key still beside it.
+    await putStageRules(auth, s, { rules: { shootout: true } });
+    expect(await resolved()).toMatchObject({ shootout: true });
   });
 });
 
