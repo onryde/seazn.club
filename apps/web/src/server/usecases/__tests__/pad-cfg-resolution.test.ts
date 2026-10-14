@@ -181,7 +181,8 @@ describe.skipIf(!HAS_DB)("loadFixturePadCfg (design §T4)", () => {
     ) as Record<string, unknown>;
     expect(parsed.shootout).toBe(false); // the division default the stage must beat
 
-    const stageId = await seedStage(auth, divisionId, 1, { shootout: true });
+    // W2c Task 12 (D3): a stage's deciders are its match RULES; the create door refuses a top-level `shootout`.
+    const stageId = await seedStage(auth, divisionId, 1, { rules: { shootout: true } });
     await generateStageFixtures(auth, stageId);
 
     const cfg = (await loadFixturePadCfg(auth, await firstFixtureOf(stageId))).cfg as Record<
