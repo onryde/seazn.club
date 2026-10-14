@@ -817,7 +817,11 @@ describe.skipIf(!HAS_DB)("P5 per-sport fits / does-not-fit (spec §9 P5, X-SR-5)
       }
       const deciders = decidersOn(m, kind, variant);
       expect(m.configSchema.safeParse({ ...(m.configSchema.parse(m.variants[variant]) as object), ...deciders }).success, `${m.key}: the deciders parse`).toBe(true);
-      const b = await seedBracket({ sport: m.key, variant, stageKind: kind, entrants: 2, stageRules: deciders });
+      // Deciders ON: where the division already plays every one (ice hockey iihf), there is nothing to switch on, and
+      // the stage plays the division's own deciders on purpose ("division"); `{}` is seedBracket's HELD shorthand and is
+      // refused there by name (review M-4).
+      const stageRules = Object.keys(deciders).length === 0 ? ("division" as const) : deciders;
+      const b = await seedBracket({ sport: m.key, variant, stageKind: kind, entrants: 2, stageRules });
       const id = b.fixtureIds[0]!;
       await seedLineups(b, id, m, await padCfg(b, id));
       await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
