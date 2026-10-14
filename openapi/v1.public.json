@@ -5117,7 +5117,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -11796,7 +11796,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -12157,7 +12157,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -13408,7 +13408,7 @@
         ]
       },
       "post": {
-        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a knockout starts with its sport's deciders — football extra time 2x15 and a 5-kick shoot-out (3 in the youth formats), ice-hockey overtime and a shoot-out, the hockey shoot-out, the limited-overs super over; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`) and validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 POINTS_MAP_INCOMPLETE; nothing in the batch is written. A top-level `config.shootout` / `config.extraTime` is refused 400 (moved to `config.rules`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size",
+        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 POINTS_MAP_INCOMPLETE; nothing in the batch is written. A top-level `config.shootout` / `config.extraTime` is refused 400 (moved to `config.rules`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size",
         "tags": [
           "stages"
         ],
@@ -14476,7 +14476,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -14706,7 +14706,7 @@
         ]
       },
       "put": {
-        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST — its kind's preset, then the rules its slot already stored (kept when the same `seq` keeps the same `kind`; a slot whose kind changed starts from its own kind's preset), then the body's `config.rules` — and every refusal POST can raise from the body (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 422 CONFIG_INVALID / POINTS_MAP_INCOMPLETE / STAGE_SWISS_ROUNDS_REQUIRED) is raised BEFORE the existing graph is deleted",
+        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset — and every refusal POST can raise from the body (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 422 CONFIG_INVALID / POINTS_MAP_INCOMPLETE / STAGE_SWISS_ROUNDS_REQUIRED) is raised BEFORE the existing graph is deleted",
         "tags": [
           "stages"
         ],
@@ -15695,7 +15695,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -19008,7 +19008,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -32731,7 +32731,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -53899,7 +53899,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -71242,7 +71242,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -74408,7 +74408,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -76043,7 +76043,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -77136,7 +77136,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -79845,7 +79845,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
