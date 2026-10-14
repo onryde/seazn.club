@@ -512,7 +512,8 @@ export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, d
   const now = deps.now ?? new Date();
   let r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   await resetStaleBridge(r.f);
-  r = await resolveRoom(identity, fixtureId);
+  // Every read of the board in the seat call tells a re-pair (m2): an Unpair can land between any two of them.
+  r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   const bridge = effectiveBridge(r.f);
   const gameOnFile = bridge !== null && bridge.challenge_id !== null;
   const facts = await roomFacts(fixtureId);
@@ -536,7 +537,7 @@ export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, d
     const ci = await checkIns(r.f, r.home, r.away, anchor);
     if (ci.home && ci.away) create = await (deps.create ?? ((id: string) => createGameIfReady(id, { now })))(fixtureId);
   }
-  const fresh = await resolveRoom(identity, fixtureId);
+  const fresh = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   const snapshot = await compose(fresh, now, deps);
   // T9 checks the flag itself at the send (T20): its refusal is the latest
   // word on it, whatever the room's own read raced to (review m3).
