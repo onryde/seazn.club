@@ -915,9 +915,64 @@ describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 
       });
       expect((await row(bye.id)).rules_override).toBeNull();
       expect(await audit(bye.id)).toHaveLength(0);
+      // Re-sending the format it already plays changes nothing, so nothing is fitted (fix round 2): accepted, no bump.
+      await expect(writeFixtureRulesOverride(odd.auth, [bye.id], null)).resolves.toEqual({
+        fixtures: [{ id: bye.id, started: true, rules_version: 0 }],
+      });
+      expect((await row(bye.id)).rules_override).toBeNull();
       checked++;
     }
     expect(checked).toBe(byes.length);
+  });
+
+  it("an award that already carries its own format (fix round 2): a second correction refits from it, re-sending it rewrites nothing, and a CLEAR re-writes the credited score under the stage's format", async () => {
+    const w = await withdrawnWinnerWalkover();
+    const stage = await padCfg(w.b, w.id); // no override yet: the stage's format
+    const first = { setTo: BWF.setTo - 6, finalSetTo: BWF.finalSetTo - 6 };
+    const second = { setTo: BWF.setTo - 4, finalSetTo: BWF.finalSetTo - 4 };
+    const award0 = await awardRow(w.id);
+    const credited = award0.summary!.headline;
+    for (const f of [first, second])
+      expect((await awardFold(w, { ...stage, ...f })).summary.headline, `the premise: ${JSON.stringify(f)} keeps the credit`).toBe(credited);
+    const stateCfg = async () => ((await awardRow(w.id)).state as { cfg?: Record<string, unknown> }).cfg;
+    const stamp = async () => (await sql<{ u: Date }[]>`select updated_at u from match_states where fixture_id = ${w.id}`)[0]!.u.getTime();
+
+    await writeFixtureRulesOverride(w.b.auth, [w.id], first);
+    expect(await stateCfg()).toMatchObject(first);
+    // A second correction: judged against the format the award now plays (the first), stored as a whole replace.
+    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], second)).resolves.toEqual({ fixtures: [{ id: w.id, started: true, rules_version: 0 }] });
+    expect((await row(w.id)).rules_override).toEqual(second);
+    expect(await stateCfg(), "the score is re-written under the second").toMatchObject(second);
+    expect((await audit(w.id)).at(-1)!.payload).toMatchObject({ before: first, after: second, started: true });
+    // Re-sending it: the same format, so no fit and no re-write.
+    const t0 = await stamp();
+    await writeFixtureRulesOverride(w.b.auth, [w.id], second);
+    expect(await stamp(), "re-sending the format it plays re-writes nothing").toBe(t0);
+    // A CLEAR: back to the stage's format — the cached score with it, never left on the cleared override's.
+    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], null)).resolves.toEqual({ fixtures: [{ id: w.id, started: true, rules_version: 0 }] });
+    expect((await row(w.id)).rules_override).toBeNull();
+    const cleared = await awardRow(w.id);
+    expect((cleared.state as { cfg?: unknown }).cfg, "the score is re-written under the stage's format").toMatchObject({
+      setTo: stage.setTo,
+      finalSetTo: stage.finalSetTo,
+    });
+    expect(cleared.summary).toEqual((await awardFold(w, stage)).summary);
+    expect([cleared.status, cleared.outcome], "the award stands throughout").toEqual([award0.status, award0.outcome]);
+  }, 60_000);
+
+  it("a stored award its own fold cannot reproduce is refused by name (409), never a 500 — and nothing is written", async () => {
+    // Raw seed: an award naming a winner who holds neither seat — the walkover folds to the other side, so the stored
+    // award is not what its own format decides. Fitting does not apply: FIXTURE_FORMAT_LOCKED.
+    const b = await badmintonLeague();
+    const id = b.fixtureIds[0]!;
+    const { away } = await sides(id);
+    await sql`update fixtures set status = 'forfeited',
+                outcome = ${sql.json({ kind: "award", winner: randomUUID(), loser: away, reason: "withdrew" })} where id = ${id}`;
+    const before = await row(id);
+    const err = await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 409, code: "FIXTURE_FORMAT_LOCKED", extra: { fixture_id: id } });
+    expect(await row(id)).toEqual(before);
+    expect(await audit(id)).toHaveLength(0);
   });
 
   it("a withdrawal's walkover over her dead seat (ruling 116): a correction that changes the credited score is refused; one that keeps it fits — the award stands, its score is re-written under the new format, no version bump", async () => {
@@ -981,6 +1036,9 @@ describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 
     // …at the ledger's tip: the token every append is checked against (`writeAwardedMatchState`, Loop R M-17).
     expect((await sql<{ s: number }[]>`select last_seq s from match_states where fixture_id = ${w.id}`)[0]!.s).toBe(2);
     expect(await fixtureRow(next), "the arriving side keeps her next seat").toEqual(seatedNext);
+    // Re-sending it (fix round 2): the snapshot already holds it — no re-freeze, no second bump.
+    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], frag)).resolves.toEqual({ fixtures: [{ id: w.id, started: true, rules_version: 1 }] });
+    expect((await row(w.id)).rules_version).toBe(1);
     // …and one that changes the credited score is refused here too.
     await expect(writeFixtureRulesOverride(w.b.auth, [w.id], { bestOf: BWF.bestOf + 2 })).rejects.toMatchObject({ code: "FORMAT_DOES_NOT_FIT_PLAY" });
   }, 60_000);
