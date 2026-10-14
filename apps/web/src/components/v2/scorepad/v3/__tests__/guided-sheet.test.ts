@@ -1575,7 +1575,7 @@ describe("GuidedSheet — `layout: rows` (W2c Task 21 design pass)", () => {
       const classes = classesOf(row);
       for (const want of ["w-full", "rounded-xl", "text-left", "min-w-0", "break-words"]) expect(classes, `${id}: ${want}`).toContain(want);
       expect(classes, `${id}: a row, not a pill`).not.toContain("rounded-full");
-      expect((propsOf(row).style as { minHeight?: number }).minHeight, `${id}: the tap floor`).toBeGreaterThanOrEqual(44);
+      expect((propsOf(row).style as { minHeight?: number }).minHeight, `${id}: the rows layout's 48px floor (pills keep 44)`).toBe(48);
     }
     expect(textOf(rows[0]!), "the long name is the label, in full").toBe(DESIGN_LONG_NAME);
   });
