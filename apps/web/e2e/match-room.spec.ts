@@ -844,23 +844,20 @@ test("Seam B, online chess off: one calm card — no board, clocks or camera —
   await ctx.close();
 });
 
-test("T17B fix 2, D10: the organiser's No result before any game, then its void — the open room says the board is closed, never 'setting up', at every width; it asks for nothing, and a re-pair opens it again", async ({
+test("T17B fix 2, D10: the organiser's No result before any game, then its void — the room says the board is closed, never 'setting up', at every width; it asks for nothing, and a re-pair opens it again", async ({
   page,
   browser,
 }) => {
   test.setTimeout(120_000);
   const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
   const ctx = await cold(browser);
-  const p = await openRoom(ctx, room, room.white.token);
-  expect(await screenOf(p), "the pair: an open board is the check-in").toBe("checkin");
-  const posts: string[] = [];
-  p.on("request", (r) => {
-    if (r.method() === "POST" && /\/external-play\/room/.test(new URL(r.url()).pathname)) posts.push(new URL(r.url()).pathname);
-  });
+  const before = await openRoom(ctx, room, room.white.token);
+  expect(await screenOf(before), "the pair: an open board is the check-in").toBe("checkin");
   // The measured stg sequence (fixture 0a45d044), through the organiser's own APIs: No result, then the undo.
   const settled = await apiJson(page.request, `/api/v1/fixtures/${room.fixtureId}/external-play/resolve`, "POST", { kind: "no_result" });
   expect(settled.status, JSON.stringify(settled.error)).toBeLessThan(300);
-  await expect.poll(() => screenOf(p), { timeout: 25_000, message: "premise: the room reads the No result" }).toBe("over");
+  await expect.poll(() => screenOf(before), { timeout: 25_000, message: "premise: the room reads the No result" }).toBe("over");
+  await before.close();
   const abandon = await withDb(async (sql) => {
     const [e] = await sql<{ id: string; seq: number; type: string }[]>`
       select id, seq, type from score_events where fixture_id = ${room.fixtureId} order by seq desc limit 1`;
@@ -874,24 +871,36 @@ test("T17B fix 2, D10: the organiser's No result before any game, then its void 
   });
   expect(voided.status, JSON.stringify(voided.error)).toBeLessThan(300);
   expect((await bridgeRow(room.fixtureId))?.status, "premise: the bridge stays closed, with no game").toBe("finished");
-  await expect.poll(() => screenOf(p), { timeout: 25_000, message: "the next poll reads the closed board" }).toBe("boardClosed");
-  const card = p.getByTestId("room-state-board-closed");
-  await expect(card.getByRole("heading", { name: uiEn["externalPlay.room.state.boardClosed.title"]! })).toBeVisible();
-  await expect(card).toContainText(uiEn["externalPlay.room.state.boardClosed.body"]!);
-  await expect(card.getByTestId("room-back-to-fixture")).toHaveAttribute("href", room.fixturePath);
-  for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-checkin-cta", "room-controls", "room-state-creating"]) {
-    await expect(p.getByTestId(id), id).toHaveCount(0);
+  // The players open their rooms after the void — where stg hung on "Setting up" for good.
+  // Every page of this context, from before its first paint (a mount claim fires at hydration).
+  const posts: string[] = [];
+  ctx.on("request", (r) => {
+    if (r.method() === "POST" && /\/external-play\/room/.test(new URL(r.url()).pathname)) posts.push(new URL(r.url()).pathname);
+  });
+  const pages: Page[] = [];
+  let checked = 0;
+  for (const me of [room.white, room.black]) {
+    const p = await openRoom(ctx, room, me.token);
+    expect(await screenOf(p), "the first paint: the closed board").toBe("boardClosed");
+    const card = p.getByTestId("room-state-board-closed");
+    await expect(card.getByRole("heading", { name: uiEn["externalPlay.room.state.boardClosed.title"]! })).toBeVisible();
+    await expect(card).toContainText(uiEn["externalPlay.room.state.boardClosed.body"]!);
+    await expect(card.getByTestId("room-back-to-fixture")).toHaveAttribute("href", room.fixturePath);
+    for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-checkin-cta", "room-controls", "room-state-creating"]) {
+      await expect(p.getByTestId(id), id).toHaveCount(0);
+    }
+    if (me === room.white) {
+      expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+      await shoot(p, "d10-board-closed");
+    }
+    pages.push(p);
+    checked++;
   }
-  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
-  await shoot(p, "d10-board-closed");
-  // Cold re-entry: the same card on the first paint, and the room asks for nothing.
-  const p2 = await openRoom(ctx, room, room.black.token);
-  expect(await screenOf(p2)).toBe("boardClosed");
-  await p2.close();
+  expect(checked).toBe(2);
   expect(posts, "nothing claimed or sent on a closed board").toEqual([]);
-  // A Swiss re-pair deletes the closed row (stages.ts clearSwissFixtureSeats, M-10); the room's next read opens it.
+  // A Swiss re-pair deletes the closed row (stages.ts clearSwissFixtureSeats, M-10); the room reads on and opens it.
   await withDb((sql) => sql`delete from fixture_external_play where fixture_id = ${room.fixtureId}`);
-  await expect.poll(() => screenOf(p), { timeout: 25_000, message: "re-paired: the check-in again" }).toBe("checkin");
+  await expect.poll(() => screenOf(pages[0]!), { timeout: 25_000, message: "re-paired: the check-in again" }).toBe("checkin");
   await ctx.close();
 });
 
