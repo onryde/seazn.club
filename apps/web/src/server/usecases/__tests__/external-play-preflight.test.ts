@@ -1097,6 +1097,14 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
             vi.unstubAllGlobals();
           }
           expect(revoke, "premise: the real unlink ran (it revoked at Lichess)").toHaveBeenCalledTimes(1);
+          // Final re-review P11 (4): the unlink also holds the live board (token_revoked, this seat), which (c)
+          // refuses on its own. Lifted by hand so (a) — no account to match the record — stands ALONE.
+          const [held] = await sql<{ needs_reason: string | null; revoked_seat: string | null }[]>`
+            select needs_reason, revoked_seat from fixture_external_play where fixture_id = ${s.fixtureId}`;
+          expect(held, "premise: the unlink held the board on its own seat").toEqual({ needs_reason: "token_revoked", revoked_seat: "white" });
+          await sql`
+            update fixture_external_play set status = 'ready', needs_reason = null, revoked_seat = null, last_error = null
+             where fixture_id = ${s.fixtureId}`;
         },
       },
       {

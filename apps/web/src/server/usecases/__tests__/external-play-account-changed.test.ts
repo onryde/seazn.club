@@ -253,13 +253,15 @@ describe.runIf(HAS_DB)("a re-link to a different Lichess account holds the playe
     expect(revoked()).toEqual([]);
   });
 
-  it("a FIRST link (no row before it — unlinked, then linked again) is not a re-link and holds nothing", async () => {
+  it("a FIRST link (no row before it) is not a re-link and holds nothing", async () => {
     const r = await round(1);
     const b = r.boards[0]!;
     await bridge(r, b, "live");
-    await unlinkLichess(b.home.userId);
+    // No link on file, and nothing held by its removal: the row goes by hand, not through the unlink (which holds).
+    await sql`delete from user_external_accounts where user_id = ${b.home.userId} and provider = 'lichess'`;
     await relink(b.home, freshAccount());
     expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "live", needs_reason: null });
+    expect(vi.mocked(holdForOrganiser)).not.toHaveBeenCalled();
   });
 
   it("never silent: a hold that fails is logged by user and board, the other board is still held, and the link and the revoke stand", async () => {
@@ -285,5 +287,119 @@ describe.runIf(HAS_DB)("a re-link to a different Lichess account holds the playe
     expect(JSON.stringify(logged), "never the token").not.toContain(token);
     expect(await getLichessAccessToken(b1.home.userId)).toBe(token);
     expect(revoked(), "the old grant is revoked all the same").toEqual([`Bearer lio_seed_${b1.home.lichessId}`]);
+  });
+});
+
+// Final re-review P11 (4): UNLINKING mid-game leaves the same board P11 holds on a re-link — a game recorded for an
+// account that is no longer linked, whose grant the unlink revokes at Lichess. It is held as `token_revoked` (the
+// unlink revokes Seazn's access, which is exactly that sentence; `account_changed` would tell the organiser a
+// different account was linked, which an unlink never does), on the unlinking player's seat, before the revoke.
+describe.runIf(HAS_DB)("an unlink holds the player's live boards as token_revoked (P11 (4))", () => {
+  const unlink = (side: SeedSide) => unlinkLichess(side.userId);
+
+  it("holds the board exactly when its game is live or mid-create — on the unlinking player's own seat, for either colour — counted", async () => {
+    let checked = 0;
+    let held = 0;
+    for (const state of Object.keys(STATES) as State[]) {
+      for (const colour of ["home", "away"] as const) {
+        const r = await round(1);
+        const b = r.boards[0]!;
+        await bridge(r, b, state);
+        const before = await bridgeOf(b.fixtureId);
+        await unlink(b[colour]);
+        const after = await bridgeOf(b.fixtureId);
+        if (STATES[state].holds) {
+          // The bridge plays home White; no colours recorded (a create in flight) ⇒ no seat, both frozen (V442).
+          const seat = STATES[state].row.challenge ? (colour === "home" ? "white" : "black") : null;
+          expect(after, `${state} ${colour}`).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: seat });
+          expect(after!.last_error, `${state} ${colour}: the organiser's detail names the account`).toContain(b[colour].lichessId);
+          held += 1;
+        } else {
+          expect(after, `${state} ${colour}: no live game, nothing held`).toEqual(before);
+        }
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(Object.keys(STATES).length * 2);
+    expect(held, "the live and mid-create cells").toBe(3 * 2);
+    expect(checked - held, "the cells that hold nothing").toBe(4 * 2);
+    expect(vi.mocked(holdForOrganiser), "one hold asked per holding cell, none for the rest").toHaveBeenCalledTimes(held);
+    expect(revoked(), "every unlink still revokes its grant").toHaveLength(checked);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("the empty case: a player with no link — and an unlink run twice — holds nothing and revokes nothing more", async () => {
+    const r = await round(1);
+    const b = r.boards[0]!;
+    await bridge(r, b, "live");
+    await unlink(b.home);
+    const held = await bridgeOf(b.fixtureId);
+    expect(held!.needs_reason).toBe("token_revoked");
+    vi.mocked(holdForOrganiser).mockClear();
+    await unlink(b.home);
+    expect(await bridgeOf(b.fixtureId), "the second unlink finds no link").toEqual(held);
+    expect(vi.mocked(holdForOrganiser)).not.toHaveBeenCalled();
+    expect(revoked(), "one grant, revoked once").toHaveLength(1);
+  });
+
+  it("the hold lands BEFORE the grant is revoked at Lichess, and the link row goes after both", async () => {
+    const r = await round(1);
+    const b = r.boards[0]!;
+    await bridge(r, b, "live");
+    const atRevoke: [string | null, number][] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      if (init.method === "DELETE") {
+        const [{ n }] = await sql<{ n: number }[]>`
+          select count(*)::int as n from user_external_accounts where user_id = ${b.home.userId} and provider = 'lichess'`;
+        atRevoke.push([(await bridgeOf(b.fixtureId))!.needs_reason, n]);
+      }
+      return new Response(null, { status: 204 });
+    }));
+    await unlink(b.home);
+    expect(atRevoke, "held, the link still on file").toEqual([["token_revoked", 1]]);
+  });
+
+  it("the hold reaches its readers: the queue lists token_revoked on the unlinking seat; that player's room is frozen, the opponent's plays on", async () => {
+    const r = await round(1);
+    const b = r.boards[0]!;
+    await bridge(r, b, "live");
+    await unlink(b.away);
+    const queue = await listNeedsOrganiserExternalPlay(r.owner, r.divisionId);
+    expect(queue.map((q) => [q.fixtureId, q.reason, q.revokedSeat])).toEqual([[b.fixtureId, "token_revoked", "black"]]);
+    const deps = {
+      publish: vi.fn(async () => {}),
+      create: vi.fn(async () => ({ created: false as const, reason: "not_ready" as const })),
+      offered: vi.fn(async () => true),
+      mintRealtime: vi.fn(async () => "rt-token"),
+    } as never;
+    const room = await readRoom({ kind: "session", userId: b.home.userId }, b.fixtureId, deps);
+    expect([room.held, room.canAct, room.frozen], "the opponent plays on").toEqual([false, true, "opponent"]);
+  });
+
+  it("the sequence: unlink, then link a DIFFERENT account — the unlink's hold stands as it was (a first link holds nothing more)", async () => {
+    const r = await round(1);
+    const b = r.boards[0]!;
+    await bridge(r, b, "live");
+    await unlink(b.home);
+    const held = await bridgeOf(b.fixtureId);
+    expect(held).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "white" });
+    await relink(b.home, freshAccount());
+    expect(await bridgeOf(b.fixtureId)).toEqual(held);
+  });
+
+  it("never silent, never blocking: a hold that fails is logged by user and board, and the unlink still revokes and removes the link", async () => {
+    const r = await round(1);
+    const b = r.boards[0]!;
+    await bridge(r, b, "live");
+    vi.mocked(holdForOrganiser).mockImplementationOnce(async () => {
+      throw new HttpError(500, "boom", "TEST_HOLD_FAILED");
+    });
+    await expect(unlink(b.home)).resolves.toBeUndefined();
+    expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "live", needs_reason: null });
+    const logged = errorSpy.mock.calls as unknown[][];
+    expect(logged).toHaveLength(1);
+    expect(logged[0]![0]).toMatchObject({ userId: b.home.userId, fixtureId: b.fixtureId });
+    expect(revoked()).toEqual([`Bearer lio_seed_${b.home.lichessId}`]);
+    expect(await getLichessAccessToken(b.home.userId), "the link is gone").toBeNull();
   });
 });
