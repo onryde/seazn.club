@@ -443,7 +443,8 @@ jobs:
           passed=$(jq '.numPassedTests' /tmp/placement-integration.json)
           failed=$(jq '.numFailedTests' /tmp/placement-integration.json)
           skipped=$(jq '.numPendingTests' /tmp/placement-integration.json)
-          echo "total=$total passed=$passed failed=$failed skipped=$skipped"
+          failed_suites=$(jq '.numFailedTestSuites' /tmp/placement-integration.json)
+          echo "total=$total passed=$passed failed=$failed skipped=$skipped failedSuites=$failed_suites"
           jq -r '.testResults[].name' /tmp/placement-integration.json
 
           if [ "$total" -eq 0 ]; then
@@ -461,12 +462,25 @@ jobs:
             exit 1
           fi
 
-          # Every live file must have REPORTED. The totals above are summed over
-          # files, so one file that vanished from the run (renamed, filter missed it)
-          # is invisible to them while the other still passes.
+          # A file that fails to LOAD or COLLECT contributes no tests, so every total above is summed over the
+          # other file alone and reads green; it shows up only as a failed SUITE (engine-split 1a review, MAJOR-1).
+          if [ "$failed_suites" -ne 0 ]; then
+            echo "::error::$failed_suites test suite(s) failed — a live file did not load or collect, and its tests are absent from the totals above."
+            docker logs placement-integration || true
+            exit 1
+          fi
+
+          # Every live file must have REPORTED, and as a PASSED file that holds tests. The totals above are summed
+          # over files, so one file that vanished from the run (renamed, filter missed it) is invisible to them while
+          # the other still passes, and a file that is listed but empty or not passed must not borrow its sibling's count.
           for f in placement-integration.test.ts repair-decompose-cpsat-integration.test.ts; do
             if ! jq -e --arg f "$f" '[.testResults[].name | endswith("/" + $f)] | any' /tmp/placement-integration.json >/dev/null; then
               echo "::error::$f did not report — it was not run, or the filename filter matched nothing."
+              docker logs placement-integration || true
+              exit 1
+            fi
+            if ! jq -e --arg f "$f" '[.testResults[] | select(.name | endswith("/" + $f)) | select(.status == "passed" and (.assertionResults | length) > 0)] | length == 1' /tmp/placement-integration.json >/dev/null; then
+              echo "::error::$f is not a passed file with tests in it (status, or zero assertions) — it did not run to completion."
               docker logs placement-integration || true
               exit 1
             fi
