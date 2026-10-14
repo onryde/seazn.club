@@ -151,7 +151,8 @@ describe.skipIf(!HAS_DB)("fixture config snapshot (V347)", () => {
   });
 
   it("freezes the RESOLVED cfg — stage overlay applied — on the first append", async () => {
-    const s = await seed({ stageConfig: { shootout: { bestOf: 5 }, placements: {} } });
+    // W2c D3: the stage's decider rides in its `rules` (the shape stage creation writes, Task 12).
+    const s = await seed({ stageConfig: { rules: { shootout: { bestOf: 5 } }, placements: {} } });
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
 
     const { config_snapshot: snap, config_snapshot_at: at } = await snapshotOf(s.fixtureId);
@@ -161,7 +162,7 @@ describe.skipIf(!HAS_DB)("fixture config snapshot (V347)", () => {
     // stage config that has since moved — the same drift one layer down.
     expect(snap).toEqual({ ...GENERIC_SCORE_DRAWS, shootout: { bestOf: 5 } });
     expect(snap).not.toEqual(GENERIC_SCORE_DRAWS);
-    // …and only the two decider keys ride along, not the whole stage config.
+    // …and only the stage's rules ride along, not the whole stage config.
     expect(snap).not.toHaveProperty("placements");
   });
 
@@ -316,9 +317,9 @@ describe.skipIf(!HAS_DB)("fixture config snapshot (V347)", () => {
   it("a stage config edit does not reach back either", async () => {
     // The stage overlay is part of the resolved cfg, so it must be frozen with
     // it — otherwise the same bug simply moves one table across.
-    const s = await seed({ stageConfig: { shootout: { bestOf: 5 } } });
+    const s = await seed({ stageConfig: { rules: { shootout: { bestOf: 5 } } } });
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
-    await sql`update stages set config = ${sql.json({ shootout: { bestOf: 11 } })} where id = ${s.stageId}`;
+    await sql`update stages set config = ${sql.json({ rules: { shootout: { bestOf: 11 } } })} where id = ${s.stageId}`;
 
     const { config_snapshot: snap } = await snapshotOf(s.fixtureId);
     expect(snap).toMatchObject({ shootout: { bestOf: 5 } });

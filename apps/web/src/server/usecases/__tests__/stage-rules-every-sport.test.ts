@@ -168,10 +168,21 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
       builtinModules.reduce((n, m) => n + Object.keys(m.variants).length, 0) * StageKind.options.length,
     );
     expect(sportsSeen.size, "every sport was visited").toBe(SPORTS_AT_W2C);
-    expect(kindsWithAKey.size, "most kinds settle at least one key somewhere").toBeGreaterThan(1);
+    // Exact, from the engine's declarations (Task 11 re-review b): the kinds where some sport and variant settles a key,
+    // and every declared key a (sport, variant, kind) cannot set.
+    const engineKinds = StageKind.options.filter((kind) =>
+      builtinModules.some((m) => Object.keys(m.variants).some((v) => stageTopKeysFor(m as AnySportModule, kind, v).size > 0)),
+    );
+    expect(kindsWithAKey.size, `the kinds that settle a key: ${engineKinds.join(", ")}`).toBe(engineKinds.length);
+    const engineRefused = builtinModules.reduce((n, m) => {
+      const sport = m as AnySportModule;
+      const known = [...sportTopKeys(sport)];
+      return n + Object.keys(m.variants).reduce((k, v) => k + StageKind.options.reduce((j, kind) => j + known.filter((top) => !stageTopKeysFor(sport, kind, v).has(top)).length, 0), 0);
+    }, 0);
     expect(viaEditor, "most keys ride the editor's own builders").toBeGreaterThan(SPORTS_AT_W2C);
     expect(accepted, `${accepted} saves`).toBeGreaterThan(2 * SPORTS_AT_W2C * StageKind.options.length);
-    expect(refused, `${refused} refusals`).toBeGreaterThan(SPORTS_AT_W2C);
+    expect(engineRefused, "the engine declares keys some stage cannot set").toBeGreaterThan(0);
+    expect(refused, `${refused} refusals`).toBe(engineRefused);
   }, 600_000);
 
   it("a cricket TEST stage refuses superOver and dls (they belong to the limited-overs variants); the same keys save on t20 (I1: the variant is witnessed)", async () => {
@@ -465,6 +476,17 @@ describe.skipIf(!HAS_DB)("I2 (Task 11 review): a stage save validates against th
     });
     expect(outcome).toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: "superOver" } });
     expect((await rulesOf(s)) ?? null, "a refused save writes nothing").toBeNull();
+  });
+
+  it("a stage DELETED while the save waits on the division lock is a 404, and nothing is written", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 0);
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const outcome = await saveBehindADivisionCommit(auth, divisionId, s, { cap: 21 }, async (tx) => {
+      await tx`delete from stages where id = ${s}`;
+    });
+    expect(outcome, "the second read, under the lock, finds no stage").toMatchObject({ status: 404 });
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from stages where id = ${s}`)[0]!.n).toBe(0);
   });
 
   it("the positive pair: with NO division change in between, the same waiting save lands", async () => {

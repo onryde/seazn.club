@@ -17,6 +17,7 @@ import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { DEPARTED_STATUSES } from "./entrants";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
+import { validatedStageConfig } from "./stage-defaults";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -322,30 +323,6 @@ export async function listStages(auth: AuthCtx, divisionId: string): Promise<Sta
   });
 }
 
-/** Define (part of) the stage graph for a division. */
-/**
- * D2a (design 2026-09-17 §T3) — `rules` is NOT settable through a stage-config
- * body. `PUT /stages/{id}/rules` is the only writer, and it is the only path
- * carrying the per-sport allowlist, the sets-based sport gate and the
- * merged-config parse. This door has to be shut explicitly because
- * `createStages` never parses stage config through any `configSchema`, and the
- * custom-points paywall reads `s.config.points`, never `s.config.rules.points`
- * — so a football division could otherwise smuggle shoot-out points (a shape
- * `SPORT_RULES.football` genuinely emits) straight past the entitlement.
- */
-export function assertConfigCarriesNoRules(config: Record<string, unknown> | null | undefined): void {
-  if (config && "rules" in config)
-    throw new HttpError(
-      400,
-      "per-stage match rules are set through PUT /stages/{id}/rules",
-      "RULES_NOT_ACCEPTED_HERE",
-    );
-}
-
-function assertNoRulesKey(inputs: readonly StageInput[]): void {
-  for (const s of inputs) assertConfigCarriesNoRules(s.config);
-}
-
 /**
  * A swiss stage declares its round budget at create time, or it is not created
  * (owner ruling 2026-09-20).
@@ -378,13 +355,47 @@ function assertSwissRoundsDeclared(inputs: readonly StageInput[]): void {
   }
 }
 
+/** The division facts a new stage's rules are judged against (`stage-defaults.ts`): its sport at the pinned module
+ *  version, its variant and its config. */
+interface StageRulesScope {
+  sport_key: string;
+  module_version: string;
+  variant_key: string;
+  config: Record<string, unknown> | null;
+}
+
+/** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
+ *  laid over its kind's preset (`validatedStageConfig`), with `carried` (replaceStages, keyed `seq:kind`) between the
+ *  two. In input order; throws before anything is written. */
+function stageConfigsAtCreate(
+  division: StageRulesScope,
+  inputs: readonly StageInput[],
+  carried: ReadonlyMap<string, Record<string, unknown>> = new Map(),
+): Record<string, unknown>[] {
+  const sportModule = resolveModule(division.sport_key, division.module_version);
+  return inputs.map((s) =>
+    validatedStageConfig(
+      sportModule,
+      division.sport_key,
+      s.kind,
+      division.variant_key,
+      division.config,
+      (s.config ?? {}) as Record<string, unknown>,
+      carried.get(`${s.seq}:${s.kind}`) ?? null,
+    ),
+  );
+}
+
+/** Define (part of) the stage graph for a division. Each stage is written with its kind's preset match rules
+ *  (`stage-defaults.ts`, X-SR-6) under any `config.rules` sent with it, validated as `PUT /stages/{id}/rules` validates
+ *  a save (SC-P8). `carried` is replaceStages' own: the rules a slot kept across its delete-and-recreate. */
 export async function createStages(
   auth: AuthCtx,
   divisionId: string,
   input: CreateStages,
+  carried?: ReadonlyMap<string, Record<string, unknown>>,
 ): Promise<StageRow[]> {
   const inputs: StageInput[] = Array.isArray(input) ? input : [input];
-  assertNoRulesKey(inputs);
   assertSwissRoundsDeclared(inputs);
   // Format gates honour an Event Pass on this division's competition
   // (v3/07 §3), so resolve the competition before gating.
@@ -448,9 +459,11 @@ export async function createStages(
   // already resolved above for the format gates, so the same id gates the cap.
   const stageCap = await getLimit(auth.orgId, "stages.per_division.max", divComp?.competition_id);
   return withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx<{ competition_id: string; sport_key: string; module_version: string }[]>`
-      select competition_id, sport_key, module_version from divisions where id = ${divisionId}`;
+    const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
+      select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
+    // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
+    const configs = stageConfigsAtCreate(division, inputs, carried);
     // fail closed (Jul3/05 §8): a points rule needing metrics the sport
     // doesn't emit never reaches play
     for (const s of inputs) {
@@ -469,13 +482,13 @@ export async function createStages(
     assertWithinLimit(stageCap, "stages.per_division.max", n + inputs.length);
 
     const rows: StageRow[] = [];
-    for (const s of inputs) {
+    for (const [i, s] of inputs.entries()) {
       const [dupe] = await tx`
         select 1 from stages where division_id = ${divisionId} and seq = ${s.seq}`;
       if (dupe) throw new HttpError(409, `stage seq ${s.seq} already exists`);
       const [row] = await tx<StageRow[]>`
         insert into stages (division_id, seq, kind, name, config, progression)
-        values (${divisionId}, ${s.seq}, ${s.kind}, ${s.name}, ${tx.json(s.config as never)},
+        values (${divisionId}, ${s.seq}, ${s.kind}, ${s.name}, ${tx.json(configs[i] as never)},
                 ${s.progression ? tx.json(s.progression as never) : null})
         returning ${tx(STAGE_COLS)}`;
       rows.push(row);
@@ -505,28 +518,29 @@ export async function createStages(
  *  — the same FORMAT_LOCKED rule as patchDivision's variant/config guard.
  *  Delete + recreate runs as two steps (createStages owns its validation and
  *  tx); a failed create leaves the division stage-less, recoverable exactly
- *  like the manual Fixtures-tab delete-then-add flow. */
+ *  like the manual Fixtures-tab delete-then-add flow — which is why every
+ *  refusal the create can raise from its input is raised here first. */
 export async function replaceStages(
   auth: AuthCtx,
   divisionId: string,
   input: CreateStages,
 ): Promise<StageRow[]> {
+  const inputs: StageInput[] = Array.isArray(input) ? input : [input];
   // BEFORE the delete below, not merely inside the `createStages` this
   // delegates to: that call runs in its own transaction, so a refusal there
   // would land after this function had already dropped every stage in the
   // division. The swiss round-count guard rides along for the same reason —
   // this is the PUT the Format tab's Apply calls, so a bad round count would
   // otherwise cost the organiser their whole stage graph.
-  assertNoRulesKey(Array.isArray(input) ? input : [input]);
-  assertSwissRoundsDeclared(Array.isArray(input) ? input : [input]);
+  assertSwissRoundsDeclared(inputs);
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   const carried = await withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx<{ competition_id: string }[]>`
-      select competition_id from divisions where id = ${divisionId}`;
+    const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
+      select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     assertNotFrozen(frozen, division.competition_id);
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
@@ -538,12 +552,12 @@ export async function replaceStages(
     }
     // Per-stage match-rules overrides survive the delete (design 2026-09-17,
     // owner ruling 2026-09-18). The Format tab's Apply is a delete-and-recreate
-    // from the template body, and that body cannot carry `rules` — the guard
-    // above refuses it, because a stage-config body is not a path that
-    // validates one. So the carry-forward has to happen HERE, server-side,
-    // rather than by asking the client to re-issue a PUT afterwards: it then
-    // holds for every caller of this function, not just the one screen we
-    // happened to fix.
+    // from the template body, which carries no rules, so the carry-forward has
+    // to happen HERE, server-side, rather than by asking the client to re-issue
+    // a PUT afterwards: it then holds for every caller of this function, not
+    // just the one screen we happened to fix. W2c Task 12 (Review Focus 5): the
+    // carried rules are laid over the slot's PRESET and under the body's own
+    // rules, key by key (`withStageDefaults`), never stored alone.
     const rows = await tx<{ seq: number; kind: string; config: Record<string, unknown> }[]>`
       select seq, kind, config from stages where division_id = ${divisionId}`;
     const keep = new Map<string, Record<string, unknown>>();
@@ -554,33 +568,19 @@ export async function replaceStages(
       // is Best-of-5" — an Apply that turns seq 2 from knockout into league is
       // a different competition shape, and silently dressing the new stage in
       // the old stage's format is the kind of invisible carry nobody audits.
-      // Dropping it makes the organiser set it again, which is a visible,
-      // correctable state; carrying it wrongly is not. Note this is a
-      // JUDGEMENT, not a validity constraint: the allowlist is per SPORT and
-      // the sport cannot change here, so a carried fragment would still pass
-      // every guard. That is exactly why the rule has to be written down.
-      if (rules !== null && rules !== undefined) keep.set(`${r.seq}:${r.kind}`, rules as Record<string, unknown>);
+      // A slot whose kind changed starts from ITS OWN kind's preset instead,
+      // which is a visible, correctable state; carrying it wrongly is not. Note
+      // this is a JUDGEMENT, not a validity constraint: the allowlist is per
+      // sport, kind and variant, and none of them changes for a matched slot.
+      if (rules !== null && typeof rules === "object" && !Array.isArray(rules))
+        keep.set(`${r.seq}:${r.kind}`, rules as Record<string, unknown>);
     }
+    // Every rules fragment in the body, judged as the create will judge it, before anything is dropped.
+    stageConfigsAtCreate(division, inputs, keep);
     await tx`delete from stages where division_id = ${divisionId}`;
     return keep;
   });
-  const created = await createStages(auth, divisionId, input);
-  if (carried.size > 0) {
-    await withTenant(auth.orgId, async (tx) => {
-      for (const stage of created) {
-        const rules = carried.get(`${stage.seq}:${stage.kind}`);
-        if (rules === undefined) continue;
-        // Server-side merge (§T2), same shape as every other writer of this
-        // column: the row was just inserted by createStages, so this adds the
-        // key back without re-writing anything createStages decided.
-        await tx`
-          update stages set config = config || ${tx.json({ rules } as never)}
-           where id = ${stage.id}`;
-        stage.config = { ...stage.config, rules };
-      }
-    });
-  }
-  return created;
+  return createStages(auth, divisionId, input, carried);
 }
 
 /**

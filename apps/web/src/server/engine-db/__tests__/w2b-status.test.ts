@@ -290,7 +290,8 @@ describe.skipIf(!HAS_DB)("W2b append guards and the status rule, through scoreEv
     ).rejects.toEqual(isEngine("ALREADY_DECIDED", "withdrew_over_result"));
     await unchanged(id, before, "league draw");
     // The positive pair: the held knockout fixture (needs_decision) walks over with reason withdrew (X-WD-1).
-    const ko = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 4 });
+    // stageRules {}: every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties).
+    const ko = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 4, stageRules: {} });
     const sf = ko.fixtureIds[0]!;
     const k = await fixtureRow(sf);
     await post(ko.auth, sf, "core.start");

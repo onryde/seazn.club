@@ -168,7 +168,7 @@
     "find": "msg(\"schedule.error.swissAbandonedRef\", { round: b.round, board: b.board })", "replace": "msg(\"schedule.error.swissAbandonedRef\", { round: b.board, board: b.round })",
     "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/__tests__/stages-panel-generate-precondition.test.tsx"], "name": "swiss_abandoned_boards" }] },
   { "id": "t7-p5-http-issues", "file": "apps/web/src/server/api-v1/http.ts",
-    "find": "if (issues) extra = { issues };", "replace": "if (issues) extra = {};",
+    "find": "...(issues ? { issues } : {}), ", "replace": "",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/http.test.ts"], "name": "P-5: CONFIG_INVALID forwards the issue messages" }] },
   { "id": "t7-p5-map-carrom", "file": "apps/web/src/lib/config-issue-copy.ts",
     "find": "[SHARE_NEEDS_DRAWN_GAME, \"rules.err.shareNeedsDrawnGame\"],", "replace": "[SHARE_NEEDS_DRAWN_GAME, \"rules.err.shareNeedsDraws\"],",

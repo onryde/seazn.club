@@ -4051,8 +4051,8 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // W2c X-SR-6, CK-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: the super over ON, wherever the
   // schema takes one (`ruleKeys.superOver.appliesTo` is the one declaration of which variants: a two-innings test match
   // has none). It is the organiser's to switch off, and a league stage starts without it; switched on there it is played
-  // on every tie (`decideTie` reads the cfg, never the stage kind). A DECLARATION only: Task 12 (stage creation) writes it
-  // into `stages.config.rules`; nothing reads it before then.
+  // on every tie (`decideTie` reads the cfg, never the stage kind). Stage creation writes it into `stages.config.rules`
+  // (apps/web usecases/stage-defaults.ts `withStageDefaults`, W2c Task 12).
   stageDefaults: (kind, variant) =>
     BRACKET_KINDS.has(kind) && ruleKeyApplies(SUPER_OVER_KEY, kind, variant) ? { superOver: true } : {},
 

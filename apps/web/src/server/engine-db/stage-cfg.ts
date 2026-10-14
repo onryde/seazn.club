@@ -15,7 +15,9 @@ import "server-only";
 // future writer smuggles them into `rules`. The overlay itself is permissive
 // about WHICH keys `rules` carries; the write path's per-sport allowlist
 // (design D2/D2a) is what keeps `points` and the decider keys out of it.
-const STAGE_DECIDER_KEYS = ["shootout", "extraTime"] as const;
+// Exported for `rule-locks.ts` (W2c Task 12): the division lock asks which top-level keys a stage carries as its own, and
+// these are the only two this overlay reads there. Task 13b retires the top-level read, and this export with it.
+export const STAGE_DECIDER_KEYS = ["shootout", "extraTime"] as const;
 
 export function stageScopedCfg(
   divisionCfg: unknown,

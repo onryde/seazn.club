@@ -371,6 +371,42 @@ describe("v1 envelope", () => {
     expect(checked).toBe(2);
   });
 
+  // W2c Task 12 (Task 2 review): the division save's CONFIG_INVALID after a per-field refusal names the fields it kept as
+  // stored (`data.refused`, divisions.ts) — forwarded beside `issues`, well-formed entries only, their four keys only.
+  it("CONFIG_INVALID forwards `refused` beside `issues`: well-formed entries, four keys each; a malformed one is dropped", async () => {
+    const kept = { field: "setTo", code: "DIVISION_FORMAT_LOCKED", stageId: "6f1c5c9e-1111-4c1d-9b0e-000000000001", stageName: "Pool A" };
+    const table = { field: "tiebreakers", code: "DIVISION_TABLE_RULES_LOCKED", stageId: "6f1c5c9e-1111-4c1d-9b0e-000000000002", stageName: "Pool B" };
+    const refused = [
+      { ...kept, secret: 1 },
+      table,
+      { ...kept, code: "STAGE_FORMAT_LOCKED" }, // not a division refusal
+      { field: "cap", code: "DIVISION_FORMAT_LOCKED", stageId: 3, stageName: "x" },
+      "setTo",
+    ];
+    const res = await v1(async () => {
+      throw new EngineError("CONFIG_INVALID", "invalid badminton config once setTo stay as stored", {
+        issues: [{ code: "custom", path: ["cap"], message: "cap must be ≥ the set target" }],
+        refused,
+      });
+    });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error).toEqual({
+      code: "CONFIG_INVALID",
+      message: "invalid badminton config once setTo stay as stored",
+      issues: [{ path: ["cap"], message: "cap must be ≥ the set target" }],
+      refused: [kept, table],
+    });
+    // Each half alone: `refused` without issues still goes out; neither leaves code + message.
+    const alone = await v1(async () => {
+      throw new EngineError("CONFIG_INVALID", "m", { refused: [kept] } as never);
+    });
+    expect((await body(alone)).error).toEqual({ code: "CONFIG_INVALID", message: "m", refused: [kept] });
+    const neither = await v1(async () => {
+      throw new EngineError("CONFIG_INVALID", "m", { refused: [{ field: 1 }] } as never);
+    });
+    expect((await body(neither)).error).toEqual({ code: "CONFIG_INVALID", message: "m" });
+  });
+
   it("P-5 empty cases: no issues, an empty list, or entries without a message forward code + message only", async () => {
     const cases: [string, unknown][] = [
       ["no data", undefined],

@@ -96,7 +96,8 @@ describe.skipIf(!HAS_DB)("the desk reads a held bracket fixture as owed work (W2
   it("a level knockout RESULT (needs_decision) raises the same row, through the status alone", async () => {
     // Football, not generic: generic REFUSES a level knockout result outright (Task 9). A football 0–0 at full time
     // with no extra time or shootout configured is HELD (X-BR-2) — the stream settle-seating.test.ts pins.
-    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 2 });
+    // stageRules {}: every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties).
+    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 2, stageRules: {} });
     const t = { ...s, f: s.fixtureIds[0]! };
     await post(t.auth, t.f, "core.start");
     await post(t.auth, t.f, "football.period", { phase: "HT" });

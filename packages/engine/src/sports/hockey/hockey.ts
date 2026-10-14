@@ -178,7 +178,7 @@ export const hockey = makePeriodModule({
   // W2c X-SR-6 (spec §4.2) — the preset a NEW bracket stage should start with: the FIH shoot-out (5 one-on-ones, 8 s,
   // then sudden death), read from the module's own `fih-shootout` preset through its own schema (a fresh object on every
   // call, so a caller that edits its copy never reaches the preset); a table stage starts with none. Hockey has no
-  // overtime. A DECLARATION only: Task 12 (stage creation) writes it into `stages.config.rules`; nothing reads it before.
+  // overtime. Stage creation writes it into `stages.config.rules` (apps/web stage-defaults.ts, W2c Task 12).
   stageDefaults: (kind) =>
     BRACKET_KINDS.has(kind) ? { shootout: hockey.configSchema.parse(hockey.variants["fih-shootout"]).shootout } : {},
   positions,

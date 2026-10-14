@@ -941,8 +941,8 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   bracketDeciders(cfg: Cfg): Partial<Cfg>;
   /**
    * W2c (spec §4.2) — the rules a NEW stage of this kind should start with, layered after the variant preset and before
-   * the stage's stored rules (the knockout preselection: football ET 2×15 + penalties, …). A declaration only: Task 12
-   * (stage creation) writes it into the stage's `config.rules`, and it is never inferred at resolve time. Every key is a
+   * the stage's stored rules (the knockout preselection: football ET 2×15 + penalties, …). Stage creation (W2c Task 12)
+   * writes it into the stage's `config.rules`, and it is never inferred at resolve time. Every key is a
    * stage key of its kind (X-SR-1 sweep). Absent = `{}`; Task 6 fills it.
    */
   stageDefaults?(kind: StageKind, variant: string | null): Partial<Cfg>;

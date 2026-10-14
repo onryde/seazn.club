@@ -176,26 +176,27 @@ function thirdPlaceKey(): string {
   return key;
 }
 
-/** Config keys createStages refuses although StageConfig declares them (D2a:
- *  `assertConfigCarriesNoRules`, called through assertNoRulesKey). */
-function refusedConfigKeys(): string[] {
-  const src = STAGES_TS();
-  expect(fnBody(src, "export async function createStages(")).toContain("assertNoRulesKey(inputs);");
-  expect(fnBody(src, "function assertNoRulesKey(")).toContain("assertConfigCarriesNoRules(s.config)");
-  const keys = [...fnBody(src, "export function assertConfigCarriesNoRules(").matchAll(/"(\w+)" in config/g)].map((m) => m[1]!);
-  if (keys.length === 0) throw new Error("stages.ts: assertConfigCarriesNoRules refuses no key");
-  return keys;
-}
-
-/** The top-level keys of api-v1/schemas.ts's StageConfig — a strictObject,
- *  so the POST /stages door 400s on any key outside this list. */
-function stageConfigKeys(): string[] {
+/** The body of api-v1/schemas.ts's StageConfig — a strictObject, so the POST /stages door 400s on any key outside it. */
+function stageConfigBody(): string {
   const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
   const start = src.indexOf("export const StageConfig = z\n  .strictObject({\n");
   if (start < 0) throw new Error("schemas.ts: StageConfig is no longer a z.strictObject");
   const end = src.indexOf("\n  })\n  .default({});", start);
   if (end < 0) throw new Error("schemas.ts: StageConfig's closing .default({}) not found");
-  const keys = [...src.slice(start, end).matchAll(/^ {4}(\w+): z\./gm)].map((m) => m[1]!);
+  return src.slice(start, end);
+}
+
+/** Config keys StageConfig declares only to REFUSE them (W2c Task 12: a top-level stage decider moved to `config.rules`
+ *  and is refused loudly with `z.never`, saying so, rather than as an unrecognised key). */
+function refusedConfigKeys(): string[] {
+  const keys = [...stageConfigBody().matchAll(/^ {4}(\w+): z\.never\(/gm)].map((m) => m[1]!);
+  if (keys.length === 0) throw new Error("schemas.ts: StageConfig refuses no key");
+  return keys;
+}
+
+/** The top-level keys of StageConfig (a refused one included: see refusedConfigKeys). */
+function stageConfigKeys(): string[] {
+  const keys = [...stageConfigBody().matchAll(/^ {4}(\w+): z\./gm)].map((m) => m[1]!);
   if (keys.length === 0) throw new Error("schemas.ts: StageConfig declares no keys");
   return keys;
 }
@@ -300,8 +301,9 @@ describe("API-only rows — bodies derived from product authorities", () => {
     const declared = stageConfigKeys();
     expect(declared).toContain("thirdPlace");
     const refused = refusedConfigKeys();
-    expect(refused).toEqual(["rules"]);
-    expect(declared).toContain("rules"); // declared-but-refused: why the declared list alone is not enough
+    expect(refused).toEqual(["shootout", "extraTime"]);
+    for (const key of refused) expect(declared).toContain(key); // declared-but-refused: why the declared list alone is not enough
+    expect(declared).toContain("rules"); // W2c Task 12: a create takes config.rules (validated by the usecase)
     let checked = 0;
     for (const row of ROW_KEYS) for (const s of stagesForRow(row)) for (const key of Object.keys(s.config)) {
       expect(declared, `${row}: config.${key}`).toContain(key);

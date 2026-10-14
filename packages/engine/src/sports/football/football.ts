@@ -2811,8 +2811,8 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   bracketDeciders: () => ({}),
 
   // W2c X-SR-6, FB-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: extra time 2×15, penalties and 5
-  // kicks each (3 in the youth formats), every one the organiser's to switch off; a table stage starts with none. This is
-  // a DECLARATION only: Task 12 (stage creation) writes it into `stages.config.rules`, and nothing reads it before then.
+  // kicks each (3 in the youth formats), every one the organiser's to switch off; a table stage starts with none. Stage
+  // creation writes it into `stages.config.rules` (apps/web usecases/stage-defaults.ts `withStageDefaults`, W2c Task 12).
   // It is never inferred at resolve time.
   stageDefaults: (kind, variant) =>
     BRACKET_KINDS.has(kind)

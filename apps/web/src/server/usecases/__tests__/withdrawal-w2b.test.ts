@@ -109,7 +109,9 @@ function siblingsInto(rows: readonly FixtureRow[]): { a: FixtureRow; b: FixtureR
   throw new Error("rig: no two seated first-round lines feed one fixture");
 }
 
-const football = { sport: "football", variant: declaredVariant("football", "11-a-side") };
+// Every football seed here is a HELD rig (0-0 at full time, `heldFootball`): `stageRules: {}` switches off the extra time
+// and penalties a new knockout starts with (W2c X-SR-6), so the level full time is held for the organiser.
+const football = { sport: "football", variant: declaredVariant("football", "11-a-side"), stageRules: {} };
 const badminton = { sport: "badminton", variant: declaredVariant("badminton", "bwf") };
 const chess = { sport: "boardgame", variant: declaredVariant("boardgame", "classical") };
 

@@ -8,7 +8,7 @@
 // (restating them here would be a second copy of a fact that already has an
 // owner).
 import { describe, expect, it } from "vitest";
-import { CreateStage, StageConfig } from "@/server/api-v1/schemas";
+import { CreateStage, STAGE_DECIDER_MOVED, StageConfig } from "@/server/api-v1/schemas";
 
 /** Every key with a real reader. Derived from the reader/writer sweep, not
  *  typed from memory — if one is dropped from the schema it becomes
@@ -35,8 +35,8 @@ const KNOWN: Record<string, unknown> = {
   rank_overrides: [{ entrant_id: "e1", rank: 1 }],
   cross_feeds: [{ from_ext_key: "sf1", side: "loser", to_stage_seq: 2, to_ext_key: "f", slot: 1 }],
   placements: { f: [1, 2] },
-  shootout: { bestOf: 5 },
-  extraTime: { halves: 2, minutes: 15 },
+  // W2c Task 12: a stage's deciders are its match rules (D3) — `shootout` / `extraTime` moved under `rules`.
+  rules: { shootout: false, extraTime: { enabled: true, halfMinutes: 10 } },
 };
 
 const stage = (config: unknown) => ({ seq: 1, kind: "knockout", name: "Cup", config });
@@ -112,12 +112,27 @@ describe("StageConfig closes the key set", () => {
   });
 
   it("leaves the shapes another authority owns unvalidated, deliberately", () => {
-    // `points` is the engine's PointsRule; shootout/extraTime belong to each
-    // sport module's configSchema. The KEY is real, the SHAPE is not this
-    // file's to enforce — a second copy here is how two shapes of one fact
-    // drift apart. If these ever start failing, the shape moved home.
+    // `points` is the engine's PointsRule; `rules` belongs to each sport
+    // module's configSchema and declarations (validated by the usecase,
+    // `stage-defaults.ts`). The KEY is real, the SHAPE is not this file's to
+    // enforce — a second copy here is how two shapes of one fact drift apart.
     expect(StageConfig.safeParse({ points: { anything: true } }).success).toBe(true);
-    expect(StageConfig.safeParse({ shootout: "whatever" }).success).toBe(true);
+    expect(StageConfig.safeParse({ rules: { anything: "whatever" } }).success).toBe(true);
+  });
+
+  it("refuses a top-level stage decider LOUDLY, naming where it moved (W2c Task 12, greenfield: no shim)", () => {
+    let checked = 0;
+    for (const key of ["shootout", "extraTime"]) {
+      for (const value of [true, false, { enabled: true, halfMinutes: 15 }, null]) {
+        const r = StageConfig.safeParse({ [key]: value });
+        expect(r.success, `${key}: ${JSON.stringify(value)}`).toBe(false);
+        expect(r.error?.issues.map((i) => i.message), key).toEqual([STAGE_DECIDER_MOVED]);
+        expect(r.error?.issues[0]?.path, key).toEqual([key]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    expect(STAGE_DECIDER_MOVED, "the message says where it went").toContain("config.rules");
   });
 
   it("defaults to {} so an omitted config is still a valid stage", () => {

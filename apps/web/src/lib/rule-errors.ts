@@ -77,6 +77,26 @@ export interface RefusedField {
   stageName: string;
 }
 
+const REFUSED_CODES: ReadonlySet<string> = new Set<RefusedField["code"]>(["DIVISION_FORMAT_LOCKED", "DIVISION_TABLE_RULES_LOCKED"]);
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** The `refused` list an error's data carries, as the wire may say it: only well-formed entries, only their four keys,
+ *  null when none (W2c Task 12 — the division save's CONFIG_INVALID after a per-field refusal names the fields it kept
+ *  as stored, and `http.ts` forwards them). */
+export function refusedFieldsOf(data: unknown): RefusedField[] | null {
+  const list = isRecord(data) ? data.refused : undefined;
+  if (!Array.isArray(list)) return null;
+  const out: RefusedField[] = [];
+  for (const r of list) {
+    if (!isRecord(r)) continue;
+    const { field, code, stageId, stageName } = r;
+    if (typeof field !== "string" || typeof code !== "string" || !REFUSED_CODES.has(code)) continue;
+    if (typeof stageId !== "string" || typeof stageName !== "string") continue;
+    out.push({ field, code: code as RefusedField["code"], stageId, stageName });
+  }
+  return out.length === 0 ? null : out;
+}
+
 /** The fit reasons' sentences (ui.json); their en copy IS `FORMAT_FIT_REASONS` (pinned). */
 export const FORMAT_FIT_REASON_KEYS = {
   ends: "rules.err.fit.ends",

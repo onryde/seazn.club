@@ -45,10 +45,12 @@ export async function seedBracket(opts: {
   divisionConfig?: Record<string, unknown>;
   /** The stage's own config; a swiss stage must declare `rounds` (assertSwissRoundsDeclared). */
   stageConfig?: Record<string, unknown>;
-  /** W2c — the stage's own match rules (`stages.config.rules`). `createStages` refuses `rules` in a stage body (D2a:
-   *  `PUT /stages/{id}/rules` is its one writer, and it serves every sport since Task 11), so a seed writes it
-   *  straight onto the row, before the fixtures are generated: the seed needs no allowlist or merge of its own, and a
-   *  test may seed rules the endpoint would refuse. */
+  /** W2c — the stage's own match rules (`stages.config.rules`), written straight onto the row AFTER `createStages`
+   *  and before the fixtures are generated, REPLACING what the create stored: since Task 12 a new bracket stage stores
+   *  its sport's preset (football's extra time and penalties, ice hockey's overtime and shoot-out, the super over), so
+   *  absent = that preset, `{}` = no stage rules at all (the stage plays its division's config: every preset decider
+   *  switched off, how a rig reaches a HELD level knockout), anything else = exactly those rules. Raw SQL on purpose:
+   *  a test may seed rules the endpoint would refuse. */
   stageRules?: Record<string, unknown>;
 }): Promise<SeededBracket> {
   const variant = declaredVariant(opts.sport, opts.variant);
@@ -98,7 +100,10 @@ export async function seedBracket(opts: {
   );
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: opts.stageKind, name: "S1", config: opts.stageConfig ?? {}, progression: null });
   if (opts.stageRules !== undefined) {
-    const n = await sql`update stages set config = config || ${sql.json({ rules: opts.stageRules } as never)} where id = ${stage!.id}`;
+    const n =
+      Object.keys(opts.stageRules).length === 0
+        ? await sql`update stages set config = config - 'rules' where id = ${stage!.id}`
+        : await sql`update stages set config = config || ${sql.json({ rules: opts.stageRules } as never)} where id = ${stage!.id}`;
     if (n.count !== 1) throw new Error("seedBracket: the stage rules were not written"); // R13
   }
   await generateStageFixtures(auth, stage!.id);

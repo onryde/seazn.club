@@ -4,6 +4,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
+import { stageDefaultsFor } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
@@ -758,5 +759,63 @@ describe.skipIf(!HAS_DB)("createFromTemplate — seeding persistence (P7/D1b T3)
     const [{ n: orphanCompetitions }] = await sql<{ n: number }[]>`
       select count(*)::int as n from competitions where org_id = ${auth.orgId} and name = ${name}`;
     expect(orphanCompetitions).toBe(0);
+  });
+});
+
+// W2c Task 12 (X-SR-6; D2a's third door on `createStages`' terms) — a template stage is created with its kind's preset
+// match rules, and a `rules` key a template stage declares is validated against the division exactly as the stage PUT
+// validates a save. Expected presets from the engine (`stageDefaultsFor`), never from the code under test.
+describe.skipIf(!HAS_DB)("createFromTemplate — template stage rules (W2c Task 12)", () => {
+  const football = builtinModules.find((m) => m.key === "football")!;
+
+  it("X-SR-6 wc32's stages are created with football's presets: the group stage none, every bracket stage its own (counted)", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const template = getTemplate("wc32")!;
+    const division = template.divisions[0]!;
+    expect(division.sportKey, "the premise: wc32 is football").toBe("football");
+    const wc32 = await createFromTemplate(auth, { template_key: "wc32", name: `wc32 ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31", visibility: "private" });
+    let bracket = 0;
+    for (const [i, st] of wc32.divisions[0]!.stages.entries()) {
+      const kind = division.stages[i]!.kind;
+      const expected = stageDefaultsFor(football, kind, division.variantKey);
+      const [row] = await sql<{ config: Record<string, unknown> }[]>`select config from stages where id = ${st.id}`;
+      if (Object.keys(expected).length === 0) expect(Object.hasOwn(row!.config, "rules"), `${kind}: no preset`).toBe(false);
+      else {
+        expect(row!.config.rules, kind).toEqual(expected);
+        bracket++;
+      }
+    }
+    expect(bracket, "anti-vacuity: wc32 has a bracket stage").toBeGreaterThan(0);
+  });
+
+  const footballKnockout = (rules: Record<string, unknown>): CompetitionTemplate => ({
+    key: "test-synthetic",
+    version: 1,
+    i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+    divisions: [
+      {
+        i18nNameKey: "templates.slam128.div.main",
+        sportKey: "football",
+        variantKey: "11-a-side",
+        entrantKind: "team",
+        entrantCount: 8,
+        stages: [{ i18nNameKey: "templates.stage.mainDraw", kind: "knockout", config: { rules } }],
+      },
+    ],
+  });
+
+  it("a declared rules key the sport never declares fails the instantiation (422, located), nothing created; a declared one lands over the preset", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const before = await competitionCount(auth.orgId);
+    await expect(
+      instantiateTemplate(auth, footballKnockout({ bogus: 1 }), { name: `Bogus ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" }),
+    ).rejects.toMatchObject({ status: 422, code: TEMPLATE_INSTANTIATION_FAILED_CODE, extra: { divisionIndex: 0, stageIndex: 0 } });
+    expect(await competitionCount(auth.orgId), "rolled back whole").toBe(before);
+
+    const ok = await instantiateTemplate(auth, footballKnockout({ shootout: false }), { name: `Off ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" });
+    const [row] = await sql<{ config: Record<string, unknown> }[]>`select config from stages where id = ${ok.divisions[0]!.stages[0]!.id}`;
+    expect(row!.config.rules).toEqual({ ...stageDefaultsFor(football, "knockout", "11-a-side"), shootout: false });
   });
 });

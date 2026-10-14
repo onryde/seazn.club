@@ -60,8 +60,8 @@ const dropTiebreak = (id: string) => sql`update fixtures set config_snapshot = c
 const LEVEL_KINDS = ["draw", "tie", "no_result"] as const;
 
 /** A 4-draw bracket: two seated semis feeding an empty final (and, for double_elim, a losers line). */
-async function semi(sport: string, variant: string, stageKind: "knockout" | "double_elim" = "knockout") {
-  const s = await seedBracket({ sport, variant: declaredVariant(sport, variant), stageKind, entrants: 4 });
+async function semi(sport: string, variant: string, stageKind: "knockout" | "double_elim" = "knockout", stageRules?: Record<string, unknown>) {
+  const s = await seedBracket({ sport, variant: declaredVariant(sport, variant), stageKind, entrants: 4, ...(stageRules === undefined ? {} : { stageRules }) });
   const sf = s.fixtureIds[0]!;
   const r = await row(sf);
   return { ...s, sf, final: r.winner_to_fixture!, home: r.home_entrant_id!, away: r.away_entrant_id! };
@@ -135,7 +135,7 @@ describe.skipIf(!HAS_DB)("X-BR-1: every seating read path asserts the bug shape 
 
 describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats both", () => {
   it("X-BR-2: a level football knockout result is held — needs_decision, nobody seated in the final, onDecided not run; the settle runs it", async () => {
-    const t = await semi("football", "11-a-side");
+    const t = await semi("football", "11-a-side", "knockout", {}); // every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties)
     const seatChecks = () => vi.mocked(assertNoLevelSeat).mock.calls.map(([f]) => f).filter((f) => f.fixtureId === t.sf);
     await post(t.auth, t.sf, "core.start");
     await post(t.auth, t.sf, "football.period", { phase: "HT" });

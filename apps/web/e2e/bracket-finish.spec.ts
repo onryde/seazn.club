@@ -3,6 +3,7 @@ import { TAG, activeOrg, apiJson, addEntrantsViaApi, createStageAndGenerate, exp
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { builtinModules } from "@seazn/engine/sports";
+import { decidersOffRules } from "./stage-deciders";
 import { forfeitAdmission, playRecorded } from "@seazn/engine/core";
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../src/lib/forfeit-phase-refusal";
 import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
@@ -76,10 +77,15 @@ async function expectSheetHeadOneRow(page: Page, width: number, opts: { hyphenat
 type Visibility = "private" | "public";
 async function knockout(
   r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], visibility: Visibility = "private", people?: string[],
-  divisionConfig?: Record<string, unknown>,
+  divisionConfig?: Record<string, unknown>, stageRules?: Record<string, unknown>,
 ) {
-  return staged(r, sport, variant, "knockout", names, visibility, people, divisionConfig);
+  return staged(r, sport, variant, "knockout", names, visibility, people, divisionConfig, stageRules);
 }
+
+/** A football knockout whose organiser switched every decider off (W2c X-SR-6: a new knockout starts with extra time and
+ *  penalties), so a level full time is HELD for a decision. */
+const footballHeldKnockout = (r: APIRequestContext, names?: string[], visibility: Visibility = "private") =>
+  knockout(r, "football", "11-a-side", names, visibility, undefined, undefined, decidersOffRules("football", "11-a-side"));
 
 /** Fix round 2 (N1) — the D-6 shape: SINGLES entrants whose `display_name` snapshot is whatever the entry flow wrote
  *  ("Entry 1"), each with the one real person behind it. Every scoring surface names such an entrant by its member
@@ -105,7 +111,7 @@ async function addSinglesWithMembers(r: APIRequestContext, divisionId: string, n
 
 async function staged(
   r: APIRequestContext, sport: string, variant: string, kind: "knockout" | "league", names: string[], visibility: Visibility = "private", people?: string[],
-  divisionConfig?: Record<string, unknown>,
+  divisionConfig?: Record<string, unknown>, stageRules?: Record<string, unknown>,
 ) {
   // Preflight C14: the variant is one the sport declares (module.variants), never a guessed literal.
   expect(Object.keys(builtinModules.find((m) => m.key === sport)?.variants ?? {}), `${sport} declares ${variant}`).toContain(variant);
@@ -124,7 +130,9 @@ async function staged(
       ? await addEntrantsViaApi(r, div.data!.id, names, sport === "football" ? "team" : "individual")
       : await addSinglesWithMembers(r, div.data!.id, names, people);
   expect(added.ids, `entrants for ${sport}`).toHaveLength(names.length);
-  const { fixtureIds, stageId } = await createStageAndGenerate(r, div.data!.id, { kind, name: "Cup" });
+  const { fixtureIds, stageId } = await createStageAndGenerate(r, div.data!.id, {
+    kind, name: "Cup", ...(stageRules === undefined ? {} : { config: { rules: stageRules } }),
+  });
   const started = await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, `start ${sport}: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   const all = await Promise.all(fixtureIds.map((id) => read(r, id)));
@@ -149,10 +157,10 @@ async function seatedInFinal(sfId: string): Promise<(string | null)[]> {
   });
 }
 
-/** A football 0–0 to full time — no extra time or shootout is configured for 11-a-side, so a knockout HOLDS it
- *  (X-BR-2). The stream is the one `settle-seating.test.ts` pins: `football.period` HT, then FT. */
+/** A football 0–0 to full time in a knockout whose deciders are all off (no extra time, no shoot-out), so it is HELD
+ *  (X-BR-2, X-SR-6). The stream is the one `settle-seating.test.ts` pins: `football.period` HT, then FT. */
 async function heldFootball(r: APIRequestContext) {
-  const { sf, divisionId } = await knockout(r, "football", "11-a-side");
+  const { sf, divisionId } = await footballHeldKnockout(r);
   await post(r, sf.id, "core.start");
   await post(r, sf.id, "football.period", { phase: "HT" });
   await post(r, sf.id, "football.period", { phase: "FT" });
@@ -386,7 +394,7 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await expect(complete).toBeVisible();
     await complete.click();
     const warning = page.getByTestId("schedule-warning");
-    await expect(warning, "named by its players, in the organiser's words").toHaveText(ui("schedule.error.completeHeldOne").replace("{matches}", heldNames));
+    await expect(warning, "named by its players, in the organiser's words").toHaveText(ui("schedule.error.completeHeldOne", { matches: heldNames }));
     await expect(warning).not.toContainText("round 1");
     expect(await stageStatus(), "refused: the stage did not complete").toEqual(["active"]);
 
@@ -1433,7 +1441,7 @@ const say = (key: string, params: Record<string, string> = {}) => {
 test.describe("W2a — the public match page and bracket (Task 13)", () => {
   test("the public match page names the settle method and keeps the level score", async ({ page, request }) => {
     const org = await activeOrg(page);
-    const ko = await knockout(request, "football", "11-a-side", undefined, "public");
+    const ko = await footballHeldKnockout(request, undefined, "public");
     const { sf } = ko;
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "football.period", { phase: "HT" });
@@ -1575,7 +1583,7 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
   test("the public screens at 1280, 768 and 320: held match, settled match, held bracket — no horizontal scroll", async ({ page, request }) => {
     const org = await activeOrg(page);
     const LONG = ["W2a Maximiliana Konstantinopoulou-Grunewald", "W2a Bartholomew Featherstonehaugh-Wolfeschl", "W2a Cy", "W2a Di"];
-    const ko = await knockout(request, "football", "11-a-side", LONG, "public");
+    const ko = await footballHeldKnockout(request, LONG, "public");
     const { sf } = ko;
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "football.period", { phase: "HT" });

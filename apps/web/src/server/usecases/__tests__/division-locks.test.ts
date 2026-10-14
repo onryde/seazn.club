@@ -8,12 +8,12 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RuleErrorCode } from "@/lib/rule-errors";
 import { BRACKET_KINDS, DRAW_KINDS, EngineError, StageKind, forbidsLevelResult } from "@seazn/engine/core";
-import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, stageDefaultsFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { PointsRule, applyPointsRule } from "@seazn/engine/competition";
 import { defaultLineupPair } from "@seazn/engine/testkit";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { ENGINE_HTTP } from "@/server/api-v1/http";
+import { ENGINE_HTTP, v1 } from "@/server/api-v1/http";
 import { appendEvent, resolveLatestModule } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
@@ -325,6 +325,11 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(data.refused.map((x) => `${x.field}@${x.stageName}`).sort()).toEqual(["finalSetTo@Pool A", "setTo@Pool A"]);
     expect((err as unknown as Error).message, "the message names the kept fields").toMatch(/setTo.*stay as stored/);
     expect((await getDivision(r.auth, r.divisionId)).config).toEqual(before);
+    // W2c Task 12 (Task 2 review): the real refusal through the real v1 envelope — `refused` reaches the client beside
+    // `issues`, so the organiser is told which kept values the config no longer parses with.
+    const wire = (await (await v1(async () => { throw err; })).json()) as { error: { refused?: unknown; issues?: unknown } };
+    expect(wire.error.refused, "the 422 names the kept fields").toEqual(data.refused);
+    expect(Array.isArray(wire.error.issues) && wire.error.issues.length > 0, "and the engine's issues").toBe(true);
   });
 
   // ---- fix round 1 (review of 3658e6ea0) ----------------------------------------------------------------------
@@ -775,19 +780,30 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect(refused.refused).toEqual([{ field: "tieBoard", code: "DIVISION_FORMAT_LOCKED", stageId: lg.s1.id, stageName: "Pool A" }]);
   });
 
-  it("M-b a started knockout that carries its own top-level `shootout` does not inherit the division's; one that does not, does", async () => {
+  it("M-b a started knockout that carries its own `shootout` (its preset in `rules`, or the pre-W2c top-level key) does not inherit the division's; one cleared back to the division does", async () => {
     const fb = resolveLatestModule("football");
     expect(deciderKeysFor(fb, "knockout", null), "precondition: the engine declares shootout a decider").toContain("shootout");
+    expect(stageDefaultsFor(fb, "knockout", "11-a-side"), "precondition: a new knockout starts with the shoot-out (X-SR-6)").toHaveProperty("shootout");
 
+    // W2c Task 12: the knockout is CREATED with its preset, `rules.shootout` — the stage carries its own.
+    const preset = await rigBracket("football", "11-a-side", { kind: "team" });
+    await start(preset.auth, preset.fixtureId);
+    const b0 = (await getDivision(preset.auth, preset.divisionId)).config as Record<string, unknown>;
+    const viaRules = await patchDivision(preset.auth, preset.divisionId, { config: { ...b0, shootout: true } });
+    expect(viaRules.refused).toEqual([]);
+
+    // The pre-W2c storage, a top-level key the resolver still reads (stage-cfg.ts, until Task 13b): also its own.
     const own = await rigBracket("football", "11-a-side", { kind: "team" });
-    await sql`update stages set config = config || ${sql.json({ shootout: true } as never)} where id = ${own.ko.id}`;
+    await sql`update stages set config = (config - 'rules') || ${sql.json({ shootout: true } as never)} where id = ${own.ko.id}`;
     await start(own.auth, own.fixtureId);
     const b1 = (await getDivision(own.auth, own.divisionId)).config as Record<string, unknown>;
     const saved = await patchDivision(own.auth, own.divisionId, { config: { ...b1, shootout: true } });
     expect(saved.refused).toEqual([]);
     expect((saved.config as { shootout: boolean }).shootout).toBe(true);
 
+    // The organiser cleared the stage back to the division (`PUT /stages/{id}/rules {rules: null}`): it inherits.
     const inherits = await rigBracket("football", "11-a-side", { kind: "team" });
+    await putStageRules(inherits.auth, inherits.ko.id, { rules: null });
     await start(inherits.auth, inherits.fixtureId);
     const b2 = (await getDivision(inherits.auth, inherits.divisionId)).config as Record<string, unknown>;
     const refused = await patchDivision(inherits.auth, inherits.divisionId, { name: "Renamed", config: { ...b2, shootout: true } });
@@ -807,20 +823,28 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect((out.config as { dls: { enabled: boolean } }).dls.enabled, "nothing refused was written").toBe(false);
   });
 
-  // The division's own variant is a lock input through the engine's DECIDER declaration for the stage kind and variant
-  // (`deciderKeysFor`): cricket's super over is a decider declared for the limited-overs variants only, so a started t20
-  // stage that carries its own is not a stage that inherits the division's.
-  it("M-b the division's own variant reaches the lock: a started t20 stage that carries its own `superOver` does not inherit the division's", async () => {
+  // W2c Task 12 (batch-2 concern A, Task 5 M2): a decider is the stage's own only where the resolver READS it there. A
+  // top-level `superOver` is read by nothing (stage-cfg.ts reads `rules` and, until Task 13b, the top-level
+  // `shootout`/`extraTime` alone), so a started stage carrying one still plays the DIVISION's super over: a change to it
+  // reaches that stage's unplayed fixtures and is refused, naming the stage. Its D3 storage, `rules.superOver`, is its own.
+  it("M-b a started t20 stage with a top-level `superOver` (read by nothing) inherits the division's and is refused; one with `rules.superOver` does not", async () => {
     const cr = resolveLatestModule("cricket");
     expect(deciderKeysFor(cr, "league", "t20"), "precondition: the engine declares superOver a t20 decider").toContain("superOver");
-    expect(deciderKeysFor(cr, "league", ""), "precondition: and not one under another variant").not.toContain("superOver");
     const r = await rig("cricket", "t20", "team");
     await sql`update stages set config = config || ${sql.json({ superOver: true } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
-    const out = await patchDivision(r.auth, r.divisionId, { config: { ...before, superOver: true } });
-    expect(out.refused).toEqual([]);
-    expect((out.config as { superOver: boolean }).superOver).toBe(true);
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, superOver: true } });
+    expect(out.refused).toEqual([{ field: "superOver", code: "DIVISION_FORMAT_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
+    expect((out.config as { superOver: boolean }).superOver, "nothing refused was written").toBe(false);
+
+    const own = await rig("cricket", "t20", "team");
+    await putStageRules(own.auth, own.s1.id, { rules: { superOver: true } });
+    await start(own.auth, own.fixtureId);
+    const b2 = (await getDivision(own.auth, own.divisionId)).config as Record<string, unknown>;
+    const saved = await patchDivision(own.auth, own.divisionId, { config: { ...b2, superOver: true } });
+    expect(saved.refused).toEqual([]);
+    expect((saved.config as { superOver: boolean }).superOver).toBe(true);
   });
 
   // Fix round 2, I-1. The engine's `appliesTo` says where a key is OFFERED, not where the fold READS it: boardgame lists
@@ -1025,13 +1049,13 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
       expect(await refusalsFor(r, fakeModule(keys, reads, refuses), ["forcedKey"], "x", { defaulted: "yes" }), "a refused parse passes the stored config through").toEqual([]);
     });
 
-    it("X-SR-4 a stage that sets a declared decider at its top level does not inherit it; one that sets a non-decider there still does", async () => {
+    it("X-SR-4 a stage's top-level `shootout` (a key the resolver still reads there) is its own; any other decider or key at the top level is inherited", async () => {
       const r = await rigBracket("generic", "score");
-      await sql`update stages set config = config || ${sql.json({ dec: 1, plain: 1 } as never)} where id = ${r.ko.id}`;
+      await sql`update stages set config = config || ${sql.json({ shootout: true, dec: 1, plain: 1 } as never)} where id = ${r.ko.id}`;
       await start(r.auth, r.fixtureId);
-      const mod = fakeModule({ dec: { scope: "stage", decider: true }, plain: { scope: "stage" } });
-      const got = await refusalsFor(r, mod, ["dec", "plain"]);
-      expect(got.map((x) => x.field), "only the non-decider is inherited").toEqual(["plain"]);
+      const mod = fakeModule({ shootout: { scope: "stage", decider: true }, dec: { scope: "stage", decider: true }, plain: { scope: "stage" } });
+      const got = await refusalsFor(r, mod, ["shootout", "dec", "plain"]);
+      expect(got.map((x) => x.field), "a declared decider the resolver never reads at the top level is inherited (the I-1 class)").toEqual(["dec", "plain"]);
     });
   });
 });

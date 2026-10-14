@@ -4525,7 +4525,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
+        "summary": "Update a division. A format edit (`variant_key`, `config`, `tiebreakers`) is applied PER FIELD (W2c, owner P-2 \"A\"): a change a STARTED stage depends on is not applied and is listed in the 200's `refused` (`field`, `code`, `stageId`, `stageName`) while every other field lands; when nothing in the save can land, 409 DIVISION_FORMAT_LOCKED (the stage plays that format) or 409 DIVISION_TABLE_RULES_LOCKED (the stage's table ranks by it), the message naming the first stage and `refused` listing every field. 422 CONFIG_INVALID when the sport's schema refuses the config (`issues`, plus `refused` when the refusal follows from fields kept as stored), or when a stage's OWN rules would no longer parse under it (`stage_id`, `stage_name`, `issues`); 422 POINTS_MAP_INCOMPLETE when the points table would stop answering a stage's own `bestOf` (`stage_id`, `stage_name`). 400 RULE_NOT_SETTABLE when a new variant cannot carry a key a stage's own rules store (`field`, `stage_id`, `stage_name`) — clear it on that stage first. 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS when an unstarted match's own format (`PUT /fixtures/{id}/rules`) would stop fitting (`fixture_id`, `fixture_no`, `field`). 422 ENTRANT_KIND_IN_USE when entrants of a kind the new format refuses still exist. Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
         "tags": [
           "divisions"
         ],
@@ -4997,6 +4997,39 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "refused": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "DIVISION_FORMAT_LOCKED",
+                                  "DIVISION_TABLE_RULES_LOCKED"
+                                ]
+                              },
+                              "stageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "code",
+                              "stageId",
+                              "stageName"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -5025,7 +5058,8 @@
                         "archived_at",
                         "created_at",
                         "required_court_tags",
-                        "camera_policy"
+                        "camera_policy",
+                        "refused"
                       ],
                       "additionalProperties": false
                     },
@@ -5067,7 +5101,15 @@
                     "required_court_tags": [
                       "example"
                     ],
-                    "camera_policy": "off"
+                    "camera_policy": "off",
+                    "refused": [
+                      {
+                        "field": "example",
+                        "code": "DIVISION_FORMAT_LOCKED",
+                        "stageId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "stageName": "example"
+                      }
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -5075,7 +5117,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -5105,6 +5147,19 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "field": {
+                          "type": "string",
+                          "description": "On RULE_NOT_SETTABLE (400): the stage's own rules key the new variant cannot carry"
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "The stage whose own rules refuse the save"
+                        },
+                        "stage_name": {
+                          "type": "string",
+                          "description": "Its name, for the sentence"
                         }
                       },
                       "additionalProperties": true
@@ -5325,6 +5380,56 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "refused": {
+                          "type": "array",
+                          "description": "On DIVISION_FORMAT_LOCKED / DIVISION_TABLE_RULES_LOCKED (409): every field refused; the message names the first",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "DIVISION_FORMAT_LOCKED",
+                                  "DIVISION_TABLE_RULES_LOCKED"
+                                ]
+                              },
+                              "stageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "code",
+                              "stageId",
+                              "stageName"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "fixture_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the unstarted match whose own format would stop fitting"
+                        },
+                        "fixture_no": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): that match's number on the board"
+                        },
+                        "field": {
+                          "type": "string",
+                          "description": "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the rule that would stop fitting"
                         }
                       },
                       "additionalProperties": true
@@ -5369,6 +5474,74 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "issues": {
+                          "type": "array",
+                          "description": "On CONFIG_INVALID (422): the sport schema's reasons, path and message only",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "path",
+                              "message"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "array",
+                                "items": {
+                                  "type": [
+                                    "string",
+                                    "integer"
+                                  ]
+                                }
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "refused": {
+                          "type": "array",
+                          "description": "On CONFIG_INVALID (422) after a per-field refusal: the fields kept as stored, whose stored values the config no longer parses with",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "DIVISION_FORMAT_LOCKED",
+                                  "DIVISION_TABLE_RULES_LOCKED"
+                                ]
+                              },
+                              "stageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "code",
+                              "stageId",
+                              "stageName"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "The stage whose own rules refuse the save"
+                        },
+                        "stage_name": {
+                          "type": "string",
+                          "description": "Its name, for the sentence"
                         }
                       },
                       "additionalProperties": true
@@ -13235,7 +13408,7 @@
         ]
       },
       "post": {
-        "summary": "Define the stage graph. 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size",
+        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a knockout starts with its sport's deciders — football extra time 2x15 and a 5-kick shoot-out (3 in the youth formats), ice-hockey overtime and a shoot-out, the hockey shoot-out, the limited-overs super over; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value) and validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 POINTS_MAP_INCOMPLETE; nothing in the batch is written. A top-level `config.shootout` / `config.extraTime` is refused 400 (moved to `config.rules`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size",
         "tags": [
           "stages"
         ],
@@ -13390,8 +13563,12 @@
                           "rank_overrides": {},
                           "cross_feeds": {},
                           "placements": {},
-                          "shootout": {},
-                          "extraTime": {},
+                          "shootout": {
+                            "not": {}
+                          },
+                          "extraTime": {
+                            "not": {}
+                          },
                           "rules": {
                             "anyOf": [
                               {
@@ -13800,8 +13977,12 @@
                             "rank_overrides": {},
                             "cross_feeds": {},
                             "placements": {},
-                            "shootout": {},
-                            "extraTime": {},
+                            "shootout": {
+                              "not": {}
+                            },
+                            "extraTime": {
+                              "not": {}
+                            },
                             "rules": {
                               "anyOf": [
                                 {
@@ -14295,7 +14476,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -14525,7 +14706,7 @@
         ]
       },
       "put": {
-        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). 422 STAGE_SWISS_ROUNDS_REQUIRED as for POST, and raised BEFORE the existing graph is deleted",
+        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST — its kind's preset, then the rules its slot already stored (kept when the same `seq` keeps the same `kind`; a slot whose kind changed starts from its own kind's preset), then the body's `config.rules` — and every refusal POST can raise from the body (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 422 CONFIG_INVALID / POINTS_MAP_INCOMPLETE / STAGE_SWISS_ROUNDS_REQUIRED) is raised BEFORE the existing graph is deleted",
         "tags": [
           "stages"
         ],
@@ -14680,8 +14861,12 @@
                           "rank_overrides": {},
                           "cross_feeds": {},
                           "placements": {},
-                          "shootout": {},
-                          "extraTime": {},
+                          "shootout": {
+                            "not": {}
+                          },
+                          "extraTime": {
+                            "not": {}
+                          },
                           "rules": {
                             "anyOf": [
                               {
@@ -15090,8 +15275,12 @@
                             "rank_overrides": {},
                             "cross_feeds": {},
                             "placements": {},
-                            "shootout": {},
-                            "extraTime": {},
+                            "shootout": {
+                              "not": {}
+                            },
+                            "extraTime": {
+                              "not": {}
+                            },
                             "rules": {
                               "anyOf": [
                                 {
@@ -15506,7 +15695,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {

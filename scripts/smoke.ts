@@ -6,6 +6,7 @@
 // must be the same one the target server uses.
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import postgres from "postgres";
 import { selectSmokeSuites, type SmokeSelection } from "./smoke-select.ts";
 import {
@@ -36,7 +37,7 @@ import { foldEpochOf } from "@seazn/engine/sport";
 // W2c Task 11: the sport registry and the engine's own stage-key declaration, the expectation of the every-sport check
 // below (never a list of keys typed into the script).
 import { builtinModules } from "@seazn/engine/sports";
-import { stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { deciderKeysFor, stageDefaultsFor, stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
 // The overlay's sport palette, from the module `overlay-tokens.ts` re-exports
 // it out of (`paletteFor = resolveSportPalette`). Imported by relative path for
 // the same reason `@seazn/engine` is imported at all and `@/…` is not: this
@@ -2280,7 +2281,7 @@ async function hubKnockoutSuite(): Promise<void> {
 /**
  * Format matrix W2a (spec §5, plan Task 17 Step 1): a knockout always finishes. Four flows through the real API as the
  * organiser of one fresh org, repriced to Pro (flow 4 mints a device link, a Pro grant):
- *  1. a football semi-final played to full time level, no decider configured (C18): held `needs_decision`; the
+ *  1. a football semi-final played to full time level, every decider switched off (C18; W2c X-SR-6): held `needs_decision`; the
  *     organiser settles it by lot for the away side → decided, `settled_lot`, the final's seat holds the winner, and
  *     the public match page says the winner "advanced on lot";
  *  2. a chess semi-final drawn, then `boardgame.tiebreak` at Armageddon recording the away side as Black, who won
@@ -2329,8 +2330,9 @@ async function bracketFinishSuite(): Promise<void> {
   const post = async (id: string, type: string, payload: unknown = {}) =>
     v1(owner, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: await seqOf(id), type, payload });
 
-  /** One division with a generated, started 4-entrant knockout: its two semi-finals (both seated) and its final. */
-  async function knockout(label: string, division: Record<string, unknown>, kind: "individual" | "team") {
+  /** One division with a generated, started 4-entrant knockout: its two semi-finals (both seated) and its final.
+   *  `rules` = the knockout stage's own match rules (W2c Task 12: a new knockout starts with its sport's preset). */
+  async function knockout(label: string, division: Record<string, unknown>, kind: "individual" | "team", rules?: Record<string, unknown>) {
     const div = await v1(owner, `/api/v1/competitions/${compRow.id}/divisions`, "POST", { name: label, ...division });
     const divRow = v1data<{ id: string; slug: string }>(div);
     const names = ["One", "Two", "Three", "Four"].map((n) => `${label} ${n} ${tag}`);
@@ -2341,7 +2343,9 @@ async function bracketFinishSuite(): Promise<void> {
       names.map((display_name, i) => ({ kind, display_name, seed: i + 1 })),
     );
     const ids = (v1data<{ id: string }[] | undefined>(entrants) ?? []).map((e) => e.id);
-    const stage = await v1(owner, `/api/v1/divisions/${divRow.id}/stages`, "POST", { seq: 1, kind: "knockout", name: label });
+    const stage = await v1(owner, `/api/v1/divisions/${divRow.id}/stages`, "POST", {
+      seq: 1, kind: "knockout", name: label, ...(rules === undefined ? {} : { config: { rules } }),
+    });
     const generated = await v1(owner, `/api/v1/stages/${v1data<{ id: string }>(stage).id}/generate`, "POST");
     const started = await v1(owner, `/api/v1/divisions/${divRow.id}/start`, "POST");
     const drawn = v1data<BfFixture[] | undefined>(await v1(owner, `/api/v1/divisions/${divRow.id}/fixtures`)) ?? [];
@@ -2376,7 +2380,12 @@ async function bracketFinishSuite(): Promise<void> {
   }
 
   // --- 1. Football: a level semi at full time is HELD, then settled by lot. ---
-  const foot = await knockout("BF Football", { sport_key: "football", variant_key: "11-a-side" }, "team");
+  // W2c Task 12 (X-SR-6): a new knockout starts with extra time and penalties; the organiser has switched every decider
+  // off — to the 11-a-side division's own values, read off the engine — so the level semi is held, never refused.
+  const football = builtinModules.find((m) => m.key === "football") as AnySportModule;
+  const footballVariant = football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>;
+  const decidersOff = Object.fromEntries(deciderKeysFor(football, "knockout", "11-a-side").map((k) => [k, footballVariant[k]]));
+  const foot = await knockout("BF Football", { sport_key: "football", variant_key: "11-a-side" }, "team", decidersOff);
   const [footSf, footSf2] = foot.semis;
   const footAway = footSf?.away_entrant_id ?? "";
   const footWrites: number[] = [];
@@ -7228,6 +7237,46 @@ async function w2cStageRulesSuite(): Promise<void> {
   );
   await w2cFixtureRulesChecks(owner, fixtureId, unstartedId);
   await w2cStageRulesEverySportChecks(owner);
+  await w2cStagePresetChecks(owner);
+}
+
+/**
+ * W2c Task 12 (X-SR-6, SC-P8) — over real HTTP: a football knockout created with no rules is stored with football's
+ * knockout preset (extra time, penalties, the kick count), read back off `GET /stages`; a second one created with
+ * `config.rules` keeps the organiser's choice over it; and a top-level `shootout` is refused 400 naming where it moved.
+ * The expected preset is the engine's (`stageDefaultsFor`), never typed here.
+ */
+async function w2cStagePresetChecks(owner: Session): Promise<void> {
+  const football = builtinModules.find((m) => m.key === "football") as AnySportModule;
+  const preset = stageDefaultsFor(football, "knockout", "11-a-side");
+  const comp = v1data<{ id: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Presets ${tag}` }),
+  );
+  const div = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "W2c KO", sport_key: "football", variant_key: "11-a-side" }),
+  );
+  const created = await v1(owner, `/api/v1/divisions/${div?.id}/stages`, "POST", { seq: 1, kind: "knockout", name: "Cup" });
+  const off = await v1(owner, `/api/v1/divisions/${div?.id}/stages`, "POST", { seq: 2, kind: "knockout", name: "Plate", config: { rules: { shootout: false } } });
+  const listed = v1data<{ seq: number; config: { rules?: Record<string, unknown> } }[] | undefined>(await v1(owner, `/api/v1/divisions/${div?.id}/stages`)) ?? [];
+  const cup = listed.find((s) => s.seq === 1)?.config.rules;
+  const plate = listed.find((s) => s.seq === 2)?.config.rules;
+  // jsonb keeps its own key order, so the comparison is structural, never JSON.stringify's.
+  const stored = created.status === 201 && isDeepStrictEqual(cup, preset) && cup?.shootout === true;
+  check(
+    "w2c: a new knockout stage stores its sport's deciders" + (stored ? "" : ` — got ${created.status} ${JSON.stringify(cup ?? created.json.error)}`),
+    stored,
+  );
+  const kept = off.status === 201 && isDeepStrictEqual(plate, { ...preset, shootout: false });
+  check(
+    "w2c: a knockout created with config.rules keeps the organiser's choice over the preset" + (kept ? "" : ` — got ${off.status} ${JSON.stringify(plate ?? off.json.error)}`),
+    kept,
+  );
+  const top = await v1(owner, `/api/v1/divisions/${div?.id}/stages`, "POST", { seq: 3, kind: "knockout", name: "Old", config: { shootout: true } });
+  const refused = top.status === 400 && JSON.stringify(top.json.error ?? {}).includes("config.rules");
+  check(
+    "w2c: a top-level stage shootout is refused, naming config.rules" + (refused ? "" : ` — got ${top.status} ${JSON.stringify(top.json.error ?? top.json.data)}`),
+    refused,
+  );
 }
 
 /**

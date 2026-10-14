@@ -1077,7 +1077,8 @@ describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (sp
   it("NEW-H1 / X-BR-2: a HELD feeder (needs_decision) is not dead either — neither of its seats is stamped, and the settle fills both", async () => {
     // single-sport: football — a 0–0 full time is a play-produced level result, held in a bracket (X-BR-2). W2b's
     // "decided, nobody advances" clause will sit beside the abandon clause and must not sweep a held row in.
-    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    // stageRules {}: every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties).
+    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true }, stageRules: {} });
     const [sf1, sf2] = s.fixtureIds;
     await post(s.auth, sf1!, "core.start");
     await post(s.auth, sf1!, "football.period", { phase: "HT" });

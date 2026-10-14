@@ -47,7 +47,8 @@ async function importChess(result: Record<string, unknown>, tag: string) {
 
 /** A started 2-draw football knockout; the stream ends 0-0 at full time — a level result a bracket HOLDS. */
 async function importFootballDraw(tag: string) {
-  const s = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 2 });
+  // stageRules {}: every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties).
+  const s = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 2, stageRules: {} });
   const fixtureId = s.fixtureIds[0]!;
   const report = await importEvents(s.auth, s.divisionId, {
     import_id: `held-${tag}-${fixtureId.slice(0, 8)}`,

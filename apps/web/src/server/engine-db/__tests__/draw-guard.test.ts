@@ -161,11 +161,13 @@ describe.skipIf(!HAS_DB)("knockout draw guard (PROMPT-61)", () => {
     expect(await eventCount(s.fixtureId)).toBe(5);
   });
 
-  it("a knockout STAGE config shootout:true routes a level FT into the shootout, not a draw", async () => {
+  it("a knockout STAGE's rules.shootout:true routes a level FT into the shootout, not a draw", async () => {
     const s = await seedFixture({
       sport: "football",
       stageKind: "knockout",
-      stageConfig: { shootout: true }, // division config keeps shootout:false
+      // W2c D3: a stage's decider is one of its match rules (`config.rules`), the shape stage creation writes as its
+      // preset (Task 12). The division config keeps shootout:false.
+      stageConfig: { rules: { shootout: true } },
     });
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
     await appendEvent(s.orgId, s.fixtureId, 1, {

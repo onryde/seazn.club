@@ -62,7 +62,8 @@ describe.skipIf(!HAS_DB)("replayOutcomeFor", () => {
     // single-sport: football reaches a held bracket fixture by PLAY — 0-0 at full time is a draw, which a knockout
     // HOLDS (ruling 79, X-BR-2). W2b retired the chess double forfeit this used (D15: refused on write; it now folds
     // to a double walkover, which is forfeited, not held).
-    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 2 });
+    // stageRules {}: every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties).
+    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 2, stageRules: {} });
     const fixtureId = s.fixtureIds[0]!;
     const key = `idem-${randomUUID()}`;
     await appendEvent(s.auth.orgId, fixtureId, 0, { type: "core.start", payload: {} });

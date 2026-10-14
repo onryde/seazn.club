@@ -238,7 +238,8 @@ describe.skipIf(!HAS_DB)("X-DW-2: a double walkover seats nobody; the cascade wa
 
   it("X-BR-1 (amended): a bracket fixture is decided only by a win or a double walkover — a level result is held, a double walkover completes the line", async () => {
     // single-sport: football reaches a held bracket fixture by play (0-0 FT, X-BR-2).
-    const s = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 4 });
+    // stageRules {}: every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties).
+    const s = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 4, stageRules: {} });
     const [a, b] = s.fixtureIds;
     const sf1 = await fixtureRow(a!);
     await post(s.auth, sf1.id, "core.start");

@@ -96,7 +96,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/competitions/{id}/divisions", method: "get", summary: "List divisions", tag: "divisions", response: z.array(S.Division) },
   { path: "/competitions/{id}/divisions", method: "post", summary: "Create a division (pins sport module version). With onlinePlay 'lichess', 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`), and 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them); camera_policy null or absent inherits the competition's, and a non-off value on a sport that cannot play online is 422 CAMERA_POLICY_SPORT", tag: "divisions", request: S.CreateDivision, response: S.Division, status: 201, errors: [403, 409, 422] },
   { path: "/divisions/{id}", method: "get", summary: "Get a division", tag: "divisions", response: S.Division },
-  { path: "/divisions/{id}", method: "patch", summary: "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited", tag: "divisions", request: S.PatchDivision, response: S.Division, errors: [402, 403, 409, 422] },
+  { path: "/divisions/{id}", method: "patch", summary: "Update a division. A format edit (`variant_key`, `config`, `tiebreakers`) is applied PER FIELD (W2c, owner P-2 \"A\"): a change a STARTED stage depends on is not applied and is listed in the 200's `refused` (`field`, `code`, `stageId`, `stageName`) while every other field lands; when nothing in the save can land, 409 DIVISION_FORMAT_LOCKED (the stage plays that format) or 409 DIVISION_TABLE_RULES_LOCKED (the stage's table ranks by it), the message naming the first stage and `refused` listing every field. 422 CONFIG_INVALID when the sport's schema refuses the config (`issues`, plus `refused` when the refusal follows from fields kept as stored), or when a stage's OWN rules would no longer parse under it (`stage_id`, `stage_name`, `issues`); 422 POINTS_MAP_INCOMPLETE when the points table would stop answering a stage's own `bestOf` (`stage_id`, `stage_name`). 400 RULE_NOT_SETTABLE when a new variant cannot carry a key a stage's own rules store (`field`, `stage_id`, `stage_name`) — clear it on that stage first. 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS when an unstarted match's own format (`PUT /fixtures/{id}/rules`) would stop fitting (`fixture_id`, `fixture_no`, `field`). 422 ENTRANT_KIND_IN_USE when entrants of a kind the new format refuses still exist. Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited", tag: "divisions", request: S.PatchDivision, response: S.PatchedDivision, errors: [400, 402, 403, 409, 422] },
   { path: "/divisions/{id}/logo-upload-url", method: "post", summary: "Signed upload URL for the division card logo (session-only; not key-accessible)", tag: "divisions" },
   { path: "/divisions/{id}", method: "delete", summary: "Delete a setup division (204) or purge a 30-day archive; started/resulted → 409 DIVISION_HAS_RESULTS {archive: true}", tag: "divisions", status: 204, errors: [409] },
   { path: "/divisions/{id}/archive", method: "post", summary: "Archive: hidden from console/public/quota, restorable", tag: "divisions", response: S.Division, errors: [409] },
@@ -141,8 +141,8 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}/checkin-link", method: "post", summary: "Mint the fixture's self-check-in QR link (session editors only; signed token, dies at local midnight)", tag: "player-accounts", response: S.CheckinLink, status: 201, errors: [422] },
   // Stages
   { path: "/divisions/{id}/stages", method: "get", summary: "List stages", tag: "stages", response: z.array(S.Stage) },
-  { path: "/divisions/{id}/stages", method: "post", summary: "Define the stage graph. 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size", tag: "stages", request: S.CreateStages, response: z.union([S.Stage, z.array(S.Stage)]), status: 201, errors: [409, 422] },
-  { path: "/divisions/{id}/stages", method: "put", summary: "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). 422 STAGE_SWISS_ROUNDS_REQUIRED as for POST, and raised BEFORE the existing graph is deleted", tag: "stages", request: S.CreateStages, response: z.array(S.Stage), errors: [409, 422] },
+  { path: "/divisions/{id}/stages", method: "post", summary: "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a knockout starts with its sport's deciders — football extra time 2x15 and a 5-kick shoot-out (3 in the youth formats), ice-hockey overtime and a shoot-out, the hockey shoot-out, the limited-overs super over; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value) and validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 POINTS_MAP_INCOMPLETE; nothing in the batch is written. A top-level `config.shootout` / `config.extraTime` is refused 400 (moved to `config.rules`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size", tag: "stages", request: S.CreateStages, response: z.union([S.Stage, z.array(S.Stage)]), status: 201, errors: [400, 409, 422] },
+  { path: "/divisions/{id}/stages", method: "put", summary: "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST — its kind's preset, then the rules its slot already stored (kept when the same `seq` keeps the same `kind`; a slot whose kind changed starts from its own kind's preset), then the body's `config.rules` — and every refusal POST can raise from the body (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 422 CONFIG_INVALID / POINTS_MAP_INCOMPLETE / STAGE_SWISS_ROUNDS_REQUIRED) is raised BEFORE the existing graph is deleted", tag: "stages", request: S.CreateStages, response: z.array(S.Stage), errors: [400, 409, 422] },
   { path: "/stages/{id}/generate", method: "post", summary: "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored.", tag: "stages", request: S.GenerateStageInput, requestOptional: true, response: S.GenerateResult, errors: [422] },
   { path: "/stages/{id}/unpair", method: "post", summary: "Unpair latest Swiss round (shells kept) — clears sides on the highest fully seated round when it has no played results; Pair-minted bye awards do not block. 422 when the stage is not `swiss`; 409 ONLINE_GAME_EXISTS when an online (Lichess) game exists, or may exist, on a board it would clear — nothing changes, void the game first", tag: "stages", response: S.UnpairResult, errors: [409, 422] },
   { path: "/stages/{id}/open-round", method: "post", summary: "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (the 10-minute check-in window hangs off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) (asked after those two, so a re-open is refused alike and nothing is written); 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route", tag: "stages", request: S.OpenRoundInput, response: S.OpenRoundResult, errors: [403, 404, 409, 422] },
@@ -726,7 +726,41 @@ const STREAM_SESSION_CREATE_ERRORS = {
 // status -> the envelope THAT route x status uses instead of the plain
 // ERROR_ENVELOPE. Consulted once, inside `operation()`'s `route.errors`
 // loop, so a route not listed here is completely unaffected.
+// W2c — the division PATCH's refusals, each with the facts a client says it with (`lib/rule-errors.ts`
+// `ruleRefusalText`). `refused` is the same list the 200 carries.
+const DIVISION_REFUSED = {
+  type: "array",
+  description: "The format fields this save did not apply, each with the first started stage that depends on it",
+  items: toSchema(S.RefusedFieldS),
+} as const;
+const STAGE_NAMED = {
+  stage_id: { type: "string", format: "uuid", description: "The stage whose own rules refuse the save" },
+  stage_name: { type: "string", description: "Its name, for the sentence" },
+} as const;
+const DIVISION_PATCH_ERRORS = {
+  400: scopedErrorEnvelope({
+    field: { type: "string", description: "On RULE_NOT_SETTABLE (400): the stage's own rules key the new variant cannot carry" },
+    ...STAGE_NAMED,
+  }),
+  409: scopedErrorEnvelope({
+    refused: { ...DIVISION_REFUSED, description: "On DIVISION_FORMAT_LOCKED / DIVISION_TABLE_RULES_LOCKED (409): every field refused; the message names the first" },
+    fixture_id: { type: "string", format: "uuid", description: "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the unstarted match whose own format would stop fitting" },
+    fixture_no: { type: ["integer", "null"], description: "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): that match's number on the board" },
+    field: { type: "string", description: "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the rule that would stop fitting" },
+  }),
+  422: scopedErrorEnvelope({
+    issues: {
+      type: "array",
+      description: "On CONFIG_INVALID (422): the sport schema's reasons, path and message only",
+      items: { type: "object", required: ["path", "message"], properties: { path: { type: "array", items: { type: ["string", "integer"] } }, message: { type: "string" } } },
+    },
+    refused: { ...DIVISION_REFUSED, description: "On CONFIG_INVALID (422) after a per-field refusal: the fields kept as stored, whose stored values the config no longer parses with" },
+    ...STAGE_NAMED,
+  }),
+};
+
 const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> = {
+  "PATCH /divisions/{id}": DIVISION_PATCH_ERRORS,
   "POST /stages/{id}/schedule/auto": { 422: CAPACITY_ERROR_ENVELOPE },
   "POST /fixtures/{id}/events": { 426: ENGINE_OUTDATED_ENVELOPE },
   "POST /competitions/from-template": {

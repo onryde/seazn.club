@@ -424,15 +424,13 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     ).rejects.toMatchObject({ status: 404 });
   }, 30_000);
 
-  it("refuses a rules key through createStages", async () => {
+  it("createStages takes config.rules on the stage PUT's terms: a points key is RULE_NOT_SETTABLE, nothing created (custom points never ride a create)", async () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
 
-    // The shape SPORT_RULES.football genuinely emits — derived from the table,
-    // not invented. createStages parses stage config through no configSchema
-    // at all, and its paywall gate reads `s.config.points`, never
-    // `s.config.rules.points`, so without this refusal a football division
-    // could set custom shoot-out points straight past the entitlement.
+    // The shape SPORT_RULES.football genuinely emits — derived from the table, not invented. The custom-points paywall
+    // reads `s.config.points`, never `s.config.rules.points`: before W2c Task 12 this door refused `rules` outright; it
+    // now takes them through the engine's allowlist, which refuses every points key (they belong to the Points section).
     const smuggled = buildRuleOverride("football", { shootoutWin: "3", shootoutLoss: "1" });
     expect(smuggled).toEqual({ points: { shootoutWin: 3, shootoutLoss: 1 } });
 
@@ -444,7 +442,12 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
         config: { rules: smuggled },
         progression: null,
       }),
-    ).rejects.toMatchObject({ status: 400, code: "RULES_NOT_ACCEPTED_HERE" });
+    ).rejects.toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: "points" } });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stages where division_id = ${divisionId}`;
+    expect(n, "nothing created").toBe(0);
+    // The positive pair: a stage key the engine declares for a league rides the create and is stored.
+    const [st] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: { rules: { halfMinutes: 40 } }, progression: null });
+    expect((await stageConfig(st!.id)).rules).toEqual({ halfMinutes: 40 });
   }, 30_000);
 });
 

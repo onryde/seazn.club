@@ -409,7 +409,9 @@ async function main() {
         seq: 2,
         kind: "knockout",
         name: "Knockout",
-        config: { shootout: true, slotOrder: DEMO_SLOT_ORDER },
+        // W2c Task 12: a stage's deciders are its match rules. A football knockout is created with its preset
+        // (extra time, then penalties: X-SR-6); the shoot-out stated here as the rule this demo depends on.
+        config: { rules: { shootout: true }, slotOrder: DEMO_SLOT_ORDER },
         progression: {
           sources: [
             {

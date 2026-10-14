@@ -97,11 +97,12 @@ async function firstFixtureOf(stageId: string): Promise<string> {
 }
 
 /** The drift this suite exists for, applied the only way that is possible
- *  after a fixture has been scored: the division-wide FORMAT_LOCKED guard
- *  (divisions.ts) refuses a `bestOf` edit through the usecase once play has
- *  started, but the rows it protects can still diverge — a pre-lock edit, an
- *  import, an /admin repair. What matters here is that the fixture's FROZEN
- *  config and the division's LIVE config disagree. */
+ *  after a fixture has been scored: the division save's per-stage lock
+ *  (divisions.ts, W2c X-SR-4: DIVISION_FORMAT_LOCKED naming the started stage)
+ *  refuses a `bestOf` edit through the usecase once play has started, but the
+ *  rows it protects can still diverge — a pre-lock edit, an import, an /admin
+ *  repair. What matters here is that the fixture's FROZEN config and the
+ *  division's LIVE config disagree. */
 async function driftDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<void> {
   await sql`update divisions set config = ${sql.json(config as never)} where id = ${divisionId}`;
 }

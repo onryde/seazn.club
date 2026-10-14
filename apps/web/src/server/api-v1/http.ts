@@ -14,6 +14,7 @@ import { forfeitPhaseRefusalOf } from "@/lib/forfeit-phase-refusal";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { configIssuesOf } from "@/lib/config-issue-copy";
+import { refusedFieldsOf } from "@/lib/rule-errors";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { log } from "@/server/logger";
@@ -261,9 +262,12 @@ async function v1Inner<T>(
       // W2c owner P-5 (fix round 1): a refused match-rules save names its PROBLEM in `data.issues` (the rule's own
       // sentence on the field's path - the share-on-abandon refusals); the generic message alone told the organiser
       // nothing to change. Only `path` and `message` go out - the issue's `input` and `code` are not wire contract.
+      // W2c Task 12: a division save refused AFTER its per-field lock also names the fields it kept as stored
+      // (`refused`, the 409's own list) — without them the organiser reads a config error about a value they never sent.
       if (err.code === "CONFIG_INVALID") {
         const issues = configIssuesOf(err.data);
-        if (issues) extra = { issues };
+        const refused = refusedFieldsOf(err.data);
+        if (issues || refused) extra = { ...(issues ? { issues } : {}), ...(refused ? { refused } : {}) };
       }
       // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things (enter
       // the winner; settle before finalizing), so the copy branches on the reason — forwarded only when named.

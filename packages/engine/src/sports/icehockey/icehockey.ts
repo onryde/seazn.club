@@ -216,8 +216,8 @@ export const icehockey = makePeriodModule({
   // (HK-AB-2): ice hockey is never offered `q4_stands`, and its schema refuses it.
   abandonOptions: ["replay", "award"],
   // W2c X-SR-6, IH-KO-1 (spec §4.2) — the preset a NEW bracket stage should start with: a 10-minute sudden-death overtime
-  // and the GWS, each the organiser's to switch off; a table stage starts with none. A fresh object on every call. A
-  // DECLARATION only: Task 12 (stage creation) writes it into `stages.config.rules`; nothing reads it before then.
+  // and the GWS, each the organiser's to switch off; a table stage starts with none. A fresh object on every call. Stage
+  // creation writes it into `stages.config.rules` (apps/web usecases/stage-defaults.ts, W2c Task 12).
   stageDefaults: (kind) =>
     BRACKET_KINDS.has(kind)
       ? { overtime: { ...IIHF_OVERTIME, minutes: KNOCKOUT_OVERTIME_MINUTES }, shootout: { ...IIHF_SHOOTOUT } }

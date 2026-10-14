@@ -166,7 +166,8 @@ describe.runIf(HAS_DB)("W2b reproduction probes (server)", () => {
 
   it("C17: withdrawing from a held knockout fixture walks it over to the remaining side (X-WD-1)", async () => {
     // single-sport: football reaches a held bracket fixture by play (0-0 FT); see heldFootballSemi for why not badminton.
-    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 4 });
+    // stageRules {}: every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties).
+    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 4, stageRules: {} });
     const sf1 = await heldFootballSemi(s.auth, s.fixtureIds[0]!);
     await withdrawEntrantCascade(s.auth, sf1.home_entrant_id!);
     const after = await fixtureRow(sf1.id);
@@ -352,6 +353,7 @@ describe.runIf(HAS_DB)("W2b reproduction probes (server)", () => {
       stageKind: "knockout",
       entrants: 4,
       stageConfig: { thirdPlace: true },
+      stageRules: {}, // every preset decider off (W2c X-SR-6: a knockout otherwise starts with extra time and penalties)
     });
     const [a, b] = s.fixtureIds;
     const sf2 = await fixtureRow(b!);

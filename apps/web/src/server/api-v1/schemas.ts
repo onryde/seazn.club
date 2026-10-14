@@ -512,8 +512,9 @@ export const PatchDivision = z
     player_name_display: z.enum(["full", "first_initial"]).nullable(),
     /** Card logo (V274, v8); null reverts the tile to the monogram. */
     logo_storage_path: z.string().max(500).nullable(),
-    /** Format edit (v8) — allowed only pre-fixtures; usecase enforces
-     *  FORMAT_LOCKED and re-validates via the pinned module schema. */
+    /** Format edit (W2c, owner P-2 "A") — applied PER FIELD: a change a started stage depends on is refused (409
+     *  DIVISION_FORMAT_LOCKED / DIVISION_TABLE_RULES_LOCKED, each naming the stage, listed in `refused`) while the
+     *  rest lands; re-validated via the pinned module schema, and against every stage's own rules. */
     variant_key: z.string().min(1).max(100),
     config: z.record(z.string(), z.unknown()),
     /** D5/P8 candidate-court filter (design doc "Tag semantics"): a court
@@ -570,6 +571,21 @@ export const Division = z.object({
   created_at: z.string(),
   required_court_tags: z.array(z.string()), // D5/P8 candidate-court filter; see PatchDivision above
   camera_policy: CameraPolicyS.nullable(), // V451 — null = inherit the competition's; see PatchDivision above
+});
+
+/** W2c (owner P-2 "A") — one field a division save did not apply, and the first started stage that depends on it: the
+ *  wire shape of `RefusedField` (`lib/rule-errors.ts`, which this file may not import: openapi-gen runs it under bare
+ *  strip-types, with no `@/`). Pinned to that type, both codes and every key, in `refused-field-schema.test.ts`. */
+export const RefusedFieldS = z.object({
+  field: z.string(),
+  code: z.enum(["DIVISION_FORMAT_LOCKED", "DIVISION_TABLE_RULES_LOCKED"]),
+  stageId: Uuid,
+  stageName: z.string(),
+});
+
+/** PATCH /divisions/{id}'s 200: the division as saved, and what was refused beside it (applied per field). */
+export const PatchedDivision = Division.extend({
+  refused: z.array(RefusedFieldS),
 });
 
 // ---------------------------------------------------------------------------
@@ -1096,8 +1112,8 @@ export type ProgressionInput = z.infer<typeof ProgressionSchema>;
  * enumerating every reader and every writer, not typed from memory.
  *
  * VALUES are typed only where THIS file is the authority. `points` belongs to
- * the engine's `PointsRule`, `shootout`/`extraTime` to each sport module's
- * `configSchema` (`packages/engine/src/sport/module.ts`), and `cross_feeds` /
+ * the engine's `PointsRule`, `rules` to each sport module's `configSchema`
+ * (`packages/engine/src/sport/module.ts`), and `cross_feeds` /
  * `placements` / `rank_overrides` / `carry_deltas` to the usecases that read
  * them. Restating those shapes here would create a second copy of a fact that
  * already has an owner — which is exactly how two shapes of one fact drift
@@ -1110,6 +1126,9 @@ export type ProgressionInput = z.infer<typeof ProgressionSchema>;
  * door — which is the guarantee `pack-schema.ts` wanted and could not give
  * itself.
  */
+/** The refusal a top-level stage decider gets (W2c Task 12): the key moved, it is not a typo. */
+export const STAGE_DECIDER_MOVED = "moved to config.rules: a stage's deciders are its match rules";
+
 export const StageConfig = z
   .strictObject({
     // League / group shape.
@@ -1148,16 +1167,17 @@ export const StageConfig = z
     rank_overrides: z.unknown().optional(),
     cross_feeds: z.unknown().optional(),
     placements: z.unknown().optional(),
-    shootout: z.unknown().optional(),
-    extraTime: z.unknown().optional(),
-    /** Per-stage match-format override (design 2026-09-17 §T3). Deliberately
-     *  LOOSE here: this file is executed by `scripts/openapi-gen.ts` under bare
-     *  `node --experimental-strip-types`, which parses neither `@/` imports nor
-     *  JSX, so it cannot see the per-sport rules table. The real per-sport
-     *  allowlist and the merged-config validation live in
-     *  `usecases/stage-rules.ts`, which can import it. Nothing may WRITE this
-     *  key through a stage-config body — `createStages`/`replaceStages` refuse
-     *  it (D2a); `PUT /stages/{id}/rules` is the only writer. */
+    // W2c Task 12 (D3; greenfield, no shim): a stage's deciders are its match RULES now, written at create as its kind's
+    // preset under `config.rules`. A top-level `shootout` / `extraTime` is refused loudly, saying where it went, rather
+    // than as an unrecognised key a client would read as a typo.
+    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
+    extraTime: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
+    /** Per-stage match rules (design 2026-09-17 §T3; W2c Task 12, SC-P8). Deliberately LOOSE here: this file is
+     *  executed by `scripts/openapi-gen.ts` under bare `node --experimental-strip-types`, which parses neither `@/`
+     *  imports nor JSX, so it cannot see the engine's declarations. A create lays this fragment over the stage kind's
+     *  preset and validates it as `PUT /stages/{id}/rules` validates a save (`usecases/stage-defaults.ts`): the
+     *  engine's per-sport, per-kind allowlist, then the merged parse with the division's config. A key sent as null
+     *  removes that preset key (the stage inherits the division's value). */
     rules: z.record(z.string(), z.unknown()).nullish(),
   })
   .default({});

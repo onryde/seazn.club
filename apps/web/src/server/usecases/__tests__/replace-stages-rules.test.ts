@@ -1,12 +1,14 @@
 // `replaceStages` and per-stage match rules (owner ruling 2026-09-18).
 //
 // The Format tab's Apply is a delete-and-recreate from the template body, and
-// that body CANNOT carry `rules` — `assertNoRulesKey` refuses it, because a
-// stage-config body is not a path that validates a rules fragment. So without a
-// server-side carry-forward, every Apply silently wiped every per-stage format
-// override an organiser had set. The ruling: preserve inside `replaceStages`
-// itself, keyed on the stage SLOT, so it holds for every caller rather than for
-// whichever screen we remembered to patch.
+// that body carries no `rules`. So without a server-side carry-forward, every
+// Apply silently wiped every per-stage format override an organiser had set.
+// The ruling: preserve inside `replaceStages` itself, keyed on the stage SLOT,
+// so it holds for every caller rather than for whichever screen we remembered
+// to patch. Since W2c Task 12 a body MAY carry `config.rules` (validated as the
+// stage PUT validates a save, BEFORE the delete), laid over the carried rules,
+// which are laid over the slot's preset (stage-defaults.test.ts, Review Focus 5;
+// tennis, here, has no preset).
 //
 // Note `replaceStages` refuses outright once any fixture exists
 // (FORMAT_LOCKED), so nothing here generates fixtures — and that same fact is
@@ -138,25 +140,32 @@ describe.skipIf(!HAS_DB)("replaceStages carries per-stage rules forward", () => 
     expect(after.get(1)!.config.rules).toEqual({ bestOf: 1 });
   }, 60_000);
 
-  it("400s on a rules key in the body AND leaves the existing stages standing", async () => {
+  it("400s on a rules key the sport never declares AND leaves the existing stages standing; a declared one lands over the carry", async () => {
     const auth = await seedOrg();
     const divisionId = await seedDivision(auth);
     await createStages(auth, divisionId, LEAGUE_THEN_KNOCKOUT);
     const before = await stageBySeq(divisionId);
+    await putStageRules(auth, before.get(1)!.id, { rules: { bestOf: 1 } });
 
     // The refusal has to happen BEFORE the delete, not inside the createStages
     // this function delegates to: that call runs in its own transaction, so a
     // refusal there would land after every stage in the division was already
-    // dropped. Comment-only until now — this is the witness.
+    // dropped.
     await expect(
       replaceStages(auth, divisionId, [
-        { seq: 1, kind: "league" as const, name: "League", config: { rules: { bestOf: 3 } }, progression: null },
+        { seq: 1, kind: "league" as const, name: "League", config: { rules: { bestOff: 3 } }, progression: null },
       ]),
-    ).rejects.toMatchObject({ status: 400, code: "RULES_NOT_ACCEPTED_HERE" });
+    ).rejects.toMatchObject({ status: 400, code: "UNKNOWN_RULE_KEY" });
 
     const after = await stageBySeq(divisionId);
     expect(after.size).toBe(2);
     expect(after.get(1)!.id).toBe(before.get(1)!.id);
     expect(after.get(2)!.id).toBe(before.get(2)!.id);
+
+    // The positive pair: a declared key in the body wins over the carried one, key by key.
+    await replaceStages(auth, divisionId, [
+      { seq: 1, kind: "league" as const, name: "League", config: { rules: { bestOf: 3 } }, progression: null },
+    ]);
+    expect((await stageBySeq(divisionId)).get(1)!.config.rules).toEqual({ bestOf: 3 });
   }, 60_000);
 });
