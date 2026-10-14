@@ -6,11 +6,10 @@ import "server-only";
 // and the existing freeze-on-first-event keeps already-scored fixtures on the
 // config they were scored under.
 //
-// This module is the reason the rules table had to leave the `"use client"`
-// component (§T0): a server module importing `@/components/v2/match-rules`
-// receives client REFERENCES, not values, and `configKeysFor` would silently
-// derive nothing. `@/lib/match-rules` is directive-free precisely so this
-// import returns real functions.
+// W2c Task 11: the allowlist of keys is no longer `@/lib/match-rules`'s editor
+// table (`configKeysFor`, four sports) but the ENGINE's own declaration of what
+// a stage of this kind and variant may set (`stageTopKeysFor`), read in
+// `stage-rules-merge.ts` with the other pure pieces of this write path.
 import type { StageKind } from "@seazn/engine/core";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";

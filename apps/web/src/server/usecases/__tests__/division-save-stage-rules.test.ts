@@ -103,7 +103,12 @@ describe.skipIf(!HAS_DB)("I-A: a division format save never leaves a stage's own
     // Raw-seeded: the stage PUT would refuse this, so it can only exist as a row written before the guard.
     await sql`update stages set config = config || ${sql.json({ rules: { cap: 5 } } as never)} where id = ${s.stages[0]!}`;
     expect(badminton.configSchema.safeParse({ ...SHORT, cap: 5 }).success, "the premise: the stored rules are invalid").toBe(false);
-    await expect(patchDivision(s.auth, s.divisionId, { name: "Renamed" })).resolves.toBeDefined();
+    // The config is SENT and unchanged (a rename alone sends none, and would skip the whole config block): the stage arm
+    // is asked only when the save really moves the config.
+    const stored = await divisionConfigOf(s.divisionId);
+    await expect(patchDivision(s.auth, s.divisionId, { config: stored as Record<string, unknown> })).resolves.toBeDefined();
+    // …and the same stage IS refused the moment the config moves (the pair that makes the gate matter).
+    await expect(patchDivision(s.auth, s.divisionId, { config: { ...(stored as object), setTo: 13, finalSetTo: 13, cap: 20 } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 });
 

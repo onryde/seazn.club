@@ -351,7 +351,7 @@
     "files": [
      "src/server/usecases/__tests__/fixture-override-guards.test.ts"
     ],
-    "name": "not refused for it"
+    "name": "does not get its match refused for it"
    }
   ]
  },
@@ -367,21 +367,6 @@
      "src/server/usecases/__tests__/fixture-override-guards.test.ts"
     ],
     "name": "shortening the stage under"
-   }
-  ]
- },
- {
-  "id": "t11-fit-variant",
-  "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);",
-  "replace": "await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, null);",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
-    ],
-    "name": "shortening the division's"
    }
   ]
  },
@@ -599,6 +584,21 @@
      "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
     ],
     "name": "every sport's STAGE door"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-variant-inside",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "const check = checkFixtureOverride(m, r.stage_kind as StageKind | null, variantKey, stageParsed.data",
+  "replace": "const check = checkFixtureOverride(m, r.stage_kind as StageKind | null, null, stageParsed.data",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "an own-format key the variant does not allow is refused"
    }
   ]
  }

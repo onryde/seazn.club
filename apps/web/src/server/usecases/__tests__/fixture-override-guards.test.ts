@@ -15,9 +15,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { writeFixtureRulesOverride } from "../fixture-rules";
+import { refuseInvalidatedOverrides } from "../fixture-override-guards";
 import { clearPoolEntrants, undoDivision } from "../history";
 import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
 import { createCompetition } from "../competitions";
@@ -344,6 +346,26 @@ describe.skipIf(!HAS_DB)("Task 11: a stage that does not parse on its own is not
     expect(badminton.configSchema.safeParse({ ...base, cap: SHORT.setTo + 9 }).success, "the premise: the mix is valid").toBe(true);
     // An unchanged config re-sent: the stage arm is not asked (nothing moved), the match arm is - and it is not refused.
     await expect(patchDivision(b.auth, b.divisionId, { config: base }), "not refused for it").resolves.toBeDefined();
+  });
+});
+
+describe.skipIf(!HAS_DB)("Task 11: the guard asks the engine about the division's VARIANT", () => {
+  // No shipped sport narrows a MATCH-scoped key by variant today (cricket's super over and DLS are stage keys), so the
+  // variant parameter is witnessed with a module that does: badminton, whose `cap` a match may set only under `bwf`.
+  const narrowed = {
+    ...badminton,
+    ruleKeys: { ...badminton.ruleKeys, cap: { scope: "match", appliesTo: { variants: ["bwf"] } } },
+  } as unknown as AnySportModule;
+
+  it("an own-format key the variant does not allow is refused (409 NO_LONGER_FITS); under a variant that allows it, the same call passes", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const id = b.fixtureIds[0]!;
+    await writeFixtureRulesOverride(b.auth, [id], { cap: SHORT.setTo + 9 }); // the real module lets a match set its cap
+    const config = (await sql<{ c: unknown }[]>`select config c from divisions where id = ${b.divisionId}`)[0]!.c;
+    const ask = (variant: string | null) => withTenant(b.auth.orgId, (tx) => refuseInvalidatedOverrides(tx, b.divisionId, config, narrowed, variant));
+    await expect(ask("short")).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id)));
+    await expect(ask("bwf"), "the variant that allows the key").resolves.toBeUndefined();
+    await expect(ask(null), "no variant narrows nothing").resolves.toBeUndefined();
   });
 });
 
