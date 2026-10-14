@@ -25,7 +25,7 @@
 // neighbouring `schedule-court-candidates.test.ts` this file is modelled on.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlacementError } from "@seazn/engine/scheduling/placement-client";
+import { PlacementError } from "@seazn/scheduler";
 import { sql, withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -139,11 +139,11 @@ async function stageFixtures(stageId: string): Promise<FixtureRow[]> {
 }
 
 /** Same seam schedule-court-candidates.test.ts spies on: `build.ts` reaches
- *  the placement service by a dynamic `await import("./placement-client.ts")`,
- *  so rejecting `solveBuild` here forces the DETERMINISTIC GREEDY path — the
+ *  the placement service through `placementSolver` (`@seazn/scheduler`), whose
+ *  `await import("./placement-client.ts")` is dynamic, so rejecting `solveBuild` here forces the DETERMINISTIC GREEDY path — the
  *  one whose court choice this file can assert on without a live solver. */
 async function spyOnPlacement() {
-  const placement = await import("@seazn/engine/scheduling/placement-client");
+  const placement = await import("@seazn/scheduler/placement-client");
   return vi
     .spyOn(placement, "solveBuild")
     .mockRejectedValue(new PlacementError("unavailable", "stubbed by stage-round-court-tags.test.ts"));

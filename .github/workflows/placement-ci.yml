@@ -5,25 +5,32 @@ name: placement-ci
 # per-service gate in this repo's CI culture (mirrors the smoke/e2e split:
 # expensive, narrowly-scoped suites stay off unrelated PRs).
 #
-# The packages/engine paths exist because two jobs below reach across the
-# language boundary, and both of their subjects live outside
+# The packages/scheduler and packages/engine paths exist because two jobs below
+# reach across the language boundary, and both of their subjects live outside
 # services/placement/ and proto/:
 #
 #   - proto-drift compares the two generated stub trees, and the TypeScript
-#     half lives under packages/engine/src/scheduling/generated/. A PR that
-#     regenerates only one side (or edits the codegen script) would
+#     half lives under packages/scheduler/src/generated/ (it moved out of the
+#     engine with the gRPC client, engine-split 1a). A PR that regenerates only
+#     one side (or edits the codegen script, packages/scheduler/scripts/) would
 #     otherwise never run this workflow, and the trees would silently
 #     diverge.
-#   - integration drives the real service through build.ts and
-#     placement-client.ts. Those are the two files that TALK to the service, and
-#     the original filter could not see either of them: a PR rewriting the
-#     client's deadline handling, its auth header, or build.ts's fallback
-#     branch triggered NO run of the one job that would catch it.
+#   - integration drives the real service through the scheduler's two live
+#     test files (src/__tests__/placement-integration.test.ts and
+#     repair-decompose-cpsat-integration.test.ts), i.e. build.ts through
+#     placementSolver and placement-client.ts. A PR rewriting the client's
+#     deadline handling, its auth header, or build.ts's fallback branch must
+#     still trigger the one job that would catch it. ci.yml's strict scheduler
+#     step EXCLUDES both files (a skip is a failure there), so this job is the
+#     only place they run; packages/scheduler/test/integration-runs-elsewhere.test.ts
+#     pins both halves from this text.
 #
-# Hence the whole of src/scheduling/**, not just generated/**. It is wider
-# than the rest of this filter deliberately — that directory is the entire
-# TS-side surface that this service has a contract with, and narrowing it to
-# an enumerated file list is how the gap above got created the first time.
+# Hence the whole of packages/scheduler/** AND the whole of the engine's
+# src/scheduling/**, not an enumerated file list. The engine tree stays in the
+# filter because build.ts still owns the request it asks the solver and the
+# greedy fallback it takes when the answer is refused; the scheduler tree is the
+# transport. Narrowing either to a file list is how the original gap was
+# created the first time.
 #
 # Deploys live in their own workflows now: placement-stg.yml (push:main)
 # and placement-prod.yml (a v*.*.* tag). This file only validates a PR's
@@ -34,7 +41,7 @@ on:
       - "services/placement/**"
       - "proto/**"
       - "packages/engine/src/scheduling/**"
-      - "packages/engine/scripts/gen-proto.ts"
+      - "packages/scheduler/**"
       - ".github/workflows/placement-ci.yml"
 
 concurrency:
@@ -241,7 +248,7 @@ jobs:
   # TypeScript stubs. Without this job, a PR that edits proto/scheduler.proto,
   # regenerates only the Python side (which the `test` job above would
   # catch via tests/test_proto_compiles.py) and stops there passes this
-  # workflow green while packages/engine/src/scheduling/generated/ silently
+  # workflow green while packages/scheduler/src/generated/ silently
   # drifts — the proto changes, Python regenerates and passes, and nothing
   # is red. This repo has been bitten by CI-only drift gates five times
   # already (openapi:gen, i18n:gen-keys, schema:snapshot, the engine
@@ -294,15 +301,15 @@ jobs:
           fi
 
       - name: Regenerate TypeScript proto stubs
-        run: npm run gen:proto --workspace packages/engine
+        run: pnpm --filter @seazn/scheduler gen:proto
 
       - name: TypeScript stub drift gate
         run: |
-          drift="$(git status --porcelain -- packages/engine/src/scheduling/generated/)"
+          drift="$(git status --porcelain -- packages/scheduler/src/generated/)"
           if [ -n "$drift" ]; then
             echo "$drift"
-            echo "::error::TypeScript proto stubs are stale — proto/scheduler.proto changed but packages/engine/src/scheduling/generated/ was not regenerated and committed. Run 'npm run gen:proto --workspace packages/engine' and commit the result."
-            git diff -- packages/engine/src/scheduling/generated/
+            echo "::error::TypeScript proto stubs are stale — proto/scheduler.proto changed but packages/scheduler/src/generated/ was not regenerated and committed. Run 'pnpm --filter @seazn/scheduler gen:proto' and commit the result."
+            git diff -- packages/scheduler/src/generated/
             exit 1
           fi
 
@@ -314,7 +321,7 @@ jobs:
   # job above starts the container but only opens a TCP socket to it, which
   # proves the port binds and nothing about whether the service solves; and
   # neither ci.yml nor e2e.yml references placement at all, so the app's own
-  # e2e runs with `placement.internal` unreachable — which build.ts:1445 folds
+  # e2e runs with `placement.internal` unreachable — which build.ts folds
   # into `greedy("solver_unavailable")` and reports as a perfectly ordinary
   # green board. A cutover regression is invisible to every one of those.
   #
@@ -358,7 +365,8 @@ jobs:
       # fork PR read access to the production value for no security gain.
       # It must nonetheless be non-empty and identical on both sides:
       # placement.config.Settings.from_env() refuses to start without one, and
-      # build.ts:1442 defaults a missing secret to "" — which the service
+      # the scheduler's placementSolver (packages/scheduler/src/solver.ts)
+      # defaults a missing secret to "" — which the service
       # rejects as UNAUTHENTICATED, which build.ts's catch folds into a
       # greedy board. A mismatch here would therefore NOT fail loudly; it
       # would look exactly like "placement lost to greedy on merit".
@@ -395,20 +403,25 @@ jobs:
 
       # `continue-on-error` so the assertion step below is what fails the
       # job. Vitest's exit code alone is not a usable gate here: a suite
-      # that SKIPS everything exits 0, and skipping is this file's default
-      # (it gates on PLACEMENT_SERVICE_HOST being defined). Judging this job by
+      # that SKIPS everything exits 0, and skipping is these files' default
+      # (they gate on PLACEMENT_SERVICE_HOST being defined). Judging this job by
       # exit code would make "the env var name changed" indistinguishable
       # from "the integration tests pass".
+      #
+      # BOTH live files, with the scheduler's own vitest. The second
+      # (repair-decompose-cpsat-integration) was run by no workflow at all
+      # before engine-split 1a-4; ci.yml's strict scheduler step excludes both.
       - name: Run the integration suite against the live service
         id: vitest
         continue-on-error: true
-        working-directory: packages/engine
+        working-directory: packages/scheduler
         env:
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-integration-secret
         run: |
           npx vitest run --reporter=json --outputFile=/tmp/placement-integration.json \
-            src/scheduling/__tests__/placement-integration.test.ts
+            src/__tests__/placement-integration.test.ts \
+            src/__tests__/repair-decompose-cpsat-integration.test.ts
 
       # Counts come from the JSON report, never from the wrapper's summary
       # or the exit code — both have lied in this repo. The zero-skip and
@@ -447,6 +460,17 @@ jobs:
             docker logs placement-integration || true
             exit 1
           fi
+
+          # Every live file must have REPORTED. The totals above are summed over
+          # files, so one file that vanished from the run (renamed, filter missed it)
+          # is invisible to them while the other still passes.
+          for f in placement-integration.test.ts repair-decompose-cpsat-integration.test.ts; do
+            if ! jq -e --arg f "$f" '[.testResults[].name | endswith("/" + $f)] | any' /tmp/placement-integration.json >/dev/null; then
+              echo "::error::$f did not report — it was not run, or the filename filter matched nothing."
+              docker logs placement-integration || true
+              exit 1
+            fi
+          done
           echo "integration suite ran against the live service: $passed passed, 0 skipped"
 
       # Unconditional: a failed assertion above must still surface why the

@@ -1,5 +1,5 @@
 // Fakes for the engine's solver and logger ports (engine-split plan Task 1a-2). They replace the old
-// `vi.spyOn(await import("./placement-client.ts"), "solveBuild")` and the `vi.spyOn(log, ...)` calls: a test now hands
+// `vi.spyOn(await import("./placement-client.ts"), "solveBuild")` (since moved to `@seazn/scheduler`) and the `vi.spyOn(log, ...)` calls: a test now hands
 // `buildSchedule` the solver it wants answered by, instead of reaching round the engine to the module it imports.
 import { vi } from "vitest";
 import type { EngineLogger, PlacementSolver, SolveBuildOutcome } from "../solver-port.ts";

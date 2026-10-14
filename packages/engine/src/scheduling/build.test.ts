@@ -1560,7 +1560,7 @@ describe("buildSchedule — Placement path", () => {
   // `placementClient.solveBuild` swallows every PROMISE REJECTION into one
   // fallback — a different path from the `ERROR`-status split above, which
   // only covers a RESOLVED outcome. `PlacementError["failure"]`
-  // (`placement-client.ts`'s `failureFor`) has five members, and all five land
+  // (`@seazn/scheduler`'s `placement-client.ts`, `failureFor`) has five members, and all five land
   // on `solver_unavailable` HERE — never `solver_busy`, which promises a
   // retry will help and is true of exactly one cause (`SOLVER_BUSY`, the
   // `ERROR`-status path above). Applying the SAME "does a retry obviously
@@ -1718,10 +1718,10 @@ describe("buildSchedule — Placement path", () => {
 
   // C10 (2026-08-16, wire person indices design). Before this task,
   // `placementInput.fixtures` never carried `people` at all -- `toRequest()`
-  // (`placement-client.ts`) gaining a `personIndices` field would still have
+  // (`@seazn/scheduler`'s `placement-client.ts`) gaining a `personIndices` field would still have
   // sent nothing, because this call site never forwarded the data to send.
   // This is the OTHER half of the fix the brief's own scouting understated
-  // (see the PR body): `placement-client.ts` gaining the field is necessary
+  // (see the PR body): the scheduler's `placement-client.ts` gaining the field is necessary
   // but not sufficient without this.
   it("forwards a fixture's people onto the wire, as data separate from entrantIds (C10)", async () => {
     let captured: SolveBuildInput | undefined;
@@ -1800,7 +1800,7 @@ describe("buildSchedule — Placement path", () => {
   // The regression test for the retirement itself: `division_rules` (proto
   // field 10) is gone, and so are `SolveBuildInput["constraints"].
   // restByDivision`/`dayCapByDivision`, the two fields that used to feed it
-  // (`placement-client.ts`'s now-deleted `toDivisionRules`). This runs a
+  // (`@seazn/scheduler`'s `placement-client.ts`, now-deleted `toDivisionRules`). This runs a
   // board that WOULD have populated both under the old contract -- a
   // division-scoped rest AND a division-scoped day cap, on the same fixture
   // -- so a regression that resurrected either field (a stray `as any`

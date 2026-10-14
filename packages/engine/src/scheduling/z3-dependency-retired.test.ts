@@ -48,6 +48,9 @@ const LIVE_TREES = [
   // the bench (2026-10-04), and whichever moves in next. The per-workspace
   // check below reds if one contributes nothing.
   "tools",
+  // The gRPC placement client, its generated stubs and the adapters moved here out of `packages/engine/src/scheduling`
+  // (engine split 1a, D11). The per-package check below reds if it ever contributes nothing.
+  "packages/scheduler",
 ] as const;
 
 function gitGrep(args: readonly string[]): string {
@@ -111,6 +114,18 @@ describe("the z3 dependency is unreferenced", () => {
       const n = importers.filter((f) => f.startsWith(`tools/${h}/`)).length;
       expect(n, `${n} tools/${h} files import the engine within the scan`).toBeGreaterThan(10);
     }
+  });
+
+  it("the scan reads into the scheduler package: the placement client the engine used to hold is inside it", () => {
+    // `@grpc/grpc-js` is IMPORTED (not merely mentioned in prose) by exactly the client and its tests, wherever they live.
+    // The engine no longer holds either, so a LIVE_TREES that forgot the scheduler would still clear "scans a tree that
+    // holds the code" above.
+    const grpcImporters = gitGrep(["-l", "-E", String.raw`(from|import|require)[[:space:]]*\(?[[:space:]]*["']@grpc/grpc-js["']`])
+      .split("\n")
+      .filter(Boolean);
+    const inScheduler = grpcImporters.filter((f) => f.startsWith("packages/scheduler/"));
+    expect(inScheduler, `files importing grpc, in the scan: ${grpcImporters.join(", ")}`).toContain("packages/scheduler/src/placement-client.ts");
+    expect(grpcImporters.filter((f) => f.startsWith("packages/engine/")), "the engine imports no gRPC client").toEqual([]);
   });
 
   it("no file imports the z3-solver package", () => {

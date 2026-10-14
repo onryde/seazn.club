@@ -42,7 +42,7 @@ import { buildSchedule, seedPinsOf, solveBuildForTests, TIER_COUNT, TIER_NAMES }
 import { buildGrid } from "./build-grid.ts";
 // `gridStepMinutes` moved out of `build-grid.ts` into its own module on main
 // while this branch was in flight; the rebase conflict here was that move
-// crossing Task 06's added `placement-client` import, not a disagreement about
+// crossing Task 06's added `placement-client` import (the client now lives in `@seazn/scheduler`), not a disagreement about
 // the step itself.
 import { gridStepMinutes } from "./grid-step.ts";
 import { boardMetrics } from "./build-objectives.ts";

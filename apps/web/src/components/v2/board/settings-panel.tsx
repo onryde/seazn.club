@@ -41,7 +41,7 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 // D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
 // capacity-precheck-design.md): CLIENT-SAFE leaf — see capacity-input.ts's
 // header for why this file must never reach `@seazn/engine/scheduling`
-// (the barrel) or `capacity-guard.ts` (server-only). P10 §4/Task 6: the
+// (the barrel, the whole solver) or `capacity-guard.ts` (server-only). P10 §4/Task 6: the
 // report itself no longer comes from a local `capacityInputForFixtures` +
 // `assessCapacity` call — see useCapacityReport's own header for why —
 // this file only builds the WIRE BODY the hook sends, which still needs

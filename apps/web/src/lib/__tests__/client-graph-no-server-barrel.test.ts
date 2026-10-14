@@ -1,24 +1,33 @@
-// W2b Task 13 fix round 1 — no "use client" module reaches the SERVER-ONLY `@seazn/engine/scheduling` barrel, through
-// any chain of its own value imports. The barrel reaches placement-client.ts → @grpc/grpc-js, and a browser bundle then
-// dies at BUILD time on `Module not found: dns` — tsc, vitest and eslint are all blind to it (swiss-pairing.test.ts
-// guards one module the same way, by reading its source). This file sweeps every client root: review I-2 imported
-// `bracketForfeitWords` from the Server Component `bracket.tsx` into the client `schedule.tsx`, which green unit suites
-// and a clean tsc let through, and only `next build` caught.
+// W2b Task 13 fix round 1 — no "use client" module reaches `@grpc/grpc-js`, through any chain of its own value imports.
+// A browser bundle that pulls the gRPC client in dies at BUILD time on `Module not found: dns` — tsc, vitest and eslint
+// are all blind to it (swiss-pairing.test.ts guards one module the same way, by reading its source). This file sweeps
+// every client root: review I-2 imported `bracketForfeitWords` from the Server Component `bracket.tsx` into the client
+// `schedule.tsx`, which green unit suites and a clean tsc let through, and only `next build` caught.
 //
 // The walk follows VALUE imports (`import type` / `export type` statements are erased by the compiler and never reach
 // a bundle) through `@/…` and relative specifiers; a package specifier is recorded, not followed.
 //
-// Fix round 2 (re-review N-2): the forbidden specifiers are DERIVED, not typed — every `@seazn/engine/*` export (the
-// engine's package.json `exports` map) whose own module graph reaches `@grpc/grpc-js`, plus grpc itself. The bare
-// barrel alone let `@seazn/engine/scheduling/placement-client`, which imports grpc directly, through.
+// Fix round 2 (re-review N-2): the forbidden specifiers are DERIVED, not typed — every export of `@seazn/engine` AND
+// `@seazn/scheduler` (each package.json `exports` map) whose own module graph reaches `@grpc/grpc-js`, plus grpc itself.
+// The bare barrel alone let `@seazn/engine/scheduling/placement-client`, which imports grpc directly, through.
+//
+// Engine split 1a (D11, D32h): the gRPC client moved to `@seazn/scheduler`, so the engine's `scheduling` barrel no longer
+// reaches grpc and is now CLIENT-IMPORTABLE — a recorded decision, pinned below rather than assumed — while
+// `@seazn/scheduler` and its `placement-client` subpath are what a client must never import. The derivation is the same;
+// only what it finds moved.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const ENGINE = resolve(SRC, "../../../packages/engine");
+/** Every workspace package whose `exports` can hand a client the gRPC client. */
+const PACKAGES = [
+  { scope: "@seazn/engine", dir: resolve(SRC, "../../../packages/engine") },
+  { scope: "@seazn/scheduler", dir: resolve(SRC, "../../../packages/scheduler") },
+] as const;
 const BARREL = "@seazn/engine/scheduling";
+const SCHEDULER = "@seazn/scheduler";
 const GRPC = "@grpc/grpc-js";
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
@@ -81,43 +90,51 @@ function walk(root: string): Map<string, string[]> {
   return reached;
 }
 
-/** Every `@seazn/engine/*` specifier the package exports, with its entry file (`./sports/*` expanded per sport). */
-function engineExports(): Map<string, string> {
-  const pkg = JSON.parse(readFileSync(join(ENGINE, "package.json"), "utf8")) as { exports: Record<string, string> };
+/** Every `<scope>/*` specifier a package exports, with its entry file (`./sports/*` expanded per sport). */
+function packageExports(scope: string, dir: string): Map<string, string> {
+  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { exports: Record<string, string> };
   const out = new Map<string, string>();
   for (const [key, target] of Object.entries(pkg.exports)) {
     if (!key.includes("*")) {
-      out.set(`@seazn/engine${key.slice(1)}`, join(ENGINE, target));
+      out.set(`${scope}${key.slice(1)}`, join(dir, target));
       continue;
     }
     const [dirPart] = target.split("*");
-    for (const name of readdirSync(join(ENGINE, dirPart!))) {
-      const entry = join(ENGINE, target.replace("*", name));
-      if (existsSync(entry)) out.set(`@seazn/engine${key.slice(1).replace("*", name)}`, entry);
+    for (const name of readdirSync(join(dir, dirPart!))) {
+      const entry = join(dir, target.replace("*", name));
+      if (existsSync(entry)) out.set(`${scope}${key.slice(1).replace("*", name)}`, entry);
     }
   }
   return out;
 }
 
-/** The engine exports whose module graph (relative value + dynamic imports) reaches grpc — plus grpc itself. */
-function forbiddenSpecifiers(): { forbidden: Set<string>; exportsChecked: number } {
+/** The exports (of BOTH packages) whose module graph (relative value + dynamic imports) reaches grpc — plus grpc itself. */
+function forbiddenSpecifiers(): { forbidden: Set<string>; exportsChecked: Record<string, number> } {
   const forbidden = new Set<string>([GRPC]);
-  const exports = engineExports();
-  for (const [specifier, entry] of exports) {
-    if ([...walk(entry).keys()].some((file) => specsOf(file).includes(GRPC))) forbidden.add(specifier);
+  const exportsChecked: Record<string, number> = {};
+  for (const { scope, dir } of PACKAGES) {
+    const exports = packageExports(scope, dir);
+    exportsChecked[scope] = exports.size;
+    for (const [specifier, entry] of exports) {
+      if ([...walk(entry).keys()].some((file) => specsOf(file).includes(GRPC))) forbidden.add(specifier);
+    }
   }
-  return { forbidden, exportsChecked: exports.size };
+  return { forbidden, exportsChecked };
 }
 
-describe("no client module reaches the server-only scheduling barrel", () => {
+describe("no client module reaches the gRPC client (the scheduler package, or grpc directly)", () => {
   const files = sourceFiles(SRC);
   const roots = files.filter((f) => isClient(readFileSync(f, "utf8")));
   const { forbidden, exportsChecked } = forbiddenSpecifiers();
 
-  it("the forbidden list is derived from the engine's exports: the barrel and placement-client, never a leaf", () => {
-    expect(exportsChecked, "engine exports read").toBeGreaterThan(20);
-    expect(forbidden.has(BARREL), "the barrel reaches grpc").toBe(true);
-    expect(forbidden.has(`${BARREL}/placement-client`), "placement-client imports grpc").toBe(true);
+  it("the forbidden list is derived from both packages' exports: the scheduler and its placement-client; the engine's scheduling barrel is client-importable since the solver port (D32h), as is every leaf", () => {
+    expect(exportsChecked["@seazn/engine"], "engine exports read").toBeGreaterThan(20);
+    expect(exportsChecked["@seazn/scheduler"], "scheduler exports read").toBeGreaterThanOrEqual(2);
+    expect(forbidden.has(SCHEDULER), "the scheduler barrel reaches grpc").toBe(true);
+    expect(forbidden.has(`${SCHEDULER}/placement-client`), "the scheduler's placement-client imports grpc").toBe(true);
+    // D32h, a recorded decision: the solver port took the gRPC client out of the engine, so its scheduling barrel no
+    // longer reaches grpc and a client MAY import it. If this goes true again, something put a client back under the engine.
+    expect(forbidden.has(BARREL), "the engine's scheduling barrel no longer reaches grpc (D32h)").toBe(false);
     // The leaves exist precisely so a client can import them: a list that forbade them would be wrong the other way.
     for (const leaf of ["bracket-layout", "swiss", "grid-step", "rest-floor"]) {
       expect(forbidden.has(`${BARREL}/${leaf}`), `${leaf} is a client-safe leaf`).toBe(false);
@@ -134,7 +151,7 @@ describe("no client module reaches the server-only scheduling barrel", () => {
     expect(valueSpecifiers(`import type { A } from "${BARREL}";\nimport { b } from "./b";`)).toEqual(["./b"]);
   });
 
-  it("every client root's value-import graph stays clear of the barrel", () => {
+  it("every client root's value-import graph stays clear of everything that reaches grpc", () => {
     let walked = 0;
     const offenders: string[] = [];
     for (const root of roots) {

@@ -12,7 +12,7 @@
 // drives the real usecase against a real database for that reason.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlacementError } from "@seazn/engine/scheduling/placement-client";
+import { PlacementError } from "@seazn/scheduler";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -113,12 +113,13 @@ async function seedOneCourtOpenFrom3pm(auth: AuthCtx): Promise<{ stageId: string
   return { stageId: stage.id, courtId: court.id };
 }
 
-/** `build.ts` reaches the placement service by a dynamic import, so a spy on
+/** `build.ts` reaches the placement service through `placementSolver`
+ *  (`@seazn/scheduler`), whose import of the client is dynamic, so a spy on
  *  the module namespace is the call it makes. Forcing the failure drives the
  *  GREEDY path, which is a different placer from the solver lattice and must
  *  reach the same answer — that is the whole point of this session. */
 async function failPlacement() {
-  const placement = await import("@seazn/engine/scheduling/placement-client");
+  const placement = await import("@seazn/scheduler/placement-client");
   return vi
     .spyOn(placement, "solveBuild")
     .mockRejectedValue(new PlacementError("unavailable", "stubbed by schedule-court-hours.test.ts"));

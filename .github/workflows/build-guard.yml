@@ -14,12 +14,15 @@ name: Build guard (push to main)
 #
 # One class of defect is invisible to every other gate and fatal on exactly
 # that path: a `"use client"` file importing a server-only module graph.
-# `packages/engine/src/scheduling`'s barrel re-exports `build.ts`, which
-# reaches `placement-client.ts` -> `@grpc/grpc-js` -> `net`/`tls`/`http2`/
+# `@seazn/scheduler` (packages/scheduler) is that graph now: its index and its
+# `placement-client` subpath reach `@grpc/grpc-js` -> `net`/`tls`/`http2`/
 # `dns`/`fs`. None exist in a browser, so the build dies with
 # `Module not found: Can't resolve 'dns'` — an error naming nothing near the
 # cause. A DYNAMIC import does not help: the bundler still resolves and
-# compiles it, merely into a separate chunk.
+# compiles it, merely into a separate chunk. (Until engine-split 1a the engine's
+# `scheduling` barrel was the carrier, via `build.ts` -> `placement-client.ts`;
+# the solver port took the client out of the engine, so that barrel is now
+# client-importable — decision D32h — and the guard is on the scheduler.)
 #
 # `tsc`, `vitest`, `eslint` and the drift gates are ALL blind to this. Only a
 # real `next build` catches it. It shipped once already — broken from the

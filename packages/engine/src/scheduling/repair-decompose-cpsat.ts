@@ -77,7 +77,7 @@
 // bracket slot (`SchedulableFixture` with neither `home` nor `away`) carries
 // its POSSIBLE participants only in `people`; C10 threads that field onto
 // the wire for every MOVABLE fixture (`build.ts`'s `solveBuild` →
-// `placement-client.ts`'s `personIndices`, a namespace separate from
+// `@seazn/scheduler`'s `placement-client.ts` `personIndices`, a namespace separate from
 // `entrantIds`), and narrowed `services/placement/src/placement/schema.py`'s
 // refusal to "neither `entrant_indices` nor `person_indices`" rather than
 // "no `entrant_indices`" alone. Two TBD siblings that share `people`, both
@@ -109,7 +109,7 @@
 // STILL OPEN, narrower than either of the above and NOT touched by this
 // pass: `existing` (a caller-frozen fold, or the caller's own `existing`
 // param) carries no `people`/`person_indices` on the wire — C10 scoped that
-// addition to `fixtures` only (see `placement-client.ts`'s own comment on
+// addition to `fixtures` only (see `@seazn/scheduler`'s `placement-client.ts`, its own comment on
 // `IndexSpace.personIndexOf`). A TBD sibling that is itself CALLER-FROZEN
 // (never a violator, folded into `existing` rather than `fixtures`) still
 // loses its participant set the moment it crosses that fold, so a

@@ -6,8 +6,9 @@
 // rank-adjacent (Hammes) pairs neighbours by STANDINGS, and before any result
 // the only rank is the seed, so neighbours would be seed 1 v seed 2.
 //
-// Client-safe: import the swiss LEAF, never the scheduling barrel. The barrel
-// is server-only (it reaches @grpc/grpc-js); see its header in
+// Client-safe: import the swiss LEAF, never the scheduling barrel. The barrel no
+// longer reaches @grpc/grpc-js (the client moved to @seazn/scheduler, engine
+// split D11) but still re-exports the whole solver; see its header in
 // packages/engine/src/scheduling/index.ts. The test pins this.
 import { pairRound } from "@seazn/engine/scheduling/swiss";
 import type { SwissConstraints, SwissStanding } from "@seazn/engine/scheduling/swiss";

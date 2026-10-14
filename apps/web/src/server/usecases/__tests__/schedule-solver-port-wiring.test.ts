@@ -27,6 +27,8 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { autoSchedule, putScheduleSettings } from "../schedule";
+import { solveBoard } from "../schedule-ai-solver";
+import type { Assignment, BuildInput, SchedulableFixture } from "@seazn/engine/scheduling";
 import { seedCourts } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -170,5 +172,65 @@ describe.skipIf(!HAS_DB)("autoSchedule hands the engine its solver and logger (p
 
     expect(solveBuild).toHaveBeenCalledTimes(1);
     expect(solveBuild.mock.calls[0]![1]).toMatchObject({ secret: "" });
+  });
+});
+
+// The THIRD call site: the AI repair round's `solveBoard` -> `repairDecomposedCpsat`. It needs no database, so it runs
+// everywhere (this describe is not gated), and it is the only thing that pins `schedule-ai-solver.ts`: the existing
+// `schedule-ai-solver.test.ts` replaces `repairDecomposedCpsat` with a mock, and `schedule-ai-repair-cpsat-wiring.test.ts`
+// counts calls to it, so neither would notice a driver handed a stub solver or a silent logger.
+describe("solveBoard (the AI repair round) hands the decomposed driver its solver and logger", () => {
+  const MIN = 60_000;
+  const START = Date.parse("2026-08-01T14:00:00Z");
+  const fixtures: SchedulableFixture[] = [
+    { id: "F1", home: "E1", away: "E2" },
+    { id: "F2", home: "E3", away: "E4" },
+  ];
+  /** Two fixtures on ONE court at ONE time: a blocking overlap, so F1 (the unfrozen one) really is a violator. */
+  const clash = (fixtureId: string): Assignment => ({
+    fixtureId,
+    court: "Court 1",
+    startAt: START,
+    endAt: START + 30 * MIN,
+    entrants: [],
+    people: [],
+  });
+  const config: BuildInput["config"] = {
+    startAt: Date.parse("2026-08-01T09:00:00Z"),
+    matchMinutes: 30,
+    gapMinutes: 0,
+    perEntrantMinRest: 0,
+    courts: ["Court 1", "Court 2"],
+    blackouts: [],
+    sessionWindows: [],
+  };
+
+  it("the real adapter dials the closed host, the real client fails, and the failure is logged through schedulerLog", async () => {
+    vi.stubEnv("PLACEMENT_SERVICE_HOST", CLOSED_PORT_HOST);
+    vi.stubEnv("PLACEMENT_SERVICE_SECRET", "wiring-secret-1a4");
+    const solveBuild = await callThroughSpy();
+    const warn = vi.spyOn(schedulerLog, "warn");
+
+    const out = await solveBoard({
+      fixtures,
+      board: [clash("F1"), clash("F2")],
+      frozen: new Set(["F2"]),
+      existing: [],
+      dependencies: [],
+      config,
+    });
+
+    // Anti-vacuity: the round really attempted a solve. `solver_ran: false` would be a no-attempt exit, which can
+    // never reach the adapter and would make every assertion below describe a path that was not taken.
+    expect(out.telemetry.solver_ran).toBe(true);
+    expect(solveBuild.mock.calls.length).toBeGreaterThan(0);
+    const settled = solveBuild.mock.results[0]!;
+    expect(settled.type).toBe("return");
+    await expect(settled.value).rejects.toBeInstanceOf(PlacementError);
+    expect(solveBuild.mock.calls[0]![1]).toMatchObject({ secret: "wiring-secret-1a4" });
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ failure: "unavailable" }),
+      expect.stringContaining("placement service unavailable"),
+    );
   });
 });

@@ -7,7 +7,7 @@
 // pattern. Real Postgres required; skipped without DATABASE_URL.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlacementError } from "@seazn/engine/scheduling/placement-client";
+import { PlacementError } from "@seazn/scheduler";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -99,10 +99,11 @@ async function seedRoundRobin(
 }
 
 /** Same seam schedule-capacity-guard.test.ts spies on: `build.ts` reaches the
- *  placement service by `await import("./placement-client.ts")`, dynamic on
- *  purpose, so a spy on this module namespace is the call it makes. */
+ *  placement service through `placementSolver` (`@seazn/scheduler`), whose
+ *  `await import("./placement-client.ts")` is dynamic on purpose, so a spy on
+ *  this module namespace is the call it makes. */
 async function spyOnPlacement() {
-  const placement = await import("@seazn/engine/scheduling/placement-client");
+  const placement = await import("@seazn/scheduler/placement-client");
   return vi
     .spyOn(placement, "solveBuild")
     .mockRejectedValue(new PlacementError("unavailable", "stubbed by schedule-court-candidates.test.ts"));

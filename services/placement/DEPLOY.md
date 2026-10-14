@@ -13,7 +13,7 @@ Two names are load-bearing and must not be changed:
 
 | | |
 |---|---|
-| Service app | `placement` — Fly's private DNS derives from the app name, and `placement-client.ts`'s `DEFAULT_HOST` is the literal `placement.flycast:50051` |
+| Service app | `placement` — Fly's private DNS derives from the app name, and `packages/scheduler/src/placement-client.ts`'s `DEFAULT_HOST` is the literal `placement.flycast:50051` |
 | Web app | `seazn-club-prod` (root `fly.toml`) |
 
 Rename the service app and every solve dials a host that does not exist: the

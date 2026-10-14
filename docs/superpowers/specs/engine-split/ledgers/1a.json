@@ -1,6 +1,6 @@
 {
   "batch": "1a",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1a, built against the batch base 5871c748e. Run: node scripts/test-parity.mjs --before <before.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --after <after-scheduler.json>=packages/scheduler --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from the package (engine: src/scheduling test/; scheduler: everything).",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1a, built against the batch base 5871c748e. Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-scheduler.json>=packages/scheduler --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (src/scheduling test/), scheduler (everything), apps/web (only the nine test files the batch touched or added: client-graph-no-server-barrel, swiss-pairing, schedule-solver-port-wiring, schedule-auto-solver-busy-latency, schedule-capacity-guard, schedule-court-candidates, schedule-court-hours, schedule-solver-telemetry, stage-round-court-tags), tools/matrix (__tests__/workspace-wiring.test.ts only), and the repo root (scripts/__tests__/tools-import-guard.test.ts only). NOT collectable by this script, accounted by hand in the 1a-4 report: scripts/__tests__/z3-retirement-drift.test.ts (pre-existing duplicate ids from truncated titles, which the script refuses; one title carries a repointed path and one test was added) and tools/matrix/__tests__/strip-types-loadable.test.ts (ids embed the absolute worktree path).",
   "entries": [
     {
       "id": "src/scheduling/placement-client.test.ts › channel lifecycle › closes the client it constructed when the call throws before it starts",
@@ -490,6 +490,104 @@
       "id": "test/runtime-deps.test.ts › scheduler runtime dependencies › is not blind to a shipped file importing a `__tests__/` helper, the one thing that makes skipping that directory safe",
       "fate": "added",
       "reason": "1a-2 review / 1a-3: the no-shipped-file-imports-a-__tests__-helper test (engine, from 1a-2) and the scheduler's copy of the runtime-deps gate (1a-3)"
+    },
+    {
+      "id": "src/lib/__tests__/client-graph-no-server-barrel.test.ts › no client module reaches the server-only scheduling barrel › every client root's value-import graph stays clear of the barrel",
+      "fate": "rewritten",
+      "to": "src/lib/__tests__/client-graph-no-server-barrel.test.ts › no client module reaches the gRPC client (the scheduler package, or grpc directly) › every client root's value-import graph stays clear of everything that reaches grpc",
+      "reason": "D32h (engine split): the barrel is client-importable once build.ts imports no gRPC client, so the describe (and, for the two tests whose title named the barrel as forbidden, the title) now says what the guard actually forbids: the scheduler package and its placement-client. The walker test keeps its title; its id changes only through the describe"
+    },
+    {
+      "id": "src/lib/__tests__/client-graph-no-server-barrel.test.ts › no client module reaches the server-only scheduling barrel › the forbidden list is derived from the engine's exports: the barrel and placement-client, never a leaf",
+      "fate": "rewritten",
+      "to": "src/lib/__tests__/client-graph-no-server-barrel.test.ts › no client module reaches the gRPC client (the scheduler package, or grpc directly) › the forbidden list is derived from both packages' exports: the scheduler and its placement-client; the engine's scheduling barrel is client-importable since the solver port (D32h), as is every leaf",
+      "reason": "D32h (engine split): the barrel is client-importable once build.ts imports no gRPC client, so the describe (and, for the two tests whose title named the barrel as forbidden, the title) now says what the guard actually forbids: the scheduler package and its placement-client. The walker test keeps its title; its id changes only through the describe"
+    },
+    {
+      "id": "src/lib/__tests__/client-graph-no-server-barrel.test.ts › no client module reaches the server-only scheduling barrel › the walker sees real edges (positive pair): schedule.tsx reaches lib/forfeit-tag.ts, bracket.tsx's barrel import is seen",
+      "fate": "rewritten",
+      "to": "src/lib/__tests__/client-graph-no-server-barrel.test.ts › no client module reaches the gRPC client (the scheduler package, or grpc directly) › the walker sees real edges (positive pair): schedule.tsx reaches lib/forfeit-tag.ts, bracket.tsx's barrel import is seen",
+      "reason": "D32h (engine split): the barrel is client-importable once build.ts imports no gRPC client, so the describe (and, for the two tests whose title named the barrel as forbidden, the title) now says what the guard actually forbids: the scheduler package and its placement-client. The walker test keeps its title; its id changes only through the describe"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › the scan reads into the scheduler package: the placement client the engine used to hold is inside it",
+      "fate": "added",
+      "reason": "1a-4: the z3 dependency-graph gate scans packages/scheduler and proves the gRPC client left the engine (the client's importers are in the scheduler, none in the engine)"
+    },
+    {
+      "id": "src/seam.test.ts › the engine's real output through the real adapter, client and a socket › a wrong secret is an unavailable service, not an accepted board (the pair of the accepted case)",
+      "fate": "added",
+      "reason": "1a-4: the engine's real buildSchedule output through the real placementSolver, the real client and an in-process gRPC server — proves the seam, not a fixture on both ends"
+    },
+    {
+      "id": "src/seam.test.ts › the engine's real output through the real adapter, client and a socket › accepted, one court (the corner case greedy cannot solve): a known-good board comes back by id, as an optimised result",
+      "fate": "added",
+      "reason": "1a-4: the engine's real buildSchedule output through the real placementSolver, the real client and an in-process gRPC server — proves the seam, not a fixture on both ends"
+    },
+    {
+      "id": "src/seam.test.ts › the engine's real output through the real adapter, client and a socket › accepted, two courts (a court decoded by index, not hard-wired): a known-good board comes back by id, as an optimised result",
+      "fate": "added",
+      "reason": "1a-4: the engine's real buildSchedule output through the real placementSolver, the real client and an in-process gRPC server — proves the seam, not a fixture on both ends"
+    },
+    {
+      "id": "src/seam.test.ts › the engine's real output through the real adapter, client and a socket › rejected: an overlapping board from the service is refused by the verifier, and nothing is invented from it",
+      "fate": "added",
+      "reason": "1a-4: the engine's real buildSchedule output through the real placementSolver, the real client and an in-process gRPC server — proves the seam, not a fixture on both ends"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › ci.yml's scheduler step excludes every live file, and still runs the rest of the package",
+      "fate": "added",
+      "reason": "1a-4: the scheduler's two live-service files run in placement-ci.yml and are excluded from ci.yml's strict step (review R10)"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › finds the two live files (anti-vacuity: a scan that finds nothing proves nothing)",
+      "fate": "added",
+      "reason": "1a-4: the scheduler's two live-service files run in placement-ci.yml and are excluded from ci.yml's strict step (review R10)"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › placement-ci.yml runs every live file with the scheduler's own vitest",
+      "fate": "added",
+      "reason": "1a-4: the scheduler's two live-service files run in placement-ci.yml and are excluded from ci.yml's strict step (review R10)"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › placement-ci.yml's filter and drift gate follow the code to packages/scheduler",
+      "fate": "added",
+      "reason": "1a-4: the scheduler's two live-service files run in placement-ci.yml and are excluded from ci.yml's strict step (review R10)"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › placement-ci.yml's judge fails on zero tests, on any skip, and on any live file that did not report",
+      "fate": "added",
+      "reason": "1a-4: the scheduler's two live-service files run in placement-ci.yml and are excluded from ci.yml's strict step (review R10)"
+    },
+    {
+      "id": "src/server/usecases/__tests__/schedule-solver-port-wiring.test.ts › autoSchedule hands the engine its solver and logger (placement down => greedy, never a 500) › BUILD: the real adapter dials the closed host, the real client fails, and the organiser gets a complete greedy board",
+      "fate": "added",
+      "reason": "1a-4: the app hands the engine its solver and logger at every call site (BUILD, REFLOW, AI repair) and the secret reaches the client through the adapter"
+    },
+    {
+      "id": "src/server/usecases/__tests__/schedule-solver-port-wiring.test.ts › autoSchedule hands the engine its solver and logger (placement down => greedy, never a 500) › REFLOW: the real adapter dials the closed host, the real client fails, and the organiser gets a complete greedy board",
+      "fate": "added",
+      "reason": "1a-4: the app hands the engine its solver and logger at every call site (BUILD, REFLOW, AI repair) and the secret reaches the client through the adapter"
+    },
+    {
+      "id": "src/server/usecases/__tests__/schedule-solver-port-wiring.test.ts › autoSchedule hands the engine its solver and logger (placement down => greedy, never a 500) › an unset PLACEMENT_SERVICE_SECRET reaches the client as the empty string, not a leftover or a default",
+      "fate": "added",
+      "reason": "1a-4: the app hands the engine its solver and logger at every call site (BUILD, REFLOW, AI repair) and the secret reaches the client through the adapter"
+    },
+    {
+      "id": "src/server/usecases/__tests__/schedule-solver-port-wiring.test.ts › solveBoard (the AI repair round) hands the decomposed driver its solver and logger › the real adapter dials the closed host, the real client fails, and the failure is logged through schedulerLog",
+      "fate": "added",
+      "reason": "1a-4: the app hands the engine its solver and logger at every call site (BUILD, REFLOW, AI repair) and the secret reaches the client through the adapter"
+    },
+    {
+      "id": "scripts/__tests__/tools-import-guard.test.ts › tools import guard: each real eslint config reaches its files › packages/scheduler: lines 2, 3 and 6 of the probe go red as src/index.ts, the decoys do not",
+      "fate": "added",
+      "reason": "1a-4: the scheduler's eslint config joins the proof that the tools import guard reaches the files it guards"
+    },
+    {
+      "id": "__tests__/workspace-wiring.test.ts › workspace wiring (trap 2: a new package is invisible to the root chains) › packages/scheduler: turbo keys its lint AND typecheck on the engine's solver port, so an engine port change is a cache miss",
+      "fate": "added",
+      "reason": "1a-4: the scheduler package's turbo pin (lint AND typecheck keyed on the engine's solver port); a new test beside the unchanged reference one"
     }
   ]
 }

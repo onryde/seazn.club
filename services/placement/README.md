@@ -27,23 +27,27 @@ It logs `placement service listening on :50051 (max_workers=4)` and then blocks
 in the foreground — leave that terminal open, or background it yourself
 (`... &`, noting the PID) if you need the terminal back.
 
-In another terminal, run the TS integration suite against it. There is no
-`test:integration` script in `packages/engine/package.json` — this is the
-direct `vitest` invocation:
+In another terminal, run the TS integration suite against it. The suite lives
+in `packages/scheduler` (the gRPC client moved there out of the engine, engine
+split 1a), which holds TWO live test files, and there is no `test:integration`
+script in `packages/scheduler/package.json` — this is the direct `vitest`
+invocation, naming both:
 
 ```bash
-cd packages/engine
+cd packages/scheduler
 PLACEMENT_SERVICE_HOST=localhost:50051 PLACEMENT_SERVICE_SECRET=dev-secret \
-  npx vitest run src/scheduling/__tests__/placement-integration.test.ts
+  npx vitest run src/__tests__/placement-integration.test.ts \
+                 src/__tests__/repair-decompose-cpsat-integration.test.ts
 ```
 
-Without `PLACEMENT_SERVICE_HOST` set, that same suite SKIPS instead of dialing
-the production default (`placement.internal:50051`, unreachable from a dev
+Without `PLACEMENT_SERVICE_HOST` set, those same suites SKIP instead of dialing
+the production default (`placement.flycast:50051`, unreachable from a dev
 machine) — that is the correct, expected behaviour, not a failure:
 
 ```bash
-cd packages/engine
-npx vitest run src/scheduling/__tests__/placement-integration.test.ts
+cd packages/scheduler
+npx vitest run src/__tests__/placement-integration.test.ts \
+               src/__tests__/repair-decompose-cpsat-integration.test.ts
 ```
 
 ### Stop it when you're done

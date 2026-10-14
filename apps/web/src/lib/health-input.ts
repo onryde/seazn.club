@@ -8,9 +8,9 @@
 // recurring defect).
 //
 // Deliberately does NOT import `@seazn/engine/scheduling` (the barrel) or
-// any non-leaf module: that barrel is server-only (scheduling/index.ts's
-// header) and a `"use client"` file that reaches it ships the whole @grpc
-// stack into the browser bundle. Only two engine imports are used here, both
+// any non-leaf module: that barrel re-exports the whole solver (scheduling/
+// index.ts's header; the @grpc stack it used to reach lives in `@seazn/scheduler`
+// since engine split D11). Only two engine imports are used here, both
 // declared LEAVES in package.json: `./scheduling/health` (this feature's
 // own pure lib — imports NOTHING itself) and `./scheduling/tz` (zero
 // dependencies), for the exact same reason capacity-input.ts uses them.

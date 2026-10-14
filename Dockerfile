@@ -14,6 +14,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
 COPY packages/engine/package.json packages/engine/
 COPY packages/reference/package.json packages/reference/
+COPY packages/scheduler/package.json packages/scheduler/
 # node 26 dropped corepack, so pnpm is installed explicitly rather than activated.
 RUN npm i -g pnpm@10.34.5
 # BuildKit cache mount over pnpm's content-addressed store: it persists on the

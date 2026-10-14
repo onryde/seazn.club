@@ -6,7 +6,7 @@
 // DATABASE_URL, matching every other DB-backed suite in this directory.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlacementError } from "@seazn/engine/scheduling/placement-client";
+import { PlacementError } from "@seazn/scheduler";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -99,18 +99,20 @@ async function seedRoundRobin(
 
 /** A spy on the ONE seam every solve leaves the process through.
  *
- *  `buildSchedule` reaches the placement service by `await
+ *  `buildSchedule` asks the `solve` the app hands it (`placementSolver`,
+ *  `@seazn/scheduler`), which reaches the placement client by `await
  *  import("./placement-client.ts")` — dynamic on purpose, so a spy on this
- *  module namespace is the call it makes (`build.ts` says as much where the
- *  import is written). The engine consumed here is the workspace source, so
- *  this namespace and the engine's own are the same module instance; the
- *  second test below is what PROVES that, by seeing a call through it.
+ *  module namespace is the call it makes (`packages/scheduler/src/solver.ts`
+ *  says as much where the import is written). The scheduler consumed here is
+ *  the workspace source, so this namespace and the adapter's own are the same
+ *  module instance; the second test below is what PROVES that, by seeing a
+ *  call through it.
  *
  *  Mocked rather than merely observed: unmocked, a call would dial
  *  `PLACEMENT_SERVICE_HOST` (unset locally, set in CI) and this file's second
  *  case would either wait out a gRPC deadline or hit a real service. */
 async function spyOnPlacement() {
-  const placement = await import("@seazn/engine/scheduling/placement-client");
+  const placement = await import("@seazn/scheduler/placement-client");
   return vi
     .spyOn(placement, "solveBuild")
     .mockRejectedValue(new PlacementError("unavailable", "stubbed by schedule-capacity-guard.test.ts"));

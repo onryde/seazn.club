@@ -516,7 +516,7 @@ export function createRealPreflightProbes(): RealProbesHandle {
 
     async checkPlacementHealth(): Promise<PlacementHealthResult> {
       const host = process.env.PLACEMENT_SERVICE_HOST ?? "placement.flycast:50051";
-      // NOT `@seazn/engine/scheduling/placement-client` — that module's
+      // NOT `@seazn/scheduler/placement-client` (formerly `@seazn/engine/scheduling/placement-client`) — that module's
       // static import graph reaches `./generated/scheduler.ts`, which
       // declares a TS `enum`. Node's `--experimental-strip-types` (this
       // script's own runtime, matching `scripts/smoke.ts`) erases types but

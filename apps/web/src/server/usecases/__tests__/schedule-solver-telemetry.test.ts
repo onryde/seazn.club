@@ -32,6 +32,7 @@ import {
   type SlotConfig,
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
+import { placementSolver, schedulerLog } from "@seazn/scheduler";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -230,6 +231,8 @@ describe("TIERS_TOTAL is the engine's ladder, not a constant that agrees with it
       fixtures: [{ id: "a", home: "E1", away: "E2", people: [] }],
       config: cfg,
       wallMs: autoSolverWallMs(),
+      solve: placementSolver,
+      log: schedulerLog,
     });
     expect(built.status).toBe("already_optimal");
     expect(built.tiersCompleted).toBe(TIERS_TOTAL);

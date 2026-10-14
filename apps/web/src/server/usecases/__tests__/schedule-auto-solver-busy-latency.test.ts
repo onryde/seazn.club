@@ -18,8 +18,9 @@
 // lock to stage the contention. C8 deleted the solver and the lock, and with
 // it the only way to hold `queued` at its cap from outside the engine — the
 // real solve simply completed and decremented. The placement client is where
-// that ability moved: `buildSchedule` reaches it through a DYNAMIC
-// `await import("./placement-client.ts")` (build.ts says why, at the import),
+// that ability moved: the `solve` the app hands `buildSchedule`
+// (`placementSolver`, `@seazn/scheduler`) reaches it through a DYNAMIC
+// `await import("./placement-client.ts")` (solver.ts says why, at the import),
 // so a spy on that module namespace is the call the engine makes, and a spy
 // that never resolves pins two builds in flight for as long as this file
 // wants them there.
@@ -38,7 +39,7 @@
 // and the cooldown limiter must show it really ran (below).
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import type { SolveBuildOutcome } from "@seazn/engine/scheduling/placement-client";
+import type { SolveBuildOutcome } from "@seazn/engine/scheduling";
 
 /** Builds that have ENTERED the engine's `buildSchedule`, counted after the
  *  call so the engine's own synchronous `queued++` has certainly happened. */
@@ -83,7 +84,7 @@ vi.mock("@/lib/cache", async (importOriginal) => {
 });
 
 const { sql } = await import("@/lib/db");
-const placement = await import("@seazn/engine/scheduling/placement-client");
+const placement = await import("@seazn/scheduler/placement-client");
 const { createCompetition } = await import("../competitions");
 const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");

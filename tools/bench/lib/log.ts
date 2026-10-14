@@ -1,7 +1,7 @@
 // Structured JSON-lines logging for the scheduler bench.
 //
 // Follows the repo's established pino convention exactly:
-// `packages/engine/src/scheduling/logger.ts` and `apps/web/src/server/
+// `packages/scheduler/src/logger.ts` (moved out of the engine, engine split D25) and `apps/web/src/server/
 // logger.ts` are both a flat module-scope `pino({...})` singleton reading
 // `LOG_LEVEL`, deliberately NOT `pino({ transport: {...} })` — a transport
 // spawns a worker thread that does a dynamic `require()` of the transport

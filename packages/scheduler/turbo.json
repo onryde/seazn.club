@@ -5,8 +5,8 @@
     // The lint is type-aware (recommendedTypeChecked) over @seazn/engine types (the solver port, the clock), so its
     // cache key must hold the engine's sources as typecheck's does: `^build` puts @seazn/engine#build in the hash.
     // Without it an engine type change could restore a stale green lint from the remote cache (the same review M-4
-    // that packages/reference/turbo.json answers). Not yet pinned by tools/matrix/__tests__/workspace-wiring.test.ts,
-    // which names only @seazn/reference: 1a-4 owns that file.
+    // that packages/reference/turbo.json answers). Pinned by tools/matrix/__tests__/workspace-wiring.test.ts, which spawns
+    // turbo's dry-run graph for this package as it does for @seazn/reference.
     "lint": {
       "dependsOn": ["^build"]
     }

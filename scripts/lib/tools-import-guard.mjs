@@ -7,7 +7,7 @@
 //
 // Two layers hold it, and this module is the one source both read:
 //   * lint — `toolsImportRules`, spread into apps/web, packages/engine,
-//     packages/reference and the root (scripts/) eslint configs. Lint sees
+//     packages/reference, packages/scheduler and the root (scripts/) eslint configs. Lint sees
 //     specifiers, not files, so it is the coarse layer: any import of a
 //     tools/* package, or any relative specifier that climbs (`../`) into a
 //     directory named `tools`.

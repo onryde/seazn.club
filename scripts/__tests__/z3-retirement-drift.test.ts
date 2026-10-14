@@ -63,6 +63,10 @@ const LIVE_TREES = [
   "tools",
   "proto",
   "services/placement",
+  // The gRPC placement client, its generated stubs and the solver/logger adapters moved here out of
+  // `packages/engine/src/scheduling` (engine split 1a, D11). Not just `src`: like the engine, its scripts and lint config
+  // are code a developer reads, and the per-package check below reds if it ever contributes nothing.
+  "packages/scheduler",
   ":!scripts/__tests__/z3-retirement-drift.test.ts",
   // Binary ASSETS are excluded, and the `-a` on every scan below is exactly why
   // they have to be. `-a` forces git to read binaries as text so a file git
@@ -173,7 +177,7 @@ const RETIRED_CLAIMS: readonly { path: string; pattern: string; nowTrue: string 
     nowTrue: "a board the TS verifier (`validateAssignments`) rejects",
   },
   {
-    path: "packages/engine/src/scheduling/generated/scheduler.ts",
+    path: "packages/scheduler/src/generated/scheduler.ts",
     pattern: "board z3 proves INFEASIBLE",
     nowTrue: "generated from the proto above — regenerate, never hand-edit",
   },
@@ -279,7 +283,10 @@ const ACCURATE_TODAY = [
   // is exported as its own subpath: it is the seam the web lane's tests use to
   // prove a solve did or did not happen, which is what z3's deleted
   // process-wide lock used to stage. Names the lock only to say it is gone.
-  "packages/engine/src/scheduling/placement-client.ts",
+  // (Moved to the scheduler package with the client itself, engine split 1a.)
+  "packages/scheduler/src/placement-client.ts",
+  // Quotes the z3 BRIDGE only as one of the engine-path lint blocks this config dropped when it was copied from the engine's.
+  "packages/scheduler/eslint.config.mjs",
   "packages/engine/src/scheduling/repair-decompose-cpsat.ts",
   "packages/engine/src/scheduling/repair-decompose.test.ts",
   "packages/engine/src/scheduling/repair-decompose.ts",
@@ -321,7 +328,9 @@ function gitGrep(args: string[]): string[] {
 
 describe("z3 retirement — stage C ledger", () => {
   it("scans a tree that actually holds the code — the gate is aimed at something", () => {
-    // Generated stubs alone put z3 in `packages/engine/src`; if this ever
+    // The ledger below names every tracked file in these trees that mentions z3 (62 when the scheduler package joined,
+    // engine split 1a); the floor sits well inside that. The generated stubs used to be the guaranteed hit here, but they
+    // no longer mention it (the proto claim was corrected) and the client moved out of `packages/engine/src`. If this ever
     // reads zero, the pathspec drifted and every assertion below is vacuous.
     expect(gitGrep(["-a", "-il", "z3", "--", ...LIVE_TREES]).length).toBeGreaterThan(20);
   });
@@ -350,6 +359,17 @@ describe("z3 retirement — stage C ledger", () => {
     expect(files.filter((f) => f.startsWith("tools/matrix/")).length).toBeGreaterThan(150);
     expect(files).toContain("tools/bench/lib/schedule.ts");
     expect(files).toContain("tools/matrix/run.ts");
+  });
+
+  it("the scheduler package is in the scan — the placement client moved out of packages/engine/src and cannot drop out unseen", () => {
+    // Engine split 1a: `@seazn/scheduler` owns the gRPC client and its generated stubs, the two files that carried this
+    // gate's most specific z3 claims. The hit count above still clears 20 without the package, so it could fall out of
+    // LIVE_TREES unseen. The z3 mention in the client is what proves the ledger below governs it.
+    const files = scanned();
+    expect(files.filter((f) => f.startsWith("packages/scheduler/")).length, "files scanned under packages/scheduler").toBeGreaterThan(5);
+    expect(files).toContain("packages/scheduler/src/placement-client.ts");
+    expect(files).toContain("packages/scheduler/src/generated/scheduler.ts");
+    expect(gitGrep(["-a", "-il", "z3", "--", ...LIVE_TREES])).toContain("packages/scheduler/src/placement-client.ts");
   });
 
   it("no binary asset reaches the scan — and there are binary assets to exclude", () => {
