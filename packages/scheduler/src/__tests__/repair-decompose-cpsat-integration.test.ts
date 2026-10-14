@@ -9,10 +9,11 @@
 // enforced by the real wire once both ends are movable `fixtures` entries.
 // SKIPPED by default: see `services/placement/README.md`'s "Local dev"
 // section to start a real service and run this for real.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isBlockingConflict, repairDecomposedCpsat, validateAssignments } from "@seazn/engine/scheduling";
 import type { Assignment, OrderDependency, SchedulableFixture, VerifyConfig } from "@seazn/engine/scheduling";
 import { placementSolver, schedulerLog } from "../index.ts";
+import { assertNoSilentGreedy, assertSolverReached, recordSolver } from "./live-seam-guard.ts";
 
 // Reaches the REAL service through the REAL adapter and logger, host and secret from the environment as in production.
 
@@ -49,6 +50,17 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
 (RUN_INTEGRATION ? describe : describe.skip)(
   "repairDecomposedCpsat integration (requires a running placement service)",
   () => {
+    // `repairDecomposedCpsat` folds a component whose solve failed into its own fallback and reports no per-component
+    // status, so against a dead service all three tests below would still pass. The only witness is the real adapter's
+    // own calls: every test must have asked it at least once, and been answered every time.
+    let seam = recordSolver(placementSolver);
+    beforeEach(() => {
+      seam = recordSolver(placementSolver);
+    });
+    afterEach(() => {
+      assertSolverReached(seam.calls);
+    });
+
     it(
       "repairs a genuine court clash via the real placement service",
       async () => {
@@ -59,7 +71,7 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           callerFrozen: new Set(),
           config: cfg(),
           budgetMs: 20_000,
-          solve: placementSolver,
+          solve: seam.solve,
           log: schedulerLog,
         });
         expect(r.status).toBe("repaired");
@@ -105,7 +117,7 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           dependencies,
           config: cfg(),
           budgetMs: 20_000,
-          solve: placementSolver,
+          solve: seam.solve,
           log: schedulerLog,
         });
 
@@ -147,7 +159,7 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           current: proposal,
           frozen: ["feeder"],
           wallMs: 20_000,
-          solve: placementSolver,
+          solve: seam.solve,
           log: schedulerLog,
         });
         // The monolithic C5 shape drops the dependency edge on the wire
@@ -161,6 +173,8 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
         ];
         const conflicts = validateAssignments(reconciled, cfg(), [], dependencies);
         expect(conflicts.some((c) => c.reason === "order")).toBe(true);
+        // and this build, which does carry a status, did not fall back to greedy either
+        assertNoSilentGreedy([out], false);
       },
       30_000,
     );

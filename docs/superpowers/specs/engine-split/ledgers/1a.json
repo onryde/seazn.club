@@ -364,27 +364,52 @@
     {
       "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › does not read any status other than solver_unavailable as a silent fallback",
       "fate": "added",
-      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
     },
     {
       "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › fails an empty list, deliberate or not: a test that built no board proves nothing about the seam",
       "fate": "added",
-      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
     },
     {
       "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › fails when any board fell back with solver_unavailable, however many reached the solver",
       "fate": "added",
-      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
     },
     {
       "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › passes a list in which the solver was reached on every board",
       "fate": "added",
-      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
     },
     {
       "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › passes solver_unavailable when the test pointed at a dead port on purpose",
       "fate": "added",
-      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › fails an empty list: a test whose solver was never asked proves nothing about the seam",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › fails when any call was rejected, however many others resolved",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › passes when the solver was asked and answered every time",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a rejected call and rethrows the very same error",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a resolved call and hands the outcome and the request through untouched",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
     },
     {
       "id": "src/index.test.ts › @seazn/scheduler public surface › exports exactly what its consumers import, and re-exports the same objects the modules define",
