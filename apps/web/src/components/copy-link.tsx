@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import QRCode from "qrcode";
+import { useOrigin } from "@/lib/use-client-snapshot";
 
 /** Shows an absolute share URL (origin + path) with a one-click copy button.
  *  Pass `qrFileName` to add a QR reveal — a printable code for noticeboards
@@ -19,11 +20,12 @@ export function CopyLink({
   qrFileName?: string;
   label: string;
 }) {
-  const [origin, setOrigin] = useState("");
+  // "" on the server and through hydration (the field shows the path), the
+  // absolute URL from the render after — read, never copied into state.
+  const origin = useOrigin();
   const [copied, setCopied] = useState(false);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
-  useEffect(() => setOrigin(window.location.origin), []);
   const url = origin ? `${origin}${path}` : path;
 
   async function copy() {

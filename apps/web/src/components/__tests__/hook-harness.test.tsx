@@ -9,7 +9,16 @@
 // looped for ever. Any assertion about how many times an island fetched, or
 // about state that an effect writes, was measuring the harness.
 import { describe, expect, it } from "vitest";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, walk } from "./_hook-harness";
 
@@ -746,5 +755,71 @@ describe("_hook-harness commit re-entrancy (review MINOR 4)", () => {
     }
 
     expect(() => renderIsland(Island, {})).toThrow(/commit/i);
+  });
+});
+
+describe("_hook-harness useSyncExternalStore hydrate mode (L3 set-state-in-effect batch)", () => {
+  // A tiny external store the test owns: a value, and the listeners React
+  // subscribed. The live snapshot differs from the server one on purpose, or
+  // "it read the live value" and "it read the server value" look the same.
+  function makeStore(initial: string) {
+    let value = initial;
+    const listeners = new Set<() => void>();
+    return {
+      subscribe: (onChange: () => void) => {
+        listeners.add(onChange);
+        return () => void listeners.delete(onChange);
+      },
+      get: () => value,
+      set(next: string) {
+        value = next;
+        for (const l of [...listeners]) l();
+      },
+      listeners,
+    };
+  }
+
+  function islandOf(store: ReturnType<typeof makeStore>, seen: string[]) {
+    return function Island() {
+      const v = useSyncExternalStore(store.subscribe, store.get, () => "server");
+      seen.push(v);
+      return <button type="button">{v}</button>;
+    };
+  }
+
+  it("default mode is unchanged: the server snapshot for ever, never subscribed", () => {
+    const store = makeStore("live");
+    const seen: string[] = [];
+    const island = renderIsland(islandOf(store, seen), {});
+    store.set("later");
+    island.rerender({});
+    expect(seen).toEqual(["server", "server"]);
+    expect(store.listeners.size).toBe(0);
+  });
+
+  it("hydrate: first render reads the server snapshot, then re-renders with the live one", () => {
+    const store = makeStore("live");
+    const seen: string[] = [];
+    const island = renderIsland(islandOf(store, seen), {}, undefined, { hydrate: true });
+    expect(seen, "hydration render must match the server markup first").toEqual(["server", "live"]);
+    expect(island.text()).toBe("live");
+  });
+
+  it("hydrate: no extra render when the live snapshot equals the server one", () => {
+    const store = makeStore("server");
+    const seen: string[] = [];
+    renderIsland(islandOf(store, seen), {}, undefined, { hydrate: true });
+    expect(seen).toEqual(["server"]);
+  });
+
+  it("hydrate: a store change after hydration re-renders through the subscription; unmount unsubscribes", () => {
+    const store = makeStore("live");
+    const seen: string[] = [];
+    const island = renderIsland(islandOf(store, seen), {}, undefined, { hydrate: true });
+    expect(store.listeners.size).toBe(1);
+    store.set("changed");
+    expect(island.text()).toBe("changed");
+    island.unmount();
+    expect(store.listeners.size, "a leaked subscription would re-render an unmounted island").toBe(0);
   });
 });

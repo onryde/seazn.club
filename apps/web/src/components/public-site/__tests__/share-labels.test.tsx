@@ -117,9 +117,9 @@ describe("ShareBar renders the locale's words, not English", () => {
   }
 });
 
-// `share` renders only after the mount effect finds `navigator.share`, and
-// `copied` only after the click resolves — no server render reaches either, so
-// they get the island harness, per locale.
+// `share` renders only after hydration finds `navigator.share`, and `copied`
+// only after the click resolves — no server render reaches either, so they get
+// the island harness in its `hydrate` mode, per locale.
 describe("ShareBar's after-mount words come from the locale too", () => {
   const origNav = globalThis.navigator;
   const origWin = (globalThis as { window?: unknown }).window;
@@ -142,7 +142,9 @@ describe("ShareBar's after-mount words come from the locale too", () => {
         writable: true,
       });
 
-      const island = renderIsland(ShareBar, { path: "/x", title: "Y", labels: shareLabels(d) });
+      const island = renderIsland(ShareBar, { path: "/x", title: "Y", labels: shareLabels(d) }, undefined, {
+        hydrate: true,
+      });
       expect(textOf(island.tree())).toContain(d["share.share"]);
 
       const button = island

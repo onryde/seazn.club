@@ -31,7 +31,10 @@ import { CookieConsent } from "../cookie-consent";
 
 const shown = (path: string) => {
   pathname.current = path;
-  return renderIsland(CookieConsent, {}).tree().length > 0;
+  // Hydrate mode: the banner's "consent needed" is read from storage after
+  // hydration, so the default (server-snapshot) mode would show nothing
+  // anywhere and make the "renders nothing" half of this file vacuous.
+  return renderIsland(CookieConsent, {}, undefined, { hydrate: true }).tree().length > 0;
 };
 
 describe("CookieConsent on the kiosk board", () => {

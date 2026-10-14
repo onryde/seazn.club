@@ -27,10 +27,11 @@
 // established in this directory (see each site's own comment below): most
 // of these are plain `renderToStaticMarkup` — a one-shot server render is
 // enough to see a static attribute on an element that is present on the
-// FIRST render — except CookieConsent, whose banner is invisible until a
-// `useEffect` flips `visible` true, which `renderToStaticMarkup` (`environment:
-// "node"`, no DOM, runs no effects at all) can never observe. That one case
-// uses `_hook-harness.tsx`'s `renderIsland`, the same technique
+// FIRST render — except CookieConsent, whose banner is invisible until the
+// render after hydration reads "consent needed" from storage, which
+// `renderToStaticMarkup` (`environment: "node"`, no DOM, server snapshot only)
+// can never observe. That one case uses `_hook-harness.tsx`'s `renderIsland`
+// in its `hydrate` mode, the same technique
 // `cookie-consent-overlay-segment.test.tsx` already proves works for this
 // exact component.
 import { describe, expect, it, vi } from "vitest";
@@ -483,9 +484,10 @@ describe("device link panel: every hand-over control carries a stable hook on th
 
 // --- CookieConsent: Accept -------------------------------------------------
 //
-// `renderToStaticMarkup` cannot see this one: the banner starts `visible:
-// false` and only flips true from inside a `useEffect`, which a one-shot
-// server render never runs (AGENTS.md, recurring failure class 2 — "pure-
+// `renderToStaticMarkup` cannot see this one: the banner is hidden on the
+// server and the hydration render, and only shows once the render after
+// hydration reads storage, which a one-shot server render never reaches
+// (AGENTS.md, recurring failure class 2 — "pure-
 // builder tests cannot see wiring"; and see this file's own header). So this
 // uses `_hook-harness.tsx`'s `renderIsland`, the same technique
 // `cookie-consent-overlay-segment.test.tsx` already proves works for this
@@ -529,7 +531,8 @@ describe("cookie consent: Accept carries a stable hook", () => {
     });
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true } as Response)));
     try {
-      const island = renderIsland(CookieConsent, {});
+      // Hydrate mode: "consent needed" is read from storage after hydration.
+      const island = renderIsland(CookieConsent, {}, undefined, { hydrate: true });
       const tree = island.tree();
       expect(tree.length, "the banner must actually be visible (post-effect), not the empty pre-effect tree").toBeGreaterThan(0);
       const accept = tree.find((el) => el.type === "button" && propsOf(el)["data-testid"] === "cookie-accept");

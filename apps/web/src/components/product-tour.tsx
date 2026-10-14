@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
@@ -61,6 +61,48 @@ function measure(target: string): Rect | null {
   return { top: r.top, left: r.left, width: r.width, height: r.height };
 }
 
+/**
+ * The tour's progress lives in `sessionStorage` (it has to survive the
+ * cross-page navigations the tour itself triggers), so the step on screen is
+ * READ from there through `useSyncExternalStore` rather than copied into state
+ * by an effect. The server snapshot is "no tour", which is also what the
+ * server and the hydration render show — the portal needs `document.body`, so
+ * nothing may render before hydration anyway. Writes go through
+ * `writeTourStep`, which notifies this tab's tour (a `storage` event only
+ * reaches OTHER tabs). Storage that throws reads as "no tour".
+ */
+const tourListeners = new Set<() => void>();
+function subscribeToTourStep(onChange: () => void): () => void {
+  tourListeners.add(onChange);
+  return () => {
+    tourListeners.delete(onChange);
+  };
+}
+function readTourStep(): string | null {
+  try {
+    return sessionStorage.getItem(TOUR_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeTourStep(value: string | null): void {
+  try {
+    if (value === null) sessionStorage.removeItem(TOUR_STORAGE_KEY);
+    else sessionStorage.setItem(TOUR_STORAGE_KEY, value);
+  } catch {
+    // A tour that cannot be remembered still has to be closable.
+  }
+  for (const notify of [...tourListeners]) notify();
+}
+const noTourOnServer = () => null;
+
+/** The stored step as an index into STEPS, or null when absent or junk. */
+function storedIndex(stored: string | null): number | null {
+  if (stored === null) return null;
+  const i = Number(stored);
+  return Number.isInteger(i) && STEPS[i] ? i : null;
+}
+
 /** `dict` is the localized `console` tour slice (keys `tour.*`), resolved by the
  *  server parent (Nav) and passed in — client islands can't import the
  *  server-only t(). */
@@ -75,36 +117,34 @@ export function ProductTour({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [step, setStep] = useState<number | null>(null);
-  const [rect, setRect] = useState<Rect | null>(null);
-  const [mounted, setMounted] = useState(false);
+  // The step on screen: the stored one, but only on ITS page. A stored step
+  // for another path is a navigation the tour triggered that is still in
+  // flight — hidden here, resumed by the destination page's tour.
+  const storedStep = storedIndex(useSyncExternalStore(subscribeToTourStep, readTourStep, noTourOnServer));
+  const step = storedStep !== null && STEPS[storedStep].path(orgSlug) === pathname ? storedStep : null;
+  const target = step === null ? null : STEPS[step].target;
+  // A measurement belongs to the target it measured: a targetless step, or a
+  // step whose target has not been measured yet, shows the centred card rather
+  // than a spotlight left over from another step.
+  const [measured, setMeasured] = useState<{ target: string; rect: Rect | null } | null>(null);
+  const rect = target !== null && measured?.target === target ? measured.rect : null;
 
-  useEffect(() => setMounted(true), []);
-
-  // Resume a tour in progress (after cross-page navigation) or auto-start on
-  // the dashboard for users who haven't completed it yet.
+  // Writes only, never a state copy: drop a junk key, or auto-start on the
+  // dashboard for users who haven't completed the tour. Keyed on the page, not
+  // on the stored value — re-running after `finish()` cleared the key would
+  // restart the tour the user just closed (`autoStart` stays true until the
+  // server re-renders).
   useEffect(() => {
-    const stored = sessionStorage.getItem(TOUR_STORAGE_KEY);
+    const stored = readTourStep();
     if (stored !== null) {
-      const i = Number(stored);
-      if (Number.isInteger(i) && STEPS[i]?.path(orgSlug) === pathname) {
-        setStep(i);
-      } else if (!Number.isInteger(i) || !STEPS[i]) {
-        sessionStorage.removeItem(TOUR_STORAGE_KEY);
-      }
-      // Path mismatch: keep the key — the navigation we triggered may still
-      // be in flight; the component on the destination page resumes it.
+      if (storedIndex(stored) === null) writeTourStep(null);
       return;
     }
-    if (autoStart && pathname === routes.orgHome(orgSlug)) {
-      sessionStorage.setItem(TOUR_STORAGE_KEY, "0");
-      setStep(0);
-    }
+    if (autoStart && pathname === routes.orgHome(orgSlug)) writeTourStep("0");
   }, [autoStart, pathname, orgSlug]);
 
   const finish = useCallback((markDone: boolean) => {
-    sessionStorage.removeItem(TOUR_STORAGE_KEY);
-    setStep(null);
+    writeTourStep(null);
     if (markDone) fetch("/api/tour", { method: "POST" }).catch(() => {});
   }, []);
 
@@ -115,13 +155,9 @@ export function ProductTour({
         return;
       }
       if (i < 0) return;
-      sessionStorage.setItem(TOUR_STORAGE_KEY, String(i));
-      if (STEPS[i].path(orgSlug) !== pathname) {
-        setStep(null); // hide until the destination page's tour resumes
-        router.push(STEPS[i].path(orgSlug));
-      } else {
-        setStep(i);
-      }
+      // On another page this hides the tour until the destination resumes it.
+      writeTourStep(String(i));
+      if (STEPS[i].path(orgSlug) !== pathname) router.push(STEPS[i].path(orgSlug));
     },
     [pathname, router, finish, orgSlug],
   );
@@ -129,12 +165,8 @@ export function ProductTour({
   // Track the highlighted element's position; poll briefly in case it renders
   // after navigation, then follow resize/scroll.
   useEffect(() => {
-    if (step === null) return;
-    const target = STEPS[step].target;
-    if (!target) {
-      setRect(null);
-      return;
-    }
+    if (target === null) return;
+    const setRect = (r: Rect | null) => setMeasured({ target, rect: r });
     let cancelled = false;
     let attempts = 0;
     let scrolled = false;
@@ -170,7 +202,7 @@ export function ProductTour({
       window.removeEventListener("resize", follow);
       window.removeEventListener("scroll", follow, true);
     };
-  }, [step]);
+  }, [target]);
 
   // Escape skips the tour.
   useEffect(() => {
@@ -182,7 +214,9 @@ export function ProductTour({
     return () => window.removeEventListener("keydown", onKey);
   }, [step, finish]);
 
-  if (!mounted || step === null) return null;
+  // `step` is null on the server and through hydration (server snapshot), so
+  // the portal below only ever renders on the client.
+  if (step === null) return null;
   const s = STEPS[step];
   const isLast = step === STEPS.length - 1;
   const title = dict[`tour.${s.id}.title`] ?? "";

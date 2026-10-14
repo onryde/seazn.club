@@ -37,7 +37,7 @@ import { CookieConsent } from "../cookie-consent";
 describe("CookieConsent on the overlay segment", () => {
   it("renders nothing under /overlay/, so OBS cannot composite it into a broadcast", () => {
     pathname.current = "/overlay/fixtures/11111111-1111-1111-1111-111111111111";
-    expect(renderIsland(CookieConsent, {}).tree()).toEqual([]);
+    expect(renderIsland(CookieConsent, {}, undefined, { hydrate: true }).tree()).toEqual([]);
   });
 
   it("still renders on the public match page — the positive pair", () => {
@@ -45,9 +45,11 @@ describe("CookieConsent on the overlay segment", () => {
     // nothing anywhere, which is a different (and much worse) bug. The stub
     // localStorage above has no CONSENT_KEY set, so `needsConsentPrompt()`
     // is true by default — the visitor's normal "first visit" state — and the
-    // effect's own `setVisible(true)` drives a second pass through the
-    // harness before `.tree()` is read.
+    // harness's hydrate mode re-reads that store after the hydration render,
+    // the second pass `.tree()` is read from. (Both cases run in hydrate mode:
+    // in the default server-snapshot mode nothing renders anywhere, and the
+    // overlay case above would pass vacuously.)
     pathname.current = "/shared/acme/summer-cup/div-a/fixtures/1";
-    expect(renderIsland(CookieConsent, {}).tree().length).toBeGreaterThan(0);
+    expect(renderIsland(CookieConsent, {}, undefined, { hydrate: true }).tree().length).toBeGreaterThan(0);
   });
 });

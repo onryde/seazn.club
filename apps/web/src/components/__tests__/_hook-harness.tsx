@@ -91,7 +91,9 @@ interface HookDispatcher {
    *  pre-hydration behaviour rather than inventing a harness-only rule. A
    *  component whose CLICK WIRING this harness exists to test never depends
    *  on which snapshot a browser-only store returns; one that started to
-   *  would need a real renderer, not this one. */
+   *  would need a real renderer, not this one — or `renderIsland`'s opt-in
+   *  `{ hydrate: true }`, which models React's after-hydration re-read for a
+   *  test that has stubbed the browser globals the live snapshot touches. */
   useSyncExternalStore: (
     subscribe: (onChange: () => void) => () => void,
     getSnapshot: () => Cell,
@@ -179,9 +181,38 @@ export function renderIsland<P>(
   Component: (props: P) => ReactNode,
   initialProps: P,
   expand: (node: ReactNode) => ReactElement[] = (node) => walk(node),
+  /**
+   * `hydrate: true` models what React does with `useSyncExternalStore` on a
+   * HYDRATING client, instead of the default "server snapshot for ever": the
+   * first render reads every store's server snapshot (the markup the server
+   * sent); once that render has committed — where React checks its stores
+   * after hydration — every store is subscribed, and if any live snapshot
+   * differs the island re-renders with the live values. From then on every
+   * render reads the live snapshot, and a store's `onChange` re-renders.
+   *
+   * Opt-in, because a browser-backed store's live snapshot reads `window` /
+   * `matchMedia` / `localStorage`, which the test must stub first. Added for
+   * the `react-hooks/set-state-in-effect` batch (L3, 2026-10-14): values a
+   * mount effect used to copy into state ("origin", "navigator.share",
+   * "consent needed") are now read through a store, and the tests that pin the
+   * after-mount value need the after-hydration read to reach it.
+   */
+  options: { hydrate?: boolean } = {},
 ) {
   const slot = hookDispatcherSlot();
   let props = initialProps;
+  // Hydrate mode only (see `options`): one cell per `useSyncExternalStore`
+  // call, keyed by call order. `subscribedTo` is the `subscribe` function the
+  // live subscription was made with, so a new one re-subscribes.
+  let hydrated = false;
+  let storeCursor = 0;
+  const stores: {
+    subscribe: (onChange: () => void) => () => void;
+    getSnapshot: () => Cell;
+    value: Cell;
+    unsubscribe?: () => void;
+    subscribedTo?: (onChange: () => void) => () => void;
+  }[] = [];
   const cells: Cell[] = [];
   let cursor = 0;
   let output: ReactNode = null;
@@ -334,10 +365,38 @@ export function renderIsland<P>(
     useContext(context) {
       return context._currentValue;
     },
-    useSyncExternalStore(_subscribe, getSnapshot, getServerSnapshot) {
-      return getServerSnapshot ? getServerSnapshot() : getSnapshot();
+    useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot) {
+      const serverRead = () => (getServerSnapshot ? getServerSnapshot() : getSnapshot());
+      if (!options.hydrate) return serverRead();
+      const index = storeCursor++;
+      const value = hydrated ? getSnapshot() : serverRead();
+      const before = stores[index];
+      stores[index] = {
+        subscribe,
+        getSnapshot,
+        value,
+        unsubscribe: before?.unsubscribe,
+        subscribedTo: before?.subscribedTo,
+      };
+      return value;
     },
   };
+
+  /** Hydrate mode, after a commit: subscribe any store whose `subscribe`
+   *  changed (or was never subscribed), then report whether any live snapshot
+   *  moved off what the last render read — React's post-hydration check. */
+  function syncStores(): boolean {
+    let moved = false;
+    for (const store of stores) {
+      if (store.subscribedTo !== store.subscribe) {
+        store.unsubscribe?.();
+        store.unsubscribe = store.subscribe(() => schedule());
+        store.subscribedTo = store.subscribe;
+      }
+      if (!Object.is(store.getSnapshot(), store.value)) moved = true;
+    }
+    return moved;
+  }
 
   /** Set state from an effect, the way a component that measures in a layout
    *  effect and then stores the measurement does. React does NOT re-enter the
@@ -370,6 +429,7 @@ export function renderIsland<P>(
       callbackCursor = 0;
       refCursor = 0;
       reducerCursor = 0;
+      storeCursor = 0;
       pending = [];
       pendingLayout = [];
       cacheUndo = [];
@@ -433,6 +493,14 @@ export function renderIsland<P>(
       try {
         commit(queuedLayout, layoutEffects);
         commit(queued, effects);
+        // Hydrate mode: the first commit IS hydration finishing. From here on
+        // renders read live snapshots; a store that moved off the value this
+        // render read re-renders the island, after the commit, like any
+        // commit-phase update.
+        if (options.hydrate) {
+          hydrated = true;
+          if (syncStores()) commitUpdate = true;
+        }
       } finally {
         committing = false;
       }
@@ -482,6 +550,7 @@ export function renderIsland<P>(
      *  flush-on-unmount fix needs — has no way to fire at all in this
      *  harness. */
     unmount: () => {
+      for (const store of stores) store.unsubscribe?.();
       for (const effect of layoutEffects) {
         effect?.cleanup?.();
       }
