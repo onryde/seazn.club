@@ -27,7 +27,9 @@ export async function POST(
       insert into email_verifications (user_id, token, expires_at)
       values (${id}, ${token}, ${expires.toISOString()})`;
 
-    const link = `${baseUrl(req)}/api/auth/verify-email?token=${token}`;
+    // The /verify-email PAGE, as the signup email links it. The API route
+    // beside it is POST-only, so a link there answers a click with a 405.
+    const link = `${baseUrl(req)}/verify-email?token=${token}`;
     await sendVerificationEmail(user.email, link);
     await logStaffAction(staff.id, "resend_verification", "user", id);
 
