@@ -517,6 +517,9 @@ per peer, `mostRecentPeerId` is used only to route a `ClientError` to the latest
 needs the live vendor: there is no RealtimeKit API token locally, and the SDK refuses the
 fixture server's token offline, so no local join happens at all, fake camera or not.
 
+**OWNER RULING (2026-10-14): (b), one pane at a time, with a white/black switch. Shape (a),
+iframe-both, is DROPPED** — not deferred, and no stg measurement is owed for it.
+
 **Ship shape: (b), one pane at a time.**
 - The panel joins ONE of the board's two meetings, labelled by player (name and colour), with
   a two-way switch to the other. Switching leaves one meeting, then joins the other.
@@ -527,16 +530,13 @@ fixture server's token offline, so no local join happens at all, fake camera or 
   one `randomUUID()` per mint) and its own `removed_at` row, on its own `(fixture_id, side)`. A switch whose join fails rolls back as `mintArbiter`'s catch does for one (`arbiter.ts:576-584`).
 - Trade-off: the arbiter sees one player at a time, never both at the same instant.
 
-**Shape (a), deferred until measured: one same-origin iframe per pane.**
-- Each pane is its own document, so it is its own realm with its own SDK registry. It needs
-  no camera: it only receives.
-- It is offered only after a stg measurement with the fake camera that shows ALL of these:
-  - two panes joined receive-only to the two meetings for 10 minutes;
-  - both tracks rendering;
-  - each pane's `ClientError` reaching its own pane;
-  - a reconnect in one pane leaving the other playing.
-- A watch then mints two participants, both-or-neither: the second mint's failure removes
-  the first.
+**Shape (a), DROPPED by the owner (2026-10-14): one same-origin iframe per pane.** Kept as a
+record of what was considered, never to be built without a new ruling.
+- Each pane would be its own document, so its own realm with its own SDK registry.
+- It would have needed a stg measurement with the fake camera (two panes joined receive-only
+  for 10 minutes, both tracks rendering, each pane's `ClientError` reaching its own pane, a
+  reconnect in one pane leaving the other playing) and a both-or-neither mint of two
+  participants. None of that is owed now.
 
 **The board list.** `boardRows` lists a board ONCE, by aggregating its rows:
 - `hasMeeting` = any row;
@@ -799,9 +799,9 @@ retired. Variants other than standard.
 - Penalty wording for a camera that goes dark: ruled as **flag, organiser decides** (D10);
   the player-facing sentence still needs writing in four locales.
 - W2b's merge date, which gates the no-show path.
-- **The arbiter's simultaneous two-pane view** (§5.6.4 shape (a), one iframe per pane) is
-  owed a stg measurement against the live vendor with the fake camera before it is offered.
-  Until then the panel shows one player's camera at a time. Owner to choose once measured.
+- ~~The arbiter's simultaneous two-pane view~~ — CLOSED by owner ruling (2026-10-14): the
+  arbiter sees ONE player's camera at a time with a white/black switch (§5.6.4 shape (b)); the
+  iframe-per-pane shape (a) is dropped, so no stg measurement is owed for it.
 - **The seat gate's RealtimeKit spend** (§5.6.8): a `camera_starting` wait re-asking once a
   second can reach about 6,000 calls per 5 minutes at 50 boards, against the global 1,200.
   This predates D16 and needs its own budget (a cached evidence read, or a slower re-ask).
