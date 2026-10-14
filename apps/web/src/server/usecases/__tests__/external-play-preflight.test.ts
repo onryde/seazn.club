@@ -2,7 +2,7 @@
 // the browser sends is read (spec §5.2, §10).
 //
 // The video side is the REAL T7 adapter (`ensureMeeting`, `addParticipant`,
-// `hasLiveVideoPublisher`) driven against an in-memory fake of RealtimeKit's
+// `seatCameraEvidence`) driven against an in-memory fake of RealtimeKit's
 // REST surface, so every seat below passes through the adapter's real
 // response parsing — a double that answered `true`/`false` directly would
 // prove only the double (AGENTS.md, "the inert seam").
@@ -24,7 +24,7 @@ import {
   RealtimeKitError,
   addParticipant,
   ensureMeeting,
-  hasLiveVideoPublisher,
+  seatCameraEvidence,
   refreshParticipantToken,
 } from "@/server/external-play/video/realtimekit";
 import { captureError } from "@/lib/sentry";
@@ -66,7 +66,19 @@ function configureRealtimeKit(): void {
   for (const [k, v] of Object.entries(RTK_ENV)) vi.stubEnv(k, v);
 }
 
-type FakeParticipant = { meetingId: string; subject: string; peers: number; everJoined: boolean };
+/** One connected (or departed) tab: a RealtimeKit PEER, with its own peer report (T17B fix 2, D2). `events` null ⇒
+ *  RealtimeKit has no report for it. */
+type FakePeer = { id: string; joinedAt: string; left: boolean; events: unknown[] | null };
+type FakeParticipant = { meetingId: string; subject: string; peers: number; everJoined: boolean; peerList: FakePeer[] };
+
+/** The measured camera-ON peer's events (T17B evidence t17b-peer-reports-live.json, peer "on"): what an honest
+ *  browser that granted the camera reports — and no producer samples (they arrive late, so the seat never reads them). */
+const CAMERA_ON_EVENTS = (at: string) => [
+  { name: "audio_off", timestamp: at },
+  { name: "video_on", timestamp: at },
+  { name: "media_permission", metadata: { device_type: "VIDEO", permission: "ACCEPTED" }, timestamp: at },
+  { name: "precall_begin", timestamp: at },
+];
 type FailRule = (method: string, path: string) => Response | "network" | null;
 
 function json(status: number, body: unknown): Response {
@@ -123,7 +135,7 @@ function fakeRealtimeKit() {
       seq += 1;
       const id = `p-${FAKE}-${seq}`;
       const token = `jwt-add-${id}`;
-      participants.set(id, { meetingId: m[1]!, subject: body.custom_participant_id, peers: 0, everJoined: false });
+      participants.set(id, { meetingId: m[1]!, subject: body.custom_participant_id, peers: 0, everJoined: false, peerList: [] });
       tokens.set(token, id);
       return json(201, { success: true, data: { id, token } });
     }
@@ -151,8 +163,17 @@ function fakeRealtimeKit() {
           custom_participant_id: p.subject,
           joined_at: "2026-10-01T12:01:00Z",
           left_at: p.peers > 0 ? null : "2026-10-01T12:04:00Z",
+          peer_events: p.peerList.flatMap((peer) => [
+            { event_name: "PEER_JOINING", peer_id: peer.id, created_at: peer.joinedAt },
+            ...(peer.left ? [{ event_name: "PEER_LEAVING", peer_id: peer.id, created_at: "2026-10-01T12:04:00Z" }] : []),
+          ]),
         }));
       return json(200, { success: true, data: { participants: rows } });
+    }
+    if (method === "GET" && (m = path.match(/^\/sessions\/peer-report\/([^/]+)$/))) {
+      const peer = [...participants.values()].flatMap((p) => p.peerList).find((x) => x.id === decodeURIComponent(m![1]!));
+      if (!peer || peer.events === null) return json(404, { success: false, error: { code: 404, message: "No peer event exists" } });
+      return json(200, { success: true, data: { participant: { peer_report: { metadata: { events: peer.events } } } } });
     }
     throw new Error(`fake RealtimeKit: unrouted ${method} ${path}`);
   };
@@ -167,9 +188,9 @@ function fakeRealtimeKit() {
       adapter.push(`addParticipant:${a.preset}`);
       return addParticipant(a, { fetch });
     },
-    hasLiveVideoPublisher: (a) => {
-      adapter.push("hasLiveVideoPublisher");
-      return hasLiveVideoPublisher(a, { fetch });
+    seatCameraEvidence: (a) => {
+      adapter.push("seatCameraEvidence");
+      return seatCameraEvidence(a, { fetch });
     },
     refreshParticipantToken: (a) => {
       adapter.push("refreshParticipantToken");
@@ -182,19 +203,25 @@ function fakeRealtimeKit() {
     http,
     adapter,
     participants,
-    /** A browser tab joining the meeting WITH a token the server handed out. */
-    joinWith(token: string): void {
+    /** A browser tab joining the meeting WITH a token the server handed out — a new PEER, whose report shows the
+     *  measured honest camera (granted and on) unless `events` says otherwise. It joined a second before NOW. */
+    joinWith(token: string, events: (at: string) => unknown[] | null = CAMERA_ON_EVENTS): void {
       const id = tokens.get(token);
       const p = id === undefined ? undefined : participants.get(id);
       if (!p) throw new Error(`fake RealtimeKit: no participant holds token ${token}`);
       p.peers += 1;
       p.everJoined = true;
+      seq += 1;
+      const at = new Date(NOW.getTime() - 1_000).toISOString();
+      p.peerList.push({ id: `peer-${FAKE}-${seq}`, joinedAt: at, left: false, events: events(at) });
     },
-    /** One tab of this participant closes. */
+    /** One tab of this participant closes: its latest connected peer leaves. */
     leave(participantId: string): void {
       const p = participants.get(participantId);
       if (!p || p.peers === 0) throw new Error(`fake RealtimeKit: ${participantId} is not connected`);
       p.peers -= 1;
+      const peer = p.peerList.filter((x) => !x.left).at(-1);
+      if (peer) peer.left = true;
     },
     failWhen(rule: FailRule): void {
       fail = rule;
@@ -516,6 +543,13 @@ function unconfigureRealtimeKit(): void {
 }
 /** The token a camera refusal or a seat carries must be the CALLER's own
  *  participant — the one stored for (fixture, caller) — never the opponent's. */
+/** The participant token a camera refusal carries (throws when it carries none). */
+function tokenOf(got: SeatResult): string {
+  const token = "participant" in got && got.participant ? got.participant.authToken : null;
+  if (!token) throw new Error(`no token in ${JSON.stringify(got)}`);
+  return token;
+}
+
 async function expectOwnToken(s: Seeded, side: "home" | "away", got: SeatResult): Promise<string> {
   const p = "participant" in got ? got.participant : null;
   expect(p, `${side} carries a token`).not.toBeNull();
@@ -552,7 +586,7 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer under each camera policy"
     const got = await claim(s, "home", rtk);
     expect(got.seated).toBe(true);
     await expectOwnToken(s, "home", got);
-    expect(count(rtk.adapter, "hasLiveVideoPublisher"), "optional must not ASK — asking invites a future refusal").toBe(0);
+    expect(count(rtk.adapter, "seatCameraEvidence"), "optional must not ASK — asking invites a future refusal").toBe(0);
     expect(count(rtk.adapter, "addParticipant:player")).toBe(1);
     expect((await participantRows(s.fixtureId))[0]?.preset).toBe("player");
   });
@@ -586,7 +620,7 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer under each camera policy"
     expect(got.seated).toBe(false);
     expect(!got.seated && got.reason).toBe("camera_required");
     await expectOwnToken(s, "home", got);
-    expect(count(rtk.adapter, "hasLiveVideoPublisher"), "the meeting is asked, every time").toBe(1);
+    expect(count(rtk.adapter, "seatCameraEvidence"), "the meeting is asked, every time").toBe(1);
     expect((await participantRows(s.fixtureId))[0]?.last_publisher_seen_at).toBeNull();
   });
 
@@ -603,7 +637,7 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer under each camera policy"
     const during = rtk.adapter.slice(before.length);
     expect(count(during, "addParticipant:player"), "a returning player is never re-minted").toBe(0);
     expect(count(during, "refreshParticipantToken"), "a returning player gets a regenerated token").toBe(1);
-    expect(count(during, "hasLiveVideoPublisher")).toBe(1);
+    expect(count(during, "seatCameraEvidence")).toBe(1);
     const [row] = await participantRows(s.fixtureId);
     expect(row?.last_publisher_seen_at?.toISOString(), "the verification is stamped at the claim time").toBe(
       NOW.toISOString(),
@@ -758,7 +792,7 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
     expect(a.seated && b.seated).toBe(true);
     expect(b.seated && b.participant?.participantId).toBe(a.seated && a.participant?.participantId);
     expect(count(rtk.adapter.slice(mark), "addParticipant:player"), "a reload must not mint a second participant").toBe(0);
-    expect(count(rtk.adapter.slice(mark), "hasLiveVideoPublisher"), "but it MUST re-verify").toBe(1);
+    expect(count(rtk.adapter.slice(mark), "seatCameraEvidence"), "but it MUST re-verify").toBe(1);
     expect((await participantRows(s.fixtureId)).length).toBe(1);
   });
 
@@ -1192,10 +1226,13 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (controller ruling Q1)", () => {
-  it("every refusal reason, swept: only the two camera refusals carry the caller's own token", async () => {
+  it("every refusal reason, swept: only the four camera refusals carry the caller's own token", async () => {
     // From the RULING, not the code: a token only once every other check has
-    // passed, and only for the caller's own participant.
-    const TOKEN_BEARING = new Set(["camera_required", "camera_lost"]);
+    // passed, and only for the caller's own participant. T17B fix 2 (D2): a
+    // camera still starting, or blocked by the browser, is a camera refusal
+    // like the other two — the room is joined with that token, and a refusal
+    // without it would drop the camera the player has just joined with.
+    const TOKEN_BEARING = new Set(["camera_required", "camera_lost", "camera_starting", "camera_blocked"]);
     const TOKENLESS = new Set([
       "window_closed", "not_a_player", "round_not_open", "fixture_not_playable", "video_unavailable",
       // Fix round 2: the play grant, checked before any token is minted.
@@ -1253,6 +1290,23 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
       rtk.leave(ok.seated ? ok.participant!.participantId : "");
       seen.set("camera_lost", await claim(lostS, "home", rtk));
     }
+    const startingS = await req();
+    {
+      const rtk = fakeRealtimeKit();
+      // Joined a second before NOW, its report holding no events yet.
+      rtk.joinWith(tokenOf(await claim(startingS, "home", rtk)), () => []);
+      seen.set("camera_starting", await claim(startingS, "home", rtk));
+    }
+    const blockedS = await req();
+    {
+      const rtk = fakeRealtimeKit();
+      rtk.joinWith(tokenOf(await claim(blockedS, "home", rtk)), (at) => [
+        { name: "video_on", timestamp: at },
+        { name: "media_permission", metadata: { device_type: "VIDEO", permission: "DENIED" }, timestamp: at },
+        { name: "video_off", timestamp: at },
+      ]);
+      seen.set("camera_blocked", await claim(blockedS, "home", rtk));
+    }
 
     let checked = 0;
     for (const [reason, got] of seen) {
@@ -1262,6 +1316,8 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     }
     await expectOwnToken(camS, "home", seen.get("camera_required")!);
     await expectOwnToken(lostS, "home", seen.get("camera_lost")!);
+    await expectOwnToken(startingS, "home", seen.get("camera_starting")!);
+    await expectOwnToken(blockedS, "home", seen.get("camera_blocked")!);
     expect(checked, "anti-vacuity: every refusal reason produced once").toBe(SEAT_REFUSAL_REASONS.length);
   });
 });
@@ -1360,7 +1416,7 @@ describe.skipIf(!process.env.DATABASE_URL)("a forged camera claim is inert", () 
     };
     const got = await seatPlayer(forged, { now: NOW, video: rtk.video });
     expect(!got.seated && got.reason).toBe("camera_required");
-    expect(count(rtk.adapter, "hasLiveVideoPublisher"), "the meeting was asked — that is the point").toBe(1);
+    expect(count(rtk.adapter, "seatCameraEvidence"), "the meeting was asked — that is the point").toBe(1);
   });
 
   it("the module names no client-supplied camera flag anywhere in its source", () => {
@@ -1368,7 +1424,7 @@ describe.skipIf(!process.env.DATABASE_URL)("a forged camera claim is inert", () 
     // prove the right file was read, and a size floor.
     const src = readFileSync(join(__dirname, "../external-play/preflight.ts"), "utf8");
     expect(src.length, "premise: the file was actually read").toBeGreaterThan(500);
-    expect(src, "positive control: this IS the preflight module").toContain("hasLiveVideoPublisher");
+    expect(src, "positive control: this IS the preflight module").toContain("seatCameraEvidence");
     expect(src, "positive control: and it is the one that gates the seat").toContain("camera_required");
     expect(src).not.toMatch(/camera[_ ]?ok/i);
     expect(src).not.toMatch(/\bclaimsCamera\b|\bcameraGranted\b|\bvideoEnabled\b/);
@@ -1810,7 +1866,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
       if (m.policy === "optional") {
         expect(got.seated, where).toBe(true);
         expect(rtk.adapter.slice(adapterBefore), `${where}: optional never asks`).not.toContain(
-          "hasLiveVideoPublisher",
+          "seatCameraEvidence",
         );
         totals.seatedOptional += 1;
         if (m.late) totals.lateReentrySeated += 1;

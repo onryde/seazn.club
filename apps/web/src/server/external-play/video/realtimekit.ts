@@ -9,20 +9,25 @@ import "server-only";
 // live-participant COUNT; session participants give joined_at/left_at and peer
 // events (PEER_CREATED | PEER_JOINING | PEER_LEAVING). `videoEnabled` and
 // `onVideoUpdate` exist only in the CLIENT SDK — which is exactly the
-// forgeable surface spec §5.2 rejects. So `hasLiveVideoPublisher` proves
-// "joined to a live session and not left", and CAMERA-ON IS ENFORCED BY THE
-// PRESET: the player preset must be configured with video on at join and the
-// video toggle DENIED. That is server-side configuration we hold, never a
-// claim the browser makes. See plan premise P-B2-6.
+// forgeable surface spec §5.2 rejects. Presence alone proves only "joined to
+// a live session and not left" — and the preset does NOT enforce camera-on
+// (T17B, measured live 2026-10-14: a player whose browser DENIED the camera
+// joined, was seated, and a game was created). P-B2-6's "camera-on is the
+// preset's job" was false.
 //
-// There IS after-the-fact evidence: the peer report (`videoOffCoverage`
-// below). It is SDK telemetry — encoder-side stats the RealtimeKit client
-// uploads — so it is harder to fake than a client boolean but it is not an
-// independent observation by any server. Measured 2026-10-09
-// (docs/superpowers/specs/evidence/2026-10-09-chess-spikes/rtk-peer-report.log):
-// it stays frozen at the join snapshot for the whole session and is final
-// about 70 s after the participant leaves, so it is organiser evidence after a
-// match and never an input to the seat gate.
+// What does tell the two apart is the peer report (GET
+// /sessions/peer-report/{peer_id}): SDK telemetry the RealtimeKit client
+// uploads — `metadata.events` (`media_permission`, `video_on`/`video_off`)
+// and `quality.video_producer` samples. It is NOT frozen at the join
+// snapshot (the 2026-10-09 spike's reading was wrong): measured live on
+// 2026-10-14 it accumulates during the session — `media_permission` was on
+// the report 1.4 s after PEER_JOINING — while the producer SAMPLES arrive
+// late and in batches (none for 90 s from a peer publishing 6 MB), so they
+// are never a seat-time signal. The seat reads the current peer's
+// permission and its latest on/off event (`seatCameraEvidence`); the
+// samples stay organiser evidence after a match (`videoOffCoverage`).
+// Residual, accepted: it is client-uploaded, so a tampered client could
+// forge it — it closes the honest-browser gap, not a determined forger.
 //
 // No credential has a default, and there is no mock fallback. The POC
 // returns `mock-token-*` whenever credentials are missing; here an
@@ -356,18 +361,19 @@ export async function ensureMeeting(fixtureId: string, deps: RealtimeKitDeps = {
   return { meetingId: winner.meetingId };
 }
 
-/** Presets, not code, are what make the camera mandatory: the `player`
- *  preset must be configured with video on at join and the video toggle
- *  DENIED. `addParticipant` therefore only ever names a preset from env —
- *  it never sends media permissions itself, so a preset change in the
- *  dashboard is the one place that rule lives. Mic muted by default is the
- *  same preset's job (spec §5.3: chess needs no audio).
+/** The preset names the role — the player publishes, the arbiter only
+ *  receives — and `addParticipant` only ever names one from env; it never
+ *  sends media permissions itself. A preset does NOT make the camera
+ *  mandatory (T17B, measured 2026-10-14: a player whose browser denied the
+ *  camera joined on the player preset): the seat reads the peer's own
+ *  report for that (`seatCameraEvidence`). Mic muted by default is the
+ *  preset's job (spec §5.3: chess needs no audio).
  *
  *  `subject` becomes `custom_participant_id`; it must be an internal id (a
  *  person UUID), never an email or a name — Cloudflare's own guidance, and
  *  the same reason `name` is omitted below. The returned `participantId` is
  *  RealtimeKit's persistent participant id (the SDK's `self.userId`), which a
- *  session-participant row carries as `user_id` — see hasLiveVideoPublisher. */
+ *  session-participant row carries as `user_id` — see seatCameraEvidence. */
 export async function addParticipant(
   a: { meetingId: string; subject: string; preset: "player" | "arbiter" },
   deps: RealtimeKitDeps = {},
@@ -453,55 +459,78 @@ export async function removeParticipant(
  *  default page is the one most likely to run out. */
 const PARTICIPANTS_PER_PAGE = 200;
 
-/** Server-verified presence, which is the strongest thing RealtimeKit's REST
- *  surface can tell us (see this file's header and plan premise P-B2-6):
- *  TRUE means "a live session exists for this meeting and this participant is
- *  in it and has not left". It does NOT read a video track — no REST
- *  endpoint and no webhook exposes one. Camera-on is the preset's job.
- *
- *  `participantId` is what addParticipant returned. In a session-participant
- *  row that value is `user_id`; the row's own `id` is the session participant
- *  id, which is neither our id nor a peer id (measured 2026-10-09,
- *  rtk-peer-report.log tail / 7dde4a246; the recorded report agrees). Whether
- *  a reload adds a row or only new peer events is unmeasured, so the question
- *  is whether ANY of this participant's rows has not left.
- *
- *  RealtimeKit's own well-formed 404 on the active session is a normal
- *  "nobody has joined yet" and answers false, as does an exact ENDED; any
- *  other failure, and any answer we cannot read, THROWS,
- *  because a silent false would refuse a seat during a vendor outage, and
- *  D11's organiser override exists precisely so an outage is handled by a
- *  person, not by a guess. */
-export async function hasLiveVideoPublisher(
-  a: { meetingId: string; participantId: string },
-  deps: RealtimeKitDeps = {},
-): Promise<boolean> {
-  const cfg = requireConfig();
+/** The meeting's LIVE session id, or null when there is none: RealtimeKit's
+ *  own well-formed 404 on the active session is a normal "nobody has joined
+ *  yet", as is an exact ENDED; any other failure, and any answer we cannot
+ *  read, THROWS, because a silent null would refuse a seat during a vendor
+ *  outage, and D11's organiser override exists precisely so an outage is
+ *  handled by a person, not by a guess. */
+async function liveSessionId(cfg: Config, meetingId: string, deps: RealtimeKitDeps): Promise<string | null> {
   let session: { id?: unknown; status?: unknown };
   try {
     session = (await cf(
       cfg,
-      `/meetings/${encodeURIComponent(a.meetingId)}/active-session`,
+      `/meetings/${encodeURIComponent(meetingId)}/active-session`,
       { method: "GET", notFound: isActiveSessionAbsent },
       deps,
     )) as { id?: unknown; status?: unknown };
   } catch (err) {
-    if (err instanceof RealtimeKitError && err.code === "not_found") return false;
+    if (err instanceof RealtimeKitError && err.code === "not_found") return null;
     throw err;
   }
   // OpenAPI closes the enum at LIVE | ENDED. Only an exact ENDED (or the
   // well-formed 404 above) means "not live"; any other value is an answer we
-  // cannot read, and a false would refuse the seat as "camera off".
-  if (session.status === "ENDED") return false;
+  // cannot read, and a null would refuse the seat as "camera off".
+  if (session.status === "ENDED") return null;
   if (session.status !== "LIVE") {
     throw new RealtimeKitError(502, "unavailable", "RealtimeKit active session has a status outside LIVE | ENDED");
   }
   if (typeof session.id !== "string" || session.id === "") {
     throw new RealtimeKitError(502, "unavailable", "RealtimeKit active session is LIVE but has no id");
   }
+  return session.id;
+}
+
+/** The seat's camera evidence for one participant (T17B fix 2, D2):
+ *  - `absent`: no live session, or this participant is not in it (never
+ *    joined, or left) — or present with no peer still connected;
+ *  - `on`: the CURRENT peer's report holds `media_permission` VIDEO ACCEPTED
+ *    and its latest `video_on`/`video_off` event is `video_on`;
+ *  - `off`: ACCEPTED, but the latest of those events is `video_off`;
+ *  - `blocked`: the current peer's browser DENIED the camera (DENIED, or
+ *    the SDK's SYSTEM_DENIED — an OS privacy setting) — `video_on` is logged
+ *    even then, so it is intent, never proof;
+ *  - `starting`: present, but the report holds neither yet (or RealtimeKit
+ *    has no report for the peer yet);
+ *  - `unreadable`: present, but the peer report could not be read — an
+ *    outage on THAT read, which the seat waits out like `starting` and only
+ *    then answers as one (the caller rethrows `error`).
+ *  `since` is the current peer's PEER_JOINING time: the seat's wait for the
+ *  evidence runs from it. `video_producer` samples are never read here —
+ *  measured late and batched, they would refuse an honest camera.
+ *
+ *  `participantId` is what addParticipant returned — a session-participant
+ *  row's `user_id`, never its `id` (measured 2026-10-09, 7dde4a246). A reload
+ *  adds a new peer under the SAME row (measured 2026-10-14); a second row is
+ *  still read, whichever way the vendor goes. The "current peer" is the
+ *  latest PEER_JOINING with no PEER_LEAVING after it, across this
+ *  participant's present rows — an old peer that left is never judged. */
+export type SeatCamera =
+  | { state: "absent" }
+  | { state: "on" | "off" | "blocked"; since: Date }
+  | { state: "starting"; since: Date }
+  | { state: "unreadable"; since: Date; error: RealtimeKitError };
+
+export async function seatCameraEvidence(
+  a: { meetingId: string; participantId: string },
+  deps: RealtimeKitDeps = {},
+): Promise<SeatCamera> {
+  const cfg = requireConfig();
+  const sessionId = await liveSessionId(cfg, a.meetingId, deps);
+  if (sessionId === null) return { state: "absent" };
   const data = (await cf(
     cfg,
-    `/sessions/${encodeURIComponent(session.id)}/participants?per_page=${PARTICIPANTS_PER_PAGE}`,
+    `/sessions/${encodeURIComponent(sessionId)}/participants?include_peer_events=true&per_page=${PARTICIPANTS_PER_PAGE}`,
     { method: "GET" },
     deps,
   )) as { participants?: unknown };
@@ -509,21 +538,110 @@ export async function hasLiveVideoPublisher(
     throw new RealtimeKitError(502, "unavailable", "RealtimeKit session participants returned no list");
   }
   const rows = data.participants as unknown[];
-  const present = rows.some((r) => {
-    const p = r as { user_id?: unknown; left_at?: unknown };
-    return p.user_id === a.participantId && (p.left_at === null || p.left_at === undefined);
+  const mine = rows.filter((r) => {
+    const p = r as { user_id?: unknown; left_at?: unknown } | null;
+    return p?.user_id === a.participantId && (p.left_at === null || p.left_at === undefined);
   });
-  if (present) return true;
-  // A full page that does not contain us cannot prove absence: the live row
-  // may be on the next page. Say so rather than answer "camera off".
-  if (rows.length >= PARTICIPANTS_PER_PAGE) {
-    throw new RealtimeKitError(
-      502,
-      "unavailable",
-      `RealtimeKit session has ${PARTICIPANTS_PER_PAGE}+ participant rows; presence not provable from one page`,
-    );
+  if (mine.length === 0) {
+    // A full page that does not contain us cannot prove absence: the live row
+    // may be on the next page. Say so rather than answer "camera off".
+    if (rows.length >= PARTICIPANTS_PER_PAGE) {
+      throw new RealtimeKitError(
+        502,
+        "unavailable",
+        `RealtimeKit session has ${PARTICIPANTS_PER_PAGE}+ participant rows; presence not provable from one page`,
+      );
+    }
+    return { state: "absent" };
   }
-  return false;
+  const peer = currentPeer(mine);
+  if (peer === null) return { state: "absent" };
+  const since = new Date(peer.joinedAt);
+  let report: unknown;
+  try {
+    report = await cf(cfg, `/sessions/peer-report/${encodeURIComponent(peer.peerId)}`, { method: "GET" }, deps);
+  } catch (err) {
+    if (!(err instanceof RealtimeKitError)) throw err;
+    // RealtimeKit's own "no peer event exists for id" (measured body): no
+    // report for this peer YET — not an outage, and not a camera.
+    if (err.code === "not_found") return { state: "starting", since };
+    return { state: "unreadable", since, error: err };
+  }
+  let camera: "on" | "off" | "blocked" | "starting";
+  try {
+    camera = cameraFromReport(report);
+  } catch (err) {
+    if (!(err instanceof RealtimeKitError)) throw err;
+    return { state: "unreadable", since, error: err };
+  }
+  return { state: camera, since };
+}
+
+/** The SDK's VIDEO permission values that mean "the browser (or the OS)
+ *  refused the camera" (web-core 2.0.2: DENIED, SYSTEM_DENIED). */
+const CAMERA_REFUSED = new Set(["DENIED", "SYSTEM_DENIED"]);
+
+function malformedPeers(what: string): RealtimeKitError {
+  return new RealtimeKitError(502, "unavailable", `RealtimeKit session participants are malformed: ${what}`);
+}
+
+/** The latest PEER_JOINING with no PEER_LEAVING for the same peer, over the
+ *  given (present) rows; null when every peer has left. A list we cannot read
+ *  THROWS — an unreadable answer is an outage, never "camera off". */
+function currentPeer(rows: unknown[]): { peerId: string; joinedAt: number } | null {
+  const joined = new Map<string, number>();
+  const left = new Set<string>();
+  rows.forEach((r, i) => {
+    const events = (r as { peer_events?: unknown }).peer_events;
+    if (!Array.isArray(events)) throw malformedPeers(`participants[${i}].peer_events is not a list`);
+    (events as unknown[]).forEach((e, j) => {
+      const ev = e as { event_name?: unknown; peer_id?: unknown; created_at?: unknown } | null;
+      if (typeof ev?.peer_id !== "string" || ev.peer_id === "") {
+        throw malformedPeers(`participants[${i}].peer_events[${j}] has no peer_id`);
+      }
+      if (ev.event_name === "PEER_LEAVING") left.add(ev.peer_id);
+      if (ev.event_name !== "PEER_JOINING") return;
+      const at = typeof ev.created_at === "string" ? Date.parse(ev.created_at) : Number.NaN;
+      if (!Number.isFinite(at)) throw malformedPeers(`participants[${i}].peer_events[${j}].created_at is not a date`);
+      joined.set(ev.peer_id, Math.max(at, joined.get(ev.peer_id) ?? at));
+    });
+  });
+  let best: { peerId: string; joinedAt: number } | null = null;
+  for (const [peerId, joinedAt] of joined) {
+    if (left.has(peerId)) continue;
+    if (best === null || joinedAt >= best.joinedAt) best = { peerId, joinedAt };
+  }
+  return best;
+}
+
+/** One peer report's camera, from `metadata.events` alone. No events list
+ *  yet (a peer whose SDK has not uploaded) is `starting`; a list we cannot
+ *  read THROWS. Events are ordered by their timestamp, ties kept in the
+ *  report's own order — the SDK logs the join's `video_on`, `media_permission`
+ *  and (when denied) `video_off` at the same millisecond. */
+function cameraFromReport(data: unknown): "on" | "off" | "blocked" | "starting" {
+  const participant = (data as { participant?: unknown } | null)?.participant as
+    | { peer_report?: { metadata?: { events?: unknown } | null } | null }
+    | undefined;
+  if (typeof participant !== "object" || participant === null) throw malformed("no participant");
+  const raw = participant.peer_report?.metadata?.events;
+  if (raw === undefined || raw === null) return "starting";
+  if (!Array.isArray(raw)) throw malformed("metadata.events is not a list");
+  const events = (raw as unknown[]).map((e, i) => {
+    const ev = e as { name?: unknown; timestamp?: unknown; metadata?: { device_type?: unknown; permission?: unknown } | null } | null;
+    if (typeof ev?.name !== "string") throw malformed(`events[${i}] has no name`);
+    return { name: ev.name, at: parseTime(ev.timestamp, `events[${i}].timestamp`), metadata: ev.metadata ?? null, i };
+  });
+  const video = events.filter((e) => e.name === "media_permission" && e.metadata?.device_type === "VIDEO");
+  if (video.some((e) => CAMERA_REFUSED.has(String(e.metadata?.permission)))) return "blocked";
+  const accepted = video.some((e) => e.metadata?.permission === "ACCEPTED");
+  const toggles = events
+    .filter((e) => e.name === "video_on" || e.name === "video_off")
+    .sort((x, y) => x.at - y.at || x.i - y.i);
+  const latest = toggles.at(-1)?.name;
+  if (accepted && latest === "video_on") return "on";
+  if (accepted && latest === "video_off") return "off";
+  return "starting";
 }
 
 /** Torn down at the result, or at T+20 if nobody came (spec §5.2). There is
@@ -566,12 +684,15 @@ export async function endMeeting(meetingId: string, deps: RealtimeKitDeps = {}):
 //
 // GET /sessions/peer-report/{peer_id}. SDK telemetry (see the header): the
 // RealtimeKit client uploads encoder-side `video_producer` samples and
-// `metadata.events`. Measured 2026-10-09 (rtk-peer-report.log): frozen at the
-// join snapshot until the participant leaves, final ~70 s after; a camera
-// turned off is a GAP in the samples plus `video_off`/`video_on` events, and
+// `metadata.events`. Measured 2026-10-09 (rtk-peer-report.log): final ~70 s
+// after the participant leaves; a camera turned off is a GAP in the samples
+// plus `video_off`/`video_on` events, and
 // `video_producer_cumulative.issues.no_video_fraction` stayed 0 through three
-// minutes off — so that field is never read here. Organiser evidence only:
-// never a seat-gate input, never an automatic outcome (spec §5.2).
+// minutes off — so that field is never read here. (The spike's "frozen at the
+// join snapshot" was wrong — measured live 2026-10-14, the report accumulates
+// — but its samples arrive late and batched.) The off-coverage below is
+// organiser evidence only, never an automatic outcome (spec §5.2); the seat
+// reads only the events (`seatCameraEvidence`).
 
 /** Sample cadence measured in the spike: 51 samples ~7 s apart (web SDK
  *  2.0.2). Used when a report has too few samples to measure its own, and as

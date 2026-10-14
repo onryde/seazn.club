@@ -492,9 +492,8 @@ export async function readRoom(identity: RoomIdentity, fixtureId: string, deps: 
 
 function seatWire(seat: SeatResult): SeatWire {
   if (seat.seated) return { seated: true, participant: seat.participant };
-  if (seat.reason === "camera_required" || seat.reason === "camera_lost") {
-    return { seated: false, reason: seat.reason, participant: seat.participant };
-  }
+  // The camera refusals, and only they, carry the caller's own token (preflight CameraRefusal).
+  if ("participant" in seat) return { seated: false, reason: seat.reason, participant: seat.participant };
   return { seated: false, reason: seat.reason, participant: null };
 }
 

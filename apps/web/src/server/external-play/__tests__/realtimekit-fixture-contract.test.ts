@@ -29,12 +29,15 @@ import {
   RealtimeKitError,
   addParticipant,
   fetchVideoOffCoverage,
-  hasLiveVideoPublisher,
   listMeetingSessions,
   listPeerIds,
   refreshParticipantToken,
   removeParticipant,
+  seatCameraEvidence,
 } from "../video/realtimekit";
+
+/** The seat's camera reading, by state alone. */
+const cameraOf = async (a: { meetingId: string; participantId: string }) => (await seatCameraEvidence(a)).state;
 
 let fx: RealtimeKitFixtureServer;
 beforeAll(async () => {
@@ -86,7 +89,7 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     vi.stubEnv("REALTIMEKIT_APP_ID", "some-other-app");
     // Cloudflare's gateway 7003 is an answer the adapter must NOT read as
     // "no session" (realtimekit.ts isActiveSessionAbsent).
-    await expect(hasLiveVideoPublisher({ meetingId: id, participantId: "p1" })).rejects.toMatchObject({ code: "unavailable", status: 404 });
+    await expect(seatCameraEvidence({ meetingId: id, participantId: "p1" })).rejects.toMatchObject({ code: "unavailable", status: 404 });
   });
 
   it("addParticipant names the subject and the env's preset; a refresh mints a DIFFERENT token for the SAME participant (rtk-token-regen.log)", async () => {
@@ -102,24 +105,43 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     expect(fx.participantFor("person-1")?.id).toBe(a.participantId);
   });
 
-  it("presence: no session is 'not live' (RealtimeKit's 404 body), setLivePublisher makes THIS participant live, and leaving ends it", async () => {
+  it("presence: no session is 'not live' (RealtimeKit's 404 body), setLivePublisher makes THIS participant live with the honest camera, and leaving ends it", async () => {
     const id = await meeting();
     const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
     const them = await addParticipant({ meetingId: id, subject: "black", preset: "player" });
-    expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId }), "before anyone joins").toBe(false);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId }), "before anyone joins").toBe("absent");
     fx.setLivePublisher(them.participantId, true);
-    expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId }), "the OTHER player's presence is not mine").toBe(false);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId }), "the OTHER player's presence is not mine").toBe("absent");
     fx.setLivePublisher(me.participantId, true);
-    expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId })).toBe(true);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId }), "a join's default is the measured camera-ON peer").toBe("on");
     fx.setLivePublisher(me.participantId, false);
-    expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId }), "a row with left_at set is not live").toBe(false);
-    // The server ASKED: the seat gate's two reads are on the record.
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId }), "a row with left_at set is not live").toBe("absent");
+    // The server ASKED: the seat gate's three reads are on the record.
     const asked = fx.calls.filter((c) => c.method === "GET").map((c) => c.route);
     expect(asked).toContain("GET /meetings/:id/active-session");
     expect(asked).toContain("GET /sessions/:id/participants");
+    expect(asked).toContain("GET /sessions/peer-report/:peer");
   });
 
-  it("a reload is a new row for the same participant: both peers are listed, first-seen order; a rejoin after everyone left is a NEW session", async () => {
+  it("MEASURED (T17B): a reload in a live session is a new PEER under the SAME row, and the seat judges the newer peer", async () => {
+    const id = await meeting();
+    const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
+    const them = await addParticipant({ meetingId: id, subject: "black", preset: "player" });
+    fx.setLivePublisher(them.participantId, true); // keeps the session LIVE through my reload
+    fx.setLivePublisher(me.participantId, true, { camera: "denied" });
+    const first = fx.currentPeer(me.participantId);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("blocked");
+    fx.setLivePublisher(me.participantId, false); // the tab closes
+    fx.setLivePublisher(me.participantId, true); // the reload: camera allowed this time
+    const second = fx.currentPeer(me.participantId);
+    expect(second, "a new peer").not.toBe(first);
+    const sid = fx.sessions(id).at(-1)!.id;
+    expect(fx.sessions(id), "one session throughout").toHaveLength(1);
+    expect(await listPeerIds(sid, me.participantId), "both peers, first-seen order, under one row").toEqual([first, second]);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId }), "the old DENIED peer left; the newer one is judged").toBe("on");
+  });
+
+  it("a rejoin after everyone left is a NEW session: both sessions are listed, each with its own peer", async () => {
     const id = await meeting();
     const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
     fx.setLivePublisher(me.participantId, true);
@@ -142,7 +164,7 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     const me = await addParticipant({ meetingId: id, subject: "arb", preset: "arbiter" });
     fx.setLivePublisher(me.participantId, true);
     await removeParticipant({ meetingId: id, participantId: me.participantId });
-    expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId })).toBe(false);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("absent");
     expect(fx.participant(me.participantId)?.deleted).toBe(true);
     expect(() => fx.setLivePublisher(me.participantId, true)).toThrow(/removed/);
     await expect(refreshParticipantToken({ meetingId: id, participantId: me.participantId })).rejects.toMatchObject({ code: "not_found" });
@@ -165,7 +187,7 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     fx.setUnavailable(true);
     let checked = 0;
     for (const call of [
-      () => hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId }),
+      () => seatCameraEvidence({ meetingId: id, participantId: me.participantId }),
       () => addParticipant({ meetingId: id, subject: "x", preset: "player" }),
       () => refreshParticipantToken({ meetingId: id, participantId: me.participantId }),
       () => listMeetingSessions(id),
@@ -177,7 +199,7 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     }
     expect(checked).toBe(4);
     fx.setUnavailable(false);
-    expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId })).toBe(true);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("on");
   });
 
   it("an unexpected route names itself", async () => {
@@ -186,6 +208,101 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     });
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ success: false, error: { message: "fixture: unhandled GET /livestreams" } });
+  });
+});
+
+// ─── The seat's camera (T17B fix 2, D2) ──────────────────────────────────────
+//
+// Presence proved only "joined": a player whose browser DENIED the camera was
+// seated live. The seat now reads the CURRENT peer's report. Expected states
+// come from the measured live reports (evidence t17b-peer-reports-live.json)
+// and the ruling — never from the adapter.
+type LiveReports = { peers: Record<"denied" | "on", { video_producer_samples: number; data: unknown }> };
+const LIVE = JSON.parse(readFileSync(join(EVIDENCE, "t17b-peer-reports-live.json"), "utf8")) as LiveReports;
+
+describe("the seat's camera: the current peer's own report, read through the real adapter", () => {
+  it("the MEASURED live reports: the DENIED peer reads blocked, the allowed peer reads on — and the 'on' verdict never needed a producer sample", async () => {
+    const id = await meeting();
+    const me = await addParticipant({ meetingId: id, subject: "black", preset: "player" });
+    fx.setLivePublisher(me.participantId, true);
+    const peer = fx.currentPeer(me.participantId)!;
+    let checked = 0;
+    for (const [name, want] of [["denied", "blocked"], ["on", "on"]] as const) {
+      fx.servePeerReport(peer, LIVE.peers[name].data);
+      expect(await cameraOf({ meetingId: id, participantId: me.participantId }), name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(LIVE.peers.denied.video_producer_samples, "premise: the denied peer published nothing").toBe(0);
+    // The recorded body carries NO quality block at all: the verdict is the events'.
+    expect(JSON.stringify(LIVE.peers.on.data)).not.toContain("video_producer");
+  });
+
+  it("every camera a join can show, swept, each with its state (zero checked fails)", async () => {
+    // From the ruling: ACCEPTED + latest video_on seats; DENIED is blocked; ACCEPTED then video_off is off; no
+    // evidence yet — an empty report, or none at all (RealtimeKit's not-found) — is starting.
+    const cases = [
+      { camera: "on", want: "on" },
+      { camera: "denied", want: "blocked" },
+      { camera: "off", want: "off" },
+      { camera: "pending", want: "starting" },
+      { camera: "none", want: "starting" },
+    ] as const;
+    let checked = 0;
+    const seen = new Set<string>();
+    for (const c of cases) {
+      fx.reset();
+      const id = await meeting();
+      const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
+      fx.setLivePublisher(me.participantId, true, { camera: c.camera });
+      const got = await seatCameraEvidence({ meetingId: id, participantId: me.participantId });
+      expect(got.state, c.camera).toBe(c.want);
+      // `since` is the peer's own join, for the seat's wait (absent carries none).
+      expect("since" in got && got.since.getTime(), `${c.camera}: since`).toBeGreaterThan(0);
+      seen.add(got.state);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect(seen.size, "four distinct states").toBe(4);
+  });
+
+  it("SEQUENCE: the latest video_on/video_off wins — a camera turned off mid-session reads off, turned back on reads on", async () => {
+    const id = await meeting();
+    const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
+    fx.setLivePublisher(me.participantId, true);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("on");
+    fx.setPeerCamera(me.participantId, "video_off");
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("off");
+    fx.setPeerCamera(me.participantId, "video_on");
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("on");
+  });
+
+  it("an old peer that LEFT is never judged: an allowed camera that left, beside a newer DENIED one, reads blocked", async () => {
+    const id = await meeting();
+    const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
+    const them = await addParticipant({ meetingId: id, subject: "black", preset: "player" });
+    fx.setLivePublisher(them.participantId, true);
+    fx.setLivePublisher(me.participantId, true); // camera on
+    fx.setLivePublisher(me.participantId, false);
+    fx.setLivePublisher(me.participantId, true, { camera: "denied" }); // the reload denied it
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("blocked");
+  });
+
+  it("a peer-report OUTAGE is `unreadable` — never on, never absent — carrying the outage and the peer's join", async () => {
+    const id = await meeting();
+    const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
+    fx.setLivePublisher(me.participantId, true);
+    // Only the report fails: presence still answers.
+    fx.setPeerReportsUnavailable(true);
+    const down = await seatCameraEvidence({ meetingId: id, participantId: me.participantId });
+    expect(down.state).toBe("unreadable");
+    expect(down.state === "unreadable" && down.error).toMatchObject({ code: "unavailable", status: 503 });
+    fx.setPeerReportsUnavailable(false);
+    // A 200 whose body cannot be read is the same: an answer we cannot read is an outage.
+    fx.servePeerReport(fx.currentPeer(me.participantId)!, "not an object");
+    const unreadable = await seatCameraEvidence({ meetingId: id, participantId: me.participantId });
+    expect(unreadable.state).toBe("unreadable");
+    expect(unreadable.state === "unreadable" && unreadable.error).toBeInstanceOf(RealtimeKitError);
   });
 });
 
@@ -207,9 +324,10 @@ const PATHS = [
   "/meetings/MID/participants/PID/live", "/meetings/MID/active-session/participants", "/sessions/SID/participants/PID",
 ];
 
-describe("property: no HTTP request can make a participant live", () => {
-  it("a forged claim on any route, in any order, never seats; the in-process call does", async () => {
+describe("property: no HTTP request can make a participant live, or turn a camera on", () => {
+  it("a forged claim on any route, in any order, never seats and never turns a DENIED camera on; the in-process call does", async () => {
     let requests = 0;
+    let camerasChecked = 0;
     const routesHit = new Set<string>();
     await fc.assert(
       fc.asyncProperty(
@@ -228,11 +346,14 @@ describe("property: no HTTP request can make a participant live", () => {
           const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
           const other = await addParticipant({ meetingId: id, subject: "black", preset: "player" });
           // A LIVE session exists (the opponent is in it), so the forged
-          // claim targets the one thing that would seat: a row for `me`.
-          fx.setLivePublisher(other.participantId, true);
+          // claim targets the one thing that would seat: a row for `me`. The
+          // opponent's browser DENIED the camera (D2): PEER is their peer, so
+          // the forged claims also target the report that would seat them.
+          fx.setLivePublisher(other.participantId, true, { camera: "denied" });
           const sid = fx.sessions(id).at(-1)!.id;
+          const peer = fx.currentPeer(other.participantId)!;
           for (const r of reqs) {
-            const path = r.path.replace("MID", id).replace("PID", me.participantId).replace("SID", sid).replace("PEER", "peer-x");
+            const path = r.path.replace("MID", id).replace("PID", me.participantId).replace("SID", sid).replace("PEER", peer);
             const claim = JSON.parse(JSON.stringify(r.claim).replace("PID", me.participantId)) as Record<string, unknown>;
             const qs = r.where === "query" ? `?${new URLSearchParams(Object.entries(claim).map(([k, v]) => [k, JSON.stringify(v)])).toString()}` : "";
             const headers: Record<string, string> = {
@@ -253,13 +374,19 @@ describe("property: no HTTP request can make a participant live", () => {
           // The kick routes may legitimately END the opponent's presence; they
           // can never CREATE ours.
           if (!fx.participant(me.participantId)?.deleted) {
-            expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId })).toBe(false);
+            expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("absent");
+          }
+          // A kick may END the opponent's presence; nothing turns their camera on.
+          if (!fx.participant(other.participantId)?.deleted) {
+            expect(await cameraOf({ meetingId: id, participantId: other.participantId }), "an HTTP request turned a denied camera on").not.toBe("on");
+            camerasChecked++;
           }
         },
       ),
       { numRuns: 80 },
     );
     expect(requests, "zero forged requests sent is a FAILURE").toBeGreaterThan(0);
+    expect(camerasChecked, "the denied camera was read after the forged requests").toBeGreaterThan(0);
     expect(routesHit.size, "the property reached most route x method cells").toBeGreaterThan(PATHS.length);
 
     // Positive control: the same setup, the one in-process call, and the seat follows.
@@ -267,6 +394,6 @@ describe("property: no HTTP request can make a participant live", () => {
     const id = await meeting();
     const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
     fx.setLivePublisher(me.participantId, true);
-    expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId })).toBe(true);
+    expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("on");
   });
 });

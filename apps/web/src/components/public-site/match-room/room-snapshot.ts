@@ -18,11 +18,13 @@ export type RoomPhaseWire = "not_opened" | "before" | "open" | "closed";
 export type CameraPolicyWire = "off" | "optional" | "required";
 
 /** Why a seat was refused, as the client renders it — preflight's
- *  SEAT_REFUSAL_REASONS. `camera_required` / `camera_lost` carry the caller's
- *  own participant token in the POST answer, never in the snapshot. */
+ *  SEAT_REFUSAL_REASONS. The four camera refusals carry the caller's own
+ *  participant token in the POST answer, never in the snapshot. */
 export type SeatRefusal =
   | "camera_required"
   | "camera_lost"
+  | "camera_starting"
+  | "camera_blocked"
   | "window_closed"
   | "not_a_player"
   | "round_not_open"
@@ -30,6 +32,21 @@ export type SeatRefusal =
   | "video_unavailable"
   | "lichess_link_required"
   | "lichess_reconsent_required";
+
+/** T17B fix 2 (D2): a seat under `required` waits for the current peer's
+ *  own camera report — `media_permission` ACCEPTED and `video_on` — and
+ *  answers `camera_starting` until it is there. Sized from the one live
+ *  measurement (2026-10-14): `media_permission` was on the report 1.4 s after
+ *  PEER_JOINING. The room re-asks every CAMERA_EVIDENCE_POLL_MS; the server
+ *  stops waiting CAMERA_EVIDENCE_DEADLINE_MS after the peer joined (about ten
+ *  times the measured 1.4 s) and answers the camera refusal — or, when the
+ *  report itself could not be read, `video_unavailable`. */
+export const CAMERA_EVIDENCE_POLL_MS = 1_000;
+export const CAMERA_EVIDENCE_DEADLINE_MS = 15_000;
+/** The room's own bound on that wait, past the server's deadline: a server
+ *  whose clock disagrees with the vendor's can never make the room poll for
+ *  ever. Past it the check-in button is offered again. */
+export const CAMERA_EVIDENCE_MAX_POLLS = Math.ceil(CAMERA_EVIDENCE_DEADLINE_MS / CAMERA_EVIDENCE_POLL_MS) + 5;
 
 export type RoomGame = {
   gameId: string;

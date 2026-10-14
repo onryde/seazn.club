@@ -24,6 +24,7 @@ export type RoomScreen =
   | { kind: "notOpened" } // card 1
   | { kind: "cameraRequired" } // card 2
   | { kind: "cameraLost" } // card 3
+  | { kind: "cameraBlocked" } // T17B fix 2 (D2): the browser refused the camera — reload after allowing it
   | { kind: "videoDown" } // card 4
   | { kind: "creating"; retryAt: string | null } // card 5
   | { kind: "closed" } // card 6
@@ -35,6 +36,10 @@ type CardKind = Exclude<RoomScreen, { kind: "creating" }>["kind"];
 const REFUSAL_SCREEN: Record<SeatRefusal, CardKind> = {
   camera_required: "cameraRequired",
   camera_lost: "cameraLost",
+  // T17B fix 2 (D2): joined, the camera's own report not in yet — the check-in
+  // stays up while the room re-asks (room-shell); it is never a card.
+  camera_starting: "checkin",
+  camera_blocked: "cameraBlocked",
   video_unavailable: "videoDown",
   lichess_link_required: "relink",
   lichess_reconsent_required: "relink",

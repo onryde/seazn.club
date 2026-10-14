@@ -200,7 +200,9 @@ vi.mock("@/server/external-play/lichess/board-api", async (importOriginal) => {
 // answers the deactivate with a 500 that many times.
 //
 // Job 5 (C1) also needs a camera WORLD: the participants T8's seat adds (the
-// seat's active session answers LIVE with every one of them present), and,
+// seat's active session answers LIVE with every one of them present, each on
+// one peer whose report shows the camera granted and on — T17B fix 2 (D2):
+// the seat reads the CURRENT peer's report), and,
 // after the match, the meeting's SESSIONS with their participant rows and
 // peer events, and each peer's report — the measured shapes (adapter tests).
 // `sessionsFail` answers GET /sessions with a 503 that many times.
@@ -258,7 +260,14 @@ const rtk = vi.hoisted(() => {
       const seat = /^\/sessions\/seat-([^/]+)\/participants$/.exec(path);
       if (method === "GET" && seat) {
         const ids = state.participants.get(decodeURIComponent(seat[1]!)) ?? [];
-        return ok({ participants: ids.map((id) => ({ id: `row-${id}`, user_id: id, left_at: null })) });
+        return ok({
+          participants: ids.map((id) => ({
+            id: `row-${id}`,
+            user_id: id,
+            left_at: null,
+            peer_events: [{ event_name: "PEER_JOINING", peer_id: `seatpeer-${id}`, created_at: "2026-01-01T00:00:00.000Z" }],
+          })),
+        });
       }
       if (method === "GET" && path === "/sessions") {
         if (state.sessionsFail > 0) {
@@ -276,6 +285,22 @@ const rtk = vi.hoisted(() => {
         return json(200, { success: true, data: { sessions: rows }, paging: { total_count: rows.length, start_offset: 0, end_offset: rows.length } });
       }
       const report = /^\/sessions\/peer-report\/([^/]+)$/.exec(path);
+      if (method === "GET" && report && report[1]!.startsWith("seatpeer-")) {
+        // The seat's camera: granted and on (the measured live join, adapter tests).
+        const at = "2026-01-01T00:00:01.000Z";
+        return ok({
+          participant: {
+            peer_report: {
+              metadata: {
+                events: [
+                  { name: "video_on", timestamp: at },
+                  { name: "media_permission", metadata: { device_type: "VIDEO", permission: "ACCEPTED" }, timestamp: at },
+                ],
+              },
+            },
+          },
+        });
+      }
       if (method === "GET" && report) {
         const r = state.reports.get(decodeURIComponent(report[1]!));
         if (!r) return json(404, { success: false, error: { code: 404, message: "No peer event exists" } });

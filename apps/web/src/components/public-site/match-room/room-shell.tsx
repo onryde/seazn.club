@@ -28,6 +28,7 @@ import { Checkin } from "./checkin";
 import { GameOver } from "./game-over";
 import { RoomHeader } from "./room-header";
 import {
+  CameraBlockedCard,
   CameraCard,
   CameraGaveUpNotice,
   CameraOffBanner,
@@ -53,7 +54,7 @@ import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
 import { deliverCameraFault } from "./room-api";
 import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
-import type { RoomGame, RoomSnapshot } from "./room-snapshot";
+import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
 const Board = dynamic(() => import("./board"), { ssr: false });
@@ -191,6 +192,23 @@ export function RoomShell({
     reclaimedFor.current = retiredKey;
     void claim();
   }, [retiredKey, claim]);
+  // T17B fix 2 (D2): the seat answered `camera_starting` — joined, the camera's own report not in yet. Re-ask every
+  // CAMERA_EVIDENCE_POLL_MS: it is not a terminal card, and the server ends the wait at its deadline. The room's own
+  // bound (CAMERA_EVIDENCE_MAX_POLLS, per participant like the retry budget) only stops a disagreeing clock from
+  // polling for ever; past it the check-in button is offered again.
+  const [startPolls, setStartPolls] = useState<{ for: string | null; n: number }>({ for: null, n: 0 });
+  const polls = startPolls.for === participantId ? startPolls.n : 0;
+  const cameraStarting = state.seat !== null && !state.seat.seated && state.seat.reason === "camera_starting";
+  const checkingCamera = cameraStarting && polls < CAMERA_EVIDENCE_MAX_POLLS;
+  useEffect(() => {
+    if (!checkingCamera || state.pending !== null) return;
+    const id = setTimeout(() => {
+      setStartPolls({ for: participantId, n: polls + 1 });
+      void claim();
+    }, CAMERA_EVIDENCE_POLL_MS);
+    return () => clearTimeout(id);
+  }, [checkingCamera, state.pending, polls, participantId, claim]);
+
   // While the camera is coming up and the seat is still being retried, the
   // player stays on the check-in; card 2/3 is for a camera that will not come.
   // Recovering is OUR guard re-joining (I-1), and a give-up is ours too (fix
@@ -204,6 +222,7 @@ export function RoomShell({
 
   const tryAgain = useCallback(() => {
     setRetry({ for: participantId, n: 0 });
+    setStartPolls({ for: participantId, n: 0 });
     void claim();
   }, [participantId, claim]);
 
@@ -222,6 +241,7 @@ export function RoomShell({
           presence={presence}
           busy={busy}
           tryAgain={tryAgain}
+          checkingCamera={checkingCamera}
           relinkHref={relinkHref}
           locale={locale}
           t={t}
@@ -268,6 +288,7 @@ export function Screen({
   presence = null,
   busy,
   tryAgain,
+  checkingCamera = false,
   relinkHref,
   locale,
   t,
@@ -282,6 +303,8 @@ export function Screen({
   presence?: boolean | null;
   busy: boolean;
   tryAgain: () => void;
+  /** T17B fix 2 (D2): the room is re-asking a seat answered `camera_starting`. */
+  checkingCamera?: boolean;
   relinkHref: string;
   locale: string;
   t: RoomT;
@@ -384,6 +407,8 @@ export function Screen({
     case "cameraRequired":
     case "cameraLost":
       return <CameraCard dropped={screen.kind === "cameraLost"} busy={busy} onRetry={tryAgain} t={t} />;
+    case "cameraBlocked":
+      return <CameraBlockedCard onReload={reload} t={t} />;
     case "videoDown":
       return <VideoDownCard busy={busy} onRetry={tryAgain} t={t} />;
     case "creating":
@@ -401,7 +426,8 @@ export function Screen({
             stream={camera.stream}
             cameraOn={camera.status === "live"}
             busy={busy}
-            onCheckIn={() => void room.claim()}
+            checkingCamera={checkingCamera}
+            onCheckIn={tryAgain}
             t={t}
             plural={plural}
           />
