@@ -63,7 +63,7 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
     try {
       const r = await fetchRoom(fixtureId, token);
       if (r.ok) dispatch({ type: "snapshot", snap: r.data, receivedAt: Date.now() });
-      else dispatch({ type: "fetch_failed", status: r.status });
+      else dispatch({ type: "fetch_failed", status: r.status, code: r.code });
     } finally {
       inFlight.current = false;
     }
@@ -145,7 +145,7 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
     dispatch({ type: "seat_sent" });
     const r = await claimSeat(fixtureId, token);
     if (!r.ok) {
-      dispatch({ type: "seat_failed", status: r.status });
+      dispatch({ type: "seat_failed", status: r.status, code: r.code });
       return null;
     }
     dispatch({ type: "seat_answered", answer: r.data, receivedAt: Date.now() });

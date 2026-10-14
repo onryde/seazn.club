@@ -6104,6 +6104,8 @@
   "externalPlay.room.over.pending": "El resultado aparecerá en el partido cuando se registre.",
   "externalPlay.room.state.notOpened.title": "Esta ronda aún no se ha abierto.",
   "externalPlay.room.state.notOpened.body": "Tu organizador la abrirá; recibirás un correo cuando empiece.",
+  "externalPlay.room.state.repairing.title": "Tu tablero se está volviendo a emparejar",
+  "externalPlay.room.state.repairing.body": "Tu organizador está cambiando los emparejamientos de esta ronda. Esta página se actualiza sola cuando termine; no hace falta recargarla.",
   "externalPlay.room.state.cameraRequired.title": "Enciende tu cámara para registrarte",
   "externalPlay.room.state.cameraRequired.body": "En esta división se juega con la cámara encendida. Permite el acceso a la cámara en tu navegador y vuelve a intentarlo.",
   "externalPlay.room.state.tryAgain": "Reintentar",

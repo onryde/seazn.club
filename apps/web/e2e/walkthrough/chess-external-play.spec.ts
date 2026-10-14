@@ -1094,28 +1094,28 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       if (req.method() === "POST" && isRoom(req.url())) stayerClaims.push(req.url());
     });
 
-    // ── the organiser unpairs and re-pairs, with NO re-open ──
-    // The page's reads are held across the unpair → re-pair gap and let through once the board is paired again: the
-    // organiser who re-pairs between two of the page's polls. (A read INSIDE the gap answers 404 — the board names
-    // nobody — and the room stops polling: a reload's way back, a different path from this one.)
-    let release!: () => void;
-    const gapOver = new Promise<void>((res) => (release = res));
-    let held = 0;
-    await sp.route(
-      (u) => isRoom(u.toString()),
-      async (route) => {
-        if (route.request().method() === "GET") {
-          held += 1;
-          await gapOver;
-        }
-        await route.continue();
-      },
-    );
+    // ── the organiser unpairs; the stayer's page reads on, untouched, through a gap longer than one poll ──
+    // Fix round 4b: a real unpair → re-pair gap lasts minutes, so the page's own polls land inside it. Every such read
+    // finds a board that names nobody, and the room must keep reading — never stop on it as if the board were gone.
     const stamp = await roundOpenedAtSql(r.stageId, 1);
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
     await page.getByTestId("stage-unpair").click();
     await expect.poll(async () => (await pairs()).filter((f) => f.home !== null || f.away !== null).length, { timeout: 30_000 }).toBe(0);
+    // A read that started before the clear may still answer the old board: the gap's reads are the ones that do not.
+    const gapRead = () =>
+      sp.waitForResponse((res) => res.request().method() === "GET" && isRoom(res.url()) && res.status() !== 200, {
+        timeout: IDLE_POLL_MS + 10_000,
+      });
+    const firstInGap = await gapRead();
+    const secondInGap = await gapRead(); // one whole poll interval later: the room is still reading
+    expect([firstInGap.status(), secondInGap.status()], "each read inside the gap: the board is being re-paired").toEqual([409, 409]);
+    expect(((await secondInGap.json()) as { error: { code: string } }).error.code).toBe("ROOM_BEING_REPAIRED");
+    await expect(screen(sp), "the stayer is told, in place of the old pairing").toHaveAttribute("data-screen", "repairing");
+    await expect(sp.getByTestId("room-state-repairing")).toContainText(uiEn["externalPlay.room.state.repairing.title"]!);
+    expect(stayerClaims, "nothing claimed in the gap").toEqual([]);
+
+    // ── the organiser re-pairs, with NO re-open ──
     const repaired = await apiJson(page.request, `/api/v1/stages/${r.stageId}/generate`, "POST", { pairing: "rank_adjacent" });
     expect(repaired.status, `re-pair round 1: ${JSON.stringify(repaired.error)}`).toBeLessThan(300);
     expect((await roundOpenedAtSql(r.stageId, 1))!.getTime(), "premise — no re-open: the same window").toBe(stamp!.getTime());
@@ -1123,11 +1123,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect([now1.home, now1.away], "premise — the top seed stayed on the board").toContain(stayer.entrantId);
     const newcomer = people.get([now1.home, now1.away].find((e) => e !== null && e !== stayer.entrantId)!)!;
     expect([board1.home.entrantId, board1.away.entrantId], "premise — the other player on the board is new to it").not.toContain(newcomer.entrantId);
-    // The board is paired again: the page reads it.
+    // The board is paired again: the page, still polling, reads it on its own.
     const readBack = sp.waitForResponse((res) => res.request().method() === "GET" && isRoom(res.url()), { timeout: IDLE_POLL_MS + 10_000 });
-    release();
     expect((await readBack).status(), "the stayer's room reads the re-paired board").toBe(200);
-    expect(held, "premise — a read was held across the gap").toBeGreaterThan(0);
     await expect(screen(sp), "still checked in, nothing to do").toHaveAttribute("data-screen", "checkin");
     expect(stayerClaims, "premise — nothing re-claimed yet: the first pairing's room is still live").toEqual([]);
     expect(video.meetingStatus(old!.meeting_id), "premise — the stayer's room is live until someone new comes in").toBe("ACTIVE");

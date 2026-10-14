@@ -2558,6 +2558,8 @@ export type DictionaryKey =
   | "externalPlay.room.state.notOpened.title"
   | "externalPlay.room.state.offForClub.body"
   | "externalPlay.room.state.offForClub.title"
+  | "externalPlay.room.state.repairing.body"
+  | "externalPlay.room.state.repairing.title"
   | "externalPlay.room.state.revoked.body"
   | "externalPlay.room.state.revoked.cameraNotice"
   | "externalPlay.room.state.revoked.otherAccount"

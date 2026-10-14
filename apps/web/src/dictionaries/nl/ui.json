@@ -6104,6 +6104,8 @@
   "externalPlay.room.over.pending": "De uitslag komt bij de wedstrijd zodra hij is vastgelegd.",
   "externalPlay.room.state.notOpened.title": "Deze ronde is nog niet geopend.",
   "externalPlay.room.state.notOpened.body": "Je organisator opent hem; je krijgt een e-mail zodra hij begint.",
+  "externalPlay.room.state.repairing.title": "Je bord wordt opnieuw gekoppeld",
+  "externalPlay.room.state.repairing.body": "Je organisator past de koppelingen van deze ronde aan. Deze pagina werkt zichzelf bij zodra dat klaar is; je hoeft niet te herladen.",
   "externalPlay.room.state.cameraRequired.title": "Zet je camera aan om in te checken",
   "externalPlay.room.state.cameraRequired.body": "In deze divisie speel je met de camera aan. Geef je browser toegang tot de camera en probeer het opnieuw.",
   "externalPlay.room.state.tryAgain": "Opnieuw proberen",

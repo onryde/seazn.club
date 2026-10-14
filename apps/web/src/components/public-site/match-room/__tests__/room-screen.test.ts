@@ -241,6 +241,22 @@ describe("roomScreen", () => {
 });
 
 describe("roomScreen — the camera settling (room-shell's context)", () => {
+  it("fix round 4b: a board being re-paired shows its own card in place of the (stale) board — check-in, live or held alike — but a stop outranks it", () => {
+    let checked = 0;
+    for (const [why, s] of [
+      ["the check-in", st({}, { repairing: true })],
+      ["checked in, the opponent named", st({ you: { colour: "white", name: "Ada Okonkwo", checkedIn: true } }, { repairing: true })],
+      ["a camera refusal", st({}, { repairing: true, seat: refused("camera_required") })],
+      ["a creating board", st({ creation: { state: "creating" } as RoomSnapshot["creation"] }, { repairing: true })],
+    ] as const) {
+      expect(roomScreen(s).kind, why).toBe("repairing");
+      expect(roomScreen({ ...s, repairing: false }).kind, `${why}: the positive`).not.toBe("repairing");
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(roomScreen(st({}, { repairing: true, notFound: true })).kind, "the room's 404 outranks it").toBe("unavailable");
+  });
+
   it("a camera refusal stays on the check-in while the camera comes up; card 2/3 once it will not", () => {
     let checked = 0;
     for (const reason of ["camera_required", "camera_lost"] as const) {

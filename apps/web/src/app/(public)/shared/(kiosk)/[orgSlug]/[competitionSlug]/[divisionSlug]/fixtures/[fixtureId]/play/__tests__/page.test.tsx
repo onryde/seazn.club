@@ -103,6 +103,16 @@ describe("match-room page", () => {
     expect(room.roomGrantDowngraded, "a refused room asks Lichess nothing").not.toHaveBeenCalled();
   });
 
+  it("fix round 4b: a page loaded while the board is being re-paired (409) has no snapshot to poll on — the same not-available card, never the error boundary; any OTHER 409 is a fault", async () => {
+    room.readRoom.mockRejectedValue(new HttpError(409, "This board is being re-paired", "ROOM_BEING_REPAIRED"));
+    const els = await render("tok");
+    expect(find(els, RoomShell)).toBeUndefined();
+    expect(find(els, RoomHeaderless)).toBeDefined();
+    expect(room.roomGrantDowngraded, "nothing asked of Lichess").not.toHaveBeenCalled();
+    room.readRoom.mockRejectedValue(new HttpError(409, "conflict", "SOMETHING_ELSE"));
+    await expect(render("tok")).rejects.toMatchObject({ status: 409, code: "SOMETHING_ELSE" });
+  });
+
   it("P10: a grant Lichess says no longer plays opens the room on the re-link screen; an intact grant opens it on check-in", async () => {
     // A check-in snapshot (window open, no game), complete enough for the shell to paint.
     const full: RoomSnapshot = {

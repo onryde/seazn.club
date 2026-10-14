@@ -39,6 +39,7 @@ import {
   NotOpenedCard,
   OffForClubCard,
   RelinkCard,
+  RepairingCard,
   RevokedNotice,
   SeatHeldNotice,
   UnavailableCard,
@@ -319,6 +320,8 @@ export function Screen({
   switch (screen.kind) {
     case "unavailable":
       return <UnavailableCard fixtureHref={snap.links.fixture} t={t} />;
+    case "repairing":
+      return <RepairingCard t={t} />;
     case "offForClub":
       return <OffForClubCard fixtureHref={snap.links.fixture} t={t} />;
     case "revoked":

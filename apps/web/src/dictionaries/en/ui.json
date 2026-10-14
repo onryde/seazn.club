@@ -6104,6 +6104,8 @@
   "externalPlay.room.over.pending": "The result will be on the fixture once it is recorded.",
   "externalPlay.room.state.notOpened.title": "This round has not been opened yet.",
   "externalPlay.room.state.notOpened.body": "Your organiser will open it; you will be emailed when it starts.",
+  "externalPlay.room.state.repairing.title": "Your board is being re-paired",
+  "externalPlay.room.state.repairing.body": "Your organiser is changing this round's pairings. This page updates by itself when they're done, so there's no need to reload.",
   "externalPlay.room.state.cameraRequired.title": "Turn on your camera to check in",
   "externalPlay.room.state.cameraRequired.body": "This division plays with cameras on. Allow camera access in your browser, then try again.",
   "externalPlay.room.state.tryAgain": "Try again",

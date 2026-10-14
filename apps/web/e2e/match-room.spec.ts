@@ -1185,6 +1185,49 @@ test("a link that does not resolve: the neutral card, never a 500, with the way 
   await ctx.close();
 });
 
+test("fix round 4b: while the organiser re-pairs the round, the open room reads on through the gap on its own card — at every width — and the re-paired board's read takes it back", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  expect(await screenOf(p)).toBe("checkin");
+  // The gap as the server answers it to the board's own link (external-play-room.test.ts; the walkthrough drives the
+  // real Unpair → Generate): every read inside it, until the board is paired again.
+  let gap = true;
+  let inGap = 0;
+  await p.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (gap && route.request().method() === "GET") {
+        inGap += 1;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: false, error: { code: "ROOM_BEING_REPAIRED", message: "This board is being re-paired" }, requestId: "e2e" }),
+        });
+        return;
+      }
+      await route.continue();
+    },
+  );
+  await expect.poll(() => screenOf(p), { timeout: 25_000, message: "the next poll (IDLE_POLL_MS) reads the gap" }).toBe("repairing");
+  await expect(p.getByRole("heading", { name: uiEn["externalPlay.room.state.repairing.title"]! })).toBeVisible();
+  await expect(p.getByText(uiEn["externalPlay.room.state.repairing.body"]!)).toBeVisible();
+  await expect(p.getByTestId("room-checkin-cta"), "the old pairing's check-in is not offered").toHaveCount(0);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "repairing");
+  const readsInGap = inGap;
+  await expect.poll(() => inGap, { timeout: 25_000, message: "the room keeps reading through the gap" }).toBeGreaterThan(readsInGap);
+  gap = false;
+  await expect.poll(() => screenOf(p), { timeout: 25_000, message: "the re-paired board's read" }).toBe("checkin");
+  // The gap's reads are the browser's own failed loads: expected here, and only those.
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/status of 409/.test(e)));
+  await ctx.close();
+});
+
 test("round not opened: the player, signed in, is told so — no check-in", async ({ page, browser }) => {
   test.setTimeout(120_000);
   const room = await seedMatchRoom(page.request, {

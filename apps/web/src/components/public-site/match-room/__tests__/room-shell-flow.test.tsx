@@ -72,7 +72,8 @@ let calls: Call[] = [];
 // serverNow is later than every earlier read (the reducer drops stale ones).
 let seatAnswers: (() => unknown)[] = [];
 /** What a GET room answers; the check-in by default. */
-let getAnswer: () => RoomSnapshot = () => snap();
+// A Response is a refusal by status (fix round 4b).
+let getAnswer: () => RoomSnapshot | Response = () => snap();
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -98,7 +99,10 @@ beforeEach(() => {
         const answer = thunk();
         return answer instanceof Response ? answer : ok(answer);
       }
-      if (init.method === "GET") return ok(getAnswer());
+      if (init.method === "GET") {
+        const a = getAnswer();
+        return a instanceof Response ? a : ok(a);
+      }
       return new Response("{}", { status: 500 });
     }),
   );
@@ -492,7 +496,10 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
           return ok({ open: body.state === "start" });
         }
         if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) return ok(seatAnswers.shift()?.());
-        if (init.method === "GET") return ok(getAnswer());
+        if (init.method === "GET") {
+        const a = getAnswer();
+        return a instanceof Response ? a : ok(a);
+      }
         return new Response("{}", { status: 500 });
       }),
     );
@@ -811,5 +818,72 @@ describe("R3-1: the meeting is retired under a seated player — one quiet re-cl
     for (let i = 0; i < 2; i += 1) await settle(IDLE_POLL_MS);
     expect(seatPosts(), "and nothing more").toBe(6);
     island.unmount();
+  });
+});
+
+// Fix round 4b, through the real transport: while the organiser re-pairs the round, GET room answers the server's 409
+// ROOM_BEING_REPAIRED (external-play-room.test.ts pins who is told). A real gap lasts minutes — many polls.
+describe("fix round 4b: the room reads on through a re-pair, and stops only on a refusal", () => {
+  const refusal = (status: number, code: string) => () =>
+    new Response(JSON.stringify({ ok: false, error: { code, message: "x" }, requestId: "r" }), { status });
+  const gets = () => calls.filter((c) => c.method === "GET").length;
+  const checkedIn = () => snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true } });
+
+  it("a gap longer than one poll: every read in it is 'being re-paired', the card replaces the stale board, the room keeps its cadence; the re-paired board's read is the check-in again", async () => {
+    getAnswer = checkedIn;
+    const island = renderIsland(RoomShell, { initial: checkedIn(), token: "tok", selfPath: "/x" });
+    await settle();
+    expect(screenOf(island), "premise — checked in").toBe("checkin");
+    const before = gets();
+    getAnswer = refusal(409, "ROOM_BEING_REPAIRED");
+    for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+    expect(gets() - before, "three idle polls, all inside the gap").toBe(3);
+    expect(screenOf(island), "told, in place of the old pairing").toBe("repairing");
+    getAnswer = checkedIn;
+    await settle(IDLE_POLL_MS);
+    expect(gets() - before, "and the next").toBe(4);
+    expect(screenOf(island), "re-paired: the room again").toBe("checkin");
+    island.unmount();
+  });
+
+  it("a check-in sent into the gap is answered the same way: the card at once, and the room reads on to the re-paired board", async () => {
+    getAnswer = () => snap();
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await settle();
+    seatAnswers = [refusal(409, "ROOM_BEING_REPAIRED")];
+    getAnswer = refusal(409, "ROOM_BEING_REPAIRED");
+    await roomOf(island).claim();
+    await settle();
+    expect(seatPosts(), "premise — the check-in went").toBe(1);
+    expect(screenOf(island), "the seat's own answer: the card, before any read").toBe("repairing");
+    const before = gets();
+    await settle(IDLE_POLL_MS);
+    expect(gets() - before, "never a stop: the next poll goes").toBe(1);
+    getAnswer = () => snap();
+    await settle(IDLE_POLL_MS);
+    expect(screenOf(island), "re-paired: the check-in to send again").toBe("checkin");
+    island.unmount();
+  });
+
+  it("a refusal stops it for good — the room's 404 (not theirs, a link refused, a board gone), a 401, a 403 — on the 'not available' card", async () => {
+    let checked = 0;
+    for (const [status, code] of [
+      [404, "NOT_FOUND"],
+      [401, "UNAUTHORIZED"],
+      [403, "FORBIDDEN"],
+    ] as const) {
+      getAnswer = checkedIn;
+      const island = renderIsland(RoomShell, { initial: checkedIn(), token: "tok", selfPath: "/x" });
+      await settle();
+      getAnswer = refusal(status, code);
+      await settle(IDLE_POLL_MS);
+      const stoppedAt = gets();
+      for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+      expect(gets(), `${status}: no read after it`).toBe(stoppedAt);
+      expect(screenOf(island), `${status}`).toBe("unavailable");
+      island.unmount();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: refusals").toBe(3);
   });
 });

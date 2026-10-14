@@ -15,7 +15,7 @@
 //     found), stays stopped — T20 re-review n1: with the flag off, every read
 //     re-runs token, seat and Lichess reads, so the poll must stop on it.
 import type { RoomActAnswer, RoomActBody, RoomClaimAnswer, SeatAnswer } from "./room-api";
-import type { Colour, RoomGame, RoomSnapshot } from "./room-snapshot";
+import { ROOM_BEING_REPAIRED, type Colour, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 
 /** Lichess statuses past which the game is over (LICHESS_STATUSES minus the
  *  two live ones: `created`, `started`). */
@@ -99,6 +99,9 @@ export type RoomState = {
    *  revoked at lichess.org). Asked ONCE per page load by the room page and kept for the page: no event changes it.
    *  Re-linking leaves the page, and the page it returns to asks again. */
   grantRefused: boolean;
+  /** Fix round 4b: the last read (or seat call) found the board being re-paired — it names nobody for now. The
+   *  room reads on; the next answered read or seat call says where the player stands. */
+  repairing: boolean;
 };
 
 export type RoomEvent =
@@ -106,11 +109,11 @@ export type RoomEvent =
   | { type: "broadcast"; b: RoomBroadcastWire; receivedAt: number }
   | { type: "seat_sent" }
   | { type: "seat_answered"; answer: RoomClaimAnswer; receivedAt: number }
-  | { type: "seat_failed"; status: number }
+  | { type: "seat_failed"; status: number; code?: string | null }
   | { type: "act_sent"; action: RoomActBody }
   | { type: "act_answered"; answer: RoomActAnswer }
   | { type: "act_failed"; status: number }
-  | { type: "fetch_failed"; status: number };
+  | { type: "fetch_failed"; status: number; code?: string | null };
 
 /** Plies played, from the FEN (fullmove number and side to move) — the one
  *  measure both a snapshot and a broadcast carry. */
@@ -141,6 +144,7 @@ export function initialRoomState(snap: RoomSnapshot, receivedAt: number, grantRe
     polling: !stopsPolling(snap),
     notFound: false,
     grantRefused,
+    repairing: false,
   };
 }
 
@@ -219,7 +223,7 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
   switch (e.type) {
     case "snapshot": {
       const merged = mergeSnapshot(s, e.snap, e.receivedAt);
-      return endNotices(s, merged === s ? s : { ...merged, notFound: false }, true);
+      return endNotices(s, merged === s ? s : { ...merged, notFound: false, repairing: false }, true);
     }
     case "broadcast":
       return endNotices(s, applyBroadcast(s, e.b, e.receivedAt), false);
@@ -230,16 +234,10 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       const merged = mergeSnapshot(s, e.answer.snapshot, e.receivedAt);
       const seat = e.answer.seat;
       const relink = seat !== null && !seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required");
-      return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null };
+      return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false };
     }
     case "seat_failed":
-      return {
-        ...s,
-        pending: s.pending?.kind === "seat" ? null : s.pending,
-        notFound: s.notFound || e.status === 404,
-        polling: s.polling && e.status !== 404,
-        error: e.status === 0 ? "network" : s.error,
-      };
+      return { ...roomCallFailed(s, e.status, e.code ?? null), pending: s.pending?.kind === "seat" ? null : s.pending };
     case "act_sent":
       if (s.pending !== null) return s;
       return { ...s, pending: { kind: "act", action: e.action }, error: null };
@@ -268,13 +266,29 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
         syncKey: s.syncKey + 1,
       };
     case "fetch_failed":
-      return {
-        ...s,
-        notFound: s.notFound || e.status === 404,
-        polling: s.polling && e.status !== 404,
-        error: e.status === 0 ? "network" : s.error,
-      };
+      return roomCallFailed(s, e.status, e.code ?? null);
   }
+}
+
+/** Fix round 4b: the GET and seat answers that refuse the CALLER for good, and stop the room — the room's one 404
+ *  (not their board, their link refused or expired, a board gone or no longer online play: the server collapses them
+ *  all, so a probe learns nothing), and 401/403 (no session, or one refused). A reload would show the same card. */
+export const ROOM_REFUSAL_STATUSES: readonly number[] = [401, 403, 404];
+
+/** A GET room or seat call that brought no snapshot. The board being re-paired (409 ROOM_BEING_REPAIRED: the organiser
+ *  unpaired the round and has not paired it again — minutes, in real use) is never a stop: the room reads on through
+ *  the gap at its cadence, and the first read of the re-paired board says where the player stands (their board again,
+ *  or the 404 if the re-pair moved them off it). A refusal stops it. Anything else — the network, a 5xx, a 429, another
+ *  409 — reads on, as ever. */
+function roomCallFailed(s: RoomState, status: number, code: string | null): RoomState {
+  if (status === 409 && code === ROOM_BEING_REPAIRED) return { ...s, repairing: true };
+  const refused = ROOM_REFUSAL_STATUSES.includes(status);
+  return {
+    ...s,
+    notFound: s.notFound || refused,
+    polling: s.polling && !refused,
+    error: status === 0 ? "network" : s.error,
+  };
 }
 
 /** Final re-review 3, R3-1: the server no longer holds the participant this room's camera joined with — none on file,

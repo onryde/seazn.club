@@ -21,7 +21,7 @@ import {
 import type { RoomActBody } from "../room-api";
 import { RoomAct, RoomActOut } from "@/server/api-v1/schemas";
 import { ROUTES } from "@/server/api-v1/openapi";
-import type { RoomGame, RoomSnapshot } from "../room-snapshot";
+import { ROOM_BEING_REPAIRED, type RoomGame, type RoomSnapshot } from "../room-snapshot";
 
 // A fixed opening, played by chess.js: FENS[i] is the board after i plies.
 const SCRIPT = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5"];
@@ -338,6 +338,64 @@ describe("fetch_failed", () => {
     expect(roomReducer(s, { type: "fetch_failed", status: 404 })).toMatchObject({ notFound: true, polling: false });
     expect(roomReducer(s, { type: "fetch_failed", status: 500 })).toMatchObject({ notFound: false, polling: true, error: null });
     expect(roomReducer(s, { type: "fetch_failed", status: 0 })).toMatchObject({ polling: true, error: "network" });
+  });
+});
+
+// Fix round 4b: a read inside an unpair → re-pair gap is the server's 409 ROOM_BEING_REPAIRED (who is told is pinned
+// in external-play-room.test.ts). The room reads on through it; the reads that refuse the caller still stop it.
+describe("fix round 4b: a board being re-paired never stops the room; a refusal still does", () => {
+  const gapRead: RoomEvent = { type: "fetch_failed", status: 409, code: ROOM_BEING_REPAIRED };
+
+  it("the empty case: a fresh room is not being re-paired", () => {
+    expect(initialRoomState(snap(), T0).repairing).toBe(false);
+  });
+
+  it("a read in the gap ⇒ being re-paired, polling ON, not gone, no error; a second the same; the re-paired board's read ends it; a later 404 (the re-pair moved them off) stops", () => {
+    const s1 = roomReducer(initialRoomState(snap(), T0), gapRead);
+    expect([s1.repairing, s1.polling, s1.notFound, s1.error]).toEqual([true, true, false, null]);
+    const s2 = roomReducer(s1, gapRead);
+    expect([s2.repairing, s2.polling, s2.notFound], "a second read in the gap").toEqual([true, true, false]);
+    const back = roomReducer(s2, { type: "snapshot", snap: snap({ serverNow: iso(T0 + 30_000) }), receivedAt: T0 + 30_000 });
+    expect([back.repairing, back.polling], "re-paired: the room again").toEqual([false, true]);
+    const moved = roomReducer(roomReducer(back, gapRead), { type: "fetch_failed", status: 404, code: "NOT_FOUND" });
+    expect([moved.notFound, moved.polling], "moved off the board: the room's 404 stops it").toEqual([true, false]);
+  });
+
+  it("the reads that refuse the CALLER stop the room — 404 (not theirs, a link refused, a board gone: one answer), 401, 403 — while a transient read, and any OTHER 409, reads on and is not 'being re-paired'", () => {
+    const s = initialRoomState(snap(), T0);
+    const table: [number, string | null, "stop" | "read on"][] = [
+      [404, "NOT_FOUND", "stop"],
+      [401, "UNAUTHORIZED", "stop"],
+      [403, "FORBIDDEN", "stop"],
+      [0, null, "read on"],
+      [500, null, "read on"],
+      [503, "UPSTREAM", "read on"],
+      [429, "RATE_LIMITED", "read on"],
+      [409, "VIDEO_MEETING_PAIRING_CHANGED", "read on"],
+      [409, null, "read on"],
+      [400, ROOM_BEING_REPAIRED, "read on"], // the code is the 409's alone
+    ];
+    const seen = { stop: 0, "read on": 0 };
+    for (const [status, code, rule] of table) {
+      const n = roomReducer(s, { type: "fetch_failed", status, code });
+      expect([n.polling, n.notFound, n.repairing], `${status} ${code}`).toEqual([rule === "read on", rule === "stop", false]);
+      seen[rule] += 1;
+    }
+    expect(seen, "anti-vacuity: both rules exercised").toEqual({ stop: 3, "read on": 7 });
+  });
+
+  it("the seat call answers alike: in the gap ⇒ being re-paired, the call over, polling on; the next seat answer ends it; a 401 seat answer stops", () => {
+    const sent = roomReducer(initialRoomState(snap(), T0), { type: "seat_sent" });
+    const gap = roomReducer(sent, { type: "seat_failed", status: 409, code: ROOM_BEING_REPAIRED });
+    expect([gap.repairing, gap.pending, gap.polling, gap.notFound]).toEqual([true, null, true, false]);
+    const answered = roomReducer(roomReducer(gap, { type: "seat_sent" }), {
+      type: "seat_answered",
+      answer: { snapshot: snap({ serverNow: iso(T0 + 5_000) }), seat: { seated: true, participant: null }, create: null },
+      receivedAt: T0 + 5_000,
+    });
+    expect([answered.repairing, answered.pending]).toEqual([false, null]);
+    const signedOut = roomReducer(sent, { type: "seat_failed", status: 401, code: "UNAUTHORIZED" });
+    expect([signedOut.polling, signedOut.notFound, signedOut.pending]).toEqual([false, true, null]);
   });
 });
 
