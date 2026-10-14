@@ -25,7 +25,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { publicOrgOrNull } from "@/server/public-site/org-guard";
-import { readRoom, type RoomIdentity } from "@/server/usecases/external-play/room";
+import { readRoom, roomGrantDowngraded, type RoomIdentity } from "@/server/usecases/external-play/room";
 import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
 
 export const dynamic = "force-dynamic";
@@ -76,10 +76,13 @@ export default async function MatchRoomPage({
   const fixturePath = routes.sharedFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
 
   let snapshot: RoomSnapshot | null = null;
+  // Final review P10: Lichess's word on the player's grant, asked ONCE per page load (never by the room's polls).
+  let grantRefused = false;
   const identity = await identityFor(token);
   if (identity !== null) {
     try {
       snapshot = await readRoom(identity, fixtureId);
+      grantRefused = await roomGrantDowngraded(identity, fixtureId);
     } catch (err) {
       // Only the room's own refusal reads as "not available"; anything else
       // is a real fault and goes to the error boundary.
@@ -104,7 +107,7 @@ export default async function MatchRoomPage({
   const selfPath = `${snapshot.links.fixture}/play${token ? `?t=${encodeURIComponent(token)}` : ""}`;
   return (
     <DictProvider dict={ui} locale={locale}>
-      <RoomShell initial={snapshot} token={token} selfPath={selfPath} />
+      <RoomShell initial={snapshot} token={token} selfPath={selfPath} grantRefused={grantRefused} />
     </DictProvider>
   );
 }

@@ -95,6 +95,10 @@ export type RoomState = {
   syncKey: number;
   polling: boolean;
   notFound: boolean;
+  /** Final review P10: Lichess said, when the page loaded, that the player's grant no longer plays (narrowed or
+   *  revoked at lichess.org). Asked ONCE per page load by the room page and kept for the page: no event changes it.
+   *  Re-linking leaves the page, and the page it returns to asks again. */
+  grantRefused: boolean;
 };
 
 export type RoomEvent =
@@ -125,7 +129,7 @@ function stopsPolling(snap: RoomSnapshot): boolean {
   return snap.onlineChessOff;
 }
 
-export function initialRoomState(snap: RoomSnapshot, receivedAt: number): RoomState {
+export function initialRoomState(snap: RoomSnapshot, receivedAt: number, grantRefused = false): RoomState {
   return {
     snap,
     skewMs: Date.parse(snap.serverNow) - receivedAt,
@@ -136,6 +140,7 @@ export function initialRoomState(snap: RoomSnapshot, receivedAt: number): RoomSt
     syncKey: 0,
     polling: !stopsPolling(snap),
     notFound: false,
+    grantRefused,
   };
 }
 

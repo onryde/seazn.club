@@ -65,7 +65,8 @@ import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
 import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } from "./play";
 import { fenAfter } from "@/server/external-play/fen";
-import { seatPlayer, type SeatResult } from "./preflight";
+import { isPlayableFixtureStatus, seatPlayer, type SeatResult } from "./preflight";
+import { lichessGrantDowngraded } from "../external-accounts";
 import { reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
 
@@ -82,6 +83,8 @@ export type RoomDeps = {
   mintRealtime?: typeof mintExternalPlayLobbyToken;
   play?: (a: { fixtureId: string; personId: string; action: PlayAction }) => Promise<PlayResult>;
   reconcile?: (fixtureId: string, trigger: "game_end" | "clock_zero") => Promise<unknown>;
+  /** P10: Lichess's word on a user's grant (external-accounts.ts `lichessGrantDowngraded`). */
+  grantDowngraded?: (userId: string | null) => Promise<boolean>;
 };
 
 /** A seat answer as the CLIENT receives it: the caller's own participant
@@ -408,6 +411,17 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     watchUrl,
     realtime,
   };
+}
+
+/** Final review P10: whether the VIEWER's Lichess grant, which our row says plays, has been narrowed or revoked at
+ *  lichess.org since — asked of Lichess once per page load by the room page, which shows the re-link screen at once
+ *  (rather than after an act spends the token). Never on a board with nothing left to play (decided, withdrawn, or
+ *  its bridge closed): there is no grant to need, and Lichess's per-IP limit is not spent on it. The same 404 as the
+ *  room for anyone not on the board. */
+export async function roomGrantDowngraded(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<boolean> {
+  const r = await resolveRoom(identity, fixtureId);
+  if (!isPlayableFixtureStatus(r.f.fixtureStatus) || effectiveBridge(r.f)?.status === "finished") return false;
+  return (deps.grantDowngraded ?? lichessGrantDowngraded)(r.player.userId);
 }
 
 /** GET the room. NEVER writes — no stale-row reset, no stamp, no create: a

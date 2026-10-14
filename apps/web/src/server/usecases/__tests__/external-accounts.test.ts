@@ -7,6 +7,7 @@ import {
   assertLichessConsentForPlay,
   getLichessAccessToken,
   getLichessLink,
+  lichessGrantDowngraded,
   personHasLichessLink,
   unlinkLichess,
   upsertLichessLink,
@@ -431,6 +432,95 @@ describe.skipIf(!HAS_DB)("external-accounts — a re-link revokes the grant it r
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0]![0]).toEqual({ userId, reason: "decrypt_failed" });
     expect(loggedText()).not.toContain("lio_m2_rot");
+  });
+});
+
+// Final review P10: a grant the player narrowed or revoked AT lichess.org is unknown to our row until an act spends
+// it. The room asks Lichess once per page load (POST /api/token/test) and shows the re-link screen at once. Through the
+// Lichess fixture, as e2e runs (LICHESS_BASE_URL, the real fetch).
+describe.skipIf(!HAS_DB)("external-accounts — Lichess's word on a stored grant (P10)", () => {
+  let fx: Awaited<ReturnType<typeof startLichessFixtureServer>>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(async () => {
+    vi.unstubAllGlobals(); // the real fetch, to a real server
+    fx = await startLichessFixtureServer(0);
+    vi.stubEnv("LICHESS_BASE_URL", fx.url);
+    warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  });
+  afterEach(async () => {
+    await fx.close();
+  });
+  const tokenTests = () => fx.calls.filter((c) => c.path === "/api/token/test");
+  async function linked(tag: string, token: string, scopes: readonly string[] = PLAY_SCOPES): Promise<string> {
+    const userId = await newUser(tag);
+    const account = lid(`lid-${tag}`);
+    await upsertLichessLink(userId, { externalUserId: account, username: tag, scopes: [...scopes], token });
+    fx.registerToken(token, account);
+    return userId;
+  }
+
+  it("the grant as Lichess holds it: every play scope ⇒ not downgraded; one scope narrowed away at lichess.org, or the token revoked there ⇒ downgraded — one ask each, no bearer, the token in the body", async () => {
+    const cases: [string, (token: string) => void, boolean][] = [
+      ["intact", () => undefined, false],
+      ["board:play narrowed away", (t) => fx.setTokenScopes(t, PLAY_SCOPES.filter((x) => x !== "board:play")), true],
+      ["challenge:read narrowed away", (t) => fx.setTokenScopes(t, PLAY_SCOPES.filter((x) => x !== "challenge:read")), true],
+      ["revoked at Lichess", (t) => fx.revokeToken(t), true],
+    ];
+    let checked = 0;
+    for (const [label, narrow, downgraded] of cases) {
+      const token = `lio_p10_${checked}_${randomUUID().slice(0, 6)}`;
+      const userId = await linked(`p10-${checked}`, token);
+      narrow(token);
+      const before = tokenTests().length;
+      expect(await lichessGrantDowngraded(userId), label).toBe(downgraded);
+      const asked = tokenTests().slice(before);
+      expect(asked.map((c) => [c.method, c.token]), label).toEqual([["POST", null]]);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+    expect(PLAY_SCOPES.length, "premise: the scopes swept above are the grant's").toBe(3);
+  });
+
+  it("our row already refuses (no link, a grant short of a scope) or no user: false, and Lichess is not asked — the seat and the act refuse those by name", async () => {
+    const unlinked = await newUser("p10-none");
+    const short = await linked("p10-short", `lio_p10_short_${randomUUID().slice(0, 6)}`, ["board:play"]);
+    let checked = 0;
+    for (const userId of [null, unlinked, short]) {
+      expect(await lichessGrantDowngraded(userId), String(userId)).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    expect(tokenTests()).toEqual([]);
+  });
+
+  it("Lichess does not answer (unreachable, a 5xx, a 429, a body without the token): false — never a re-link screen on a hiccup — and logged without the token", async () => {
+    const token = `lio_p10_down_${randomUUID().slice(0, 6)}`;
+    const userId = await linked("p10-down", token);
+    const answers: [string, () => Promise<Response>][] = [
+      ["unreachable", async () => { throw new TypeError("fetch failed"); }],
+      ["503", async () => new Response("down", { status: 503 })],
+      ["429", async () => new Response(JSON.stringify({ error: "Too many requests" }), { status: 429 })],
+      ["no entry", async () => new Response(JSON.stringify({}), { status: 200 })],
+      ["not json", async () => new Response("<html>", { status: 200 })],
+    ];
+    let checked = 0;
+    for (const [label, answer] of answers) {
+      vi.stubGlobal("fetch", vi.fn(answer));
+      warnSpy.mockClear();
+      expect(await lichessGrantDowngraded(userId), label).toBe(false);
+      expect(warnSpy, label).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]![0], label).toMatchObject({ userId });
+      expect(JSON.stringify(warnSpy.mock.calls), label).not.toContain(token);
+      checked += 1;
+    }
+    expect(checked).toBe(answers.length);
+  });
+
+  it("a stored token we cannot open is not the player's grant: false, nothing asked", async () => {
+    const userId = await linked("p10-kek", `lio_p10_kek_${randomUUID().slice(0, 6)}`);
+    vi.stubEnv("LICHESS_TOKEN_KEK", randomBytes(32).toString("hex"));
+    expect(await lichessGrantDowngraded(userId)).toBe(false);
+    expect(tokenTests()).toEqual([]);
   });
 });
 

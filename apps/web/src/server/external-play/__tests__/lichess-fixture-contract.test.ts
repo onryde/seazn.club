@@ -572,6 +572,23 @@ describe("lichess fixture server — the measured facts", () => {
     }
   });
 
+  it("POST /api/token/test (lila OAuth.testTokens, read from source 2026-10-14): NO auth, the body is the tokens comma-separated, and each is answered null or {userId, scopes comma-joined, expires}", async () => {
+    fx.setTokenScopes(B.token, ["challenge:read"]);
+    fx.revokeToken("tok-gone");
+    const res = await fetch(`${fx.url}/api/token/test`, { method: "POST", headers: { "content-type": "text/plain" }, body: `${W.token},${B.token},tok-nobody` });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      [W.token]: { userId: W.id, scopes: "board:play,challenge:write,challenge:read", expires: null },
+      [B.token]: { userId: B.id, scopes: "challenge:read", expires: null },
+      "tok-nobody": null,
+    });
+    expect(fx.calls.at(-1), "no bearer: the call names no token").toMatchObject({ method: "POST", path: "/api/token/test", token: null });
+    // A revoked token is answered null, as one Lichess never issued.
+    fx.revokeToken(W.token);
+    const after = await fetch(`${fx.url}/api/token/test`, { method: "POST", body: W.token });
+    expect(await after.json()).toEqual({ [W.token]: null });
+  });
+
   it("an unregistered bearer is refused like a revoked one — a misconfigured token never plays", async () => {
     const id = await startGame();
     const res = await rawPost(`/api/board/game/${id}/move/e2e4`, "tok-nobody");

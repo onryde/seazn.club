@@ -106,6 +106,9 @@ export interface LichessFixtureServer {
   registerToken(token: string, lichessId: string): void;
   /** Every later call bearing `token` answers 401 {"error":"No such token"}. */
   revokeToken(token: string): void;
+  /** The scopes POST /api/token/test reports for `token` (final review P10): a grant the player narrowed at
+   *  lichess.org. Default: the three Seazn's OAuth asks for (DEFAULT_TOKEN_SCOPES). */
+  setTokenScopes(token: string, scopes: readonly string[]): void;
   /** M3: allow `count` creates per `windowMs`, then 429. Off until called. */
   setCreateBudget(count: number, windowMs: number): void;
   /** The side to move's clock has run out, with nobody reading. The NEXT
@@ -123,6 +126,9 @@ export interface LichessFixtureServer {
   reset(): void;
   close(): Promise<void>;
 }
+
+/** What a registered token carries unless a test narrows it: Seazn's OAuth grant (lib/oauth.ts LICHESS_OAUTH_SCOPES). */
+const DEFAULT_TOKEN_SCOPES = ["board:play", "challenge:write", "challenge:read"] as const;
 
 const M6 = { error: "Not your turn, or game already over" };
 const M12 = { error: "This game cannot be played with the Board API." };
@@ -233,6 +239,7 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
   const calls: LichessFixtureCall[] = [];
   const tokens = new Map<string, string>();
   const revoked = new Set<string>();
+  const scopesOf = new Map<string, readonly string[]>();
   const games = new Map<string, Game>();
   const rawExports = new Map<string, string>();
   const rawStreams = new Map<string, string>();
@@ -385,6 +392,23 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
         const g = games.get(exp[1]!);
         if (!g || g.status === "canceled") return send({ error: "Not found" }, 404);
         return send(exportBody(g, query));
+      }
+
+      // lila OAuth.testTokens (read from source, 2026-10-14; final review P10): NO auth — AnonBodyOf(tolerantText), the
+      // body the tokens comma-separated (at most 1000) — and each answered null, or {userId, scopes comma-joined,
+      // expires}. lila rate-limits it per IP (oauthTokenTest, cost = the count); not modelled.
+      if (path === "/api/token/test" && method === "POST") {
+        const asked = raw.split(",").map((x) => x.trim()).filter((x) => x.length > 0).slice(0, 1000);
+        return send(
+          Object.fromEntries(
+            asked.map((t) => [
+              t,
+              tokens.has(t) && !revoked.has(t)
+                ? { userId: tokens.get(t)!, scopes: (scopesOf.get(t) ?? DEFAULT_TOKEN_SCOPES).join(","), expires: null }
+                : null,
+            ]),
+          ),
+        );
       }
 
       // A route this stub does not serve names itself, token or not.
@@ -572,6 +596,9 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
     revokeToken(token) {
       revoked.add(token);
     },
+    setTokenScopes(token, scopes) {
+      scopesOf.set(token, [...scopes]);
+    },
     setCreateBudget(count, windowMs) {
       budget = { count, windowMs, stamps: [] };
     },
@@ -601,6 +628,7 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
       calls.length = 0;
       tokens.clear();
       revoked.clear();
+      scopesOf.clear();
       games.clear();
       rawExports.clear();
       rawStreams.clear();

@@ -290,7 +290,76 @@ export async function assertPersonIdsLinkedForOnlinePlay(
 /** Whether a stored grant is enough to PLAY: a consent timestamp AND every scope in PLAY_SCOPES. The one authority —
  *  the play gate below refuses exactly when this answers false, and `/me` asks for re-consent on the same answer. */
 export function lichessGrantPlays(link: Pick<LichessLink, "consentedAt" | "scopes">): boolean {
-  return link.consentedAt !== null && PLAY_SCOPES.every((s) => link.scopes.includes(s));
+  return link.consentedAt !== null && scopesPlay(link.scopes);
+}
+
+/** Every scope in PLAY_SCOPES is among `scopes` — the scope half of `lichessGrantPlays`, which Lichess's own answer
+ *  (`lichessGrantDowngraded`) is held to as well. */
+function scopesPlay(scopes: readonly string[]): boolean {
+  return PLAY_SCOPES.every((s) => scopes.includes(s));
+}
+
+/** Lichess's word on one token: `POST /api/token/test` (lila OAuth.testTokens, read from source 2026-10-14) — NO
+ *  auth, the body the token itself (lila takes several, comma-separated), answered `{<token>: null}` for a token it
+ *  does not hold (revoked, expired, never issued) or `{<token>: {userId, scopes: "a,b", expires}}`. `unknown` is
+ *  every answer that is neither — unreachable, a non-200 (lila rate-limits this per IP), a body without the token. */
+async function testAtLichess(
+  token: string,
+): Promise<{ kind: "gone" } | { kind: "scopes"; scopes: string[] } | { kind: "unknown"; reason: string }> {
+  let res: Response;
+  try {
+    res = await fetch(`${lichessTokenUrl()}/test`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: token,
+      signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
+    });
+  } catch {
+    return { kind: "unknown", reason: "unreachable" };
+  }
+  if (res.status !== 200) return { kind: "unknown", reason: `status_${res.status}` };
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return { kind: "unknown", reason: "not_json" };
+  }
+  if (typeof body !== "object" || body === null || !Object.hasOwn(body, token)) return { kind: "unknown", reason: "no_entry" };
+  const entry = (body as Record<string, unknown>)[token];
+  if (entry === null) return { kind: "gone" };
+  const scopes = (entry as { scopes?: unknown }).scopes;
+  if (typeof scopes !== "string") return { kind: "unknown", reason: "no_scopes" };
+  return { kind: "scopes", scopes: scopes.split(",").map((x) => x.trim()).filter((x) => x.length > 0) };
+}
+
+/**
+ * Final review P10: whether a grant OUR row says plays has been narrowed or revoked at lichess.org since — the
+ * player removed a scope, or revoked Seazn's token, there. Our row cannot know until an act spends the token and
+ * Lichess refuses it, so the match room asks Lichess once per page load and shows the re-link screen at once.
+ *
+ * True only on Lichess's own answer: the token is gone, or it lacks a play scope (the same PLAY_SCOPES the row is
+ * held to). False everywhere else, and Lichess is not asked when our row already refuses (no user, no link, a
+ * grant short of a scope — the seat and the act refuse those by name) or the stored token cannot be opened (Seazn's
+ * fault, already reported, never the player's). A Lichess that does not answer is logged and reads false: a hiccup
+ * is never a re-link screen — an act still learns the truth.
+ */
+export async function lichessGrantDowngraded(userId: string | null): Promise<boolean> {
+  if (userId === null) return false;
+  const link = await getLichessLink(userId);
+  if (link === null || !lichessGrantPlays(link)) return false;
+  let token: string | null;
+  try {
+    token = await getLichessAccessToken(userId);
+  } catch {
+    return false; // LICHESS_TOKEN_UNAVAILABLE: getLichessAccessToken reported it
+  }
+  if (token === null) return false;
+  const said = await testAtLichess(token);
+  if (said.kind === "unknown") {
+    log.warn({ userId, reason: said.reason }, "lichess: the token test did not answer — the room shows no re-link screen on it");
+    return false;
+  }
+  return said.kind === "gone" || !scopesPlay(said.scopes);
 }
 
 /** PLAY gate (§3.1). A link is not enough: the row must carry a consent
