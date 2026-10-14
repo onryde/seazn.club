@@ -198,6 +198,17 @@ describe.skipIf(!HAS_DB)("M1: a division variant change never strands a stage ke
     expect(await variantOf(s.divisionId)).toBe("test");
   });
 
+  // Fix round 1: since R-T12-1 the config arm reads a stage's rules through the resolver, which drops a null itself; the
+  // ALLOWLIST arm reads the keys, so only the drop before it keeps a stored null from being asked as a key.
+  it("a null STORED in a stage's rules is 'inherit' under a variant change too: never asked as a key, the change lands (M3)", async () => {
+    const s = await seedCricket("league");
+    // Raw-seeded (the endpoint never writes a null): a key the new variant cannot carry, held only as "inherit".
+    await sql`update stages set config = config || ${sql.json({ rules: { superOver: null } } as never)} where id = ${s.stageId}`;
+    expect(stageTopKeysFor(cricket, "league", "test").has("superOver"), "the premise: asked as a key, it would be refused").toBe(false);
+    await expect(patchDivision(s.auth, s.divisionId, { variant_key: "test" })).resolves.toBeDefined();
+    expect(await variantOf(s.divisionId)).toBe("test");
+  });
+
   // Fix round 1 (R-T12-2): a key still EQUAL to the old variant's preset is re-seeded by the change, never asked; only
   // a key the organiser changed reaches the allowlist (variant-preset-reseed.test.ts holds the re-seed itself).
   it("a knockout whose super over the organiser switched off is asked too, naming it; one still on its preset is re-seeded and lands", async () => {
