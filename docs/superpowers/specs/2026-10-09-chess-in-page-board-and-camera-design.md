@@ -342,9 +342,11 @@ could forge it; this closes the honest-browser gap, not a determined forger.
 - **A player sees their own tile only** (D7). Local preview; no subscription to the
   opponent. Since 2026-10-14 the opponent is not in the player's meeting at all (§5.6).
 - A **presence pill** shows "opponent camera: live / off" — compliance without a face.
-- An **arbiter**, when assigned, joins receive-only and sees both players' tiles for a
+  Since 2026-10-14 it is the opponent's own client's report, relayed by our server with no
+  vendor call (§5.6.3).
+- An **arbiter**, when assigned, joins receive-only and sees the players' tiles for a
   chosen fixture, plus that fixture's flags. Since 2026-10-14 that is two meetings, one per
-  player (§5.6).
+  player, shown ONE AT A TIME with a switch between them (§5.6.4).
 - Mic muted by default. Chess needs no audio.
 
 Rationale for D7: chess events are full of under-18s, and showing a child's face to a
@@ -368,10 +370,10 @@ tournament.
 The audit row (`online_chess_audit`: who overrode, when, and their note) is a **staff record
 read by SQL only**; no screen shows it (ruling, final review M-8, 2026-10-14).
 
-### 5.6 One meeting per player (amended 2026-10-14, owner ruling "1 per-player", T17B fix 2 D16)
+### 5.6 One meeting per player (amended 2026-10-14, owner ruling "1 per-player", T17B fix 2 D16; revised after review)
 
 **This replaces the shared meeting.** Each board now has TWO RealtimeKit meetings, one per
-player. A player's meeting holds that player and, when one is watching, the arbiters. Nobody
+player. A player's meeting holds that player and, when one is watching, an arbiter. Nobody
 else. The opponent is never a participant in it.
 
 **Why. D7 was enforced only by the client, and a client can be tampered with.**
@@ -391,61 +393,272 @@ else. The opponent is never a participant in it.
   holds on the vendor's side, whatever the client does. The client watchdog stays as
   defence in depth: arbiters publish nothing, but it costs nothing.
 
-**What changes, each consumer once.**
-- **Schema** (a new delta after V445, numbered at the time). The meeting row is keyed per
-  player: `fixture_video_meetings` gains `side text not null check (side in ('home',
-  'away'))`, and its key becomes `(fixture_id, side)`.
-  - The side is the player's ENTRANT side (the fixture's seat), which is fixed for a
-    pairing. The colour is not fixed: it is read from the ledger (home unless a
-    `boardgame.pairing` card records Black on home, `whiteSideOf`), so an organiser's card
-    can swap it after a player has arrived.
-  - Every table that references a meeting by `fixture_id` (participants, guard faults)
-    references `(fixture_id, side)` instead.
-  - The pairing stamp (`home_entrant_id`/`away_entrant_id`, R2-2) stays on each row.
-  - Greenfield (RULES.md): the delta drops the existing shared-meeting rows, which cascade.
-    It does not try to split them, and nothing is backfilled.
-- **The seat claim** mints the player into THEIR side's meeting, creating it on first
-  arrival. The opponent's claim touches the other row only.
-  - The seat evidence (§5.2 amended: the current peer's `media_permission` and
-    `video_on`) is read from the player's own meeting. Nothing about the gate changes.
-- **The presence pill** ("opponent camera: live / off") is read on the server from the
-  OPPONENT's meeting. The player never joins it, and nothing about the opponent's meeting
-  is handed to the player's browser except that one answer.
-- **The arbiter** joins BOTH meetings receive-only, as two participants, one per meeting,
-  each minted and removed exactly as one is today. The panel shows two panes, labelled by
-  player.
-  - The per-open participant id (`${userId}:${uuid}`) and the `removed_at` record apply
-    per meeting.
-  - The RealtimeKit global limit (1,200 calls per 5 min) is now spent twice per watch.
-- **Teardown** ends both meetings everywhere a meeting is ended today: at the result (the
-  room's own end and the sweep's backstop), at T+20 if nobody came, on a re-pair (openRound's
-  fresh window deletes both rows of a game-less board), and on ensureMeeting's replace of
-  another pairing's meeting.
-  - A board's camera room is over only when both are ended.
-- **Camera evidence and flags** run per meeting.
-  - Each meeting's peer reports belong to one player, so `camera_lost` is that player's.
-  - The multiple-devices flag (`concurrentConnections`) is computed per meeting, i.e. per
-    player, which is what it always meant.
-  - The guard-fault intervals are per meeting.
-  - `camera_evidence_at` is stamped per meeting, and the board's evidence is settled when
-    both are.
-- **The organiser's video override** (D11) covers the board: both meetings, or neither.
+#### 5.6.1 The one rule every statement follows
+
+**A meeting is `(fixture_id, side)`.** The side is the player's ENTRANT side, `home` or
+`away` (the fixture's seat). It is fixed for a pairing. The colour is not: it is read from
+the ledger (home unless a `boardgame.pairing` card records Black on home, `whiteSideOf`), so
+an organiser's card can swap it after a player has arrived. Nothing reads a meeting by
+colour; the colour only LABELS (`arbiter.ts:284/537` map white/black from `whiteSide` for the
+label alone).
+
+- Every statement on `fixture_video_meetings`, `fixture_video_participants` and
+  `fixture_video_guard_faults` names the side, and every `RETURNING` consumer iterates
+  over its rows. No `const [row]` / `[m]` / `gone[0]` destructuring on a meeting query.
+- **A source-guard test** walks the server tree and fails on any SQL that reads or joins
+  one of the three tables by `fixture_id` without `side`. It reports how many statements it
+  checked, and zero is a failure.
+
+**Schema** (a new delta after V445, numbered at the time):
+- `fixture_video_meetings` gains `side text not null check (side in ('home','away'))`. Its
+  key becomes `(fixture_id, side)`; `meeting_id` stays unique.
+- `fixture_video_participants` and `fixture_video_guard_faults` gain `side` and reference
+  `(fixture_id, side)` instead of `fixture_id`.
+- The pairing stamp (`home_entrant_id`/`away_entrant_id`, R2-2) stays on each row, and each
+  row is judged by BOTH entrants, in order, exactly as today (m1). A re-pair therefore
+  retires BOTH rows, the stayer's included. The stayer's meeting held no opponent, so this
+  is not about a leak; it keeps R2-2 and R3-1 working unchanged.
+- `camera_evidence_at` stays per row, and V442's check (evidence requires `ended_at`)
+  stays per row.
+- New on the player participant row: `camera_reported text null check (camera_reported in
+  ('live','off'))` and `camera_reported_at timestamptz null`, for the pill (§5.6.3).
+- Greenfield (RULES.md): the delta drops the existing shared-meeting rows, which cascade.
+  It does not try to split them, and nothing is backfilled. See §5.6.7 for the deploy step
+  that must run BEFORE the drop.
+
+#### 5.6.2 The call sites, each once (the review's I1, re-pinned on 124ff0b0f)
+
+| Site | Today | Per side |
+|---|---|---|
+| `realtimekit.ts:303` `ensureMeeting(fixtureId)` | creates THE meeting | `ensureMeeting(fixtureId, side)`: creates that side's meeting on that player's first arrival |
+| `realtimekit.ts:258-265` `meetingOnFile` | one row by fixture | by `(fixture_id, side)` |
+| `realtimekit.ts:275-283` `retireStaleMeeting` | ends `gone[0]` only | iterates: ends every retired row at the vendor |
+| `realtimekit.ts:659-680` `endMeeting` | stamps `removed_at` on every arbiter row of the FIXTURE | stamps only the arbiter rows of ITS `(fixture_id, side)` |
+| `preflight.ts:187,256` seat claim → `ensureMeeting` | the board's meeting | the CALLER's side (from `loadSides`) |
+| `preflight.ts:318-330` R2-2 locked mint check | `em.entrant_id in (home, away)`, any side | pinned to the row's OWN side (§5.6.5, the review's I3) |
+| `preflight.ts:259,275` evidence stamp `last_publisher_seen_at` | by participant id | unchanged (a participant id is one meeting's) |
+| `preflight.ts:350-355` `storedPlayerParticipant` | by fixture + person | by `(fixture_id, side)` + person |
+| `room.ts:293-304,418-426` `opponentParticipant` → `opponentPresence` | names the opponent's participant in the shared meeting | REMOVED: the snapshot carries `opponentCamera` (§5.6.3) |
+| `room.ts:645-657` `reportCameraFault` | joins by fixture | the caller's own `(fixture_id, side)` |
+| `room-end.ts:28-45` `endRoomAtResult` | `const [room]`: ends ONE meeting | ends every unended row of the fixture, each in its own try |
+| `open-round.ts:350,380` stale-meeting delete on a fresh window / D17 re-arm | deletes by fixture | unchanged as a delete (both rows go), but the vendor ends iterate every returned row |
+| `seated.ts:45` `fixturesSeating` | any player participant on the fixture | unchanged (keyed by person, true on either side) |
+| `guard-faults.ts:34-76` | keyed `(fixture_id, person_id)` | `(fixture_id, side, person_id)` |
+| `sweep.ts:544-549` `teardownCandidates` | per row | unchanged: already per row, so each side is retried on its own |
+| `sweep.ts:848-860` camera candidates | per row | per row = per `(fixture, side)` (§5.6.6) |
+| `sweep.ts:869-892` `readCameraEvidence` | both sides' players over ONE meeting | only THIS row's side's player (§5.6.6) |
+| `sweep.ts:975-979` `settleCamera` | stamps `where fixture_id` (both rows) | stamps `(fixture_id, side)` |
+| `sweep.ts:1108-1120` `arbiterCandidates` | joins meetings by fixture (2 × 2 rows) | joins `(fixture_id, side)` |
+| `sweep.ts:1130-1137` `arbiterRevoke` | may remove from the WRONG meeting | removes from its own row's meeting |
+| `arbiter.ts:236-256` `boardRows` | `left join … on m.fixture_id = f.id`: lists each board TWICE | a per-board aggregate (§5.6.4) |
+| `arbiter.ts:485-523` `joinAsArbiter` → `ensureMeeting` | creates the meeting if missing | joins only an EXISTING side's meeting; an arbiter never creates one |
+| `arbiter.ts:559-582` `mintArbiter` + its rollback | one meeting | one `(fixture_id, side)` per mint |
+| `arbiter.ts:601-633` `leaveAsArbiter` | the join can pick the other meeting's id, then 404 → stamped removed while still live | joins `(fixture_id, side)` |
+
+`lib/arbiter-view.ts`, `match-window.ts` and `match-camera-off.ts` only NAME the tables in
+comments; `match-window.ts` `meetingEndedAt` is correct per meeting once the candidate is
+`(fixture, side)`.
+
+#### 5.6.3 The opponent's presence pill: the opponent's own report, relayed (the review's C1)
+
+**The source.** The pill ("opponent camera: live / off") can no longer be read from the
+player's own meeting: the opponent is not in it. It is NOT read from the vendor either:
+- RealtimeKit's REST API has no live per-participant publishing signal (§5.2: the peer
+  report is telemetry, frozen at join). A vendor read could say only "the opponent joined",
+  never "their camera is on".
+- Even that read, per room poll, would cost 50 boards × 2 viewers × 20 polls × 3 calls ≈
+  6,000 calls per 5 minutes against the account's GLOBAL 1,200. Past that, every call is
+  refused for 5 minutes, seat gates included, for every club.
+
+So the pill comes from the opponent's OWN client, which already knows its camera state
+(`useOwnCamera`: live / off / failed / recovering):
+- On every change of its own camera state, the opponent's room POSTs `{ state: "live" |
+  "off" }` to a new route beside `camera-fault`, with the same identity rule: the caller's
+  own player participant, in their own side's meeting, still open; anything else is the
+  room's one 404. The server stamps `camera_reported` and `camera_reported_at` on that
+  participant row, on the server's clock.
+- While the camera stays live, the same POST is repeated every `CAMERA_REPORT_HEARTBEAT_MS`
+  (30 s) as a heartbeat. Only a CHANGE pings the opponent's room (rate-limited per seat, as
+  `camera-fault` does); a heartbeat writes the row and pings nobody.
+- The snapshot's `opponentPresence: { participantId } | null` (`room-snapshot.ts:115`)
+  becomes `opponentCamera: "live" | "off" | null`:
+  - `"live"`: the opponent is seated, their latest report is `live`, it is younger than
+    `CAMERA_REPORT_STALE_MS` (75 s, two and a half heartbeats), and no guard-fault interval
+    of theirs is open;
+  - `"off"`: their latest report is `off` and fresh;
+  - `null` (no pill, as `null` is today): no report yet, a stale report, an open guard fault
+    (OUR re-join, never "camera off"), or no opponent seated.
+- The client's `opponent-presence.ts` and `useOpponentPresence` (`use-own-camera.ts`) are
+  rewritten to read `opponentCamera`; openapi follows.
+
+**The budget.** Zero vendor calls. On our side: one single-row update per player per 30 s,
+plus one per change, and the room's existing reads.
+
+**Review I8 — its rule is KEPT, its mechanism is replaced.** "A room read never calls the
+vendor" still holds. What changes is where the answer comes from: the opponent's own
+report, not this client's view of a shared meeting.
+
+**What the pill is not.** It is the opponent's browser's word, so a tampered client could
+send `live` with no camera. The pill only informs the player. The checks stay where they
+are: the seat gate's evidence before play (§5.2), the arbiter's live view, and the sweep's
+peer-report evidence after the match (`camera_lost`).
+
+#### 5.6.4 The arbiter: one player's camera at a time (the review's C2)
+
+**The SDK supports one meeting per page.** RealtimeKit 2.0.2 keeps a module-level context
+registry (`dist/index.es.js:5377`, `const qr = new AC()`) with a `mostRecentPeerId`, and its
+own comment (`:5367-5372`) says multiple ongoing meetings per page are not supported and "a
+lot more components will fail" if tried. READ, not run: in 2.0.2 the registry keys contexts
+per peer, `mostRecentPeerId` is used only to route a `ClientError` to the latest meeting's
+`onError` (`:5508`), and a reconnect sets the `tracing-id` header on the client
+`vt()` returns (`:24422`). What else fails is unmeasured.
+
+**Not measured here.** Two meetings in one page cannot be measured in this worktree. A join
+needs the live vendor: there is no RealtimeKit API token locally, and the SDK refuses the
+fixture server's token offline, so no local join happens at all, fake camera or not.
+
+**Ship shape: (b), one pane at a time.**
+- The panel joins ONE of the board's two meetings, labelled by player (name and colour), with
+  a two-way switch to the other. Switching leaves one meeting, then joins the other.
+- This is the leave-then-join path the panel already runs when the organiser switches
+  boards (`arbiter-camera.ts:88` `init`, `:238` `leave`), so it asks nothing new of the SDK.
+- The arbiter always holds at most ONE live participant, so a partial watch cannot happen
+  (the review's I4). Each mint keeps today's per-open participant id (`${userId}:${uuid}`,
+  one `randomUUID()` per mint) and its own `removed_at` row, on its own `(fixture_id, side)`. A switch whose join fails rolls back as `mintArbiter`'s catch does for one (`arbiter.ts:576-584`).
+- Trade-off: the arbiter sees one player at a time, never both at the same instant.
+
+**Shape (a), deferred until measured: one same-origin iframe per pane.**
+- Each pane is its own document, so it is its own realm with its own SDK registry. It needs
+  no camera: it only receives.
+- It is offered only after a stg measurement with the fake camera that shows ALL of these:
+  - two panes joined receive-only to the two meetings for 10 minutes;
+  - both tracks rendering;
+  - each pane's `ClientError` reaching its own pane;
+  - a reconnect in one pane leaving the other playing.
+- A watch then mints two participants, both-or-neither: the second mint's failure removes
+  the first.
+
+**The board list.** `boardRows` lists a board ONCE, by aggregating its rows:
+- `hasMeeting` = any row;
+- `meetingEndedAt` = set only when BOTH rows are ended (the latest);
+- `evidenceAt` = set only when BOTH rows are stamped (the latest).
+
+`arbiter.ts:247` is the only reader of "the board's evidence is settled".
+
+#### 5.6.5 The seat claim, and the invariant the mint's lock holds (the review's I3)
+
+- The seat claim mints the player into THEIR side's meeting, creating it on that player's
+  first arrival. The opponent's claim touches the other row only.
+- The seat evidence (§5.2 amended: the current peer's `media_permission` and `video_on`)
+  is read from the player's own meeting. Nothing else about the gate changes.
+- **The invariant.** The mint's locked statement (`preflight.ts:318-330`) pins the person
+  to THIS row's side entrant:
+  `em.entrant_id = case m.side when 'home' then f.home_entrant_id else f.away_entrant_id end`.
+  Today's `in (home, away)` accepts either side. The ordered `samePair` compare happens to
+  refuse a swap, but that is a by-product, not the rule.
+- A player's meeting id or token never reaches the opponent's browser. Tokens are minted per
+  participant with the API key. The snapshot carries only the viewer's own
+  `seat.participant` and, after §5.6.3, no opponent participant id at all.
+
+#### 5.6.6 Teardown, camera evidence and flags, per meeting (the review's I2 and I4)
+
+**Teardown is per row, and it ends both.** It runs everywhere a meeting is ended today:
+- at the result: the room's own end (`room-end.ts`), plus the sweep's backstop;
+- at T+20 if nobody came;
+- on a re-pair: openRound's fresh window deletes both rows of a game-less board;
+- on `ensureMeeting`'s replace of another pairing's meeting.
+
+Each row is ended in its own try. A vendor failure on one leaves that row unended, and the
+sweep's per-row teardown (`sweep.ts:544-549`) retries it alone. `endMeeting` stamps
+`removed_at` only on the arbiter rows of ITS `(fixture_id, side)`, so an arbiter still
+watching the other meeting is never recorded as removed while it is live. A board's camera
+room is over only when both rows are ended.
+
+**What a half-ended board shows.** This happens only at a result or at T+20, and it is
+accepted:
+- the player whose meeting ended sees their camera end;
+- `ownParticipantId` stays on file, so there is no R3-1 re-claim;
+- the opponent's pill goes to `null` once that player's report is stale.
+
+**Camera evidence and flags** run per `(fixture, side)`:
+- The sweep's candidate is a row. It reads only that row's side's player, so the other
+  player's participants are not "absent" and the read is not stuck at `not_ready`.
+- It stamps `camera_evidence_at` on `(fixture_id, side)`. Stamping both rows at once would
+  break V442's check while the other meeting is still live, and abort the settle on every
+  pass.
+- Each meeting's peer reports belong to one player, so `camera_lost` is that player's.
+- The multiple-devices flag (`concurrentConnections`) is computed per meeting, i.e. per
+  player, which is what it always meant.
+- The guard-fault intervals are per meeting.
+
+**The organiser's video override** (D11) covers the board: both meetings, or neither.
+
+#### 5.6.7 The deploy step, and the copy
+
+**The step BEFORE the delta drops the shared rows (m3).** Stg is at V442, with 4 meeting
+rows. 3 of them are not ended, so they are ACTIVE at the vendor, and their tokens stay
+valid until they expire. Dropping the rows would orphan them, and nothing would ever end
+them.
+- So the deploy first ends every row with `ended_at is null` at the vendor: kick-all, then
+  INACTIVE, which is `endMeeting`, one row at a time. It confirms zero unended rows
+  remain, and only then applies the delta.
+- Prod has no rows: the branch is unmerged.
 
 **Copy.** The privacy line may now state the guarantee: **"Your opponent can't see your
 camera."**
+- That is true only once no shared meeting exists anywhere, which is why the step above
+  runs first.
 - It replaces the hedged first sentence ruled for D5 ("Your opponent's room isn't set up to
   show your camera."). The second sentence, "Your organiser can watch it live; it isn't
   recorded.", stays.
 - The check-in copy test's ABSOLUTES guard keeps refusing "can't" everywhere else. This one
   line is excepted, citing this section.
 - The arbiter's watch-only line and the privacy page say the same thing.
+- An organiser who plays on the board cannot watch it: `arbiter.ts:497` refuses with
+  `ARBITER_PLAYS_THIS_BOARD`, and the sweep revokes such a watch.
 
-**Tests owed** (with the build):
+#### 5.6.8 The RealtimeKit budget (m2)
+
+These are vendor calls per board per round, counted from the call sites, against the
+account's global 1,200 per 5 minutes. `k` is the number of seat claims a player makes,
+including `camera_starting` re-asks.
+
+| | Shared meeting (today) | One per player |
+|---|---|---|
+| Meeting create | 1 | 2 |
+| Per player: add participant + seat evidence (≈3 per claim) | 2 × (1 + 3k) | 2 × (1 + 3k), unchanged |
+| Teardown (kick-all + INACTIVE) | 2 | 4 |
+| Evidence after the match (sessions + peer ids + one peer report) | ≈ 4 | ≈ 6 |
+| Arbiter watch, shape (b): add + remove per pane shown | 2 | 2 per switch |
+| The pill | 0 (client signalling) | 0 (the opponent's report) |
+
+- At k = 2 and no arbiter, that is about 21 calls today and 26 per player: **+5 per board**.
+  At 50 boards in one round that is +250, spread over the round and the games.
+- The dominant term is NOT this change: it is the seat claim's `3k`. A `camera_starting`
+  wait that re-asks once a second (§5.2, up to `CAMERA_EVIDENCE_MAX_POLLS`) can reach
+  `k ≈ 20`, so 50 boards × 2 players × 20 × 3 ≈ 6,000 calls at worst, already over the
+  limit today. That is recorded as an open concern beside this change, not caused by it.
+
+**Tests owed** (with the build), each against the RealtimeKit fixture server, each counted:
 - The two players' participants are in DIFFERENT meeting ids. Drive the real seat claim
-  twice, against the RealtimeKit fixture server.
-- A player's meeting never contains the opponent, whichever player arrives first.
-- The arbiter receives both.
-- A mutant that collapses the two meetings back into one must go red.
+  twice. A player's meeting never contains the opponent, whichever player arrives first.
+- I3's invariant: a re-pair with the same two entrants and the SIDES SWAPPED never mints a
+  player into the other side's meeting.
+- Evidence settles per meeting, while the other meeting is still live (no V442 abort).
+- The arbiter panel lists each board ONCE, with the aggregate's `meetingEndedAt` and
+  `evidenceAt`.
+- Leave and revoke act on the right meeting; `endMeeting` stamps only its own meeting's
+  arbiters.
+- The pill:
+  - each state from the opponent's reports (live, off, stale, guard fault, none);
+  - a change pings, a heartbeat does not;
+  - someone else's seat is refused;
+  - a room read makes zero vendor calls (counted at the fixture server).
+- The source guard (§5.6.1) reports its count, and a mutant that drops `side` from one
+  statement goes red.
+- A mutant that collapses the two meetings back into one goes red.
+- Shape (b): switching panes leaves one meeting before joining the other, and never holds
+  two participants at once.
 
 ---
 
@@ -586,3 +799,9 @@ retired. Variants other than standard.
 - Penalty wording for a camera that goes dark: ruled as **flag, organiser decides** (D10);
   the player-facing sentence still needs writing in four locales.
 - W2b's merge date, which gates the no-show path.
+- **The arbiter's simultaneous two-pane view** (§5.6.4 shape (a), one iframe per pane) is
+  owed a stg measurement against the live vendor with the fake camera before it is offered.
+  Until then the panel shows one player's camera at a time. Owner to choose once measured.
+- **The seat gate's RealtimeKit spend** (§5.6.8): a `camera_starting` wait re-asking once a
+  second can reach about 6,000 calls per 5 minutes at 50 boards, against the global 1,200.
+  This predates D16 and needs its own budget (a cached evidence read, or a slower re-ask).
