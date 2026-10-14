@@ -359,6 +359,38 @@ describe.skipIf(!HAS_DB)("§8 seam: the preset reaches the real fold through the
     expect((await stageConfig(plain.stageId)).rules, "a league stage starts without it").toBeUndefined();
     expect((await play(auth, plain.id, tied)).outcome, "the positive pair: off, the tie stands").toEqual({ kind: "tie" });
   });
+
+  it("CK-SO-1 X-SR-6 a tied t20 KNOCKOUT plays its preset super over; created with superOver:false the same tie is HELD (needs_decision), through the real create and fold", async () => {
+    const cricket = mod("cricket");
+    const auth = await seedOrg();
+    const preset = stageDefaultsFor(cricket, "knockout", "t20");
+    expect(deciderKeysFor(cricket, "knockout", "t20"), "the premise: the super over is t20's knockout decider").toEqual(["superOver"]);
+    expect(preset.superOver, "the premise: the preset switches it on").toBe(true);
+    // A tied T20 (equal totals off the full quota), as CK-SO-1's league half plays it.
+    const tied = [
+      start,
+      { type: "cricket.innings.summary", payload: { runs: 150, wickets: 5, legalBalls: 120 } },
+      { type: "cricket.innings.summary", payload: { runs: 150, wickets: 7, legalBalls: 120 } },
+    ];
+    let checked = 0;
+    for (const [rules, held] of [[undefined, false], [{ superOver: false }, true]] as const) {
+      const { divisionId } = await seedDivision(auth, "cricket", "t20", 2); // its own division: one knockout final each
+      const f = await seatedFixture(auth, divisionId, 1, "knockout", rules);
+      expect((await stageConfig(f.stageId)).rules, "what the stage stores").toEqual({ ...preset, ...rules });
+      const last = await play(auth, f.id, tied);
+      expect((await resolvedCfg(auth, f.id)).superOver, "what the fold resolves").toBe(!held);
+      if (held) {
+        expect(last.status, "off: held for the organiser, never refused").toBe("needs_decision");
+        expect(last.outcome).toMatchObject({ kind: "tie" });
+      } else {
+        expect(last.status, "the preset: the super over is owed").toBe("in_play");
+        expect((last.state as { phase: string }).phase).toBe("super_over");
+        expect(last.outcome).toBeNull();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
 });
 
 // Fix round 1, R-T12-1 (owner Q7: knockout deciders are "preselected, can be turned off") — a period sport's overtime
