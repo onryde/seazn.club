@@ -1,6 +1,6 @@
 {
   "batch": "1b",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file. Task 1b-2 (compiled dist and the publish manifest) appends its own entries, built against the same base 604e66ace: engine root (test/publish-manifest.test.ts new, so all `added`; test/runtime-deps.test.ts as the retitled file, one `rewritten`), apps/web (src/__tests__/toolchain.test.ts, the zod pin: values changed, no title changed), and the repo root (scripts/__tests__/engine-bare-imports.test.ts new, `added`; main-module.test.ts the untouched control; engine-package-identity.test.ts collected on the after side so its 1b-1 entries stay used). Collection for 1b-2 per side: engine = test/publish-manifest.test.ts + test/runtime-deps.test.ts, apps/web = src/__tests__/toolchain.test.ts, root = the three scripts/__tests__ files above.",
   "entries": [
     {
       "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › is published under the GitHub owner's scope",
@@ -56,6 +56,60 @@
     },
     {
       "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › refuses a workspace glob shape it cannot expand rather than skipping it",
+      "fate": "added"
+    },
+    {
+      "id": "test/runtime-deps.test.ts › engine runtime dependencies › declares every runtime import in `dependencies`, not `devDependencies`",
+      "fate": "rewritten",
+      "to": "test/runtime-deps.test.ts › engine runtime dependencies › declares every runtime import in `dependencies` or `peerDependencies`, not `devDependencies`",
+      "reason": "title extended in 1b-2: zod moved from dependencies to a peer, so the declared set is dependencies plus peerDependencies; same test, same file"
+    },
+    {
+      "id": "scripts/__tests__/engine-bare-imports.test.ts › no consumer relies on importing the engine for an effect › finds no bare static import of the engine under apps/, packages/, tools/ or scripts/",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-bare-imports.test.ts › no consumer relies on importing the engine for an effect › the matcher sees the shape it forbids and none it should allow",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › every bare package the exported entry points reach is declared for the consumer › covers every exported entry point, so a bare package outside the testkit cannot ship undeclared",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › every bare package the exported entry points reach is declared for the consumer › covers the testkit barrel's closure, whose conformance suite pulls in the test runner",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › emits the src tree into dist as .js with .d.ts beside it, so the toDist mapping above is the real one",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › keeps the emitted dist out of the package's own lint, whose typed rules cannot parse a file outside the tsconfig",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › mirrors all 21 workspace exports into dist (never zero)",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › records where the package lives, and only the dist build is named `build:dist` (a `build` script would join every turbo typecheck)",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › ships dist and rules/, nothing private, to GitHub Packages",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › takes zod as a peer only, and declares the testkit's test-runner imports as optional peers",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › sideEffects: false › holds: loading every exported entry point registers no sport into the shared registry",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › sideEffects: false › is declared",
       "fate": "added"
     }
   ]

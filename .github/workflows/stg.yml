@@ -59,10 +59,17 @@ jobs:
       # --omit=dev which used to find them hoisted out of apps/web.
       #
       # That reasoning is TRANSITIVE: @seazn/engine's own runtime imports must
-      # be in ITS `dependencies` too. pnpm gives no walk-up to a hoisted copy,
-      # so a devDependency-only entry resolves in every other job and dies with
+      # be declared by it too. pnpm gives no walk-up to a hoisted copy, so a
+      # devDependency-only entry resolves in every other job and dies with
       # ERR_MODULE_NOT_FOUND here alone. packages/engine/test/runtime-deps.test.ts
-      # is the gate; it is why zod sits in dependencies, not devDependencies.
+      # is the gate (dependencies or peerDependencies, never devDependencies).
+      #
+      # zod is the engine's PEER since engine-split 1b-2, and a workspace package's
+      # peer is not installed under --prod (packages/engine/node_modules does not
+      # exist here). The engine's src reaches zod by walking up to the ROOT
+      # node_modules, so zod must be in the ROOT's `dependencies`; the
+      # "what the deploy job's --prod install needs" test in
+      # apps/web/src/__tests__/toolchain.test.ts is the gate.
       - run: pnpm install --frozen-lockfile --prod
 
       - name: Cache Flyway CLI

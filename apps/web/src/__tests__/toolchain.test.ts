@@ -451,10 +451,20 @@ describe("toolchain: pnpm workspace", () => {
      * devDependencies — where every other root script dep correctly lives —
      * would drop them from the deploy install and ERR_MODULE_NOT_FOUND every
      * staging release.
+     *
+     * `zod` is on the list for a different reason (engine-split 1b-2, R34): no
+     * root script imports it. It is @onryde/seazn-engine's PEER now, and a peer
+     * is not installed for a workspace package under `--prod`, so
+     * packages/engine/node_modules is not even created. `sync:sports` loads
+     * @seazn/engine/sports -> src/sports/football/football.ts -> `zod`, and that
+     * file finds it only by walking up to the ROOT node_modules, which holds
+     * only what the root lists in `dependencies`. Verified on a clean worktree:
+     * with zod in devDependencies the deploy install dies with
+     * ERR_MODULE_NOT_FOUND "Cannot find package 'zod'" on that import.
      */
     const root = rootManifest();
     const prod = new Set(Object.keys(root.dependencies ?? {}));
-    for (const dep of ["@seazn/engine", "postgres", "stripe"]) {
+    for (const dep of ["@seazn/engine", "postgres", "stripe", "zod"]) {
       expect(prod.has(dep), `root dependencies must include ${dep}`).toBe(true);
     }
   });

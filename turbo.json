@@ -24,11 +24,13 @@
   "tasks": {
     // apps/web is the only package with a build; the engine (package name
     // @onryde/seazn-engine, consumed as `@seazn/engine` through the workspace
-    // alias `"@seazn/engine": "workspace:@onryde/seazn-engine@*"`) ships raw TS
-    // via exports and has no build script, so `^build` is a no-op edge that
-    // exists to keep the ordering correct if the engine ever gains one. (A
-    // compiled dist is for the published tarball only: workspace consumers keep
-    // reading src through the same exports.) The dependency graph (the alias
+    // alias `"@seazn/engine": "workspace:@onryde/seazn-engine@*"`) has no
+    // `build` script, so `^build` is a no-op edge that exists to keep the
+    // ordering correct if the engine ever gains one. Workspace consumers read
+    // src; the published tarball is dist, built by `build:dist` (engine-split
+    // §5.2), deliberately NOT named `build`: `typecheck` dependsOn `^build`, so a
+    // `build` script would put the emit into every turbo typecheck and build
+    // for work nothing in the workspace reads. The dependency graph (the alias
     // edge) already makes an engine source change invalidate the web build.
     "build": {
       "dependsOn": ["^build"],

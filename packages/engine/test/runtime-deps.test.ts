@@ -1,9 +1,14 @@
 // The staging deploy installs with `pnpm install --frozen-lockfile --prod`,
 // which drops devDependencies. pnpm's isolated node_modules gives no walk-up
 // to a hoisted copy the way npm's flat tree did, so every package the engine
-// imports at RUNTIME must sit in `dependencies` — a devDependency-only entry
-// resolves fine in every local run and in every CI job that installs dev deps,
-// then dies with ERR_MODULE_NOT_FOUND on the deploy job alone.
+// imports at RUNTIME must sit in `dependencies` or `peerDependencies` — a
+// devDependency-only entry resolves fine in every local run and in every CI job
+// that installs dev deps, then dies with ERR_MODULE_NOT_FOUND on the deploy job
+// alone. (1b-2: zod moved from `dependencies` to a peer, so the published
+// tarball makes the consumer own the one zod instance. A workspace package's
+// peer is not installed under `--prod`, so the monorepo's deploy install finds
+// zod only by walking up to the ROOT node_modules: the root lists it in
+// `dependencies`, pinned in apps/web/src/__tests__/toolchain.test.ts.)
 //
 // src/testkit/** is excluded: it is a test harness, imported only from a
 // consumer's own test files, so vitest/fast-check stay devDependencies.
@@ -18,7 +23,7 @@ import { describe, expect, it } from "vitest";
 const SRC = new URL("../src", import.meta.url).pathname;
 const MANIFEST = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url).pathname, "utf8"),
-) as { dependencies?: Record<string, string> };
+) as { dependencies?: Record<string, string>; peerDependencies?: Record<string, string> };
 
 /** `import … from "x"`, `export … from "x"`, bare `import "x"`, `import("x")`. The `… ` part may not cross a quote or a `;`:
  *  otherwise a bare `import "x"` is read as the head of the NEXT statement's `from` and its own specifier is never seen. */
@@ -78,8 +83,8 @@ function runtimeImports(): Map<string, string> {
 const REACHES_INTO_TESTS = /^\.{1,2}\/(?:.*\/)?__tests__\//;
 
 describe("engine runtime dependencies", () => {
-  it("declares every runtime import in `dependencies`, not `devDependencies`", () => {
-    const declared = new Set(Object.keys(MANIFEST.dependencies ?? {}));
+  it("declares every runtime import in `dependencies` or `peerDependencies`, not `devDependencies`", () => {
+    const declared = new Set([...Object.keys(MANIFEST.dependencies ?? {}), ...Object.keys(MANIFEST.peerDependencies ?? {})]);
     const missing = [...runtimeImports()]
       .filter(([pkg]) => !declared.has(pkg))
       .map(([pkg, file]) => `${pkg} (imported from src/${file})`);

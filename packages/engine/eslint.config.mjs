@@ -38,6 +38,8 @@ export default defineConfig([
     "coverage/**",
     ".vite/**",
     ".vite-temp/**",
+    // The tsc emit the published tarball ships (build:dist, engine-split 1b-2): generated, and outside the tsconfig the typed rules need.
+    "dist/**",
   ]),
 
   js.configs.recommended,
