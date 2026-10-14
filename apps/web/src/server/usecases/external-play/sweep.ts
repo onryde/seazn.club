@@ -56,14 +56,9 @@ import { holdForOrganiser, holdRefusedNoShow } from "./result";
 import { checkIns } from "./room";
 import { isSeatedOn } from "./seated";
 
-export type SweepJob =
-  | "close_unplayable"
-  | "no_show"
-  | "mint_retry"
-  | "teardown"
-  | "reconcile"
-  | "camera_evidence"
-  | "arbiter_revoke";
+/** Every job a pass runs — the vocabulary of `failures[].job` (final re-review N-1: the suite sweeps it). */
+export const SWEEP_JOBS = ["close_unplayable", "no_show", "mint_retry", "teardown", "reconcile", "camera_evidence", "arbiter_revoke"] as const;
+export type SweepJob = (typeof SWEEP_JOBS)[number];
 
 /** Final review I-1: written out LITERALLY. The cron Worker reads `data.failed` and `data.skipped` as its failure
  *  counters (R3, apps/cron-worker/src/schedule.ts), and apps/cron-worker/test/drift.test.ts finds each field's numeric
@@ -102,8 +97,9 @@ export type SweepReport = {
    *  budget (SWEEP_PASS_BUDGET_MS) was spent. NOT a failure: they keep
    *  their place and the next firing reaches them. */
   deferred: number;
-  /** I-1: fixtures whose action threw — `failures.length`, as a number the
-   *  cron Worker can read. */
+  /** I-1: `failures.length`, as a number the cron Worker can read. Final
+   *  re-review N-1: derived ONCE, as the pass returns — never counted beside
+   *  each push, which the camera give-up once missed. */
   failed: number;
   /** One per fixture whose action threw. A code, never a message: a
    *  message can carry a Lichess body, and the report is returned to the
@@ -204,7 +200,6 @@ async function each<T extends { fixtureId: string }>(
     } catch (err) {
       const code = codeOf(err);
       pass.report.failures.push({ job, fixtureId: row.fixtureId, code });
-      pass.report.failed++;
       // Review M7: the report stays code-only (it is returned to the cron
       // caller); the server log carries what diagnoses it — the message, and
       // the stack of anything that is not a named refusal (a TypeError is a
@@ -1177,5 +1172,6 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   await each(pass, "camera_evidence", await cameraCandidates(pass), (c) => cameraEvidence(pass, c, rtk));
   // After the teardown too: a room ended in THIS pass took its watches with it.
   await each(pass, "arbiter_revoke", await arbiterCandidates(pass), (c) => arbiterRevoke(pass, c, rtk));
+  report.failed = report.failures.length;
   return report;
 }
