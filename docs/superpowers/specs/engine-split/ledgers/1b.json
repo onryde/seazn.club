@@ -1,6 +1,6 @@
 {
   "batch": "1b",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file. Task 1b-2 (compiled dist and the publish manifest) appends its own entries, built against the same base 604e66ace: engine root (test/publish-manifest.test.ts new, so all `added`; test/runtime-deps.test.ts as the retitled file, one `rewritten`), apps/web (src/__tests__/toolchain.test.ts, the zod pin: values changed, no title changed), and the repo root (scripts/__tests__/engine-bare-imports.test.ts new, `added`; main-module.test.ts the untouched control; engine-package-identity.test.ts collected on the after side so its 1b-1 entries stay used). Collection for 1b-2 per side: engine = test/publish-manifest.test.ts + test/runtime-deps.test.ts, apps/web = src/__tests__/toolchain.test.ts, root = the three scripts/__tests__ files above.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file. Task 1b-2 (compiled dist and the publish manifest) appends its own entries, built against the same base 604e66ace: engine root (test/publish-manifest.test.ts new, so all `added`; test/runtime-deps.test.ts as the retitled file, one `rewritten`), apps/web (src/__tests__/toolchain.test.ts, the zod pin: values changed, no title changed), and the repo root (scripts/__tests__/engine-bare-imports.test.ts new, `added`; main-module.test.ts the untouched control; engine-package-identity.test.ts collected on the after side so its 1b-1 entries stay used). Collection for 1b-2 per side: engine = test/publish-manifest.test.ts + test/runtime-deps.test.ts, apps/web = src/__tests__/toolchain.test.ts, root = the three scripts/__tests__ files above. Review fixes of 1b-2 (clean dist, inlined sources, derived prod-peer pin, README, wider bare-import matcher) added the engine tests for the clean-first build, the inlined sources and the README, and the apps/web test for the derived required-peer pin, all `added`; the bare-imports scan test was retitled before the batch merged, so its `added` id is the final title.",
   "entries": [
     {
       "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › is published under the GitHub owner's scope",
@@ -65,7 +65,7 @@
       "reason": "title extended in 1b-2: zod moved from dependencies to a peer, so the declared set is dependencies plus peerDependencies; same test, same file"
     },
     {
-      "id": "scripts/__tests__/engine-bare-imports.test.ts › no consumer relies on importing the engine for an effect › finds no bare static import of the engine under apps/, packages/, tools/ or scripts/",
+      "id": "scripts/__tests__/engine-bare-imports.test.ts › no consumer relies on importing the engine for an effect › finds no binding-less import or require of the engine under apps/, packages/, tools/ or scripts/",
       "fate": "added"
     },
     {
@@ -110,6 +110,22 @@
     },
     {
       "id": "test/publish-manifest.test.ts › sideEffects: false › is declared",
+      "fate": "added"
+    },
+    {
+      "id": "src/__tests__/toolchain.test.ts › toolchain: pnpm workspace › every required peer of the engine is a root dependency, derived from the engine's own manifest",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › carries each module's source inside its source map, because src is not in `files` and a map that points at it resolves to nothing",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › clears dist before it emits, so a module deleted from src cannot survive a rebuild into the tarball",
+      "fate": "added"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › has a README that names every public subpath, the registry, the install alias and the peers",
       "fate": "added"
     }
   ]

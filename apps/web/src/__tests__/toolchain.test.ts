@@ -469,6 +469,27 @@ describe("toolchain: pnpm workspace", () => {
     }
   });
 
+  it("every required peer of the engine is a root dependency, derived from the engine's own manifest", () => {
+    /**
+     * The list above names zod by hand, which is right for today's peer and silent about tomorrow's: a second required peer
+     * added to packages/engine/package.json would pass every local run and every dev-deps CI job, then die on the deploy
+     * install with the same ERR_MODULE_NOT_FOUND. So the set is read from the engine, not typed here: every peer not marked
+     * optional in `peerDependenciesMeta`. (fast-check and vitest are optional: only the testkit loads them.)
+     */
+    const engine = JSON.parse(readFileSync(join(REPO_ROOT, "packages/engine/package.json"), "utf8")) as {
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    const required = Object.keys(engine.peerDependencies ?? {}).filter((p) => engine.peerDependenciesMeta?.[p]?.optional !== true);
+    // anti-vacuity: an engine that lost its peers, or a filter that dropped them all, would make the loop below check nothing
+    expect(required, "required peers of the engine").toContain("zod");
+    expect(required.length).toBeGreaterThan(0);
+    const prod = new Set(Object.keys(rootManifest().dependencies ?? {}));
+    for (const dep of required) {
+      expect(prod.has(dep), `root dependencies must include the engine's required peer ${dep}`).toBe(true);
+    }
+  });
+
   it("root declares what its own typecheck paths reach for", () => {
     /**
      * `typecheck:scripts` runs `node node_modules/typescript-native/bin/tsc`

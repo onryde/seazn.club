@@ -9,8 +9,14 @@ import { describe, expect, it } from "vitest";
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const SKIP_DIRS = new Set(["node_modules", ".next", "dist", ".turbo", "coverage", ".git", ".stryker-tmp", "reports", "test-results", "playwright-report"]);
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx)$/;
-/** A static import that binds nothing: `import "@seazn/engine/x";` — the quote follows `import` directly, with no `from` between. */
-const BARE_IMPORT = /^[ \t]*import[ \t]*["'](?:@seazn\/engine|@onryde\/seazn-engine)[^"']*["']/gm;
+const ENGINE_SPEC = String.raw`["'](?:@seazn/engine|@onryde/seazn-engine)[^"']*["']`;
+/**
+ * An import of the engine that binds nothing, in each of the three shapes a bundler may drop under `sideEffects: false`:
+ * `import "@seazn/engine/x";` (the quote follows `import` directly), `import {} from "@seazn/engine/x";` (an empty binding
+ * list), and a `require("@seazn/engine/x");` statement whose result is thrown away. A `require` whose value is used
+ * (`const x = require(...)`, `module.exports = require(...)`) does not start the line, so it is not matched.
+ */
+const BARE_IMPORT = new RegExp(String.raw`^[ \t]*(?:import[ \t]*${ENGINE_SPEC}|import[ \t]*\{\s*\}\s*from[ \t]*${ENGINE_SPEC}|require\([ \t]*${ENGINE_SPEC}[ \t]*\))`, "gm");
 const BOUND_IMPORT = /^[ \t]*(?:import|export)\b[^"';]*?\bfrom[ \t]*["']@seazn\/engine[^"']*["']/gm;
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -32,10 +38,20 @@ describe("no consumer relies on importing the engine for an effect", () => {
     expect(hit('import type { A } from "@seazn/engine/core";')).toBe(0);
     expect(hit('const m = await import("@seazn/engine/core");')).toBe(0);
     expect(hit('// import "@seazn/engine/sports"')).toBe(0);
+    // the other ways to import for nothing: an empty binding list, and a require() whose result is thrown away
+    expect(hit('import {} from "@seazn/engine/sports";')).toBe(1);
+    expect(hit('import {  } from "@onryde/seazn-engine/sports";')).toBe(1);
+    expect(hit('import {\n} from "@seazn/engine/sports";')).toBe(1);
+    expect(hit('require("@seazn/engine/sports");')).toBe(1);
+    expect(hit("  require('@onryde/seazn-engine');")).toBe(1);
+    expect(hit('import { a } from "@seazn/engine/core";')).toBe(0);
+    expect(hit('const { a } = require("@seazn/engine/core");')).toBe(0);
+    expect(hit('module.exports = require("@seazn/engine/core");')).toBe(0);
+    expect(hit('import {} from "./local";')).toBe(0);
     expect([...'import {\n  a,\n} from "@seazn/engine/core";\n'.matchAll(BOUND_IMPORT)]).toHaveLength(1);
   });
 
-  it("finds no bare static import of the engine under apps/, packages/, tools/ or scripts/", () => {
+  it("finds no binding-less import or require of the engine under apps/, packages/, tools/ or scripts/", () => {
     const files = ["apps", "packages", "tools", "scripts"].flatMap((d) => walk(path.join(ROOT, d)));
     let boundImporters = 0;
     const bare: string[] = [];

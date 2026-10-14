@@ -1,6 +1,8 @@
 // D14/D16/D25: what a registry consumer receives. The workspace keeps TS source exports until 2b (spec §5.2);
 // publishConfig.exports must mirror every one of them into dist/.
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
@@ -44,7 +46,7 @@ describe("publish manifest", () => {
 
   it("records where the package lives, and only the dist build is named `build:dist` (a `build` script would join every turbo typecheck)", () => {
     expect(pkg.repository).toEqual({ type: "git", url: "https://github.com/onryde/seazn.club", directory: "packages/engine" });
-    expect(pkg.scripts["build:dist"]).toBe("node ../../node_modules/typescript-native/bin/tsc -p tsconfig.build.json");
+    expect(typeof pkg.scripts["build:dist"]).toBe("string");
     expect(pkg.scripts.build).toBeUndefined();
   });
 
@@ -55,6 +57,51 @@ describe("publish manifest", () => {
     for (const f of ["dist/core/index.js", "dist/core/index.d.ts", "dist/testkit/conformance.js"]) {
       expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(true);
     }
+  });
+
+  it("clears dist before it emits, so a module deleted from src cannot survive a rebuild into the tarball", () => {
+    // tsc only ever writes: without a clear, the .js of a deleted module stays in dist and `files` ships it.
+    const steps = (pkg.scripts["build:dist"] as string).split(" && ");
+    expect(steps, "clear, then emit — nothing else").toHaveLength(2);
+    const [clear, emit] = steps as [string, string];
+    expect(emit).toBe("node ../../node_modules/typescript-native/bin/tsc -p tsconfig.build.json");
+    // run the clear step AS DECLARED, in a scratch package dir with a stale dist and a src that must survive it
+    const dir = mkdtempSync(join(tmpdir(), "engine-clear-"));
+    try {
+      mkdirSync(join(dir, "dist/sub"), { recursive: true });
+      writeFileSync(join(dir, "dist/stale-deleted-module.js"), "export {};\n");
+      writeFileSync(join(dir, "dist/sub/old.d.ts"), "export {};\n");
+      mkdirSync(join(dir, "src"));
+      writeFileSync(join(dir, "src/keep.ts"), "export {};\n");
+      writeFileSync(join(dir, "package.json"), "{}\n");
+      execFileSync("sh", ["-c", clear], { cwd: dir });
+      expect(existsSync(join(dir, "dist")), "dist cleared").toBe(false);
+      expect(existsSync(join(dir, "src/keep.ts")), "src untouched").toBe(true);
+      expect(existsSync(join(dir, "package.json")), "package.json untouched").toBe(true);
+      // the empty case: a first build has no dist yet, and a second clear must not fail
+      execFileSync("sh", ["-c", clear], { cwd: dir });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries each module's source inside its source map, because src is not in `files` and a map that points at it resolves to nothing", () => {
+    expect(pkg.files).not.toContain("src");
+    expect(buildConfig.compilerOptions.sourceMap).toBe(true);
+    expect(buildConfig.compilerOptions.inlineSources).toBe(true);
+  });
+
+  it("has a README that names every public subpath, the registry, the install alias and the peers", () => {
+    const readme = readFileSync(join(ENGINE, "README.md"), "utf8");
+    // the subpaths come from the manifest's own exports, so a new export without a README line fails here
+    for (const k of Object.keys(pkg.exports)) expect(readme, `README names the ${k} subpath`).toContain(`\`${k}\``);
+    expect(readme).toContain("https://npm.pkg.github.com");
+    expect(readme).toContain("@onryde:registry=https://npm.pkg.github.com");
+    expect(readme).toContain("@seazn/engine@npm:@onryde/seazn-engine");
+    // required peer vs optional peers, each named in the sentence that gives its status
+    expect(readme).toMatch(/`zod`[^\n]*required/i);
+    for (const p of Object.keys(pkg.peerDependenciesMeta)) expect(readme, `README names optional peer ${p}`).toContain(`\`${p}\``);
+    expect(readme).toContain("docs/superpowers/specs/2026-10-13-engine-split-design.md");
   });
 
   it("emits the src tree into dist as .js with .d.ts beside it, so the toDist mapping above is the real one", () => {
