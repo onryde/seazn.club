@@ -8,12 +8,12 @@
 // default, so a bare `parse({})` throws for it (preflight C7), and the resolver is the cfg the product folds under.
 // Tests that fold core.settle / boardgame.tiebreak fold through loop D's engine (Tasks 4–5), merged into this lane.
 import { describe, expect, it, vi } from "vitest";
-import { BRACKET_KINDS, SETTLE_METHODS, foldMatchWithStoppage, isLevelOutcome, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
+import { BRACKET_KINDS, SETTLE_METHODS, foldMatchWithStoppage, isLevelOutcome, outcomeOf, settleOffered, type EventEnvelope } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { defaultLineupPair, forEachSport } from "@seazn/engine/testkit";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { foldStream } from "../lib/fold.ts";
-import { resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
+import { CfgInvalid, resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream, levelReachable, matchesRequest, settleableOutcome } from "../lib/streams/index.ts";
 import { boardgameGenerator } from "../lib/streams/boardgame.ts";
 import { carromGenerator } from "../lib/streams/carrom.ts";
@@ -41,6 +41,13 @@ const request = (c: Case, cfg: unknown, stageKind: StreamRequest["stageKind"], o
 const bracketCfg = (c: Case, overrides: Record<string, unknown> = {}): unknown => stageCfg(c.key, resolveSportCfg(c.key, c.variant, overrides), "knockout");
 const fold = (c: Case, cfg: unknown, events: readonly StreamEvent[]): Folded => foldMatchWithStoppage(c.module, cfg as never, c.lineups, envelopes(events));
 const outcomeAfter = (c: Case, cfg: unknown, events: readonly StreamEvent[]) => outcomeOf(c.module, fold(c, cfg, events));
+/** Is the organiser's settle OFFERED on a bracket match whose ledger is `events` and which was abandoned? The ENGINE's one
+ *  predicate (`settleOffered`, W2c Task 7), asked of the effective outcome and the folded state - never a copy of its rule.
+ *  False where the abandon decides the match (HK-AB-2 `q4_stands` once the 4th quarter has started, an `award` policy). */
+const settleOfferedAfterAbandon = (c: Case, cfg: unknown, events: readonly StreamEvent[]): boolean => {
+  const folded = fold(c, cfg, events);
+  return settleOffered(c.module, "knockout", { outcome: outcomeOf(c.module, folded), abandoned: true, state: folded.state });
+};
 const thrown = (f: () => unknown): unknown => { try { f(); } catch (e) { return e; } throw new Error("expected the call to throw"); };
 const unreachable = (f: () => unknown): boolean => { try { f(); return false; } catch (e) { if (e instanceof OutcomeUnreachable) return true; throw e; } };
 
@@ -54,12 +61,26 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     expect(all.length).toBeGreaterThan(11); // more than one declared variant somewhere
   });
 
-  it("every sport × variant × method: a bracket abandon at a real score, then settle, folds to a settled win", () => {
+  it("every sport × variant × method: a bracket abandon at a real score, then settle, folds to a settled win - except where the ENGINE decides the abandon (HK-AB-2), which is refused by name", () => {
     let checked = 0;
+    let refused = 0; // cells whose abandon at score the engine decides (settleOffered false): the generator must say so by name
     let withScore = 0; // sports whose win takes more than one event: the abandon must come after real play
     for (const c of cases()) {
       const cfg = bracketCfg(c);
       const win = generateStream(request(c, cfg, "knockout", { kind: "win", winner: "home" }));
+      // W2c Task 7 (262760d0a): a variant whose preset says `abandonPolicy: "q4_stands"` (hockey/fih-shootout, HK-AB-2) lets the result stand once
+      // the 4th quarter has started, and this cut is IN it - so the abandon folds to a win and no settle applies. Which cells those are is the
+      // engine's answer (settleOffered), never a list here.
+      const offered = settleOfferedAfterAbandon(c, cfg, generateStream(request(c, cfg, "knockout", { kind: "abandon", atScore: true })));
+      if (!offered) {
+        for (const method of SETTLE_METHODS) {
+          const ask = () => generateStream(request(c, cfg, "knockout", { kind: "settle", then: "away", method, after: "abandon" }));
+          expect(unreachable(ask), `${c.key}/${c.variant} ${method}: the engine offers no settle after this abandon`).toBe(true);
+          expect(ask, `${c.key}/${c.variant} ${method}`).toThrow(/core\.settle does not apply/);
+          refused++;
+        }
+        continue;
+      }
       for (const method of SETTLE_METHODS) {
         const events = generateStream(request(c, cfg, "knockout", { kind: "settle", then: "away", method, after: "abandon" }));
         const where = `${c.key}/${c.variant} ${method}`;
@@ -78,7 +99,9 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
         checked++;
       }
     }
-    expect(checked).toBe(cases().length * SETTLE_METHODS.length);
+    expect(checked + refused, "every cell is either built or refused by name").toBe(cases().length * SETTLE_METHODS.length);
+    expect(refused, "some variant\'s abandon is decided by the engine (hockey/fih-shootout, HK-AB-2), or the refusal is never reached").toBeGreaterThan(0);
+    expect(checked, "and the rest build").toBeGreaterThan(refused);
     expect(withScore).toBeGreaterThan(0);
   });
 
@@ -451,25 +474,40 @@ describe("W2a request vocabulary — labels, matching and the settle preconditio
       ["win", { kind: "win", winner: "a", loser: "b" } as never, false], ["award", { kind: "award", winner: "a" } as never, false],
     ];
     let checked = 0;
-    for (const [name, outcome, want] of rows) { expect(settleableOutcome(outcome), name).toBe(want); checked++; }
+    for (const [name, outcome, want] of rows) {
+      expect(settleableOutcome(outcome), name).toBe(want);
+      // One authority: the generator's precondition is the engine's settleOffered, for a bracket match that was abandoned.
+      expect(settleOffered({}, "knockout", { outcome, abandoned: true, state: null }), `${name}: the engine's own answer`).toBe(want);
+      checked++;
+    }
     expect(checked).toBe(rows.length);
   });
 
   it("generateStream refuses a settle after an abandon the ENGINE decides as a win (X-ST-1, C12): a period sport whose cfg awards an abandon, over every sport × variant", () => {
     let awarding = 0; // cases whose abandon-at-score the engine folds to a win: the settle must be refused there
     let settling = 0; // cases whose abandon-at-score the engine leaves undecided or level: the settle must build
+    let engineRefused = 0; // cases whose module offers no `award` policy AND whose schema refuses it: the override is withheld, and the engine says why
     for (const c of cases()) {
-      // The cfg the engine KEEPS: a sport whose schema does not declare abandonPolicy drops the override, so this is its own answer.
-      const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, { abandonPolicy: "award" }), "knockout");
+      // The override is the engine's own declaration: `abandonOptions` lists the policies a sport offers an organiser (W2c Task 7). A sport that does
+      // not offer `award` (carrom and generic: replay | share) REFUSES it in its schema now, so the sweep asks only where it is offered; elsewhere the
+      // cfg is the variant's own, and the refusal is pinned below rather than assumed.
+      const awardOffered = c.module.abandonOptions?.includes("award") === true;
+      if (!awardOffered && c.module.abandonOptions !== undefined) {
+        expect(() => resolveSportCfg(c.key, c.variant, { abandonPolicy: "award" }), `${c.key}/${c.variant}: the engine refuses an award it does not offer`).toThrow(CfgInvalid);
+        engineRefused++;
+      }
+      const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, awardOffered ? { abandonPolicy: "award" } : {}), "knockout");
       const cut = generateStream(request(c, cfg, "knockout", { kind: "abandon", atScore: true }));
       const folded = outcomeAfter(c, cfg, cut);
-      const settleable = folded === null || isLevelOutcome(folded);
+      const settleable = settleOfferedAfterAbandon(c, cfg, cut);
       const ask = (): unknown => generateStream(request(c, cfg, "knockout", { kind: "settle", then: "home", method: SETTLE_METHODS[0]!, after: "abandon" }));
       if (settleable) { expect(ask, `${c.key}/${c.variant}`).not.toThrow(); settling++; }
-      else { expect(ask, `${c.key}/${c.variant}: the abandon folds to '${folded.kind}'`).toThrow(/core\.settle does not apply/); awarding++; }
+      else { expect(ask, `${c.key}/${c.variant}: the abandon folds to '${folded?.kind}'`).toThrow(/core\.settle does not apply/); awarding++; }
+      if (awardOffered) expect(settleable, `${c.key}/${c.variant}: an award policy decides the abandon, so no settle is offered`).toBe(false);
     }
     expect(awarding, "some sport awards an abandon, or the guard is never reached").toBeGreaterThan(0);
     expect(settling).toBeGreaterThan(0);
+    expect(engineRefused, "some sport offers no award and refuses it, or the withheld override is never witnessed").toBeGreaterThan(0);
     expect(awarding + settling).toBe(cases().length);
   });
 
