@@ -8,6 +8,8 @@ import { boardgame } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { generic } from "@seazn/engine/sports/generic";
 import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
+import { deciderKeysFor, stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { hasFrozenCfg, resolveFixtureCfg } from "../fixture-cfg";
 
 const DIVISION = { bestOf: 3, points: { w: 3, d: 1, l: 0 }, shootout: null } as const;
@@ -139,5 +141,67 @@ describe("resolveFixtureCfg — the bracket overlay (ruling 76, spec §5.4.1)", 
     const odd = { ...live, variant: "bullet" };
     expect(boardgame.configSchema.safeParse(odd).success).toBe(false); // the premise: the schema refuses it
     expect(resolveFixtureCfg(row(null), odd, { kind: "knockout", config: null }, boardgame)).toEqual({ ...odd, tiebreak: true });
+  });
+});
+
+// W2c Task 13b, carried from Task 4's review (G1) and Task 8's re-review: owner Q7 "B" lets an organiser switch EVERY
+// decider off (X-SR-6's held arm). With the top-level overlay gone the deciders live in `rules` alone, and the bracket
+// overlay (`bracketDeciders`) runs AFTER them: no sport's overlay may write back a decider the stage stored as off.
+describe("resolveFixtureCfg — every decider off in a bracket stage's rules stays off (G1, registry sweep)", () => {
+  const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  /** A decider's OFF, read off a resolved cfg. An ARRAY decider (chess's tie-break rungs) is off only when EMPTY: a
+   *  falsy or `enabled` test reads `[]` as on (Task 8 re-review). */
+  const deciderIsOff = (v: unknown): boolean =>
+    v === null || v === false || (Array.isArray(v) && v.length === 0) || (isObj(v) && v.enabled === false);
+  /** The deciders whose engine off is null, which a stage says with `false` (ruling R-T12-1) — the ruling's list. */
+  const NULL_OFF: Readonly<Record<string, readonly string[]>> = { icehockey: ["overtime", "shootout"], hockey: ["shootout"] };
+  /** The value a stage stores to switch decider `k` off. Throws for a decider with no known off (an assumption, guarded). */
+  function stageOff(m: AnySportModule, division: Record<string, unknown>, k: string): unknown {
+    if (NULL_OFF[m.key]?.includes(k)) return false;
+    if (m.configSchema.safeParse({ ...division, [k]: [] }).success) return [];
+    const own = division[k];
+    if (typeof own === "boolean") return false;
+    if (isObj(own) && "enabled" in own) return { ...own, enabled: false };
+    throw new Error(`no known off value for ${m.key}.${k}: the sweep owes this decider a case`);
+  }
+
+  it("the predicate: an empty rung list is off, a listed rung is on (the array case a truthiness test gets wrong)", () => {
+    expect(deciderIsOff([])).toBe(true);
+    expect(deciderIsOff(["rapid"])).toBe(false);
+    expect(deciderIsOff(null)).toBe(true);
+    expect(deciderIsOff({ enabled: true, halfMinutes: 15 })).toBe(false);
+  });
+
+  it("G1: every sport x bracket kind x variant, each decider stored off in rules, resolves off; with the preset, some resolve on (counted)", () => {
+    const seen = new Set<string>();
+    let cells = 0;
+    let presetOn = 0;
+    for (const m of builtinModules as readonly AnySportModule[]) {
+      for (const variant of Object.keys(m.variants)) {
+        const division = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+        for (const kind of BRACKET_KINDS) {
+          const keys = deciderKeysFor(m, kind, variant);
+          if (keys.length === 0) continue;
+          const off = Object.fromEntries(keys.map((k) => [k, stageOff(m, division, k)]));
+          const out = resolveFixtureCfg(row(null), division, { kind, config: { rules: off } }, m) as Record<string, unknown>;
+          expect(m.configSchema.safeParse(out).success, `${m.key}/${variant}/${kind}: the engine takes the resolved cfg`).toBe(true);
+          for (const k of keys) {
+            expect(deciderIsOff(out[k]), `${m.key}/${variant}/${kind}.${k}: stored off, resolved ${JSON.stringify(out[k])}`).toBe(true);
+            seen.add(`${m.key}.${k}`);
+            cells++;
+          }
+          // The pair: the kind's preset (the engine's own `stageDefaults`) resolves at least one decider ON, so the
+          // predicate is not vacuously satisfied.
+          const preset = resolveFixtureCfg(row(null), division, { kind, config: { rules: stageDefaultsFor(m, kind, variant) } }, m) as Record<string, unknown>;
+          if (keys.some((k) => !deciderIsOff(preset[k]))) presetOn++;
+        }
+      }
+    }
+    expect(cells, "anti-vacuity").toBeGreaterThan(0);
+    expect(presetOn, "the preset turns deciders on somewhere").toBeGreaterThan(0);
+    // Chess's array decider is in the sweep, beside the null-off, boolean and object ones.
+    for (const k of ["boardgame.tiebreakRungs", "icehockey.overtime", "hockey.shootout", "football.shootout", "football.extraTime", "cricket.superOver"]) {
+      expect(seen, k).toContain(k);
+    }
   });
 });
