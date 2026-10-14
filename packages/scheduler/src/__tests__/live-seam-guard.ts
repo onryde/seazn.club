@@ -3,7 +3,7 @@
 // in the live files are ones greedy alone can place, so nothing else would notice. It lives here, apart from the skipped
 // describe it guards, so a unit test can reach it without a service (live-seam-guard.test.ts).
 import { expect } from "vitest";
-import type { BuildResult } from "../build.ts";
+import type { BuildResult } from "@seazn/engine/scheduling";
 
 /**
  * Throws unless the boards a live test built prove the real solver was asked.

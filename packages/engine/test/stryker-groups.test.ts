@@ -124,7 +124,7 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
       expect(Object.keys(map).length, name).toBeGreaterThan(0);
       for (const [k, reason] of Object.entries(map)) {
         expect(reason.length, `${name}[${k}]`).toBeGreaterThanOrEqual(10);
-        // testkit and generated/ hold files the universe filter would keep; a stale key (renamed or deleted file) matches none
+        // testkit holds files the universe filter would keep; a stale key (renamed, moved or deleted file) matches none
         expect(files.filter((f) => matchesGlob(f, k)).length, `${name}[${k}] matches no file`).toBeGreaterThan(0);
       }
     }
@@ -153,12 +153,11 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
   });
 
   it("the scheduling files ruling 67 names as excluded are each excluded by name, and nothing else under scheduling/ is (the seven draw generators stay in)", () => {
-    for (const n of ["index", "logger", "solver-test-bounds", "placement-client", "payload-fixtures"]) {
+    for (const n of ["index", "solver-test-bounds", "payload-fixtures"]) {
       expect(Object.keys(STRYKER_EXCLUDED), n).toContain(`src/scheduling/${n}.ts`);
     }
-    expect(Object.keys(STRYKER_EXCLUDED)).toContain("src/scheduling/generated/**");
     const scheduling = Object.keys(STRYKER_EXCLUDED).filter((k) => k.startsWith("src/scheduling/"));
-    expect(scheduling).toHaveLength(6);
+    expect(scheduling).toHaveLength(3);
     // the seven draw generators are not excluded and not placement, and the draws legs hold exactly those seven
     const draws = STRYKER_FAMILIES.draws.flatMap((g) => STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS]);
     for (const n of ["bracket", "bracket-layout", "roundrobin", "swiss", "americano", "participants", "feedgraph"]) {

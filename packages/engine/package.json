@@ -22,7 +22,6 @@
     "./scheduling/capacity": "./src/scheduling/capacity.ts",
     "./scheduling/grid-step": "./src/scheduling/grid-step.ts",
     "./scheduling/health": "./src/scheduling/health.ts",
-    "./scheduling/placement-client": "./src/scheduling/placement-client.ts",
     "./scheduling/rest-floor": "./src/scheduling/rest-floor.ts",
     "./scheduling/swiss": "./src/scheduling/swiss.ts",
     "./scheduling/tz": "./src/scheduling/tz.ts",
@@ -35,7 +34,6 @@
     "sim": "vitest run src/testkit/simulation.test.ts src/testkit/chaos.test.ts src/testkit/undo-sweep.test.ts",
     "sim:replay": "node --experimental-strip-types scripts/sim-replay.ts",
     "schema:snapshot": "node --experimental-strip-types scripts/schema-snapshot.ts",
-    "gen:proto": "node --experimental-strip-types scripts/gen-proto.ts",
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
     "lint": "eslint",
     "sim:matrix": "node --experimental-strip-types scripts/sim-replay.ts --matrix",
@@ -47,9 +45,6 @@
     "zod": "^4.4.3"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.13.0",
-    "@grpc/grpc-js": "^1.14.4",
-    "pino": "^10.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -59,8 +54,6 @@
     "@types/node": "^26",
     "eslint": "^9",
     "fast-check": "^3",
-    "protoc": "35.1.0",
-    "ts-proto": "2.12.0",
     "typescript": "6.0.3",
     "typescript-eslint": "^8",
     "typescript-native": "npm:typescript@7.0.2",

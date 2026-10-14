@@ -1,0 +1,445 @@
+{
+  "batch": "1a",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1a, built against the batch base 5871c748e. Run: node scripts/test-parity.mjs --before <before.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --after <after-scheduler.json>=packages/scheduler --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from the package (engine: src/scheduling test/; scheduler: everything).",
+  "entries": [
+    {
+      "id": "src/scheduling/placement-client.test.ts › channel lifecycle › closes the client it constructed when the call throws before it starts",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › channel lifecycle › closes the client it constructed when the call throws before it starts",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › channel lifecycle › constructs and closes one client per solve, even for the same host",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › channel lifecycle › constructs and closes one client per solve, even for the same host",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › channel lifecycle › never closes an injected call seam",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › channel lifecycle › never closes an injected call seam",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › attaches the shared secret as call metadata",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › attaches the shared secret as call metadata",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › builds a request the generated encoder can round-trip",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › builds a request the generated encoder can round-trip",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › defaults rule groups and pinned rule/entrant references to empty when omitted",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › defaults rule groups and pinned rule/entrant references to empty when omitted",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › derives the wire budget and the transport deadline from the same wallSeconds",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › derives the wire budget and the transport deadline from the same wallSeconds",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › gives two identically-named courts distinct indices that both decode correctly",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › gives two identically-named courts distinct indices that both decode correctly",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › inverts assignment indices back to the original ids on the way out",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › inverts assignment indices back to the original ids on the way out",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › keeps a later distinct court at its own array position after an earlier duplicate",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › keeps a later distinct court at its own array position after an earlier duplicate",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › maps rule groups and pinned rule/entrant references onto the wire",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › maps rule groups and pinned rule/entrant references onto the wire",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › refuses a dependency that references an unknown fixture",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › refuses a dependency that references an unknown fixture",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › refuses a request whose matchMinutes is an ambiguous zero",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › refuses a request whose matchMinutes is an ambiguous zero",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › refuses a request whose wallSeconds is an ambiguous zero",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › refuses a request whose wallSeconds is an ambiguous zero",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › refuses a rule group that references an unknown fixture",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › refuses a rule group that references an unknown fixture",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › refuses a slot that references a court missing from courts",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › refuses a slot that references a court missing from courts",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › rejects immediately when the call throws synchronously",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › rejects immediately when the call throws synchronously",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › rejects rather than hanging when the response cannot be translated",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › rejects rather than hanging when the response cannot be translated",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › rejects the call when it exceeds the deadline margin",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › rejects the call when it exceeds the deadline margin",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › reports an unreadable UNRECOGNIZED wire status as ERROR, not UNKNOWN",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › reports an unreadable UNRECOGNIZED wire status as ERROR, not UNKNOWN",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › reports an unreadable UNSPECIFIED wire status as ERROR, not UNKNOWN",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › reports an unreadable UNSPECIFIED wire status as ERROR, not UNKNOWN",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › resolves a slot naming a duplicate court to its first occurrence",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › resolves a slot naming a duplicate court to its first occurrence",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › resolves allowedCourts through the court index space, and refuses an unknown court",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › resolves allowedCourts through the court index space, and refuses an unknown court",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › round-trips round presence on Fixture and PinnedRow — set survives, absent is not 0",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › round-trips round presence on Fixture and PinnedRow — set survives, absent is not 0",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › round-trips rule groups and pinned rule/entrant references through the real encoder",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › round-trips rule groups and pinned rule/entrant references through the real encoder",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › sends ids as positional indices, derived from the input, on the wire",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › sends ids as positional indices, derived from the input, on the wire",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › sets a transport deadline one margin beyond the solver's wall budget",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › sets a transport deadline one margin beyond the solver's wall budget",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › translates a INVALID_ARGUMENT transport status into a domain failure",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › translates a INVALID_ARGUMENT transport status into a domain failure",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › translates a PERMISSION_DENIED transport status into a domain failure",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › translates a PERMISSION_DENIED transport status into a domain failure",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › translates a RESOURCE_EXHAUSTED transport status into a domain failure",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › translates a RESOURCE_EXHAUSTED transport status into a domain failure",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › translates a UNAUTHENTICATED transport status into a domain failure",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › translates a UNAUTHENTICATED transport status into a domain failure",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › translates a UNAVAILABLE transport status into a domain failure",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › translates a UNAVAILABLE transport status into a domain failure",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › treats two courts differing only by a homoglyph (Cyrillic Es U+0421) as distinct, not rejected",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › treats two courts differing only by a homoglyph (Cyrillic Es U+0421) as distinct, not rejected",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › treats two courts differing only by an invisible code point (U+3164 Hangul Filler) as distinct, not rejected",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › treats two courts differing only by an invisible code point (U+3164 Hangul Filler) as distinct, not rejected",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › treats two courts differing only by trailing whitespace as distinct, not rejected",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › treats two courts differing only by trailing whitespace as distinct, not rejected",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/placement-client.test.ts › solveBuild › turns a transport DEADLINE_EXCEEDED into a clear error",
+      "fate": "rehomed",
+      "to": "src/placement-client.test.ts › solveBuild › turns a transport DEADLINE_EXCEEDED into a clear error",
+      "reason": "the gRPC client and its tests move to @seazn/scheduler (D11); same test, new home"
+    },
+    {
+      "id": "src/scheduling/__tests__/placement-integration.test.ts › placement integration (requires a running service) › accepts, rather than refuses, two undecided bracket fixtures sharing every possible finalist",
+      "fate": "rehomed",
+      "to": "src/__tests__/placement-integration.test.ts › placement integration (requires a running service) › accepts, rather than refuses, two undecided bracket fixtures sharing every possible finalist",
+      "reason": "the live-service integration test moves with the client it exercises (skipped without PLACEMENT_SERVICE_HOST, as before)"
+    },
+    {
+      "id": "src/scheduling/__tests__/placement-integration.test.ts › placement integration (requires a running service) › falls back to greedy with the service unreachable",
+      "fate": "rehomed",
+      "to": "src/__tests__/placement-integration.test.ts › placement integration (requires a running service) › falls back to greedy with the service unreachable",
+      "reason": "the live-service integration test moves with the client it exercises (skipped without PLACEMENT_SERVICE_HOST, as before)"
+    },
+    {
+      "id": "src/scheduling/__tests__/placement-integration.test.ts › placement integration (requires a running service) › reaches Placement on a multi-court board whose greedy seed is off the grid — the shape that regressed",
+      "fate": "rehomed",
+      "to": "src/__tests__/placement-integration.test.ts › placement integration (requires a running service) › reaches Placement on a multi-court board whose greedy seed is off the grid — the shape that regressed",
+      "reason": "the live-service integration test moves with the client it exercises (skipped without PLACEMENT_SERVICE_HOST, as before)"
+    },
+    {
+      "id": "src/scheduling/__tests__/placement-integration.test.ts › placement integration (requires a running service) › solves a 32-fixture/5-court board end to end with zero verifier conflicts",
+      "fate": "rehomed",
+      "to": "src/__tests__/placement-integration.test.ts › placement integration (requires a running service) › solves a 32-fixture/5-court board end to end with zero verifier conflicts",
+      "reason": "the live-service integration test moves with the client it exercises (skipped without PLACEMENT_SERVICE_HOST, as before)"
+    },
+    {
+      "id": "src/scheduling/__tests__/repair-decompose-cpsat-integration.test.ts › repairDecomposedCpsat integration (requires a running placement service) › regresses without the decomposition — the same board reds against a single monolithic buildSchedule call",
+      "fate": "rehomed",
+      "to": "src/__tests__/repair-decompose-cpsat-integration.test.ts › repairDecomposedCpsat integration (requires a running placement service) › regresses without the decomposition — the same board reds against a single monolithic buildSchedule call",
+      "reason": "the second live-service integration test imported the client by relative path, so it moves with it (skipped without PLACEMENT_SERVICE_HOST, as before)"
+    },
+    {
+      "id": "src/scheduling/__tests__/repair-decompose-cpsat-integration.test.ts › repairDecomposedCpsat integration (requires a running placement service) › repairs a genuine court clash via the real placement service",
+      "fate": "rehomed",
+      "to": "src/__tests__/repair-decompose-cpsat-integration.test.ts › repairDecomposedCpsat integration (requires a running placement service) › repairs a genuine court clash via the real placement service",
+      "reason": "the second live-service integration test imported the client by relative path, so it moves with it (skipped without PLACEMENT_SERVICE_HOST, as before)"
+    },
+    {
+      "id": "src/scheduling/__tests__/repair-decompose-cpsat-integration.test.ts › repairDecomposedCpsat integration (requires a running placement service) › resolves a violator's order breach against a real, frozen feeder via the nudge, against the real placement service",
+      "fate": "rehomed",
+      "to": "src/__tests__/repair-decompose-cpsat-integration.test.ts › repairDecomposedCpsat integration (requires a running placement service) › resolves a violator's order breach against a real, frozen feeder via the nudge, against the real placement service",
+      "reason": "the second live-service integration test imported the client by relative path, so it moves with it (skipped without PLACEMENT_SERVICE_HOST, as before)"
+    },
+    {
+      "id": "test/stryker-groups.test.ts › every engine source file has exactly one Stryker home (rulings 66, 67) › the placement exclusion is the 19 exact src/scheduling files of build, calendar and repair, each exactly one file (ruling 67)",
+      "fate": "rewritten",
+      "to": "test/stryker-groups.test.ts › every engine source file has exactly one Stryker home (rulings 66, 67) › the placement exclusion is the 19 exact src/scheduling files of build, calendar and repair (ruling 67) plus solver-port.ts (engine split, D11), each exactly one file",
+      "reason": "title and count extended in 1a-2: ruling 67's 19 files plus solver-port.ts (20); same test, same file"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: already_optimal (from build-day-gate.test.ts :156 \"still claims already_optimal on our own ladder\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: dependencies (from build.test.ts :2507 \"strips rounds for a WHOLE division when one of its fixtures also carries a feed dependency\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: dependencies_board (from build.test.ts :2507 input, with a reply that places all three cards in dependency order)",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: empty (from 0 fixtures (no existing test; the empty case TEST-STRATEGY owes every sequence))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: error_internal (from build.test.ts :1653 \"reports a board Placement itself marks ERROR the same way as a rejection\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: error_solver_busy (from build.test.ts :1679 \"maps ERROR + error.code SOLVER_BUSY to the existing solver_busy\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: infeasible_pins_local (from build.test.ts :454 \"proves infeasible only when the pins really do contradict\" (caught locally, solver never asked))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: infeasible_reported_by_solver (from build-pins.test.ts :32-56 input + one existing pin; the INFEASIBLE reply has no source test (arm previously unpinned))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: multi_pool_strip (from build.test.ts :2575 \"strips rounds for a division whose round-bearing fixtures span more than one pool\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: optimized (from build.test.ts :265 \"places a card greedy declared unplaceable\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: polish_published_slot (from build-polish.test.ts :181 \"freezes a card to where it was PUBLISHED, not to where greedy re-placed it\" (frozen + current))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: rejected_plain_error (from build.test.ts :1575 \"falls back to greedy on a Placement rejection\" (a plain Error, no `failure`))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: rejected_unavailable (from build.test.ts :1636 \"maps a rejected PlacementError(unavailable) to solver_unavailable\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: unknown (from build.test.ts :1705 \"maps an UNKNOWN outcome (the chain proved nothing) to not_searched, not ok\")",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: verifier_rejected (from build.test.ts :761 \"hands back the greedy seed, LOUDLY, over a breach the solver INTRODUCED\" (here a real overlap: both cards on C1 at T0))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: wall_zero (from build.test.ts :437 \"stops on the outer wall cap without inventing a verdict\" (bails before the solver))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › asks the solver the same question and returns the same board: worse_than_seed (from build.test.ts :1566 (a reply that places nothing, against a seed that places 1; D6 ships the seed))",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "src/scheduling/build-port-equivalence.test.ts › solver port equivalence › covers 17 scenarios, including optimized and the empty input",
+      "fate": "added",
+      "reason": "1a-2: the engine's behaviour on every arm of solveBuild, recorded before and after the port (D5)"
+    },
+    {
+      "id": "test/runtime-deps.test.ts › engine runtime dependencies › is not blind to a shipped file importing a `__tests__/` helper, the one thing that makes skipping that directory safe",
+      "fate": "added",
+      "reason": "1a-2 review / 1a-3: the no-shipped-file-imports-a-__tests__-helper test (engine, from 1a-2) and the scheduler's copy of the runtime-deps gate (1a-3)"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › does not read any status other than solver_unavailable as a silent fallback",
+      "fate": "added",
+      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › fails an empty list, deliberate or not: a test that built no board proves nothing about the seam",
+      "fate": "added",
+      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › fails when any board fell back with solver_unavailable, however many reached the solver",
+      "fate": "added",
+      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › passes a list in which the solver was reached on every board",
+      "fate": "added",
+      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › passes solver_unavailable when the test pointed at a dead port on purpose",
+      "fate": "added",
+      "reason": "1a-2 review: the no-silent-greedy guard of the live placement tests, unit-tested without a service; it lives in the scheduler beside the live tests, so it is new at base-relative"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › exports exactly what its consumers import, and re-exports the same objects the modules define",
+      "fate": "added",
+      "reason": "1a-3: the scheduler package's public surface and its logger adapter (schedulerLog)"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › is the logger the engine's scheduler used to own: the same name, and LOG_LEVEL decides its level",
+      "fate": "added",
+      "reason": "1a-3: the scheduler package's public surface and its logger adapter (schedulerLog)"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › schedulerLog.debug hands the fields and the message to pino at that level and no other",
+      "fate": "added",
+      "reason": "1a-3: the scheduler package's public surface and its logger adapter (schedulerLog)"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › schedulerLog.error hands the fields and the message to pino at that level and no other",
+      "fate": "added",
+      "reason": "1a-3: the scheduler package's public surface and its logger adapter (schedulerLog)"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › schedulerLog.info hands the fields and the message to pino at that level and no other",
+      "fate": "added",
+      "reason": "1a-3: the scheduler package's public surface and its logger adapter (schedulerLog)"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › schedulerLog.warn hands the fields and the message to pino at that level and no other",
+      "fate": "added",
+      "reason": "1a-3: the scheduler package's public surface and its logger adapter (schedulerLog)"
+    },
+    {
+      "id": "src/solver.test.ts › placementSolver (the adapter behind the engine's solver port) › forwards the engine's question and requestId, and the secret from the environment",
+      "fate": "added",
+      "reason": "1a-3: the adapter behind the engine's solver port"
+    },
+    {
+      "id": "src/solver.test.ts › placementSolver (the adapter behind the engine's solver port) › sends an empty secret when none is configured, and lets the client's rejection through unchanged",
+      "fate": "added",
+      "reason": "1a-3: the adapter behind the engine's solver port"
+    },
+    {
+      "id": "test/runtime-deps.test.ts › scheduler runtime dependencies › declares every runtime import in `dependencies`, not `devDependencies`",
+      "fate": "added",
+      "reason": "1a-2 review / 1a-3: the no-shipped-file-imports-a-__tests__-helper test (engine, from 1a-2) and the scheduler's copy of the runtime-deps gate (1a-3)"
+    },
+    {
+      "id": "test/runtime-deps.test.ts › scheduler runtime dependencies › finds the imports it is meant to be guarding",
+      "fate": "added",
+      "reason": "1a-2 review / 1a-3: the no-shipped-file-imports-a-__tests__-helper test (engine, from 1a-2) and the scheduler's copy of the runtime-deps gate (1a-3)"
+    },
+    {
+      "id": "test/runtime-deps.test.ts › scheduler runtime dependencies › is not blind to a shipped file importing a `__tests__/` helper, the one thing that makes skipping that directory safe",
+      "fate": "added",
+      "reason": "1a-2 review / 1a-3: the no-shipped-file-imports-a-__tests__-helper test (engine, from 1a-2) and the scheduler's copy of the runtime-deps gate (1a-3)"
+    }
+  ]
+}

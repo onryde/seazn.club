@@ -10,15 +10,11 @@
 // SKIPPED by default: see `services/placement/README.md`'s "Local dev"
 // section to start a real service and run this for real.
 import { describe, expect, it } from "vitest";
-import { repairDecomposedCpsat } from "../repair-decompose-cpsat.ts";
-import { isBlockingConflict, validateAssignments } from "../calendar.ts";
-import type { Assignment, OrderDependency, SchedulableFixture, VerifyConfig } from "../calendar.ts";
-import { solveBuild } from "../placement-client.ts";
-import { silentLogger, type PlacementSolver } from "../solver-port.ts";
+import { isBlockingConflict, repairDecomposedCpsat, validateAssignments } from "@seazn/engine/scheduling";
+import type { Assignment, OrderDependency, SchedulableFixture, VerifyConfig } from "@seazn/engine/scheduling";
+import { placementSolver, schedulerLog } from "../index.ts";
 
-// Reaches the REAL service through the REAL transport function, host and secret from the environment as before the port.
-const liveSolve: PlacementSolver = (input, ctx) =>
-  solveBuild(input, { secret: process.env.PLACEMENT_SERVICE_SECRET ?? "", requestId: ctx.requestId });
+// Reaches the REAL service through the REAL adapter and logger, host and secret from the environment as in production.
 
 // Same gate `placement-integration.test.ts` uses.
 const RUN_INTEGRATION = process.env.PLACEMENT_SERVICE_HOST !== undefined;
@@ -63,8 +59,8 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           callerFrozen: new Set(),
           config: cfg(),
           budgetMs: 20_000,
-          solve: liveSolve,
-          log: silentLogger,
+          solve: placementSolver,
+          log: schedulerLog,
         });
         expect(r.status).toBe("repaired");
         expect(r.moved.length).toBeGreaterThan(0);
@@ -109,8 +105,8 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           dependencies,
           config: cfg(),
           budgetMs: 20_000,
-          solve: liveSolve,
-          log: silentLogger,
+          solve: placementSolver,
+          log: schedulerLog,
         });
 
         expect(r.status).toBe("repaired");
@@ -135,7 +131,7 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
         // directly (one buildSchedule call, feeder passed via frozen/current
         // — never as a movable fixtures entry) to prove this is a genuine
         // fix, not a coincidence of the board shape.
-        const { buildSchedule } = await import("../build.ts");
+        const { buildSchedule } = await import("@seazn/engine/scheduling");
         const proposal = [
           at("feeder", "A", 0, ["e1", "e2"]),
           at("dependent", "B", 0, ["e3", "e4"]),
@@ -151,8 +147,8 @@ const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
           current: proposal,
           frozen: ["feeder"],
           wallMs: 20_000,
-          solve: liveSolve,
-          log: silentLogger,
+          solve: placementSolver,
+          log: schedulerLog,
         });
         // The monolithic C5 shape drops the dependency edge on the wire
         // (`feeder` never reaches `freeFixtureIds`) — the encoder places

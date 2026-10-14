@@ -88,20 +88,15 @@ describe("engine runtime dependencies", () => {
 
   it("finds the imports it is meant to be guarding", () => {
     // A regex that silently matched nothing would make the gate above vacuous.
-    // `@grpc/grpc-js` and `@bufbuild/protobuf` arrive with the placement client
-    // and its generated stubs; `pino` arrives with `scheduling/logger.ts`; all
-    // three are runtime imports, so all three must stay in `dependencies` for
-    // the `--prod` staging install.
+    // The engine's only runtime import is `zod`. The gRPC client and the pino
+    // logger left with the solver and logger ports (engine-split D11, D25) and
+    // now live in @seazn/scheduler, whose own runtime-deps test pins them there.
     //
-    // `z3-solver` was a fifth entry until C8 deleted the solver. It is listed
-    // by name here rather than left to a length check precisely so that its
-    // removal had to be an edit someone made on purpose.
-    expect([...runtimeImports().keys()].sort()).toEqual([
-      "@bufbuild/protobuf",
-      "@grpc/grpc-js",
-      "pino",
-      "zod",
-    ]);
+    // `z3-solver` was an entry until C8 deleted the solver, and `@grpc/grpc-js`,
+    // `@bufbuild/protobuf` and `pino` were until D11/D25. The set is listed by
+    // name rather than left to a length check precisely so that any removal or
+    // addition has to be an edit someone made on purpose.
+    expect([...runtimeImports().keys()].sort()).toEqual(["zod"]);
   });
 
   it("is not blind to a shipped file importing a `__tests__/` helper, the one thing that makes skipping that directory safe", () => {

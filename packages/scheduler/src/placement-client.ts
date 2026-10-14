@@ -5,7 +5,7 @@
 // back into `SolveBuildOutcome`, and settles. No tier reasoning, no objective
 // interpretation, no board validation — `build.ts` owns all of that.
 //
-// EXPORTED AS `@seazn/engine/scheduling/placement-client`, and the subpath is
+// EXPORTED AS `@seazn/scheduler/placement-client`, and the subpath is
 // there for the WEB LANE'S TESTS rather than for production callers — nothing
 // in `apps/web` calls this directly, and nothing should: `buildSchedule` is
 // the entry point. Being the one seam every solve leaves the process through
@@ -18,8 +18,9 @@ import * as grpc from "@grpc/grpc-js";
 
 import type { ServiceError } from "@grpc/grpc-js";
 
-import { systemClock } from "../core/clock.ts";
-import type { Clock } from "../core/clock.ts";
+import { systemClock } from "@seazn/engine/core";
+import type { Clock } from "@seazn/engine/core";
+import type { SolveBuildInput, SolveBuildOutcome } from "@seazn/engine/scheduling";
 import type {
   SchedulerServiceClient as SchedulerServiceClientType,
   SolveBuildRequest,
@@ -27,7 +28,6 @@ import type {
 } from "./generated/scheduler.ts";
 import { SchedulerServiceClient, SolveStatus } from "./generated/scheduler.ts";
 import { log } from "./logger.ts";
-import type { SolveBuildInput, SolveBuildOutcome } from "./solver-port.ts";
 
 /**
  * @internal The RPC seam, declared explicitly rather than `Pick`ed off the
@@ -56,9 +56,7 @@ function cancelCall(call: unknown): void {
   if (typeof cancel === "function") cancel.call(call);
 }
 
-// `SolveBuildInput` / `SolveBuildOutcome` live in `solver-port.ts` (the engine's side of the boundary, engine-split D11).
-// Re-exported here so the existing `@seazn/engine/scheduling/placement-client` subpath keeps resolving them.
-export type { SolveBuildInput, SolveBuildOutcome } from "./solver-port.ts";
+// `SolveBuildInput` / `SolveBuildOutcome` live in `@seazn/engine/scheduling` (the engine's side of the boundary, engine-split D11).
 
 /**
  * Transport configuration. Deliberately carries NO wall budget: that lives on

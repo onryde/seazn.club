@@ -26,15 +26,16 @@
 // `.failure`-keyed switch. This file follows the brief where the two
 // disagree.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSchedule, type BuildResult } from "../build.ts";
 import {
+  buildSchedule,
   slotFixtures,
   validateAssignments,
+  type BuildProblem,
+  type BuildResult,
   type SchedulableFixture,
   type SlotConfig,
-} from "../calendar.ts";
-import { solveBuild } from "../placement-client.ts";
-import { silentLogger, type BuildProblem, type PlacementSolver } from "../solver-port.ts";
+} from "@seazn/engine/scheduling";
+import { placementSolver, schedulerLog } from "../index.ts";
 import { assertNoSilentGreedy } from "./live-seam-guard.ts";
 
 const MIN = 60_000;
@@ -51,17 +52,14 @@ const fx = (id: string, home: string, away: string): SchedulableFixture => ({
   away,
 });
 
-// While this file still sits in the engine (it moves to `packages/scheduler` in 1a-3) it reaches the REAL service
-// through the REAL adapter: the transport function the engine used to import itself. Host and secret come from the
-// environment exactly as they did before the port, so what runs here is the production seam and not a stand-in.
-const liveSolve: PlacementSolver = (input, ctx) =>
-  solveBuild(input, { secret: process.env.PLACEMENT_SERVICE_SECRET ?? "", requestId: ctx.requestId });
+// This file reaches the REAL service through the REAL adapter and the REAL logger (`placementSolver`, `schedulerLog`): the
+// production seam, not a stand-in. Host and secret come from the environment exactly as they do in production.
 
 /** Every board built in the current test, so `afterEach` can tell a live solve from a silent greedy fallback. */
 const built: BuildResult[] = [];
 /** `buildSchedule` over the live seam. Records the result for the `solver_unavailable` guard below. */
 const buildLive = async (problem: BuildProblem): Promise<BuildResult> => {
-  const result = await buildSchedule({ ...problem, solve: liveSolve, log: silentLogger });
+  const result = await buildSchedule({ ...problem, solve: placementSolver, log: schedulerLog });
   built.push(result);
   return result;
 };

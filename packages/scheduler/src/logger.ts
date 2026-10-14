@@ -1,9 +1,9 @@
 // Structured logging for the scheduling subsystem — build.ts's placement
 // path and placement-client.ts's gRPC transport. Not part of the package's
-// public surface (no "./scheduling/logger" entry in package.json exports):
-// it exists so the two previously-silent failure modes on that path (an
-// encoder/verifier disagreement, a placement service that never answers) are
-// observable, nothing more.
+// public surface (the package exposes `schedulerLog`, an `EngineLogger` over
+// this, from its index): it exists so the two previously-silent failure modes
+// on that path (an encoder/verifier disagreement, a placement service that
+// never answers) are observable, nothing more.
 //
 // Deliberately NOT `pino({ transport: {...} })`: a transport spawns a worker
 // thread that does a dynamic `require()` of the transport target, which a
