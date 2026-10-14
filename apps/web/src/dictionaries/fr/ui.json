@@ -6229,6 +6229,7 @@
   "arbiter.notice.alreadyResolved": "Cet échiquier a déjà son résultat.",
   "arbiter.notice.boardChanged": "Cet échiquier a changé pendant que vous décidiez — rechargez pour le voir.",
   "arbiter.notice.onlineGameOver": "La partie en ligne de cet échiquier est terminée. Saisissez son résultat sur le pupitre.",
+  "arbiter.notice.onlineGameNeverStarted": "La partie en ligne de cet échiquier n'a jamais commencé. Saisissez son résultat sur le pupitre.",
   "arbiter.notice.needsWinner": "Une partie à élimination directe nulle exige un vainqueur. Choisissez qui se qualifie.",
   "arbiter.notice.knockoutNeedsWinner": "Une partie à élimination directe exige un vainqueur — arbitrez-la ou attribuez-la.",
   "arbiter.notice.swissNeedsResult": "Une ronde suisse exige que chaque partie soit décidée — arbitrez-la ou attribuez-la.",

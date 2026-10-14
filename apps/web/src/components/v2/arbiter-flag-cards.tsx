@@ -197,19 +197,21 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
           ? f.t("arbiter.notice.boardChanged")
           : n.code === "ONLINE_GAME_OVER"
             ? f.t("arbiter.notice.onlineGameOver")
-            : n.code === "TIEBREAK_NEEDS_WINNER"
-              ? f.t("arbiter.notice.needsWinner")
-              : n.code === "ARBITER_PLAYS_THIS_BOARD"
-                ? f.t("arbiter.notice.settleOwnBoard")
-                : // I-3's two 409s: No result where it is refused (a screen loaded before the board's stage or hold changed).
-                  n.code === "KNOCKOUT_NEEDS_WINNER"
-                  ? f.t("arbiter.notice.knockoutNeedsWinner")
-                  : n.code === "SWISS_NEEDS_RESULT"
-                    ? f.t("arbiter.notice.swissNeedsResult")
-                    : // M-7: the screen's No result / double walkover is no longer the board's (who turned up changed).
-                      n.code === "NO_RESULT_CHANGED"
-                      ? f.t("arbiter.notice.noResultChanged")
-                      : f.t("arbiter.notice.failed");
+            : n.code === "ONLINE_GAME_NEVER_STARTED"
+              ? f.t("arbiter.notice.onlineGameNeverStarted")
+              : n.code === "TIEBREAK_NEEDS_WINNER"
+                ? f.t("arbiter.notice.needsWinner")
+                : n.code === "ARBITER_PLAYS_THIS_BOARD"
+                  ? f.t("arbiter.notice.settleOwnBoard")
+                  : // I-3's two 409s: No result where it is refused (a screen loaded before the board's stage or hold changed).
+                    n.code === "KNOCKOUT_NEEDS_WINNER"
+                    ? f.t("arbiter.notice.knockoutNeedsWinner")
+                    : n.code === "SWISS_NEEDS_RESULT"
+                      ? f.t("arbiter.notice.swissNeedsResult")
+                      : // M-7: the screen's No result / double walkover is no longer the board's (who turned up changed).
+                        n.code === "NO_RESULT_CHANGED"
+                        ? f.t("arbiter.notice.noResultChanged")
+                        : f.t("arbiter.notice.failed");
     case "overridden":
       return f.t("arbiter.notice.overridden");
     case "override_failed":

@@ -789,6 +789,8 @@ describe("your decision", () => {
       [{ boardId: "f3", kind: "settle_failed", code: "BOARD_CHANGED" }, EN["arbiter.notice.boardChanged"]!],
       // T16 fix round 3, N4: the online game is over and its result was voided — the pad decides it.
       [{ boardId: "f3", kind: "settle_failed", code: "ONLINE_GAME_OVER" }, EN["arbiter.notice.onlineGameOver"]!],
+      // Final review M-5: a board closed before its game started — never "over"; the same instruction, the pad.
+      [{ boardId: "f3", kind: "settle_failed", code: "ONLINE_GAME_NEVER_STARTED" }, "This board's online game never started. Record its result on the scoring pad."],
       [{ boardId: "f3", kind: "settle_failed", code: "TIEBREAK_NEEDS_WINNER" }, EN["arbiter.notice.needsWinner"]!],
       [{ boardId: "f3", kind: "settle_failed", code: "ARBITER_PLAYS_THIS_BOARD" }, EN["arbiter.notice.settleOwnBoard"]!],
       // I-3's 409 — No result on a knockout board (a panel loaded before its stage became one still offered it).
@@ -810,9 +812,9 @@ describe("your decision", () => {
       expect(text(h), JSON.stringify(notice)).toContain(sentence);
       seen.add(sentence);
     }
-    // 26 notices; "failed" is the shared fallback sentence (2 rows), so 25.
-    expect(notices.length).toBe(26);
-    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(25);
+    // 27 notices; "failed" is the shared fallback sentence (2 rows), so 26.
+    expect(notices.length).toBe(27);
+    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(26);
   });
 
   // R4 (T16 fix round 1): on a FINISHED board the close is a review, not a go-on — so is its answer (the queue's words).

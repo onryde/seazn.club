@@ -6229,6 +6229,7 @@
   "arbiter.notice.alreadyResolved": "Dit bord heeft al een uitslag.",
   "arbiter.notice.boardChanged": "Dit bord is veranderd terwijl je besliste — herlaad om het te zien.",
   "arbiter.notice.onlineGameOver": "De online partij van dit bord is afgelopen. Leg de uitslag vast op het scorepad.",
+  "arbiter.notice.onlineGameNeverStarted": "De online partij van dit bord is nooit begonnen. Leg de uitslag vast op het scorepad.",
   "arbiter.notice.needsWinner": "Een knock-outpartij in remise heeft een winnaar nodig. Kies wie doorgaat.",
   "arbiter.notice.knockoutNeedsWinner": "Een knock-outpartij heeft een winnaar nodig — beslis haar of ken haar toe.",
   "arbiter.notice.swissNeedsResult": "Een Zwitserse ronde heeft van elke partij een uitslag nodig — beslis haar of ken haar toe.",
