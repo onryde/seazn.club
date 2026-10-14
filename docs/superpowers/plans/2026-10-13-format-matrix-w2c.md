@@ -3035,6 +3035,8 @@ describe.skipIf(!HAS_DB)("rule 10 — stage rules × start × void", () => {
 ---
 ### Task 12: Stage creation writes the presets; the API takes `config.rules`; carry merges (server)
 
+> **Carried from Task 11.** Writers of a top-level stage `shootout` / `extraTime` that the presets must reconcile: `apps/web/src/server/schemas.ts:1120-1121`, `scripts/seed-fifa2026.ts:435`, `scripts/smoke-sports.ts:301`. Re-pin the lines before editing.
+
 > **Carried from the batch-2 re-review (concern A).** `rule-locks.ts:~116` exempts a stage that carries ANY `deciderKeysFor` key at its top level (`cfg[key]`), but the resolver reads only `shootout`/`extraTime` there (`stage-cfg.ts`) — the I-1 class. Unreachable today (StageConfig is strict; no template carries the others). When converting/deleting that branch: until it goes, restrict it to the keys the resolver actually reads, and **invert or delete** the t20 `superOver` test that seeds the top-level key by raw SQL and asserts `refused: []` (it pins the wrong answer: the division change still reaches that stage's unplayed fixtures).
 
 > **Carried from Task 5 review (M2).** `rule-locks.ts:~104` reads a decider at the stage's TOP level (pre-D3 storage). When this task moves deciders into `stages.config.rules`, convert that branch, its test and its mutant to read the new storage (or delete them if `stage.rules` already covers it). Grep `-a` for every other top-level decider read.
@@ -4273,6 +4275,8 @@ The English strings above are the proposed copy. They are signed with the Step 3
 ---
 
 ### Task 17: S1 + S4 — the stage format row for every sport (UI)
+
+> **Carried from Task 11.** The stage PUT now MERGES its fragment into the stored rules: an omitted key is KEPT. `stageFormatSaveFragment` in `components/v2/stages-panel.tsx` must send `null` for any field the organiser blanked, or a cleared field silently survives. Pin it with a test that clears a field and reads the stored rules back. Also update the comments in `stages-panel.tsx` and `describe-rules.ts:197-207` that still describe the old four-sport gate.
 
 > **Carried from Tasks 6+7 review.** Carrom `share` is refused unless the tie board is "Drawn game" (overnight ruling, mirrors P-5): every shipped carrom variant defaults to "extra", so `share(carrom, {}).disabled === true` with the reason naming the tie-board setting — the plan's test expecting `false` (~this task's abandon-options case) is WRONG; flip it. `share` is offered only on DRAW_KINDS stages (ignored in brackets).
 
