@@ -242,7 +242,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
                   type="button"
                   aria-pressed={pressed}
                   onClick={() => p.on.select(b.fixtureId)}
-                  className={`flex min-h-14 min-w-0 flex-col gap-0.5 rounded-[10px] text-left ${
+                  className={`flex min-h-14 min-w-0 cursor-pointer flex-col gap-0.5 rounded-[10px] text-left ${
                     pressed
                       ? "border-2 border-[#7c3aed] bg-[#f3effc] px-[11px] py-[7px]"
                       : `border bg-white px-3 py-2 ${b.state.kind === "on_hold" ? "border-[#f1c4c0]" : "border-[#e7e3f3]"}`
@@ -328,7 +328,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
                   onClick={p.on.override}
                   disabled={p.decision.busy !== null}
                   aria-busy={p.decision.busy?.kind === "override" || undefined}
-                  className="min-h-11 rounded-[10px] bg-[#713f12] px-3 text-[15px] font-semibold text-white disabled:opacity-60"
+                  className="min-h-11 cursor-pointer rounded-[10px] bg-[#713f12] px-3 text-[15px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {f.t("arbiter.outage.cta")}
                 </button>
@@ -616,7 +616,7 @@ function Decision({
             onClick={on.toggleSettle}
             aria-expanded={decision.settleOpen}
             aria-controls={settlePanel}
-            className="min-h-11 rounded-[10px] bg-[#7c3aed] px-3 text-[15px] font-semibold text-white"
+            className="min-h-11 cursor-pointer rounded-[10px] bg-[#7c3aed] px-3 text-[15px] font-semibold text-white"
           >
             {f.t("arbiter.decide.settle")}
           </button>

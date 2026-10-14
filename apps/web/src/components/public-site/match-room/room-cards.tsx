@@ -57,10 +57,11 @@ const ICON_COLOUR: Record<IconName, string> = {
   blocked: "#6b5b8a",
 };
 
+// T17B fix 2 (D7): the hand on every button (Tailwind v4 preflight gives <button> the arrow); never on a disabled one.
 const PRIMARY =
-  "flex min-h-11 items-center justify-center rounded-[10px] border-0 bg-[#7c3aed] px-4 text-[15px] font-semibold text-white no-underline disabled:opacity-60";
+  "flex min-h-11 cursor-pointer items-center justify-center rounded-[10px] border-0 bg-[#7c3aed] px-4 text-[15px] font-semibold text-white no-underline disabled:cursor-not-allowed disabled:opacity-60";
 const OUTLINE =
-  "flex min-h-11 items-center justify-center rounded-[10px] border border-[#c9bdf0] bg-white px-4 text-[15px] font-semibold text-[#2e1065] no-underline disabled:opacity-60";
+  "flex min-h-11 cursor-pointer items-center justify-center rounded-[10px] border border-[#c9bdf0] bg-white px-4 text-[15px] font-semibold text-[#2e1065] no-underline disabled:cursor-not-allowed disabled:opacity-60";
 
 export function StateCard({
   testId,
@@ -295,7 +296,7 @@ export function CameraGaveUpNotice({ onReload, t }: { onReload: () => void; t: R
         type="button"
         data-testid="room-camera-reload"
         onClick={onReload}
-        className="min-h-11 rounded-[10px] border-0 bg-[#713f12] text-[15px] font-semibold text-white"
+        className="min-h-11 cursor-pointer rounded-[10px] border-0 bg-[#713f12] text-[15px] font-semibold text-white"
       >
         {t("externalPlay.room.state.cameraGaveUp.reload")}
       </button>
@@ -316,7 +317,7 @@ export function CameraOffBanner({ onEnable, t }: { onEnable: () => void; t: Room
         type="button"
         data-testid="room-camera-on"
         onClick={onEnable}
-        className="min-h-11 rounded-[10px] border-0 bg-[#713f12] text-[15px] font-semibold text-white"
+        className="min-h-11 cursor-pointer rounded-[10px] border-0 bg-[#713f12] text-[15px] font-semibold text-white"
       >
         {t("externalPlay.room.state.cameraOff.cta")}
       </button>

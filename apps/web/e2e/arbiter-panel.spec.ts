@@ -253,6 +253,9 @@ test.describe("arbiter panel", () => {
     // The boards, in board order, each with its own state; board 1 on screen.
     const buttons = boardsNav(page).getByRole("button");
     await expect(buttons).toHaveCount(2);
+    // T17B fix 2 (D7): every board button shows the hand — read from the cascade, counted.
+    const cursors = await buttons.evaluateAll((els) => els.map((el) => getComputedStyle(el).cursor));
+    expect(cursors, "anti-vacuity + the hand on each board").toEqual(["pointer", "pointer"]);
     await expect(buttons.nth(0)).toContainText(fill("arbiter.boardNo", { n: 1 }));
     await expect(buttons.nth(0)).toContainText(b1.home.name);
     await expect(buttons.nth(0)).toHaveAttribute("aria-pressed", "true");

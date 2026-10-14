@@ -10,8 +10,9 @@ import type { ArbiterNotice, SettleChoice } from "./arbiter-decision";
 
 export const MUTED = "text-[#6b5b8a]";
 export const SOFT = "text-[#4a3a6b]";
+// T17B fix 2 (D7): the hand on every button (Tailwind v4 preflight gives <button> the arrow); never on a disabled one.
 export const BUTTON_QUIET =
-  "min-h-11 rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-semibold text-[#2e1065] disabled:cursor-not-allowed disabled:opacity-60";
+  "min-h-11 cursor-pointer rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-semibold text-[#2e1065] disabled:cursor-not-allowed disabled:opacity-60";
 const CHIP = "self-start rounded-full px-2.5 py-[3px] text-xs font-semibold";
 export const CHIP_AMBER = `${CHIP} bg-[#fef3c7] text-[#713f12]`;
 export const CHIP_NEUTRAL = `${CHIP} bg-[#f3effc] text-[#4a3a6b]`;
