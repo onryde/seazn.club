@@ -41,6 +41,7 @@ import {
   type RoomDeps,
   type RoomIdentity,
 } from "../external-play/room";
+import { seatPlayer } from "../external-play/preflight";
 import { startLichessFixtureServer } from "../../../../e2e/lichess-fixture-server";
 import { hasLiveVideoPublisher } from "@/server/external-play/video/realtimekit";
 import { GUARD_FAULT_MAX_STAMPS } from "@/server/external-play/video/guard-faults";
@@ -57,6 +58,20 @@ vi.mock("../external-play/end-game", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../external-play/end-game")>()),
   endLichessGame: vi.fn(async () => true),
 }));
+
+// Final re-review 4, m2: a pause between the seat call's two reads of the board, where a case stages an Unpair —
+// null (a straight pass-through) unless a case stages one.
+const gate = vi.hoisted(() => ({ reset: null as null | (() => Promise<void>) }));
+vi.mock("../external-play/guard", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../external-play/guard")>();
+  return {
+    ...real,
+    resetStaleBridge: async (...a: Parameters<typeof real.resetStaleBridge>) => {
+      await gate.reset?.();
+      return real.resetStaleBridge(...a);
+    },
+  };
+});
 
 // `stampFixtureCheckIn` stamps the DB's own now() (real wall clock) and
 // `checkInCounts` judges THAT stamp against the open's window, so the open is
@@ -1387,6 +1402,49 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — a board being re-pair
     await repair(s);
     expect((await readRoom({ kind: "token", token }, s.fixtureId, deps())).you.name, "re-paired: the room").toBe("Ada Okonkwo");
     expect((await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps())).you.name).toBe("Bo Lind");
+  });
+
+  it("m2: an Unpair that lands INSIDE the seat call — between its first two reads of the board, or after the seat, before its last — is the 409 too: the room reads on, never the 404 that stops it", async () => {
+    const stagings: [string, (s: SeedOnlineChessFixtureResult, staged: () => void) => Partial<RoomDeps>][] = [
+      [
+        "between the first two reads (around the stale-bridge reset)",
+        (s, staged) => {
+          gate.reset = async () => {
+            gate.reset = null;
+            staged();
+            await unpair(s);
+          };
+          return {};
+        },
+      ],
+      [
+        "after the seat, before the answer's own read",
+        (s, staged) => ({
+          seat: async (...a: Parameters<typeof seatPlayer>) => {
+            const seat = await seatPlayer(...a);
+            staged();
+            await unpair(s);
+            return seat;
+          },
+        }),
+      ],
+    ];
+    let checked = 0;
+    for (const [why, stage] of stagings) {
+      const s = await seed();
+      const token = await tokenFor(s, s.home.personId);
+      let staged = 0;
+      const d = deps(stage(s, () => (staged += 1)));
+      try {
+        await expect(claimRoomSeat({ kind: "token", token }, s.fixtureId, d), why).rejects.toMatchObject(REPAIRING);
+      } finally {
+        gate.reset = null;
+      }
+      expect(staged, `${why}: anti-vacuity — the Unpair landed`).toBe(1);
+      expect(d.create.mock.calls.length, `${why}: no game asked for`).toBe(0);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: stagings").toBe(2);
   });
 
   it("never told to anyone the board is not tied to — a stranger, a player of another division, a link for another board, another round's open, or expired: the room's one 404, as before", async () => {
