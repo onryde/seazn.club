@@ -310,6 +310,11 @@ function scopesPlay(scopes: readonly string[]): boolean {
   return PLAY_SCOPES.every((s) => scopes.includes(s));
 }
 
+/** Final re-review N-3: how long the match room page waits on Lichess's word, as it renders. Its answer is ignored
+ *  when it does not come (the first act learns the truth), so a slow lichess.org costs every room load this much
+ *  at most — never LICHESS_TIMEOUT_MS (10 s), which bounds the calls whose answer is needed. */
+export const LICHESS_TOKEN_TEST_TIMEOUT_MS = 2_000;
+
 /** Lichess's word on one token: `POST /api/token/test` (lila OAuth.testTokens, read from source 2026-10-14) — NO
  *  auth, the body the token itself (lila takes several, comma-separated), answered `{<token>: null}` for a token it
  *  does not hold (revoked, expired, never issued) or `{<token>: {userId, scopes: "a,b", expires}}`. `unknown` is
@@ -317,23 +322,25 @@ function scopesPlay(scopes: readonly string[]): boolean {
 async function testAtLichess(
   token: string,
 ): Promise<{ kind: "gone" } | { kind: "scopes"; scopes: string[] } | { kind: "unknown"; reason: string }> {
+  // One cap over the whole exchange, headers AND body (N-3).
+  const signal = AbortSignal.timeout(LICHESS_TOKEN_TEST_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(`${lichessTokenUrl()}/test`, {
       method: "POST",
       headers: { "content-type": "text/plain" },
       body: token,
-      signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
+      signal,
     });
   } catch {
-    return { kind: "unknown", reason: "unreachable" };
+    return { kind: "unknown", reason: signal.aborted ? "timeout" : "unreachable" };
   }
   if (res.status !== 200) return { kind: "unknown", reason: `status_${res.status}` };
   let body: unknown;
   try {
     body = await res.json();
   } catch {
-    return { kind: "unknown", reason: "not_json" };
+    return { kind: "unknown", reason: signal.aborted ? "timeout" : "not_json" };
   }
   if (typeof body !== "object" || body === null || !Object.hasOwn(body, token)) return { kind: "unknown", reason: "no_entry" };
   const entry = (body as Record<string, unknown>)[token];
