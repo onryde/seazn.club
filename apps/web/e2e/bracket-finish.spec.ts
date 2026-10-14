@@ -349,6 +349,44 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await expect(settledRow.getByTestId("run-sheet-held-chip")).toHaveCount(0);
   });
 
+  test("X-AB-5 (fix round 2, N2): the explicit Complete stage of a league is refused BY NAME while a match is held - the desk says which match, by its players, and the settle then lets the stage complete", async ({ page, request }) => {
+    // Seam: producer (completeStageIfReady's refusal) -> v1 wire body -> the stages panel's catch -> `schedule-warning`.
+    // The unit chain stops at classifyActError; only the browser proves the panel hands it the board's own match lookup
+    // (without it the sentence reads "round 1, match 2" instead of the players).
+    const lg = await staged(request, "generic", "score", "league", ["W2a Ana", "W2a Ben", "W2a Cy"]);
+    expect(lg.ready.length, "a three-entrant round robin has three fixtures").toBe(3);
+    const [held, ...rest] = lg.ready;
+    await post(request, held!.id, "core.start");
+    await post(request, held!.id, "core.abandon", { reason: "rain" });
+    expect((await read(request, held!.id)).status).toBe("abandoned");
+    for (const f of rest) {
+      await post(request, f.id, "generic.result", { p1Score: 2, p2Score: 1 });
+      expect((await read(request, f.id)).status, "the other matches are played").toBe("decided");
+    }
+    const stageStatus = () =>
+      withDb(async (sql) => (await sql<{ status: string }[]>`select status from stages where division_id = ${lg.divisionId}`).map((r) => r.status));
+    const heldNames = `${lg.shownAs.get(held!.home_entrant_id!)} \u2013 ${lg.shownAs.get(held!.away_entrant_id!)}`;
+    const complete = page.getByTestId("stage-complete");
+
+    const division = (await fixturePath(request, held!.id)).split("/f/")[0]!;
+    await page.goto(`${division}?tab=fixtures`);
+    await dismissCookieBanner(page);
+    await expect(complete).toBeVisible();
+    await complete.click();
+    const warning = page.getByTestId("schedule-warning");
+    await expect(warning, "named by its players, in the organiser's words").toHaveText(ui("schedule.error.completeHeldOne").replace("{matches}", heldNames));
+    await expect(warning).not.toContainText("round 1");
+    expect(await stageStatus(), "refused: the stage did not complete").toEqual(["active"]);
+
+    // The settle is the way out; then the same click completes the stage and the amber line is gone.
+    await post(request, held!.id, "core.settle", { winner: held!.home_entrant_id, method: "organiser" });
+    expect((await read(request, held!.id)).status, "the settle decided it").toBe("decided");
+    await page.reload();
+    await complete.click();
+    await expect.poll(stageStatus, "settled, the league completes").toEqual(["complete"]);
+    await expect(page.getByTestId("schedule-warning")).toHaveCount(0);
+  });
+
   test("Review Focus 2: a double submit of the settle dialog sends one settle", async ({ page, request }) => {
     const { sf } = await knockout(request, "generic", "score");
     await post(request, sf.id, "core.start");
