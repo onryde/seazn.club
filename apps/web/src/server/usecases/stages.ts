@@ -378,7 +378,8 @@ export interface StageCarry {
  *  R-T13-1: a matched slot also keeps its own POINTS, unless the body sends its own (a rule is one sentence: the body's
  *  replaces the carry whole). The carried rule is asked the stage PUT's points questions like any other
  *  (`refuseStagePoints`, inside `validatedStageConfig`), so a rule the division can no longer express refuses the Apply
- *  here, before `replaceStages` deletes anything. A new slot, or one whose kind changed, carries none. */
+ *  inside `replaceStages`' one transaction, which rolls its delete back (R-T13-3). A new slot, or one whose kind
+ *  changed, carries none. */
 function stageConfigsAtCreate(
   division: StageRulesScope,
   inputs: readonly StageInput[],
@@ -415,10 +416,12 @@ export async function assertCustomPointsAllowed(auth: AuthCtx, rule: PointsRule)
  * W2c Task 13 fix round 1 (R-T13-2) — every refusal a stage BATCH earns from its input alone, before anything is written:
  * the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.custom_points` on a body's own points,
  * `tiebreakers.custom`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
- * batch names twice. `createStages` asks it first; `replaceStages` asks it BEFORE its delete, which commits on its own,
- * so a 402 or a 409 on Apply no longer leaves the division with no stages. Pooled reads (`requireFeature`, `getLimit`):
- * call it OUTSIDE `withTenant`, never inside one. Returns the stage cap (`createStages` re-counts it inside its insert
- * transaction against the stages that stand then).
+ * batch names twice. Pooled reads (`requireFeature`, `getLimit`), so both callers ask it before their transaction opens,
+ * never inside one (lib/db.ts): `createStages` before its inserts, `replaceStages` before the one transaction that
+ * deletes and recreates (R-T13-3), so a 402 or a 409 here writes nothing. It is not the only refusal a batch can earn —
+ * the rules and points questions, the stage cap against the stages that stand, the database's CHECKs and an unresolvable
+ * progression all answer inside the transaction, and roll it back. Returns the stage cap (`insertStageBatch` re-counts it
+ * inside the insert transaction against the stages that stand then).
  */
 export async function assertStageBatchGates(
   auth: AuthCtx,
@@ -485,13 +488,8 @@ export async function assertStageBatchGates(
 
 /** Define (part of) the stage graph for a division. Each stage is written with its kind's preset match rules
  *  (`stage-defaults.ts`, X-SR-6) under any `config.rules` sent with it, validated as `PUT /stages/{id}/rules` validates
- *  a save (SC-P8). `carried` is replaceStages' own: what a slot kept across its delete-and-recreate (`StageCarry`). */
-export async function createStages(
-  auth: AuthCtx,
-  divisionId: string,
-  input: CreateStages,
-  carried?: ReadonlyMap<string, StageCarry>,
-): Promise<StageRow[]> {
+ *  a save (SC-P8). The pooled gates first, then the inserts in one transaction (`insertStageBatch`). */
+export async function createStages(auth: AuthCtx, divisionId: string, input: CreateStages): Promise<StageRow[]> {
   const inputs: StageInput[] = Array.isArray(input) ? input : [input];
   assertSwissRoundsDeclared(inputs);
   // Format gates honour an Event Pass on this division's competition
@@ -504,102 +502,118 @@ export async function createStages(
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
-  return withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
-      select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
-    if (!division) throw new HttpError(404, "division not found");
-    // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
-    // The same door asks each stage's points the stage PUT's questions (W2c Task 13, `refuseStagePoints`), the old
-    // fail-closed metrics check (Jul3/05 §8: a rule needing metrics the sport doesn't emit never reaches play) among them.
-    const configs = stageConfigsAtCreate(division, inputs, carried);
-    assertNotFrozen(frozen, division.competition_id);
+  return withTenant(auth.orgId, (tx) => insertStageBatch(tx, divisionId, inputs, stageCap, frozen));
+}
 
-    // Doc 10 §1: `stages.per_division.max` (2/4/∞) — the batch must fit,
-    // counted in the same tx as the inserts (doc 10 §2 rule 1).
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from stages where division_id = ${divisionId}`;
-    assertWithinLimit(stageCap, "stages.per_division.max", n + inputs.length);
+/** The write half of a stage batch, inside the CALLER's transaction: the division (404), each stage's config, the frozen
+ *  competition, the stage cap against the stages that stand, the inserts, the progression rules, the reopen. Every
+ *  refusal it raises rolls back with that transaction — which is what lets `replaceStages` run its delete in the same
+ *  one (R-T13-3). No pooled reads in here (lib/db.ts): the caller asks the gates (`assertStageBatchGates`) and the
+ *  frozen set before opening `withTenant` and hands them in. `carried` is replaceStages' own: what a slot kept across
+ *  its delete-and-recreate (`StageCarry`). */
+async function insertStageBatch(
+  tx: Tx,
+  divisionId: string,
+  inputs: readonly StageInput[],
+  stageCap: number | null,
+  frozen: ReadonlySet<string>,
+  carried?: ReadonlyMap<string, StageCarry>,
+): Promise<StageRow[]> {
+  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
+    select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
+  if (!division) throw new HttpError(404, "division not found");
+  // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
+  // The same door asks each stage's points the stage PUT's questions (W2c Task 13, `refuseStagePoints`), the old
+  // fail-closed metrics check (Jul3/05 §8: a rule needing metrics the sport doesn't emit never reaches play) among them.
+  const configs = stageConfigsAtCreate(division, inputs, carried);
+  assertNotFrozen(frozen, division.competition_id);
 
-    const rows: StageRow[] = [];
-    for (const [i, s] of inputs.entries()) {
-      const [dupe] = await tx`
-        select 1 from stages where division_id = ${divisionId} and seq = ${s.seq}`;
-      if (dupe) throw new HttpError(409, `stage seq ${s.seq} already exists`);
-      const [row] = await tx<StageRow[]>`
-        insert into stages (division_id, seq, kind, name, config, progression)
-        values (${divisionId}, ${s.seq}, ${s.kind}, ${s.name}, ${tx.json(configs[i] as never)},
-                ${s.progression ? tx.json(s.progression as never) : null})
-        returning ${tx(STAGE_COLS)}`;
-      rows.push(row);
-    }
-    // Progression rules validated AFTER every stage in this batch is
-    // inserted, so `source: "previous"` / `{stageId}` resolves against
-    // sibling stages in THIS batch too, regardless of input array order (resolution is by seq,
-    // not insertion order) — a bad seeded_map or an unreachable source 422s
-    // here at rule-save time, never discovered later at proposal time
-    // (design's Edge inventory).
-    for (const s of inputs) {
-      if (!s.progression) continue;
-      const row = rows.find((r) => r.seq === s.seq)!;
-      await validateStageProgression(tx, row, s.progression);
-    }
-    // Adding a stage to a completed division (e.g. finals after the league
-    // wrapped the graph) reopens it — 'completed' must mean "nothing left".
-    await tx`
-      update divisions set status = 'active'
-      where id = ${divisionId} and status = 'completed'`;
-    return rows;
-  });
+  // Doc 10 §1: `stages.per_division.max` (2/4/∞) — the batch must fit,
+  // counted in the same tx as the inserts (doc 10 §2 rule 1).
+  const [{ n }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from stages where division_id = ${divisionId}`;
+  assertWithinLimit(stageCap, "stages.per_division.max", n + inputs.length);
+
+  const rows: StageRow[] = [];
+  for (const [i, s] of inputs.entries()) {
+    const [dupe] = await tx`
+      select 1 from stages where division_id = ${divisionId} and seq = ${s.seq}`;
+    if (dupe) throw new HttpError(409, `stage seq ${s.seq} already exists`);
+    const [row] = await tx<StageRow[]>`
+      insert into stages (division_id, seq, kind, name, config, progression)
+      values (${divisionId}, ${s.seq}, ${s.kind}, ${s.name}, ${tx.json(configs[i] as never)},
+              ${s.progression ? tx.json(s.progression as never) : null})
+      returning ${tx(STAGE_COLS)}`;
+    rows.push(row);
+  }
+  // Progression rules validated AFTER every stage in this batch is
+  // inserted, so `source: "previous"` / `{stageId}` resolves against
+  // sibling stages in THIS batch too, regardless of input array order (resolution is by seq,
+  // not insertion order) — a bad seeded_map or an unreachable source 422s
+  // here at rule-save time, never discovered later at proposal time
+  // (design's Edge inventory).
+  for (const s of inputs) {
+    if (!s.progression) continue;
+    const row = rows.find((r) => r.seq === s.seq)!;
+    await validateStageProgression(tx, row, s.progression);
+  }
+  // Adding a stage to a completed division (e.g. finals after the league
+  // wrapped the graph) reopens it — 'completed' must mean "nothing left".
+  await tx`
+    update divisions set status = 'active'
+    where id = ${divisionId} and status = 'completed'`;
+  return rows;
+}
+
+/** FORMAT_LOCKED (409): a stage of the division owns fixtures, so its stage graph is the format being played. */
+async function assertFormatUnlocked(tx: Tx, divisionId: string): Promise<void> {
+  const [locked] = await tx`
+    select 1 from fixtures f join stages s on s.id = f.stage_id
+    where s.division_id = ${divisionId} limit 1`;
+  if (locked) throw new HttpError(409, "Format is locked — fixtures exist", "FORMAT_LOCKED");
 }
 
 /** Replace the division's whole stage graph (v8 Settings → Format: League /
  *  Knockout / Groups + Knockout…). Allowed only while no stage owns fixtures
  *  — the same FORMAT_LOCKED rule as patchDivision's variant/config guard.
- *  Delete + recreate runs as two steps (createStages owns its validation and
- *  tx); a failed create leaves the division stage-less, recoverable exactly
- *  like the manual Fixtures-tab delete-then-add flow — which is why every
- *  refusal the create can raise from its input is raised here first: the
- *  rules and points questions (`stageConfigsAtCreate`) inside the delete's
- *  transaction, every batch gate (`assertStageBatchGates`, R-T13-2) before it. */
+ *  The delete and every insert run in ONE transaction (R-T13-3): any refusal
+ *  the recreate raises — a rules or points fragment (`stageConfigsAtCreate`),
+ *  the frozen competition, the stage cap, a database CHECK, a progression
+ *  source that resolves to nothing — rolls the delete back with it, and the
+ *  division keeps the stages it had. The pooled gates (`assertStageBatchGates`,
+ *  R-T13-2) and the frozen lookup are asked before that transaction opens,
+ *  after one short tenant read that answers a missing (or another org's)
+ *  division 404 and a locked one FORMAT_LOCKED ahead of any 402. */
 export async function replaceStages(
   auth: AuthCtx,
   divisionId: string,
   input: CreateStages,
 ): Promise<StageRow[]> {
   const inputs: StageInput[] = Array.isArray(input) ? input : [input];
-  // BEFORE the delete below, not merely inside the `createStages` this
-  // delegates to: that call runs in its own transaction, so a refusal there
-  // would land after this function had already dropped every stage in the
-  // division. The swiss round-count guard rides along for the same reason —
-  // this is the PUT the Format tab's Apply calls, so a bad round count would
-  // otherwise cost the organiser their whole stage graph.
+  // The swiss round-count guard: pure, asked before any read. This is the PUT
+  // the Format tab's Apply calls, so a bad round count refuses before anything.
   assertSwissRoundsDeclared(inputs);
-  // R-T13-2: every gate `createStages` asks of the batch, asked HERE, before the delete below commits on its own — a
-  // 402 (a plan feature, the stage cap) or a 409 (a seq named twice) on Apply used to land after it and leave the
-  // division with no stages. Pooled reads, so outside the transaction; a missing division answers 404 before any of them.
-  // Scoped to the caller's org by hand (a pooled read has no tenant): another org's division is a missing one, 404.
-  const [divComp] = await sql<{ competition_id: string }[]>`
-    select d.competition_id from divisions d join competitions c on c.id = d.competition_id
-     where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;
-  if (!divComp) throw new HttpError(404, "division not found");
-  await assertStageBatchGates(auth, divComp, inputs);
+  // Fix round 2 (c): one short tenant read before the gates. RLS scopes it to the caller's org, so another org's
+  // division is a missing one (404 — a gate's 402 would confirm it exists). A division whose fixtures exist answers
+  // FORMAT_LOCKED, the refusal the organiser can act on, ahead of any plan gate or frozen 402. The lock is asked
+  // again under the advisory lock below: this read decides the ORDER of the refusals, that one is the guard.
+  const divComp = await withTenant(auth.orgId, async (tx) => {
+    const [head] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${divisionId}`;
+    if (!head) throw new HttpError(404, "division not found");
+    await assertFormatUnlocked(tx, divisionId);
+    return head;
+  });
+  // R-T13-2: every gate `createStages` asks of the batch. Pooled reads, so between the two transactions, never in one.
+  const stageCap = await assertStageBatchGates(auth, divComp, inputs);
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
-  const carried = await withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
-      select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
-    if (!division) throw new HttpError(404, "division not found");
-    assertNotFrozen(frozen, division.competition_id);
+  return withTenant(auth.orgId, async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-    const [locked] = await tx`
-      select 1 from fixtures f join stages s on s.id = f.stage_id
-      where s.division_id = ${divisionId} limit 1`;
-    if (locked) {
-      throw new HttpError(409, "Format is locked — fixtures exist", "FORMAT_LOCKED");
-    }
+    await assertFormatUnlocked(tx, divisionId);
     // Per-stage match-rules overrides survive the delete (design 2026-09-17,
     // owner ruling 2026-09-18). The Format tab's Apply is a delete-and-recreate
     // from the template body, which carries no rules, so the carry-forward has
@@ -636,13 +650,11 @@ export async function replaceStages(
         ...(points !== undefined && points !== null ? { points } : {}),
       });
     }
-    // Every rules fragment and points rule in the body or the carry, judged as the create will judge it, before anything
-    // is dropped.
-    stageConfigsAtCreate(division, inputs, keep);
     await tx`delete from stages where division_id = ${divisionId}`;
-    return keep;
+    // R-T13-3: the recreate runs in THIS transaction, so every refusal it raises — the body's and the carry's rules and
+    // points, the 404, the frozen 402, the cap, a CHECK, SEEDING_RULES_MISSING — rolls the delete above back with it.
+    return insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);
   });
-  return createStages(auth, divisionId, input, carried);
 }
 
 /**

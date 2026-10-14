@@ -141,21 +141,6 @@
   ]
  },
  {
-  "id": "t12-replace-predelete",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "    stageConfigsAtCreate(division, inputs, keep);\n",
-  "replace": "",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-defaults.test.ts"
-    ],
-    "name": "refuses an invalid rules body BEFORE the delete"
-   }
-  ]
- },
- {
   "id": "t12-carry-lookup",
   "file": "apps/web/src/server/usecases/stages.ts",
   "find": "      carry?.rules ?? null,\n",
@@ -173,8 +158,8 @@
  {
   "id": "t12-carry-passed",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "return createStages(auth, divisionId, input, carried);",
-  "replace": "return createStages(auth, divisionId, input);",
+  "find": "return insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);",
+  "replace": "return insertStageBatch(tx, divisionId, inputs, stageCap, frozen);",
   "killers": [
    {
     "cwd": "apps/web",

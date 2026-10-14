@@ -516,8 +516,8 @@
  {
   "id": "t13-fr1-gates-before-delete",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "  await assertStageBatchGates(auth, divComp, inputs);\n  // Resolved BEFORE the transaction",
-  "replace": "  // Resolved BEFORE the transaction",
+  "find": "never in one.\n  const stageCap = await assertStageBatchGates(auth, divComp, inputs);\n",
+  "replace": "never in one.\n  const stageCap = await getLimit(auth.orgId, \"stages.per_division.max\", divComp.competition_id);\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -532,13 +532,6 @@
      "src/server/usecases/__tests__/replace-stages-gates.test.ts"
     ],
     "name": "a formats.double_elim 402 leaves"
-   },
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
-    ],
-    "name": "a duplicate seq inside the body is 409"
    }
   ]
  },
@@ -575,8 +568,8 @@
  {
   "id": "t13-fr1-replace-404-first",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "  if (!divComp) throw new HttpError(404, \"division not found\");\n  await assertStageBatchGates",
-  "replace": "  await assertStageBatchGates",
+  "find": "    if (!head) throw new HttpError(404, \"division not found\");\n",
+  "replace": "",
   "killers": [
    {
     "cwd": "apps/web",
@@ -590,8 +583,8 @@
  {
   "id": "t13-fr1-replace-org-scoped",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "     where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;",
-  "replace": "     where d.id = ${divisionId}`;",
+  "find": "  const divComp = await withTenant(auth.orgId, async (tx) => {\n    const [head]",
+  "replace": "  const divComp = await sql.begin(async (tx) => {\n    const [head]",
   "killers": [
    {
     "cwd": "apps/web",
@@ -718,6 +711,65 @@
      "src/server/usecases/__tests__/stage-points.test.ts"
     ],
     "name": "replaceStages asks the same questions of a body's points BEFORE its delete"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr2-one-tx",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    return insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);\n  });\n}",
+  "replace": "    return keep;\n  }).then((keep) => withTenant(auth.orgId, (tx) => insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep)));\n}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "SEEDING_RULES_MISSING"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "from inside the insert loop"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "refuses an invalid rules body BEFORE the delete"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr2-lock-before-gates",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await assertFormatUnlocked(tx, divisionId);\n    return head;",
+  "replace": "    return head;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "a gated body = 409 FORMAT_LOCKED"
+   }
+  ]
+ },
+ {
+  "id": "t13-fr2-removal-arm",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "  if (!standing.ok && expressible.keys.every((k) => standing.keys.includes(k))) return;\n",
+  "replace": "  if (!standing.ok && expressible.keys.length === standing.keys.length && expressible.keys.every((k) => standing.keys.includes(k))) return;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "the removal arm"
    }
   ]
  }
