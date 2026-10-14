@@ -2,9 +2,11 @@
 //
 // Measured live on staging, 2026-10-14: the route's schema was
 // `z.object({ token }).strict()`, while `components/verify-email.tsx` POSTs
-// `{ token, next }` whenever the emailed link carries one — every invite
-// (`/join/{token}`) and claim (`/claim/{token}`) signup, which is exactly what
-// `AuthForm next=…` on those pages produces. `.strict()` refused the body with
+// `{ token, next }` whenever the emailed link carries one. Four pages hand
+// `AuthForm` a `next`, and a signup through any of them puts it in the link:
+// invite (`/join/{token}`), claim (`/claim/{token}`), check-in
+// (`/checkin/{token}`) and the login page (any safe `?next=` it arrived with,
+// e.g. a settings destination bounced through sign-in). `.strict()` refused the body with
 // 400 "Invalid input" before the token was even read, so an invited person
 // could not verify at all. The same token verified with `{ token }` alone.
 //
@@ -52,10 +54,15 @@ import { POST } from "../route";
 const HAS_DB = !!process.env.DATABASE_URL;
 const ORIGIN = "https://seazn.club";
 
-/** The two real producers of a signup `next`: the invite and claim pages hand
- *  `AuthForm` exactly these (join/[token]/page.tsx, claim/[token]/page.tsx). */
+/** The four real producers of a signup `next` — the pages that hand `AuthForm`
+ *  one: join/[token]/page.tsx, claim/[token]/page.tsx, checkin/[token]/page.tsx,
+ *  and login/page.tsx, which forwards whatever safe `?next=` it arrived with
+ *  (the settings destination page-auth's org-less bounce carries is one). */
 const INVITE_NEXT = "/join/inv0123456789";
 const CLAIM_NEXT = routes.claim("clm0123456789");
+const CHECKIN_NEXT = "/checkin/chk0123456789";
+const LOGIN_CARRIED_NEXT = "/settings?tab=account&email_change=success";
+const PRODUCER_NEXTS = [INVITE_NEXT, CLAIM_NEXT, CHECKIN_NEXT, LOGIN_CARRIED_NEXT];
 
 /** The first-run wizard (app/onboarding/page.tsx). postAuthLanding's rule:
  *  without a safe `next` a user is guaranteed an org, and a NEW user
@@ -126,9 +133,9 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("POST /api/auth/verify-email — a link that carries next", () => {
-  it("verifies an invite or claim link and lands on it, without provisioning a default org", async () => {
+  it("verifies a link from each of the four next producers and lands on it, without provisioning a default org", async () => {
     let checked = 0;
-    for (const next of [INVITE_NEXT, CLAIM_NEXT]) {
+    for (const next of PRODUCER_NEXTS) {
       jar.values.clear();
       const userId = await freshUser();
       const token = await createVerificationToken(userId);
@@ -144,7 +151,8 @@ describe.skipIf(!HAS_DB)("POST /api/auth/verify-email — a link that carries ne
       expect(await orgsOwned(userId), next).toEqual([]);
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(PRODUCER_NEXTS.length);
+    expect(checked).toBe(4);
   });
 
   it("accepts the longest next the signup route will put in the link", async () => {
@@ -164,6 +172,49 @@ describe.skipIf(!HAS_DB)("POST /api/auth/verify-email — a link that carries ne
 
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body.data?.redirect).toBe(longest);
+  });
+
+  it("an over-long next is refused 400 before the token is read — and the SAME token still verifies", async () => {
+    // One past the producer's own bound: signup would never mint it, so the
+    // route refuses it as malformed rather than guessing at it.
+    const bound = signupSchema.shape.next.unwrap().maxLength!;
+    const tooLong = "/" + "a".repeat(bound);
+    expect(tooLong).toHaveLength(bound + 1);
+    const userId = await freshUser();
+    const token = await createVerificationToken(userId);
+
+    const refused = await verify({ token, next: tooLong });
+
+    expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+    expect(refused.body.error).toBe("Invalid input");
+    expect(await emailVerified(userId), "refused before the token was read").toBe(false);
+    expect(await getCurrentUser(), "nobody signed in by a refused body").toBeNull();
+
+    // The refusal consumed nothing: the link still works with a valid body.
+    const retried = await verify({ token, next: INVITE_NEXT });
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+    expect(retried.body.data?.redirect).toBe(INVITE_NEXT);
+    expect(await emailVerified(userId)).toBe(true);
+  });
+
+  it("a non-string next (null, a number, an array, an object) is refused 400 and leaves the token usable", async () => {
+    const NOT_STRINGS: unknown[] = [null, 42, [INVITE_NEXT], { path: INVITE_NEXT }];
+    const userId = await freshUser();
+    const token = await createVerificationToken(userId);
+    let checked = 0;
+    for (const next of NOT_STRINGS) {
+      const r = await verify({ token, next });
+      expect(r.status, `${JSON.stringify(next)}: ${JSON.stringify(r.body)}`).toBe(400);
+      expect(r.body.error, JSON.stringify(next)).toBe("Invalid input");
+      checked++;
+    }
+    expect(checked).toBe(NOT_STRINGS.length);
+    expect(checked).toBe(4);
+    expect(await emailVerified(userId), "no refusal read the token").toBe(false);
+
+    const r = await verify({ token });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(await emailVerified(userId)).toBe(true);
   });
 
   it("with no next — the empty case — lands a new user on the first-run wizard and provisions their org", async () => {
