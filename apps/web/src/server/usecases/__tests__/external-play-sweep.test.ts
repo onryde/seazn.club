@@ -83,6 +83,7 @@ import {
   expectedEndAt,
   playableWindow,
   sweepExternalPlay,
+  SWEEP_JOBS,
   type SweepDeps,
   type SweepReport,
 } from "../external-play/sweep";
@@ -348,6 +349,20 @@ vi.mock("@/server/usecases/scoring", async (importOriginal) => {
   };
 });
 
+// Final re-review N-1: job 0's close refuses for the fixtures a test names — the one failure kind no seam reaches
+// (a close is a DB write, and a real refusal of it needs a broken database). Every other fixture closes for real.
+const closeRefusal = vi.hoisted(() => ({ fixtures: new Set<string>() }));
+vi.mock("@/server/usecases/external-play/bridge-close", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/usecases/external-play/bridge-close")>();
+  return {
+    ...real,
+    closeBridgeIfUnplayable: async (...args: Parameters<typeof real.closeBridgeIfUnplayable>) => {
+      if (closeRefusal.fixtures.has(args[0])) throw new HttpError(503, "the close was refused (test)", "CLOSE_REFUSED");
+      return real.closeBridgeIfUnplayable(...args);
+    },
+  };
+});
+
 /** Every Board API call refuses unless a test scripts it. */
 const UNSCRIPTED = { ok: false, code: "unavailable", raw: "unscripted Board API call" } as const;
 
@@ -466,9 +481,27 @@ async function openedBoard(
   return { ...s, opened, at: (min) => new Date(opened.getTime() + min * 60_000) };
 }
 
+// Final re-review N-1: `failed` IS `failures.length` — the cron Worker reads the number (R3), the log and the caller read
+// the list, and the two once disagreed (the camera give-up was listed, never counted). Every pass this file drives goes
+// through `checkedPass`, which holds the equality on its report and tallies the failure kinds it saw; the file's last
+// describe asserts the tally reached every job, and the give-up, so the equality was checked where it can break.
+const GIVE_UP = "camera_evidence:CAMERA_EVIDENCE_UNREAD";
+const failureKindsSeen = new Map<string, number>();
+let passesChecked = 0;
+async function checkedPass(deps: SweepDeps): Promise<SweepReport> {
+  const r = await sweepExternalPlay(deps);
+  expect(r.failed, `failed = failures.length: ${JSON.stringify(r.failures)}`).toBe(r.failures.length);
+  passesChecked++;
+  for (const f of r.failures) {
+    const kind = f.code === "CAMERA_EVIDENCE_UNREAD" ? GIVE_UP : f.job;
+    failureKindsSeen.set(kind, (failureKindsSeen.get(kind) ?? 0) + 1);
+  }
+  return r;
+}
+
 async function sweep(b: Board | readonly Board[], deps: SweepDeps): Promise<SweepReport> {
   const boards = Array.isArray(b) ? (b as readonly Board[]) : [b as Board];
-  return sweepExternalPlay({ ...deps, orgIds: boards.map((x) => x.orgId) });
+  return checkedPass({ ...deps, orgIds: boards.map((x) => x.orgId) });
 }
 
 const forfeitsAttempted = (fixtureId: string) =>
@@ -533,7 +566,7 @@ describe.runIf(HAS_DB)("the sweep never touches a round the organiser has not op
     const f = await loadOnlinePlayFixture(s.fixtureId);
     await ensureBridgeRow(f!);
     expect((await sql`select 1 from stage_round_opens where stage_id = ${s.stageId}`).length, "premise: never opened").toBe(0);
-    const report = await sweepExternalPlay({ now: new Date(), orgIds: [s.orgId] });
+    const report = await checkedPass({ now: new Date(), orgIds: [s.orgId] });
     expect(report.noShows).toBe(0);
     expect(forfeitsAttempted(s.fixtureId), "not even attempted").toEqual([]);
     expect(await forfeitsWritten(s.fixtureId)).toEqual([]);
@@ -745,7 +778,7 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     await sql`update fixture_external_play set mint_claimed_at = ${new Date(now.getTime() - 1_000)} where fixture_id = ${live.fixtureId}`;
     await sql`update fixture_external_play set mint_claimed_at = ${new Date(now.getTime() - MINT_CLAIM_STALE_MS - 1_000)}
                where fixture_id = ${stale.fixtureId}`;
-    await sweepExternalPlay({ now, orgIds: [live.orgId, stale.orgId] });
+    await checkedPass({ now, orgIds: [live.orgId, stale.orgId] });
     expect(forfeitsAttempted(live.fixtureId), "in flight: wait").toEqual([]);
     expect(forfeitsAttempted(stale.fixtureId).length, "stale: nothing is in flight").toBe(1);
   });
@@ -789,7 +822,7 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
   });
 
   it("an EMPTY org scope is a scope with nothing in it, never every org", async () => {
-    const report = await sweepExternalPlay({ now: new Date(), orgIds: [] });
+    const report = await checkedPass({ now: new Date(), orgIds: [] });
     expect(report).toMatchObject({ scanned: 0, noShows: 0, failures: [] });
     expect(scoring.calls).toEqual([]);
   });
@@ -902,7 +935,7 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
   it("the refusal does not abort the rest of the pass", async () => {
     const blocked = await openedBoard({ checkedIn: [], kind: "knockout" });
     const ordinary = await openedBoard({ checkedIn: ["home"] });
-    const report = await sweepExternalPlay({ now: blocked.at(45), orgIds: [blocked.orgId, ordinary.orgId] });
+    const report = await checkedPass({ now: blocked.at(45), orgIds: [blocked.orgId, ordinary.orgId] });
     expect(report.heldForOrganiser).toBe(1);
     expect(forfeitsAttempted(ordinary.fixtureId).map((c) => c.input.payload), "the other board still got its ruling")
       .toEqual([{ by: ordinary.away.entrantId, reason: WALKOVER }]);
@@ -1335,6 +1368,23 @@ describe.runIf(HAS_DB)("job 2 — retry a create that lost to Lichess's 429 wall
     expect(report.mintRetries).toBe(0);
     const second = await sweep(b, { now: retryAt, createGameIfReady: createGame });
     expect(second.mintRetries, "at retry_at itself the hold is over").toBe(1);
+  });
+
+  it("N-1: a retry whose create THROWS is listed AND counted — and the next pass retries it again", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const retryAt = await throttled(b, 3);
+    const now = new Date(retryAt.getTime() + 1_000);
+    const report = await sweep(b, {
+      now,
+      createGameIfReady: async () => {
+        throw new HttpError(503, "Lichess is down", "LICHESS_UNAVAILABLE");
+      },
+    });
+    expect(report.failures).toEqual([{ job: "mint_retry", fixtureId: b.fixtureId, code: "LICHESS_UNAVAILABLE" }]);
+    expect([report.mintRetries, report.failed], "tried once, failed once").toEqual([1, 1]);
+    const { tried, createGame } = recordingCreate();
+    const again = await sweep(b, { now: new Date(now.getTime() + SWEEP_CADENCE_MS), createGameIfReady: createGame });
+    expect([tried.length, again.failed], "the throw left the board pending: retried, nothing failed").toEqual([1, 0]);
   });
 
   it("OUTSIDE the window it is not retried: past T+20 no game can be made", async () => {
@@ -4334,7 +4384,7 @@ describe.runIf(HAS_DB)("I1 — a fixture leaving the playable set closes its hel
   it("the empty case first: a held board under an OPEN fixture stays held, in the queue, and polled", async () => {
     const { r, b } = await heldBoard("fair_play");
     expect(isPlayableFixtureStatus(await fixtureStatus(b.fixtureId)), "premise: the fixture is open").toBe(true);
-    const report = await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] });
+    const report = await checkedPass({ now: new Date(), orgIds: [r.orgId] });
     expect(report.bridgesClosed, "nothing to close").toBe(0);
     expect((await heldBridgeOf(b.fixtureId)).status).toBe("needs_organiser");
     expect((await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).map((x) => x.fixtureId)).toEqual([b.fixtureId]);
@@ -4374,7 +4424,7 @@ describe.runIf(HAS_DB)("I1 — a fixture leaving the playable set closes its hel
       expect(before.doc.externalPlay?.watch?.over, `${label}: the board's clocks stop`).toBe(true);
 
       // The sweep closes the orphaned bridge: finished, no hold reason, no seat.
-      const report = await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] });
+      const report = await checkedPass({ now: new Date(), orgIds: [r.orgId] });
       expect(report.bridgesClosed, `${label}: one bridge closed`).toBe(1);
       expect(report.failures, label).toEqual([]);
       const bridge = await heldBridgeOf(b.fixtureId);
@@ -4384,10 +4434,28 @@ describe.runIf(HAS_DB)("I1 — a fixture leaving the playable set closes its hel
       const after = await spectator(b.fixtureId);
       expect([after.view, after.polls], `${label}: still finished after the close`).toEqual(["finished", false]);
       // A second pass has nothing left to close.
-      expect((await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] })).bridgesClosed, `${label}: second pass`).toBe(0);
+      expect((await checkedPass({ now: new Date(), orgIds: [r.orgId] })).bridgesClosed, `${label}: second pass`).toBe(0);
       checked += 1;
     }
     expect(checked, "anti-vacuity: routes driven").toBe(routes.length);
+  });
+
+  it("N-1: a close that THROWS is listed AND counted, the board stays held, and the next pass closes it", async () => {
+    const { r, b } = await heldBoard("fair_play");
+    await padResult(r, b.fixtureId, b.home.entrantId);
+    expect(isPlayableFixtureStatus(await fixtureStatus(b.fixtureId)), "premise: the pad decided the fixture").toBe(false);
+    closeRefusal.fixtures.add(b.fixtureId);
+    try {
+      const refused = await checkedPass({ now: new Date(), orgIds: [r.orgId] });
+      expect(refused.failures).toEqual([{ job: "close_unplayable", fixtureId: b.fixtureId, code: "CLOSE_REFUSED" }]);
+      expect([refused.bridgesClosed, refused.failed]).toEqual([0, 1]);
+      expect((await heldBridgeOf(b.fixtureId)).status, "still held").toBe("needs_organiser");
+    } finally {
+      closeRefusal.fixtures.delete(b.fixtureId);
+    }
+    const healed = await checkedPass({ now: new Date(), orgIds: [r.orgId] });
+    expect([healed.bridgesClosed, healed.failed]).toEqual([1, 0]);
+    expect((await heldBridgeOf(b.fixtureId)).status).toBe("finished");
   });
 
   it("the pad's result reaches the spectators' header: home won, by resignation, White's score first", async () => {
@@ -4403,7 +4471,22 @@ describe.runIf(HAS_DB)("I1 — a fixture leaving the playable set closes its hel
     const { r, b } = await heldBoard("tiebreak_owed");
     await padResult(r, b.fixtureId, b.away.entrantId);
     expect((await heldBridgeOf(b.fixtureId)).status, "premise: the close never ran").toBe("needs_organiser");
-    expect((await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] })).bridgesClosed).toBe(1);
+    expect((await checkedPass({ now: new Date(), orgIds: [r.orgId] })).bridgesClosed).toBe(1);
     expect((await heldBridgeOf(b.fixtureId)).status).toBe("finished");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final re-review N-1: the equality `failed = failures.length`, held by checkedPass on every pass above, reached every
+// failure kind the sweep can report — each job's thrown action, and the camera give-up (listed, settled, not thrown).
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("N-1 — `failed` equals the listed failures, over every failure kind", () => {
+  it("every pass in this file held failed = failures.length, and those passes reported every job's failure and the give-up", () => {
+    const kinds: readonly string[] = [...SWEEP_JOBS, GIVE_UP];
+    expect(passesChecked, "anti-vacuity: passes checked").toBeGreaterThan(0);
+    const missing = kinds.filter((k) => !failureKindsSeen.has(k));
+    expect(missing, `kinds seen: ${JSON.stringify(Object.fromEntries(failureKindsSeen))}`).toEqual([]);
+    expect([...failureKindsSeen.keys()].filter((k) => !kinds.includes(k)), "no kind outside the vocabulary").toEqual([]);
+    expect(kinds.length, "7 jobs and the give-up").toBe(8);
   });
 });
