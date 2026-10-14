@@ -98,8 +98,11 @@ export type SweepReport = {
    *  says so (anti-vacuity), rather than reporting four zeros. */
   scanned: number;
   /** I-1: rows of network jobs NOT started because the pass's wall-clock
-   *  budget (SWEEP_PASS_BUDGET_MS) was spent. NOT a failure: they keep
-   *  their place and the next firing reaches them. */
+   *  budget (SWEEP_PASS_BUDGET_MS), or reconcile's own slice of it
+   *  (SWEEP_RECONCILE_BUDGET_MS, D20), was spent; and D20: flag-due boards
+   *  read without the settling read the per-pass cap
+   *  (SWEEP_SETTLING_READS_PER_PASS) left to the next pass. NOT a failure:
+   *  they keep their place and the next firing reaches them. */
   deferred: number;
   /** I-1: `failures.length`, as a number the cron Worker can read. Final
    *  re-review N-1: derived ONCE, as the pass returns — never counted beside
@@ -117,8 +120,9 @@ export type SweepDeps = {
   endMeeting?: (meetingId: string) => Promise<void>;
   /** T9's create, judged on the sweep's clock. */
   createGameIfReady?: (fixtureId: string, deps: { now: Date }) => Promise<CreateOutcome>;
-  /** T11's reconcile (`reconcile(fixtureId, "sweep")`), on the sweep's clock. */
-  reconcile?: (a: { fixtureId: string; trigger: "sweep" }) => Promise<ReconcileOutcome | null>;
+  /** T11's reconcile (`reconcile(fixtureId, "sweep")`), on the sweep's clock. `settle` is the pass's settling-read
+   *  slot (D20): reconcile asks it before a settling read, and makes none on `false`. */
+  reconcile?: (a: { fixtureId: string; trigger: "sweep"; settle: () => boolean }) => Promise<ReconcileOutcome | null>;
   /** The RealtimeKit transport job 5 reads the peer reports through. */
   realtimeKit?: RealtimeKitDeps;
   /** TEST SEAM — scope every job to these orgs. Production passes none and
@@ -129,8 +133,8 @@ export type SweepDeps = {
    *  (M8), so a test can overlap two passes and prove a job's own row claim
    *  on its own. Production never passes it. */
   serialise?: false;
-  /** TEST SEAM — the clock the pass budget (I-1) is measured on. Production
-   *  passes none and reads Date.now. */
+  /** TEST SEAM — the clock the pass budget (I-1) and reconcile's slice (D20)
+   *  are measured on. Production passes none and reads Date.now. */
   wallClock?: () => number;
 };
 
@@ -142,9 +146,23 @@ export type SweepDeps = {
  *  plus a 3 s broadcast — so a row started just inside the budget against a stalled vendor can still outlive the
  *  Worker. That reads as a Worker timeout (an error, one Sentry event an hour under R2), never as silence. T17B fix 2,
  *  D11 widens it: a board whose side to move is at zero is read again on a stream HELD ~9 s (reconcile
- *  FLAG_SETTLE_HOLD_MS, bounded at LICHESS_TIMEOUT_MS + the hold), so a pass reads ~5 such boards before the budget
- *  stops it; the rest are read on the next pass. */
+ *  FLAG_SETTLE_HOLD_MS, bounded at LICHESS_TIMEOUT_MS + the hold). D20 bounds that: see the two constants below. */
 export const SWEEP_PASS_BUDGET_MS = 45_000;
+
+/** D20 (review I1; spec docs/superpowers/specs/2026-10-15-chess-per-board-timers-design.md §6.1 (b)): the settling
+ *  reads (reconcile's D11 held read, FLAG_SETTLE_HOLD_MS each) one pass makes. About five of them spent the whole pass
+ *  inside reconcile, so every job after it — mint_retry, teardown, camera evidence, the arbiter revokes — never ran. A
+ *  flag-due board past the cap is still read (its first line), counted `deferred`, placed no unsettled-flag hold (it
+ *  was never given the read that settles), and keeps its place: its claim is handed back, so the next pass reads it
+ *  first. A flag with a room tab open is settled within seconds by the room's own clock-zero report, whatever the
+ *  sweep does. A board ALREADY held clock_flag_unsettled takes no slot: the sweep reads it with no hold (reconcile,
+ *  D20 (a)). */
+export const SWEEP_SETTLING_READS_PER_PASS = 2;
+
+/** D20 (review I1; spec §6.1 (c)): reconcile's own slice of the pass budget. Reconcile stops STARTING reads once the
+ *  pass has spent this much, so the jobs after it always get the rest of SWEEP_PASS_BUDGET_MS. The order stays —
+ *  reconcile first is load-bearing (runPass). The capped settling reads fit inside it (tested). */
+export const SWEEP_RECONCILE_BUDGET_MS = 20_000;
 
 /** I-1: the jobs that call Lichess or RealtimeKit, so the pass budget applies to them. Job 0 (close) and job 1 (the
  *  T+20 no-show) touch only our own database, and the no-show is time-critical: a slow Lichess must never push a
@@ -181,12 +199,17 @@ type Pass = {
   clock: () => number;
   startedAt: number;
   spent: boolean;
+  /** D20: the settling reads this pass has made (SWEEP_SETTLING_READS_PER_PASS). */
+  settlingReads: number;
 };
 
-/** I-1: has the pass spent its budget? Once spent it stays spent. */
-function budgetSpent(pass: Pass): boolean {
-  if (!pass.spent && pass.clock() - pass.startedAt >= SWEEP_PASS_BUDGET_MS) pass.spent = true;
-  return pass.spent;
+/** I-1: has the pass spent its budget — for reconcile (D20), its own slice of it? Once the pass's budget is spent it
+ *  stays spent, and the clock is not read again. One look per row either way. */
+function budgetSpent(pass: Pass, job: SweepJob): boolean {
+  if (pass.spent) return true;
+  const elapsed = pass.clock() - pass.startedAt;
+  if (elapsed >= SWEEP_PASS_BUDGET_MS) pass.spent = true;
+  return pass.spent || (job === "reconcile" && elapsed >= SWEEP_RECONCILE_BUDGET_MS);
 }
 
 async function each<T extends { fixtureId: string }>(
@@ -198,7 +221,7 @@ async function each<T extends { fixtureId: string }>(
   pass.report.scanned += rows.length;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
-    if (NETWORK_JOBS.has(job) && budgetSpent(pass)) {
+    if (NETWORK_JOBS.has(job) && budgetSpent(pass, job)) {
       pass.report.deferred += rows.length - i;
       break;
     }
@@ -710,10 +733,28 @@ async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullab
     returning status, needs_reason as "needsReason"`;
   if (!claimed) return;
   pass.report.reconciled++;
+  // D20 (b): the pass's settling-read slots. A flag-due board past the cap is read, never settled here, and deferred.
+  let settleDeferred = false;
+  const settle = (): boolean => {
+    if (pass.settlingReads >= SWEEP_SETTLING_READS_PER_PASS) {
+      settleDeferred = true;
+      return false;
+    }
+    pass.settlingReads++;
+    return true;
+  };
   try {
-    await readAndRule(pass, c, read);
+    await readAndRule(pass, c, read, settle);
   } finally {
     await countHoldPlaced(pass, c.fixtureId, claimed);
+    if (settleDeferred) {
+      pass.report.deferred++;
+      // It keeps its place: the claim is handed back, so the board is due at once and read first next pass. Only
+      // this pass's own claim — a later one stands.
+      await sql`
+        update fixture_external_play set last_polled_at = ${c.lastPolledAt}
+         where fixture_id = ${c.fixtureId} and last_polled_at = ${pass.now}`;
+    }
   }
 }
 
@@ -733,11 +774,16 @@ async function countHoldPlaced(pass: Pass, fixtureId: string, before: HoldFacts)
   pass.report.heldForOrganiser++;
 }
 
-async function readAndRule(pass: Pass, c: ReconcileCandidate, read: NonNullable<SweepDeps["reconcile"]>): Promise<void> {
+async function readAndRule(
+  pass: Pass,
+  c: ReconcileCandidate,
+  read: NonNullable<SweepDeps["reconcile"]>,
+  settle: () => boolean,
+): Promise<void> {
   const end = expectedEnd(c);
   if (c.bridgeStatus === "needs_organiser") {
     try {
-      await read({ fixtureId: c.fixtureId, trigger: "sweep" });
+      await read({ fixtureId: c.fixtureId, trigger: "sweep", settle });
     } finally {
       await countRead(c.fixtureId);
     }
@@ -745,7 +791,7 @@ async function readAndRule(pass: Pass, c: ReconcileCandidate, read: NonNullable<
   }
   let outcome: ReconcileOutcome | null;
   try {
-    outcome = await read({ fixtureId: c.fixtureId, trigger: "sweep" });
+    outcome = await read({ fixtureId: c.fixtureId, trigger: "sweep", settle });
   } catch (err) {
     await noTruth(pass, c, end);
     throw err;
@@ -1180,14 +1226,22 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
 async function runPass(deps: SweepDeps): Promise<SweepReport> {
   const report = emptyReport(0);
   const clock = deps.wallClock ?? Date.now;
-  const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report, clock, startedAt: clock(), spent: false };
+  const pass: Pass = {
+    now: deps.now ?? new Date(),
+    orgIds: deps.orgIds,
+    report,
+    clock,
+    startedAt: clock(),
+    spent: false,
+    settlingReads: 0,
+  };
 
   // Job 0 before everything: a board whose fixture is decided is over for us.
   await each(pass, "close_unplayable", await unplayableCandidates(pass), (c) => closeUnplayable(pass, c));
   // FIRST: a game on file is brought to the truth before anything rules on
   // its board — a ready game aborted at ply 0 is the organiser's `aborted`,
   // never a no-show (T10 ruling), and a game it finishes is torn down below.
-  const read = deps.reconcile ?? ((a) => reconcile(a.fixtureId, a.trigger, { now: pass.now }));
+  const read = deps.reconcile ?? ((a) => reconcile(a.fixtureId, a.trigger, { now: pass.now, settle: a.settle }));
   await each(pass, "reconcile", await reconcileCandidates(pass), (c) => sweepReconcile(pass, c, read));
   const create = deps.createGameIfReady ?? ((id, d) => createGameIfReady(id, { now: d.now }));
   await each(pass, "mint_retry", await retryCandidates(pass), (c) => mintRetry(pass, c, create));
