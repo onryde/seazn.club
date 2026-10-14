@@ -12,6 +12,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
+import { stageTopKeysFor } from "@seazn/engine/sport";
+import { StageKind } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -150,5 +152,92 @@ describe.skipIf(!HAS_DB)("I-A: a division pointsMap edit never leaves a stage's 
     const other = await seed({ ...SHORT, pointsMap: FULL }, ["Pool A", "Pool B"]);
     await putStageRules(other.auth, other.stages[1]!, { rules: { setTo: 13 } });
     await expect(patchDivision(other.auth, other.divisionId, { config: { ...SHORT, pointsMap: WITHOUT_3_2 } })).resolves.toBeDefined();
+  });
+});
+
+// W2c Task 12 (Task 11 review M1) — a division VARIANT change re-asks the ALLOWLIST of every stage that carries rules: the
+// keys a stage of that kind may set depend on the variant (`stageTopKeysFor`), and a key the new variant cannot carry is
+// left stored and un-removable (`{superOver: null}` is itself RULE_NOT_SETTABLE once the division is a test match). Cricket:
+// the engine declares the super over for the limited-overs variants only. Expected keys come from the engine.
+describe.skipIf(!HAS_DB)("M1: a division variant change never strands a stage key the new variant cannot carry", () => {
+  const cricket = builtinModules.find((m) => m.key === "cricket")!;
+  async function seedCricket(kind: "league" | "knockout", rules?: Record<string, unknown>) {
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: orgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug) values (${"Vm " + suffix}, ${"vm-" + suffix}) returning id`;
+    await setOrgPlan(orgId);
+    await invalidateOrgEntitlements(orgId);
+    const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Vm Cup " + suffix, visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + suffix, sport_key: "cricket", variant_key: "t20", config: {} });
+    const [st] = await createStages(auth, division.id, { seq: 1, kind, name: kind === "league" ? "Pool A" : "Final", config: {}, progression: null });
+    if (rules !== undefined) await putStageRules(auth, st!.id, { rules });
+    return { auth, divisionId: division.id, stageId: st!.id };
+  }
+  const variantOf = async (id: string) => (await sql<{ v: string }[]>`select variant_key as v from divisions where id = ${id}`)[0]!.v;
+  const rulesOf = async (id: string) => (await sql<{ r: unknown }[]>`select config -> 'rules' as r from stages where id = ${id}`)[0]!.r;
+
+  it("premise: superOver is a t20 stage key and not a test one", () => {
+    expect(stageTopKeysFor(cricket, "league", "t20").has("superOver")).toBe(true);
+    expect(stageTopKeysFor(cricket, "league", "test").has("superOver")).toBe(false);
+  });
+
+  it("t20 -> test with a stored superOver: refused RULE_NOT_SETTABLE naming the stage and the key; nothing written", async () => {
+    const s = await seedCricket("league", { superOver: false });
+    const err = await patchDivision(s.auth, s.divisionId, { variant_key: "test" }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: "superOver", stage_id: s.stageId, stage_name: "Pool A" } });
+    expect(String((err as Error).message)).toContain("Pool A");
+    expect(await variantOf(s.divisionId), "the variant is unchanged").toBe("t20");
+    expect(await rulesOf(s.stageId)).toEqual({ superOver: false });
+  });
+
+  it("the positive pair: with the key cleared on the stage (allowed while t20), the same change lands", async () => {
+    const s = await seedCricket("league", { superOver: false });
+    await putStageRules(s.auth, s.stageId, { rules: { superOver: null } });
+    await expect(patchDivision(s.auth, s.divisionId, { variant_key: "test" })).resolves.toBeDefined();
+    expect(await variantOf(s.divisionId)).toBe("test");
+  });
+
+  it("a knockout created with its preset (X-SR-6: the super over on) is asked too, naming it", async () => {
+    const s = await seedCricket("knockout");
+    expect(await rulesOf(s.stageId), "the premise: the knockout stores its preset").toEqual({ superOver: true });
+    await expect(patchDivision(s.auth, s.divisionId, { variant_key: "test" })).rejects.toMatchObject({
+      code: "RULE_NOT_SETTABLE",
+      extra: { field: "superOver", stage_id: s.stageId, stage_name: "Final" },
+    });
+  });
+
+  // The call site asks on `configApplied || variantApplied`. The second half is unreachable with today's engine, and this
+  // is the guard on that assumption: every variant switch that takes a stage key away also moves the config (so the config
+  // gate already asks it). The day a sport declares a pair that does not, this reds, and the variant half needs a witness.
+  it("premise sweep: every variant switch that takes a stage key away also moves the division config (counted)", () => {
+    const canon = (o: unknown): string =>
+      JSON.stringify(o, (_k, v: unknown) => (v !== null && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
+    let pairs = 0;
+    const stillSame: string[] = [];
+    for (const m of builtinModules) {
+      const vs = Object.keys(m.variants);
+      for (const from of vs) for (const to of vs) {
+        if (from === to) continue;
+        const loses = StageKind.options.some((k) => [...stageTopKeysFor(m, k, from)].some((key) => !stageTopKeysFor(m, k, to).has(key)));
+        if (!loses) continue;
+        pairs++;
+        const stored = m.configSchema.parse(m.variants[from]);
+        const resent = m.configSchema.safeParse({ ...(m.variants[to] as object), ...(stored as object) });
+        if (resent.success && canon(resent.data) === canon(stored)) stillSame.push(`${m.key} ${from} -> ${to}`);
+      }
+    }
+    expect(pairs, "anti-vacuity: the engine declares variant-dependent stage keys").toBeGreaterThan(0);
+    expect(stillSame).toEqual([]);
+  });
+
+  it("empty case: a variant change with no stage rules lands; one whose new variant still carries the key keeps it", async () => {
+    const s = await seedCricket("league");
+    await expect(patchDivision(s.auth, s.divisionId, { variant_key: "test" })).resolves.toBeDefined();
+    expect(stageTopKeysFor(cricket, "league", "odi").has("superOver"), "the premise: an ODI stage carries the super over").toBe(true);
+    const t = await seedCricket("league", { superOver: true });
+    await expect(patchDivision(t.auth, t.divisionId, { variant_key: "odi" })).resolves.toBeDefined();
+    expect(await variantOf(t.divisionId)).toBe("odi");
+    expect(await rulesOf(t.stageId)).toEqual({ superOver: true });
   });
 });

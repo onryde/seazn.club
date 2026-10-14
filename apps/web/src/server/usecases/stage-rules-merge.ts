@@ -185,6 +185,11 @@ export function divisionSaveRefusal(p: StageRulesProblem, sportKey: string, stag
  * config the schema refuses (Pool B's `cap: 21` under a division whose `setTo` is now 25) or a `pointsMap` that no
  * longer answers a stage's `bestOf` is frozen as is. `nextDivisionConfig` is the config about to be written. Refuses
  * the first stage in board order, naming it; null rules are not asked.
+ *
+ * W2c Task 12 (Task 11 review M1): `nextVariant` is the variant about to be written when the save CHANGES it, else null.
+ * The keys a stage may set depend on its variant (`stageTopKeysFor`), so a change re-asks the ALLOWLIST first, over the
+ * keys each stage stores: a t20 stage's `superOver: false` under a test-match division is a key nothing can remove
+ * (`{superOver: null}` is itself refused there). RULE_NOT_SETTABLE (400), naming the stage and the key.
  */
 export async function refuseInvalidatedStageRules(
   tx: Tx,
@@ -192,15 +197,34 @@ export async function refuseInvalidatedStageRules(
   nextDivisionConfig: unknown,
   module: AnySportModule,
   sportKey: string,
+  nextVariant: string | null = null,
 ): Promise<void> {
-  const stages = await tx<{ id: string; name: string; rules: unknown }[]>`
-    select id, name, config -> 'rules' as rules from stages
+  const stages = await tx<{ id: string; name: string; kind: StageKind; rules: unknown }[]>`
+    select id, name, kind, config -> 'rules' as rules from stages
      where division_id = ${divisionId} and config -> 'rules' is not null order by seq`;
   for (const s of stages) {
     if (!isObj(s.rules)) continue;
     const rules = withoutNulls(s.rules);
     if (Object.keys(rules).length === 0) continue;
+    if (nextVariant !== null) refuseKeysForStage(module, sportKey, s, nextVariant, Object.keys(rules));
     const problem = stageRulesProblem(module, nextDivisionConfig, rules, setsBestOf(rules));
     if (problem !== null) throw divisionSaveRefusal(problem, sportKey, s);
+  }
+}
+
+/** `refuseUnsettableKeys` for one stage under a division save, its refusal naming the stage (`stage_id`, `stage_name`)
+ *  the way `divisionSaveRefusal` does: the organiser is told which stage to clear the key on. */
+function refuseKeysForStage(
+  module: AnySportModule,
+  sportKey: string,
+  stage: { id: string; name: string; kind: StageKind },
+  variant: string,
+  keys: readonly string[],
+): void {
+  try {
+    refuseUnsettableKeys(module, sportKey, stage.kind, variant, keys);
+  } catch (e) {
+    if (!(e instanceof HttpError)) throw e;
+    throw new HttpError(e.status, `${stage.name}: ${e.message}`, e.code, { ...e.extra, stage_id: stage.id, stage_name: stage.name });
   }
 }

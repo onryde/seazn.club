@@ -380,7 +380,7 @@
  {
   "id": "t11-division-stage-arm",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "if (configApplied) await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key);",
+  "find": "          await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key, variantApplied ? (effective.variant_key as string) : null);\n",
   "replace": "",
   "killers": [
    {
@@ -402,8 +402,8 @@
  {
   "id": "t11-division-stage-gate",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "if (configApplied) await refuseInvalidatedStageRules(",
-  "replace": "await refuseInvalidatedStageRules(",
+  "find": "if (configApplied || variantApplied) {",
+  "replace": "if (true) {",
   "killers": [
    {
     "cwd": "apps/web",

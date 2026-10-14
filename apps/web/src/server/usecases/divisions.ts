@@ -1178,8 +1178,12 @@ export async function patchDivision(
         effective.variant_key = variantRefusal ? current.variant_key : (patch.variant_key ?? current.variant_key);
         effective.config = tx.json(nextConfig as never);
         // W2c Task 11 (batch-1 I-A): no stage that carries its own rules may be left invalid by this config - asked
-        // only when the save really moves the config (an unchanged one leaves every stage exactly as it was valid).
-        if (configApplied) await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key);
+        // only when the save really moves the config (an unchanged one leaves every stage exactly as it was valid) or the
+        // variant (Task 12, M1: the keys a stage may carry are the variant's, so a stored one can stop being settable).
+        const variantApplied = variantChanged && variantRefusal === undefined;
+        if (configApplied || variantApplied) {
+          await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key, variantApplied ? (effective.variant_key as string) : null);
+        }
         // W2c Task 14 (I-A one layer up): no unstarted match's own format may be left invalid by this config.
         await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);
         // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE the write — re-written after it.

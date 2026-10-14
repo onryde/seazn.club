@@ -1,0 +1,322 @@
+[
+ {
+  "id": "t12-defaults",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "const preset = { ...stageDefaultsFor(module, kind, variant), ...carried };",
+  "replace": "const preset = { ...carried };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "a second create on the same division"
+   }
+  ]
+ },
+ {
+  "id": "t12-carry-precedence",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "const preset = { ...stageDefaultsFor(module, kind, variant), ...carried };",
+  "replace": "const preset = { ...carried, ...stageDefaultsFor(module, kind, variant) };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "a slot whose seq:kind matched keeps its edits over the preset"
+   }
+  ]
+ },
+ {
+  "id": "t12-precedence",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "const rules = Object.keys(provided).length === 0 ? preset : mergedStageRules(preset, provided);",
+  "replace": "const rules = preset;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "provided rules win over the preset"
+   }
+  ]
+ },
+ {
+  "id": "t12-precedence-order",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "mergedStageRules(preset, provided);",
+  "replace": "mergedStageRules(provided, preset);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "provided rules win over the preset"
+   }
+  ]
+ },
+ {
+  "id": "t12-no-empty-rules",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "return rules !== null && Object.keys(rules).length > 0 ? { ...rest, rules } : rest;",
+  "replace": "return { ...rest, rules };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "a second create on the same division"
+   }
+  ]
+ },
+ {
+  "id": "t12-allowlist",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "  refuseUnsettableKeys(module, sportKey, kind, variant, Object.keys(sent));\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "refusals at create write NOTHING"
+   }
+  ]
+ },
+ {
+  "id": "t12-merged-parse",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "if (problem !== null) throw stageSaveRefusal(problem, sportKey);",
+  "replace": "if (false) throw stageSaveRefusal(problem, sportKey);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "refusals at create write NOTHING"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "P-5 share needs draws"
+   }
+  ]
+ },
+ {
+  "id": "t12-create-validates",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "const configs = stageConfigsAtCreate(division, inputs, carried);",
+  "replace": "const configs = inputs.map((s) => (s.config ?? {}) as Record<string, unknown>);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "a second create on the same division"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "refusals at create write NOTHING"
+   }
+  ]
+ },
+ {
+  "id": "t12-replace-predelete",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    stageConfigsAtCreate(division, inputs, keep);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "refuses an invalid rules body BEFORE the delete"
+   }
+  ]
+ },
+ {
+  "id": "t12-carry-lookup",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "carried.get(`${s.seq}:${s.kind}`) ?? null,",
+  "replace": "null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "a slot whose seq:kind matched keeps its edits over the preset"
+   }
+  ]
+ },
+ {
+  "id": "t12-carry-passed",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "return createStages(auth, divisionId, input, carried);",
+  "replace": "return createStages(auth, divisionId, input);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "a slot whose seq:kind matched keeps its edits over the preset"
+   }
+  ]
+ },
+ {
+  "id": "t12-template-validates",
+  "file": "apps/web/src/server/usecases/templates.ts",
+  "find": "const stageConfig = validatedStageConfig(",
+  "replace": "const stageConfig = ((..._a: unknown[]) => _a[5] as Record<string, unknown>)(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/templates.test.ts"
+    ],
+    "name": "X-SR-6 wc32's stages are created with football's presets"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/templates.test.ts"
+    ],
+    "name": "a declared rules key the sport never declares fails the instantiation"
+   }
+  ]
+ },
+ {
+  "id": "t12-m1-variant",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (nextVariant !== null) refuseKeysForStage(module, sportKey, s, nextVariant, Object.keys(rules));",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "t20 -> test with a stored superOver"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "a knockout created with its preset"
+   }
+  ]
+ },
+ {
+  "id": "t12-m1-passthrough",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "variantApplied ? (effective.variant_key as string) : null",
+  "replace": "null",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "t20 -> test with a stored superOver"
+   }
+  ]
+ },
+ {
+  "id": "t12-stage-404",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "if (!stage) throw new HttpError(404, \"stage not found\"); // deleted while this save waited for the lock",
+  "replace": "if (!stage) throw new Error(\"stage not found\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "a stage DELETED while the save waits on the division lock"
+   }
+  ]
+ },
+ {
+  "id": "t12-http-refused",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "if (issues || refused) extra = { ...(issues ? { issues } : {}), ...(refused ? { refused } : {}) };",
+  "replace": "if (issues) extra = { issues };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "CONFIG_INVALID forwards `refused` beside `issues`"
+   }
+  ]
+ },
+ {
+  "id": "t12-refused-well-formed",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "    if (typeof stageId !== \"string\" || typeof stageName !== \"string\") continue;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "CONFIG_INVALID forwards `refused` beside `issues`"
+   }
+  ]
+ },
+ {
+  "id": "t12-schema-never",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),",
+  "replace": "    shootout: z.unknown().optional(),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "CreateStage refuses top-level shootout"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/stage-config.test.ts"
+    ],
+    "name": "refuses a top-level stage decider LOUDLY"
+   }
+  ]
+ },
+ {
+  "id": "t12-refused-code",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "code: z.enum([\"DIVISION_FORMAT_LOCKED\", \"DIVISION_TABLE_RULES_LOCKED\"]),",
+  "replace": "code: z.enum([\"DIVISION_FORMAT_LOCKED\"]),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/refused-field-schema.test.ts"
+    ],
+    "name": "the schema's codes are exactly the type's codes"
+   }
+  ]
+ }
+]
