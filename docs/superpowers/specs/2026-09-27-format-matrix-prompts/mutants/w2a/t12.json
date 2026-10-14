@@ -182,8 +182,8 @@
   {
     "id": "hint-everywhere",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n        when: (a) => a.rung === \"armageddon\",",
-    "replace": "        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n        when: () => true,",
+    "find": "      hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n      ...gate((rung) => rung === \"armageddon\"),",
+    "replace": "      hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n      ...gate(() => true),",
     "killers": [
       {
         "cwd": "apps/web",
@@ -197,7 +197,7 @@
   {
     "id": "hint-dropped",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n",
+    "find": "      hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n",
     "replace": "",
     "killers": [
       {
@@ -212,7 +212,7 @@
   {
     "id": "lots-hint-dropped",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "        hintKey: \"pad.boardgame.tiebreak.lotsHint\",\n",
+    "find": "    hintKey: \"pad.boardgame.tiebreak.lotsHint\",\n",
     "replace": "",
     "killers": [
       {
@@ -242,8 +242,8 @@
   {
     "id": "winner-side-flip",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "winner: entrantOf(state, winnerSideOf(a)),",
-    "replace": "winner: entrantOf(state, winnerSideOf(a) === \"home\" ? \"away\" : \"home\"),",
+    "find": "winner: entrantOf(state, winnerSideOf(a, rung)),",
+    "replace": "winner: entrantOf(state, winnerSideOf(a, rung) === \"home\" ? \"away\" : \"home\"),",
     "killers": [
       {
         "cwd": "apps/web",
@@ -257,8 +257,8 @@
   {
     "id": "score-armageddon",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "        title: \"pad.boardgame.tiebreak.score.title\",\n        when: (a) => a.rung !== \"armageddon\",",
-    "replace": "        title: \"pad.boardgame.tiebreak.score.title\",\n        when: () => true,",
+    "find": "      title: \"pad.boardgame.tiebreak.score.title\",\n      ...gate((rung) => rung !== \"armageddon\"),",
+    "replace": "      title: \"pad.boardgame.tiebreak.score.title\",\n      ...gate(() => true),",
     "killers": [
       {
         "cwd": "apps/web",
