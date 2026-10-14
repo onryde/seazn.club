@@ -8,10 +8,10 @@
 // `configSchema` is unchanged: `false` never reaches it.
 //
 // WHICH keys take that `false` is read from the engine, never listed here: a whole decider the sport declares
-// (`ruleKeys[key].decider`) whose schema takes null at that key and refuses false. That is exactly the period sports'
-// three today (football's shoot-out and the super over are booleans, where `false` is the engine's own value and is
-// stored and read as itself; chess's off is the empty rung list). Anywhere else a `false` reaches the sport's schema
-// unmapped and is refused there by name (CONFIG_INVALID), as any other value it does not take.
+// (`ruleKeys[key].decider`) whose schema takes null at that key. That is exactly the period sports' three today
+// (football's shoot-out and the super over are booleans, which refuse null and take `false` as their own value, stored
+// and read as itself; chess's rung list and carrom's tie board refuse null too). Anywhere else a `false` reaches the
+// sport's schema unmapped and is refused there by name (CONFIG_INVALID), as any other value it does not take.
 //
 // Its own module, free of server-only imports, so the e2e rig helper (`e2e/stage-deciders.ts`) asks the same question.
 import type { RuleKeys } from "@seazn/engine/sport";
@@ -25,10 +25,9 @@ export interface DeciderOffSource {
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /** Whether a stage's `false` at `key` means the engine's `null` (off): a declared whole decider whose schema, over this
- *  division's config, takes null and refuses false. A key the sport does not own ("toString") never does. */
+ *  division's config, takes null there. A key the sport does not own ("toString") never does. */
 export function offByFalse(module: DeciderOffSource, divisionCfg: unknown, key: string): boolean {
   const keys = module.ruleKeys ?? {};
   if (!Object.hasOwn(keys, key) || keys[key]!.decider !== true) return false;
-  const base = isObj(divisionCfg) ? divisionCfg : {};
-  return module.configSchema.safeParse({ ...base, [key]: null }).success && !module.configSchema.safeParse({ ...base, [key]: false }).success;
+  return module.configSchema.safeParse({ ...(isObj(divisionCfg) ? divisionCfg : {}), [key]: null }).success;
 }
