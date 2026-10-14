@@ -8,6 +8,10 @@ const ids = (d: Date, cron = TRIGGER_CRON, jobs: readonly Job[] = JOBS) => dueJo
 const HOURLY = ["registrations", "billing-events", "funnel-remind"];
 /** Capture QR v2 §6.11 (W22): the stream-tick trigger, every 5 minutes. Typed from the spec, never read from JOBS. */
 const EVERY_5 = "*/5 * * * *";
+/** Chess in-page board design §4: "The 5-minute cron stays what it is … but it is NOT optional" — the external-play
+ *  sweep (T+20 no-show, mint retry, meeting teardown, reconcile, camera evidence). Typed from the spec, never read from
+ *  JOBS. The `*\/5` rows, in table order. */
+const EVERY_5_ROWS = ["stream-tick", "external-play"];
 /** A well-formed trigger no row names. */
 const UNKNOWN = "*/7 * * * *";
 
@@ -69,8 +73,24 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
     ]);
   });
 
+  it("the external-play row is in the table exactly once, on the spec's */5 trigger (chess in-page design §4)", () => {
+    expect(JOBS.filter((j) => j.id === "external-play")).toEqual([
+      // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
+      // re-send with `skipped`. Final review I-1: a failed fixture and a skipped pass are both failures to the monitor.
+      {
+        id: "external-play",
+        path: "/api/cron/external-play",
+        trigger: EVERY_5,
+        due: { kind: "every" },
+        retry: false,
+        manual: true,
+        failureCounts: ["data.failed", "data.skipped"],
+      },
+    ]);
+  });
+
   it("a second trigger runs ONLY its own rows: never news-digest or an hourly row, even at Monday 08:05", () => {
-    expect(ids(at("2026-09-28T08:05:00Z"), EVERY_5)).toEqual(["stream-tick"]);
+    expect(ids(at("2026-09-28T08:05:00Z"), EVERY_5)).toEqual(EVERY_5_ROWS);
     expect(ids(at("2026-09-28T08:17:00Z"), TRIGGER_CRON)).toEqual([...HOURLY, "news-digest"]);
   });
 
@@ -85,8 +105,8 @@ describe("JOBS table", () => {
     expect(new Set(JOBS.map((j) => j.path)).size).toBe(JOBS.length);
   });
 
-  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1) and stream-tick (its next firing is the retry); every job may be run by hand (R1, R2)", () => {
-    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick"]);
+  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1), stream-tick and external-play (each one's next firing is the retry); every job may be run by hand (R1, R2)", () => {
+    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick", "external-play"]);
     expect(JOBS.filter((j) => !j.manual)).toEqual([]);
   });
 
@@ -114,6 +134,9 @@ describe("JOBS table", () => {
       "billing-grant": ["data.failed"],
       // T7b: stream-tick's StreamTickResult.failed — `deferred` is NOT a failure (reached at the next firing).
       "stream-tick": ["data.failed"],
+      // Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when another pass held the
+      // lock). `deferred` is NOT a failure (the pass budget ran out; the next firing reaches the rest).
+      "external-play": ["data.failed", "data.skipped"],
     });
   });
 });

@@ -6,6 +6,8 @@ import {
   type CryptoKey,
   type JWK,
 } from "jose";
+import type { LichessStatus } from "@/server/external-play/types";
+import { spectatorBoard, type PublicBoardPush } from "@/server/external-play/public-view";
 
 /** How long a broadcast may take before its fetch is aborted. Every caller is
  *  fire-and-forget, but one that awaits the promise (a player-stats refresh
@@ -229,6 +231,141 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
  * Header must include `kid` when signing with an asymmetric key so Realtime
  * can pick the matching JWKS entry.
  */
+/** Private lobby topic. Not the paid `fixture:{id}` score channel. */
+export function externalPlayLobbyTopic(fixtureId: string): string {
+  return `external-play:${fixtureId}`;
+}
+
+/**
+ * Subscriber JWT for the online-play lobby (chess Lichess external-play
+ * redesign, Task 8). Carries `lobby_fixture_id` — NEVER `fixture_id`: V403's
+ * paid `fixture:{id}` score-channel policy reads `fixture_id`, and
+ * `external-play:{fixtureId}` (V407) is a private, unpaid channel with its
+ * own policy keyed on `lobby_fixture_id` — sharing the claim name would let a
+ * paid-realtime subscriber JWT also authorize the free lobby topic, or vice
+ * versa. `expiresAt` is the fixture's own deadline (T+20, `windowFor`'s
+ * `deadline`), not a flat TTL — the room's realtime subscription should never
+ * outlive the window it was minted for (spec §12.1: "the realtime subscriber
+ * JWT is issued per room load and expires at T+20").
+ */
+export async function mintExternalPlayLobbyToken(
+  fixtureId: string,
+  subject: string,
+  expiresAt: Date,
+): Promise<string> {
+  const { key, alg, kid } = await resolveRealtimeMintKey();
+  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
+  if (kid) header.kid = kid;
+  return new SignJWT({
+    role: "authenticated",
+    sub: subject,
+    lobby_fixture_id: fixtureId,
+  })
+    .setProtectedHeader(header)
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
+    .setAudience("authenticated")
+    .sign(key);
+}
+
+/** Tell the other lobby screen that Ready changed. Fire-and-forget. */
+export async function publishExternalPlayLobby(fixtureId: string): Promise<void> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return;
+  try {
+    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+        apikey: key,
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            topic: externalPlayLobbyTopic(fixtureId),
+            event: "lobby_changed",
+            payload: { v: Date.now() },
+            private: true,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`[realtime] lobby broadcast failed (${res.status}) for ${fixtureId}`);
+    }
+  } catch (err) {
+    console.warn("[realtime] lobby broadcast error:", err);
+  }
+}
+
+/** The match room's whole state after an accepted move (chess design §3.4,
+ *  Task 10), so a client renders it without a refetch — a refetch here is
+ *  served from the browser's HTTP cache and shows stale state. Clocks are
+ *  true AT THE INSTANT OF THE BROADCAST and are rendering only: nothing
+ *  declares a flag from them (spec §6, M2). */
+export type RoomBroadcast = {
+  fen: string;
+  lastMove: string | null;
+  turn: "white" | "black";
+  whiteMs: number;
+  blackMs: number;
+  status: LichessStatus;
+  drawOfferBy: "white" | "black" | null;
+};
+
+/** Push the room state to both players, and the board to spectators. Same endpoint, headers and topic as
+ *  `publishExternalPlayLobby` — the topic's realtime policy (V440) already
+ *  admits a seated player, so no new policy — plus the timeout that
+ *  `publishFixtureUpdate` carries. Fire-and-forget: never throws. */
+export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcast): Promise<void> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return;
+  // A board the spectators' copy cannot read (not a FEN, a status nobody
+  // declared) costs the spectators one push — never the players theirs.
+  let spectator: PublicBoardPush | null = null;
+  try {
+    spectator = spectatorBoard(body);
+  } catch (err) {
+    console.warn(`[realtime] spectator board skipped for ${fixtureId}:`, err);
+  }
+  try {
+    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+        apikey: key,
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            topic: externalPlayLobbyTopic(fixtureId),
+            event: "room_state",
+            payload: body,
+            private: true,
+          },
+          // T16 — the spectators' copy, on the public fixture topic the public
+          // realtime token is minted for (V403): the board alone, never the
+          // draw offer. The watch island reads it through the match centre's
+          // one subscription (use-live-fixture → live-board-channel).
+          ...(spectator === null
+            ? []
+            : [{ topic: `fixture:${fixtureId}`, event: "board_state", payload: spectator, private: true }]),
+        ],
+      }),
+      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.warn(`[realtime] room broadcast failed (${res.status}) for ${fixtureId}`);
+    }
+  } catch (err) {
+    console.warn("[realtime] room broadcast error:", err);
+  }
+}
+
 export async function mintPublicFixtureToken(
   fixtureId: string,
   ttlSeconds = 3600,

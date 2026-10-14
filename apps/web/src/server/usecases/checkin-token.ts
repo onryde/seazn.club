@@ -8,6 +8,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { endOfLocalDay } from "./device-links";
+import { authSecretKey } from "./signing-key";
 
 const TYP = "seazn-checkin";
 /** The ONE algorithm this seam mints and accepts (whole-branch review m1). jose already refuses `alg: none` and an
@@ -17,16 +18,6 @@ const TYP = "seazn-checkin";
  *  by both the mint and the verify, so the two can never drift apart. */
 const ALGORITHMS = ["HS256"] as const;
 
-function secretKey(): Uint8Array {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV === "production")
-      throw new Error("AUTH_SECRET environment variable is required in production");
-    return new TextEncoder().encode("dev-insecure-secret-change-me");
-  }
-  return new TextEncoder().encode(secret);
-}
-
 /** Mint a check-in token for a fixture. Caller supplies the expiry (end of
  *  the fixture's local day — reuse endOfLocalDay from device-links). */
 export async function mintCheckinToken(fixtureId: string, expiresAt: Date): Promise<string> {
@@ -34,7 +25,7 @@ export async function mintCheckinToken(fixtureId: string, expiresAt: Date): Prom
     .setProtectedHeader({ alg: ALGORITHMS[0], typ: TYP })
     .setIssuedAt()
     .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
-    .sign(secretKey());
+    .sign(authSecretKey());
 }
 
 /**
@@ -75,7 +66,7 @@ export async function createCheckinLink(
  *  a stale QR (print from yesterday), CHECKIN_INVALID for everything else. */
 export async function verifyCheckinToken(token: string): Promise<string> {
   try {
-    const { payload, protectedHeader } = await jwtVerify(token, secretKey(), {
+    const { payload, protectedHeader } = await jwtVerify(token, authSecretKey(), {
       typ: TYP,
       algorithms: [...ALGORITHMS],
     });

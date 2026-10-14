@@ -132,3 +132,20 @@ export const CAPTURE_START_LIMIT: RateLimitConfig = { max: 6, windowSeconds: 60 
  *  route spends this INSTEAD of CAPTURE_CODE_LIMIT, so a Send never pushes a live phone's beats into 429. Fails open as
  *  the other capture budgets do. */
 export const CAPTURE_RECORD_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 3600 };
+
+/**
+ * The match room's camera-fault stamp (T14 fix round 6, M-2): the lobby PING a
+ * changed stamp sends the opponent, per fixture and seat. Past it the stamp is
+ * still written and the ping skipped — the opponent's next read catches up.
+ * Fail-open: a Redis blip must not withhold the opponent's pill update.
+ */
+export const CAMERA_FAULT_PING_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
+
+/**
+ * The arbiter panel's "Resync from Lichess" (T15 fix round 1, M3), per
+ * fixture across every organiser: each one opens a Lichess stream with a
+ * PLAYER's token, and Lichess's 429 stops every call the club makes for a
+ * minute. Six a minute is more than any person presses; fail-open, so a Redis
+ * blip never withholds a resync.
+ */
+export const ARBITER_RESYNC_LIMIT: RateLimitConfig = { max: 6, windowSeconds: 60 };

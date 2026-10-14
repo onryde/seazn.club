@@ -18,7 +18,9 @@ import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
-import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
+import { publicScheduleCopy, publicWatchCopy } from "@/server/public-site/schedule-copy";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
@@ -210,6 +212,12 @@ export default async function DivisionHomePage({ params }: Props) {
   // W2b Task 13 (review I-2): the forfeit tags and sentences ride the schedule copy, so the schedule rows AND the
   // bracket tiles tag a credited result — in the org's locale like the rest of the copy.
   const scheduleCopy = { ...publicScheduleCopy(dict, lookup), forfeit: forfeitCopyOf((k) => t(dict, k)) };
+  // T16 fix round 1, I4: an online chess division's Fixtures list says which boards can be watched — one read, and
+  // none at all for a division that does not play online.
+  const watch =
+    supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess"
+      ? { ...(await loadDivisionWatch(division.id)), copy: publicWatchCopy(lookup) }
+      : undefined;
   // N1e e1: round_no restarts in every stage, so the round view orders its
   // groups by each stage's seq first, as the embed schedule widget does.
   const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
@@ -491,7 +499,7 @@ export default async function DivisionHomePage({ params }: Props) {
           </span>
           <span className="rounded-full bg-accent-soft px-2 py-0.5 uppercase text-accent-strong">
             {variantLabel(
-              { sportKey: division.sport_key, variantKey: division.variant_key, storedName: division.variant_name ?? null },
+              { sportKey: division.sport_key, variantKey: division.variant_key, storedName: division.variant_name ?? null, config: division.config },
               lookup,
             )}
           </span>
@@ -553,6 +561,7 @@ export default async function DivisionHomePage({ params }: Props) {
               stageNames={stageNames}
               copy={scheduleCopy}
               locale={orgLocale}
+              {...(watch ? { watch } : {})}
             />,
             standingsPanel,
             entrantsPanel,

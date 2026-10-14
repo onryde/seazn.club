@@ -146,6 +146,11 @@ export default defineConfig({
     // identically, and concludes the test hangs.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // T20: online chess is behind the PostHog flag `online-chess` (fallback OFF), and the test env has no PostHog
+    // (POSTHOG* is stripped above) — so without this every suite that opens a round, creates a game or turns online
+    // play on would read the club as not offered. The override is what local, CI and e2e set; the flag's own suites
+    // (online-chess-flag*.test.ts) remove it per case and answer on the flag alone.
+    env: { ONLINE_CHESS_ALWAYS: "1" },
     // Warns once when DATABASE_URL is absent: the DB suites then SKIP and the
     // run still exits 0, which has already been misread as a pass. See the file.
     globalSetup: ["./vitest.globalSetup.ts"],

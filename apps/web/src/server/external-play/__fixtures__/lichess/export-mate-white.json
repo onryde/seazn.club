@@ -1,0 +1,10 @@
+{
+  "id": "MRLIhQuS",
+  "rated": true,
+  "status": "mate",
+  "winner": "white",
+  "players": {
+    "white": { "user": { "id": "sciroff", "name": "sciroff" } },
+    "black": { "user": { "id": "galmz", "name": "Galmz" } }
+  }
+}

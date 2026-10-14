@@ -1,0 +1,723 @@
+{
+ "success": true,
+ "data": {
+  "participant": {
+   "id": "ca9beb6c-9b0a-4620-a201-b0bd3ea47623",
+   "session_id": "561b3ee9-fba7-4b9f-9f78-f467ab8fe695",
+   "user_id": "aaae7f73-6dad-4c1f-afea-bcb7751640dc",
+   "custom_participant_id": "spike-white-20261009",
+   "display_name": "spike-white",
+   "role": "group_call_host",
+   "joined_at": "2026-10-09T18:05:13.750Z",
+   "left_at": "2026-10-09T18:14:14.778Z",
+   "duration": 9.017133333333334,
+   "created_at": "2026-10-09T18:05:15.000Z",
+   "updated_at": "2026-10-09T18:14:14.878Z",
+   "peer_report": {
+    "metadata": {
+     "events": [
+      {
+       "name": "audio_off",
+       "timestamp": "2026-10-09T18:05:13.039Z"
+      },
+      {
+       "name": "video_on",
+       "timestamp": "2026-10-09T18:05:13.039Z"
+      },
+      {
+       "name": "media_permission",
+       "metadata": {
+        "device_type": "VIDEO",
+        "permission": "ACCEPTED"
+       },
+       "timestamp": "2026-10-09T18:05:13.039Z"
+      },
+      {
+       "name": "precall_begin",
+       "timestamp": "2026-10-09T18:05:13.039Z"
+      },
+      {
+       "name": "video_off",
+       "timestamp": "2026-10-09T18:09:14.608Z"
+      },
+      {
+       "name": "video_on",
+       "timestamp": "2026-10-09T18:12:14.615Z"
+      },
+      {
+       "name": "video_off",
+       "timestamp": "2026-10-09T18:14:14.626Z"
+      },
+      {
+       "name": "disconnect",
+       "timestamp": "2026-10-09T18:14:14.636Z"
+      }
+     ],
+     "sdk_name": "web-core",
+     "sdk_version": "2.0.2",
+     "room_view_type": "groupCall"
+    },
+    "quality": {
+     "video_producer": [
+      {
+       "timestamp": "2026-10-09T18:05:20.993Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 120,
+       "key_frames_encoded": 1,
+       "packets_sent": 515,
+       "bytes_sent": 540658,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:05:27.996Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 19,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 649,
+       "bytes_sent": 684534,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:05:34.996Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 19,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 648,
+       "bytes_sent": 688148,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:05:41.995Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 672,
+       "bytes_sent": 709949,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:05:48.995Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 644,
+       "bytes_sent": 681986,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:05:55.993Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 674,
+       "bytes_sent": 712765,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:02.992Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 668,
+       "bytes_sent": 711848,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:09.992Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 637,
+       "bytes_sent": 666883,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:16.992Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 640,
+       "bytes_sent": 685091,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:23.995Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 632,
+       "bytes_sent": 668184,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:30.992Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 633,
+       "bytes_sent": 665888,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:37.994Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 650,
+       "bytes_sent": 690951,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:44.992Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 622,
+       "bytes_sent": 660888,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:51.994Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 650,
+       "bytes_sent": 687164,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:06:58.996Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 644,
+       "bytes_sent": 680988,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:05.993Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 647,
+       "bytes_sent": 683999,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:12.995Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 666,
+       "bytes_sent": 708163,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:19.996Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 647,
+       "bytes_sent": 677538,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:26.998Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 637,
+       "bytes_sent": 668547,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:33.997Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 622,
+       "bytes_sent": 663586,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:40.994Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 628,
+       "bytes_sent": 659225,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:47.995Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 1,
+       "packets_sent": 643,
+       "bytes_sent": 685885,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:07:54.988Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 607,
+       "bytes_sent": 636559,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:01.978Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 616,
+       "bytes_sent": 648308,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:08.973Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 630,
+       "bytes_sent": 671144,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:15.971Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 616,
+       "bytes_sent": 645419,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:22.965Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 637,
+       "bytes_sent": 669977,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:29.964Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 622,
+       "bytes_sent": 657751,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:36.963Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 606,
+       "bytes_sent": 640249,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:43.966Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 621,
+       "bytes_sent": 654375,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:50.968Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 139,
+       "key_frames_encoded": 0,
+       "packets_sent": 589,
+       "bytes_sent": 611878,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:08:57.963Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 21,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 594,
+       "bytes_sent": 620056,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:09:04.963Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 21,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 594,
+       "bytes_sent": 612844,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:09:11.965Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 21,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 581,
+       "bytes_sent": 600911,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:12:20.968Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 179,
+       "key_frames_encoded": 0,
+       "packets_sent": 764,
+       "bytes_sent": 797559,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:12:27.970Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 19,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 601,
+       "bytes_sent": 630640,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:12:34.969Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 572,
+       "bytes_sent": 598904,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:12:41.970Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 19,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 593,
+       "bytes_sent": 626591,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:12:48.971Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 19,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 590,
+       "bytes_sent": 617488,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:12:55.968Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 579,
+       "bytes_sent": 608382,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:02.968Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 603,
+       "bytes_sent": 627895,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:09.970Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 19,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 580,
+       "bytes_sent": 594175,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:16.970Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 1,
+       "packets_sent": 621,
+       "bytes_sent": 651509,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:23.969Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 585,
+       "bytes_sent": 609941,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:30.966Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 570,
+       "bytes_sent": 595773,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:37.969Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 592,
+       "bytes_sent": 617143,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:44.969Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 570,
+       "bytes_sent": 593912,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:51.969Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 585,
+       "bytes_sent": 609502,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:13:58.969Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 587,
+       "bytes_sent": 610746,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:14:05.968Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 569,
+       "bytes_sent": 589303,
+       "packets_lost": 0,
+       "mos_quality": 1
+      },
+      {
+       "timestamp": "2026-10-09T18:14:12.968Z",
+       "frame_width": 1280,
+       "frame_height": 720,
+       "frames_per_second": 20,
+       "frames_encoded": 140,
+       "key_frames_encoded": 0,
+       "packets_sent": 594,
+       "bytes_sent": 614554,
+       "packets_lost": 0,
+       "mos_quality": 1
+      }
+     ],
+     "video_producer_cumulative": {
+      "frame_width": {
+       "avg": 1280,
+       "p50": 1280,
+       "p75": 1280,
+       "p90": 1280
+      },
+      "frame_per_second": {
+       "avg": 19.941176470588236,
+       "p50": 20,
+       "p75": 20,
+       "p90": 19
+      },
+      "quality_mos": {
+       "avg": 1,
+       "p50": 1,
+       "p75": 1,
+       "p90": 1
+      },
+      "packet_loss": {
+       "avg": 0,
+       "50_or_greater_event_fraction": 0,
+       "25_or_greater_event_fraction": 0,
+       "10_or_greater_event_fraction": 0,
+       "5_or_greater_event_fraction": 0
+      },
+      "rtt": {
+       "avg": 0,
+       "500ms_or_greater_event_fraction": 0,
+       "250ms_or_greater_event_fraction": 0,
+       "100ms_or_greater_event_fraction": 0
+      },
+      "key_frames_encoded_fraction": 0.00041911148365465214,
+      "high_negative_feedback_fraction": 0,
+      "issues": {
+       "poor_resolution_fraction": 0,
+       "no_video_fraction": 0,
+       "quality_limitation_fraction": 0,
+       "cpu_quality_limitation_fraction": 0,
+       "bandwidth_quality_limitation_fraction": 0
+      }
+     },
+     "screenshare_video_producer": []
+    }
+   }
+  }
+ },
+ "_provenance": "Recorded 2026-10-09 18:15Z from GET /accounts/{account}/realtime/kit/{app}/sessions/peer-report/c4736b31-83f6-42d0-a18b-019f498fb347 after the rtk-peer-report.log spike. REDACTED: metadata.candidate_pairs, ip_information, device_info, browser_metadata, pc_metadata, *_devices_updates, selected_device_updates removed; video_producer samples keep only the listed fields. Driver timeline: camera ON 18:05:14, OFF 18:09:14, ON 18:12:14, leave 18:14:14 (rtk-peer-report.log)."
+}

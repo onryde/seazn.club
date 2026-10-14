@@ -254,8 +254,9 @@ start_server() {
   # Like CI, it seals stream targets under a per-run random RELAY_KEK (a caller's own wins), and the walkthrough's
   # fake phone connects after FAKE_INGEST_CONNECT_AFTER_MS, the value e2e.yml pins for the walkthrough leg.
   # Capture QR v2: CAPTURE_QR_V2_ALWAYS=1 shows the panel's phone-camera option, which is otherwise behind the PostHog
-  # flag capture-qr-v2 with fallback false (no PostHog here) — as CI's server steps do.
-  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 RELAY_DRIVERS="${RELAY_DRIVERS:-fake}" ENV_NAME=ci CAPTURE_QR_V2_ALWAYS="${CAPTURE_QR_V2_ALWAYS:-1}" RELAY_KEK="${RELAY_KEK:-$(openssl rand -hex 32)}" FAKE_INGEST_CONNECT_AFTER_MS="${FAKE_INGEST_CONNECT_AFTER_MS:-10000}" node server.js ) > "$log" 2>&1 &
+  # flag capture-qr-v2 with fallback false (no PostHog here) — as CI's server steps do. ONLINE_CHESS_ALWAYS=1 likewise
+  # offers online chess (PostHog flag online-chess, fallback false).
+  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 RELAY_DRIVERS="${RELAY_DRIVERS:-fake}" ENV_NAME=ci CAPTURE_QR_V2_ALWAYS="${CAPTURE_QR_V2_ALWAYS:-1}" ONLINE_CHESS_ALWAYS="${ONLINE_CHESS_ALWAYS:-1}" RELAY_KEK="${RELAY_KEK:-$(openssl rand -hex 32)}" FAKE_INGEST_CONNECT_AFTER_MS="${FAKE_INGEST_CONNECT_AFTER_MS:-10000}" node server.js ) > "$log" 2>&1 &
   SERVER_PID=$!
   echo "$SERVER_PID" > "$RUNDIR/server.pid"
 
@@ -284,6 +285,9 @@ common_env() {
   # CI's throwaway device-link envelope key (scorer sheets §4.1), the same value as the workflows. Never a real key:
   # the standalone server never reads .env.local, so without this every mint in a local run fails closed.
   export DEVICE_LINK_KEK=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+  # CI's throwaway Lichess-token envelope key (chess design §3.1), the same value as the workflows and
+  # deliberately NOT the device-link one — a shared value would make the key separation vacuous.
+  export LICHESS_TOKEN_KEK=9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
   export NEXT_TELEMETRY_DISABLED=1
   export SCHEDULING_AI_BASE_URL="http://127.0.0.1:4319"
 }
@@ -315,6 +319,17 @@ e2e_env() {
   export ANTHROPIC_API_KEY=sk-ant-e2e-fixture
   # e2e.yml's e2e-parallel job sets this for sitemap.spec.ts (server AND runner).
   export SITEMAP_REVALIDATE_SECONDS=20
+  # Online chess walkthrough (Task 17): the server must point at the local fixture servers the spec starts, with the
+  # video fixture's credentials (e2e.yml's e2e-parallel sets these; e2e-ci-wiring.test.ts pins both to the fixture
+  # modules). No job here runs the walkthrough leg, but a server this script starts is then the one it needs
+  # (docs/runbooks/e2e-local.md), and a stray call from any other spec is refused locally rather than leaving the machine.
+  export LICHESS_BASE_URL=http://127.0.0.1:4321
+  export REALTIMEKIT_BASE_URL=http://127.0.0.1:4322
+  export CLOUDFLARE_ACCOUNT_ID=e2e-rtk-account
+  export REALTIMEKIT_API_TOKEN=e2e-rtk-api-token
+  export REALTIMEKIT_APP_ID=e2e-rtk-app
+  export REALTIMEKIT_PLAYER_PRESET=e2e_chess_player
+  export REALTIMEKIT_ARBITER_PRESET=e2e_chess_arbiter
 }
 
 # ===========================================================================

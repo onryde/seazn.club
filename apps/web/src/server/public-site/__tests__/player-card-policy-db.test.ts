@@ -56,7 +56,8 @@ vi.mock("@/lib/db", async (importOriginal) => {
   };
 });
 
-import { getPublicPlayer, orgTag } from "../data";
+import { getPublicPlayer } from "../data";
+import { orgTag } from "../cache-tags";
 import { closeSql, OPEN_FULL, seedYouthNameScene, type YouthNameScene } from "./_youth-name-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;

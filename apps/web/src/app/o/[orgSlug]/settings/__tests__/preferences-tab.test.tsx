@@ -57,6 +57,8 @@ vi.mock("@/lib/db", () => ({
   sql: vi.fn(async (strings: TemplateStringsArray) => {
     const text = Array.isArray(strings) ? strings.join("") : "";
     if (text.includes("default_locale")) return [{ ...sqlRow, ...orgRow }];
+    // Not linked to Lichess: the generic row is no account link (T16 reads the link's grant).
+    if (text.includes("user_external_accounts")) return [];
     return [sqlRow];
   }),
 }));
@@ -124,6 +126,9 @@ vi.mock("@/components/account-actions", () => ({
   TransferOwnerForm: () => <div />,
   DeleteAccountButton: () => <div />,
 }));
+// The Lichess card (chess branch) reads its copy through useT, which throws outside a DictProvider; it has its own
+// suite (lichess-card-online-chess-flag.test.tsx).
+vi.mock("@/components/lichess-link-card", () => ({ LichessLinkCard: () => <div /> }));
 
 import SettingsPage from "../page";
 

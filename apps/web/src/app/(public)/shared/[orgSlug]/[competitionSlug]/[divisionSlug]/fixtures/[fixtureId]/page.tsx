@@ -27,6 +27,13 @@ import { posterFileName } from "@/lib/poster-file-name";
 import { statusOf } from "@/server/public-site/match-centre";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { MatchCentreSubheading } from "./subheading";
+import { WatchPanel } from "@/components/public-site/match-centre/watch-panel";
+import { showWatchPanel } from "@/components/public-site/match-centre/watch-state";
+import type { PublicWatchDoc } from "@/server/external-play/public-view";
+import { YourBoard } from "@/components/public-site/your-board";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { assertTimeControl } from "@/server/external-play/time-controls";
+import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { shareTextFor } from "./share-text";
 import { streamLinkLabelKey } from "./stream-link";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -218,6 +225,17 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   };
 }
 
+/** Match details' time control: the division's clock as the online catalogue reads it, or null for one it cannot
+ *  (the line is then left out rather than guessed). */
+function watchClockOf(config: unknown): { limitSeconds: number; incrementSeconds: number } | null {
+  try {
+    const tc = assertTimeControl((config as { clock?: BoardgameClockInput } | null)?.clock);
+    return { limitSeconds: tc.limitSeconds, incrementSeconds: tc.incrementSeconds };
+  } catch {
+    return null;
+  }
+}
+
 export default async function FixturePage({ params }: Props) {
   const { orgSlug, competitionSlug, divisionSlug, fixtureId } = await params;
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
@@ -233,6 +251,8 @@ export default async function FixturePage({ params }: Props) {
   const ui = await getDictionary(locale, "ui");
 
   const [home, away] = sideNamesFor(data, msgFn);
+  const onlineBoard = supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess";
+  const watchDoc: PublicWatchDoc = { roundOpened: data.roundOpened, roundOpenedAt: data.roundOpenedAt, externalPlay: data.externalPlay };
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key, data.matchCentre, dict);
 
@@ -297,6 +317,14 @@ export default async function FixturePage({ params }: Props) {
           </Link>
         </nav>
 
+        {/* T16 — a player's door into their match room. This HTML is shared (ISR), so it carries no door: the
+            island asks the lobby route after hydration, and only one of the two players gets an answer. ABOVE the
+            headline, not under it: a player's first visit is a cold one (the invite mail), so the site's cookie notice
+            — fixed to the bottom, ~240px tall at 320 — is up when the card arrives, and under the headline it sat over
+            "Go to your board" (e2e run 38481554563, 320x700). Here it clears the notice at 320x568. A spectator gets
+            nothing, so their page does not move. */}
+        {onlineBoard ? <YourBoard fixtureId={fixture.id} /> : null}
+
         <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
           <h1 className="font-display text-2xl font-semibold text-ink">
             {home} <span className="text-ink-muted">{msgFn("schedule.vs")}</span> {away}
@@ -352,7 +380,12 @@ export default async function FixturePage({ params }: Props) {
             "Starts …" sentence renders — one kick-off, one wording, one
             timezone. `initial` is this request's own document, so first paint
             is byte-identical to a server render. */}
-        <MatchCentreSubheading fixtureId={fixture.id} initial={initial} dict={dict} />
+        <MatchCentreSubheading
+          fixtureId={fixture.id}
+          initial={initial}
+          dict={dict}
+          {...(onlineBoard ? { roundOpen: { at: data.roundOpenedAt, timeZone: data.venueTz, locale } } : {})}
+        />
 
         {/* Stream overlay W1 (design §3.9) — the club's own broadcast, under
             the headline block and above the match centre. PLACEMENT ONLY:
@@ -395,6 +428,18 @@ export default async function FixturePage({ params }: Props) {
             </p>
           ) : null;
         })()}
+
+        {/* T16 — the online board, watched here (D3: one venue, no Lichess link). The server's doc paints
+            first; the island keeps it live (its poll, and the moves pushed through the match centre's channel). */}
+        {onlineBoard && showWatchPanel(fixture.status, watchDoc) ? (
+          <WatchPanel
+            fixtureId={fixture.id}
+            initial={watchDoc}
+            names={{ home, away }}
+            details={{ scheduledAt: fixture.scheduled_at ?? null, clock: watchClockOf(division.config), timeZone: data.venueTz }}
+            pairedWhiteSide={data.pairedWhiteSide}
+          />
+        ) : null}
 
         {/* Task 14 — the match centre replaces the old bare scorebug
             (`<LiveScore>`, retired). `<MatchCentre>` drives its own live

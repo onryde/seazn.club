@@ -60,11 +60,9 @@ import type { AnySportModule } from "@seazn/engine/sport";
 // zero imports, and the barrel is the whole solver (it used to reach the gRPC
 // placement client too, before that client moved to `@seazn/scheduler`).
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
+import { competitionTag, divisionTag, orgTag } from "./cache-tags";
 import {
-  competitionTag,
-  divisionTag,
   getPublicCompetition,
-  orgTag,
   readEntrantMemberRefs,
   readPublicCompetitionShell,
   REVALIDATE_FAST,

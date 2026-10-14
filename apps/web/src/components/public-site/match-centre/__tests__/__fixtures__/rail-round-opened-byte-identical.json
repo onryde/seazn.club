@@ -1,0 +1,10 @@
+{
+  "capturedAt": "cacf6b6e0 (b42a805ab rebased onto W2b, 2026-10-13)",
+  "cases": {
+    "rail:no-watch": "bf13c09150713292519975d11f2bc08be0da7aee5cd6a7fb84521ae607120f58",
+    "rail:links-empty/en": "bf13c09150713292519975d11f2bc08be0da7aee5cd6a7fb84521ae607120f58",
+    "rail:links-some/en": "712ac115a96f6c9a30f2b54be7e0235a509f62a0bdc6e5384d0e35ea4fb20b7b",
+    "rail:links-empty/fr": "bf13c09150713292519975d11f2bc08be0da7aee5cd6a7fb84521ae607120f58",
+    "rail:links-some/fr": "d327898d2dac83ab9b47404ad5bc847adfa7aad71290c02f3ab00e344346a371"
+  }
+}

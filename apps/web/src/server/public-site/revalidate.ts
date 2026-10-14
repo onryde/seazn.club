@@ -9,7 +9,8 @@ import { cacheDel, cacheDelPattern } from "@/lib/cache";
 import { broadcastRevalidate } from "@/lib/peer-revalidate";
 import { purgeCdn } from "@/lib/cdn-purge";
 import { log } from "@/server/logger";
-import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from "./data";
+// The leaf, never ./data: this module is on the scoring write path (T16 fix round 2, N1 — see ./cache-tags).
+import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from "./cache-tags";
 import { deferred } from "@/lib/deferred";
 import { publicFixtureCacheKey } from "./fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "./division-doc-cache-keys";
@@ -48,7 +49,7 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
  *     competition they are not rostered in (`public_players_v` is org-scoped);
  *   - the division tag of every division they are rostered in, deduped,
  *     EXPIRED: the entries that mask their name for others (`pub-div-v4`,
- *     `pub-fixture-v4`, `pub-hub-v5`, and other players' cards through
+ *     `pub-fixture-v8`, `pub-hub-v5`, and other players' cards through
  *     `pub-player-v17`), and the pages built on them. It used to be 'max',
  *     which serves the PREVIOUS render while the rebuild runs (measured after
  *     a consent OFF: 2.8–4.3s, 2–3 loads, in a local prod build at load 16–40).
@@ -203,7 +204,7 @@ export function dropNamedPublicDocuments(
  *  read-your-own-writes (the smoke hub champion check reads a single time; a
  *  realtime push triggers one refresh). Every spectator
  *  entry a score changes carries the division tag: `pub-div-v4`,
- *  `pub-fixture-v4` and `pub-hub-v5` carry their own division's, and the
+ *  `pub-fixture-v8` and `pub-hub-v5` carry their own division's, and the
  *  player card's `pub-player-v17` carries every division of its competition,
  *  because its match lines can come from any of them (final review I1). An
  *  expired tag beats a stale one on an entry carrying both. The competition

@@ -70,6 +70,7 @@ const COPY: ScheduleCopy = {
   calendar: "(calendar)",
   timesIn: "(times in {zone})",
   empty: "(empty)",
+  roundOpened: "(opened)",
 };
 
 // A main draw and its plate. Both end in a round the namer calls "(final)";

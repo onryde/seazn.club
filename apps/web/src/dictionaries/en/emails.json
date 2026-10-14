@@ -380,5 +380,13 @@
   "soloSignUpAssigned.preheader": "The organiser has placed you on {teamName}.",
   "soloSignUpAssigned.title": "You have a team",
   "soloSignUpAssigned.intro": "Hi {playerName} — the organiser has placed you on {teamName} in {divisionName} at {competitionName}. Nothing else to do; your team will be in touch about playing.",
-  "soloSignUpAssigned.viewStatus": "You can see your entry here: {url}"
+  "soloSignUpAssigned.viewStatus": "You can see your entry here: {url}",
+  "externalPlayInvite.subject": "Round {roundNo} is open — your game vs {opponentName}",
+  "externalPlayInvite.preheader": "Take your seat on Seazn by {deadline}.",
+  "externalPlayInvite.title": "Your round is open",
+  "externalPlayInvite.body": "The organiser has opened round {roundNo}. Your online chess game against <strong>{opponentName}</strong> is ready to play now.",
+  "externalPlayInvite.deadline": "Open the game on Seazn and take your seat by <strong>{deadline}</strong>.",
+  "externalPlayInvite.button": "Open game",
+  "externalPlayInvite.footer": "You received this because you're entered in an online chess division at {orgName} on Seazn Club.",
+  "externalPlayInvite.text": "Round {roundNo} is open. Your game vs {opponentName} is ready to play now. Take your seat by {deadline}: {fixtureUrl}"
 }

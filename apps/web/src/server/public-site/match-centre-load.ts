@@ -35,6 +35,7 @@ import { rulesLineText } from "@/lib/rules-line";
 import { effectiveRulesLine } from "./describe-rules";
 import type { MatchCentreDocT, SideT } from "./match-centre-schema";
 import type { PublicFixture } from "./data";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -443,7 +444,12 @@ export async function loadMatchCentre(
         where v.stage_id = ${fixture.stage_id}`,
       getDictionary(toLocale(ctx.locale), "public"),
     ]);
-  const [eventRows, configRows, lineups, feeders, sideRead] = await Promise.all([
+  // R3 (T16 fix round 1): an online game being played leaves its fixture `scheduled`, so the header asks the bridge —
+  // only for a sport that can play online, and only while the fixture is still scheduled (in play already reads
+  // live; a settled one keeps its state). Lazy, so no other sport's page loads the online-play reader at all.
+  const askOnline = fixture.status === "scheduled" && supportsOnlinePlay(ctx.division.sportKey);
+  const readOnlineGame = async () => (await import("@/server/usecases/external-play-read")).loadOnlineHeader(fixture.id);
+  const [eventRows, configRows, lineups, feeders, sideRead, onlineHeader] = await Promise.all([
     sql<
       {
         id: string;
@@ -464,6 +470,7 @@ export async function loadMatchCentre(
     }),
     seatToName ? readFeeders() : null,
     readSides(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay }),
+    askOnline ? readOnlineGame() : { onlineGameInPlay: false, onlineGameStarting: false },
   ]);
 
   const envelopes: EventEnvelope[] = eventRows.map((r) => ({
@@ -579,6 +586,12 @@ export async function loadMatchCentre(
     resolveMsg: publicDict === null ? undefined : (msg) => t(publicDict, msg.key, msg.params),
     doubleWalkoverNext,
     unseatedForfeitLoser: unseated,
+    onlineGameInPlay: onlineHeader.onlineGameInPlay,
+    // T17 fix round 4, I1: Starting only while the division plays online — the reader the Fixtures list and the
+    // fixture page's board gate on, so the three never disagree. An opened round switched to over-the-board keeps its
+    // `stage_round_opens` row, and Starting needs no game at all, so without this every unplayed board of it read
+    // Starting. (R3's Live needs a real game with moves; it is left as it was.)
+    onlineGameStarting: onlineHeader.onlineGameStarting && readOnlinePlay(configRows.division?.config) === "lichess",
   };
   return buildMatchCentre(input);
 }

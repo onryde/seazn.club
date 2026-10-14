@@ -59,6 +59,7 @@ function renderSettings(
       canAutoPost={false}
       showSeeds={overrides.showSeeds ?? true}
       viewerPlan="community"
+      onlineChessOffered
     />,
   );
 }

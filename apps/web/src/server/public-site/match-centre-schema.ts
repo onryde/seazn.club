@@ -65,6 +65,13 @@ export const MatchCentreHeader = z.object({
    */
   metaLine: z.string().nullable(),
   updatedAt: z.string(),             // ISO
+  /**
+   * T17 owner change (2026-10-13): an online board whose round is open with no move yet — the court card's chip
+   * reads "Starting" instead of "Scheduled". PRESENT ONLY in that state (never `false`), and only beside a
+   * `scheduled` status, which it does not change: every other reader of `status` (the poster, the hub, the
+   * subheading) keeps its scheduled reading, and every other sport's and state's header is the one it always was.
+   */
+  onlineStarting: z.literal(true).optional(),
 });
 
 export const CricketBattingRow = z.object({ person: Person, runs: z.number(), balls: z.number(), fours: z.number().nullable(), sixes: z.number().nullable(), strikeRate: z.string().nullable(), dismissal: Msg, notOut: z.boolean() });

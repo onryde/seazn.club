@@ -257,10 +257,40 @@ export async function setMyAvailability(
 }
 
 /**
- * QR self check-in: stamp presence. A fresh row defaults the RSVP to 'in'
- * (turning up answers the question); an existing answer is never clobbered.
- * Returns null when the caller has no claimed person on the fixture — the
- * route turns that into the claim-first interstitial.
+ * The person-level check-in stamp: insert-or-re-stamp fixture_availability
+ * for `personId` on `fixtureId`. A fresh row defaults the RSVP to 'in'
+ * (turning up answers the question); an existing status is never clobbered
+ * (the upsert's `set` list omits `status`), but `checked_in_at` is always
+ * re-stamped to `now()` on every call, including a second one.
+ *
+ * Tenant context: like the rest of this file, this runs on the unscoped
+ * superuser `sql` client, never `withTenant` — fixture_availability's RLS
+ * policy only ever gated app_user writes (V276/V351), and the /me lane has
+ * always bypassed it. `orgId` here is a plain column value, not an RLS
+ * context, so it is NOT re-derived or verified against `fixtureId` — the
+ * caller (today: checkInToFixture's `myPersonOnFixture` lookup; the match
+ * room in Task 8, from a signed-link-resolved person) owns proving personId
+ * legitimately belongs to fixtureId/orgId before calling this.
+ */
+export async function stampFixtureCheckIn(
+  personId: string,
+  fixtureId: string,
+  orgId: string,
+): Promise<AvailabilityRow> {
+  const [row] = await sql<AvailabilityRow[]>`
+    insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
+    values (${fixtureId}, ${personId}, ${orgId}, 'in', now())
+    on conflict (fixture_id, person_id) do update
+      set checked_in_at = now(), updated_at = now()
+    returning ${sql(FA_COLS)}`;
+  return row;
+}
+
+/**
+ * QR self check-in: resolves the caller's claimed person on the fixture,
+ * then stamps presence via stampFixtureCheckIn. Returns null when the
+ * caller has no claimed person on the fixture — the route turns that into
+ * the claim-first interstitial.
  */
 export async function checkInToFixture(
   userId: string,
@@ -271,13 +301,7 @@ export async function checkInToFixture(
   if (mine.fixture_status === "finalized" || mine.fixture_status === "cancelled") {
     throw new HttpError(422, `This match is ${mine.fixture_status} — check-in is closed`);
   }
-  const [row] = await sql<AvailabilityRow[]>`
-    insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
-    values (${fixtureId}, ${mine.person_id}, ${mine.org_id}, 'in', now())
-    on conflict (fixture_id, person_id) do update
-      set checked_in_at = now(), updated_at = now()
-    returning ${sql(FA_COLS)}`;
-  return row;
+  return stampFixtureCheckIn(mine.person_id, fixtureId, mine.org_id);
 }
 
 export interface FixtureAvailability {

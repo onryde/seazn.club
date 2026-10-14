@@ -352,11 +352,43 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /capture/codes/:code/scoring-link",
   // Capture record upload (spec 2026-10-12, P1): the operator's Send record — the phone's tok, never a key.
   "POST /capture/codes/:code/records",
+  // Chess in-page board (2026-10-09 design §6): the room read names a player's
+  // seat, the POSTs seat them, submit moves with that player's own stored
+  // Lichess OAuth token, report their clock at zero, and stamp a camera gap
+  // our safeguard caused (I-1). A credential-backed,
+  // session/link-token surface — the device-links reasoning, never key-reachable.
+  "GET /fixtures/:id/external-play/room",
+  "POST /fixtures/:id/external-play/room",
+  "POST /fixtures/:id/external-play/room/act",
+  "POST /fixtures/:id/external-play/room/clock-zero",
+  "POST /fixtures/:id/external-play/room/camera-fault",
+  // F2 (T14), T16: the lobby is a signed-in player's door into their room (it
+  // names a player's seat — the room read's reasoning); there is no POST, the
+  // check-in is the room's. A resolve writes a result under organiser
+  // authority with a named user, which a key does not have.
+  "GET /fixtures/:id/external-play/lobby",
+  "POST /fixtures/:id/external-play/resolve",
+  // T16: "Let the game go on" — the closed flag names the signed-in user who
+  // reviewed it (the audit record); a key has no person to name.
+  "POST /fixtures/:id/external-play/flags/close",
+  // T15 (design §5.3, D11): the arbiter's join hands out a token that WATCHES
+  // players' cameras — a person's act, never a key's; the override's audit
+  // record names the signed-in user; the resync sits beside them.
+  "POST /fixtures/:id/external-play/arbiter",
+  "DELETE /fixtures/:id/external-play/arbiter/:participantId",
+  "POST /fixtures/:id/external-play/resync",
+  "POST /fixtures/:id/external-play/video-override",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",
   "DELETE /orgs/:id/stream-targets/:targetId",
   "POST /registrations/:id/refund",
+  // Online chess (T19, D12): opening a round emails real people and starts a
+  // clock against them, and its stamp names the USER who opened it
+  // (stage_round_opens.opened_by NOT NULL) — a key has no user to name. The
+  // resend is the same invite to the same people.
+  "POST /stages/:id/open-round",
+  "POST /fixtures/:id/external-play/resend",
   // Destructive + money-adjacent (payments-hardening P0-1): deleting a
   // competition cascades registrations/passes; console has no button —
   // keys must not have one either.

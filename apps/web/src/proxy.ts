@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { negotiateLocale } from "@/lib/i18n-negotiate";
 import { hasLocale } from "@/lib/i18n-constants";
+import { SESSION_HINT_COOKIE, SESSION_MAX_AGE_S, hasSessionHint } from "@/lib/session-hint";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -55,7 +56,10 @@ export function cspHeader(nonce: string, opts: { forceReportOnly?: boolean } = {
     `img-src 'self' blob: data: https:`,
     `font-src 'self' data:`,
     // Stripe: api.stripe.com for tokenization; supabase + sentry as before.
-    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}`,
+    // RealtimeKit: the match room's camera tile joins from the browser; its
+    // Core SDK talks to *.realtime.cloudflare.com, signalling over wss
+    // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
+    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}`,
     // Embedded Checkout renders inside a Stripe-hosted iframe.
     `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com`,
     `object-src 'none'`,
@@ -207,7 +211,28 @@ export function proxy(request: NextRequest) {
     ? NextResponse.rewrite(rewriteUrl, { request: { headers: requestHeaders } })
     : NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set(csp.name, csp.value);
+  if (!cacheable) syncSessionHint(request, response);
   return response;
+}
+
+/** R2 (T16 fix round 1): keep the readable signed-in hint (lib/session-hint.ts) in step with the HttpOnly session, for
+ *  a session minted before the hint existed or a hint an expired session left behind. App pages only — never on an
+ *  ISR/CDN-cacheable tree, where a Set-Cookie would ride a shared response. Presence, not validity: the hint has no
+ *  authority, and a stale one costs one refused request. */
+function syncSessionHint(request: NextRequest, response: NextResponse): void {
+  const session = request.cookies.has("seazn_session");
+  const hint = hasSessionHint(request.headers.get("cookie") ?? "");
+  if (session && !hint) {
+    response.cookies.set(SESSION_HINT_COOKIE, "1", {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: SESSION_MAX_AGE_S,
+    });
+  } else if (!session && hint) {
+    response.cookies.delete(SESSION_HINT_COOKIE);
+  }
 }
 
 export const config = {

@@ -1245,6 +1245,22 @@ async function main() {
   await registrationTeamOpsSuite();
   await registrationSelfLinkAndConsentSuite();
 
+  // Chess Lichess external-play (2026-09-15 Task 9): cron auth + OTB
+  // onlinePlay-off regression. Own fresh org; keyless-safe.
+  await externalPlayOtBSmoke();
+
+  // Chess in-page board T14: the match room's neutral card and its API's
+  // refusals. Keyless; one signed-in stranger.
+  await matchRoomSuite();
+
+  // Chess in-page board T15: the arbiter panel's page and routes refuse
+  // everyone but an organiser of an online board. Keyless; own fresh org.
+  await arbiterSuite();
+
+  // Chess in-page board T16: the spectators' board route and the organiser's
+  // two decision routes, against a live server. Keyless; own fresh org.
+  await onlineChessDeskSuite();
+
   // Task 15 (spectator W1): the public match-centre page and its
   // `match_centre` API field, against a live server. Own fresh org;
   // keyless-safe.
@@ -21486,6 +21502,345 @@ async function setPlan(orgId: string, plan: string, owner: Session): Promise<voi
   await bustOrgEntitlements(owner, orgId);
 }
 
+/**
+ * Chess Lichess external-play Task 9 smoke:
+ * - cron without/with wrong secret is refused
+ * - boardgame division without onlinePlay accepts an unlinked entrant (OTB)
+ */
+async function externalPlayOtBSmoke(): Promise<void> {
+  const wrongCron = await fetch(`${BASE}/api/cron/external-play`, {
+    method: "POST",
+    headers: { "x-cron-secret": "definitely-wrong-external-play" },
+  });
+  check(
+    "external-play: cron wrong secret → 401 (or 503 if CRON_SECRET unset)",
+    wrongCron.status === 401 || wrongCron.status === 503,
+  );
+
+  const s = newSession();
+  const ver = await signIn(s, `delivered+smoke-ep-otb-${tag}@resend.dev`);
+  const orgId = ver.org_id;
+
+  // Ensure boardgame catalog exists (same local-run fallback as entrant-shapes).
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    const db = postgres(dbUrl, {
+      connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+      ssl:
+        process.env.DATABASE_SSL === "disable"
+          ? false
+          : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl)
+            ? false
+            : "require",
+      prepare: !dbUrl.includes(":6543"),
+      max: 1,
+    });
+    await db`insert into sports (key, name, module_version, position_catalog)
+             values ('boardgame', 'Board game', '1.0.0', ${db.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+             on conflict (key) do nothing`;
+    await db`insert into sport_variants (sport_key, key, name, config, is_system)
+             values ('boardgame', 'classical', 'Classical', ${db.json({})}, true)
+             on conflict do nothing`;
+    await db.end();
+  }
+
+  const comp = v1data<{ id: string }>(
+    await v1(s, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `EP OTB ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const div = v1data<{ id: string; config: Record<string, unknown> }>(
+    await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Chess OTB",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", clock: { base: 600 } },
+    }),
+  );
+  check(
+    "external-play: OTB boardgame division has no onlinePlay",
+    div.config.onlinePlay === undefined,
+  );
+
+  const entrant = await v1(s, `/api/v1/divisions/${div.id}/entrants`, "POST", {
+    kind: "individual",
+    display_name: `OTB Player ${tag}`,
+    members: [{ new_person: { full_name: `OTB Player ${tag}` } }],
+  });
+  check(
+    "external-play: unlinked entrant accepted when onlinePlay is off (201)",
+    entrant.status === 201,
+  );
+
+  // Sanity: org cookie matches (unused beyond proving session still live).
+  check("external-play: smoke org still active", !!orgId);
+}
+
+/**
+ * Chess in-page board T14 — the match room, keyless (no Lichess, no
+ * RealtimeKit; nothing here ever resolves to a seat). A room that does not
+ * resolve is the room's ONE neutral card — never a 500, never a hint which
+ * (no link, a junk link, a signed-in stranger all look alike); the page's
+ * head keeps a personal link out of indexes and Referers; and the room's API
+ * answers no identity 401 and every wrong identity the same 404 — reads,
+ * seats and acts alike, before anything could reach Lichess. The real room
+ * (a game, both boards, a move) is e2e/match-room.spec.ts; its Lichess round
+ * trip is Task 17's walkthrough. SMOKE_ONLY=matchRoom runs it alone.
+ */
+async function matchRoomSuite(): Promise<void> {
+  const fixtureId = crypto.randomUUID();
+  const fixturePath = `/shared/smoke-room-${tag}/open/rapid/fixtures/${fixtureId}`;
+  const junk = `junk-${tag}`;
+  const stranger = newSession();
+  await signIn(stranger, `delivered+smoke-room-${tag}@resend.dev`);
+  check("match room: the stranger is signed in", !!stranger.cookies["seazn_session"]);
+
+  const visitors: [string, string, Session | null][] = [
+    ["no link", "", null],
+    ["a junk link", `?t=${junk}`, null],
+    ["a signed-in stranger", "", stranger],
+  ];
+  let pages = 0;
+  for (const [who, query, session] of visitors) {
+    const res = await fetch(`${BASE}${fixturePath}/play${query}`, {
+      redirect: "manual",
+      headers: session ? { cookie: cookieHeader(session) } : {},
+    });
+    const html = await res.text();
+    check(`match room page, ${who}: 200, never a 500 (got ${res.status})`, res.status === 200);
+    check(`match room page, ${who}: the neutral card`, html.includes(`data-screen="unavailable"`));
+    check(`match room page, ${who}: its one way out is the fixture page`, html.includes(`href="${fixturePath}"`));
+    check(`match room page, ${who}: never indexed`, html.includes(`<meta name="robots" content="noindex, nofollow"`));
+    check(`match room page, ${who}: never a Referer`, html.includes(`<meta name="referrer" content="no-referrer"`));
+    pages += 1;
+  }
+  check("match room page: anti-vacuity, three visitors", pages === 3);
+
+  const anon = newSession();
+  const room = `/api/v1/fixtures/${fixtureId}/external-play/room`;
+  const move = { kind: "move", uci: "e2e4" };
+  const calls: [string, Session, string, string, unknown, number][] = [
+    ["read, no identity", anon, room, "GET", undefined, 401],
+    ["seat, no identity", anon, room, "POST", undefined, 401],
+    ["act, no identity", anon, `${room}/act`, "POST", move, 401],
+    ["read, a junk link", anon, `${room}?t=${junk}`, "GET", undefined, 404],
+    ["seat, a junk link", anon, `${room}?t=${junk}`, "POST", undefined, 404],
+    ["act, a junk link", anon, `${room}/act?t=${junk}`, "POST", move, 404],
+    ["read, a signed-in stranger", stranger, room, "GET", undefined, 404],
+    ["act, a signed-in stranger", stranger, `${room}/act`, "POST", move, 404],
+  ];
+  let answered = 0;
+  for (const [what, session, path, method, body, want] of calls) {
+    const r = await v1(session, path, method, body);
+    const code = r.json.error?.code;
+    check(
+      `match room API, ${what}: ${want}${want === 404 ? " NOT_FOUND" : ""} (got ${r.status} ${code ?? ""})`,
+      r.status === want && (want !== 404 || code === "NOT_FOUND"),
+    );
+    answered += 1;
+  }
+  check("match room API: anti-vacuity, eight calls", answered === calls.length && answered === 8);
+}
+
+/**
+ * Chess in-page board T15 — the arbiter panel, keyless (no Lichess, no
+ * RealtimeKit). The organiser's panel and its four routes answer only an
+ * organiser of an ONLINE chess board: on an over-the-board chess fixture the
+ * join, the leave, the video override and the resync are NOT FOUND (there is
+ * no online game; T15 fix round 1, M3); with no identity every route is 401, and so with a
+ * signed-in stranger (not a member of the fixture's org); the panel page 404s on the
+ * over-the-board division, with a signed-out visitor sent to sign in. The real
+ * panel (boards, flags, the outage and its audit record) is
+ * e2e/arbiter-panel.spec.ts. SMOKE_ONLY=arbiter runs it alone.
+ */
+async function arbiterSuite(): Promise<void> {
+  const owner = newSession();
+  await signIn(owner, `delivered+smoke-arb-${tag}@resend.dev`);
+  const stranger = newSession();
+  await signIn(stranger, `delivered+smoke-arb-stranger-${tag}@resend.dev`);
+  check("arbiter: owner and stranger signed in", !!owner.cookies["seazn_session"] && !!stranger.cookies["seazn_session"]);
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Arbiter OTB ${tag}`, visibility: "public" }),
+  );
+  const div = v1data<{ id: string; slug: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Chess OTB",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", clock: { base: 600 } },
+    }),
+  );
+  const ents = await v1(owner, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+    { kind: "individual", display_name: `Arb A ${tag}`, members: [{ new_person: { full_name: `Arb A ${tag}` } }] },
+    { kind: "individual", display_name: `Arb B ${tag}`, members: [{ new_person: { full_name: `Arb B ${tag}` } }] },
+  ]);
+  check(`arbiter: two over-the-board entrants (got ${ents.status})`, ents.status === 201);
+  const stage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }));
+  const gen = v1data<{ fixtures: { id: string }[] }>(await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST"));
+  const fixtureId = gen?.fixtures?.[0]?.id ?? "";
+  check("arbiter: an over-the-board chess fixture to ask about", fixtureId !== "");
+
+  const anon = newSession();
+  const base = `/api/v1/fixtures/${fixtureId}/external-play`;
+  const note = { note: "smoke: never written" };
+  const calls: [string, Session, string, unknown, number, string | null][] = [
+    ["join, no identity", anon, `${base}/arbiter`, undefined, 401, null],
+    ["resync, no identity", anon, `${base}/resync`, undefined, 401, null],
+    ["override, no identity", anon, `${base}/video-override`, note, 401, null],
+    // Not a member of the fixture's org: requireOrgAuth's AuthError, the same
+    // 401 as no identity — nothing says the board exists.
+    ["join, a signed-in stranger", stranger, `${base}/arbiter`, undefined, 401, "UNAUTHENTICATED"],
+    ["resync, a signed-in stranger", stranger, `${base}/resync`, undefined, 401, "UNAUTHENTICATED"],
+    ["override, a signed-in stranger", stranger, `${base}/video-override`, note, 401, "UNAUTHENTICATED"],
+    ["join, the organiser, over the board", owner, `${base}/arbiter`, undefined, 404, "NOT_FOUND"],
+    ["override, the organiser, over the board", owner, `${base}/video-override`, note, 404, "NOT_FOUND"],
+    ["resync, the organiser, over the board", owner, `${base}/resync`, undefined, 404, "NOT_FOUND"],
+  ];
+  let answered = 0;
+  for (const [what, session, path, body, want, code] of calls) {
+    const r = await v1(session, path, "POST", body);
+    const got = r.json.error?.code;
+    check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
+    answered += 1;
+  }
+  // The panel closing (I2): DELETE …/arbiter/{participantId} — nobody's watch here.
+  const leave = `${base}/arbiter/smoke-${tag}`;
+  const leaves: [string, Session, number, string | null][] = [
+    ["leave, no identity", anon, 401, null],
+    ["leave, a signed-in stranger", stranger, 401, "UNAUTHENTICATED"],
+    ["leave, the organiser, a watch that is not theirs", owner, 404, "NOT_FOUND"],
+  ];
+  for (const [what, session, want, code] of leaves) {
+    const r = await v1(session, leave, "DELETE");
+    const got = r.json.error?.code;
+    check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
+    answered += 1;
+  }
+  check("arbiter API: anti-vacuity, twelve calls", answered === calls.length + leaves.length && answered === 12);
+
+  // The page: the division's slugs from the organiser's own links.
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[] | { orgs?: { slug: string }[] };
+  const orgSlug = Array.isArray(orgs) ? orgs[0]?.slug : orgs.orgs?.[0]?.slug;
+  const page = `/o/${orgSlug}/c/${comp.slug}/d/${div.slug}/arbiter`;
+  const asOwner = await fetch(`${BASE}${page}`, { redirect: "manual", headers: { cookie: cookieHeader(owner) } });
+  check(`arbiter page, the organiser, over the board: 404 (got ${asOwner.status})`, asOwner.status === 404);
+  const asAnon = await fetch(`${BASE}${page}`, { redirect: "manual" });
+  const to = asAnon.headers.get("location") ?? "";
+  check(`arbiter page, signed out: sent to sign in (got ${asAnon.status} ${to})`, asAnon.status >= 300 && asAnon.status < 400 && to.includes("/login"));
+}
+
+/**
+ * Chess in-page board T16 — keyless (no Lichess, no RealtimeKit), against a
+ * live server:
+ * - the spectators' board route GET /api/v1/public/fixtures/{id}/board answers
+ *   a PUBLIC fixture with its doc ({roundOpened, externalPlay}) under the
+ *   edge's short public window, and is the same 404 for something that is not
+ *   an id, an id that does not exist, and a fixture of a PRIVATE competition;
+ * - the organiser's two decisions — "Let the game go on" (…/flags/close) and
+ *   "Settle the result now…" (…/resolve) — refuse no identity and a signed-in
+ *   stranger (401), and answer the organiser of an over-the-board fixture with
+ *   a NOT FOUND (no online board, no flag) rather than writing anything;
+ * - the player's door (GET …/lobby) refuses no identity (401) and is the
+ *   room's one 404 for a signed-in non-player, never cached.
+ * The real surfaces (the watch panel, the queue, the run sheet, Open round) are
+ * e2e/online-chess-desk.spec.ts. SMOKE_ONLY=onlineChessDesk runs it alone.
+ */
+async function onlineChessDeskSuite(): Promise<void> {
+  const owner = newSession();
+  await signIn(owner, `delivered+smoke-ocd-${tag}@resend.dev`);
+  const stranger = newSession();
+  await signIn(stranger, `delivered+smoke-ocd-stranger-${tag}@resend.dev`);
+  check("online chess desk: owner and stranger signed in", !!owner.cookies["seazn_session"] && !!stranger.cookies["seazn_session"]);
+  const anon = newSession();
+
+  /** One over-the-board chess fixture in a competition of the given visibility. */
+  const fixtureIn = async (visibility: "public" | "private"): Promise<string> => {
+    const comp = v1data<{ id: string }>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `OCD ${visibility} ${tag}`, visibility }),
+    );
+    const div = v1data<{ id: string }>(
+      await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+        name: "Chess OTB",
+        sport_key: "boardgame",
+        variant_key: "classical",
+        config: { variant: "classical", clock: { base: 600 } },
+      }),
+    );
+    const ents = await v1(owner, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+      { kind: "individual", display_name: `OCD A ${visibility} ${tag}`, members: [{ new_person: { full_name: `OCD A ${tag}` } }] },
+      { kind: "individual", display_name: `OCD B ${visibility} ${tag}`, members: [{ new_person: { full_name: `OCD B ${tag}` } }] },
+    ]);
+    check(`online chess desk: two entrants in the ${visibility} division (got ${ents.status})`, ents.status === 201);
+    const stage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }));
+    const gen = v1data<{ fixtures: { id: string }[] }>(await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST"));
+    return gen?.fixtures?.[0]?.id ?? "";
+  };
+  const publicFixture = await fixtureIn("public");
+  const privateFixture = await fixtureIn("private");
+  check("online chess desk: a public and a private fixture to ask about", publicFixture !== "" && privateFixture !== "");
+
+  // The spectators' board route: public, no identity needed.
+  const board = (id: string) => v1(anon, `/api/v1/public/fixtures/${id}/board`);
+  const open = await board(publicFixture);
+  check(`board route, a public over-the-board fixture: 200 (got ${open.status})`, open.status === 200);
+  const doc = v1data<{ roundOpened?: unknown; externalPlay?: unknown }>(open);
+  check(
+    `board route: nothing played online here — roundOpened false, externalPlay null (got ${JSON.stringify(doc)})`,
+    doc?.roundOpened === false && doc?.externalPlay === null,
+  );
+  const cc = open.headers.get("cache-control") ?? "";
+  check(`board route: the edge's short public window (got "${cc}")`, cc === "public, s-maxage=2, stale-while-revalidate=5");
+  const notFound: [string, string][] = [
+    ["not an id", "not-a-uuid"],
+    ["an id that does not exist", "00000000-0000-4000-8000-000000000000"],
+    ["a fixture of a private competition", privateFixture],
+  ];
+  for (const [what, id] of notFound) {
+    const r = await board(id);
+    check(`board route, ${what}: 404 (got ${r.status})`, r.status === 404);
+  }
+
+  // The organiser's decisions: valid bodies, so each answer is the auth or the board's, never the parser's.
+  const base = `/api/v1/fixtures/${publicFixture}/external-play`;
+  const flagIds = { ids: ["00000000-0000-4000-8000-000000000001"] };
+  const settle = { kind: "draw" };
+  const calls: [string, Session, string, unknown, number, string | null][] = [
+    ["go on, no identity", anon, `${base}/flags/close`, flagIds, 401, null],
+    ["settle, no identity", anon, `${base}/resolve`, settle, 401, null],
+    ["go on, a signed-in stranger", stranger, `${base}/flags/close`, flagIds, 401, "UNAUTHENTICATED"],
+    ["settle, a signed-in stranger", stranger, `${base}/resolve`, settle, 401, "UNAUTHENTICATED"],
+    ["go on, the organiser, a flag that is not on this board", owner, `${base}/flags/close`, flagIds, 404, "FLAG_NOT_FOUND"],
+    ["settle, the organiser, over the board", owner, `${base}/resolve`, settle, 404, "NOT_FOUND"],
+  ];
+  let answered = 0;
+  for (const [what, session, path, body, want, code] of calls) {
+    const r = await v1(session, path, "POST", body);
+    const got = r.json.error?.code;
+    check(`online chess desk API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
+    answered += 1;
+  }
+  // The player's door: session only; a non-player is the room's one 404; never cached.
+  const doors: [string, Session, number, string | null][] = [
+    ["door, no identity", anon, 401, null],
+    ["door, a signed-in stranger", stranger, 404, "NOT_FOUND"],
+    ["door, the organiser, who plays nowhere here", owner, 404, "NOT_FOUND"],
+  ];
+  for (const [what, session, want, code] of doors) {
+    const r = await v1(session, `${base}/lobby`);
+    const got = r.json.error?.code;
+    const noStore = r.headers.get("cache-control") === "private, no-store";
+    check(`online chess desk API, ${what}: ${want}${code ? ` ${code}` : ""}, private no-store (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code) && noStore);
+    answered += 1;
+  }
+  check("online chess desk API: anti-vacuity, nine calls", answered === calls.length + doors.length && answered === 9);
+  // Nothing above wrote a result: the public fixture is still unplayed.
+  const fx = v1data<{ status?: string }>(await v1(owner, `/api/v1/fixtures/${publicFixture}`));
+  check(`online chess desk: no refusal wrote a result (status ${fx?.status})`, fx?.status === "scheduled");
+}
+
 async function cleanup(tag: string): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -21524,6 +21879,14 @@ async function cleanup(tag: string): Promise<void> {
     // #404 personMergeSuite — its own Pro org (its two persons, their
     // suspension and the person_merges ledger row all cascade with it).
     `delivered+dupmerge_${tag}@resend.dev`,
+    // T15 arbiterSuite — its owner's org (one over-the-board chess division)
+    // and its stranger's.
+    `delivered+smoke-arb-${tag}@resend.dev`,
+    `delivered+smoke-arb-stranger-${tag}@resend.dev`,
+    // T16 onlineChessDeskSuite — its owner's org (two over-the-board chess
+    // divisions, one public, one private) and its stranger's.
+    `delivered+smoke-ocd-${tag}@resend.dev`,
+    `delivered+smoke-ocd-stranger-${tag}@resend.dev`,
     // T14 autoScheduleSuite — its own Pro org (one competition, one division
     // and its six fixtures all cascade with it).
     `delivered+smoke-autosched-${tag}@resend.dev`,
@@ -21766,6 +22129,9 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   captureRecord: () => captureRecordSuite(),
   bracketFinish: () => bracketFinishSuite(),
   walkoverCredit: () => walkoverCreditSuite(),
+  matchRoom: () => matchRoomSuite(),
+  arbiter: () => arbiterSuite(),
+  onlineChessDesk: () => onlineChessDeskSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan

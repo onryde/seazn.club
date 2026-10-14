@@ -1,0 +1,116 @@
+// The match room's five calls to OUR server (design §3.4: the browser never
+// talks to Lichess). Client-safe: no server module is imported — the wire
+// types below mirror `RoomAct` / `RoomActOut` (api-v1/schemas.ts), the
+// room usecase's `SeatWire` and T9's `CreateOutcome`, and room-api.test.ts
+// pins each mirror against
+// its source at the type level, so the two cannot drift silently.
+import type { RoomSnapshot, SeatRefusal } from "./room-snapshot";
+
+export type RoomActBody =
+  | { kind: "move"; uci: string }
+  | { kind: "resign" }
+  | { kind: "draw"; accept: boolean }
+  | { kind: "abort" };
+
+export type GrantRefusalWire = "lichess_link_required" | "lichess_reconsent_required";
+
+export type RoomActAnswer =
+  | { ok: true; applied: boolean; ended?: true }
+  | { ok: false; reconcile: true; reason: string }
+  | { ok: false; reconcile: false; reason: GrantRefusalWire };
+
+export type ParticipantWire = { participantId: string; authToken: string };
+
+/** The room usecase's `CameraFaultReport` / the route's `RoomCameraFault`
+ *  (I-1): our guard's gap on this player's OWN seat started or ended. */
+export type CameraFaultBody = { state: "start" | "end"; participantId: string };
+
+export type SeatAnswer =
+  | { seated: true; participant: ParticipantWire | null }
+  | { seated: false; reason: SeatRefusal; participant: ParticipantWire | null };
+
+/** T9's `CreateOutcome` (create-game.ts), mirrored. */
+export type CreateAnswer =
+  | { created: true; gameId: string }
+  | {
+      created: false;
+      reason: "not_ready" | "already" | "unplayable" | "provider_error" | "no_person" | "online_chess_disabled" | GrantRefusalWire;
+    };
+
+export type RoomClaimAnswer = {
+  snapshot: RoomSnapshot;
+  seat: SeatAnswer | null;
+  /** T9's answer when this seat asked for the game; null when it asked
+   *  nothing (review m3). Its refusal for the flag already shows as
+   *  `snapshot.onlineChessOff`. */
+  create: CreateAnswer | null;
+};
+
+/** A call's outcome: the envelope's data, or the HTTP status and error code
+ *  (`status: 0` ⇒ the request never got an answer). */
+export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; code: string | null };
+
+export type Fetcher = typeof fetch;
+
+export function roomApiPath(fixtureId: string, tail: "" | "/act" | "/clock-zero" | "/camera-fault", token: string | null): string {
+  const q = token ? `?t=${encodeURIComponent(token)}` : "";
+  return `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/room${tail}${q}`;
+}
+
+async function call<T>(f: Fetcher, url: string, init: RequestInit): Promise<ApiResult<T>> {
+  let res: Response;
+  try {
+    res = await f(url, { credentials: "same-origin", cache: "no-store", ...init });
+  } catch {
+    return { ok: false, status: 0, code: null };
+  }
+  type Envelope = { ok?: boolean; data?: T; error?: { code?: string } };
+  let body: Envelope | null = null;
+  try {
+    body = (await res.json()) as Envelope | null;
+  } catch {
+    body = null;
+  }
+  if (res.ok && body?.ok === true && body.data !== undefined) return { ok: true, data: body.data };
+  return { ok: false, status: res.status, code: body?.error?.code ?? null };
+}
+
+export function fetchRoom(fixtureId: string, token: string | null, f: Fetcher = fetch) {
+  return call<RoomSnapshot>(f, roomApiPath(fixtureId, "", token), { method: "GET" });
+}
+
+export function claimSeat(fixtureId: string, token: string | null, f: Fetcher = fetch) {
+  return call<RoomClaimAnswer>(f, roomApiPath(fixtureId, "", token), { method: "POST" });
+}
+
+export function sendAct(fixtureId: string, token: string | null, action: RoomActBody, f: Fetcher = fetch) {
+  return call<RoomActAnswer>(f, roomApiPath(fixtureId, "/act", token), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(action),
+  });
+}
+
+export function sendClockZero(fixtureId: string, token: string | null, f: Fetcher = fetch) {
+  return call<{ reconciled: boolean }>(f, roomApiPath(fixtureId, "/clock-zero", token), { method: "POST" });
+}
+
+/** Our guard's gap on the caller's own seat (I-1). `keepalive`: a page
+ *  closing mid-recovery still closes the stamp it opened. */
+/** The stamp, for the camera session's queue (fix round 6, M-3): REJECTS when
+ *  the server may not have taken it — the network down (status 0) or a 5xx —
+ *  so the session sends it again; resolves on a 2xx or any 4xx (the cap's
+ *  429, a 404), which another send would only repeat. */
+export async function deliverCameraFault(fixtureId: string, token: string | null, body: CameraFaultBody, f: Fetcher = fetch): Promise<void> {
+  const r = await sendCameraFault(fixtureId, token, body, f);
+  if (!r.ok && (r.status === 0 || r.status >= 500)) throw new Error(`camera-fault not delivered (${r.status})`);
+}
+
+export function sendCameraFault(fixtureId: string, token: string | null, body: CameraFaultBody, f: Fetcher = fetch) {
+  return call<{ open: boolean }>(f, roomApiPath(fixtureId, "/camera-fault", token), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    keepalive: true,
+  });
+}

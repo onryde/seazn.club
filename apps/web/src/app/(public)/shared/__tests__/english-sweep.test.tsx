@@ -63,6 +63,7 @@ const stub = vi.hoisted(() => ({
   relatedCompetition: vi.fn(),
   publicSuspensions: vi.fn(),
   embedDivisionData: vi.fn(),
+  readRoom: vi.fn(),
 }));
 /** Every element a share image handed to satori, in draw order. */
 const images = vi.hoisted(() => ({ drawn: [] as unknown[] }));
@@ -152,6 +153,9 @@ vi.mock("@/lib/prose", () => ({ renderProse: async (html: string) => `<p>${html}
 // The embed widgets' loader: the same division document the page stubs hand
 // the division page.
 vi.mock("@/server/embed-data", () => ({ embedDivisionData: stub.embedDivisionData }));
+// The match room's first snapshot (T14): its usecase reads the database and a
+// personal link; the snapshot is data, handed in here.
+vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: stub.readRoom, roomGrantDowngraded: async () => false }));
 // A share image is satori pixels, which no sweep can read — but the ELEMENT
 // handed to satori is markup. Captured here and rendered like a page, so every
 // word the image would draw is classified. The body is never painted.
@@ -191,6 +195,8 @@ import PlayerNotFound from "../[orgSlug]/[competitionSlug]/players/[personId]/no
 import KioskOrgLayout from "../(kiosk)/[orgSlug]/layout";
 import * as PresentCompetition from "../(kiosk)/[orgSlug]/[competitionSlug]/present/page";
 import * as PresentDivision from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
+import * as MatchRoom from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play/page";
+import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
 import FixtureCard from "../[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/opengraph-image";
 import { GET as fixturePoster } from "../[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png/route";
 import EmbedLayout from "@/app/embed/layout";
@@ -1040,6 +1046,74 @@ async function renderBoards(): Promise<Segment[]> {
   return out;
 }
 
+// ---------------------------------------------- the match room (T14)
+
+// A player's own board, in the kiosk layout like the boards: the check-in,
+// a live game with cameras on and an incoming draw offer, game over, and two
+// state cards. Effects never run in a static render, so this is first paint.
+async function renderMatchRooms(): Promise<Segment[]> {
+  stub.getPublicOrg.mockResolvedValue({ org: org(), competitions: [] });
+  const at = "2026-10-12T10:00:00.000Z";
+  const base: RoomSnapshot = {
+    fixtureId: "9zqfixture",
+    serverNow: at,
+    phase: "open",
+    scheduledAt: at,
+    roundOpenedAt: at,
+    opensAt: at,
+    deadline: "2026-10-12T10:20:00.000Z",
+    links: { fixture: `/shared/${ORG_SLUG}/${COMP_SLUG}/9zqa/fixtures/9zqfixture`, standings: `/shared/${ORG_SLUG}/${COMP_SLUG}/9zqa` },
+    meta: { divisionName: "9zqopen 8zqrapid", roundNo: 3, boardNo: 2, limitSeconds: 600, incrementSeconds: 5 },
+    orgSlug: ORG_SLUG,
+    you: { colour: "white", name: "9zqbo 8zqlind", checkedIn: false },
+    opponent: { colour: "black", name: "9zqada 8zqokonkwo", checkedIn: true },
+    cameraPolicy: "required",
+    opponentPresence: { participantId: "rtk-opp" },
+    ownParticipantId: null,
+    frozen: null,
+    canAct: true,
+    otherAccount: null,
+    onlineChessOff: false,
+    boardClosed: false,
+    creation: null,
+    game: null,
+    held: false,
+    result: null,
+    watchUrl: null,
+    realtime: null,
+  };
+  const game = {
+    gameId: "9zqgame",
+    moves: ["e2e4", "e7e5", "g1f3"],
+    fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+    lastMove: ["g1", "f3"] as [string, string],
+    turn: "black" as const,
+    whiteMs: 582_000,
+    blackMs: 497_000,
+    clockAsOf: at,
+    clockRunning: true,
+    drawOfferBy: "black" as const,
+    over: false,
+  };
+  const rooms: RoomSnapshot[] = [
+    base,
+    { ...base, you: { ...base.you, colour: "black", checkedIn: true }, opponent: { ...base.opponent, colour: "white" }, game },
+    { ...base, game: { ...game, over: true, drawOfferBy: null }, result: { outcome: "won", method: "checkmate", score: "1–0" } },
+    { ...base, phase: "not_opened" },
+    { ...base, creation: { state: "creating" } },
+    // A held board (review I2): the held seam's copy is swept too.
+    { ...base, you: { ...base.you, checkedIn: true }, game, canAct: false },
+  ];
+  const p = { orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: "9zqa", fixtureId: "9zqfixture" };
+  const out: Segment[] = [...(await served(MatchRoom, params(p)))];
+  for (const room of rooms) {
+    stub.readRoom.mockResolvedValueOnce(room);
+    const page = await MatchRoom.default({ ...params(p), searchParams: Promise.resolve({ t: "9zqtoken" }) });
+    out.push(...(await html(await KioskOrgLayout({ children: page, ...params({ orgSlug: ORG_SLUG }) }))));
+  }
+  return out;
+}
+
 // ------------------------------------------------------------- the scenes
 
 type Params<T> = { params: Promise<T> };
@@ -1222,6 +1296,12 @@ const SCENES: Scene[] = [
     ],
     minDictValues: 10,
     render: renderBoards,
+  },
+  {
+    name: "match room (check-in, a live game with an offer, game over, two state cards — in the kiosk layout)",
+    files: ["(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play/page.tsx"],
+    minDictValues: 20,
+    render: renderMatchRooms,
   },
 ];
 

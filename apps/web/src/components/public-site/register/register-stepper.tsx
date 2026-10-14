@@ -27,6 +27,7 @@ import {
   summarizeCart,
   type CartAction,
 } from "./cart";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { seasonStartYearFrom } from "./eligibility-presentation";
 import { clearRegisterState, REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
 import {
@@ -37,6 +38,7 @@ import {
   type SubmitResultShape,
 } from "./submit";
 import { StepConsent } from "./step-consent";
+import { onlineDivisionNames, registerReturnPath, type RegisterLichessState } from "./register-lichess-card";
 import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
@@ -101,6 +103,7 @@ export function RegisterStepper({
   info,
   locale,
   joinCode,
+  lichess = null,
 }: {
   orgSlug: string;
   competitionSlug: string;
@@ -110,8 +113,14 @@ export function RegisterStepper({
    *  data attribute (never rendered as content) so it is a concrete,
    *  inspectable hook rather than a prop nothing ever reads. */
   joinCode?: string | null;
+  /** I5 (T16 fix round 1): this viewer's Lichess link state, read by the page only when a division plays online;
+   *  null ⇒ no division does, and no card is offered. */
+  lichess?: RegisterLichessState | null;
 }) {
   const t = useT();
+  // I5: where a Lichess link start comes back to — this registration, its join code kept (the draft is in
+  // sessionStorage, so the player lands back on the step they left).
+  const lichessReturn = registerReturnPath(orgSlug, competitionSlug, joinCode ?? null);
   const openDivisions = info.divisions.filter((d) => d.open);
   // The collapse now depends on the single division's entrant kind, not just
   // the count — see shouldCollapseEntries. Both this and the auto-seed below
@@ -169,7 +178,11 @@ export function RegisterStepper({
   // server message, still shown, but only ever as secondary text — server
   // errors are English-only by design (no server-side i18n), so it must
   // never be the primary thing a registrant reads.
-  const [submitError, setSubmitError] = useState<{ kind: SubmitFailureKind; detail: string } | null>(null);
+  const [submitError, setSubmitError] = useState<{
+    kind: SubmitFailureKind;
+    detail: string;
+    code?: string;
+  } | null>(null);
   // Review finding #2 (MEDIUM) — focus management across step transitions.
   // `containerRef` scopes the DOM query the focus effect below runs
   // (mirrors modal.tsx's own `dialogRef`/`querySelectorAll` pattern);
@@ -414,6 +427,7 @@ export function RegisterStepper({
       setSubmitError({
         kind: classifySubmitFailure(status),
         detail: err instanceof Error ? err.message : String(err),
+        code: err instanceof ApiV1Error ? err.code : undefined,
       });
       setSubmitting(false);
     }
@@ -474,6 +488,12 @@ export function RegisterStepper({
 
       {currentStep === "consent" && (
         <StepConsent
+          lichess={(() => {
+            const divisions = lichess === null ? [] : onlineDivisionNames(cart, info.divisions);
+            return lichess === null || divisions.length === 0
+              ? null
+              : { divisions, orgSlug, next: lichessReturn, state: lichess };
+          })()}
           contact={contact}
           onContactChange={(patch) => setContact((c) => ({ ...c, ...patch }))}
           consent={consent}
@@ -498,7 +518,16 @@ export function RegisterStepper({
               {/* Secondary — the raw detail, de-emphasized: useful context
                   (e.g. "another checkout was just started"), never the
                   primary thing read. */}
-              <p className="text-xs text-ink-muted">{submitError.detail}</p>
+              {submitError.code === "LICHESS_LINK_REQUIRED" ? (
+                <p className="text-sm text-ink">
+                  {t("register.lichessLinkRequired")}{" "}
+                  <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="font-medium underline" data-testid="register-lichess-link">
+                    {t("register.lichessLinkCta")}
+                  </a>
+                </p>
+              ) : (
+                <p className="text-xs text-ink-muted">{submitError.detail}</p>
+              )}
             </div>
           )}
         </>

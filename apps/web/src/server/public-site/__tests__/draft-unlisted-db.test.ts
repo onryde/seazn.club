@@ -47,7 +47,8 @@ import { publicOrgLive, discoveryList } from "@/server/usecases/public";
 import { publicRegistrationInfo } from "@/server/usecases/registrations";
 import { submitRegistrationGroup } from "@/server/usecases/registration-submit";
 import { getDiscoveryDirectory } from "../discovery";
-import { getPublicCompetition, getPublicOrg, listPublicSitemapEntries, orgTag } from "../data";
+import { getPublicCompetition, getPublicOrg, listPublicSitemapEntries } from "../data";
+import { orgTag } from "../cache-tags";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 

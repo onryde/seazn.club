@@ -163,6 +163,10 @@ const REST = [
   "src/server/public-site/__tests__/double-walkover-score-lines.test.ts",
   "src/server/public-site/__tests__/match-centre-forfeit.test.ts",
   "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts",
+  // Online chess (Lichess external play): the match centre's live online board and the public fixture's
+  // external-play read. Neither begins with "c".
+  "src/server/public-site/__tests__/match-centre-online-live.test.ts",
+  "src/server/public-site/__tests__/public-fixture-external-play.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

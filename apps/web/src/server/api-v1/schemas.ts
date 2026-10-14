@@ -41,6 +41,8 @@ import { MatchCentreDoc } from "../public-site/match-centre-schema.ts";
 // registration-rules.ts above: this file is shared with the standalone
 // OpenAPI generator script, which has no `@/` alias resolution.
 import { streamUrlSchema } from "../../lib/stream-url.ts";
+// T19 (D12): the Open round vocabulary — one list, shared with the organiser control.
+import { OPEN_ROUND_REFUSALS, OPEN_ROUND_SKIP_REASONS } from "../../lib/open-round.ts";
 // Streaming R1 (Task 9) — the capture QR's ONE schema (design §7.6), re-exported
 // in the relay block below, never re-typed. Relative + explicit `.ts`, same
 // reason as stream-url.ts above; lib/capture-qr.ts imports zod and nothing else.
@@ -77,6 +79,8 @@ import { isValidIana } from "../../lib/tz.ts";
 // D6 (fixture-page stream, 2026-09-30) — the platforms a NEW destination may name. RELATIVE with `.ts`, never `@/`,
 // for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
 import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
+import type { BoardErrorCode, GrantRefusal } from "../external-play/types.ts";
+import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -414,6 +418,11 @@ function checkAgeCutoff(
   }
 }
 
+/** Online-chess camera policy (design §5.1, V439). The vocabulary is
+ *  lib/camera-policy.ts's — one definition shared with the server ladder and
+ *  the settings control. */
+export const CameraPolicyS = z.enum(CAMERA_POLICIES);
+
 export const CreateDivision = z
   .object({
     name: z.string().min(1).max(200),
@@ -436,6 +445,11 @@ export const CreateDivision = z
     age_cutoff_month: z.number().int().min(1).max(12).nullable().optional(),
     age_cutoff_day: z.number().int().min(1).max(31).nullable().optional(),
     eligibility_note: z.string().max(2000).nullable().optional(),
+    /** Online-chess camera requirement for this division (V439
+     *  `divisions.camera_policy`). Absent or null ⇒ inherit the competition's
+     *  (NOT NULL, default 'off'); a stage may override it. Board games only —
+     *  any other sport refuses 'optional'/'required' (422 CAMERA_POLICY_SPORT). */
+    camera_policy: CameraPolicyS.nullable().optional(),
   })
   .superRefine(checkAgeBand)
   .superRefine(checkAgeCutoff);
@@ -502,6 +516,13 @@ export const PatchDivision = z
      *  `stages.required_court_tags` (V367) — that column's own CRUD still
      *  does not exist, only its read into this union. */
     required_court_tags: RequiredCourtTags,
+    /** Online-chess camera requirement (see CreateDivision). null clears this
+     *  division's own value ⇒ inherit the competition's. Once any round of the
+     *  division has been opened the EFFECTIVE requirement may only be relaxed
+     *  (D9) — a tightening is 409 POLICY_LOCKED — and every real change writes
+     *  a `chess.camera_policy_changed` competition_events row. A re-send of
+     *  the stored value is a no-op. */
+    camera_policy: CameraPolicyS.nullable(),
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch")
@@ -539,6 +560,7 @@ export const Division = z.object({
   archived_at: z.string().nullable(), // v3/09 §4 — set = archived (hidden, restorable)
   created_at: z.string(),
   required_court_tags: z.array(z.string()), // D5/P8 candidate-court filter; see PatchDivision above
+  camera_policy: CameraPolicyS.nullable(), // V439 — null = inherit the competition's; see PatchDivision above
 });
 
 // ---------------------------------------------------------------------------
@@ -1341,6 +1363,136 @@ export type PatchFixture = z.infer<typeof PatchFixture>;
 export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict();
 export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
 
+/** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3) — the
+ *  arbiter's OWN RealtimeKit token for the board's meeting (preset `arbiter`,
+ *  receive-only), a FRESH participant per open (fix round 1, I2) whose id
+ *  the client hands back when it leaves, and the two players' participant
+ *  ids by colour, which its client subscribes to. Never a player's token
+ *  (spec §10). */
+export const ArbiterJoinOut = z.object({
+  authToken: z.string(),
+  participantId: z.string(),
+  white: z.array(z.string()),
+  black: z.array(z.string()),
+});
+
+/** DELETE /fixtures/{id}/external-play/arbiter/{participantId} (T15 fix
+ *  round 1, I2) — the panel closed: the server removes the caller's own
+ *  arbiter participant from the meeting. `removed: false` when it was
+ *  already removed (a repeat, the sweep, the room's teardown). */
+export const ArbiterLeaveOut = z.object({ removed: z.boolean() });
+
+/** POST /fixtures/{id}/external-play/resync (T15) — the organiser's
+ *  reconcile (trigger `organiser`): did a read bring Lichess's truth, how many
+ *  plies it added to the ledger, and whether it closed the board. */
+export const ExternalPlayResyncOut = z.object({
+  read: z.boolean(),
+  adopted: z.number().int(),
+  finished: z.boolean(),
+});
+
+/** POST /fixtures/{id}/external-play/video-override (D11, Task 8's
+ *  organiserOverrideVideo) — the reason goes on the audit record. */
+export const VideoOverrideInput = z.object({ note: z.string().trim().min(1).max(500) }).strict();
+export type VideoOverrideInput = z.infer<typeof VideoOverrideInput>;
+export const VideoOverrideOut = z.object({ overridden: z.literal(true) });
+
+/** GET /fixtures/{id}/external-play/lobby (T16) — a signed-in player's door
+ *  into their match room. The states are lobby.ts's LOBBY_STATES (kept in
+ *  step by external-play-lobby-route.test.ts); `online_chess_off` carries no
+ *  path — nothing has started and the club is not offered online chess. */
+export const ExternalPlayLobbyOut = z.union([
+  z.object({ state: z.literal("online_chess_off"), roomPath: z.null() }),
+  z.object({
+    state: z.enum(["not_opened", "before", "check_in", "closed", "playing", "held", "over"]),
+    roomPath: z.string(),
+    opensAt: z.string().nullable(),
+    deadline: z.string().nullable(),
+  }),
+]);
+
+/** POST /fixtures/{id}/external-play/resolve (T16) — the organiser settles
+ *  an online board: the panel's buttons ("X wins", "Y wins", "Draw", and in
+ *  place of a winner "No result" — the void — or the double walkover). The
+ *  kinds are resolve.ts's RESOLVE_KINDS (kept in step by
+ *  fixtures/[id]/external-play/__tests__/decision-routes.test.ts). */
+export const ResolveExternalPlay = z
+  .object({
+    kind: z.enum(["home_wins", "away_wins", "draw", "no_result", "double_walkover"]),
+  })
+  .strict();
+export type ResolveExternalPlay = z.infer<typeof ResolveExternalPlay>;
+
+/** `finished`: the board has its result. `tiebreak_owed`: the draw opened a
+ *  bracket tie-break, and the board waits for the organiser to pick who goes
+ *  through. */
+export const ResolveExternalPlayOut = z.object({
+  status: z.enum(["finished", "tiebreak_owed"]),
+});
+export type ResolveExternalPlayOut = z.infer<typeof ResolveExternalPlayOut>;
+
+/** POST /fixtures/{id}/external-play/flags/close (T16) — "Let the game go
+ *  on": the flags the organiser was shown, by id. */
+export const CloseExternalPlayFlags = z
+  .object({
+    ids: z.array(z.string().uuid()).min(1).max(50),
+  })
+  .strict();
+export type CloseExternalPlayFlags = z.infer<typeof CloseExternalPlayFlags>;
+export const CloseExternalPlayFlagsOut = z.object({
+  closed: z.number().int(),
+  stillOpen: z.number().int(),
+});
+
+/** POST /fixtures/{id}/external-play/room/act (T14) — a player's intended
+ *  move, draw offer/answer, resignation or abort, forwarded by T10's `act`.
+ *  The uci length bound is a cheap first gate only: the strict UCI check is
+ *  T3's `assertUci` (M5), server-side, and a suffixless promotion is refused
+ *  there with 400 INVALID_UCI. No takeback: Lichess's Board API has none. */
+export const RoomAct = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("move"), uci: z.string().min(4).max(5) }).strict(),
+  z.object({ kind: z.literal("resign") }).strict(),
+  z.object({ kind: z.literal("draw"), accept: z.boolean() }).strict(),
+  z.object({ kind: z.literal("abort") }).strict(),
+]);
+export type RoomAct = z.infer<typeof RoomAct>;
+
+/** POST /fixtures/{id}/external-play/room/camera-fault (T14 re-review 3,
+ *  I-1) — the caller's browser left the meeting because it could not refuse
+ *  a remote stream (D7), or is back. `participantId` names the caller's OWN
+ *  seat in the meeting; the server checks it and stamps its own clock. */
+export const RoomCameraFault = z
+  .object({ state: z.enum(["start", "end"]), participantId: z.string().min(1).max(200) })
+  .strict();
+export type RoomCameraFault = z.infer<typeof RoomCameraFault>;
+
+/** Every reason T10 answers `reconcile: true` with: a Board API failure
+ *  class, or a ledger that no longer replays. Typed both ways against the
+ *  source unions, so a new code there fails compilation here. */
+const ROOM_ACT_RECONCILE_REASONS = [
+  "not_your_turn_or_over",
+  "unplayable_time_control",
+  "rate_limited",
+  "unauthorized",
+  "unavailable",
+  "outcome_unknown",
+  "unreplayable",
+] as const satisfies readonly (BoardErrorCode | "unreplayable")[];
+const ROOM_ACT_GRANT_REFUSALS = ["lichess_link_required", "lichess_reconsent_required"] as const satisfies readonly GrantRefusal[];
+type _ReconcileReasonsCovered = Exclude<BoardErrorCode | "unreplayable", (typeof ROOM_ACT_RECONCILE_REASONS)[number]>;
+type _GrantRefusalsCovered = Exclude<GrantRefusal, (typeof ROOM_ACT_GRANT_REFUSALS)[number]>;
+const _roomActCovered: [_ReconcileReasonsCovered, _GrantRefusalsCovered] extends [never, never] ? true : never = true;
+void _roomActCovered;
+
+/** T10's PlayResult on the wire. `ended: true` ⇒ the move ended the game at
+ *  Lichess (the room has already asked reconcile to close it). */
+export const RoomActOut = z.union([
+  z.object({ ok: z.literal(true), applied: z.boolean(), ended: z.literal(true).optional() }).strict(),
+  z.object({ ok: z.literal(false), reconcile: z.literal(true), reason: z.enum(ROOM_ACT_RECONCILE_REASONS) }).strict(),
+  z.object({ ok: z.literal(false), reconcile: z.literal(false), reason: z.enum(ROOM_ACT_GRANT_REFUSALS) }).strict(),
+]);
+export type RoomActOut = z.infer<typeof RoomActOut>;
+
 export const FixtureStream = z.object({
   id: z.string(),
   stream_url: z.string().nullable(),
@@ -2057,6 +2209,21 @@ export const UnpairResult = z.object({
   cleared: z.number().int(),
   round: z.number().int(),
 });
+
+/** POST /stages/{id}/open-round (T19, D12) — the organiser opens one round
+ *  of an online-play stage: stamps it and invites its players. */
+export const OpenRoundInput = z.object({ roundNo: z.number().int().positive() }).strict();
+export type OpenRoundInput = z.infer<typeof OpenRoundInput>;
+
+export const OpenRoundSkip = z.object({ fixtureId: Uuid, reason: z.enum(OPEN_ROUND_SKIP_REASONS) });
+
+/** `invited` counts SEATS whose invite the mail provider accepted (two per
+ *  board), never boards. Every refusal wrote nothing. */
+export const OpenRoundResult = z.union([
+  z.object({ opened: z.literal(true), invited: z.number().int(), skipped: z.array(OpenRoundSkip) }),
+  z.object({ opened: z.literal(false), reason: z.literal("already_open"), skipped: z.array(OpenRoundSkip) }),
+  z.object({ opened: z.literal(false), reason: z.enum(OPEN_ROUND_REFUSALS) }),
+]);
 
 export const CompleteResult = z.object({
   completed: z.boolean(),
@@ -3459,6 +3626,12 @@ export const PublicRegistrationDivision = z.object({
    *  column the ENTRIES step renders as an organiser notice. Organiser-
    *  authored free text: render as TEXT, never as HTML/markdown. */
   eligibility_note: z.string().nullable(),
+  /** T16 (spec §5.4) — the division plays online on Lichess (and the club is offered online chess): stated on the
+   *  ENTRIES step, before signup. */
+  online_play: z.boolean(),
+  /** T16 — the camera requirement a player signs up to (the division's own setting, else the competition's); `off`
+   *  whenever `online_play` is false. */
+  camera_policy: CameraPolicyS,
 });
 
 export const PublicRegistrationInfo = z.object({

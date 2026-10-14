@@ -1,7 +1,9 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { TAG, apiJson, activeOrg, expectNoHorizontalScroll } from "./helpers";
+import { seedOnlineRound } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
-import { dictString, publicJson, spectator, uiString } from "./spectator-w2-kit";
+import { dictString, publicJson, spectator, uiString, type W2Locale } from "./spectator-w2-kit";
 
 // v8 acceptance (spec 2026-07-13): the division Settings tab collects
 // general/format/sharing/danger; the format locks once fixtures exist (UI
@@ -263,4 +265,290 @@ test("show seeds OFF: no seed chip on the public Teams and Entrants tabs, and th
     expect(rect.x + rect.width, `the block fits a ${width}px viewport`).toBeLessThanOrEqual(width);
     await block.screenshot({ path: testInfo.outputPath(`division-settings-public-page-${width}.png`) });
   }
+});
+
+// ─── Online chess: the camera group (Task 6's owed browser checks) ──────────────────────────────────────────────────
+//
+// task-6-report.md "Visual and e2e checks owed" 1-11, the T6 review's M-7 (a) axe on the group and (b) its collapsed
+// summary at 320, the follow-up review's Minor 2 (save "Competition setting" and RELOAD) and M-6 (the tab still renders
+// after a rules save — the TDZ crash T6 fixed had no test that fails without it). apps/web vitest is node-env and the
+// Group renders collapsed, so none of this is reachable from a unit test. Copy comes from the dictionaries (the copy's
+// own source); the time-control list is the owner's ruling (2026-10-09), typed here — never read from the catalogue.
+
+/** Ship-1 online clocks, as the owner ruled them (progress.md, 2026-10-09 + the 10+0/15+0 ruling), in that order. */
+const SHIP_1_CLOCKS = ["3+0", "3+2", "5+0", "5+3", "10+0", "10+5", "15+0", "15+10"];
+/** "Monitored" in each locale — no camera sentence may claim it (task-6-report.md check 11). */
+const MONITORED: Record<W2Locale, RegExp> = { en: /monitor/i, es: /monitoriz|vigilad/i, fr: /surveill/i, nl: /monitor|bewaakt|toezicht/i };
+const LOCALES: W2Locale[] = ["en", "es", "fr", "nl"];
+
+async function seedChessDivision(
+  request: APIRequestContext,
+  page: Page,
+  opts: { online: boolean; camera?: "off" | "optional" | "required" },
+): Promise<{ divisionId: string; settings: string }> {
+  const org = await activeOrg(page);
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `T6 Camera ${TAG} ${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "public",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBeLessThan(300);
+  const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Camera Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    // 10+5: a ship-1 clock, so turning online play on is a legal save.
+    config: { variant: "classical", clock: { base: 600, increment: 5 }, ...(opts.online ? { onlinePlay: "lichess" } : {}) },
+  });
+  expect(div.status, JSON.stringify(div.error)).toBeLessThan(300);
+  if (opts.camera) {
+    const cam = await apiJson(request, `/api/v1/divisions/${div.data!.id}`, "PATCH", { camera_policy: opts.camera });
+    expect(cam.status, JSON.stringify(cam.error)).toBeLessThan(300);
+  }
+  return { divisionId: div.data!.id, settings: `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=settings` };
+}
+
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The camera group's toggle; its accessible name is the title, then the summary while collapsed. */
+const cameraToggle = (page: Page, locale: W2Locale = "en") =>
+  page.getByRole("button", { name: new RegExp(`^${escapeRe(uiString(locale, "divset.camera.label"))}`) });
+const cameraSection = (page: Page, locale: W2Locale = "en") => page.locator("section").filter({ has: cameraToggle(page, locale) });
+
+async function openCameraGroup(page: Page, locale: W2Locale = "en"): Promise<void> {
+  const toggle = cameraToggle(page, locale);
+  await expect(toggle).toBeVisible({ timeout: 20_000 });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(page.getByTestId("division-camera-policy")).toBeVisible();
+}
+
+async function gotoSettings(page: Page, path: string): Promise<void> {
+  await page.goto(path);
+  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
+}
+
+/** Every uncaught page error, so a crash the error boundary swallows still reds. */
+function pageErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
+  return errors;
+}
+
+async function setLocaleCookie(page: Page, locale: W2Locale): Promise<void> {
+  const origin = new URL(page.url() === "about:blank" ? (process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000") : page.url()).origin;
+  await page.context().addCookies([{ name: "seazn_locale", value: locale, url: origin }]);
+}
+
+test.describe("online chess: the division's camera group (Task 6's owed browser checks)", () => {
+  test("chess only; gated on SAVED online play — and a rules save leaves the tab standing (M-6); the inherited hint; the Required notice; Save, reload, and back to the competition's setting (Minor 2)", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const errors = pageErrors(page);
+
+    // 1. Not a chess division: no camera group. One non-chess sport only — the gate is `sport_key === "boardgame"`, one
+    //    comparison, and the chess division below is its positive pair.
+    const org = await activeOrg(page);
+    const plain = await seedRig(request);
+    await gotoSettings(page, `/o/${org.slug}/c/${plain.compSlug}/d/${plain.divSlug}?tab=settings`);
+    await expect(page.getByRole("button", { name: /Format/ })).toBeVisible();
+    await expect(cameraToggle(page)).toHaveCount(0);
+
+    // 2. A chess division with online play OFF: the group is there, the select and Save are disabled, and it says why.
+    const rig = await seedChessDivision(request, page, { online: false });
+    await gotoSettings(page, rig.settings);
+    await openCameraGroup(page);
+    await expect(page.getByTestId("division-camera-policy")).toBeDisabled();
+    await expect(page.getByTestId("division-camera-save")).toBeDisabled();
+    await expect(page.getByTestId("division-camera-needs-online")).toHaveText(uiString("en", "divset.camera.needsOnlinePlay"));
+
+    // An unsaved Online play choice does not unlock it: the camera follows the SAVED value.
+    await page.getByRole("button", { name: /Format/ }).click();
+    await page.getByTestId("division-online-play").selectOption("lichess");
+    await expect(page.getByTestId("division-camera-policy"), "an unsaved choice unlocked the camera").toBeDisabled();
+    // Saving the rules turns it on — and (M-6) the refreshed config re-syncs the form without crashing the tab: the
+    // enabled select below can only come from the NEW config having rendered.
+    await page.getByRole("button", { name: uiString("en", "divset.saveRules") }).click();
+    await expect(page.getByText("Match rules saved.")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("division-camera-policy")).toBeEnabled({ timeout: 15_000 });
+    await expect(page.getByTestId("division-camera-needs-online")).toHaveCount(0);
+    await expect(page.getByTestId("division-settings"), "M-6: the tab still renders after a rules save").toBeVisible();
+    expect(errors, "M-6: no page error from the post-save re-sync").toEqual([]);
+
+    // 3. Nothing pinned: the competition's setting applies, and the hint says which (the competition default, Off).
+    const off = uiString("en", "divset.camera.off");
+    await expect(page.getByTestId("division-camera-policy")).toHaveValue("inherit");
+    await expect(page.getByTestId("division-camera-inherited")).toHaveText(uiString("en", "divset.camera.inherited", { policy: off }));
+    // 5. Unchanged: Save is disabled.
+    await expect(page.getByTestId("division-camera-save")).toBeDisabled();
+
+    // 4. Required shows what players are told, verbatim; Optional and Off hide it.
+    const notice = page.getByTestId("division-camera-player-notice");
+    await page.getByTestId("division-camera-policy").selectOption("required");
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText(uiString("en", "divset.camera.playerNoticeLabel"));
+    await expect(notice).toContainText(uiString("en", "onlineChess.camera.playerNotice"));
+    for (const relaxed of ["optional", "off"]) {
+      await page.getByTestId("division-camera-policy").selectOption(relaxed);
+      await expect(notice, `${relaxed} hides the notice`).toHaveCount(0);
+    }
+
+    // 3 + 5. Pin Optional: saved, the inherited hint goes, and it survives a reload.
+    await page.getByTestId("division-camera-policy").selectOption("optional");
+    await expect(page.getByTestId("division-camera-save")).toBeEnabled();
+    await page.getByTestId("division-camera-save").click();
+    await expect(page.getByText(uiString("en", "divset.camera.saved"))).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("division-camera-inherited")).toHaveCount(0);
+    await gotoSettings(page, rig.settings);
+    await expect(cameraToggle(page), "the collapsed summary names the pinned value").toHaveAccessibleName(
+      new RegExp(`${escapeRe(uiString("en", "divset.camera.optional"))}$`),
+    );
+    await openCameraGroup(page);
+    await expect(page.getByTestId("division-camera-policy")).toHaveValue("optional");
+    await expect(page.getByTestId("division-camera-inherited")).toHaveCount(0);
+    await expect(page.getByTestId("division-camera-save"), "unchanged after the reload").toBeDisabled();
+
+    // Minor 2: back to the competition's setting. Before Save the hint says what WILL apply; after Save and a reload
+    // the division stores nothing (null) and inherits again.
+    await page.getByTestId("division-camera-policy").selectOption("inherit");
+    await expect(page.getByTestId("division-camera-inherited")).toHaveText(uiString("en", "divset.camera.inheritPending", { policy: off }));
+    await page.getByTestId("division-camera-save").click();
+    await expect(page.getByText(uiString("en", "divset.camera.saved"))).toBeVisible({ timeout: 15_000 });
+    await gotoSettings(page, rig.settings);
+    await expect(cameraToggle(page)).toHaveAccessibleName(new RegExp(`${escapeRe(uiString("en", "divset.camera.inheritSummary", { policy: off }))}$`));
+    await openCameraGroup(page);
+    await expect(page.getByTestId("division-camera-policy")).toHaveValue("inherit");
+    await expect(page.getByTestId("division-camera-inherited")).toHaveText(uiString("en", "divset.camera.inherited", { policy: off }));
+    const stored = await apiJson<{ camera_policy: string | null }>(request, `/api/v1/divisions/${rig.divisionId}`);
+    expect(stored.data?.camera_policy, "inherit is stored as NULL, not as the competition's value").toBeNull();
+    expect(errors).toEqual([]);
+  });
+
+  test("a division WITH fixtures: the Format group is read-only, the camera group still edits and saves (6)", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const round = await seedOnlineRound(request, ["Cam Fix A", "Cam Fix B"], { open: false });
+    const settings = round.fixturesTab.replace("?tab=fixtures", "?tab=settings");
+    await gotoSettings(page, settings);
+    await page.getByRole("button", { name: /Format/ }).click();
+    await expect(page.getByTestId("format-locked")).toBeVisible();
+    await openCameraGroup(page);
+    await expect(page.getByTestId("division-camera-policy")).toBeEnabled();
+    // No round is open, so tightening is still allowed (D9).
+    await page.getByTestId("division-camera-policy").selectOption("required");
+    await page.getByTestId("division-camera-save").click();
+    await expect(page.getByText(uiString("en", "divset.camera.saved"))).toBeVisible({ timeout: 15_000 });
+    await gotoSettings(page, settings);
+    await openCameraGroup(page);
+    await expect(page.getByTestId("division-camera-policy")).toHaveValue("required");
+  });
+
+  test("after a round opens: a tightening is refused in the viewer's language and the select snaps back; a relaxation saves (7)", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const round = await seedOnlineRound(request, ["Cam Lock A", "Cam Lock B"], { camera: "optional" });
+    const settings = round.fixturesTab.replace("?tab=fixtures", "?tab=settings");
+    await gotoSettings(page, settings);
+    await setLocaleCookie(page, "es");
+    await gotoSettings(page, settings);
+    await openCameraGroup(page, "es");
+    const select = page.getByTestId("division-camera-policy");
+    await expect(select).toHaveValue("optional");
+    await select.selectOption("required");
+    await page.getByTestId("division-camera-save").click();
+    await expect(page.getByText(uiString("es", "divset.err.cameraPolicyLocked"))).toBeVisible({ timeout: 15_000 });
+    await expect(select, "snapped back to the stored value").toHaveValue("optional");
+    const still = await apiJson<{ camera_policy: string | null }>(request, `/api/v1/divisions/${round.divisionId}`);
+    expect(still.data?.camera_policy, "nothing was written").toBe("optional");
+    // Relaxing is always allowed.
+    await select.selectOption("off");
+    await page.getByTestId("division-camera-save").click();
+    await expect(page.getByText(uiString("es", "divset.camera.saved"))).toBeVisible({ timeout: 15_000 });
+    await gotoSettings(page, settings);
+    await openCameraGroup(page, "es");
+    await expect(select).toHaveValue("off");
+  });
+
+  test("a rules save with Lichess on a 1+0 clock names the ship-1 clocks, in the viewer's language (8)", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const rig = await seedChessDivision(request, page, { online: false });
+    await gotoSettings(page, rig.settings);
+    await setLocaleCookie(page, "fr");
+    await gotoSettings(page, rig.settings);
+    // The Format group's title in French, then the clock fields (sport-rules vocabulary: English in every locale).
+    await page.getByRole("button", { name: new RegExp(escapeRe(uiString("fr", "divset.format"))) }).first().click();
+    await page.getByTestId("division-online-play").selectOption("lichess");
+    await page.getByRole("spinbutton", { name: "Time per side (minutes)" }).fill("1");
+    await page.getByRole("spinbutton", { name: "Increment per move (seconds, Fischer)" }).fill("0");
+    await page.getByRole("button", { name: uiString("fr", "divset.saveRules") }).click();
+    await expect(page.getByText(uiString("fr", "divset.err.timeControlUnsupported", { controls: SHIP_1_CLOCKS.join(", ") }))).toBeVisible({
+      timeout: 15_000,
+    });
+    const stored = await apiJson<{ config: { onlinePlay?: string; clock?: unknown } }>(request, `/api/v1/divisions/${rig.divisionId}`);
+    expect(stored.data?.config.onlinePlay, "the refused save wrote nothing").toBeUndefined();
+    expect(stored.data?.config.clock).toEqual({ base: 600, increment: 5 });
+  });
+
+  test("Required, in all four languages: the notice verbatim and nothing says monitored (11); no page scroll at 320/768/1280 in es and fr (10); axe on the open group (M-7a); the collapsed summary at 320 (M-7b)", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(240_000);
+    const errors = pageErrors(page);
+    const rig = await seedChessDivision(request, page, { online: true, camera: "required" });
+    const inherit = await seedChessDivision(request, page, { online: true });
+    await gotoSettings(page, rig.settings);
+    let localesChecked = 0;
+    let widthsChecked = 0;
+    for (const locale of LOCALES) {
+      await setLocaleCookie(page, locale);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gotoSettings(page, rig.settings);
+      await openCameraGroup(page, locale);
+      const notice = page.getByTestId("division-camera-player-notice");
+      await expect(notice.locator("p").first()).toHaveText(uiString(locale, "divset.camera.playerNoticeLabel"));
+      await expect(notice.locator("p").nth(1), `${locale}: the notice, verbatim`).toHaveText(uiString(locale, "onlineChess.camera.playerNotice"));
+      const groupText = await cameraSection(page, locale).innerText();
+      expect(groupText, `${locale}: a camera sentence says "monitored"`).not.toMatch(MONITORED[locale]);
+      if (locale === "es" || locale === "fr") {
+        for (const width of [320, 768, 1280]) {
+          await page.setViewportSize({ width, height: 900 });
+          await expect(notice).toBeVisible();
+          await expectNoHorizontalScroll(page);
+          widthsChecked++;
+        }
+      }
+      if (locale === "es") {
+        // M-7 (a): the open group, notice shown, at the narrowest width.
+        await page.setViewportSize({ width: 320, height: 900 });
+        const axe = await new AxeBuilder({ page })
+          .include('section:has([data-testid="division-camera-policy"])')
+          .withTags(["wcag2a", "wcag2aa"])
+          .analyze();
+        const blocking = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+        expect(blocking.map((v) => `${v.id}: ${v.nodes[0]?.html}`), "axe serious/critical on the open camera group").toEqual([]);
+        // M-7 (b): the COLLAPSED summary at 320, for a pinned value and for the inherited one — not cut off, and no
+        // page scroll.
+        let summaries = 0;
+        for (const [path, want] of [
+          [rig.settings, uiString("es", "divset.camera.required")],
+          [inherit.settings, uiString("es", "divset.camera.inheritSummary", { policy: uiString("es", "divset.camera.off") })],
+        ] as const) {
+          await gotoSettings(page, path);
+          const toggle = cameraToggle(page, "es");
+          await expect(toggle).toHaveAttribute("aria-expanded", "false");
+          const summary = toggle.locator("span.truncate");
+          await expect(summary).toHaveText(want);
+          const fit = await summary.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth, right: el.getBoundingClientRect().right }));
+          expect(fit.scroll, `es-320 summary "${want}" is cut off: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.client);
+          expect(fit.right).toBeLessThanOrEqual(320);
+          await expectNoHorizontalScroll(page);
+          summaries++;
+        }
+        expect(summaries).toBe(2);
+      }
+      localesChecked++;
+    }
+    expect(localesChecked, "anti-vacuity: all four locales").toBe(4);
+    expect(widthsChecked, "anti-vacuity: three widths in es and fr").toBe(6);
+    expect(errors).toEqual([]);
+  });
 });

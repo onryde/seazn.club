@@ -27,6 +27,10 @@ import { listPosts, type OrgPost } from "@/server/usecases/org-posts";
 import { NewsTab } from "@/components/news/news-tab";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
+import { getLichessLink, lichessGrantPlays } from "@/server/usecases/external-accounts";
+import { onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
+import { lichessConfigured } from "@/lib/oauth";
+import { lichessFlashKey } from "@/lib/lichess-link";
 import {
   DisplayNameForm,
   ChangeEmailForm,
@@ -34,6 +38,7 @@ import {
   TransferOwnerForm,
   DeleteAccountButton,
 } from "@/components/account-actions";
+import { LichessLinkCard } from "@/components/lichess-link-card";
 import { ApiKeysPanel } from "@/components/api-keys";
 import { TimezonePreference } from "@/components/timezone-preference";
 import { LocalePreference } from "@/components/locale-preference";
@@ -106,7 +111,7 @@ export default async function SettingsPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
-  searchParams: Promise<{ tab?: string; email_change?: string }>;
+  searchParams: Promise<{ tab?: string; email_change?: string; lichess?: string }>;
 }) {
   const { orgSlug } = await params;
   const page = await requireOrgPage(orgSlug, { tail: "/settings" });
@@ -115,7 +120,7 @@ export default async function SettingsPage({
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
-  const { tab: rawTab, email_change } = await searchParams;
+  const { tab: rawTab, email_change, lichess } = await searchParams;
   const tab: Tab = (SETTINGS_TABS.includes(rawTab as SettingsTab) ? rawTab : "organization") as Tab;
 
   // Per-tab lazy data loading.
@@ -217,7 +222,18 @@ export default async function SettingsPage({
 
   // Account tab data
   const orgMembersMap = new Map<string, OrgMember[]>();
+  let lichessUsername: string | null = null;
+  const lichessOk = lichessConfigured();
+  // T20: linking a Lichess account starts online chess, offered per club (the PostHog flag `online-chess`). The card
+  // shows while this club is offered it — or while the player is linked, so they can still unlink.
+  let lichessOffered = false;
+  // T16: linked, but the grant cannot play (the play gate's own predicate) — the card asks for a re-link.
+  let lichessNeedsReconsent = false;
   if (tab === "account") {
+    const linked = await getLichessLink(user.id);
+    lichessUsername = linked?.username ?? null;
+    lichessNeedsReconsent = linked !== null && !lichessGrantPlays(linked);
+    lichessOffered = await onlineChessOffered(auth);
     for (const org of orgs) {
       if (org.role === "owner") {
         const members = await sql<OrgMember[]>`
@@ -285,6 +301,11 @@ export default async function SettingsPage({
     ["success", "invalid", "expired", "taken", "error"].includes(email_change)
       ? t(dict, `settings.emailChange.${email_change}`)
       : null;
+
+  // Every outcome the linking flow reports here — the callback's, and the start's own refusal (T20 fix round 1, m5) —
+  // through the one mapping /me shares; anything else renders nothing.
+  const lichessMessageKey = lichessFlashKey(lichess);
+  const lichessMessage = lichessMessageKey ? t(dict, lichessMessageKey) : null;
 
   return (
     <>
@@ -617,6 +638,18 @@ export default async function SettingsPage({
                     {emailChangeMessage}
                   </div>
                 )}
+                {lichessMessage && (
+                  <div
+                    className={`rounded-lg px-4 py-3 text-sm ${
+                      lichess === "linked"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-red-50 text-red-700"
+                    }`}
+                    data-testid="lichess-flash"
+                  >
+                    {lichessMessage}
+                  </div>
+                )}
 
                 {/* Profile */}
                 <section className="card space-y-2 p-5">
@@ -636,6 +669,16 @@ export default async function SettingsPage({
                   <SectionHeader icon={Mail}>{t(dict, "settings.account.changeEmail")}</SectionHeader>
                   <ChangeEmailForm currentEmail={user.email} />
                 </section>
+
+                {(lichessOffered || lichessUsername) && (
+                  <LichessLinkCard
+                    linkedUsername={lichessUsername}
+                    configured={lichessOk}
+                    // A (re-)link starts online chess: it names this club only while the club is offered it.
+                    orgSlug={lichessOffered ? active.slug : null}
+                    needsReconsent={lichessNeedsReconsent}
+                  />
+                )}
 
                 {/* Export */}
                 <section className="card p-5">

@@ -1,0 +1,122 @@
+/* The board's look, ours and drawn OVER chessground's own unmodified
+   stylesheets (board-loader.ts): the owner-approved canvas (2026-10-11) —
+   chessboard.js 1.0.0 style. Light #f0d9b5, dark #b58863, a 2px #404040
+   border with square corners, coordinates in the opposite square colour
+   (rank numbers top-left of the left file, file letters bottom-right of the
+   bottom rank), a yellow inner glow on the last move, dots for legal moves, a
+   red glow on a king in check. Scoped under .seazn-board so nothing leaks. */
+.seazn-board {
+  border: 2px solid #404040;
+  box-sizing: border-box;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+/* chessground's base sheet sets every .cg-wrap to `position: relative` with
+   no height of its own, and it loads after Tailwind — so the wrapper's
+   `absolute inset-0` lost, chessground measured a 0px-tall wrap when it was
+   built, and drew a board with no squares, pieces or targets (found by the
+   room e2e; a node test cannot see a cascade). Two classes outrank one. */
+.seazn-board .cg-wrap {
+  position: absolute;
+  inset: 0;
+}
+
+.seazn-board cg-board {
+  background-color: #b58863;
+  /* One 2×2 tile = 25% of the board: top-left light (a8 for White, h1 for
+     Black — both light), clockwise from the top-right: dark, light, dark. */
+  background-image: conic-gradient(#b58863 25%, #f0d9b5 0 50%, #b58863 0 75%, #f0d9b5 0);
+  background-size: 25% 25%;
+}
+
+.seazn-board cg-board square.last-move {
+  background: none;
+  box-shadow: inset 0 0 3px 3px yellow;
+}
+
+.seazn-board cg-board square.selected {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+
+.seazn-board cg-board square.move-dest {
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.22) 0 14%, transparent 15%);
+}
+
+.seazn-board cg-board square.move-dest.oc {
+  background: radial-gradient(circle, transparent 0 78%, rgba(0, 0, 0, 0.22) 79%);
+}
+
+.seazn-board cg-board square.check {
+  background: radial-gradient(
+    circle,
+    rgba(220, 38, 38, 0.95) 0%,
+    rgba(220, 38, 38, 0.55) 40%,
+    rgba(220, 38, 38, 0) 72%
+  );
+}
+
+/* Coordinates: inside the board, never in a gutter. */
+.seazn-board .cg-wrap coords {
+  opacity: 1;
+  font-family: inherit;
+  font-size: var(--seazn-coord-px, 10px);
+  line-height: 1;
+  text-transform: none;
+}
+
+.seazn-board .cg-wrap coords.ranks {
+  left: 2px;
+  top: 0;
+  width: auto;
+  height: 100%;
+}
+
+.seazn-board .cg-wrap coords.ranks coord {
+  transform: none;
+  padding-top: 2px;
+}
+
+.seazn-board .cg-wrap coords.files {
+  left: 0;
+  bottom: 1px;
+  width: 100%;
+  height: auto;
+  /* The canvas letters are lower case (a–h); the base sheet uppercases files
+     with a rule as specific as the shared one above, so it is undone here. */
+  text-transform: none;
+}
+
+.seazn-board .cg-wrap coords.files coord {
+  text-align: right;
+  padding-right: 3px;
+}
+
+/* Opposite square colour. chessground renders ranks 1..8 and files a..h in
+   DOM order, and reverses them with flex for the orientation. From White's
+   side a1 is dark: odd ranks and odd files sit on dark squares. From Black's
+   side the left file is h and the bottom rank is 8: the parity flips.
+   chessground 9.2.1 marks only Black's orientation (`coords.ranks.black`);
+   White's carries no class, so White is `:not(.black)` — a `.white`
+   selector matched nothing and left every label in the page's ink (found by
+   the room e2e). */
+.seazn-board .cg-wrap coords.ranks:not(.black) coord:nth-child(odd),
+.seazn-board .cg-wrap coords.files:not(.black) coord:nth-child(odd),
+.seazn-board .cg-wrap coords.ranks.black coord:nth-child(even),
+.seazn-board .cg-wrap coords.files.black coord:nth-child(even) {
+  color: #f0d9b5;
+}
+
+.seazn-board .cg-wrap coords.ranks:not(.black) coord:nth-child(even),
+.seazn-board .cg-wrap coords.files:not(.black) coord:nth-child(even),
+.seazn-board .cg-wrap coords.ranks.black coord:nth-child(odd),
+.seazn-board .cg-wrap coords.files.black coord:nth-child(odd) {
+  color: #b58863;
+}
+
+/* The promotion sheet's piece faces reuse chessground's own piece set. */
+.seazn-promo-piece.cg-wrap piece {
+  position: static;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
