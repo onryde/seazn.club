@@ -10,7 +10,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { backendPid, pollWaitersBehind, waitersBehind } from "./_lock-waiters";
 import { HttpError } from "@/lib/errors";
-import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS } from "@/server/external-play/window";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 
 // The email seam: the real `send` no-ops without RESEND_API_KEY (vitest.config
@@ -1684,5 +1684,49 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(await meetingsOf(gameBoard.fixtureId), "the game's meeting stands").toEqual([{ meeting_id: gameMeeting, ended_at: null }]);
     expect(await meetingsOf(b!.fixtureId), "the game-less board's meeting went").toEqual([]);
     expect(rtk.http.slice(mark).some((c) => c.includes(gameMeeting)), "the game's meeting is not ended").toBe(false);
+  });
+
+  it("final re-review 2, R2-3: at a re-stamp, every board a game IS or MAY BE on file keeps its meeting — a recorded challenge, a sent create, a LIVE mint claim — and a stale claim or a bare row does not — counted", async () => {
+    // Typed from the states T9 leaves (create-game.ts): it claims (mint_claimed_at), marks the send (create_sent_at),
+    // then records the challenge. Between the claim and the marker only the live claim says a create is in flight —
+    // the sweep's own authority counts it (sweep.ts gameMayBeOnFile); a claim older than MINT_CLAIM_STALE_MS is nobody's.
+    type Row = { status: "pending" | "live"; challenge: boolean; sentAgoMs: number | null; claimAgoMs: number | null };
+    const CASES: { label: string; row: Row; kept: boolean }[] = [
+      { label: "a recorded challenge", row: { status: "live", challenge: true, sentAgoMs: null, claimAgoMs: null }, kept: true },
+      { label: "a create sent, no challenge yet", row: { status: "pending", challenge: false, sentAgoMs: 5_000, claimAgoMs: null }, kept: true },
+      { label: "a LIVE mint claim, nothing sent yet", row: { status: "pending", challenge: false, sentAgoMs: null, claimAgoMs: MINT_CLAIM_STALE_MS / 3 }, kept: true },
+      { label: "a STALE mint claim", row: { status: "pending", challenge: false, sentAgoMs: null, claimAgoMs: MINT_CLAIM_STALE_MS + MIN }, kept: false },
+      { label: "a bare pending row", row: { status: "pending", challenge: false, sentAgoMs: null, claimAgoMs: null }, kept: false },
+    ];
+    let checked = 0;
+    for (const c of CASES) {
+      const rtk = fakeRtk();
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+      const t0 = new Date();
+      expect(await open(s, 1, t0), c.label).toMatchObject({ opened: true });
+      await unpairSwissRound(s.owner, s.stageId);
+      await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+      const [board] = await swissRound1(s.stageId);
+      const reopenAt = new Date(t0.getTime() + 2 * MIN);
+      const ago = (ms: number | null) => (ms === null ? null : new Date(reopenAt.getTime() - ms));
+      const meeting = `r23-${randomUUID().slice(0, 8)}`;
+      await sql`
+        insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, white_lichess_id, black_lichess_id,
+                                           create_sent_at, mint_claimed_at)
+        values (${board!.fixtureId}, ${s.orgId}, ${c.row.status}, now(), ${c.row.challenge ? `g${randomUUID().slice(0, 7)}` : null},
+                ${c.row.challenge ? "home" : null}, ${c.row.challenge ? "w-r23" : null}, ${c.row.challenge ? "b-r23" : null},
+                ${ago(c.row.sentAgoMs)}, ${ago(c.row.claimAgoMs)})`;
+      await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${board!.fixtureId}, ${s.orgId}, ${meeting})`;
+      const mark = rtk.http.length;
+      expect(await reopen(s, reopenAt, rtk.end), c.label).toMatchObject({ opened: true });
+      expect(await auditTypes(s.competitionId), `${c.label}: premise — the window re-stamped`).toEqual([
+        "external_play.round_opened",
+        "external_play.round_reopened",
+      ]);
+      expect(await meetingsOf(board!.fixtureId), c.label).toEqual(c.kept ? [{ meeting_id: meeting, ended_at: null }] : []);
+      expect(rtk.http.slice(mark).some((h) => h.includes(meeting)), `${c.label}: ended at RealtimeKit`).toBe(!c.kept);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
   });
 });
