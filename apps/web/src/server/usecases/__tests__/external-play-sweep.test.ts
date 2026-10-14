@@ -68,7 +68,7 @@ import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { openRound } from "../external-play/open-round";
 import { act } from "../external-play/play";
-import { reconcile } from "../external-play/reconcile";
+import { FLAG_SETTLE_HOLD_MS, FLAG_UNSETTLED_HOLD_MS, reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
 import { organiserOverrideVideo } from "../external-play/preflight";
 import {
@@ -79,6 +79,8 @@ import {
   SWEEP_MOVE_BUDGET,
   SWEEP_NO_TRUTH_HOLD_AFTER,
   SWEEP_PASS_BUDGET_MS,
+  SWEEP_RECONCILE_BUDGET_MS,
+  SWEEP_SETTLING_READS_PER_PASS,
   NO_SHOW_REFUSALS_BEFORE_HOLD,
   expectedEndAt,
   playableWindow,
@@ -157,10 +159,16 @@ const lichess = vi.hoisted(() => {
   const refused = (what: string): Answer => ({ status: 503, body: `no ${what} scripted` });
   const state = {
     calls: [] as { kind: "stream" | "export" | "other"; gameId: string }[],
+    /** D20: every SETTLING stream read (D11's held read), by game, in order — recorded at the board-api boundary. */
+    holds: [] as { gameId: string; holdMs: number }[],
+    /** D20: charged with each stream read's hold (0 for a first-line read) — a test's simulated wall clock. */
+    charge: null as null | ((holdMs: number) => void),
     onStream: ((): Answer => refused("stream")) as Script,
     onExport: ((): Answer => refused("export")) as Script,
     reset() {
       state.calls = [];
+      state.holds = [];
+      state.charge = null;
       state.onStream = () => refused("stream");
       state.onExport = () => refused("export");
     },
@@ -192,7 +200,17 @@ vi.mock("@/server/external-play/lichess/board-api", async (importOriginal) => {
     baseUrl: "https://lichess.test",
     fetch: ((input: string | URL | Request) => lichess.serve(String(input))) as typeof fetch,
   });
-  return { ...real, ...board, readGameStream: wired.readGameStream, exportGame: wired.exportGame };
+  return {
+    ...real,
+    ...board,
+    readGameStream: (a: Parameters<typeof wired.readGameStream>[0]) => {
+      const holdMs = a.holdMs ?? 0;
+      if (holdMs > 0) lichess.holds.push({ gameId: a.gameId, holdMs });
+      lichess.charge?.(holdMs);
+      return wired.readGameStream(a);
+    },
+    exportGame: wired.exportGame,
+  };
 });
 
 // RealtimeKit: the REAL adapter (ensureMeeting / endMeeting) over this fake
@@ -2249,19 +2267,21 @@ describe.runIf(HAS_DB)("I-1 — the report's numeric failure counters and the pa
     expect([clean.reconciled, clean.failed], "the next pass read both and nothing threw").toEqual([2, 0]);
   });
 
-  it("the budget: once SPENT the pass starts no further reconcile, counts it deferred (never failed), and the next pass reads it", async () => {
+  it("reconcile's slice (D20 (c)): once SPENT the pass starts no further reconcile, counts it deferred (never failed), and the next pass reads it", async () => {
     const one = await openedBoard({ checkedIn: ["home", "away"] });
     const two = await openedBoard({ checkedIn: ["home", "away"] });
     await liveGame(one);
     await liveGame(two);
-    const B = SWEEP_PASS_BUDGET_MS;
+    // Reconcile's own slice of the pass (D20 (c)), well inside the pass budget: the slice is what stops it.
+    const R = SWEEP_RECONCILE_BUDGET_MS;
+    expect(R, "premise: the slice is the tighter bound").toBeLessThan(SWEEP_PASS_BUDGET_MS);
     const reads: string[] = [];
     const reconcile: SweepDeps["reconcile"] = async ({ fixtureId }) => {
       reads.push(fixtureId);
       return null;
     };
-    // Start 0; before the first board: B/2 (read); before the second: exactly B (spent).
-    const spent = scripted([0, B / 2, B]);
+    // Start 0; before the first board: R/2 (read); before the second: exactly R (spent).
+    const spent = scripted([0, R / 2, R]);
     const first = await sweep([one, two], { now: one.at(8), reconcile, wallClock: spent.wallClock });
     expect([first.reconciled, first.deferred, first.failed, first.skipped], "one read, one deferred").toEqual([1, 1, 0, 0]);
     expect(spent.looks(), "PREMISE: start, before each of the two boards — and no look after it stopped").toBe(3);
@@ -2273,16 +2293,35 @@ describe.runIf(HAS_DB)("I-1 — the report's numeric failure counters and the pa
     expect(reads[1]).toBe(deferred);
   });
 
-  it("positive pair: 1 ms short of the budget before the second board, both are read and nothing is deferred", async () => {
+  it("positive pair: 1 ms short of reconcile's slice before the second board, both are read and nothing is deferred", async () => {
     const one = await openedBoard({ checkedIn: ["home", "away"] });
     const two = await openedBoard({ checkedIn: ["home", "away"] });
     await liveGame(one);
     await liveGame(two);
-    const B = SWEEP_PASS_BUDGET_MS;
+    const R = SWEEP_RECONCILE_BUDGET_MS;
     let reads = 0;
-    const short = scripted([0, 0, B - 1, B]);
+    const short = scripted([0, 0, R - 1, R]);
     const r = await sweep([one, two], { now: one.at(8), reconcile: async () => (reads++, null), wallClock: short.wallClock });
     expect([r.reconciled, r.deferred, reads]).toEqual([2, 0, 2]);
+  });
+
+  it("D20: the PASS budget still bounds the jobs after reconcile — at the budget a due teardown waits (deferred); 1 ms short it runs (counted)", async () => {
+    const B = SWEEP_PASS_BUDGET_MS;
+    let checked = 0;
+    for (const [clock, runs] of [[B - 1, true], [B, false]] as const) {
+      // A room nobody used, its round opened 30 minutes ago: past T+20, so the teardown is due.
+      const idle = await openedBoard({ checkedIn: ["home"], openedMinutesAgo: 30 });
+      const { meetingId } = await ensureMeeting(idle.fixtureId, RTK);
+      const ended: string[] = [];
+      const r = await sweep(idle, {
+        now: new Date(),
+        wallClock: scripted([0, clock]).wallClock,
+        endMeeting: async (m) => void ended.push(m),
+      });
+      expect([ended, r.deferred], `the clock at ${clock} ms`).toEqual(runs ? [[meetingId], 0] : [[], 1]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("the DB-only no-show is never deferred: with the budget spent from the start it still forfeits the absent player", async () => {
@@ -2302,6 +2341,232 @@ describe.runIf(HAS_DB)("I-1 — the report's numeric failure counters and the pa
     expect(r.deferred, "the live board's read").toBeGreaterThanOrEqual(1);
     expect(r.noShows, "the forfeit was written in this pass").toBe(1);
     expect(forfeitsAttempted(absent.fixtureId)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D20 (review I1; spec docs/superpowers/specs/2026-10-15-chess-per-board-timers-design.md §6.1). A board whose side to
+// move is at zero costs a settling read held FLAG_SETTLE_HOLD_MS (D11), and about five of them spent the whole pass
+// inside reconcile: mint_retry, teardown, camera evidence and the arbiter revokes never ran. Three fixes, each pinned:
+//   (a) a board already held clock_flag_unsettled is read with no hold (the reconcile suite pins the trigger rule);
+//   (b) at most SWEEP_SETTLING_READS_PER_PASS settling reads a pass — the rest are read, counted `deferred`, never held
+//       for a settle they were not given, and first in line next pass;
+//   (c) reconcile stops starting reads at its own slice, SWEEP_RECONCILE_BUDGET_MS, so the jobs after it get the rest.
+// ---------------------------------------------------------------------------
+describe("D20 — the spec's figures (§6.1), and that they fit together", () => {
+  it("2 settling reads a pass and a 20 s reconcile slice of the pass; the capped holds fit inside the slice", () => {
+    expect(SWEEP_SETTLING_READS_PER_PASS, "spec §6.1 (b)").toBe(2);
+    expect(SWEEP_RECONCILE_BUDGET_MS, "spec §6.1 (c)").toBe(20_000);
+    expect(SWEEP_SETTLING_READS_PER_PASS * FLAG_SETTLE_HOLD_MS, "the capped holds fit the slice").toBeLessThan(SWEEP_RECONCILE_BUDGET_MS);
+    expect(SWEEP_RECONCILE_BUDGET_MS, "the slice leaves the rest of the pass to the jobs after reconcile").toBeLessThan(SWEEP_PASS_BUDGET_MS);
+  });
+});
+
+describe.runIf(HAS_DB)("D20 — flag-due boards cannot starve the pass (review I1)", () => {
+  const CAP = SWEEP_SETTLING_READS_PER_PASS;
+  /** The pass's wall clock, simulated: it moves only when the test charges it. */
+  function simClock() {
+    let t = 0;
+    return { wallClock: () => t, advance: (ms: number) => void (t += ms) };
+  }
+  /** Lichess for these boards: each game reads e2e4 e7e5, White to move, `started`, White's clock at `wtime`. With
+   *  `settles`, a HELD stream also carries the flag Lichess pushes past its CheckOnline tick (outoftime, Black wins);
+   *  a first-line read never reaches it — lila's own behaviour (reconcile.ts header, D11). */
+  const LINE2 = ["e2e4", "e7e5"] as const;
+  const world = new Map<string, { b: Board; wtime: number; settles: boolean }>();
+  function lineOf(b: Board, gameId: string, wtime: number): string {
+    const j = JSON.parse(gameFull(b, gameId, MID, { moves: LINE2 })) as GameFullJson;
+    j.state.wtime = wtime;
+    return `${JSON.stringify(j)}\n`;
+  }
+  const pushedFlag = `${JSON.stringify({ type: "gameState", ...MID.state, moves: LINE2.join(" "), wtime: 0, status: "outoftime", winner: "black" })}\n`;
+  beforeEach(() => {
+    world.clear();
+    lichess.onStream = (c) => {
+      const w = world.get(c.gameId);
+      if (!w) return { status: 503, body: "no such game scripted" };
+      const full = lineOf(w.b, c.gameId, w.wtime);
+      return { status: 200, body: w.settles && w.wtime === 0 ? `${full}${pushedFlag}` : full };
+    };
+  });
+
+  /** N live boards (T10's e2e4), caught up by ONE real sweep pass on Lichess's e2e4 e7e5 with White's clock at `w` —
+   *  T11's own write: the line, last_move_at = that pass, white_ms = w. White's flag falls at the catch-up + w, read
+   *  back from every row. From then on Lichess reads White at zero, still `started`. */
+  async function flagDueBoards(n: number, w: number) {
+    const boards: Board[] = [];
+    for (let i = 0; i < n; i++) boards.push(await openedBoard({ checkedIn: ["home", "away"] }));
+    const games: string[] = [];
+    for (const b of boards) games.push(await liveGame(b));
+    boards.forEach((b, i) => world.set(games[i]!, { b, wtime: w, settles: false }));
+    const caughtUpAt = new Date(Math.max(...boards.map((b) => b.at(8).getTime())));
+    expect((await sweep(boards, { now: caughtUpAt })).reconciled, "premise: the catch-up read every board").toBe(n);
+    for (const b of boards) {
+      const [row] = await sql<{ move_count: number; last_move_at: Date | null; white_ms: number | null; status: string }[]>`
+        select move_count, last_move_at, white_ms, status from fixture_external_play where fixture_id = ${b.fixtureId}`;
+      expect([row!.move_count, row!.last_move_at?.getTime(), row!.white_ms, row!.status], "premise: caught up").toEqual([
+        LINE2.length,
+        caughtUpAt.getTime(),
+        w,
+        "live",
+      ]);
+    }
+    expect(lichess.holds, "premise: time on the clock — the catch-up held nothing").toEqual([]);
+    for (const g of games) world.get(g)!.wtime = 0;
+    lichess.calls = [];
+    return { boards, games, caughtUpAt, flagAt: caughtUpAt.getTime() + w };
+  }
+  const statesOf = async (boards: readonly Board[]) => Promise.all(boards.map((b) => bridgeOf(b.fixtureId)));
+
+  /** T9's REAL createGameIfReady meeting Lichess's 429 at `min`: a pending row with `retry_at` — job 2's candidate. */
+  async function throttledCreate(b: Board, min: number): Promise<Date> {
+    __setCreationQueueDeps({ now: () => b.at(min).getTime() });
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "rate_limited", raw: "Too many requests. Try again later." });
+    expect(await createGameIfReady(b.fixtureId, { now: b.at(min), publish: async () => {} }), "premise: T9 was throttled")
+      .toEqual({ created: false, reason: "provider_error" });
+    const [r] = await sql<{ last_error: string | null }[]>`select last_error from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    const at = /retry_at=(\S+)$/.exec(r!.last_error ?? "")?.[1];
+    expect(at, `premise: T9 recorded when to retry (${r!.last_error})`).toBeDefined();
+    return new Date(at!);
+  }
+  /** Job 2 and job 3's candidates beside the flagged boards: a room nobody used (its round opened 30 minutes ago, so
+   *  past T+20) and a throttled create. Recorders stand in for the vendor calls; the candidates are the real rows. */
+  async function laterJobs(now: (b: Board) => Date) {
+    const idle = await openedBoard({ checkedIn: ["home"], openedMinutesAgo: 30 });
+    const { meetingId } = await ensureMeeting(idle.fixtureId, RTK);
+    const throttled = await openedBoard({ checkedIn: ["home", "away"] });
+    const retryAt = await throttledCreate(throttled, 3);
+    const at = now(throttled);
+    expect(at.getTime(), "premise: past the retry's hold").toBeGreaterThanOrEqual(retryAt.getTime());
+    expect(at.getTime(), "premise: inside the retry's window").toBeLessThan(playableWindow(throttled.opened).deadline.getTime());
+    expect(at.getTime(), "premise: past the idle room's T+20").toBeGreaterThanOrEqual(playableWindow(idle.opened).deadline.getTime());
+    const ended: string[] = [];
+    const tried: string[] = [];
+    const deps: Pick<SweepDeps, "endMeeting" | "createGameIfReady"> = {
+      endMeeting: async (m) => void ended.push(m),
+      createGameIfReady: async (fixtureId) => (tried.push(fixtureId), { created: false, reason: "provider_error" }),
+    };
+    return { boards: [idle, throttled], at, deps, ended, tried, meetingId, throttledId: throttled.fixtureId };
+  }
+
+  it("review I1's own pin: N flag-due boards beside a due teardown and a due retry — the teardown and the retry RUN, CAP boards are settled, the rest deferred and settled CAP a pass after; N = 0 the same (counted)", async () => {
+    let checked = 0;
+    for (const n of [3 * CAP, 0]) {
+      const flagged = n > 0 ? await flagDueBoards(n, 60_000) : null;
+      for (const g of flagged?.games ?? []) world.get(g)!.settles = true;
+      const later = await laterJobs((b) => (flagged ? new Date(flagged.caughtUpAt.getTime() + SWEEP_CADENCE_MS) : b.at(13)));
+      if (flagged) {
+        expect(later.at.getTime() - flagged.flagAt, "premise: past the unsettled bound — a deferred board COULD be held").toBeGreaterThan(FLAG_UNSETTLED_HOLD_MS);
+      }
+      lichess.holds = [];
+      // A settling read costs its hold on the pass's clock (~9 s); a first-line read, nothing.
+      const sim = simClock();
+      lichess.charge = (holdMs) => sim.advance(holdMs);
+      const r = await sweep([...(flagged?.boards ?? []), ...later.boards], { now: later.at, wallClock: sim.wallClock, ...later.deps });
+      lichess.charge = null;
+      const settled = Math.min(n, CAP);
+      expect(later.ended, `N=${n}: the idle room came down`).toEqual([later.meetingId]);
+      expect(later.tried, `N=${n}: the throttled create was retried`).toEqual([later.throttledId]);
+      expect(lichess.holds.map((h) => h.holdMs), `N=${n}: settling reads`).toEqual(Array<number>(settled).fill(FLAG_SETTLE_HOLD_MS));
+      expect([r.reconciled, r.deferred, r.failed], `N=${n}: every flagged board read, the rest deferred`).toEqual([n, n - settled, 0]);
+      if (flagged) {
+        const held = new Set(lichess.holds.map((h) => h.gameId));
+        const states = await statesOf(flagged.boards);
+        flagged.games.forEach((g, i) => {
+          expect(states[i], `board ${i}: settled by its held read, or deferred — still live, never held`).toEqual(
+            held.has(g) ? { status: "finished", needs_reason: null } : { status: "live", needs_reason: null },
+          );
+        });
+        // The rest wait for the next passes: CAP a pass, until every board is settled.
+        let passes = 1;
+        let t = later.at.getTime();
+        while ((await statesOf(flagged.boards)).some((s) => s?.status === "live") && passes < n) {
+          t += SWEEP_CADENCE_MS;
+          lichess.holds = [];
+          await sweep(flagged.boards, { now: new Date(t) });
+          expect(lichess.holds.length, `pass ${passes + 1}: the cap`).toBeLessThanOrEqual(CAP);
+          passes++;
+        }
+        expect(passes, "every board settled, CAP a pass").toBe(Math.ceil(n / CAP));
+        expect((await statesOf(flagged.boards)).every((s) => s?.status === "finished"), "all settled").toBe(true);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the cap: a board past it is READ but deferred — never held for a settle it was not given; next pass it gets its settling read, and the boards already held take no slot (D20 (a))", async () => {
+    const f = await flagDueBoards(CAP + 1, 60_000);
+    const pass1 = new Date(f.caughtUpAt.getTime() + SWEEP_CADENCE_MS);
+    expect(pass1.getTime() - f.flagAt, "premise: past the unsettled bound").toBeGreaterThan(FLAG_UNSETTLED_HOLD_MS);
+    const r1 = await sweep(f.boards, { now: pass1 });
+    const settledFirst = new Set(lichess.holds.map((h) => h.gameId));
+    expect(settledFirst.size, "pass 1: the cap, one read per board").toBe(CAP);
+    expect(lichess.holds.length).toBe(CAP);
+    expect([r1.reconciled, r1.deferred, r1.heldForOrganiser], "pass 1").toEqual([CAP + 1, 1, CAP]);
+    const states1 = await statesOf(f.boards);
+    f.games.forEach((g, i) => {
+      expect(states1[i], `pass 1, board ${i}`).toEqual(
+        settledFirst.has(g) ? { status: "needs_organiser", needs_reason: "clock_flag_unsettled" } : { status: "live", needs_reason: null },
+      );
+    });
+    const deferredGame = f.games.find((g) => !settledFirst.has(g))!;
+    // Pass 2: the held boards are read with no hold; the deferred board has its settling read — and, unsettled, is held.
+    lichess.holds = [];
+    lichess.calls = [];
+    const r2 = await sweep(f.boards, { now: new Date(pass1.getTime() + SWEEP_CADENCE_MS) });
+    expect(lichess.holds.map((h) => h.gameId), "pass 2: the deferred board's settling read, and nobody else's").toEqual([deferredGame]);
+    expect([r2.reconciled, r2.deferred, r2.heldForOrganiser], "pass 2: every board read").toEqual([CAP + 1, 0, 1]);
+    for (const g of f.games) {
+      expect(lichess.calls.filter((c) => c.gameId === g).length, `pass 2: ${g === deferredGame ? "first-line + settling" : "first-line only"}`)
+        .toBe(g === deferredGame ? 2 : 1);
+    }
+    expect((await statesOf(f.boards)).map((s) => s?.needs_reason), "all held now").toEqual(f.games.map(() => "clock_flag_unsettled"));
+  });
+
+  it("a deferred board keeps its place: next pass its settling read comes FIRST, before boards that already had one (inside the bound, nobody held)", async () => {
+    const f = await flagDueBoards(CAP + 1, SWEEP_CADENCE_MS - 10_000);
+    const pass1 = new Date(f.caughtUpAt.getTime() + SWEEP_CADENCE_MS);
+    expect(pass1.getTime() - f.flagAt, "premise: inside the unsettled bound — nobody is held in pass 1").toBeLessThan(FLAG_UNSETTLED_HOLD_MS);
+    const r1 = await sweep(f.boards, { now: pass1 });
+    const first = lichess.holds.map((h) => h.gameId);
+    expect([first.length, r1.deferred], "pass 1: the cap").toEqual([CAP, 1]);
+    expect((await statesOf(f.boards)).map((s) => s?.status), "pass 1: nobody held").toEqual(f.games.map(() => "live"));
+    const deferredGame = f.games.find((g) => !first.includes(g))!;
+    lichess.holds = [];
+    await sweep(f.boards, { now: new Date(pass1.getTime() + SWEEP_CADENCE_MS) });
+    expect(lichess.holds.length, "pass 2: the cap").toBe(CAP);
+    expect(lichess.holds[0]!.gameId, "pass 2: the deferred board's settling read comes first").toBe(deferredGame);
+  });
+
+  it("the budget split (c): reconcile stops starting reads at its slice, so the retry and the teardown run in a pass whose reads would have spent it all; the next pass reads the rest", async () => {
+    const C = SWEEP_RECONCILE_BUDGET_MS / 2; // one read's cost on the simulated clock
+    const n = Math.ceil(SWEEP_PASS_BUDGET_MS / C); // enough reads to spend the WHOLE pass, were reconcile unbounded
+    const inSlice = Math.ceil(SWEEP_RECONCILE_BUDGET_MS / C); // reads started at 0, C, … while under the slice
+    expect(inSlice, "premise: the slice stops reconcile before every board is read").toBeLessThan(n);
+    const boards: Board[] = [];
+    for (let i = 0; i < n; i++) boards.push(await openedBoard({ checkedIn: ["home", "away"] }));
+    for (const b of boards) await liveGame(b);
+    const later = await laterJobs((b) => b.at(13));
+    const sim = simClock();
+    const reads: string[] = [];
+    const r = await sweep([...boards, ...later.boards], {
+      now: later.at,
+      wallClock: sim.wallClock,
+      reconcile: async ({ fixtureId }) => {
+        reads.push(fixtureId);
+        sim.advance(C);
+        return null;
+      },
+      ...later.deps,
+    });
+    expect([reads.length, r.reconciled, r.deferred], "reconcile stopped at its slice").toEqual([inSlice, inSlice, n - inSlice]);
+    expect(later.tried, "the retry ran").toEqual([later.throttledId]);
+    expect(later.ended, "the teardown ran").toEqual([later.meetingId]);
+    const deferred = boards.map((b) => b.fixtureId).filter((id) => !reads.includes(id));
+    const next = await sweep(boards, { now: later.at, reconcile: async ({ fixtureId }) => (reads.push(fixtureId), null) });
+    expect([next.reconciled, next.deferred], "the next pass read the rest").toEqual([n - inSlice, 0]);
+    expect(reads.slice(inSlice).sort()).toEqual([...deferred].sort());
   });
 });
 

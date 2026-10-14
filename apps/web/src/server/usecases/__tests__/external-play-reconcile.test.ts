@@ -845,7 +845,8 @@ describe.runIf(HAS_DB)("reconcile — D11 (b, c): a flag Lichess has not settled
     expect(again, "a held board is still read (RECONCILED_WHILE_HELD)").toMatchObject({ result: { wrote: "needs_organiser", reason: "clock_flag_unsettled" } });
     let n = 0;
     lichess.onStream = () => ok(n++ === 0 ? gameFull(g, EXPIRED_1, { moves: [...LINE] }) : thenPushed(gameFull(g, EXPIRED_1, { moves: [...LINE] }), EXPIRED_2));
-    const settled = await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + 150_000)).deps);
+    // D20 (a): a held board's settling read is the organiser's or the room's, never the 5-minute sweep's (next describe).
+    const settled = await reconcile(g.fixtureId, "organiser", observed(new Date(flagAt + 150_000)).deps);
     // T12 writes the result over a mid-game hold; the held row is closed by its one authority, the sweep's first job
     // (bridge-close.ts) — reconcile finishes only ready/live rows (controller carry).
     expect(settled).toMatchObject({ result: { wrote: "decided" }, finished: false });
@@ -862,6 +863,83 @@ describe.runIf(HAS_DB)("reconcile — D11 (b, c): a flag Lichess has not settled
     const out = await reconcile(g.fixtureId, "clock_zero", observed(later(10 * 60_000)).deps);
     expect(out).toMatchObject({ adopted: LINE.length - 1, result: null });
     expect((await bridge(g.fixtureId)).status).toBe("live");
+  });
+
+  // D20 (review I1, spec 2026-10-15-chess-per-board-timers-design.md §6.1 (a)): a board ALREADY held
+  // clock_flag_unsettled is still at zero at Lichess, so a settling read on it costs ~9 s on EVERY 5-minute pass until
+  // the organiser acts. The sweep reads it with no hold; the organiser and the room's own clock-zero reports carry it.
+  // Every other trigger still settles it. Swept over the triggers, counted.
+  it("D20 (a): a board held clock_flag_unsettled is read by the SWEEP with no settling read, and takes no slot; every other trigger settles it — counted", async () => {
+    let checked = 0;
+    for (const trigger of RECONCILE_TRIGGERS) {
+      lichess.reset();
+      const { g, flagAt } = await caughtUp();
+      unsettled(g);
+      await reconcile(g.fixtureId, "clock_zero", observed(new Date(flagAt + FLAG_UNSETTLED_HOLD_MS)).deps);
+      expect((await bridge(g.fixtureId)).needs_reason, `${trigger}: premise: held`).toBe("clock_flag_unsettled");
+      lichess.calls.length = 0;
+      let asked = 0;
+      const { deps, settles } = observed(new Date(flagAt + 2 * FLAG_UNSETTLED_HOLD_MS), { settle: () => (asked++, true) });
+      const out = await reconcile(g.fixtureId, trigger, deps);
+      const bySweep = trigger === "sweep";
+      expect([asked, [...settles], streams().length], trigger).toEqual(bySweep ? [0, [], 1] : [1, [FLAG_SETTLE_HOLD_MS], 2]);
+      expect(out, `${trigger}: the board stays held`).toMatchObject({ result: { wrote: "needs_organiser", reason: "clock_flag_unsettled" }, finished: false });
+      expect((await bridge(g.fixtureId)).needs_reason, trigger).toBe("clock_flag_unsettled");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: triggers").toBe(RECONCILE_TRIGGERS.length);
+  });
+
+  it("D20 (a), the pair: a board held for ANOTHER reason (provider_error) at zero is still settled by the sweep — the exception is the flag hold alone", async () => {
+    const { g, flagAt } = await caughtUp();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "test: held for the organiser" });
+    let n = 0;
+    lichess.onStream = () => ok(n++ === 0 ? gameFull(g, EXPIRED_1, { moves: [...LINE] }) : thenPushed(gameFull(g, EXPIRED_1, { moves: [...LINE] }), EXPIRED_2));
+    const { deps, settles } = observed(new Date(flagAt + 2 * FLAG_UNSETTLED_HOLD_MS));
+    const out = await reconcile(g.fixtureId, "sweep", deps);
+    expect([...settles], "one settling read").toEqual([FLAG_SETTLE_HOLD_MS]);
+    expect(out).toMatchObject({ result: { wrote: "decided" } });
+  });
+
+  // D20 (b): the sweep caps settling reads per pass through the `settle` seam. A read the cap refuses was never given
+  // the chance to settle, so it is never evidence that Lichess did not: no clock_flag_unsettled hold, however late.
+  it("D20 (b): `settle` says no — no settling read, the first read applied, and NOT held however far past the bound; the pair says yes", async () => {
+    const { g, flagAt } = await caughtUp();
+    unsettled(g);
+    lichess.calls.length = 0;
+    const at = new Date(flagAt + 2 * FLAG_UNSETTLED_HOLD_MS);
+    let asked = 0;
+    const no = observed(at, { settle: () => (asked++, false) });
+    const out = await reconcile(g.fixtureId, "sweep", no.deps);
+    expect([asked, [...no.settles], streams().length], "asked once, refused: one first-line read").toEqual([1, [], 1]);
+    expect(out).toMatchObject({ source: "stream", result: null, finished: false });
+    const r = await bridge(g.fixtureId);
+    expect([r.status, r.needs_reason], "never held on a read that could not settle").toEqual(["live", null]);
+    lichess.calls.length = 0;
+    const yes = observed(at, { settle: () => (asked++, true) });
+    const held = await reconcile(g.fixtureId, "sweep", yes.deps);
+    expect([asked, [...yes.settles], streams().length], "allowed: one settling read").toEqual([2, [FLAG_SETTLE_HOLD_MS], 2]);
+    expect(held).toMatchObject({ result: { wrote: "needs_organiser", reason: "clock_flag_unsettled" } });
+  });
+
+  it("D20 (b): `settle` is asked ONLY for a mover at zero — time on the clock, the zero on the waiting side, a flag already settled never spend a slot (counted)", async () => {
+    const cases: [string, (g: Game) => string][] = [
+      ["mid-game (the mid recording)", (g) => gameFull(g, MID)],
+      ["Black at 0, White to move", (g) => gameFull(g, MID, { btime: 0 })],
+      ["already settled (expired-2)", (g) => gameFull(g, EXPIRED_2)],
+    ];
+    let asked = 0;
+    let checked = 0;
+    for (const [why, line] of cases) {
+      lichess.reset();
+      const g = await liveGame();
+      serveStream(line(g));
+      const { deps, settles } = observed(READ, { settle: () => (asked++, true) });
+      await reconcile(g.fixtureId, "sweep", deps);
+      expect([asked, [...settles]], why).toEqual([0, []]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: cases").toBe(cases.length);
   });
 });
 

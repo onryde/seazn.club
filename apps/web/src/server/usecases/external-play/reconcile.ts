@@ -84,6 +84,10 @@ export type ReconcileDeps = {
   /** T17B fix 2 (D11): FLAG_UNSETTLED_HOLD_MS unless a case says otherwise — the reconcile property's interleavings
    *  leave the unsettled-flag hold to its own suite, which pins the default. */
   flagUnsettledAfterMs?: number;
+  /** D20 (review I1): asked once, just before a settling read; `false` skips it — the sweep's per-pass cap
+   *  (SWEEP_SETTLING_READS_PER_PASS). A read the caller skipped was never given the chance to settle, so it places no
+   *  clock_flag_unsettled hold. Absent, every settling read is made. */
+  settle?: () => boolean;
 };
 
 export type ReconcileOutcome = {
@@ -372,16 +376,29 @@ export async function reconcile(
   let truth = await readTruth(game, deps);
   // D11: the side to move at zero, the game `started` — on any trigger, read once more with the stream held open past
   // lila's CheckOnline tick, the one read on which Lichess flags it (see the header). A read that cannot be made keeps
-  // the first.
-  if (truth.source === "stream" && flagDue(truth.game)) {
-    const again = await readTruth(game, deps, FLAG_SETTLE_HOLD_MS);
-    if (again.source !== "none") truth = again;
+  // the first. D20 (review I1), two exceptions, both the 5-minute sweep's:
+  //   (a) a board ALREADY held clock_flag_unsettled is read by the sweep with no hold — it is still at zero, and would
+  //       cost ~9 s of every pass until the organiser acts. The organiser and the room's clock-zero reports carry it.
+  //   (b) the caller's `settle` refuses (the per-pass cap): no settling read, and no unsettled-flag hold from this read.
+  let mayHoldUnsettled = true;
+  if (truth.source === "stream" && flagDue(truth.game) && !(trigger === "sweep" && heldUnsettled(b))) {
+    if (deps.settle === undefined || deps.settle()) {
+      const again = await readTruth(game, deps, FLAG_SETTLE_HOLD_MS);
+      if (again.source !== "none") truth = again;
+    } else {
+      mayHoldUnsettled = false;
+    }
   }
 
-  if (truth.source === "stream") return applyStream(game, truth, deps);
+  if (truth.source === "stream") return applyStream(game, truth, deps, mayHoldUnsettled);
   if (truth.source === "export") return applyExport(game, truth, deps);
   if (truth.revoked.length > 0) await holdRevoked(game, truth.revoked);
   return null;
+}
+
+/** D20 (a): the row is already the organiser's for a flag Lichess did not settle. */
+function heldUnsettled(b: BridgeRow): boolean {
+  return b.status === "needs_organiser" && b.needs_reason === "clock_flag_unsettled";
 }
 
 function readable(b: BridgeRow): boolean {
@@ -560,6 +577,8 @@ async function applyStream(
   g: Game,
   t: Extract<Truth, { source: "stream" }>,
   deps: ReconcileDeps,
+  /** D20 (b): false when the settling read was skipped — such a read is no evidence Lichess failed to flag. */
+  mayHoldUnsettled: boolean,
 ): Promise<ReconcileOutcome> {
   const fixtureId = g.fixture.fixtureId;
   const lichess = t.game;
@@ -676,7 +695,9 @@ async function applyStream(
   if (!IS_TERMINAL[lichess.status]) {
     if (t.revoked.length > 0) return out({ result: await holdRevoked(g, t.revoked), adopted: applied });
     // D11 (b): never give up on a flag silently — past the bound, the organiser decides, with the evidence.
-    const unsettled = unsettledFlagEvidence(g, lichess, adopted, t.at, deps.flagUnsettledAfterMs ?? FLAG_UNSETTLED_HOLD_MS);
+    const unsettled = mayHoldUnsettled
+      ? unsettledFlagEvidence(g, lichess, adopted, t.at, deps.flagUnsettledAfterMs ?? FLAG_UNSETTLED_HOLD_MS)
+      : null;
     const held = unsettled === null ? null : await holdForOrganiser({ fixtureId, reason: "clock_flag_unsettled", detail: unsettled });
     return out({ result: held, adopted: applied });
   }
