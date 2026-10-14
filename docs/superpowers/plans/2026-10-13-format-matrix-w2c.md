@@ -3226,6 +3226,8 @@ export function withStageDefaults(module: AnySportModule, kind: StageKind, varia
 
 ### Task 13: Stage points — the server half of ST-G8 (same loop as Task 12)
 
+> **Carried from the batch-3 review (I3).** `pointsRuleAwardReachesTable(module)` (`packages/engine/src/competition/points.ts:~226`, Task 9) has NO production consumer yet. This task's points validation/explanation consumes it: on a set sport (false) the stage rule's walkover-score input is refused or explained ("a walkover's score does not reach this table"), never silently ignored. Test both a goal sport (true) and a set sport (false).
+
 > **Carried from Task 9.** `pointsRuleExpressible` / `POINTS_RULE_INEXPRESSIBLE` has NO producer after Task 9 (code + copy exist at `lib/rule-errors.ts:15,43`): this task is the producer — `putStageRules`'s points arm (and `createStages`' custom-points path) must call it and refuse; drive it through the real HTTP route, not the helper. Its reason text is English with raw key names: map keys to localised field labels for the 409/422 copy (Task 18 shows it). Also: Task 9 made the rule's award ASSIGN `for`/`against`/`diff` (not add); `STAGE_POINTS_REPLACES` = `points`, `pointsMap` (`scoring`, `awardScore` stay locked).
 
 Spec item 10; Q1; Review Focus 3.
@@ -4057,6 +4059,8 @@ test("X-SR-7 P5: remote pad open on a live match; the organiser corrects the for
 ---
 ### Task 16: Public labels say the rules for every sport
 
+> **Carried from the batch-3 review (M4).** The walkover score readers to unify are `awardedMatchState` / `awardFit` (`apps/web/src/server/engine-db/awarded-state.ts`) and the headline readers (`football.ts` `displayedGoals`, `period/kernel.ts` `officialScore`): one score = the stage rule's award where one applies.
+
 > **Carried from Task 9 fix round (X-WO-1, overnight ruling).** Under a stage points rule carrying `forfeit.awardScore`, the table credits the RULE's score (e.g. football 5-0) while the match headline still reads the division `awardScore` (3-0). One number everywhere: wherever a walkover's score is shown for a fixture in such a stage (match headline on the console/public match page, results list, stage format line), show the rule's awarded score; test football + generic with a rule 5-0 vs division 3-0, every surface that renders the walkover score (grep the headline/summary readers).
 
 Spec item 15, plus the public half of items 10, 12 and 13; X-SR-1 (public), X-PT-1 (public line).
@@ -4519,6 +4523,8 @@ Notes:
 ---
 
 ### Task 18: S3 — stage points UI (same loop as Task 17)
+
+> **Carried from the batch-3 review (I3).** The S3 points editor reads `pointsRuleAwardReachesTable(module)` to HIDE the walkover-score input on set sports (and show it on goal sports); a render test per family. Without this the Task 9 declaration stays inert.
 
 > **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
 
