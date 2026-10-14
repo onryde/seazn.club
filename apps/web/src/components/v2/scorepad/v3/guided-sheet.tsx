@@ -369,8 +369,10 @@ const cancelButtonClass =
 // `max-w-full` is what lets a long label WRAP instead of overflowing: a `shrink-0` flex item in a `flex-wrap` row is as wide as
 // its text, and a 43-character entrant name (the W2c Task 21 Black step; the rapid winner step had it too) was 353px of
 // content in a 260px card, clipped by the card's `overflow-hidden` — visible only with a realistic name, only in a browser.
+// `py-1.5` is the room a WRAPPED (2-line) label needs inside the rounded-full pill; the inline 44px `minHeight` still floors a
+// one-line label at the same height as before (20px line + 12px padding < 44).
 const choiceButtonClass =
-  "min-w-0 max-w-full shrink-0 break-words rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+  "min-w-0 max-w-full shrink-0 break-words rounded-full border border-slate-200 bg-white px-4 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
 
 /** A row of real 44px choice buttons for a `SheetChoiceStep` — the
  *  `renderCandidateRow` (context-strip.tsx) equivalent for options that

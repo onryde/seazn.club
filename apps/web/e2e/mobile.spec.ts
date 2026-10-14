@@ -4919,6 +4919,12 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   const optionIds = () => v3Sheet(page).locator("[data-choice-option-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-choice-option-id")));
   const backButton = () => v3Sheet(page).getByRole("button", { name: "Back", exact: true });
   const projectWidth = page.viewportSize()!.width;
+  /** Only for a per-screen visual verdict: an element crop of the open sheet into W2A_SHOTS_DIR (the switch bracket-finish.spec.ts
+   *  uses). Unset in CI, where it does nothing. */
+  const shotSheet = async (name: string) => {
+    const dir = process.env.W2A_SHOTS_DIR;
+    if (dir) await v3Sheet(page).screenshot({ path: `${dir}/${name}-${projectWidth}.png` });
+  };
   /** Nothing in the open sheet is wider than the box that clips it (a scrollable region would be reachable; clipped content is not),
    *  and the page does not scroll sideways. The names are 43 characters: this is the check a short name cannot fail. */
   const expectSheetNotClipped = async (screen: string) => {
@@ -4944,6 +4950,7 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   await assertTapFloor(option("away"), "rapid winner");
   await expect(option("away")).toHaveText(nameOf.get(awayEntrantId)!);
   await expectSheetNotClipped("Rapid winner step");
+  await shotSheet("t21-long-name-rapid-winner");
   await option("away").click();
   expect(await optionIds()).toEqual(["none", "2–0", "1½–½"]);
   await assertTapFloor(option("none"), "score none");
@@ -4981,6 +4988,7 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   await expect(option("black-away")).toHaveText(nameOf.get(awayEntrantId)!);
   for (const id of ["black-home", "black-away"]) await assertTapFloor(option(id), `Black ${id}`);
   await expectSheetNotClipped("Black step");
+  await shotSheet("t21-long-name-black");
   await option("black-away").click();
 
   // Screen 2 — Result? The engine's three, each labelled by the dictionary, the hint showing.

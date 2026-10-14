@@ -591,5 +591,20 @@
     "name": "every choice button may not outgrow its row"
    }
   ]
+ },
+ {
+  "id": "t21-choice-pill-no-vertical-padding",
+  "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+  "find": "bg-white px-4 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400\";\n\n/** A row of real 44px",
+  "replace": "bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400\";\n\n/** A row of real 44px",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+    ],
+    "name": "every choice button may not outgrow its row"
+   }
+  ]
  }
 ]

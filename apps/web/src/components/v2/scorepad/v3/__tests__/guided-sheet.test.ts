@@ -1432,6 +1432,10 @@ describe("GuidedSheet — a long choice label wraps, it never overflows its row 
       expect(classes, `${String(propsOf(option)["data-choice-option-id"])}: capped at its row's width`).toContain("max-w-full");
       expect(classes, `${String(propsOf(option)["data-choice-option-id"])}: may shrink below its content`).toContain("min-w-0");
       expect(classes, `${String(propsOf(option)["data-choice-option-id"])}: its label breaks`).toContain("break-words");
+      // A 2-line name in a rounded-full pill needs breathing room top and bottom (it touched the curve at 320 without it);
+      // the 44px floor stays, so a one-line label is the same height as before.
+      expect(classes, `${String(propsOf(option)["data-choice-option-id"])}: vertical padding for a wrapped label`).toContain("py-1.5");
+      expect((propsOf(option).style as { minHeight?: number }).minHeight, "the 44px tap floor stays").toBe(44);
     }
     expect(textOf(options[0]!), "the long name is the label, in full").toBe(longName);
   });
