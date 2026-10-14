@@ -257,6 +257,15 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     }
     expect(checked, "every choice step was inspected").toBe(sheet.steps.filter((s) => s.kind === "choice").length);
     expect(checked).toBeGreaterThanOrEqual(5);
+    // What a scorer SEES, per rung: the hint is on a shown step for the Armageddon and on none for rapid or blitz. (The check
+    // above says which step carries it; this one says the step is not shown on a rung that never plays it.)
+    let rungs = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      const hinted = sheet.steps.filter((s) => shownFor(s, { rung }) && s.kind === "choice" && s.hintKey === "pad.boardgame.tiebreak.armageddonHint");
+      expect(hinted.map((s) => s.id), `rung ${rung}`).toEqual(rung === "armageddon" ? ["result"] : []);
+      rungs++;
+    }
+    expect(rungs, "every rung the engine declares was inspected").toBe(TIEBREAK_RUNGS.length);
   });
 
   it("BG-KO-2 the confirm line names who advances and why, for every Black × result — the scorer never applies the rule", () => {

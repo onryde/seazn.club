@@ -1,0 +1,595 @@
+[
+ {
+  "id": "t21-black-pinned-home",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "black: entrantOf(state, blackSideOf(a))",
+  "replace": "black: entrantOf(state, \"home\")",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "the seam: every payload the sheet can build folds through the REAL engine"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the Armageddon branch asks Black then the result"
+   }
+  ]
+ },
+ {
+  "id": "t21-rungs-engine-constant",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "effectiveRungs(cfgOf(view)).map(",
+  "replace": "[\"rapid\", \"blitz\", \"armageddon\"].map(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-3 the rung step offers exactly the rungs the STAGE plays"
+   }
+  ]
+ },
+ {
+  "id": "t21-rungs-resorted-canonical",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "effectiveRungs(cfgOf(view)).map(",
+  "replace": "[...effectiveRungs(cfgOf(view))].sort((x, y) => [\"rapid\", \"blitz\", \"armageddon\"].indexOf(x) - [\"rapid\", \"blitz\", \"armageddon\"].indexOf(y)).map(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-3 the rung step offers exactly the rungs the STAGE plays"
+   }
+  ]
+ },
+ {
+  "id": "t21-advancer-always-black",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "const advancer: Side = result === \"white\" ? (black === \"home\" ? \"away\" : \"home\") : black;",
+  "replace": "const advancer: Side = black;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the confirm line names who advances and why"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the read-back names the entrant the REAL engine advances"
+   }
+  ]
+ },
+ {
+  "id": "t21-advancer-draw-goes-to-white",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "const advancer: Side = result === \"white\" ? (black === \"home\" ? \"away\" : \"home\") : black;",
+  "replace": "const advancer: Side = result !== \"black\" ? (black === \"home\" ? \"away\" : \"home\") : black;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the confirm line names who advances and why"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the read-back names the entrant the REAL engine advances"
+   }
+  ]
+ },
+ {
+  "id": "t21-advancer-white-stays-black",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "const advancer: Side = result === \"white\" ? (black === \"home\" ? \"away\" : \"home\") : black;",
+  "replace": "const advancer: Side = result === \"white\" ? black : black;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the confirm line names who advances and why"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the read-back names the entrant the REAL engine advances"
+   }
+  ]
+ },
+ {
+  "id": "t21-colour-word-swapped",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "colour: t(COLOUR_KEY[result])",
+  "replace": "colour: t(COLOUR_KEY[result === \"white\" ? \"black\" : \"white\"])",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the confirm line names who advances and why"
+   }
+  ]
+ },
+ {
+  "id": "t21-drawn-line-never",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "return result === \"draw\"",
+  "replace": "return result === \"never\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the confirm line names who advances and why"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the read-back names the entrant the REAL engine advances"
+   }
+  ]
+ },
+ {
+  "id": "t21-hint-on-black-step",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "        title: \"pad.boardgame.tiebreak.black.title\",\n",
+  "replace": "        title: \"pad.boardgame.tiebreak.black.title\",\n        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the 'draw means Black advances' hint stays"
+   }
+  ]
+ },
+ {
+  "id": "t21-black-step-every-rung",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "        title: \"pad.boardgame.tiebreak.black.title\",\n        when: (a) => a.rung === \"armageddon\",",
+  "replace": "        title: \"pad.boardgame.tiebreak.black.title\",\n        when: () => true,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the Armageddon branch asks Black then the result"
+   }
+  ]
+ },
+ {
+  "id": "t21-confirm-step-every-rung",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "        title: \"pad.boardgame.tiebreak.confirm.title\",\n        when: (a) => a.rung === \"armageddon\",",
+  "replace": "        title: \"pad.boardgame.tiebreak.confirm.title\",\n        when: () => true,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the Armageddon branch asks Black then the result"
+   }
+  ]
+ },
+ {
+  "id": "t21-result-step-every-rung",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "        title: \"pad.boardgame.tiebreak.result.title\",\n        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n        when: (a) => a.rung === \"armageddon\",",
+  "replace": "        title: \"pad.boardgame.tiebreak.result.title\",\n        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n        when: () => true,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the Armageddon branch asks Black then the result"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the 'draw means Black advances' hint stays"
+   }
+  ]
+ },
+ {
+  "id": "t21-winner-step-for-armageddon",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "        title: \"pad.boardgame.tiebreak.winner.title\",\n        when: (a) => a.rung !== \"armageddon\",",
+  "replace": "        title: \"pad.boardgame.tiebreak.winner.title\",\n        when: () => true,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the Armageddon branch asks Black then the result"
+   }
+  ]
+ },
+ {
+  "id": "t21-black-defaults-home",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "  throw new Error(`boardgame tie-break: no Black answered for rung \"${String(answers.rung)}\"`);",
+  "replace": "  return \"home\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "with no winner, Black or result answered for the chosen rung the sheet refuses"
+   }
+  ]
+ },
+ {
+  "id": "t21-result-defaults-draw",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "  throw new Error(`boardgame tie-break: no result answered for rung \"${String(answers.rung)}\"`);",
+  "replace": "  return \"draw\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "with no winner, Black or result answered for the chosen rung the sheet refuses"
+   }
+  ]
+ },
+ {
+  "id": "t21-payload-names-a-winner",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "if (a.rung === \"armageddon\") return { rung: a.rung, black:",
+  "replace": "if (a.rung === \"armageddon\") return { rung: a.rung, winner: entrantOf(state, blackSideOf(a)), black:",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "the seam: every payload the sheet can build folds through the REAL engine"
+   }
+  ]
+ },
+ {
+  "id": "t21-results-reversed",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "options: ARMAGEDDON_RESULTS.map((result) =>",
+  "replace": "options: [...ARMAGEDDON_RESULTS].reverse().map((result) =>",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the Armageddon branch asks Black then the result"
+   }
+  ]
+ },
+ {
+  "id": "t21-name-ignores-seated-person",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "return found.labelText ?? t(found.label);",
+  "replace": "return t(found.label);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 with no name known the confirm line falls back"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "BG-KO-2 the confirm line names who advances and why"
+   }
+  ]
+ },
+ {
+  "id": "t21-chassis-confirm-click-noop",
+  "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+  "find": "renderConfirmStep(step, state.answers, t, () => handleAnswer(\"confirmed\"))",
+  "replace": "renderConfirmStep(step, state.answers, t, () => {})",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+    ],
+    "name": "tapping Confirm completes exactly once"
+   }
+  ]
+ },
+ {
+  "id": "t21-chassis-summary-dropped",
+  "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+  "find": "{step.summary(answers)}",
+  "replace": "{\"\"}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+    ],
+    "name": "renders the sentence the skin derives from the answers so far"
+   }
+  ]
+ },
+ {
+  "id": "t21-chassis-confirm-short-target",
+  "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+  "find": "        onClick={onConfirm}\n        style={{ minHeight: 44 }}",
+  "replace": "        onClick={onConfirm}\n        style={{ minHeight: 24 }}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+    ],
+    "name": "renders the sentence the skin derives from the answers so far"
+   }
+  ]
+ },
+ {
+  "id": "t21-chassis-confirm-answers-stale",
+  "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+  "find": "renderConfirmStep(step, state.answers, t,",
+  "replace": "renderConfirmStep(step, initialSheetState().answers, t,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+    ],
+    "name": "Back from the confirm step re-opens the choice"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-black-sides-swapped",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "{ kind: \"choice\", optionId: `${BLACK_OPTION_PREFIX}${side}` },",
+  "replace": "{ kind: \"choice\", optionId: `${BLACK_OPTION_PREFIX}${side === \"home\" ? \"away\" : \"home\"}` },",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break \\(BG-KO-1, ruling 82; W2c BG-KO-2\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break, replayed on the fake ledger"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-result-step-dropped",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "    { kind: \"choice\", optionId: `${RESULT_OPTION_PREFIX}${result}` },\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break \\(BG-KO-1, ruling 82; W2c BG-KO-2\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break, replayed on the fake ledger"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-confirm-dropped",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "    { kind: \"confirm\" },\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break \\(BG-KO-1, ruling 82; W2c BG-KO-2\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break, replayed on the fake ledger"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-armageddon-taps-score",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "    { kind: \"confirm\" },\n",
+  "replace": "    { kind: \"choice\", optionId: TIEBREAK_SCORE_NONE },\n    { kind: \"confirm\" },\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break \\(BG-KO-1, ruling 82; W2c BG-KO-2\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break, replayed on the fake ledger"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-armageddon-tile-dropped",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "  return [\n    { kind: \"tile\", tileId: BOARDGAME_TIEBREAK_TILE },\n    { kind: \"choice\", optionId: ARMAGEDDON },",
+  "replace": "  return [\n    { kind: \"choice\", optionId: ARMAGEDDON },",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break \\(BG-KO-1, ruling 82; W2c BG-KO-2\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break, replayed on the fake ledger"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-armageddon-extra-keys",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "keys.length !== 3 || keys[0] !== \"black\" || keys[1] !== \"result\" || keys[2] !== \"rung\" || ",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break: a payload that is not the engine's rung"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-armageddon-result-unchecked",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "(ARMAGEDDON_RESULTS as readonly string[]).includes(p.result)",
+  "replace": "true",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break: a payload that is not the engine's rung"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-armageddon-black-unchecked",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "const side = p.black === ctx.entrants.home ? \"home\" : p.black === ctx.entrants.away ? \"away\" : null;",
+  "replace": "const side = p.black === ctx.entrants.away ? \"away\" : \"home\";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break: a payload that is not the engine's rung"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-armageddon-routed-as-rapid",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "if (rung === ARMAGEDDON) return armageddonSteps(payload, p, keys, ctx);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break \\(BG-KO-1, ruling 82; W2c BG-KO-2\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break, replayed on the fake ledger"
+   }
+  ]
+ },
+ {
+  "id": "t21-pad-white-result-id-typed",
+  "file": "tools/matrix/lib/pads/boardgame.ts",
+  "find": "`${RESULT_OPTION_PREFIX}${result}`",
+  "replace": "`${RESULT_OPTION_PREFIX}draw`",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "W2a tie-break \\(BG-KO-1, ruling 82; W2c BG-KO-2\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/pad-adapters.test.ts"
+    ],
+    "name": "route case \\(a value outside the generator's\\): the Armageddon White wins"
+   }
+  ]
+ },
+ {
+  "id": "t21-chassis-choice-uncapped",
+  "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+  "find": "\"min-w-0 max-w-full shrink-0 break-words rounded-full",
+  "replace": "\"min-w-0 shrink-0 break-words rounded-full",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+    ],
+    "name": "every choice button may not outgrow its row"
+   }
+  ]
+ }
+]

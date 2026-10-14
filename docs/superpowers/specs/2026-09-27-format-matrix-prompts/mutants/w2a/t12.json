@@ -190,7 +190,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "BG-KO-2 \\(ruling 82\\): every rung shows ONE winner step"
+        "name": "BG-KO-2 the 'draw means Black advances' hint stays"
       }
     ]
   },
@@ -205,7 +205,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "BG-KO-2 \\(ruling 82\\): every rung shows ONE winner step"
+        "name": "BG-KO-2 the 'draw means Black advances' hint stays"
       }
     ]
   },
@@ -225,21 +225,6 @@
     ]
   },
   {
-    "id": "armageddon-winner-ignored",
-    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "answers.rung === \"armageddon\" ? answers[\"winner-armageddon\"] : answers.winner",
-    "replace": "answers.winner ?? answers[\"winner-armageddon\"]",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
-        ],
-        "name": "answers left by a rung the scorer backed out of are never sent"
-      }
-    ]
-  },
-  {
     "id": "winner-default",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
     "find": "  if (answer === \"home\" || answer === \"away\") return answer;",
@@ -250,7 +235,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "with no winner answered for the chosen rung the sheet refuses"
+        "name": "with no winner, Black or result answered for the chosen rung the sheet refuses"
       }
     ]
   },
@@ -281,21 +266,6 @@
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
         "name": "the score step shows for rapid and blitz only"
-      }
-    ]
-  },
-  {
-    "id": "score-stale",
-    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "      const score = a.rung !== \"armageddon\" ? a.score : undefined;",
-    "replace": "      const score = a.score;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
-        ],
-        "name": "answers left by a rung the scorer backed out of are never sent"
       }
     ]
   },
@@ -332,7 +302,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "with no entrant name the winner options fall back to the players"
+        "name": "with no entrant name the winner and Black options fall back to the players"
       },
       {
         "cwd": "apps/web",
@@ -548,7 +518,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "with NO pairing card the winner and armageddon options read the ENTRANTS"
+        "name": "with NO pairing card the winner and Black options read the ENTRANTS"
       }
     ]
   },
