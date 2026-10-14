@@ -160,9 +160,10 @@ export default defineConfig({
     // included) into .next/standalone, and vitest globbing those copies after
     // a local build segfaulted the run.
     exclude: ["**/node_modules/**", "**/dist/**", "e2e/**", "**/.next/**"],
-    // @seazn/engine ships TS source (workspace symlink) — inline it so vitest
-    // transforms it instead of treating it as an opaque external dep.
-    server: { deps: { inline: [/@seazn\/engine/] } },
+    // @seazn/engine and @seazn/scheduler ship TS source (workspace symlinks) — inline them so vitest
+    // transforms them instead of treating them as opaque external deps. The scheduler matters twice over: the
+    // wiring tests spy on its `solveBuild` through the module namespace, which only sees a module vitest owns.
+    server: { deps: { inline: [/@seazn\/engine/, /@seazn\/scheduler/] } },
     coverage: {
       provider: "v8",
       // The v1 engine (pairing/standings/engine) was deleted at the PROMPT-15

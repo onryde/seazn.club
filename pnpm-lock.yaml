@@ -113,6 +113,9 @@ importers:
       '@seazn/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@seazn/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@sentry/nextjs':
         specifier: ^10.62.0
         version: 10.62.0(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.8.0(@opentelemetry/api@1.9.1))(next@16.3.6(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(@types/node@26.1.2)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react@19.2.4)(webpack@5.108.3(esbuild@0.28.1)(postcss@8.5.28)(sharp@0.35.4(@types/node@26.1.2)))
