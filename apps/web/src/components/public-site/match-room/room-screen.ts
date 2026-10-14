@@ -69,8 +69,8 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   // too: play.ts refuses every act, and re-linking that account is the
   // remedy (T14 re-review 5, I-2).
   if (snap.frozen === "you" || snap.frozen === "both" || snap.otherAccount !== null) return { kind: "revoked" };
-  // Lichess refused the player's own grant mid-act or at the seat.
-  if (s.error === "relink") return { kind: "relink" };
+  // Lichess refused the player's own grant mid-act or at the seat — or said so when the page loaded (P10).
+  if (s.error === "relink" || s.grantRefused) return { kind: "relink" };
   // A game on file the server will not take an act on (play.ts refuses it:
   // a provider_error hold, T13's deadline hold, a withdrawn board) is shown
   // as it truly is — held, view-only — never live and movable (review I2).

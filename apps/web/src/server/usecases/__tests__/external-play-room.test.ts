@@ -37,8 +37,10 @@ import {
   readRoom,
   reportCameraFault,
   reportClockZero,
+  roomGrantDowngraded,
   type RoomDeps,
 } from "../external-play/room";
+import { startLichessFixtureServer } from "../../../../e2e/lichess-fixture-server";
 import { hasLiveVideoPublisher } from "@/server/external-play/video/realtimekit";
 import { GUARD_FAULT_MAX_STAMPS } from "@/server/external-play/video/guard-faults";
 import { GUARD_FAULT_FLAG_STAMPS } from "@/server/external-play/video/match-camera-off";
@@ -1174,6 +1176,85 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — a broken game row (re
       });
     } finally {
       errors.mockRestore();
+    }
+  });
+});
+
+// Final review P10: the room asks Lichess, once per page load, whether the VIEWER's grant still plays — so a grant
+// narrowed or revoked at lichess.org shows the re-link screen at once, not after a spent act. The page asks; this is
+// the usecase it asks.
+describe.skipIf(!process.env.DATABASE_URL)("room — Lichess's word on the viewer's grant (P10)", () => {
+  it("asks for the VIEWER's own user, by session and by room link alike, and answers what Lichess said", async () => {
+    let checked = 0;
+    for (const answer of [true, false]) {
+      const s = await seed();
+      await gameOnFile(s, { status: "live", moves: ["e2e4"] });
+      const viewers = [
+        { identity: { kind: "session" as const, userId: s.home.userId }, userId: s.home.userId },
+        { identity: { kind: "token" as const, token: await tokenFor(s, s.away.personId) }, userId: s.away.userId },
+      ];
+      for (const v of viewers) {
+        const asked: (string | null)[] = [];
+        const grantDowngraded = async (userId: string | null) => (asked.push(userId), answer);
+        expect(await roomGrantDowngraded(v.identity, s.fixtureId, deps({ grantDowngraded })), v.identity.kind).toBe(answer);
+        expect(asked, v.identity.kind).toEqual([v.userId]);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("before the game too (the check-in): the grant is asked — the create would spend it", async () => {
+    const s = await seed();
+    const asked: (string | null)[] = [];
+    expect(await roomGrantDowngraded({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ grantDowngraded: async (u) => (asked.push(u), true) }))).toBe(true);
+    expect(asked).toEqual([s.home.userId]);
+  });
+
+  it("nothing left to play — the bridge closed, or the board decided — answers false and asks nobody", async () => {
+    let checked = 0;
+    for (const close of [
+      async (s: SeedOnlineChessFixtureResult) => void (await gameOnFile(s, { status: "finished", moves: ["e2e4", "e7e5"] })),
+      // Labelled SQL: the board's result is the subject's input, not under test (the room suites drive the writers).
+      async (s: SeedOnlineChessFixtureResult) => void (await sql`update fixtures set status = 'decided' where id = ${s.fixtureId}`),
+    ]) {
+      const s = await seed();
+      await close(s);
+      const asked: (string | null)[] = [];
+      expect(await roomGrantDowngraded({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ grantDowngraded: async (u) => (asked.push(u), true) }))).toBe(false);
+      expect(asked).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("someone not on the board is the room's own 404, and nothing is asked", async () => {
+    const s = await seed();
+    const stranger = await makeUser("p10-stranger");
+    const asked: (string | null)[] = [];
+    const err = await roomGrantDowngraded({ kind: "session", userId: stranger.id }, s.fixtureId, deps({ grantDowngraded: async (u) => (asked.push(u), true) })).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toMatchObject({ status: 404 });
+    expect(asked).toEqual([]);
+  });
+
+  it("by default it is Lichess itself that is asked (through the fixture): the viewer whose grant was narrowed there reads true, the other false", async () => {
+    const fx = await startLichessFixtureServer(0);
+    try {
+      vi.stubEnv("LICHESS_BASE_URL", fx.url);
+      const s = await seed();
+      await gameOnFile(s, { status: "live", moves: ["e2e4"] });
+      // The seed's linked players hold `lio_seed_<lichess id>` (seedPlayer).
+      for (const side of [s.home, s.away]) fx.registerToken(`lio_seed_${side.lichessId}`, side.lichessId);
+      fx.setTokenScopes(`lio_seed_${s.home.lichessId}`, ["challenge:read"]);
+      const read = (userId: string) => roomGrantDowngraded({ kind: "session", userId }, s.fixtureId, deps());
+      expect([await read(s.home.userId), await read(s.away.userId)]).toEqual([true, false]);
+      expect(fx.calls.filter((c) => c.path === "/api/token/test")).toHaveLength(2);
+    } finally {
+      vi.unstubAllEnvs();
+      await fx.close();
     }
   });
 });

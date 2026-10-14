@@ -116,16 +116,20 @@ export function RoomShell({
   initial,
   token,
   selfPath,
+  grantRefused = false,
 }: {
   initial: RoomSnapshot;
   token: string | null;
   /** This page's own path and query, where re-linking Lichess returns to. */
   selfPath: string;
+  /** Final review P10: Lichess said, as this page loaded, that the player's grant no longer plays — the re-link
+   *  screen shows at once (room.ts `roomGrantDowngraded`, asked by the page). */
+  grantRefused?: boolean;
 }) {
   const t = useT();
   const plural = usePlural();
   const locale = useLocale();
-  const room = useRoom(initial, token);
+  const room = useRoom(initial, token, grantRefused);
   const { state } = room;
   const snap = state.snap;
   const cameraOn = snap.cameraPolicy !== "off";

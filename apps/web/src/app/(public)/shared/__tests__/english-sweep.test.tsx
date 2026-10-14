@@ -155,7 +155,7 @@ vi.mock("@/lib/prose", () => ({ renderProse: async (html: string) => `<p>${html}
 vi.mock("@/server/embed-data", () => ({ embedDivisionData: stub.embedDivisionData }));
 // The match room's first snapshot (T14): its usecase reads the database and a
 // personal link; the snapshot is data, handed in here.
-vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: stub.readRoom }));
+vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: stub.readRoom, roomGrantDowngraded: async () => false }));
 // A share image is satori pixels, which no sweep can read — but the ELEMENT
 // handed to satori is markup. Captured here and rendered like a page, so every
 // word the image would draw is classified. The body is never painted.

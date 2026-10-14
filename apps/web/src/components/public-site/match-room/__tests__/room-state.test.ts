@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { Chess } from "chess.js";
-import { canMove, initialRoomState, moveNotice, parseRoomBroadcast, plyOfFen, roomReducer, type RoomBroadcastWire, type RoomState } from "../room-state";
+import { canMove, initialRoomState, moveNotice, parseRoomBroadcast, plyOfFen, roomReducer, type RoomBroadcastWire, type RoomEvent, type RoomState } from "../room-state";
 import type { RoomActBody } from "../room-api";
 import { RoomAct, RoomActOut } from "@/server/api-v1/schemas";
 import { ROUTES } from "@/server/api-v1/openapi";
@@ -240,6 +240,28 @@ describe("seat round trip", () => {
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+
+  it("P10: Lichess's answer at page load is kept for the page — no snapshot, seat answer, act or failed fetch clears or sets it", () => {
+    expect(initialRoomState(snap(), T0).grantRefused, "the empty case: not asked ⇒ not refused").toBe(false);
+    const events: RoomEvent[] = [
+      { type: "snapshot", snap: snap({ serverNow: iso(T0 + 1) }), receivedAt: T0 },
+      { type: "seat_sent" },
+      { type: "seat_answered", answer: { snapshot: snap({ serverNow: iso(T0 + 2) }), seat: { seated: true, participant: null }, create: null }, receivedAt: T0 },
+      { type: "act_sent", action: { kind: "resign" } },
+      { type: "act_answered", answer: { ok: true, applied: true } },
+      { type: "fetch_failed", status: 500 },
+    ];
+    let checked = 0;
+    for (const start of [true, false]) {
+      let s = initialRoomState(snap(), T0, start);
+      for (const e of events) {
+        s = roomReducer(s, e);
+        expect(s.grantRefused, `${start} after ${e.type}`).toBe(start);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(events.length * 2);
   });
 
   it("a 404 seat answer is not-found and stops polling; a dropped connection is a network error", () => {

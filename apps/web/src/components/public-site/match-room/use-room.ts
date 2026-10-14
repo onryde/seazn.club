@@ -47,9 +47,10 @@ export function pollIntervalMs(a: { gameLive: boolean; subscribed: boolean }): n
   return a.gameLive && !a.subscribed ? LIVE_POLL_MS : IDLE_POLL_MS;
 }
 
-export function useRoom(initial: RoomSnapshot, token: string | null) {
+export function useRoom(initial: RoomSnapshot, token: string | null, grantRefused = false) {
   const fixtureId = initial.fixtureId;
-  const [state, dispatch] = useReducer(roomReducer, initial, (s) => initialRoomState(s, Date.now()));
+  // P10: the page load's answer from Lichess, kept for the page (room-state `grantRefused`).
+  const [state, dispatch] = useReducer(roomReducer, initial, (s) => initialRoomState(s, Date.now(), grantRefused));
   const stateRef = useRef(state);
   useEffect(() => {
     stateRef.current = state;

@@ -130,6 +130,15 @@ describe("roomScreen", () => {
     expect(roomScreen({ ...all, notFound: false, error: null, snap: { ...off, result: null, frozen: null, canAct: true } }).kind).toBe("live");
   });
 
+  it("P10: Lichess said at page load that the grant no longer plays ⇒ relink — game over and a frozen seat outrank it; it outranks a held board, the live board and the check-in", () => {
+    const grantRefusedOn = (over: Partial<RoomSnapshot>) => roomScreen(st(over, { grantRefused: true })).kind;
+    // The empty case first: no refusal leaves each of these on its own screen.
+    expect([st({ game: GAME, canAct: true }), st({ game: GAME, canAct: false }), st({})].map((x) => roomScreen(x).kind)).toEqual(["live", "held", "checkin"]);
+    expect([grantRefusedOn({ game: GAME, canAct: true }), grantRefusedOn({ game: GAME, canAct: false }), grantRefusedOn({})]).toEqual(["relink", "relink", "relink"]);
+    expect(grantRefusedOn({ game: { ...GAME, over: true } })).toBe("over");
+    expect(grantRefusedOn({ game: GAME, frozen: "you" })).toBe("revoked");
+  });
+
   it("I1: a frozen seat whose game is over — written or seen over — is the game-over screen, for both freezes", () => {
     let checked = 0;
     for (const frozen of ["you", "both"] as const) {
