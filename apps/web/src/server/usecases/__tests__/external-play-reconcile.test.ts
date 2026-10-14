@@ -17,7 +17,7 @@
 //
 // Single-sport by construction: online play exists only for `boardgame`
 // (guard.ts `d.sport_key = 'boardgame'`); reconcile adds no sport branch.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -54,6 +54,13 @@ import { offersSettle } from "@/lib/arbiter-view";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
+import { ensureMeeting } from "@/server/external-play/video/realtimekit";
+import { endRoomAtResult } from "../external-play/room-end";
+import {
+  REALTIMEKIT_FIXTURE_ENV,
+  startRealtimeKitFixtureServer,
+  type RealtimeKitFixtureServer,
+} from "../../../../e2e/realtimekit-fixture-server";
 import { after } from "next/server";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -2531,3 +2538,115 @@ describe.runIf(HAS_DB)("an online game over, its result voided on the pad (N4)",
   });
 });
 
+
+// T17B fix 2 (D8b), measured on stg: after the checkmate both cameras kept publishing until the sweep's teardown six
+// minutes later (job 3, every 5 min). Ruling: the server ends the meeting best-effort, WITHOUT blocking, when the
+// result is recorded — the game end read from Lichess, and the organiser's settle — and the sweep stays the backstop.
+// The meeting is a real one: minted, kicked and deactivated at the e2e RealtimeKit fixture server.
+describe.runIf(HAS_DB)("the result ends the camera room — after the answer, never failing it (T17B fix 2, D8b)", () => {
+  let fx: RealtimeKitFixtureServer;
+  beforeAll(async () => {
+    fx = await startRealtimeKitFixtureServer(0);
+  });
+  afterAll(async () => {
+    await fx.close();
+  });
+  beforeEach(() => {
+    fx.reset();
+    for (const [k, v] of Object.entries(REALTIMEKIT_FIXTURE_ENV)) vi.stubEnv(k, v);
+    vi.stubEnv("REALTIMEKIT_BASE_URL", fx.url);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** The tail work a call hands to `defer`, held until the test runs it — so "after the answer" is observable. */
+  function heldTail() {
+    const queued: (() => Promise<unknown>)[] = [];
+    return { defer: (task: () => Promise<unknown>) => void queued.push(task), queued, run: () => Promise.all(queued.splice(0).map((t) => t())) };
+  }
+  async function endedAt(fixtureId: string): Promise<Date | null> {
+    const [row] = await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`;
+    return row?.ended_at ?? null;
+  }
+  const meetingCalls = (meetingId: string) => fx.calls.filter((c) => c.path.includes(`/meetings/${meetingId}`)).map((c) => `${c.method} ${c.path.slice(c.path.indexOf("/meetings/"))}`);
+  const organiserOf = (g: Game) => ({ orgId: g.orgId, via: "session", userId: g.ownerUserId, role: "owner", keyId: null }) as AuthCtx;
+
+  it("the empty case: a game end with no camera room on file ends nothing and calls nobody — the result still lands", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, EXPIRED_2));
+    const tail = heldTail();
+    expect(await reconcile(g.fixtureId, "game_end", { ...observed().deps, room: { defer: tail.defer } })).toMatchObject({ result: { wrote: "decided" }, finished: true });
+    await tail.run();
+    expect(fx.calls, "no vendor call").toEqual([]);
+  });
+
+  it("the game's end at Lichess ends the room AFTER the answer: kicked, INACTIVE, ended_at stamped — once", async () => {
+    const g = await liveGame();
+    const { meetingId } = await ensureMeeting(g.fixtureId);
+    serveStream(gameFull(g, EXPIRED_2));
+    const tail = heldTail();
+    const out = await reconcile(g.fixtureId, "game_end", { ...observed().deps, room: { defer: tail.defer } });
+    expect(out, "the result is the answer").toMatchObject({ result: { wrote: "decided" }, finished: true });
+    // Not yet: the answer never waited on the vendor.
+    expect([fx.meetingStatus(meetingId), await endedAt(g.fixtureId)], "the answer came first").toEqual(["ACTIVE", null]);
+    expect(tail.queued.length, "one tail task").toBe(1);
+    await tail.run();
+    expect(fx.meetingStatus(meetingId)).toBe("INACTIVE");
+    expect(await endedAt(g.fixtureId)).not.toBeNull();
+    expect(meetingCalls(meetingId).filter((c) => c.startsWith("POST") && c.endsWith("/kick-all")), "everyone kicked").toHaveLength(1);
+    // A second read of the ended game ends nothing more.
+    serveStream(gameFull(g, EXPIRED_2));
+    expect(await reconcile(g.fixtureId, "game_end", { ...observed(later(60_000)).deps, room: { defer: tail.defer } })).toBeNull();
+    await tail.run();
+    expect(meetingCalls(meetingId).filter((c) => c.endsWith("/kick-all"))).toHaveLength(1);
+  });
+
+  it("a vendor outage never fails the result: the result is written, the tail settles quietly, and the room is left for the sweep (ended_at still null)", async () => {
+    const g = await liveGame();
+    const { meetingId } = await ensureMeeting(g.fixtureId);
+    serveStream(gameFull(g, EXPIRED_2));
+    fx.setUnavailable(true);
+    const warn = vi.spyOn(log, "warn");
+    const tail = heldTail();
+    expect(await reconcile(g.fixtureId, "game_end", { ...observed().deps, room: { defer: tail.defer } })).toMatchObject({ result: { wrote: "decided" }, finished: true });
+    await expect(tail.run(), "the tail never rejects").resolves.toBeDefined();
+    expect(await endedAt(g.fixtureId), "the sweep's job 3 picks it up: ended_at is null").toBeNull();
+    expect(warn.mock.calls.some(([o]) => (o as { meetingId?: string }).meetingId === meetingId), "logged, with the meeting").toBe(true);
+    fx.setUnavailable(false);
+    expect(fx.meetingStatus(meetingId)).toBe("ACTIVE");
+    warn.mockRestore();
+  });
+
+  it("the guard: a room whose game is still on (bridge live, fixture playable) is never ended — and the positive pair, a finished bridge, is", async () => {
+    const g = await liveGame();
+    const { meetingId } = await ensureMeeting(g.fixtureId);
+    const tail = heldTail();
+    endRoomAtResult(g.fixtureId, { defer: tail.defer });
+    await tail.run();
+    expect([fx.meetingStatus(meetingId), await endedAt(g.fixtureId)], "a live game keeps its room").toEqual(["ACTIVE", null]);
+    expect(meetingCalls(meetingId).filter((c) => c.endsWith("/kick-all")), "nobody kicked").toHaveLength(0);
+    await sql`update fixture_external_play set status = 'finished', finished_at = now() where fixture_id = ${g.fixtureId}`;
+    endRoomAtResult(g.fixtureId, { defer: tail.defer });
+    await tail.run();
+    expect(fx.meetingStatus(meetingId)).toBe("INACTIVE");
+    // Ended once is ended: a second call (another reader of the same end) asks the vendor nothing — RealtimeKit's
+    // limit is account-wide.
+    const asked = fx.calls.length;
+    endRoomAtResult(g.fixtureId, { defer: tail.defer });
+    await tail.run();
+    expect(fx.calls.length, "no vendor call for a room already ended").toBe(asked);
+  });
+
+  it("the organiser's settle ends the room too — after the answer", async () => {
+    const g = await liveGame();
+    const { meetingId } = await ensureMeeting(g.fixtureId);
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "test: held for the organiser" });
+    const tail = heldTail();
+    expect(await resolveExternalPlay(organiserOf(g), g.fixtureId, "home_wins", { room: { defer: tail.defer }, defer: () => {} })).toEqual({ status: "finished" });
+    expect(fx.meetingStatus(meetingId), "not before the answer").toBe("ACTIVE");
+    await tail.run();
+    expect(fx.meetingStatus(meetingId)).toBe("INACTIVE");
+    expect(await endedAt(g.fixtureId)).not.toBeNull();
+  });
+});

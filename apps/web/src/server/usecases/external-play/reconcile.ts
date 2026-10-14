@@ -49,6 +49,7 @@ import { fenAfter } from "@/server/external-play/fen";
 import { closeBridgeIfUnplayable } from "./bridge-close";
 import { isPlayableFixtureStatus } from "./preflight";
 import { holdForOrganiser, writeResultFrom, type HoldReason, type ResultWrite, type RevokedSeat } from "./result";
+import { endRoomAtResult, type RoomEndDeps } from "./room-end";
 
 /** Spec §3.5's five triggers — the domain as a VALUE so a sweep can
  *  cross-product it. Add a trigger here and the enumeration test fails until
@@ -68,6 +69,8 @@ export type ReconcileDeps = {
   writeResult?: typeof writeResultFrom;
   publish?: (fixtureId: string, body: RoomBroadcast) => Promise<void>;
   sleep?: (ms: number) => Promise<void>;
+  /** T17B fix 2 (D8b): the camera room's end at the game's end (room-end.ts) — after the answer by default. */
+  room?: RoomEndDeps;
 };
 
 export type ReconcileOutcome = {
@@ -732,6 +735,9 @@ async function settle(
     result = await write(snapshot, g.fixture.fixtureId);
   }
   const finished = closesTheBridge(result) ? await finish(g, at) : false;
+  // T17B fix 2 (D8b): the game ended — its camera room ends after this answer, never delaying or failing it, once the
+  // game is over for us (room-end.ts asks the bridge: a held ending, a tie-break owed, keeps its room).
+  endRoomAtResult(g.fixture.fixtureId, deps.room);
   return { source, snapshot, result, finished, adopted };
 }
 
