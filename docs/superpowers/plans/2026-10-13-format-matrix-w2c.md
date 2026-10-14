@@ -3375,6 +3375,8 @@ The badminton `short` and generic `score` variants are re-confirmed as in Task 2
 
 ### Task 13b: Delete the top-level decider overlay — resolver code (Opus; after Tasks 12+13, same batch)
 
+> **Carried from Task 12.** Delete what Task 12 left as the bridge: the `STAGE_DECIDER_KEYS` export, the top-level `shootout`/`extraTime` branch in `usecases/rule-locks.ts`, and the resolver's top-level read. The bench mirror test (`validate-pack.test.ts`, which reads that literal) moves with it. Keep ruling R-T12-1's stage `false` → engine `null` mapping in exactly one place when the resolver is reworked.
+
 > **Carried from Task 8 re-review.** Chess's decider is the ARRAY `tiebreakRungs` (`decider: true`); its off value is `[]`. The "every decider off" sweep and the X-SR-6 notice must treat an array decider as off only when `Array.isArray(v) && v.length === 0` — a falsy/`enabled` test reads `[]` as on. Include chess in the sweep with that predicate, and a mutant that uses a truthiness test.
 
 > **Carried from the batch-2 re-review.** The overlay grep `config\??\.(shootout|extraTime)` misses computed reads like `cfg[key]` (`rule-locks.ts`); also grep `deciderKeysFor` call sites and every `[key]` read of a stage config.
