@@ -3035,6 +3035,8 @@ describe.skipIf(!HAS_DB)("rule 10 — stage rules × start × void", () => {
 ---
 ### Task 12: Stage creation writes the presets; the API takes `config.rules`; carry merges (server)
 
+> **Carried from the Task 11 re-review.** (a) `usecases/stage-rules.ts:122` — the 404 when the stage is deleted while the save waits on the division lock — has no test: add one in the `saveBehindADivisionCommit` harness (delete the stage on the holder connection). (b) The every-sport sweep's floors are loose (`kindsWithAKey > 1`, `refused > 11` against actual 9 and 447): tighten to the engine-derived values while this task is in that file.
+
 > **Carried from the Task 11 review.** (M1) A division VARIANT change is not re-checked against stored stage keys: cricket t20 -> test with a stored `superOver: false` lands and the stale key can no longer be removed alone (`{superOver: null}` is RULE_NOT_SETTABLE). In `refuseInvalidatedStageRules` (`usecases/stage-rules-merge.ts`) also call `refuseUnsettableKeys(module, sport, stage.kind, nextVariant, keys)`, gated on a variant change (`configApplied` can be false for one); DB test both directions. (M8) Task 11 already split the stage validation into `refuseUnsettableKeys`, `mergedStageRules`, `stageRulesProblem` in `stage-rules-merge.ts` — this task's `validateStageRules` for create and replaceStages COMPOSES those, never a second copy. (M4) The division PATCH summary in `openapi.ts` (~:99) must also name 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS and the stage-named 422s.
 
 > **Carried from Task 11.** Writers of a top-level stage `shootout` / `extraTime` that the presets must reconcile: `apps/web/src/server/schemas.ts:1120-1121`, `scripts/seed-fifa2026.ts:435`, `scripts/smoke-sports.ts:301`. Re-pin the lines before editing.
