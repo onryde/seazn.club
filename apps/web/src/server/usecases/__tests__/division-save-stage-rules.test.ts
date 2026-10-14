@@ -198,13 +198,19 @@ describe.skipIf(!HAS_DB)("M1: a division variant change never strands a stage ke
     expect(await variantOf(s.divisionId)).toBe("test");
   });
 
-  it("a knockout created with its preset (X-SR-6: the super over on) is asked too, naming it", async () => {
-    const s = await seedCricket("knockout");
-    expect(await rulesOf(s.stageId), "the premise: the knockout stores its preset").toEqual({ superOver: true });
+  // Fix round 1 (R-T12-2): a key still EQUAL to the old variant's preset is re-seeded by the change, never asked; only
+  // a key the organiser changed reaches the allowlist (variant-preset-reseed.test.ts holds the re-seed itself).
+  it("a knockout whose super over the organiser switched off is asked too, naming it; one still on its preset is re-seeded and lands", async () => {
+    const s = await seedCricket("knockout", { superOver: false });
     await expect(patchDivision(s.auth, s.divisionId, { variant_key: "test" })).rejects.toMatchObject({
       code: "RULE_NOT_SETTABLE",
       extra: { field: "superOver", stage_id: s.stageId, stage_name: "Final" },
     });
+    const preset = await seedCricket("knockout");
+    expect(await rulesOf(preset.stageId), "the premise: the knockout stores its preset").toEqual({ superOver: true });
+    await expect(patchDivision(preset.auth, preset.divisionId, { variant_key: "test" })).resolves.toBeDefined();
+    expect(await variantOf(preset.divisionId)).toBe("test");
+    expect(await rulesOf(preset.stageId), "the preset went with the variant").toBeNull();
   });
 
   // The call site asks on `configApplied || variantApplied`. The second half is unreachable with today's engine, and this

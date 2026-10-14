@@ -27,6 +27,7 @@ import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { divisionRefusals } from "./rule-locks";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
 import { refuseInvalidatedStageRules } from "./stage-rules-merge";
+import { reseedStagePresets } from "./stage-preset-reseed";
 import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
 import {
@@ -808,6 +809,8 @@ export async function patchDivision(
   // W2c Task 11 (carry (b) of the batch-3 re-review): whether this save re-wrote a stored walkover score. Set in the
   // transaction, read after it commits.
   let rewroteAwards = false;
+  // W2c Task 12 fix round 1 (R-T12-2): the stages a variant change re-seeded, set in the transaction, read after it.
+  let reseededStages: string[] = [];
   const cameraGate = async (ptx: Tx) => {
     await ptx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
     roundOpened = await anyRoundOpened(ptx, id, new Date());
@@ -1181,13 +1184,22 @@ export async function patchDivision(
         // only when the save really moves the config (an unchanged one leaves every stage exactly as it was valid) or the
         // variant (Task 12, M1: the keys a stage may carry are the variant's, so a stored one can stop being settable).
         const variantApplied = variantChanged && variantRefusal === undefined;
+        // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE this save's first write (the re-seed
+        // below is one) — re-written after it.
+        held = await heldAwards(tx, tx`division_id = ${id}`);
+        // W2c Task 12 fix round 1 (R-T12-2): a variant change re-seeds the presets its unstarted stages still store
+        // (`stage-preset-reseed.ts`), BEFORE the stages are re-asked below, so only a key the organiser chose meets the
+        // new variant's allowlist. A refusal below rolls the re-seed back with the rest of the save.
+        if (variantApplied) {
+          reseededStages = await reseedStagePresets(tx, {
+            divisionId: id, module: sportModule, fromVariant: current.variant_key, toVariant: effective.variant_key as string, actorId: auth.userId,
+          });
+        }
         if (configApplied || variantApplied) {
           await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key, variantApplied ? (effective.variant_key as string) : null);
         }
         // W2c Task 14 (I-A one layer up): no unstarted match's own format may be left invalid by this config.
         await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);
-        // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE the write — re-written after it.
-        held = await heldAwards(tx, tx`division_id = ${id}`);
       }
       if (refusedFields.has("tiebreakers")) delete effective.tiebreakers;
     }
@@ -1283,7 +1295,8 @@ export async function patchDivision(
   // W2c Task 11 (carry (b) of the batch-3 re-review): a format save that re-wrote a walkover's stored score must reach
   // the public pages now, not after their cache expires (15-300 s) - the same tags `putStageRules` fires after its own
   // re-write. Synchronous and after the commit, like that one (Next flushes a request's revalidations once).
-  if (rewroteAwards) fireDivisionRevalidate(row.id, row.competition_id);
+  // A variant change that re-seeded a stage's rules moved the format its public pages print (R-T12-2): the same tags.
+  if (rewroteAwards || reseededStages.length > 0) fireDivisionRevalidate(row.id, row.competition_id);
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, matching the pattern in patchCompetition.
   if (previousSlug) {
