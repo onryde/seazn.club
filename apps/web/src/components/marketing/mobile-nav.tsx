@@ -62,10 +62,16 @@ export function MarketingMobileNav({
     };
   }, [open]);
 
-  // Close on route change (a link tap navigates — nothing else needs to).
-  useEffect(() => {
+  // Close on route change (a link tap navigates — nothing else needs to). A
+  // navigation hands this island a fresh `links` array from the server parent,
+  // so a new identity is the signal. Adjusted DURING render (React's "reset
+  // state when a prop changes" pattern) rather than in an effect, so the frame
+  // after a navigation never paints the panel still open.
+  const [linksSeen, setLinksSeen] = useState(links);
+  if (links !== linksSeen) {
+    setLinksSeen(links);
     setOpen(false);
-  }, [links]);
+  }
 
   return (
     <div ref={rootRef} className="relative md:hidden">

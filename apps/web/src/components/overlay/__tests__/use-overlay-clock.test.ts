@@ -111,6 +111,49 @@ describe("useOverlayClock", () => {
     expect(h.read()).toBe("45:00");
   });
 
+  // ESLint L3: the label is now derived from (the clock being shown, the last
+  // tick's wall time). The hold must therefore arm NOTHING and drop the running
+  // timer — a live interval during half-time would creep the held reading.
+  // `stubTick` above never really clears, so this case tracks clears itself.
+  it("half-time HOLD clears the running timer and arms none — the held reading cannot creep; a no-clock status ends the hold", () => {
+    let cb: (() => void) | null = null;
+    let armed = 0;
+    let lastId = 0;
+    const cleared: number[] = [];
+    vi.stubGlobal("setInterval", ((fn: () => void) => {
+      cb = fn;
+      armed += 1;
+      lastId += 1;
+      return lastId as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval);
+    vi.stubGlobal("clearInterval", ((id: number) => {
+      cleared.push(id);
+      if (id === lastId) cb = null;
+    }) as unknown as typeof clearInterval);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const h = harness(ANCHOR, "in_play");
+    now.mockReturnValue(1_005_000);
+    (cb as (() => void) | null)?.();
+    expect(h.read()).toBe("12:46");
+
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    expect(cleared, "the running timer must stop at the whistle").toEqual([1]);
+    now.mockReturnValue(1_600_000);
+    (cb as (() => void) | null)?.(); // only a still-armed interval could fire here
+    expect(h.read()).toBe("12:46");
+    // A second absent push holds the same reading.
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    expect(h.read()).toBe("12:46");
+    expect(armed, "nothing re-armed during the hold").toBe(1);
+
+    // A status with no clock ends the hold for good: back in play without a
+    // clock shows nothing, never the stale pre-whistle reading.
+    h.island.rerender({ clock: undefined, status: "finalized", offset: 0 });
+    expect(h.read()).toBeNull();
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    expect(h.read()).toBeNull();
+  });
+
   it("shows nothing before kick-off and after the decision, whatever the anchor says", () => {
     stubTick();
     vi.spyOn(Date, "now").mockReturnValue(1_000_000);

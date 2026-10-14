@@ -13,12 +13,24 @@
 // it half-drawn. `disconnect()` on the first hit also means no observer stays
 // alive for the rest of the page's life.
 //
-// FAIL OPEN, deliberately. Where `IntersectionObserver` does not exist — SSR,
-// the node test harness, an old browser — this returns `true` on the first
-// render, so the behaviour is exactly what it was before this hook existed. A
-// gate that fails closed would leave the section permanently blank in precisely
-// the environments that cannot tell us it did.
-import { useEffect, useState } from "react";
+// FAIL OPEN, deliberately. Where `IntersectionObserver` does not exist — the
+// node test harness, an old browser — this returns `true` from the render after
+// hydration, so the behaviour is exactly what it was before this hook existed.
+// A gate that fails closed would leave the section permanently blank in
+// precisely the environments that cannot tell us it did. The SERVER render (and
+// the hydration render that must match it) says "not started": a server has no
+// observer either, but a server has no viewer, and the gate's server markup has
+// always been shut.
+//
+// ESLint L3: the missing-observer case used to be a `setStarted(true)` straight
+// out of the effect. "Is there an IntersectionObserver" is a fact about the
+// browser, so it is read through `useSyncExternalStore` instead; the latch
+// stays in state, set only from the observer's own callback.
+import { useEffect, useState, useSyncExternalStore } from "react";
+
+const observerNeverAppears = () => () => {};
+const observerMissing = () => typeof IntersectionObserver !== "function";
+const shutOnServer = () => false;
 
 /**
  * `true` once any part of `ref`'s element has entered the viewport, and `true`
@@ -39,17 +51,15 @@ import { useEffect, useState } from "react";
  * from a JSX `ref=`, and so this is drivable without a DOM.
  */
 export function useStartOnView(ref: { current: Element | null }): boolean {
+  const failOpen = useSyncExternalStore(observerNeverAppears, observerMissing, shutOnServer);
   const [started, setStarted] = useState(false);
 
   useEffect(() => {
     if (started) return;
     // Support check BEFORE the element check: the node test harness renders
-    // without a DOM, so its ref never fills in. Reversing these two lines would
-    // hang every existing test on a gate that can never open.
-    if (typeof IntersectionObserver !== "function") {
-      setStarted(true);
-      return;
-    }
+    // without a DOM, so its ref never fills in. With no observer there is
+    // nothing to arm — `failOpen` above has already opened the gate.
+    if (typeof IntersectionObserver !== "function") return;
     const el = ref.current;
     if (!el) return;
     const io = new IntersectionObserver((entries) => {
@@ -61,5 +71,5 @@ export function useStartOnView(ref: { current: Element | null }): boolean {
     return () => io.disconnect();
   }, [ref, started]);
 
-  return started;
+  return started || failOpen;
 }

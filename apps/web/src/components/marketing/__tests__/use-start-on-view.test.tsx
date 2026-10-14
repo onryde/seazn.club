@@ -109,11 +109,32 @@ describe("useStartOnView", () => {
   });
 
   // The branch every OTHER suite in this directory depends on: with no
-  // `IntersectionObserver` the gate must be open on the first render, or the
-  // node-env island tests would all hang on a trace that never advances.
+  // `IntersectionObserver` the gate must be open from the render after
+  // hydration, or the node-env island tests would all hang on a trace that
+  // never advances. Hydrate mode, because "is there an observer" is read
+  // through a store whose server snapshot is shut (ESLint L3).
   it("fails open where IntersectionObserver does not exist", () => {
     vi.stubGlobal("IntersectionObserver", undefined);
-    const probe = mount();
+    const probe = renderIsland(Probe, {} as Record<string, never>, (node) => [node as never], {
+      hydrate: true,
+    });
+    expect(textOf(probe.tree() as never)).toBe("started");
+  });
+
+  it("stays shut on the server even where IntersectionObserver does not exist", () => {
+    // The server has no observer and no viewer: its markup was always "not
+    // started", and the hydration render must match it.
+    vi.stubGlobal("IntersectionObserver", undefined);
+    expect(mount().tree()).toEqual(["waiting"]);
+  });
+
+  it("with an observer, hydrate mode still waits for an intersection (fail-open is ONLY for a missing one)", () => {
+    stubObserver();
+    const probe = renderIsland(Probe, {} as Record<string, never>, (node) => [node as never], {
+      hydrate: true,
+    });
+    expect(textOf(probe.tree() as never)).toBe("waiting");
+    made[0]!.cb([{ isIntersecting: true }]);
     expect(textOf(probe.tree() as never)).toBe("started");
   });
 });
