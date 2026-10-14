@@ -52,7 +52,7 @@ export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, onCh
       {snap.cameraPolicy !== "off" ? (
         <>
           <OwnTile policy={snap.cameraPolicy} stream={stream} variant="checkin" cameraOn={cameraOn} t={t} />
-          <p className="m-0 text-xs leading-[1.45] text-[#6b5b8a]">
+          <p data-testid="room-checkin-privacy" className="m-0 text-xs leading-[1.45] text-[#6b5b8a]">
             {t("externalPlay.room.checkin.privacy", { name: firstName(snap.opponent.name) })}
           </p>
         </>

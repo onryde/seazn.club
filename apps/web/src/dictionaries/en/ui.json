@@ -6104,7 +6104,7 @@
   "externalPlay.room.checkin.closesAt": "at {time}",
   "externalPlay.room.checkin.cameraOn": "Camera on",
   "externalPlay.room.checkin.micOff": "Mic off",
-  "externalPlay.room.checkin.privacy": "{name} never sees your video. Only your organiser can review it.",
+  "externalPlay.room.checkin.privacy": "{name}'s board is not set up to show your video. Your organiser can watch it live; it is not recorded.",
   "externalPlay.room.checkin.opponentIn": "{name} has checked in",
   "externalPlay.room.checkin.opponentNotIn": "{name} hasn't checked in yet",
   "externalPlay.room.checkin.cta": "Check in",
