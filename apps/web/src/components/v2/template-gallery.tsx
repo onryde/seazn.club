@@ -12,10 +12,11 @@
 // `templates` arrives as a PROP from the Server Component page, not a direct
 // `@/server/templates/catalog` import — that module resolves `StageKind`
 // through api-v1/schemas.ts, which (for the OpenAPI generator's sake) pulls
-// in `@seazn/engine/scheduling`'s HardConstraint, whose barrel also reaches
-// the gRPC placement client (`@grpc/grpc-js`, Node-only: dns/fs/http2/net).
-// A plain Server Component never ships that chain to the browser; a "use
-// client" file that VALUE-imports it does — caught by e2e, not tsc or
+// in `@seazn/engine/scheduling`'s HardConstraint, whose barrel then also
+// reached the gRPC placement client (`@grpc/grpc-js`, Node-only: dns/fs/http2/
+// net; the client now lives in `@seazn/scheduler`). A plain Server Component
+// never shipped that chain to the browser; a "use
+// client" file that VALUE-imported it did — caught by e2e, not tsc or
 // vitest, which is exactly why the acceptance criteria requires a REAL e2e
 // run. `CompetitionTemplate` below stays a TYPE-only import (erased at
 // build, zero runtime weight) — only the catalog.ts VALUE import moved.
@@ -306,8 +307,8 @@ export function TemplateDetailSheet({
     try {
       // The response shape is spelled out inline rather than imported from
       // `@/server/api-v1/schemas`: this is a "use client" file, and a VALUE
-      // import of that module drags the gRPC placement client into the browser
-      // bundle (see the module header). Only the two fields this component
+      // import of that module once dragged the gRPC placement client into the
+      // browser bundle (see the module header) and still ships the whole API schema. Only the two fields this component
       // acts on are named.
       const created = await apiV1<{
         slug: string;

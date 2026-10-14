@@ -4,9 +4,9 @@
 // client-safe like format-gallery.tsx" — wrong, caught by e2e (not tsc or
 // vitest): `kind` below reuses api-v1/schemas.ts's StageKind, and that
 // module VALUE-imports HardConstraint from @seazn/engine/scheduling, whose
-// barrel also reaches the gRPC placement client (@grpc/grpc-js — Node-only
-// dns/fs/http2/net). Bundling that into a "use client" file breaks the
-// browser build. Only the CompetitionTemplate TYPE is client-safe (type-only
+// barrel then also reached the gRPC placement client (@grpc/grpc-js — Node-only
+// dns/fs/http2/net; now in `@seazn/scheduler`). Bundling that into a "use
+// client" file broke the browser build, and the module is still server-only. Only the CompetitionTemplate TYPE is client-safe (type-only
 // imports are erased before bundling); components/v2/template-gallery.tsx
 // imports just that, and receives the actual parsed catalog as a prop from
 // its Server Component page instead.

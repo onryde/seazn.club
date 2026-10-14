@@ -57,7 +57,8 @@ import { log } from "@/server/logger";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { AnySportModule } from "@seazn/engine/sport";
 // The LEAF, not the `@seazn/engine/scheduling` barrel: `bracket-layout.ts` has
-// zero imports, and the barrel reaches the gRPC placement client.
+// zero imports, and the barrel is the whole solver (it used to reach the gRPC
+// placement client too, before that client moved to `@seazn/scheduler`).
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import {
   competitionTag,

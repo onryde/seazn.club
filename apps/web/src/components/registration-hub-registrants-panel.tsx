@@ -8,9 +8,10 @@ import { RegistrationHubRegistrantTable } from "@/components/registration-hub-re
 import { hasActiveFilters } from "@/components/registration-hub-registrant-derive";
 // A real (non-type-only) VALUE import — safe here because this file has no
 // "use client": it is a server component, never bundled for the browser, so
-// schemas.ts's own transitive reach into the engine's gRPC scheduling
-// client (Node built-ins: dns/net/http2) never becomes the browser's
-// problem. RegistrationHubRegistrantFilters (below) is the opposite case —
+// schemas.ts's own transitive reach (it once reached the engine's gRPC
+// scheduling client, Node built-ins dns/net/http2, before that client moved
+// to `@seazn/scheduler`) never becomes the browser's problem.
+// RegistrationHubRegistrantFilters (below) is the opposite case —
 // it BECAME a client component (R4's auto-submit needs onChange handlers)
 // and broke `next build` importing this same module directly, which is why
 // its two option lists are read HERE, server-side, and handed down as

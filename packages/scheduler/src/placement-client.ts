@@ -28,6 +28,7 @@ import type {
 } from "./generated/scheduler.ts";
 import { SchedulerServiceClient, SolveStatus } from "./generated/scheduler.ts";
 import { log } from "./logger.ts";
+import { PlacementError, type PlacementFailure } from "./placement-error.ts";
 
 /**
  * @internal The RPC seam, declared explicitly rather than `Pick`ed off the
@@ -292,27 +293,10 @@ function reverseLookup(values: readonly string[], index: number, kind: "fixture"
   return value;
 }
 
-/**
- * Why a solve did not produce an outcome, in domain words. `build.ts` decides
- * whether to fall back on this field; it must never need `grpc.status`, which
- * is exactly the vocabulary this type exists to stop at the boundary.
- */
-export type PlacementFailure =
-  | "invalid_request" // refused here, or refused by the service's own ACL
-  | "deadline" // no answer inside wallSeconds + the margin
-  | "unauthenticated" // the shared secret was rejected
-  | "unavailable" // the service could not be reached
-  | "transport"; // anything else that went wrong on the wire
-
-export class PlacementError extends Error {
-  readonly failure: PlacementFailure;
-
-  constructor(failure: PlacementFailure, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "PlacementError";
-    this.failure = failure;
-  }
-}
+// `PlacementFailure` and `PlacementError` live in `./placement-error.ts` so the package's index can re-export them without
+// loading this module (and with it gRPC and protobuf). Re-exported here so `@seazn/scheduler/placement-client` keeps
+// offering them; it is the same class either way.
+export { PlacementError, type PlacementFailure } from "./placement-error.ts";
 
 /**
  * The id<->index translation this ACL exists to own (round-6 brief: "the

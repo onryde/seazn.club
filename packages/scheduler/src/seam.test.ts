@@ -96,6 +96,16 @@ const REST_KNOWN_GOOD = [
   { fixtureId: "c", court: "C1", startAtMs: T0 + 150 * MIN },
 ] as const;
 
+/** The SAME three fixtures with the courts swapped: C2, C1, C2. The REST board's courts (C1, C2, C1) are exactly
+ *  `fixtureIndex % 2`, so a decoder that took the court from the fixture's POSITION instead of from `courtIndex` would pass
+ *  it by coincidence (the review's surviving mutant). Here the court sequence is NOT a function of fixture position: the
+ *  first card is on the second court. Still a clean, equally balanced board (imbalance 30, greedy's is 90). */
+const REST_MIRRORED_KNOWN_GOOD = [
+  { fixtureId: "a", court: "C2", startAtMs: T0 },
+  { fixtureId: "b", court: "C1", startAtMs: T0 + 75 * MIN },
+  { fixtureId: "c", court: "C2", startAtMs: T0 + 150 * MIN },
+] as const;
+
 /** What the fake needs to know about a request to name its fixtures: the ids in the order `buildSchedule` sends them, and
  *  the entrant tuple each carries on the wire (entrants are numbered by first sighting over that order). A violated
  *  precondition answers INTERNAL, so a wrong assumption turns the case red instead of mis-naming a card. */
@@ -107,6 +117,7 @@ interface Scenario {
 }
 const CORNER: Scenario = { fixtures: cornerFixtures, config: cornerConfig, wireEntrants: "0,1|2,3", good: KNOWN_GOOD };
 const REST: Scenario = { fixtures: restFixtures, config: restConfig, wireEntrants: "0,1|0,2|1,2", good: REST_KNOWN_GOOD };
+const REST_MIRRORED: Scenario = { fixtures: restFixtures, config: restConfig, wireEntrants: "0,1|0,2|1,2", good: REST_MIRRORED_KNOWN_GOOD };
 /** Two fixtures on ONE court at ONE slot: the verifier must refuse it whatever the service claims. */
 const OVERLAPPING = [
   { fixtureId: "a", court: "C1", startAtMs: T0 },
@@ -198,6 +209,7 @@ describe("the engine's real output through the real adapter, client and a socket
   for (const [label, scenario] of [
     ["one court (the corner case greedy cannot solve)", CORNER],
     ["two courts (a court decoded by index, not hard-wired)", REST],
+    ["two courts, mirrored (the court sequence is not a function of the fixture's position)", REST_MIRRORED],
   ] as const) {
     it(`accepted, ${label}: a known-good board comes back by id, as an optimised result`, async () => {
       vi.stubEnv("PLACEMENT_SERVICE_HOST", host);

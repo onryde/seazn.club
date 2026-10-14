@@ -27,8 +27,9 @@ import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
 // public kiosk, each row's round name — N1d d4) arrives on the slides.
 import type { SlideshowLabels } from "@/server/slideshow-labels";
 // Leaf import, not the barrel — see bracket-panel.tsx's comment: the barrel
-// now drags `build.ts` -> `placement-client.ts` -> `@grpc/grpc-js` (Node-only)
-// into this client component's browser bundle and breaks `next build` outright.
+// used to drag `build.ts` -> `placement-client.ts` -> `@grpc/grpc-js` (Node-only)
+// into this client component's browser bundle and break `next build` outright
+// (the client now lives in `@seazn/scheduler`; the leaf still avoids the solver).
 import {
   doubleElimBracket,
   lbRowUnit,

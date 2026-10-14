@@ -588,6 +588,21 @@
       "id": "__tests__/workspace-wiring.test.ts › workspace wiring (trap 2: a new package is invisible to the root chains) › packages/scheduler: turbo keys its lint AND typecheck on the engine's solver port, so an engine port change is a cache miss",
       "fate": "added",
       "reason": "1a-4: the scheduler package's turbo pin (lint AND typecheck keyed on the engine's solver port); a new test beside the unchanged reference one"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › an error the real client throws is an instance of the barrel's PlacementError (one class, however it is imported)",
+      "fate": "added",
+      "reason": "1a-4 review: the barrel's static graph loads neither gRPC nor protobuf (PlacementError lives in its own import-free module), and one PlacementError class however it is imported"
+    },
+    {
+      "id": "src/index.test.ts › @seazn/scheduler public surface › importing the barrel loads neither gRPC nor protobuf — the client loads only when a solve is asked for",
+      "fate": "added",
+      "reason": "1a-4 review: the barrel's static graph loads neither gRPC nor protobuf (PlacementError lives in its own import-free module), and one PlacementError class however it is imported"
+    },
+    {
+      "id": "src/seam.test.ts › the engine's real output through the real adapter, client and a socket › accepted, two courts, mirrored (the court sequence is not a function of the fixture's position): a known-good board comes back by id, as an optimised result",
+      "fate": "added",
+      "reason": "1a-4 review: a case whose court sequence is not a function of the fixture's position (C2, C1, C2), so a decoder keyed on fixtureIndex cannot pass by coincidence"
     }
   ]
 }

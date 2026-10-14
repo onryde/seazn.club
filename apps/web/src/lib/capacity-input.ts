@@ -19,8 +19,9 @@
 // type-only plus the same two already-approved leaves (`rest-floor.ts`,
 // `tz.ts`), verified before wiring this up. It stays a DEEP import
 // (`.../calendar`, never the barrel) for exactly that reason — the barrel's
-// `export *` chain is what drags in build.ts/placement-client.ts/grpc, not
-// calendar.ts itself. `HardConstraint`/`RuleFixture` are TYPE-ONLY imports,
+// `export *` chain is what dragged in build.ts/placement-client.ts/grpc (the
+// client has since moved to `@seazn/scheduler`) and still drags in the whole
+// solver, not calendar.ts itself. `HardConstraint`/`RuleFixture` are TYPE-ONLY imports,
 // erased at build time — they cost the bundle nothing regardless of source.
 import { dayKeyInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
 import { usableWindows } from "@seazn/engine/scheduling/court-windows";
