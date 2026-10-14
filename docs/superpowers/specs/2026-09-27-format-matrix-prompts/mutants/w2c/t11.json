@@ -180,8 +180,8 @@
  {
   "id": "t11-merged-parse",
   "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
-  "find": "const parsed = module.configSchema.safeParse({ ...(isObj(divisionConfig) ? divisionConfig : {}), ...rules });",
-  "replace": "const parsed = module.configSchema.safeParse({ ...(isObj(divisionConfig) ? divisionConfig : {}) });",
+  "find": "stageScopedCfg(isObj(divisionConfig) ? divisionConfig : {}, { rules }, module)",
+  "replace": "stageScopedCfg(isObj(divisionConfig) ? divisionConfig : {}, {}, module)",
   "killers": [
    {
     "cwd": "apps/web",
@@ -202,8 +202,8 @@
  {
   "id": "t11-merged-parse-division",
   "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
-  "find": "const parsed = module.configSchema.safeParse({ ...(isObj(divisionConfig) ? divisionConfig : {}), ...rules });",
-  "replace": "const parsed = module.configSchema.safeParse({ ...rules });",
+  "find": "stageScopedCfg(isObj(divisionConfig) ? divisionConfig : {}, { rules }, module)",
+  "replace": "stageScopedCfg({}, { rules }, module)",
   "killers": [
    {
     "cwd": "apps/web",
@@ -477,7 +477,7 @@
  {
   "id": "t11-revalidate-division",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "if (rewroteAwards) fireDivisionRevalidate(row.id, row.competition_id);",
+  "find": "if (rewroteAwards || reseededStages.length > 0) fireDivisionRevalidate(row.id, row.competition_id);",
   "replace": "",
   "killers": [
    {
@@ -492,7 +492,7 @@
  {
   "id": "t11-revalidate-always",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "if (rewroteAwards) fireDivisionRevalidate(row.id, row.competition_id);",
+  "find": "if (rewroteAwards || reseededStages.length > 0) fireDivisionRevalidate(row.id, row.competition_id);",
   "replace": "fireDivisionRevalidate(row.id, row.competition_id);",
   "killers": [
    {

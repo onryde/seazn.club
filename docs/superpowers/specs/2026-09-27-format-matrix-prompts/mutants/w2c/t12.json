@@ -218,7 +218,7 @@
     "files": [
      "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
     ],
-    "name": "a knockout created with its preset"
+    "name": "a knockout whose super over the organiser switched off"
    }
   ]
  },
@@ -316,6 +316,280 @@
      "src/server/api-v1/__tests__/refused-field-schema.test.ts"
     ],
     "name": "the schema's codes are exactly the type's codes"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr1-false-off",
+  "file": "apps/web/src/server/engine-db/stage-cfg.ts",
+  "find": "if (v === false && module !== null && offByFalse(module, divisionCfg, k)) overlay[k] = null;",
+  "replace": "if (false) overlay[k] = null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/stage-cfg.test.ts"
+    ],
+    "name": "for exactly the ruling's deciders"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "X-SR-6 IH-KO-1 every decider off"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr1-decider-only",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
+  "find": "if (!Object.hasOwn(keys, key) || keys[key]!.decider !== true) return false;",
+  "replace": "if (!Object.hasOwn(keys, key)) return false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/stage-cfg.test.ts"
+    ],
+    "name": "R-T12-1 the map needs the module"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "is taken only where the engine reads it as off"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr1-null-probe",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
+  "find": "return module.configSchema.safeParse({ ...(isObj(divisionCfg) ? divisionCfg : {}), [key]: null }).success;",
+  "replace": "return true;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/stage-cfg.test.ts"
+    ],
+    "name": "for exactly the ruling's deciders"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "is taken only where the engine reads it as off"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr1-merged-parse-off",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "stageScopedCfg(isObj(divisionConfig) ? divisionConfig : {}, { rules }, module)",
+  "replace": "stageScopedCfg(isObj(divisionConfig) ? divisionConfig : {}, { rules }, null)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "X-SR-6 IH-KO-1 every decider off"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "sequence: the stage PUT switches a preset decider off"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr1-livecfg-off",
+  "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+  "find": "stageScopedCfg(divisionCfg, stage?.config, module)",
+  "replace": "stageScopedCfg(divisionCfg, stage?.config, null)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "X-SR-6 IH-KO-1 every decider off"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr1-e2e-helper",
+  "file": "apps/web/e2e/stage-deciders.ts",
+  "find": "offByFalse(m, division, k) ? false : (division[k] ?? null)",
+  "replace": "(division[k] ?? null)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-defaults.test.ts"
+    ],
+    "name": "X-SR-6 IH-KO-1 every decider off"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-equality",
+  "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
+  "find": "if (!had || !isDeepStrictEqual(out[key], oldPreset[key])) continue;",
+  "replace": "if (!had) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "the organiser's own keys are kept"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "an organiser-edited key survives the change"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-call",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "        if (variantApplied) {",
+  "replace": "        if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "cricket t20 -> test drops the knockout's super over"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "a knockout whose super over the organiser switched off"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-applied-not-changed",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "        if (variantApplied) {",
+  "replace": "        if (variantChanged) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "a started stage is never touched"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-started",
+  "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
+  "find": "if (started.has(s.id)) continue;",
+  "replace": "void started;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "a started stage is never touched"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-adds",
+  "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
+  "find": "    } else if (!had) {",
+  "replace": "    } else if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "cricket t20 -> test drops the knockout's super over"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-drops",
+  "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
+  "find": "      else delete out[key];",
+  "replace": "      else void 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "cricket t20 -> test drops the knockout's super over"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "an untouched preset becomes the new variant's"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-unchanged-skip",
+  "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
+  "find": "if (isDeepStrictEqual(reseededRules(before, {}, {}), after)) continue;",
+  "replace": "if (false) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "empty case: a variant change on a division with no stages"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-audit",
+  "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
+  "find": "values (${s.competition_id}, 'stage.rules_reseeded',",
+  "replace": "values (${s.competition_id}, 'stage.rules_reseeded_not',",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "cricket t20 -> test drops the knockout's super over"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr2-revalidate",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "if (rewroteAwards || reseededStages.length > 0)",
+  "replace": "if (rewroteAwards)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "the public pages are revalidated when a change re-seeded"
    }
   ]
  }
