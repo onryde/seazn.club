@@ -1,0 +1,616 @@
+{
+  "batch": "1c",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1c, built against the batch base ca6e7a21a (main after 1d). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine's vitest binary (--exclude '**/strip-types-loadable.test.ts' for the matrix collection: its titles embed the checkout's absolute path, so a base worktree and a head worktree never agree; the file is unchanged). Task 1c-1 (phone-subpaths.json and the static RN-safe rule): no existing test id changed or left, so there is no moved, rewritten or retired entry - the existing CLI tests of test/boundary-gate.test.ts keep their titles and gain the phone walk's inputs (package.json, phone-subpaths.json and a four-entry skeleton) in their scratch checkout. Every entry is `added`: 113 in test/boundary-gate.test.ts (the phone walk, its refusals and its reading of code, the CLI's phone behaviour) and 9 in test/pack-proof.test.ts (the rn leg's phone helpers). Whole-batch parity: before-only 0, after-only 122, both 10970, unaccounted 0.",
+  "entries": [
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › a phone-safety violation does not hide a clean boundary line count, and a clean phone walk does not hide a boundary violation",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 on a phone-safety violation, names it by its path from the working directory, and does not say PASS",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 when the phone walk cannot run or walked nothing: no package.json or phone-subpaths.json, and an empty subpath list, are not a clean engine",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › reports a boundary violation and a phone-safety violation together, each by its own summary",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › the real gate walks the recorded closure and passes, from the engine directory and from the directory above it",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › agrees with an independent reading of the same graph: the TypeScript AST finds the same modules and the same packages",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded module count, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › imports only packages the engine declares as runtime dependencies: zod, and nothing optional",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded module count, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › is deterministic: a second call reports the same walk",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded module count, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › lists the D25 phone subpaths, and every one is a key of the package's exports",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded module count, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › walks exactly the recorded closure, every phone entry module included, and finds it clean",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded module count, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › lists the walk and its entries exactly: every phone entry, each sport directory with an index, what they import, once each",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ! as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after % as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after & as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ( as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after * as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after + as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after , as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after - as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after : as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ; as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after < as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after = as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after > as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ? as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after [ as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ^ as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word await as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word case as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word delete as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word do as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word else as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word in as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word instanceof as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word new as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word of as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word return as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word throw as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word typeof as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word void as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word yield as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after { as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after | as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ~ as a regular expression",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads code, not text: a comment or a string that says process.env or node:fs is not an import or a read",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads the package.json and phone-subpaths.json it is given, and fails loudly when either is unusable",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › sees an import written after a string that holds a // as well",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a /* inside a string",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a // inside a string",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by a call",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by a name",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by a number",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by an indexed value",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by an object",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a placeholder that held braces",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a quote in a block comment",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex at the start of the file",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex holding a quote",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex holding a slash in a class",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex that follows return",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an apostrophe in a comment",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an escaped backtick in a template",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an escaped quote",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an escaped slash in a regex",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an unterminated string",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process inside a nested template placeholder",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process inside a placeholder that holds braces",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process inside a template placeholder",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions (and a / that divides) neither hide nor invent an import or a read; how specifiers resolve; sorted, deduplicated, line-numbered output; unusable inputs fail loudly"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not flag the same code outside the phone closure",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `export type *` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `export type { … } from` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `import type of a default` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `import type` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not walk into scheduling once it has refused the import: the one violation is the import, not what is behind it",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a default and a named import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import()",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a multi-line import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a namespace import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a require()",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a side-effect import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows an inline `type` specifier (whether the build keeps it is a compiler flag; a walk too wide is loud, too narrow silent)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows export *",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows export * as",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows export { … } from",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows import … from",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a bare builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a builtin subpath reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import it cannot resolve reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic node: import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a listed subpath the package does not export",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a node: builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a node:-only builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a pattern shape it would have to guess at, rather than walking a smaller closure",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a phone subpath whose entry file lives under scheduling",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a re-exported builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a relative import of a file that is not there reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a side-effect node: import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a star re-exported node: builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import of a package file outside src/ reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import that leaves the package by exactly the root reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import that leaves the package reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis behind brackets reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained globalThis.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process behind brackets reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses scheduling reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses scheduling through a directory import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › reports a violation at its own line, after multi-line comments, strings and templates",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › resolves a specifier as written, without its extension, with .js for .ts, and as a directory's index",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › treats a ./sports/* pattern that matches no directory, and an exports value that is not a ./ path, as violations too",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › treats an exports target that does not exist as a violation, not a smaller walk",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): what checkPhoneSafety refuses (a Node builtin, process, scheduling) and its own refusals (unresolved import, outside src/, missing entry, unknown subpath, a pattern shape it would have to guess), which import forms it follows and which it does not (type-only is erased)"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › distTwin maps src/<path>.ts to dist/<path>.js and nothing else",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › engineDistPaths keeps the engine's modules under either spelling, as their dist/ paths",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › holds against the real engine: the walk's modules all have a dist/ twin the build emits, and the count is the recorded closure",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › passes when the bundle holds exactly the walked modules (in any order) and reports how many",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › refuses a walked module the bundle lacks, naming it, and a bundled module the walk never reached, naming it",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › refuses an empty walk: a comparison against nothing is satisfied by nothing",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › run.mjs imports the subpaths from phone-subpaths.json, runs the static walk, and compares the bundle to it (no module-count floor)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the phone subpaths the rn leg imports › are the listed subpaths, each a key of the packed manifest, with ./sports/* expanded over the source's sport directories",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the phone subpaths the rn leg imports › honours the alias, keeps the list's order, and refuses what it cannot import: nothing, an unexported subpath, an unknown pattern",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json (phoneSpecifiers) and holds the Metro dev bundle to exactly the modules the static walk found (distTwin, engineDistPaths, assertBundleMatchesWalk); the interim >= 40 floor is gone"
+    }
+  ]
+}
