@@ -107,6 +107,11 @@ import { openRound, roundOpenedAt } from "../open-round";
 import { bridgeTakesInvites } from "../invite";
 import { organiserOverrideVideo, seatPlayer } from "../preflight";
 import { createGameIfReady } from "../create-game";
+import { resolveExternalPlay } from "../resolve";
+import { holdForOrganiser, writeResultFrom } from "../result";
+import type { GameSnapshot } from "@/server/external-play/types";
+import { getFixtureState } from "../../fixtures";
+import { scoreEvent } from "../../scoring";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import {
   addFixture,
@@ -1300,6 +1305,97 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
     for (const b of before) expect(await bridgeOf(b.fixtureId)).toBeNull();
     const [gone] = await sql`select 1 from fixtures where id in ${sql(before.map((b) => b.fixtureId))}`;
     expect(gone, "the old fixtures were replaced").toBeUndefined();
+  });
+
+  // Final review M-10 (brief ruling): the lock blocks only while a game is LIVE or mid-create — never once the game is
+  // over or our side closed the board. Before, a recorded challenge blocked forever: a board whose game Lichess
+  // aborted (held `aborted`, nothing on the ledger) could never be re-paired, settled or not.
+  /** A recorded game that Lichess then ABORTED, through T12's real writer, with the game-over stamp reconcile's read
+   *  writes before it (reconcile.ts `settle`). Nothing reaches the ledger. */
+  async function abortedGame(fixtureId: string): Promise<void> {
+    expect((await createGameIfReady(fixtureId, { publish: async () => undefined })).created).toBe(true);
+    const gameId = (await bridgeOf(fixtureId))!.challenge_id!;
+    await sql`update fixture_external_play set game_over_at = now() where fixture_id = ${fixtureId}`;
+    const snapshot = { gameId, status: "aborted", winner: null, movesSan: [], whiteMs: 1, blackMs: 1, increment: 0 } as unknown as GameSnapshot;
+    await writeResultFrom(snapshot, fixtureId);
+    const [ledger] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+    expect(ledger!.n, "premise: an aborted game writes nothing to the ledger").toBe(0);
+    expect(await bridgeOf(fixtureId), "premise: held aborted, the game id kept").toMatchObject({ status: "needs_organiser", challenge_id: gameId });
+  }
+
+  it("M-10: a board whose game Lichess ABORTED is re-paired — unpair goes through, its bridge row goes with the seats, and the re-paired round opens afresh", async () => {
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
+    const before = await swissRound1(s.stageId);
+    expect(await open(s)).toMatchObject({ opened: true });
+    await abortedGame(before[0]!.fixtureId);
+
+    await unpairSwissRound(s.owner, s.stageId);
+    let checked = 0;
+    for (const b of before) {
+      expect(await bridgeOf(b.fixtureId), `${b.fixtureId}: the bridge went with the seats`).toBeNull();
+      const [seats] = await sql`select home_entrant_id, away_entrant_id from fixtures where id = ${b.fixtureId}`;
+      expect(seats).toEqual({ home_entrant_id: null, away_entrant_id: null });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+    expect(await swissRound1(s.stageId), "re-paired").toHaveLength(2);
+    mail.sent.length = 0;
+    expect(await open(s, 1, new Date())).toEqual({ opened: true, invited: 4, skipped: [] });
+  });
+
+  it("M-10: rebuild of a stage whose one game Lichess aborted goes through too", async () => {
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
+    const before = await swissRound1(s.stageId);
+    await open(s);
+    await abortedGame(before[0]!.fixtureId);
+    await rebuildStageFixtures(s.owner, s.stageId);
+    const [gone] = await sql`select 1 from fixtures where id in ${sql(before.map((b) => b.fixtureId))}`;
+    expect(gone, "the old fixtures were replaced").toBeUndefined();
+  });
+
+  it("M-10: a board OUR side closed (finished) with nothing on its ledger is not locked; a held board whose game has not been seen to end still is", async () => {
+    // The finished row stands for one reconcile or a settle closed (reconcile.ts: "the bridge closes with no read and
+    // no result") — by SQL, since every product path that closes a bridge also leaves ledger evidence, which the
+    // unpair's own played-result guards refuse first (the next test).
+    {
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
+      const before = await swissRound1(s.stageId);
+      await open(s);
+      expect((await createGameIfReady(before[0]!.fixtureId, { publish: async () => undefined })).created).toBe(true);
+      await sql`update fixture_external_play set status = 'finished', finished_at = now() where fixture_id = ${before[0]!.fixtureId}`;
+      await unpairSwissRound(s.owner, s.stageId);
+      expect(await bridgeOf(before[0]!.fixtureId)).toBeNull();
+    }
+    // A token_revoked hold mid-game: the game may still be running at Lichess — the round is not re-paired under it.
+    {
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
+      const before = await swissRound1(s.stageId);
+      await open(s);
+      const f = before[0]!.fixtureId;
+      expect((await createGameIfReady(f, { publish: async () => undefined })).created).toBe(true);
+      await holdForOrganiser({ fixtureId: f, reason: "token_revoked", detail: "TEST", seat: "white" });
+      expect(await bridgeOf(f), "premise: held, the game on file, no end seen").toMatchObject({ status: "needs_organiser" });
+      const snapshot = await roundState(s.stageId, before.map((b) => b.fixtureId));
+      expect(await refusal(unpairSwissRound(s.owner, s.stageId))).toEqual({ status: 409, code: "ONLINE_GAME_EXISTS" });
+      expect(await roundState(s.stageId, before.map((b) => b.fixtureId))).toEqual(snapshot);
+    }
+  });
+
+  it("M-10 premise, pinned: a board whose online RESULT was voided on the pad is held by the unpair's played-result guard (any sport's rule), never by the online lock", async () => {
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
+    const before = await swissRound1(s.stageId);
+    await open(s);
+    const f = before[0]!.fixtureId;
+    expect((await createGameIfReady(f, { publish: async () => undefined })).created).toBe(true);
+    expect(await resolveExternalPlay(s.owner, f, "home_wins", { defer: () => undefined })).toEqual({ status: "finished" });
+    const [result] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${f} and type = 'boardgame.result'`;
+    const fs = await getFixtureState(s.owner, f);
+    await scoreEvent(s.owner, f, { expected_seq: fs.last_seq, type: "core.void", payload: { event_id: result!.id } });
+    expect(await bridgeOf(f), "premise: our side closed it").toMatchObject({ status: "finished" });
+    const err = await unpairSwissRound(s.owner, s.stageId).then(() => null, (e: unknown) => e);
+    expect(err && typeof err === "object" && "code" in err ? (err as { code: string }).code : err).toBe("STAGE_NOT_READY");
+    expect(String((err as Error).message), "the round's own played-result guard").toContain("swiss round has played results");
   });
 
   it("delete-entrant REFUSES likewise when the entrant's round has a game", async () => {
