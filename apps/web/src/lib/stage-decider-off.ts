@@ -18,7 +18,7 @@
 // - `storedStageRules`: the rules a new stage stores (`usecases/stage-defaults.ts` `withStageDefaults` calls it);
 // - `mergedStageRules`: how a save merges (`usecases/stage-rules-merge.ts` re-exports it);
 // - `stageScopedCfgOf` / `liveStageCfg`: the resolver's stage overlay and bracket deciders (`engine-db/stage-cfg.ts`
-//   `stageScopedCfg` and `engine-db/fixture-cfg.ts` `liveCfg` call them with their `STAGE_DECIDER_KEYS`).
+//   `stageScopedCfg` and `engine-db/fixture-cfg.ts` `liveCfg` call them).
 // The module imports nothing but the engine's barrels (bare packages), so the harness loads it under plain node (pinned in
 // tools/matrix/__tests__/boundary.test.ts), and the e2e rig helper (`e2e/stage-deciders.ts`) asks the same questions.
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
@@ -134,21 +134,18 @@ export interface BracketDeciderSource extends DeciderOffSource {
   bracketDeciders(cfg: never): Record<string, unknown>;
 }
 
-/** PROMPT-61 §2 and design 2026-09-17 §T1 — the stage-scoped cfg: the division, then the stage's stored `rules`
- *  (`stageRulesOverlay`), then the stage's own top-level `topLevelKeys` (the product passes `STAGE_DECIDER_KEYS`, which
- *  stay the single winner for those keys). Identity when the stage overlays nothing, so callers pass the result on
- *  unconditionally. */
+/** PROMPT-61 §2 and design 2026-09-17 §T1 — the stage-scoped cfg: `{...division, ...rules}`, the stage's stored `rules`
+ *  laid over its division through the one mapping (`stageRulesOverlay`). W2c D3 (Task 13b): a stage's deciders are
+ *  ordinary `rules` keys, gated on the way in by the write paths' `stageTopKeysFor` (Tasks 11, 12); nothing at the stage
+ *  config's TOP level is read (the retired `shootout` / `extraTime` overlay). Identity when the stage overlays nothing,
+ *  so callers pass the result on unconditionally. */
 export function stageScopedCfgOf(
   divisionCfg: unknown,
   stageCfg: Record<string, unknown> | null | undefined,
   module: DeciderOffSource | null,
-  topLevelKeys: readonly string[],
 ): unknown {
   if (stageCfg == null) return divisionCfg;
   const overlay = stageRulesOverlay(module, divisionCfg, stageCfg.rules);
-  for (const key of topLevelKeys) {
-    if (stageCfg[key] !== undefined) overlay[key] = stageCfg[key];
-  }
   if (Object.keys(overlay).length === 0) return divisionCfg;
   return { ...(divisionCfg as Record<string, unknown>), ...overlay };
 }
@@ -161,9 +158,8 @@ export function liveStageCfg(
   divisionCfg: unknown,
   stage: StageCfgSource | null | undefined,
   module: BracketDeciderSource,
-  topLevelKeys: readonly string[],
 ): unknown {
-  const scoped = stageScopedCfgOf(divisionCfg, stage?.config, module, topLevelKeys);
+  const scoped = stageScopedCfgOf(divisionCfg, stage?.config, module);
   if (!forbidsLevelResult(stage?.kind)) return scoped;
   if (scoped === null || typeof scoped !== "object" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is
   const parsed = module.configSchema.safeParse(scoped);
@@ -174,9 +170,8 @@ export function liveStageCfg(
 /** The cfg the fixtures of a stage CREATED with `rules` fold under before any edit, event or override: what the create
  *  door stores (`storedStageRules`, no carry) read through the resolver (`liveStageCfg`). The format-matrix harness's
  *  `stageCfg` is exactly this. The product reaches the same value through `validatedStageConfig` and `liveCfg`, which
- *  is the differential pinned in usecases/__tests__/stage-cfg-composition.test.ts. A created stage never carries a
- *  top-level decider (the create door refuses one), so no top-level key is read here. */
+ *  is the differential pinned in usecases/__tests__/stage-cfg-composition.test.ts. */
 export function postedStageCfg(module: AnySportModule, divisionCfg: unknown, kind: StageKind, variant: string | null, rules?: unknown): unknown {
   const stored = storedStageRules(module, kind, variant, rules ?? null);
-  return liveStageCfg(divisionCfg, { kind, config: stored === null ? {} : { rules: stored } }, module, []);
+  return liveStageCfg(divisionCfg, { kind, config: stored === null ? {} : { rules: stored } }, module);
 }

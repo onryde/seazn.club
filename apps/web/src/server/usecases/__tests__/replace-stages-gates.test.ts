@@ -1,9 +1,10 @@
-// W2c Task 13 fix round 1, ruling R-T13-2. `replaceStages` (the Format tab's Apply) deletes the division's stage graph
-// in its own committed transaction and then calls `createStages`. Every refusal `createStages` raised from its INPUT
-// after that point (the entitlement gates, the stage cap, the feed-graph check, a duplicate seq in the body) landed
-// after the delete: a 402 or a 409 on Apply emptied the division. `assertStageBatchGates` now asks them all BEFORE
-// the delete. The witness for "untouched" is the division's stage ids, in board order: the same count AND the same
-// rows (a refused Apply that recreated identical stages would still be a loss of every row's id).
+// W2c Task 13 fix rounds 1 and 2, rulings R-T13-2 and R-T13-3. `replaceStages` (the Format tab's Apply) once deleted the
+// division's stage graph in its own committed transaction and then called `createStages`, so every refusal raised from
+// its INPUT after that point (the entitlement gates, the stage cap, the feed-graph check, a duplicate seq in the body)
+// emptied the division. Now the pooled gates (`assertStageBatchGates`) answer before the transaction opens, and the
+// delete and every insert run in ONE transaction (`insertStageBatch`), so any later refusal rolls the delete back. The
+// witness for "untouched" is the division's stage ids, in board order: the same count AND the same rows (a refused Apply
+// that recreated identical stages would still be a loss of every row's id).
 //
 // Expected values come from the entitlement table itself (`getLimit`) and the feature keys the gates name, never from a
 // typed plan table. Real Postgres required; skipped without DATABASE_URL.

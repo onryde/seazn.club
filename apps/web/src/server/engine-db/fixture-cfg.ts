@@ -1,6 +1,5 @@
 import "server-only";
 import { liveStageCfg, type DeciderOffSource } from "@/lib/stage-decider-off";
-import { STAGE_DECIDER_KEYS } from "./stage-cfg";
 
 /** The fixture's stage, as every caller already reads it: its kind (the overlay's switch) and its config (the
  *  stage-scoped overlay `stageScopedCfg` applies). Null/undefined = no stage row (a fixture outside any stage). */
@@ -155,7 +154,7 @@ export function mergeRulesOverride(decided: Record<string, unknown>, ov: unknown
 export function liveCfg(divisionCfg: unknown, stage: FixtureStageSource | null | undefined, module: DeciderSource): unknown {
   // The composition is lib/stage-decider-off.ts `liveStageCfg` (fix round 2, review M-3): the format-matrix harness folds
   // under the same code, never a copy.
-  return liveStageCfg(divisionCfg, stage, module, STAGE_DECIDER_KEYS);
+  return liveStageCfg(divisionCfg, stage, module);
 }
 
 /**

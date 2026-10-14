@@ -9,17 +9,26 @@ import "server-only";
 // `config.rules` sent with a create is validated exactly as the stage PUT validates a save, from the same pieces in
 // `stage-rules-merge.ts` (never a second copy): the allowlist over the keys AS SENT, then the merged parse of
 // `{division ⊕ the rules the stage will store}`. Every door that creates a stage calls `validatedStageConfig`:
-// `createStages` (and through it `replaceStages`, which also asks it BEFORE its delete) and template instantiation.
+// `createStages` and `replaceStages` (both through `insertStageBatch`; replaceStages asks it inside the one transaction
+// that also holds its delete, so a refusal rolls the delete back and the division keeps its stages, R-T13-3) and template
+// instantiation.
 import type { StageKind } from "@seazn/engine/core";
 import { PointsRule } from "@seazn/engine/competition";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { HttpError } from "@/lib/errors";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
-import { STAGE_DECIDER_KEYS } from "@/server/engine-db/stage-cfg";
 import { storedStageRules } from "@/lib/stage-decider-off";
 import { refuseStagePoints, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** W2c Task 13b (R-13b-1; D3) — every whole decider any sport declares (`decider: true`, over every kind and variant).
+ *  A stage carries its deciders under `config.rules` only; one at the config's TOP level is read by nothing (stage-cfg.ts),
+ *  so it is a client's mistake, refused by name rather than silently ignored. From the engine's declarations, never a
+ *  list kept here: a decider a sport adds is refused with no edit to this file. That no decider collides with a stage
+ *  config key of its own (`StageConfig`) is a guard in usecases/__tests__/stage-defaults.test.ts. */
+const TOP_LEVEL_DECIDERS: ReadonlySet<string> = new Set(builtinModules.flatMap((m) => deciderKeysFor(m, null, null)));
 
 /**
  * The stage config with its rules as a new stage stores them: a BASE, then the rules sent with the create, merged the
@@ -49,7 +58,8 @@ export function withStageDefaults(
 
 /**
  * `withStageDefaults`, validated (SC-P8: a create takes `config.rules` on the stage PUT's terms). Throws, writing
- * nothing: VALIDATION (400, `field`) for a top-level `shootout` / `extraTime` (moved to `config.rules`), from any caller; UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (400) for a key sent that the sport never declares or this kind and
+ * nothing: VALIDATION (400, `field`) for a decider at the config's top level (`shootout`, `extraTime`, `overtime`, …: any
+ * the engine declares, `TOP_LEVEL_DECIDERS`; moved to `config.rules`), from any caller; UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (400) for a key sent that the sport never declares or this kind and
  * variant cannot set; CONFIG_INVALID (422, the engine's `issues`) when the division's config under the rules the stage
  * would store is one the sport refuses; POINTS_MAP_INCOMPLETE (422) when the rules sent move `bestOf` past what the
  * division's points table answers. The merged parse runs on the rules as STORED (the preset or the carry included), so a
@@ -70,8 +80,9 @@ export function validatedStageConfig(
 ): Record<string, unknown> {
   // Fix round 2 (review gap hunt): the API's schema refuses a top-level decider, but an internal caller reaches this
   // door with no schema in front of it, so the door refuses it too, by name, before anything is merged or written.
-  for (const key of STAGE_DECIDER_KEYS) {
-    if (Object.hasOwn(config, key)) {
+  // Task 13b: every decider the engine declares, not the two the retired top-level overlay read.
+  for (const key of Object.keys(config)) {
+    if (TOP_LEVEL_DECIDERS.has(key)) {
       throw new HttpError(400, `config.${key}: ${STAGE_DECIDER_MOVED}`, "VALIDATION", { field: `config.${key}` });
     }
   }

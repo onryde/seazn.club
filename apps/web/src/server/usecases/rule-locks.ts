@@ -10,7 +10,6 @@ import type { Tx } from "@/lib/db";
 import type { RefusedField } from "@/lib/rule-errors";
 import { DRAW_KINDS, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { pointsKeysFor, type AnySportModule } from "@seazn/engine/sport";
-import { STAGE_DECIDER_KEYS } from "@/server/engine-db/stage-cfg";
 import { playedSql } from "@/server/engine-db/format-standing";
 
 /**
@@ -125,10 +124,9 @@ export async function divisionRefusals(
       // `tiebreak` is listed for bracket kinds, yet a league game folds to the tie-break phase when the division says so).
       // What a stage truly ignores is a key it FORCES.
       if (forbidsLevelResult(st.kind) && forced.has(key)) return false;
-      // W2c Task 12 (batch-2 concern A, Task 5 M2): a decider at the stage's TOP level is its own only where the resolver
-      // reads it there — `shootout`/`extraTime` (stage-cfg.ts, until Task 13b retires that read). Any other key at the
-      // top level is read by nothing, so the stage plays the division's value: inherited. D3's storage is `rules`, below.
-      if ((STAGE_DECIDER_KEYS as readonly string[]).includes(key) && cfg[key] !== undefined) return false;
+      // W2c D3 (Task 13b): a stage's own value for any key, a decider included, lives in its `rules`, the only place the
+      // resolver reads one (stage-cfg.ts). A key at the stage config's TOP level is read by nothing, so the stage plays the
+      // division's value: inherited.
       const rules = (cfg.rules ?? {}) as Record<string, unknown>;
       return rules[key] == null;                                   // the stage inherits this key (a null is "inherit", stage-cfg.ts)
     });
