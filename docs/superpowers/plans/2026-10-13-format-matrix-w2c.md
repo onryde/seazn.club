@@ -4540,6 +4540,8 @@ Notes:
 
 ### Task 18: S3 — stage points UI (same loop as Task 17)
 
+> **Carried from Task 13 (false premises).** Community ALREADY has `standings.custom_points` (V393), so a "Community org sees the gate" e2e cannot go red as written — drive the 402 with an org whose plan or override denies `custom_points`, and assert the gate on THAT. The server now REFUSES (not explains) a walkover score on a sport whose table never reads it, so the editor must hide that input there (the I3 carry below) or the save fails. Badminton refuses a `loss_margin_lte` bonus and already pays a walkover 2-0 — pick fixture values from the engine's declarations, not the brief. The PUT body is strict (an unknown key is a 400).
+
 > **Carried from the batch-3 review (I3).** The S3 points editor reads `pointsRuleAwardReachesTable(module)` to HIDE the walkover-score input on set sports (and show it on goal sports); a render test per family. Without this the Task 9 declaration stays inert.
 
 > **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
