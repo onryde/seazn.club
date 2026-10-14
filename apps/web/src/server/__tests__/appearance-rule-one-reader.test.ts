@@ -100,6 +100,13 @@ const EXEMPT: readonly Exemption[] = [
     sites: 1,
     reason: "Lichess create recovery: another fixture of the same two players with a create in flight (a peer), so an ambiguous challenge is held, never adopted; credits nothing",
   },
+  {
+    file: "src/server/usecases/external-play/account-changed.ts",
+    fn: "holdBoardsOnAccountChange",
+    sites: 1,
+    reason:
+      "final review P11: a re-link to a different Lichess account finds the boards this user SITS AT whose game is live or mid-create, to hold them for the organiser; who appeared is never asked, credits nothing",
+  },
   // Registration finds a person in the player lane (persons_org_user_lane_uq).
   { file: "src/server/usecases/registrations.ts", fn: "resolvePlayerPerson", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
   { file: "src/server/usecases/registrations.ts", fn: "findPlayerPersonByEmail", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
