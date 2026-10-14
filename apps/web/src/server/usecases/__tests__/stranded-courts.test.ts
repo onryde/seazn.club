@@ -186,7 +186,8 @@ function stripComments(source: string): string {
  *
  *  A hardcoded two-file list is what this guard used to read, and that is the
  *  same shape whose failure P10 Task 2 had just finished fixing for
- *  `window-single-source.test.ts`: a SIXTH call site added in any other file
+ *  the window guard (now `court-window-single-source.test.ts` in this directory,
+ *  moved out of the engine by engine-split 1d-3): a SIXTH call site added in any other file
  *  was invisible to it, which is precisely the regression the guard exists to
  *  catch (`person-merge.ts` was itself the fifth site, blind for two waves).
  *  Walk the tree instead, so a new site cannot be born outside the guard's
