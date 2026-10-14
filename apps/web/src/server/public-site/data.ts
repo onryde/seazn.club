@@ -29,6 +29,7 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { z } from "zod";
 import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
+import { cachedIfFound } from "./cache-found";
 import { loadMatchCentre } from "./match-centre-load";
 import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
@@ -601,7 +602,9 @@ export async function getPublicOrg(orgSlug: string): Promise<{
   org: PublicOrg;
   competitions: PublicOrgCompetition[];
 } | null> {
-  return unstable_cache(
+  // A missing org is never stored (cache-found.ts): a slug can be taken a
+  // second after someone asked for it.
+  return cachedIfFound(
     async () => {
       const org = await loadOrg(orgSlug);
       if (!org) return null;
@@ -614,7 +617,7 @@ export async function getPublicOrg(orgSlug: string): Promise<{
     // same reason `pub-player` and `pub-hub` retire their keys on a shape change.
     ["pub-org-v2", orgSlug],
     { tags: [orgTag(orgSlug)], revalidate: REVALIDATE_FAST },
-  )();
+  );
 }
 
 /** Competition home: hero + divisions (+ live-now strip). */
@@ -725,13 +728,39 @@ export async function getPublicCompetition(
   orgSlug: string,
   compSlug: string,
 ): Promise<PublicCompetitionShell | null> {
-  const shell = await unstable_cache(
+  // A missing or private competition is never stored (cache-found.ts): a
+  // create, or a move back to public, is served by the very next read.
+  const shell = await cachedIfFound(
     () => readPublicCompetitionShell(orgSlug, compSlug),
     ["pub-comp", orgSlug, compSlug],
     { tags: [orgTag(orgSlug)], revalidate: REVALIDATE_FAST },
-  )();
+  );
   if (!shell) return null;
   return shell;
+}
+
+/**
+ * A division by slug in its competition's shell — the lookup behind every
+ * public division and fixture page. The CACHED shell answers when it lists the
+ * division. When it does not, Postgres does: a cached shell is never the
+ * authority for a MISSING division (owner ruling 2026-10-14, public pages
+ * never cache a not-found), so a division created after the shell was cached
+ * is served by the very next read even if no write expired the shell. The
+ * uncached read costs one shell query on a 404 only; a found division never
+ * pays it.
+ */
+async function findPublicDivision(
+  orgSlug: string,
+  compSlug: string,
+  divSlug: string,
+): Promise<{ shell: PublicCompetitionShell; division: PublicDivision } | null> {
+  const cached = await getPublicCompetition(orgSlug, compSlug);
+  if (!cached) return null;
+  const division = cached.divisions.find((d) => d.slug === divSlug);
+  if (division) return { shell: cached, division };
+  const fresh = await readPublicCompetitionShell(orgSlug, compSlug);
+  const late = fresh?.divisions.find((d) => d.slug === divSlug);
+  return fresh && late ? { shell: fresh, division: late } : null;
 }
 
 /**
@@ -1067,10 +1096,9 @@ export async function getPublicDivision(
   /** Venue zone for schedule display (V305): division override → org tz → UTC. */
   tz: string;
 } | null> {
-  const shell = await getPublicCompetition(orgSlug, compSlug);
-  if (!shell) return null;
-  const division = shell.divisions.find((d) => d.slug === divSlug);
-  if (!division) return null;
+  const found = await findPublicDivision(orgSlug, compSlug, divSlug);
+  if (!found) return null;
+  const { shell, division } = found;
 
   const detail = await unstable_cache(
     () => readPublicDivisionDetail(division, read),
@@ -1127,12 +1155,14 @@ export async function getPublicFixture(
   stageName: string | null;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
-  const shell = await getPublicCompetition(orgSlug, compSlug);
-  if (!shell) return null;
-  const division = shell.divisions.find((d) => d.slug === divSlug);
-  if (!division) return null;
+  const found = await findPublicDivision(orgSlug, compSlug, divSlug);
+  if (!found) return null;
+  const { shell, division } = found;
 
-  const detail = await unstable_cache(
+  // A missing fixture is never stored (cache-found.ts) — nor one asked for
+  // under ANOTHER division's URL, which used to cache `null` under this
+  // fixture's id and 404 its own page for a REVALIDATE_FAST window.
+  const detail = await cachedIfFound(
     async () => {
       const [fixtureRow] = await sql<PublicFixture[]>`
         select v.id, v.division_id, v.stage_id, v.pool_id, v.round_no, v.seq_in_round,
@@ -1287,7 +1317,7 @@ export async function getPublicFixture(
     // walkover as a bare "Forfeited" over a played 0 — 0.
     ["pub-fixture-v4", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
-  )();
+  );
   if (!detail) return null;
 
   return { org: shell.org, competition: shell.competition, division, ...detail };

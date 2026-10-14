@@ -10,7 +10,9 @@
 // where a suspended machine's cache clock does not run.
 //
 // The competition writes owe the same: a delete, a create (a slug someone
-// probed is cached as MISSING and must heal), and any move between public,
+// probed was cached as MISSING until public reads stopped storing a refusal —
+// cache-found.ts, owner ruling 2026-10-14 — and the create still expires the
+// org tag, for the page Next's ISR cache rendered as a 404), and any move between public,
 // unlisted, private and draft — the shell reads `public_competitions_v`
 // (public | unlisted), so making an unlisted competition private must take its
 // public pages down now, not when the entry ages out.
@@ -536,7 +538,7 @@ describe.skipIf(!HAS_DB)("patchCompetition: any move between public, unlisted, p
       const to = EXPOSURE_WALK[i]!;
       await getPublicCompetition(orgSlug, comp.slug);
       const entry = shellEntryOf(orgSlug, comp.slug);
-      expect(entry, "premise: the shell (or its refusal) is cached").toBeDefined();
+      expect(entry, "premise: the shell is cached (while refused: its last found entry — a refusal is never stored)").toBeDefined();
       const { calls } = await inRequest(() => patchCompetition(auth, comp.id, { ...EXPOSURES[to] }));
       const after = await getPublicCompetition(orgSlug, comp.slug);
       walked.push({
@@ -663,7 +665,7 @@ async function seedTemplateSport(key: string): Promise<void> {
   }
 }
 
-describe.skipIf(!HAS_DB)("a create heals a competition slug the shell cached as missing", () => {
+describe.skipIf(!HAS_DB)("a create of a competition slug someone probed: the refusal was never cached, and the create expires the org tag", () => {
   const CREATES: Array<{
     site: string;
     readable: boolean;
@@ -701,8 +703,8 @@ describe.skipIf(!HAS_DB)("a create heals a competition slug the shell cached as 
       const orgSlug = await orgSlugOf(auth);
       const { slug, run } = c.create(auth, randomUUID().slice(0, 8));
       expect(await getPublicCompetition(orgSlug, slug), "premise: the slug is refused before the create").toBeNull();
-      const entry = shellEntryOf(orgSlug, slug);
-      expect(entry, "premise: the refusal is cached").toBeDefined();
+      // Public reads never store a not-found (cache-found.ts, owner ruling 2026-10-14).
+      expect(shellEntryOf(orgSlug, slug), "the refusal is not cached").toBeUndefined();
 
       const { result, calls } = await inRequest(run);
 
@@ -713,7 +715,6 @@ describe.skipIf(!HAS_DB)("a create heals a competition slug the shell cached as 
       if (c.readable) {
         expect(org, "the org tag, EXPIRED, once").toEqual([{ expire: 0 }]);
         expect(peers, "the other machines, told to expire it, once").toEqual(["expire"]);
-        expect(expired(entry!), "the cached refusal").toBe(true);
         expect(after?.competition.slug, "the next public read").toBe(slug);
       } else {
         expect(org).toEqual([]);
