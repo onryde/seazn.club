@@ -58,7 +58,7 @@ const imageExempt = workspaces.filter((w) => ignoredBy(w) !== undefined);
 type Manifest = { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; scripts?: Record<string, string> };
 
 /**
- * Spawns turbo's own dry-run task graph for `pkg`'s lint and typecheck, and asserts each depends on an `@seazn/engine#` task
+ * Spawns turbo's own dry-run task graph for `pkg`'s lint and typecheck, and asserts each depends on an `@onryde/seazn-engine#` task
  * whose hashed inputs hold every file in `engineFiles`. Returns how many tasks it judged (anti-vacuity: callers pin it).
  */
 function engineInputsHashedBy(pkg: string, engineFiles: string[]): number {
@@ -75,8 +75,8 @@ function engineInputsHashedBy(pkg: string, engineFiles: string[]): number {
   for (const id of [`${pkg}#lint`, `${pkg}#typecheck`]) {
     const t = byId.get(id);
     expect(t, `${id} missing from the turbo graph`).toBeDefined();
-    const engineDeps = (t?.dependencies ?? []).filter((d) => d.startsWith("@seazn/engine#"));
-    expect(engineDeps, `${id} does not depend on any @seazn/engine task`).not.toEqual([]);
+    const engineDeps = (t?.dependencies ?? []).filter((d) => d.startsWith("@onryde/seazn-engine#"));
+    expect(engineDeps, `${id} does not depend on any @onryde/seazn-engine task`).not.toEqual([]);
     for (const d of engineDeps) {
       const inputs = Object.keys(byId.get(d)?.inputs ?? {});
       for (const file of engineFiles) expect(inputs, `${d} does not hash ${file}`).toContain(file);
@@ -165,7 +165,7 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     const ref = JSON.parse(read("packages/reference/package.json")) as Manifest;
     const engine = JSON.parse(read("packages/engine/package.json")) as Manifest;
     expect(ref.dependencies?.["@seazn/engine"]).toBeUndefined();
-    expect(ref.devDependencies?.["@seazn/engine"]).toBe("workspace:*");
+    expect(ref.devDependencies?.["@seazn/engine"]).toBe("workspace:@onryde/seazn-engine@*");
     let shared = 0;
     for (const [name, range] of Object.entries(ref.devDependencies ?? {})) {
       const theirs = engine.devDependencies?.[name];

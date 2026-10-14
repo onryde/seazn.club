@@ -27,7 +27,7 @@ const NO_TESTS = ["!src/**/*.test.ts", "!src/**/__tests__/**"];
  *  test/stryker-sizing.test.ts holds the list equal to what the instrumenter finds. A statement that declares nothing is a member too,
  *  named by its kind and its place: `football.arbitraryEvent.if#7` is the seventh `if` of that body. scripts/stryker-cuts.mjs resolves the cuts with the TypeScript parser, and test/stryker-cuts.test.ts proves
  *  it with Stryker's own instrumenter, with an edit at the top of cricket.ts. A rename of an anchor is a loud failure (no
- *  statement or member declares it), never a silent loss. The anchors are chosen by `pnpm --filter @seazn/engine mutation:recut
+ *  statement or member declares it), never a silent loss. The anchors are chosen by `pnpm --filter ./packages/engine mutation:recut
  *  <file> <parts> [--open <Host,...>]`, which minimises the largest part by Stryker's own mutant count. A leg takes part N of a
  *  file as `file#N`. */
 export const STRYKER_SPLITS = {
@@ -60,7 +60,7 @@ export const STRYKER_SPLITS = {
  *  cancelled ones. The cost of a mutant is NOT one number: 0.3 runner-seconds for a leg whose mutants a test kills at once, 114 for a
  *  leg whose mutants are mostly "static" (Stryker runs every static mutant against every test, after the others), so a leg is held to
  *  the 200-minute split line by its measured wall, never by its mutant count. A leg that was over 200 minutes, or was cancelled, is
- *  cut again with `pnpm --filter @seazn/engine mutation:recut <file> <parts> [--open <Host,...>]`, and the part is RUN: the 17 parts
+ *  cut again with `pnpm --filter ./packages/engine mutation:recut <file> <parts> [--open <Host,...>]`, and the part is RUN: the 17 parts
  *  the first run produced were each run (T20 step 2b) and their own wall, dry run and phase are in stryker-measured.json, because a
  *  projection is not a measurement (the share-of-phase model and the cancelled leg's pace were each off, in both directions, by up to
  *  4x; the note on PROJECTED_LINE_MINUTES in test/stryker-sizing.test.ts has the figures). The one part that was cancelled at its

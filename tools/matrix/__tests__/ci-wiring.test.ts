@@ -497,7 +497,7 @@ describe("tools-tests type-check CI wiring (W1d Task 10, item 7 D9)", () => {
 // pins it, line-based as Task 10's is, and then RUNS the command as ci.yml spells it, so a flag pnpm swallowed or a script
 // that does not exist reds here and not on the first PR that lowers a floor.
 describe("Stryker floor CI wiring (W1d Task 15, D14)", () => {
-  const STEP = "      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1";
+  const STEP = "      - run: pnpm --filter ./packages/engine mutation:floor --check-file-against HEAD^1";
   const TSC_STEP = "      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json";
   const lines = ci.split("\n");
   const isComment = (l: string) => /^\s*#/.test(l);

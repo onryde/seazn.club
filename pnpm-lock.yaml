@@ -26,7 +26,7 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: workspace:*
+        specifier: workspace:@onryde/seazn-engine@*
         version: link:packages/engine
       pino:
         specifier: ^10.3.1
@@ -111,7 +111,7 @@ importers:
         specifier: ^0.9.54
         version: 0.9.54(qrcode@1.5.4)(react@19.2.4)(tailwindcss@4.3.1)(typescript@6.0.3)(zod@4.4.3)
       '@seazn/engine':
-        specifier: workspace:*
+        specifier: workspace:@onryde/seazn-engine@*
         version: link:../../packages/engine
       '@seazn/scheduler':
         specifier: workspace:*
@@ -329,7 +329,7 @@ importers:
         specifier: ^9
         version: 9.39.4
       '@seazn/engine':
-        specifier: workspace:*
+        specifier: workspace:@onryde/seazn-engine@*
         version: link:../engine
       '@types/node':
         specifier: ^26
@@ -359,7 +359,7 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: workspace:*
+        specifier: workspace:@onryde/seazn-engine@*
         version: link:../engine
       pino:
         specifier: ^10.3.1
@@ -399,7 +399,7 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: workspace:*
+        specifier: workspace:@onryde/seazn-engine@*
         version: link:../../packages/engine
       pino:
         specifier: ^10.3.1
@@ -417,7 +417,7 @@ importers:
   tools/matrix:
     dependencies:
       '@seazn/engine':
-        specifier: workspace:*
+        specifier: workspace:@onryde/seazn-engine@*
         version: link:../../packages/engine
       '@seazn/reference':
         specifier: workspace:*

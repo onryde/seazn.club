@@ -360,7 +360,7 @@ describe("toolchain: pnpm workspace", () => {
     ) as { dependencies: Record<string, string> };
     // `"*"` makes pnpm hit the registry for a private package and fail with
     // "No authorization header" — it must be the workspace protocol.
-    expect(web.dependencies["@seazn/engine"]).toBe("workspace:*");
+    expect(web.dependencies["@seazn/engine"]).toBe("workspace:@onryde/seazn-engine@*");
   });
 
   /**

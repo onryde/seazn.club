@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@grpc/grpc-js": "^1.14.4",
-    "@seazn/engine": "workspace:*",
+    "@seazn/engine": "workspace:@onryde/seazn-engine@*",
     "pino": "^10.3.1",
     "playwright": "^1.61.1",
     "postgres": "^3.4.9",
