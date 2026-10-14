@@ -549,3 +549,75 @@ describe.skipIf(!HAS_DB)("Review Focus 5: replaceStages carries the organiser's 
     expect((await stageConfig(st!.id)).rules).toEqual(stageDefaultsFor(football, "knockout", "11-a-side"));
   });
 });
+
+// Fix round 2, R-T12-4 (review I-1): `replaceStages` never re-seeds a key the organiser removed or cleared on a MATCHED
+// slot (seq and kind unchanged) — R-T12-2's meaning: an organiser's removal is kept. A matched slot's stored rules ARE
+// its rules: no stored rules, or a preset key absent from them, is the organiser's clear. A genuinely new slot still
+// starts from its preset. Through the REAL replaceStages, every sport x variant whose knockout has a preset (counted).
+describe.skipIf(!HAS_DB)("R-T12-4 replaceStages keeps an organiser's cleared preset key on a matched slot", () => {
+  it("R-T12-4 X-SR-6 a preset key PUT to null, and a stage PUT to `{}` (Same as division), stay cleared across replaceStages; a new slot gets the preset; a second replace changes nothing — every preset sport and variant (counted)", async () => {
+    const presetSports = new Set<string>();
+    const covered = new Set<string>();
+    let variants = 0;
+    for (const m of builtinModules as readonly AnySportModule[]) {
+      const withPreset = Object.keys(m.variants).filter((v) => Object.keys(stageDefaultsFor(m, "knockout", v)).length > 0);
+      if (withPreset.length === 0) continue;
+      presetSports.add(m.key);
+      const auth = await seedOrg();
+      for (const variant of withPreset) {
+        const where = `${m.key}/${variant}`;
+        const preset = stageDefaultsFor(m, "knockout", variant);
+        const [cleared] = Object.keys(preset) as [string];
+        const { divisionId } = await seedDivision(auth, m.key, variant, 0);
+        const [ko] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null });
+        expect((await stageConfig(ko!.id)).rules, `${where}: the premise, the preset is stored`).toEqual(preset);
+        // (a) The organiser removes one preset key: the stage inherits the division's value there.
+        await putStageRules(auth, ko!.id, { rules: { [cleared]: null } });
+        const removed = (await stageConfig(ko!.id)).rules as Record<string, unknown> | undefined;
+        expect(Object.hasOwn(removed ?? {}, cleared), `${where}: the premise, ${cleared} removed`).toBe(false);
+        // The same slot re-applied, plus a genuinely new knockout slot.
+        const body = [
+          { seq: 1, kind: "knockout" as const, name: "KO", config: {}, progression: null },
+          { seq: 2, kind: "knockout" as const, name: "KO 2", config: {}, progression: null },
+        ];
+        const first = await replaceStages(auth, divisionId, body);
+        const bySeq = new Map(first.map((s) => [s.seq, s] as const));
+        const kept = (await stageConfig(bySeq.get(1)!.id)).rules as Record<string, unknown> | undefined;
+        expect(Object.hasOwn(kept ?? {}, cleared), `${where}: ${cleared} is NOT re-seeded on the matched slot`).toBe(false);
+        expect(kept, `${where}: the matched slot's rules are what the organiser left`).toEqual(removed);
+        // The positive pair: the new slot starts from its preset.
+        expect((await stageConfig(bySeq.get(2)!.id)).rules, `${where}: a new slot gets the preset`).toEqual(preset);
+        // (b) The organiser sets the new slot to "Same as division": no rules at all, and a replace keeps it so.
+        await putStageRules(auth, bySeq.get(2)!.id, { rules: {} });
+        expect(Object.hasOwn(await stageConfig(bySeq.get(2)!.id), "rules"), `${where}: the premise, Same as division`).toBe(false);
+        const second = await replaceStages(auth, divisionId, body);
+        const rulesOf = async (rows: readonly { seq: number; id: string }[]) =>
+          new Map(await Promise.all(rows.map(async (s) => [s.seq, (await stageConfig(s.id)).rules] as const)));
+        const afterSecond = await rulesOf(second);
+        expect(afterSecond.get(2), `${where}: Same as division survives the replace (no preset restored)`).toBeUndefined();
+        expect(afterSecond.get(1), `${where}: the cleared key stays cleared`).toEqual(removed);
+        // (d) A further replace with nothing changed changes nothing.
+        expect(await rulesOf(await replaceStages(auth, divisionId, body)), `${where}: idempotent`).toEqual(afterSecond);
+        await sql`delete from stages where division_id = ${divisionId}`;
+        covered.add(m.key);
+        variants++;
+      }
+    }
+    expect(variants, "anti-vacuity: knockout presets swept").toBeGreaterThan(0);
+    expect([...covered].sort(), "every sport with a knockout preset was driven").toEqual([...presetSports].sort());
+    expect(presetSports.size, "anti-vacuity: the engine presets some sport's knockout").toBeGreaterThan(0);
+  }, 300_000);
+
+  it("R-T12-4 a cleared key on a matched slot is kept while a body rule still lands over it, key by key", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "football", "youth", 0); // single-sport: the body-over-carry merge is sport-blind
+    const preset = stageDefaultsFor(football, "knockout", "youth") as Record<string, unknown>;
+    const [cleared] = Object.keys(preset) as [string];
+    expect(preset.shootoutAttempts, "the premise: the body's 4 differs from the preset's").not.toBe(4);
+    const [ko] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null });
+    await putStageRules(auth, ko!.id, { rules: { [cleared]: null } });
+    const [after] = await replaceStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: { rules: { shootoutAttempts: 4 } }, progression: null });
+    const { [cleared]: _gone, ...rest } = preset;
+    expect((await stageConfig(after!.id)).rules, `${cleared} stays cleared; the body's key lands`).toEqual({ ...rest, shootoutAttempts: 4 });
+  });
+});
