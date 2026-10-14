@@ -89,17 +89,22 @@ export function OverviewTab({
   const [colors, setColors] = useState<Record<string, string>>(club.colors ?? {});
   const [contact, setContact] = useState({ role_key: "secretary", full_name: "", email: "", phone: "" });
 
-  async function run(fn: () => Promise<unknown>) {
+  /** Resolves `true` only when `fn` succeeded. A failure is shown here (error
+   *  or paywall) and reported as `false`, so a caller that moves on afterwards
+   *  — the club delete navigates away — can stay put and leave it on screen. */
+  async function run(fn: () => Promise<unknown>): Promise<boolean> {
     setBusy(true);
     setError(null);
     setPaywall(null);
     try {
       await fn();
       router.refresh();
+      return true;
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED")
         setPaywall(String(err.extra.feature_key ?? ""));
       else setError(err instanceof Error ? err.message : msg("clubs.overview.saveFailed"));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -391,8 +396,11 @@ export function OverviewTab({
                 tone: "danger",
               });
               if (!ok) return;
-              await run(() => apiV1(`/api/v1/clubs/${club.id}`, { method: "DELETE" }));
-              router.push("/directory?tab=clubs");
+              const deleted = await run(() => apiV1(`/api/v1/clubs/${club.id}`, { method: "DELETE" }));
+              // A refused delete stays here with its reason on screen; the
+              // club still exists. `replace`, not `push`: Back must not
+              // restore the deleted club's page from the router cache.
+              if (deleted) router.replace("/directory?tab=clubs");
             }}
           >
             {msg("clubs.delete")}
