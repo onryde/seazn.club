@@ -12,7 +12,7 @@
 // saves; the sweep over every variant-dependent preset is pure.
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { StageKind } from "@seazn/engine/core";
 import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -29,6 +29,21 @@ import { putStageRules } from "../stage-rules";
 import { reseededRules, reseedStagePresets } from "../stage-preset-reseed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// A re-seed moves the format the public pages print: the save fires the division's revalidation, as an award re-write
+// does. The spy wraps the REAL revalidation (it still runs); it only records which division was asked for.
+const revalidated = vi.hoisted(() => [] as string[]);
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...real,
+    fireDivisionRevalidate: (...args: Parameters<typeof real.fireDivisionRevalidate>) => {
+      revalidated.push(args[0]);
+      return real.fireDivisionRevalidate(...args);
+    },
+  };
+});
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const g = globalThis as { _sql?: { end(): Promise<void> } };
@@ -195,6 +210,17 @@ describe.skipIf(!HAS_DB)("R-T12-2 a division variant change re-seeds its unstart
     expect(reseeded).toEqual([sibling]);
     expect(await rulesOf(started), "started: untouched").toEqual(youth);
     expect(await rulesOf(sibling)).toEqual(stageDefaultsFor(football, "knockout", "11-a-side"));
+  });
+
+  it("the public pages are revalidated when a change re-seeded a stage, and not when it moved nothing (the empty case first)", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "cricket", "t20");
+    const mine = () => revalidated.filter((d) => d === divisionId).length;
+    await patchDivision(auth, divisionId, { variant_key: "odi" }); // no stage: nothing re-seeded
+    expect(mine(), "nothing re-seeded, nothing revalidated").toBe(0);
+    await knockout(auth, divisionId);
+    await patchDivision(auth, divisionId, { variant_key: "test" });
+    expect(mine(), "the knockout's super over went with the variant").toBe(1);
   });
 
   it("empty case: a variant change on a division with no stages, or only table stages, re-seeds nothing and lands", async () => {
