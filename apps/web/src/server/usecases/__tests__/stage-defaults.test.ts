@@ -21,9 +21,11 @@ import { CreateStage } from "@/server/api-v1/schemas";
 import { appendEvent, type AppendResult } from "@/server/engine-db";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
+import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
+import { putStageRules } from "../stage-rules";
+import { decidersOffRules } from "../../../../e2e/stage-deciders";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -356,6 +358,134 @@ describe.skipIf(!HAS_DB)("§8 seam: the preset reaches the real fold through the
     const plain = await seatedFixture(auth, divisionId, 2, "league");
     expect((await stageConfig(plain.stageId)).rules, "a league stage starts without it").toBeUndefined();
     expect((await play(auth, plain.id, tied)).outcome, "the positive pair: off, the tie stands").toEqual({ kind: "tie" });
+  });
+});
+
+// Fix round 1, R-T12-1 (owner Q7: knockout deciders are "preselected, can be turned off") — a period sport's overtime
+// and shoot-out are OFF in the engine as `null`, and a stage's `null` already means INHERIT (key absence). So a stage
+// switches one off with an explicit `false`, and the one resolver reads it as the engine's `null`.
+/** The knockout deciders whose engine OFF is null, read from the engine's own schema for the variant: the key takes null
+ *  and refuses false. The test's own probe, held against the ruling's list below, never the product's predicate. */
+const nullOffDeciders = (m: AnySportModule, variant: string): string[] => {
+  const division = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+  return deciderKeysFor(m, "knockout", variant).filter(
+    (k) => m.configSchema.safeParse({ ...division, [k]: null }).success && !m.configSchema.safeParse({ ...division, [k]: false }).success,
+  );
+};
+/** The ruling's own list (R-T12-1): ice hockey's overtime and shoot-out, hockey's shoot-out. */
+const RULING_OFF_BY_FALSE: Record<string, readonly string[]> = { icehockey: ["overtime", "shootout"], hockey: ["shootout"] };
+/** Regulation after the opening whistle, to full time — the period kernel's labels for 3 periods and for 4 quarters. */
+const REGULATION: Record<string, readonly string[]> = { icehockey: ["P2", "P3", "FT"], hockey: ["Q2", "Q3", "Q4", "FT"] };
+const regulation = (sport: string) => [start, ...REGULATION[sport]!.map((to) => ({ type: `${sport}.period.advance`, payload: { to } }))];
+const settleHome = (home: string) => ({ type: "core.settle", payload: { winner: home, method: "organiser" } });
+
+describe.skipIf(!HAS_DB)("R-T12-1 X-SR-6: a period knockout's deciders switched off with `false`, through the real fold", () => {
+  it("X-SR-6 IH-KO-1 every decider off: a level period knockout is HELD (needs_decision), then settled; its preset sibling plays on — every ice-hockey and hockey variant (counted)", async () => {
+    const auth = await seedOrg();
+    const found: Record<string, readonly string[]> = {};
+    let checked = 0;
+    for (const m of builtinModules as readonly AnySportModule[]) {
+      for (const variant of Object.keys(m.variants)) {
+        const keys = nullOffDeciders(m, variant);
+        if (keys.length === 0) continue;
+        found[m.key] = keys;
+        const periods = (m.configSchema.parse(m.variants[variant]) as { periods: { count: number } }).periods.count;
+        expect(REGULATION[m.key]!.length - 1, `${m.key}/${variant}: the premise: regulation advances through every period`).toBe(periods - 1);
+        const { divisionId } = await seedDivision(auth, m.key, variant, 2);
+        // The e2e rigs' own helper builds the "every decider off" rules, so this proves what they send.
+        const off = decidersOffRules(m.key, variant);
+        expect(off, `${m.key}/${variant}: every knockout decider, false`).toEqual(Object.fromEntries(deciderKeysFor(m, "knockout", variant).map((k) => [k, false])));
+        const ko = await seatedFixture(auth, divisionId, 1, "knockout", off);
+        expect((await stageConfig(ko.stageId)).rules, `${m.key}/${variant}: stored as sent, false`).toEqual(off);
+        const atFt = await play(auth, ko.id, regulation(m.key));
+        expect(atFt.status, `${m.key}/${variant}: held for the organiser, never refused`).toBe("needs_decision");
+        const cfg = await resolvedCfg(auth, ko.id);
+        for (const k of keys) expect(cfg[k], `${m.key}/${variant}: the engine reads ${k} OFF (null)`).toBeNull();
+        const settled = await appendEvent(auth.orgId, ko.id, REGULATION[m.key]!.length + 1, settleHome(ko.home));
+        expect(settled.status, `${m.key}/${variant}: settled`).toBe("decided");
+        expect(settled.outcome).toMatchObject({ kind: "win", winner: ko.home });
+        // The positive pair: the preset stage (the deciders ON) plays on from the same level score.
+        const on = await seatedFixture(auth, divisionId, 2, "knockout");
+        const onFt = await play(auth, on.id, regulation(m.key));
+        expect(onFt.status, `${m.key}/${variant}: the preset sibling plays its decider`).toBe("in_play");
+        checked++;
+      }
+    }
+    expect(found, "exactly the ruling's keys take `false` as off").toEqual(RULING_OFF_BY_FALSE);
+    expect(checked, "every ice-hockey and hockey variant").toBe(Object.keys(mod("icehockey").variants).length + Object.keys(mod("hockey").variants).length);
+  });
+
+  it("X-SR-6 `false` is OFF, `null` INHERITS: an iihf knockout that inherits plays the division's overtime, its `false` sibling is held; hockey fih-shootout the same with the shoot-out", async () => {
+    const auth = await seedOrg();
+    let checked = 0;
+    for (const [sport, variant, phase] of [["icehockey", "iihf", "OT"], ["hockey", "fih-shootout", "SHOOTOUT"]] as const) {
+      const m = mod(sport);
+      const division = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+      const keys = RULING_OFF_BY_FALSE[sport]!;
+      for (const k of keys) expect(division[k], `${sport}/${variant}: the premise: the division plays its own ${k}`).not.toBeNull();
+      const { divisionId } = await seedDivision(auth, sport, variant, 2);
+      const inherit = await seatedFixture(auth, divisionId, 1, "knockout", Object.fromEntries(keys.map((k) => [k, null])));
+      expect((await stageConfig(inherit.stageId)).rules, `${sport}: null removes the preset key, nothing stored`).toBeUndefined();
+      const inFt = await play(auth, inherit.id, regulation(sport));
+      expect(inFt.status, `${sport}: inheriting, the division's decider is played`).toBe("in_play");
+      expect((inFt.state as { phase: string }).phase).toBe(phase);
+      const cfg = await resolvedCfg(auth, inherit.id);
+      for (const k of keys) expect(cfg[k], `${sport}: the division's own ${k}`).toEqual(division[k]);
+      const off = await seatedFixture(auth, divisionId, 2, "knockout", Object.fromEntries(keys.map((k) => [k, false])));
+      expect((await play(auth, off.id, regulation(sport))).status, `${sport}: false, held`).toBe("needs_decision");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("`false` is taken only where the engine reads it as off or as itself: refused by name elsewhere (cap, periods; hockey has no overtime), nothing written", async () => {
+    const auth = await seedOrg();
+    let checked = 0;
+    for (const [sport, variant, kind, rules, match] of [
+      ["badminton", "bwf", "knockout", { cap: false }, { code: "CONFIG_INVALID" }],
+      ["icehockey", "iihf", "knockout", { periods: false }, { code: "CONFIG_INVALID" }],
+      // FIH hockey declares no overtime at all (the period kernel's keys, narrowed): unknown, before any value is read.
+      ["hockey", "fih-shootout", "knockout", { overtime: false }, { status: 400, code: "UNKNOWN_RULE_KEY" }],
+    ] as const) {
+      const { divisionId } = await seedDivision(auth, sport, variant, 0);
+      const err = await createStages(auth, divisionId, { seq: 1, kind, name: "KO", config: { rules }, progression: null }).catch((e: unknown) => e);
+      expect(err, `${sport} ${JSON.stringify(rules)}`).toMatchObject(match);
+      if (match.code === "CONFIG_INVALID") {
+        const paths = ((err as { data?: { issues?: { path: PropertyKey[] }[] } }).data?.issues ?? []).map((i) => i.path[0]);
+        expect(paths, `${sport}: the engine names the key`).toContain(Object.keys(rules)[0]);
+      }
+      expect(await stageCount(divisionId), `${sport}: nothing created`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // The positive pairs: where `false` IS the engine's value (football's shoot-out, the t20 super over) it is stored and
+    // read as false, never mapped to null.
+    for (const [sport, variant, key] of [["football", "11-a-side", "shootout"], ["cricket", "t20", "superOver"]] as const) {
+      const { divisionId } = await seedDivision(auth, sport, variant, 2);
+      const f = await seatedFixture(auth, divisionId, 1, "knockout", { [key]: false });
+      expect((await stageConfig(f.stageId)).rules).toMatchObject({ [key]: false });
+      await play(auth, f.id, [start]); // the fold inputs exist from the first event
+      expect((await resolvedCfg(auth, f.id))[key], `${sport}: the engine's own false`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("sequence: the stage PUT switches a preset decider off with `false` and back on with null; a division save over a `false` stage lands and keeps it", async () => {
+    const auth = await seedOrg();
+    const ice = mod("icehockey");
+    const { divisionId } = await seedDivision(auth, "icehockey", "iihf", 2);
+    const [st] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null });
+    const preset = stageDefaultsFor(ice, "knockout", "iihf");
+    await expect(putStageRules(auth, st!.id, { rules: { shootout: false } })).resolves.toEqual({ rules: { ...preset, shootout: false } });
+    await expect(putStageRules(auth, st!.id, { rules: { overtime: false } })).resolves.toEqual({ rules: { overtime: false, shootout: false } });
+    await expect(putStageRules(auth, st!.id, { rules: { periods: false } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    // A division format save re-asks every stage's rules through the merged parse: `false` is read as off there too.
+    const division = ice.configSchema.parse(ice.variants.iihf) as { periods: { count: number; minutes: number } };
+    await expect(patchDivision(auth, divisionId, { config: { periods: { ...division.periods, minutes: division.periods.minutes + 1 } } })).resolves.toBeDefined();
+    expect((await stageConfig(st!.id)).rules, "the division save keeps the stage's off").toEqual({ overtime: false, shootout: false });
+    // Back on: null removes the key, and the stage inherits the division's overtime.
+    await expect(putStageRules(auth, st!.id, { rules: { overtime: null } })).resolves.toEqual({ rules: { shootout: false } });
   });
 });
 
