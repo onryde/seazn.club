@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { EngineError, type FoldableModule, type LineupPair, type MatchOutcome, type ScoreSummary } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { FORMAT_FIT_REASONS } from "@/lib/rule-errors";
-import { awardFit } from "../awarded-state";
+import { awardFit, awardFoldsUnder } from "../awarded-state";
 
 const H = "home-entrant";
 const A = "away-entrant";
@@ -112,5 +112,25 @@ describe("awardFit: the verdict on correcting a match decided without play", () 
   it("a module bug is not a verdict: a plain Error from either fold propagates", () => {
     expect(() => fit({ credit: 2 }, { credit: 2, crash: true })).toThrow("fake: a bug in the module");
     expect(() => fit({ credit: 2, crash: true }, { credit: 2 })).toThrow("fake: a bug in the module");
+  });
+
+  it("batch-3 I1, awardFoldsUnder — a FORMAT SAVE's only question: does the award hold under the new format?", () => {
+    // A save moves the credited score with it, so another score is a fold that HOLDS; the engine refusing and another
+    // award are the two that do not, each with its own reason; a module bug is no verdict.
+    const holds = (cfg: FakeCfg) => awardFoldsUnder(m, cfg, lineups, award, at);
+    const table: { label: string; cfg: FakeCfg; want: { ok: true; headline: string } | { ok: false; reason: string } }[] = [
+      { label: "the same credit", cfg: { credit: 2 }, want: { ok: true, headline: "2 — 0" } },
+      { label: "another credited score (the save re-writes it)", cfg: { credit: 3 }, want: { ok: true, headline: "3 — 0" } },
+      { label: "the engine refuses the forfeit", cfg: { credit: 2, refuse: true }, want: { ok: false, reason: "fake: this format refuses a walkover" } },
+      { label: "the fold decides another award", cfg: { credit: 2, flip: true }, want: { ok: false, reason: FORMAT_FIT_REASONS.result } },
+    ];
+    let checked = 0;
+    for (const row of table) {
+      const got = holds(row.cfg);
+      expect(got.ok ? { ok: true, headline: got.state.summary.headline } : got, row.label).toEqual(row.want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every arm was asked").toBe(4);
+    expect(() => holds({ credit: 2, crash: true }), "a module bug is no verdict").toThrow("fake: a bug in the module");
   });
 });

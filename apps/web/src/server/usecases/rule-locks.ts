@@ -10,6 +10,7 @@ import type { Tx } from "@/lib/db";
 import type { RefusedField } from "@/lib/rule-errors";
 import { DRAW_KINDS, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { deciderKeysFor, pointsKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { playedSql } from "@/server/engine-db/format-standing";
 
 /**
  * Division config keys that are TABLE rules (Q3); every other key is match format (Q4). Derived from the engine's own
@@ -55,14 +56,17 @@ export const STAGE_POINTS_REPLACES: ReadonlySet<string> = new Set(["points", "po
  * `config_snapshot` and a score event both only ever appear; neither goes
  * away. The `score_events` half also covers the JSON-`null`-config carve-out,
  * where a fixture records events and never takes a snapshot at all.
+ *
+ * W2c batch-3 I1: the predicate is `format-standing.ts`'s PLAYED, the one definition the per-match writer reads too. A
+ * match DECIDED WITHOUT PLAY (a walkover no event records) locks nothing: a save re-writes its score instead
+ * (`award-rewrite.ts`).
  */
 export async function lockedStageIdsAmong(tx: Tx, stageIds: readonly string[]): Promise<Set<string>> {
   if (stageIds.length === 0) return new Set();
   const rows = await tx<{ stage_id: string }[]>`
     select distinct f.stage_id from fixtures f
      where f.stage_id = any(${stageIds as string[]}::uuid[])
-       and (f.config_snapshot is not null
-            or exists(select 1 from score_events e where e.fixture_id = f.id))`;
+       and ${playedSql(tx, "f")}`;
   return new Set(rows.map((r) => r.stage_id));
 }
 

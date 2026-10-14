@@ -7,7 +7,8 @@ import { HttpError } from "@/lib/errors";
 import { FORMAT_FIT_REASONS, RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { LOCKED_FIXTURE_STATUSES, hasFrozenCfg, resolveModule } from "@/server/engine-db";
-import { awardFit, isScoredAward, ledgerOf, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
+import { awardFit, isScoredAward, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
+import { formatStanding } from "@/server/engine-db/format-standing";
 import { bracketOrder } from "@/server/engine-db/fed-seats";
 import { liveCfg, mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
 import { foldFrom, loadFoldInputs } from "@/server/engine-db/fold";
@@ -278,10 +279,13 @@ export async function writeFixtureRulesOverride(
       const stored = overrideFor(row, m, stageResolved, fragment);
       const next = stored === null || Object.keys(stored).length === 0 ? null : stored;
 
+      // Which cfg the match folds under now — its frozen one, or the live resolution (fixture-cfg.ts): the re-freeze's
+      // question, not "has it started".
       const snapshotted = hasFrozenCfg(row.config_snapshot);
-      // (7a) An outcome no standing event records: decided without play.
-      const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;
-      const started = snapshotted || withoutPlay;
+      // Where it stands, read as every format door reads it (`format-standing.ts`, batch-3 I1): PLAYED (a frozen cfg or
+      // a recorded event) and (7a) DECIDED WITHOUT PLAY (an outcome no standing event records).
+      const { played, decidedWithoutPlay: withoutPlay } = await formatStanding(tx, id);
+      const started = played || withoutPlay;
       let version = row.rules_version;
       // The corrected cfg is exactly what `resolveFixtureCfg` returns for this row once `next` is stored and the
       // snapshot cleared: the stage's format with the override merged last (fixture-cfg.ts).
@@ -312,6 +316,10 @@ export async function writeFixtureRulesOverride(
           }
           corrected.push(id);
         }
+      } else if (played) {
+        // Played with no frozen cfg (a row scored before V347 froze one): it folds under the live resolution, so the
+        // override moves its play like a correction — X-SR-5's fit, with nothing to re-freeze.
+        await assertFits(tx, row, cfg);
       }
       await tx`update fixtures set rules_override = ${next === null ? null : tx.json(next as never)} where id = ${id}`;
       // After the override lands: the award's score re-written under the cfg the fixture now resolves to.

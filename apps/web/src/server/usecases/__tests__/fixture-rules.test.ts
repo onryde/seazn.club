@@ -488,6 +488,21 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
     expect(await audit(id)).toHaveLength(0);
   });
 
+  it("batch-3 I1, one 'started': a match PLAYED with no frozen cfg (a pre-V347 row) is started — the same misfit is refused, and the write reports it started", async () => {
+    // The stage lock (`rule-locks.ts`) has always counted a recorded event as play; the writer counted only a frozen
+    // cfg, so a played row without one took any format unasked. Both now read `format-standing.ts`.
+    const b = await badmintonLeague();
+    const { id } = await oneSetPlayed(b);
+    await sql`update fixtures set config_snapshot = null, config_snapshot_at = null where id = ${id}`;
+    const before = await row(id);
+    const err = await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: id } });
+    expect(await row(id)).toEqual(before);
+    // Positive pair: a fitting format is taken, and reported started.
+    const out = await writeFixtureRulesOverride(b.auth, [id], { bestOf: 5 });
+    expect(out.fixtures).toEqual([expect.objectContaining({ id, started: true })]);
+  });
+
   it("P-4 positive pair: the same best-of-1 correction BEFORE any set completes fits", async () => {
     const b = await badmintonLeague();
     const id = b.fixtureIds[0]!;

@@ -159,8 +159,8 @@
  {
   "id": "t14-award-path",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;",
-  "replace": "const withoutPlay = false;",
+  "find": "const { played, decidedWithoutPlay: withoutPlay } = await formatStanding(tx, id);",
+  "replace": "const { played } = await formatStanding(tx, id); const withoutPlay = false;",
   "killers": [
    {
     "cwd": "apps/web",
@@ -180,9 +180,9 @@
  },
  {
   "id": "t14-award-needs-outcome",
-  "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;",
-  "replace": "const withoutPlay = (await ledgerOf(tx, id)).standing === 0;",
+  "file": "apps/web/src/server/engine-db/format-standing.ts",
+  "find": "return tx`(${f}.outcome is not null and not exists (",
+  "replace": "return tx`(true and not exists (",
   "killers": [
    {
     "cwd": "apps/web",
@@ -190,14 +190,21 @@
      "src/server/usecases/__tests__/fixture-rules.test.ts"
     ],
     "name": "only the CHANGED leaves are stored"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "five fixture shapes"
    }
   ]
  },
  {
   "id": "t14-award-needs-no-play",
-  "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;",
-  "replace": "const withoutPlay = row.outcome !== null;",
+  "file": "apps/web/src/server/engine-db/format-standing.ts",
+  "find": "where e.fixture_id = ${f}.id and e.type <> 'core.void'",
+  "replace": "where false and e.fixture_id = ${f}.id and e.type <> 'core.void'",
   "killers": [
    {
     "cwd": "apps/web",
@@ -248,7 +255,7 @@
  {
   "id": "t14-award-headline",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "if (now.summary.headline !== was.summary.headline)",
+  "find": "if (now.state.summary.headline !== was.summary.headline)",
   "replace": "if (false)",
   "killers": [
    {
@@ -270,7 +277,7 @@
  {
   "id": "t14-awardfit-now-engine",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "    if (EngineError.is(err)) return { ok: false, code: \"FORMAT_DOES_NOT_FIT_PLAY\", reason: err.message };",
+  "find": "    if (EngineError.is(err)) return { ok: false, reason: err.message };\n",
   "replace": "",
   "killers": [
    {
@@ -279,13 +286,20 @@
      "src/server/engine-db/__tests__/award-fit.test.ts"
     ],
     "name": "every arm, each with the verdict"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "awardFoldsUnder"
    }
   ]
  },
  {
   "id": "t14-awardfit-now-mismatch",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "    if (err instanceof AwardFoldMismatch) return { ok: false, code: \"FORMAT_DOES_NOT_FIT_PLAY\", reason: FORMAT_FIT_REASONS.result };",
+  "find": "    if (err instanceof AwardFoldMismatch) return { ok: false, reason: FORMAT_FIT_REASONS.result };\n",
   "replace": "",
   "killers": [
    {
@@ -294,6 +308,13 @@
      "src/server/engine-db/__tests__/award-fit.test.ts"
     ],
     "name": "every arm, each with the verdict"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "awardFoldsUnder"
    }
   ]
  },
@@ -359,8 +380,8 @@
  {
   "id": "t14-awardfit-bug-propagates",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "    throw err;\n  }\n  if (now.summary.headline",
-  "replace": "    return { ok: false, code: \"FIXTURE_FORMAT_LOCKED\" };\n  }\n  if (now.summary.headline",
+  "find": "    throw err;\n  }\n}\n\nexport function awardFit(",
+  "replace": "    return { ok: false, reason: \"a bug\" };\n  }\n}\n\nexport function awardFit(",
   "killers": [
    {
     "cwd": "apps/web",
@@ -368,6 +389,13 @@
      "src/server/engine-db/__tests__/award-fit.test.ts"
     ],
     "name": "a module bug is not a verdict"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "awardFoldsUnder"
    }
   ]
  },
@@ -785,6 +813,273 @@
      "src/server/engine-db/__tests__/fixture-cfg-order.test.ts"
     ],
     "name": "M2 empty case: an override of only nulls"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-stage-skip-fragment",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "       where id = ${stageId}`;\n    await rewriteHeldAwards(tx, held);\n",
+  "replace": "       where id = ${stageId}`;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "badminton, the STAGE door"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-stage-skip-clear",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "config - 'rules' where id = ${stageId}`;\n      await rewriteHeldAwards(tx, held);\n",
+  "replace": "config - 'rules' where id = ${stageId}`;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "badminton, the STAGE door"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-stage-no-held",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    const held = await heldAwards(tx, tx`stage_id = ${stageId}`);",
+  "replace": "    const held: Awaited<ReturnType<typeof heldAwards>> = [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "badminton, the STAGE door"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-division-skip",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "    await rewriteHeldAwards(tx, held);\n    return written;",
+  "replace": "    return written;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "badminton, the DIVISION door"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "football, a STARTED knockout"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-division-no-held",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "        held = await heldAwards(tx, tx`division_id = ${id}`);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "badminton, the DIVISION door"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "every sport's division door"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-refuse-it",
+  "file": "apps/web/src/server/usecases/award-rewrite.ts",
+  "find": "if (!fold.ok) throw saveRefusal(h, fold.reason);",
+  "replace": "throw saveRefusal(h, \"refused\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "badminton, the STAGE door"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "every sport's division door"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-never-refuse",
+  "file": "apps/web/src/server/usecases/award-rewrite.ts",
+  "find": "if (!fold.ok) throw saveRefusal(h, fold.reason);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "both doors refuse by name"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-moved-only",
+  "file": "apps/web/src/server/usecases/award-rewrite.ts",
+  "find": "if (canonicalJson(now.cfg) === canonicalJson(h.cfg)) continue;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "re-sending the same save re-writes nothing"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-held-standing",
+  "file": "apps/web/src/server/usecases/award-rewrite.ts",
+  "find": "if (!isScoredAward(r.outcome) || (await ledgerOf(tx, r.id)).standing > 0) continue;",
+  "replace": "if (!isScoredAward(r.outcome)) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "football, a STARTED knockout"
+   }
+  ]
+ },
+ {
+  "id": "b3-i1-held-scope-stage",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "heldAwards(tx, tx`stage_id = ${stageId}`)",
+  "replace": "heldAwards(tx, tx`false`)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "badminton, the STAGE door"
+   }
+  ]
+ },
+ {
+  "id": "b3-played-event-half",
+  "file": "apps/web/src/server/engine-db/format-standing.ts",
+  "find": "or exists (select 1 from score_events e where e.fixture_id = ${f}.id))`",
+  "replace": "or false)`",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "five fixture shapes"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "after the only event is voided the stage is still started"
+   }
+  ]
+ },
+ {
+  "id": "b3-played-snapshot-half",
+  "file": "apps/web/src/server/engine-db/format-standing.ts",
+  "find": "(${f}.config_snapshot is not null or exists",
+  "replace": "(false or exists",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "five fixture shapes"
+   }
+  ]
+ },
+ {
+  "id": "b3-lock-reads-played",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "and ${playedSql(tx, \"f\")}`;",
+  "replace": "and false`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "five fixture shapes"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "after the only event is voided the stage is still started"
+   }
+  ]
+ },
+ {
+  "id": "b3-writer-played-fit",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "      } else if (played) {\n",
+  "replace": "      } else if (false) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a match PLAYED with no frozen cfg"
+   }
+  ]
+ },
+ {
+  "id": "b3-writer-started-played",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "const started = played || withoutPlay;",
+  "replace": "const started = withoutPlay || hasFrozenCfg(row.config_snapshot);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "five fixture shapes"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a match PLAYED with no frozen cfg"
    }
   ]
  }

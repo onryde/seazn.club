@@ -19,6 +19,7 @@ import { resolveModule } from "@/server/engine-db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
+import { heldAwards, rewriteHeldAwards } from "./award-rewrite";
 // The format-lock predicate lives in rule-locks.ts (moved from here, W2c Task 2): the division PATCH asks the same
 // question per stage, and both halves must read one definition of "started".
 import { lockedStageIdsAmong } from "./rule-locks";
@@ -197,10 +198,15 @@ export async function putStageRules(
     // overrides nothing: the overlay would walk it for no reason, and every
     // `"rules" in config` reader (the panel's "Same as division" state) would
     // report an override that is not there.
+    // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE this save — re-written after it, under the
+    // format the stage now plays (`award-rewrite.ts`). The stage lock above does not count them as play.
+    const held = await heldAwards(tx, tx`stage_id = ${stageId}`);
+
     if (Object.keys(fragment).length === 0) {
       // `- 'rules'` removes the KEY. Writing null instead would leave a null
       // the overlay copies over the division's value.
       await tx`update stages set config = config - 'rules' where id = ${stageId}`;
+      await rewriteHeldAwards(tx, held);
       return { rules: null, divisionId: stage.division_id, competitionId: stage.competition_id };
     }
 
@@ -246,6 +252,7 @@ export async function putStageRules(
     await tx`
       update stages set config = config || ${tx.json({ rules: fragment } as never)}
        where id = ${stageId}`;
+    await rewriteHeldAwards(tx, held);
     return { rules: fragment, divisionId: stage.division_id, competitionId: stage.competition_id };
   });
 

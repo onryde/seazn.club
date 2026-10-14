@@ -26,6 +26,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { divisionRefusals } from "./rule-locks";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
+import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
 import {
   slugify,
@@ -807,6 +808,8 @@ export async function patchDivision(
     roundOpened = await anyRoundOpened(ptx, id, new Date());
   };
   const row = await withTenant(auth.orgId, async (tx) => {
+    // W2c batch-3 I1: the walkovers no event records, read before a format write (`award-rewrite.ts`); none otherwise.
+    let held: HeldAward[] = [];
     const effective: Record<string, unknown> = { ...patch };
     if (cameraPolicyNamed) {
       // The stored value this write replaces, under the same `for no key
@@ -979,6 +982,10 @@ export async function patchDivision(
     // belonged to the division-wide lock, which is gone.
     const formatEdit = patch.variant_key !== undefined || patch.config !== undefined;
     if (formatEdit || patch.tiebreakers !== undefined) {
+      // The division advisory lock every format writer takes (`stage-rules.ts`, `fixture-rules.ts`): a format edit
+      // re-writes the walkovers no event records (batch-3 I1, below), and a per-match correction of one of them must
+      // not interleave with it.
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
       const [current] = await tx<
         {
           sport_key: string;
@@ -1167,6 +1174,8 @@ export async function patchDivision(
         effective.config = tx.json(nextConfig as never);
         // W2c Task 14 (I-A one layer up): no unstarted match's own format may be left invalid by this config.
         await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule);
+        // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE the write — re-written after it.
+        held = await heldAwards(tx, tx`division_id = ${id}`);
       }
       if (refusedFields.has("tiebreakers")) delete effective.tiebreakers;
     }
@@ -1220,8 +1229,7 @@ export async function patchDivision(
       if (!row) throw new HttpError(404, "division not found");
       return row;
     };
-    if (!regenerating) return update(effective, tx);
-    return withUniqueSlug(
+    const written = !regenerating ? await update(effective, tx) : await withUniqueSlug(
       tx,
       {
         base: slugify(patch.name!),
@@ -1242,6 +1250,9 @@ export async function patchDivision(
         return update(slug === before!.slug ? effective : { ...effective, slug }, sp);
       },
     );
+    // batch-3 I1: under the format the division now plays, in this transaction (`award-rewrite.ts`).
+    await rewriteHeldAwards(tx, held);
+    return written;
   }, cameraPolicyNamed ? { privilegedPrelude: cameraGate } : {}).catch((err: unknown) => {
     // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
     // PATCHes can each pass the merge-and-validate guard above against a

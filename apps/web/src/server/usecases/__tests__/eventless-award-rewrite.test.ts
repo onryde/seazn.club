@@ -6,7 +6,7 @@
 // walkover has no play to misfit, and the winner never changes. The stored row must equal the engine's own walkover
 // fold (`awardedMatchState`) under the format the match now resolves (the pad's cfg, `loadFixturePadCfg`) — the
 // expectation is the engine's, never the save's.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -15,17 +15,33 @@ import { sql, withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { awardedMatchState } from "@/server/engine-db/awarded-state";
+import { formatStanding } from "@/server/engine-db/format-standing";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { loadFixturePadCfg } from "../fixtures";
 import { putStageRules } from "../stage-rules";
+import { writeFixtureRulesOverride } from "../fixture-rules";
+import { lockedStageIdsAmong } from "../rule-locks";
 import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// The save's refusal arm (`award-rewrite.ts`) is reached by no shipped sport's walkover — none refuses a forfeit or
+// decides another award for a format (award-fit.test.ts's header). It is a guard, so the last describe reaches it
+// through the real saves by steering the engine's verdict for ONE named fixture; every other call is the real one.
+const steer = vi.hoisted(() => ({ refuse: new Set<string>() }));
+vi.mock("@/server/engine-db/awarded-state", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/engine-db/awarded-state")>();
+  return {
+    ...real,
+    awardFoldsUnder: (...args: Parameters<typeof real.awardFoldsUnder>) =>
+      steer.refuse.has(args[4].fixtureId) ? { ok: false as const, reason: "steered: this format refuses the walkover" } : real.awardFoldsUnder(...args),
+  };
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -165,6 +181,15 @@ describe.skipIf(!HAS_DB)("I1 a format save re-writes the walkovers no event reco
     const w = await f14Walkover("football", "11-a-side");
     const line = w.others[0]!;
     await appendEvent(w.auth.orgId, line, 0, { type: "core.start", payload: {} });
+    // An award AFTER play is no walkover: its score is its ledger's fold, never re-written by a save. Its cfg un-frozen
+    // (a pre-V347 row), so the save DOES move the format it resolves — only the "no standing event" filter keeps it out.
+    const playedAward = w.others[1]!;
+    const [pa] = await sql<{ away: string }[]>`select away_entrant_id as away from fixtures where id = ${playedAward}`;
+    await appendEvent(w.auth.orgId, playedAward, 0, { type: "core.start", payload: {} });
+    await appendEvent(w.auth.orgId, playedAward, 1, { type: "core.forfeit", payload: { by: pa!.away, reason: "disqualified" } } as never);
+    await sql`update fixtures set config_snapshot = null, config_snapshot_at = null where id = ${playedAward}`;
+    const playedBefore = (await stored(playedAward))!;
+    expect(playedBefore, "the premise: the played award has its ledger's fold").not.toBeNull();
     const before = (await stored(w.id))!;
     const config = await currentConfig(w.divisionId);
     const cfgNow = (await padCfg(w)) as { awardScore: { goals: number } };
@@ -175,6 +200,7 @@ describe.skipIf(!HAS_DB)("I1 a format save re-writes the walkovers no event reco
     expect((out as { refused?: unknown[] }).refused ?? [], "the premise: the started knockout lets awardScore through").toEqual([]);
     const after = await expectStoredIsTheFold(w, "after the division save");
     expect(after.summary.headline).toBe(moved.summary.headline);
+    expect(await stored(playedAward), "the award after play keeps its ledger's fold").toEqual(playedBefore);
   }, 60_000);
 
   it("every sport's division door: a change of variant re-writes the F14 walkover under the format it now resolves (counted)", async () => {
@@ -210,4 +236,83 @@ describe.skipIf(!HAS_DB)("I1 a format save re-writes the walkovers no event reco
     expect(swept.length).toBe(walkovers);
     expect(moved, "every sport's variant change moved the walkover's resolved format").toBe(walkovers);
   }, 600_000);
+});
+
+describe.skipIf(!HAS_DB)("I1 one 'started': every format door reads format-standing.ts", () => {
+  it("five fixture shapes: the stage lock locks on PLAYED only, the per-match writer reports PLAYED or DECIDED WITHOUT PLAY (counted)", async () => {
+    // single-sport: the shapes are ledger shapes (a frozen cfg, an event, a void, an award), the same in every sport.
+    const w = await f14Walkover("badminton", "bwf", 16);
+    expect(w.others.length, "the premise: four other seated lines").toBeGreaterThanOrEqual(4);
+    const [started, voided, legacy, unstarted] = w.others as [string, string, string, string];
+    const locked = () => withTenant(w.auth.orgId, (tx) => lockedStageIdsAmong(tx, [w.stageId]));
+
+    // The ruling: a walkover decided without play locks no format — the save re-writes its score instead.
+    expect(await locked(), "only the walkover is decided: the stage is not locked").toEqual(new Set());
+
+    await appendEvent(w.auth.orgId, started, 0, { type: "core.start", payload: {} });
+    await appendEvent(w.auth.orgId, voided, 0, { type: "core.start", payload: {} });
+    const [{ id: startId }] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${voided} and type = 'core.start'`;
+    await appendEvent(w.auth.orgId, voided, 1, { type: "core.void", payload: {}, voids: startId });
+    await appendEvent(w.auth.orgId, legacy, 0, { type: "core.start", payload: {} });
+    await sql`update fixtures set config_snapshot = null, config_snapshot_at = null where id = ${legacy}`;
+
+    // Each shape's standing BY DEFINITION (format-standing.ts's header), never read off the code.
+    const shapes: { label: string; id: string; played: boolean; decidedWithoutPlay: boolean }[] = [
+      { label: "unstarted", id: unstarted, played: false, decidedWithoutPlay: false },
+      { label: "F14 walkover", id: w.id, played: false, decidedWithoutPlay: true },
+      { label: "started (frozen cfg + an event)", id: started, played: true, decidedWithoutPlay: false },
+      { label: "its only event voided", id: voided, played: true, decidedWithoutPlay: false },
+      { label: "events, no frozen cfg (pre-V347)", id: legacy, played: true, decidedWithoutPlay: false },
+    ];
+    let checked = 0;
+    for (const sh of shapes) {
+      expect(await withTenant(w.auth.orgId, (tx) => formatStanding(tx, sh.id)), sh.label).toEqual({
+        played: sh.played,
+        decidedWithoutPlay: sh.decidedWithoutPlay,
+      });
+      // The writer's own word for it (a clearing write over no override: it moves nothing on any of the five).
+      const out = await writeFixtureRulesOverride(w.auth, [sh.id], null);
+      expect(out.fixtures[0]?.started, `${sh.label}: the writer's 'started'`).toBe(sh.played || sh.decidedWithoutPlay);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every shape was asked").toBe(shapes.length);
+    expect(shapes.filter((sh) => sh.played).length, "both answers are witnessed").toBe(3);
+    expect(await locked(), "a played line locks the stage").toEqual(new Set([w.stageId]));
+  }, 120_000);
+});
+
+describe.skipIf(!HAS_DB)("I1 the save's one refusal: an award that will not hold under the new format", () => {
+  it("both doors refuse by name (409 FORMAT_DOES_NOT_FIT_PLAY, the match and the engine's reason) and write nothing; unsteered, the same save goes through", async () => {
+    // single-sport: the arm is steered (above), so the sport only supplies a real walkover and a real save.
+    const w = await f14Walkover("badminton", "bwf");
+    const no = (await sql<{ n: number | null }[]>`select fixture_no n from fixtures where id = ${w.id}`)[0]!.n;
+    const name = no === null ? "This match" : `Match ${no}`;
+    const config = await currentConfig(w.divisionId);
+    const bestOf = Number(((await padCfg(w)) as { bestOf: number }).bestOf) + 2;
+    const before = (await stored(w.id))!;
+    const stageBefore = (await sql<{ c: unknown }[]>`select config c from stages where id = ${w.stageId}`)[0]!.c;
+    steer.refuse.add(w.id);
+    try {
+      const doors: [string, () => Promise<unknown>][] = [
+        ["stage", () => putStageRules(w.auth, w.stageId, { rules: { bestOf } })],
+        ["division", () => patchDivision(w.auth, w.divisionId, { config: { ...config, bestOf } })],
+      ];
+      let refused = 0;
+      for (const [door, save] of doors) {
+        const err = await save().catch((e: unknown) => e);
+        expect(err, door).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: w.id } });
+        expect(String((err as Error).message), door).toBe(`${name}: steered: this format refuses the walkover`);
+        refused++;
+      }
+      expect(refused, "anti-vacuity: both doors asked").toBe(2);
+      expect(await stored(w.id), "nothing re-written").toEqual(before);
+      expect(await currentConfig(w.divisionId), "the division save rolled back").toEqual(config);
+      expect((await sql<{ c: unknown }[]>`select config c from stages where id = ${w.stageId}`)[0]!.c, "the stage save rolled back").toEqual(stageBefore);
+    } finally {
+      steer.refuse.delete(w.id);
+    }
+    // Positive pair: the same save, the real verdict — it goes through and re-writes.
+    await patchDivision(w.auth, w.divisionId, { config: { ...config, bestOf } });
+    await expectStoredIsTheFold(w, "unsteered");
+  }, 120_000);
 });

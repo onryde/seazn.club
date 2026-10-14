@@ -107,6 +107,27 @@ export type AwardFitVerdict =
  *    the fold deciding another award is the "result" reason; a different credited score is the "score" reason.
  *  - Anything else thrown is a module bug, not a verdict, and propagates.
  */
+/** Does the stored award hold under `cfg`? Its walkover folded there (`awardedMatchState`), or the reason it will not
+ *  hold: the engine refusing the forfeit (its own message) or the fold deciding another award (the "result" reason). A
+ *  module bug (a plain Error) is no verdict and propagates. The format correction asks it of the corrected cfg
+ *  (`awardFit`); a FORMAT SAVE asks only this (batch-3 I1, `award-rewrite.ts`): the save moves the credited score with
+ *  it, so the old fold is no question there. */
+export function awardFoldsUnder(
+  module: AnySportModule,
+  cfg: unknown,
+  lineups: LineupPair,
+  outcome: MatchOutcome,
+  at: { fixtureId: string; recordedAt: string },
+): { ok: true; state: ReturnType<typeof awardedMatchState> } | { ok: false; reason: string } {
+  try {
+    return { ok: true, state: awardedMatchState(module, cfg, lineups, outcome, at) };
+  } catch (err) {
+    if (EngineError.is(err)) return { ok: false, reason: err.message };
+    if (err instanceof AwardFoldMismatch) return { ok: false, reason: FORMAT_FIT_REASONS.result };
+    throw err;
+  }
+}
+
 export function awardFit(
   module: AnySportModule,
   currentCfg: unknown,
@@ -123,15 +144,9 @@ export function awardFit(
     if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
     throw err;
   }
-  let now;
-  try {
-    now = awardedMatchState(module, correctedCfg, lineups, outcome, at);
-  } catch (err) {
-    if (EngineError.is(err)) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: err.message };
-    if (err instanceof AwardFoldMismatch) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: FORMAT_FIT_REASONS.result };
-    throw err;
-  }
-  if (now.summary.headline !== was.summary.headline)
+  const now = awardFoldsUnder(module, correctedCfg, lineups, outcome, at);
+  if (!now.ok) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: now.reason };
+  if (now.state.summary.headline !== was.summary.headline)
     return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: FORMAT_FIT_REASONS.score };
   return { ok: true };
 }
