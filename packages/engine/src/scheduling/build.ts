@@ -116,7 +116,8 @@ import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
 // The engine reaches a solver and a logger only through the ports in `solver-port.ts` (engine-split D11, D25): this file
-// imports no transport, reads no env and opens no socket. Type-only, so nothing here binds at runtime.
+// imports no transport, reads no env and opens no socket. The one runtime import is `assertEnginePorts`, the D29 check
+// that both ports were actually supplied.
 import { assertEnginePorts } from "./solver-port.ts";
 import type { EngineLogger, PlacementSolver, SolveBuildInput, SolveBuildOutcome } from "./solver-port.ts";
 
