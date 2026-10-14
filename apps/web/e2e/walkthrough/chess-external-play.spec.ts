@@ -89,6 +89,16 @@ test.describe.configure({ mode: "parallel" });
 // tests open no camera.
 test.use({ launchOptions: { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] } });
 
+/** T17B fix 2, D15: under camera "required" the check-in tests the camera ON THE PAGE before Check in opens — this
+ *  file's browsers run Chromium's fake camera, so the test passes as a player's would. A board without the duty has
+ *  no test: nothing to do. */
+async function passCameraTest(p: Page): Promise<void> {
+  const camera = p.getByTestId("room-checkin-test-cta");
+  if ((await camera.count()) === 0) return;
+  await camera.click();
+  await expect(p.getByTestId("room-checkin-cta"), "the tested camera opens Check in").toBeEnabled({ timeout: 15_000 });
+}
+
 async function sharedPath(
   request: import("@playwright/test").APIRequestContext,
   competitionId: string,
@@ -570,6 +580,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const ctx1 = await playerContext(browser);
     const p1 = await openRoom(ctx1, boardA, first);
     await expect(screen(p1)).toHaveAttribute("data-screen", "checkin");
+    await passCameraTest(p1);
     await p1.getByTestId("room-checkin-cta").click();
     await expect.poll(() => video.participantFor(first.personId) !== null, { message: NOT_POINTED("RealtimeKit"), timeout: 20_000 }).toBe(true);
     await expect(screen(p1), "the meeting reports nobody: the seat is refused").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
@@ -607,6 +618,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     video.setUnavailable(true);
     const ctx2 = await playerContext(browser);
     const p2 = await openRoom(ctx2, boardA, second);
+    await passCameraTest(p2);
     await p2.getByTestId("room-checkin-cta").click();
     await expect(screen(p2)).toHaveAttribute("data-screen", "videoDown", { timeout: 30_000 });
     await expect(p2.getByTestId("room-state-video-down")).toBeVisible();
@@ -817,6 +829,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const b2: RoundBoard = { fixtureId: boards2[0]!.id, home: players.get(boards2[0]!.home!)!, away: players.get(boards2[0]!.away!)! };
     const ctx = await playerContext(browser);
     const p = await openRoom(ctx, b2, b2.home);
+    await passCameraTest(p);
     await p.getByTestId("room-checkin-cta").click();
     await expect(screen(p)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     video.setLivePublisher(participantOf(b2.home), true);
@@ -929,6 +942,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const ctx = await playerContext(browser);
     const p = await openRoom(ctx, reBoard1, newcomer);
     await expect(screen(p)).toHaveAttribute("data-screen", "checkin");
+    await passCameraTest(p);
     const [claim] = await Promise.all([
       p.waitForResponse((res) => res.request().method() === "POST" && /\/external-play\/room$/.test(new URL(res.url()).pathname)),
       p.getByTestId("room-checkin-cta").click(),
@@ -1019,6 +1033,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await card.getByTestId("your-board-link").click();
     await p.waitForURL((u) => u.pathname === routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
     await expect(screen(p)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    await passCameraTest(p);
     const [claim] = await Promise.all([
       p.waitForResponse((res) => res.request().method() === "POST" && /\/external-play\/room$/.test(new URL(res.url()).pathname)),
       p.getByTestId("room-checkin-cta").click(),
@@ -1076,6 +1091,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const sctx = await playerContext(browser);
     const sp = await openRoom(sctx, board1, stayer);
     await expect(screen(sp)).toHaveAttribute("data-screen", "checkin");
+    await passCameraTest(sp);
     await sp.getByTestId("room-checkin-cta").click();
     await expect(screen(sp), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     const first = video.participantFor(stayer.personId)!;
@@ -1144,6 +1160,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await expect(screen(np)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     // The stayer's own re-claim, if it comes, comes by itself: watched from before the retire.
     const reclaim = sp.waitForResponse((res) => res.request().method() === "POST" && isRoom(res.url()), { timeout: IDLE_POLL_MS + 20_000 });
+    await passCameraTest(np);
     await np.getByTestId("room-checkin-cta").click();
     await expect(screen(np), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     const fresh = await meetingsOf(board1.fixtureId);
@@ -1206,6 +1223,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const sctx = await playerContext(browser);
     const sp = await openRoom(sctx, board1, stayer);
     await expect(screen(sp)).toHaveAttribute("data-screen", "checkin");
+    await passCameraTest(sp);
     await sp.getByTestId("room-checkin-cta").click();
     await expect(screen(sp)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     const first = video.participantFor(stayer.personId)!;
@@ -1281,6 +1299,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await card.getByTestId("your-board-link").click();
     await np.waitForURL((u) => u.pathname === routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
     await expect(screen(np)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    await passCameraTest(np);
     await np.getByTestId("room-checkin-cta").click();
     await expect(screen(np)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     expect((await meetingsOf(board1.fixtureId)).map((m) => m.meeting_id), "the newcomer joins the stayer's new meeting").toEqual([fresh[0]!.meeting_id]);

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { Checkin } from "../checkin";
+import { HANDED } from "../camera-test";
 import type { RoomSnapshot } from "../room-snapshot";
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
@@ -31,6 +32,9 @@ function cta(locale: string, checkingCamera: boolean): { disabled: boolean; labe
         cameraOn
         busy={false}
         checkingCamera={checkingCamera}
+        // D15: `camera_starting` is a seat answer, so Check in was pressed and the tested camera handed over — the
+        // state both legs here stand in (before any test, "required" keeps Check in shut: checkin-camera-test).
+        cameraTest={{ view: HANDED, onTest: () => {}, onFrame: () => {}, onHandOver: () => {} }}
         onCheckIn={() => {}}
         t={t as never}
         plural={((k: string) => k) as never}
