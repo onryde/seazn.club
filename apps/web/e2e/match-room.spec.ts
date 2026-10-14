@@ -19,7 +19,7 @@
  */
 import { test, expect, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { Chess } from "chess.js";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { apiJson, loginUi, withDb } from "./helpers";
@@ -115,6 +115,37 @@ async function noSidewaysScroll(page: Page, widths: number[]): Promise<number> {
       client: document.documentElement.clientWidth,
     }));
     expect(scroll, `no horizontal page scroll at ${width}px`).toBeLessThanOrEqual(client);
+    checked += 1;
+  }
+  return checked;
+}
+
+/** T17B fix 2 (D12): every painted box in the room lies inside the viewport, at each width. The page CLIPS
+ *  (globals.css `html, body { overflow-x: clip }`), so a box past the right edge is cut off, never scrolled to — and
+ *  noSidewaysScroll cannot see it (the owner's Open 4: the right clock, the camera tile, the pill, the buttons and the
+ *  help text ran off a desktop window with no scrollbar). Names the offenders; counts boxes and widths. */
+async function nothingPastTheEdge(page: Page, widths: number[]): Promise<number> {
+  let checked = 0;
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(150);
+    const out = await page.getByTestId("match-room").evaluate((root) => {
+      const vw = document.documentElement.clientWidth;
+      const bad: string[] = [];
+      let boxes = 0;
+      for (const el of [root, ...root.querySelectorAll("*")]) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        boxes += 1;
+        if (r.right > vw + 0.5 || r.left < -0.5) {
+          const id = (el as HTMLElement).dataset?.testid ?? String((el as HTMLElement).className ?? "").slice(0, 70);
+          bad.push(`${el.tagName.toLowerCase()}[${id}] ${Math.round(r.left)}..${Math.round(r.right)} of ${vw}`);
+        }
+      }
+      return { bad: bad.slice(0, 10), boxes };
+    });
+    expect(out.boxes, `anti-vacuity: boxes painted at ${width}px`).toBeGreaterThan(20);
+    expect(out.bad, `nothing past the edge at ${width}px`).toEqual([]);
     checked += 1;
   }
   return checked;
@@ -555,6 +586,52 @@ test("a move through the REAL server: a grant downgraded mid-game is refused by 
   await p.waitForTimeout(200);
   expect(await screenOf(p)).toBe("relink");
   expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
+  await ctx.close();
+});
+
+test("T17B fix 2, D12: the live room under a camera policy — clocks, board, camera tile, notice, controls — is painted inside the window at every desktop width (1024–1440), the laptop's 1100 and the phones", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [longName(), longName()], cameraPolicy: "required" });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: 300_000, blackMs: 296_000 });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  expect(await screenOf(p)).toBe("live");
+  // The owner's room had a LIVE camera and the opponent's pill; no browser here can make a RealtimeKit peer, so both
+  // are staged (controller hypothesis: a real <video>'s intrinsic width, 1280 px, unconstrained). A 1280x720 canvas
+  // stream goes into the tile's OWN <video>, unhidden as a stream unhides it; the pill's own markup (the component,
+  // classes, read from presence-pill.tsx — Playwright's own JSX transform cannot render the component) goes into
+  // the strip, "on camera", for the opponent's long name.
+  const pillSrc = readFileSync(new URL("../src/components/public-site/match-room/presence-pill.tsx", import.meta.url), "utf8");
+  const classes = [...pillSrc.matchAll(/className="([^"]+)"/g)].map((m) => m[1]!);
+  expect(classes, "the pill's two literal class lists").toHaveLength(2);
+  const pill =
+    `<span data-testid="room-presence-pill" data-state="live" class="${classes[0]}">` +
+    `<span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full bg-[#15803d]"></span>` +
+    `<span class="${classes[1]}">${uiEn["externalPlay.room.presence.live"]!.replace("{name}", room.black.name.split(" ")[0]!)}</span></span>`;
+  const intrinsic = await p.getByTestId("room-own-tile").evaluate(async (tile, html) => {
+    const canvas = Object.assign(document.createElement("canvas"), { width: 1280, height: 720 });
+    canvas.getContext("2d")!.fillRect(0, 0, 1280, 720);
+    const video = tile.querySelector("video")!;
+    video.classList.remove("hidden");
+    video.srcObject = canvas.captureStream(5);
+    await video.play().catch(() => {});
+    await new Promise((r) => (video.videoWidth > 0 ? r(null) : video.addEventListener("loadedmetadata", r, { once: true })));
+    tile.parentElement!.insertAdjacentHTML("beforeend", html);
+    return video.videoWidth;
+  }, pill);
+  expect(intrinsic, "the staged stream is the wide one").toBe(1280);
+  // The right column's parts are there to be measured (the premise of the sweep).
+  for (const id of ["room-clock-opponent", "room-clock-you", "room-tile-strip", "room-controls", "room-camera-notice", "room-presence-pill"]) {
+    await expect(p.getByTestId(id), id).toBeVisible();
+  }
+  const WIDTHS = [1024, 1100, 1180, 1280, 1366, 1440, 768, 834, 320, 375];
+  expect(await nothingPastTheEdge(p, WIDTHS), "anti-vacuity: widths").toBe(WIDTHS.length);
+  expect(await noSidewaysScroll(p, WIDTHS)).toBe(WIDTHS.length);
+  await shoot(p, "d12-live-camera");
   await ctx.close();
 });
 
