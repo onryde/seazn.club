@@ -18,7 +18,7 @@ import { apiV1 } from "@/lib/client-v1";
 import { StagePicker } from "./board/stage-picker";
 import { settingsErrorText } from "@/lib/schedule-error";
 import { track, EVENTS } from "@/lib/analytics";
-import { useLocalStorageItem, useMediaQuery, writeLocalStorageItem } from "@/lib/use-client-snapshot";
+import { useHydrated, useLocalStorageItem, useMediaQuery, writeLocalStorageItem } from "@/lib/use-client-snapshot";
 import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, daySlots, type FeedLabelPair } from "@/lib/schedule-board";
@@ -916,22 +916,36 @@ export function ScheduleBoard({
   );
 
   // ------------------------------------------------------- density modes
-  // Derived, not copied out of storage by an effect (ESLint L3): the pick made
+  // Not copied out of storage by an effect any more (ESLint L3): the pick made
   // here, else the saved one, else the default — Agenda on a phone and for
   // ≥8 divisions (v3/04 §2), the Board otherwise. Storage and the viewport are
   // read through `useSyncExternalStore`, whose SERVER snapshots ("nothing
-  // saved", "not narrow") make the server and hydration renders agree on the
-  // Board; the saved / phone density lands on the render after hydration.
+  // saved", "not narrow", not hydrated) make the server and hydration renders
+  // agree on the Board; the saved / phone density lands on the render after
+  // hydration.
+  //
+  // The DEFAULT is decided at those moments only — after hydration and when
+  // the division count changes (the old effect's own triggers) — never live
+  // on resize: a Board the organiser is looking at must not turn into an
+  // Agenda because the window narrowed (schedule-datetime-ux.spec.ts resizes
+  // 1280 → 375 and still expects the board table). And, as before, it only
+  // ever moves TO Agenda; a count dropping below 8 keeps what is shown.
   const savedDensity = useLocalStorageItem(DENSITY_STORAGE_KEY);
   const narrow = useMediaQuery("(max-width: 640px)");
+  const hydrated = useHydrated();
   const [pickedDensity, setPickedDensity] = useState<Density | null>(null);
+  const [autoDensity, setAutoDensity] = useState<Density>("board");
+  const densitySeed = `${hydrated}|${divisions.length}`;
+  const [densitySeededFor, setDensitySeededFor] = useState(() => `false|${divisions.length}`);
+  if (densitySeededFor !== densitySeed) {
+    setDensitySeededFor(densitySeed);
+    if (hydrated && (narrow || divisions.length >= 8)) setAutoDensity("agenda");
+  }
   const density: Density =
     pickedDensity ??
     (savedDensity === "board" || savedDensity === "agenda" || savedDensity === "lanes"
       ? savedDensity
-      : narrow || divisions.length >= 8
-        ? "agenda"
-        : "board");
+      : autoDensity);
   const [view, setView] = useState<"day" | "week">("day");
   const pickDensity = useCallback((d: Density) => {
     setPickedDensity(d);

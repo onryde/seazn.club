@@ -218,6 +218,20 @@ describe("schedule board density", () => {
     expect(densityOf(hydrated(manyDivisions(7)).tree())).toBe("board");
   });
 
+  it("the default is decided once, not live: a window narrowed after mount keeps the Board; ≥8 divisions arriving moves it to Agenda, and dropping back keeps Agenda", () => {
+    const island = hydrated();
+    expect(densityOf(island.tree())).toBe("board");
+    narrow = true; // the window narrows past 640px with the board on screen
+    island.rerender({ ...PROPS });
+    expect(densityOf(island.tree()), "no live flip on resize (e2e: schedule-datetime-ux)").toBe("board");
+
+    narrow = false;
+    island.rerender(manyDivisions(8));
+    expect(densityOf(island.tree())).toBe("agenda");
+    island.rerender(manyDivisions(3));
+    expect(densityOf(island.tree()), "only ever moves TO Agenda, as before").toBe("agenda");
+  });
+
   it("a saved density beats the phone default", () => {
     narrow = true;
     store.set(KEY, "board");
