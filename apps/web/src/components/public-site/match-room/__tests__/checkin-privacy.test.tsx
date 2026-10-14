@@ -102,3 +102,36 @@ describe("check-in privacy line — the configuration, never a guarantee (fix ro
     expect(checked).toBe(LOCALES.length);
   });
 });
+
+// T17B fix 2 (controller ruling, folded into D4): the arbiter's watch-only line made the same kind of promise — "they
+// never see each other" — that nothing proves (the player preset has no receive permission to deny; its only
+// receive-side setting is a view config). It falls under the same rule: what the rooms are SET UP to do.
+const ARBITER_RULED = {
+  en: "You're watching. The players' rooms aren't set up to let them see or hear you, or to show each other.",
+  es: "Estás observando. Los tableros de los jugadores no están configurados para que te vean ni te oigan, ni para mostrarse entre sí.",
+  fr: "Vous observez. Les échiquiers des joueurs ne sont pas configurés pour qu'ils vous voient ou vous entendent, ni pour les montrer l'un à l'autre.",
+  nl: "Je kijkt mee. De borden van de spelers zijn niet ingesteld om jou te laten zien of horen, of om elkaar te tonen.",
+} as const satisfies Record<Locale, string>;
+
+describe("the arbiter's watch-only line — the same rule as the check-in's (T17B fix 2)", () => {
+  it("says, in each locale, what the players' rooms are set up to do — and makes no absolute claim: no never, no only, no guarantee — counted", () => {
+    let lines = 0;
+    let words = 0;
+    for (const locale of LOCALES) {
+      const line = DICTS[locale]["arbiter.watchOnly"];
+      expect(line, locale).toBe(ARBITER_RULED[locale]);
+      for (const word of ABSOLUTES[locale]) {
+        expect(line!.toLowerCase(), `${locale}: "${word}"`).not.toMatch(new RegExp(`(^|[^\\p{L}])${word}([^\\p{L}]|$)`, "u"));
+        words++;
+      }
+      lines++;
+    }
+    expect(lines).toBe(LOCALES.length);
+    expect(words).toBe(Object.values(ABSOLUTES).flat().length);
+  });
+
+  it("is the line the panel draws, in its header and in its body — counted from the panel's source", () => {
+    const src = readFileSync(join(__dirname, "..", "..", "..", "v2", "arbiter-panel.tsx"), "utf8");
+    expect(src.split('f.t("arbiter.watchOnly")').length - 1, "header (desktop) and body (below lg)").toBe(2);
+  });
+});

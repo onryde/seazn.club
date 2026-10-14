@@ -6145,7 +6145,7 @@
   "arbiter.title": "Arbitre",
   "arbiter.back": "Retour à la feuille de ronde",
   "arbiter.roundLine": "{stage} · Ronde {round}",
-  "arbiter.watchOnly": "Vous ne faites qu'observer. Les joueurs ne peuvent ni vous voir ni vous entendre, et ils ne se voient jamais entre eux.",
+  "arbiter.watchOnly": "Vous observez. Les échiquiers des joueurs ne sont pas configurés pour qu'ils vous voient ou vous entendent, ni pour les montrer l'un à l'autre.",
   "arbiter.boardsHeading": "Échiquiers filmés",
   "arbiter.boardPicker": "Échiquier",
   "arbiter.boardNo": "Échiquier {n}",

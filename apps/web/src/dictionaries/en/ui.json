@@ -6145,7 +6145,7 @@
   "arbiter.title": "Arbiter",
   "arbiter.back": "Back to run sheet",
   "arbiter.roundLine": "{stage} · Round {round}",
-  "arbiter.watchOnly": "You only watch. The players can't see or hear you, and they never see each other.",
+  "arbiter.watchOnly": "You're watching. The players' rooms aren't set up to let them see or hear you, or to show each other.",
   "arbiter.boardsHeading": "Boards on camera",
   "arbiter.boardPicker": "Board",
   "arbiter.boardNo": "Board {n}",

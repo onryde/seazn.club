@@ -406,6 +406,74 @@ test.describe("arbiter panel", () => {
     expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
   });
 
+  test("T17B fix 2 (D4): on a desktop the watch-only line sits UNDER the title, whole and inside the header, and the round line beside the title keeps its round number — at every desktop width, under a long stage name; at 320 and 768 it reads in the body; no sideways scroll at 320, 768 or 1280", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const r = await seedRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
+    await gameOn(r.boards[0]!, { moves: LINE });
+    // A real stage name of a long-running league, so the round line takes its share of the header.
+    const stage = "Championship Qualifiers Group A";
+    await withDb((sql) => sql`update stages set name = ${stage} where id = (select stage_id from fixtures where id = ${r.boards[0]!.fixtureId})`);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    await expect(page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] })).toBeVisible();
+    await expect(page.getByText(fill("arbiter.roundLine", { stage, round: 1 }))).toBeVisible();
+
+    const line = uiEn["arbiter.watchOnly"]!;
+    // lg (1024) is where the header line appears: its tightest width, then the common desktops.
+    const DESKTOP = [1024, 1100, 1280, 1440];
+    let checked = 0;
+    for (const width of DESKTOP) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.waitForTimeout(150);
+      const inHeader = page.locator("header").filter({ has: page.getByRole("heading", { level: 1 }) }).getByText(line, { exact: true });
+      await expect(inHeader, `${width}px: the header carries the line`).toBeVisible();
+      const m = await inHeader.evaluate((el) => {
+        const header = el.closest("header")!;
+        const hr = header.getBoundingClientRect();
+        const pad = parseFloat(getComputedStyle(header).paddingRight);
+        const r = el.getBoundingClientRect();
+        const title = header.querySelector("h1")!.getBoundingClientRect();
+        const round = [...header.querySelectorAll("span")].find((x) => /·/.test(x.textContent ?? ""))!;
+        return {
+          top: r.top,
+          left: r.left,
+          titleBottom: title.bottom,
+          roundLeft: round.getBoundingClientRect().left,
+          roundWhole: round.scrollWidth <= round.clientWidth,
+          right: r.right,
+          limit: hr.right - pad,
+          headerFits: header.scrollWidth <= header.clientWidth,
+          textFits: el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight + 1,
+          inViewport: r.right <= document.documentElement.clientWidth,
+          bottom: r.bottom,
+          headerBottom: hr.bottom,
+        };
+      });
+      expect(m.right, `${width}px: the line ends inside the header's padding`).toBeLessThanOrEqual(m.limit + 0.5);
+      expect(m.headerFits, `${width}px: nothing in the header overflows it`).toBe(true);
+      expect(m.textFits, `${width}px: every word of the line is painted`).toBe(true);
+      expect(m.inViewport, `${width}px: on screen`).toBe(true);
+      expect(m.bottom, `${width}px: inside the header, not hanging below it`).toBeLessThanOrEqual(m.headerBottom + 0.5);
+      expect(m.top, `${width}px: under the title, never beside it`).toBeGreaterThanOrEqual(m.titleBottom - 0.5);
+      expect(Math.abs(m.left - m.roundLeft), `${width}px: aligned with the round line it sits under`).toBeLessThanOrEqual(1);
+      expect(m.roundWhole, `${width}px: the round line is whole — its round number painted`).toBe(true);
+      if (SHOTS) await page.screenshot({ path: join(SHOTS, `arbiter-header-${width}.png`), clip: { x: 0, y: 0, width, height: 180 }, caret: "initial" });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: desktop widths").toBe(DESKTOP.length);
+    // Below lg the line reads in the body, under the board picker — never the header.
+    for (const width of [320, 768]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(150);
+      await expect(page.locator("main").getByText(line, { exact: true }), `${width}px`).toBeVisible();
+    }
+    await shoot(page, "arbiter-header-long-stage");
+    expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
+  });
+
   // I-3 (controller ruling, fix round 2): "No result" is VOID — an abandon, no points, no absence — and in ANY knockout
   // the server refuses it (a knockout game needs a winner), so it is not offered there — on the panel or on the
   // division's queue — and the settle says why. The knockout board here FEEDS a next match: the hiding is the

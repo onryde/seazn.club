@@ -6145,7 +6145,7 @@
   "arbiter.title": "Árbitro",
   "arbiter.back": "Volver a la hoja de ronda",
   "arbiter.roundLine": "{stage} · Ronda {round}",
-  "arbiter.watchOnly": "Solo observas. Los jugadores no pueden verte ni oírte, y nunca se ven entre ellos.",
+  "arbiter.watchOnly": "Estás observando. Los tableros de los jugadores no están configurados para que te vean ni te oigan, ni para mostrarse entre sí.",
   "arbiter.boardsHeading": "Tableros con cámara",
   "arbiter.boardPicker": "Tablero",
   "arbiter.boardNo": "Tablero {n}",
