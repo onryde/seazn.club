@@ -140,6 +140,51 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     expect(resolvePhase(voided)).toBe("live");
   });
 
+  it("a voided Armageddon is re-recorded from scratch: each re-record advances the entrant ITS Black × result gives, twice over, never the voided one's (the sequence, class 1)", () => {
+    // single-sport: the void-then-re-record of a tie-break is chess's alone — boardgame is the only module declaring deciderTypes
+    // Three Armageddons whose rulebook advancers (BG-KO-2: White won -> the other entrant; Black won or drawn -> Black) each differ from the
+    // one before it, so a re-record that kept the voided event's winner (or its Black) could not pass.
+    const attempts = [
+      { black: "home", result: "white" },
+      { black: "home", result: "black" },
+      { black: "away", result: "draw" },
+    ] as const;
+    const advancers = attempts.map((a) => ENTRANT[advancerOf(a.black, a.result)]);
+    expect(advancers, "each attempt's advancer differs from the previous one's").toEqual(["A", "H", "A"]);
+    // The ledger grows one attempt at a time: [start, drawn, TB1, void(TB1), TB2, void(TB2), TB3]. Event ids are `e-<seq>`.
+    const ledger: { type: string; payload: Record<string, unknown>; voids?: string }[] = [START, DRAWN];
+    let checked = 0;
+    attempts.forEach((a, i) => {
+      // The pad offers the sheet from the CURRENT ledger (the previous attempt voided): build the payload through it, not by hand.
+      const offered = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: ledger });
+      expect(buildTiles(offered, echo).map((t) => t.id), `attempt ${i + 1}: the tie-break is owed again`).toEqual([TIEBREAK_TILE_ID]);
+      expect(resolvePhase(offered)).toBe("live");
+      const payload = buildSheets(offered, echo)[TIEBREAK_TILE_ID]!.buildPayload({ rung: "armageddon", black: `black-${a.black}`, result: `result-${a.result}` });
+      ledger.push({ type: TIEBREAK_TYPE, payload });
+      const recorded = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: ledger });
+      expect(boardgame.outcome(recorded.state as never), `attempt ${i + 1} (${a.black} Black, ${a.result}): the engine's win`).toMatchObject({
+        kind: "win",
+        winner: advancers[i],
+        loser: advancers[i] === "H" ? "A" : "H",
+        method: "tiebreak_armageddon",
+      });
+      expect(buildTiles(recorded, echo), `attempt ${i + 1}: decided, nothing offered`).toEqual([]);
+      expect(resolvePhase(recorded)).toBe("post");
+      checked++;
+      if (i < attempts.length - 1) {
+        // Void it: the match is undecided again (no carry-over of the voided win) and the decider is owed.
+        ledger.push({ type: "core.void", payload: {}, voids: `e-${ledger.length}` });
+        const voided = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: ledger });
+        expect(boardgame.outcome(voided.state as never), `after voiding attempt ${i + 1}`).toBeNull();
+        expect((voided.state as { phase?: string }).phase).toBe("tiebreak");
+        checked++;
+      }
+    });
+    // three records + two voids
+    expect(checked).toBe(5);
+    expect(ledger.filter((e) => e.voids !== undefined).map((e) => e.voids)).toEqual(["e-3", "e-5"]);
+  });
+
   it("a ledger whose settle names neither side is refused loudly — the pad never guesses who advanced", () => {
     const v = tiebreakView();
     const bogus = { ...v, events: [...v.events, makeEnvelope(3, { type: "core.settle", payload: { winner: "X", method: "lot" } } as never)] };
