@@ -15,6 +15,25 @@ export function remainingMs(a: { baseMs: number; asOfMs: number; nowMs: number; 
   return Math.max(0, a.baseMs - Math.max(0, a.nowMs - a.asOfMs));
 }
 
+/**
+ * T17B fix 2, D13: the instant, on the SERVER's clock, at which the side to
+ * move's clock reaches zero — the same reading the clock face counts down
+ * (each clock is as at `clockAsOf`, V442) — or null when no clock runs toward
+ * one: the clocks not started (ply < 2), the game over, no stamp yet. Never a
+ * flag on its own: Lichess decides that (reconcile.ts, D11).
+ */
+export function moverFlagAt(g: {
+  clockRunning: boolean;
+  over: boolean;
+  clockAsOf: string | null;
+  turn: "white" | "black";
+  whiteMs: number;
+  blackMs: number;
+}): number | null {
+  if (!g.clockRunning || g.over || g.clockAsOf === null) return null;
+  return Date.parse(g.clockAsOf) + Math.max(0, g.turn === "white" ? g.whiteMs : g.blackMs);
+}
+
 /** Below this the face shows tenths (time trouble). */
 export const TENTHS_BELOW_MS = 10_000;
 

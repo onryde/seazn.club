@@ -752,23 +752,27 @@ describe.runIf(HAS_DB)("reconcile — D11: a clock at zero is read once more on 
     expect(checked, "anti-vacuity: triggers").toBe(RECONCILE_TRIGGERS.length);
   });
 
-  it("the empty cases: a clock NOT at zero, the zero on the WAITING side, a flag Lichess already settled — no settling read", async () => {
+  // Controller ruling (2026-10-14): the 9 s hold is paid ONLY for a mover at zero — a sweep over live boards with time
+  // on the clock pays nothing. Swept over every trigger, counted.
+  it("the empty cases, on EVERY trigger: a clock NOT at zero, the zero on the WAITING side, a flag Lichess already settled — no settling read", async () => {
     const cases: [string, (g: Game) => string][] = [
       ["mid-game (the mid recording)", (g) => gameFull(g, MID)],
       ["Black at 0, White to move", (g) => gameFull(g, MID, { btime: 0 })],
       ["already settled (expired-2)", (g) => gameFull(g, EXPIRED_2)],
     ];
     let checked = 0;
-    for (const [why, line] of cases) {
-      lichess.reset();
-      const g = await liveGame();
-      serveStream(line(g));
-      const { deps, settles } = observed();
-      await reconcile(g.fixtureId, "clock_zero", deps);
-      expect([[...settles], streams().length], why).toEqual([[], 1]);
-      checked++;
+    for (const trigger of RECONCILE_TRIGGERS) {
+      for (const [why, line] of cases) {
+        lichess.reset();
+        const g = await liveGame();
+        serveStream(line(g));
+        const { deps, settles } = observed();
+        await reconcile(g.fixtureId, trigger, deps);
+        expect([[...settles], streams().length], `${trigger}: ${why}`).toEqual([[], 1]);
+        checked++;
+      }
     }
-    expect(checked).toBe(cases.length);
+    expect(checked, "anti-vacuity: trigger × case").toBe(RECONCILE_TRIGGERS.length * cases.length);
   });
 
   it("a settling read that cannot be made keeps the first read", async () => {

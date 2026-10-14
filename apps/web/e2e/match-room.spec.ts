@@ -603,6 +603,79 @@ test("a held board (review I2): a game nobody may act on reads as held — the b
   await ctx.close();
 });
 
+test("T17B fix 2, D13: at the mover's flag the room locks — the board takes no move, Resign and Offer draw are off, it says it is confirming with Lichess; held, that the organiser is; the result replaces it — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, longName()] });
+  // White to move, 4 s on its clock as at the last move (now). The kit's Lichess tokens can never be opened (its
+  // header), so the server's read behind a clock-zero report would answer 503: the report is answered here, at the
+  // browser's edge, as "nothing to read yet" — and counted, so the lock is seen to coincide with the room asking.
+  // The server's held read is the walkthrough's (chess-external-play.spec.ts, D11).
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: 4_000, blackMs: 240_000 });
+  const ctx = await cold(browser);
+  let zeroReports = 0;
+  await ctx.route("**/external-play/room/clock-zero*", async (route: Route) => {
+    zeroReports += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data: { reconciled: false }, requestId: "e2e" }) });
+  });
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  // The pair first: above zero, the board and the actions are White's.
+  expect(await screenOf(p)).toBe("live");
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
+  await expect(p.getByTestId("room-resign")).toBeEnabled();
+  await expect(p.getByTestId("room-draw")).toBeEnabled();
+  await expect(p.getByTestId("room-flag-notice")).toHaveCount(0);
+
+  // At zero: locked, and the room says why.
+  await expect(p.getByTestId("room-flag-notice")).toHaveAttribute("data-kind", "lichess", { timeout: 15_000 });
+  await expect(p.getByTestId("room-flag-notice")).toHaveText(uiEn["externalPlay.room.flag.lichess"]!);
+  await expect(p.getByTestId("room-clock-you")).toContainText("0:00.0");
+  await expect.poll(() => zeroReports, { message: "the room reported the clock at zero" }).toBeGreaterThanOrEqual(1);
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "false");
+  await expect(p.getByTestId("room-resign")).toBeDisabled();
+  await expect(p.getByTestId("room-draw")).toBeDisabled();
+  await expect(p.getByText(uiEn["externalPlay.room.yourMove"]!, { exact: true }), "nobody is told 'your move' at 0:00.0").toHaveCount(0);
+  // White's own knight, White to move: a tap selects nothing on a flagged board.
+  expect(await pieceUnder(p, "g1", "white")).toBe("g1");
+  await tap(p, "g1", "white");
+  await p.waitForTimeout(300); // two frames: a dot, if one were coming, is painted
+  expect(await squaresWith(p, "move-dest"), "no destinations at the flag").toEqual([]);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "flag-lichess");
+
+  // D11 (b): Lichess has not settled it a minute after the flag — held for the organiser (reconcile's write, here
+  // by hand). The organiser is confirming it; never the generic held line.
+  await withDb(
+    (sql) => sql`
+      update fixture_external_play
+         set status = 'needs_organiser', needs_reason = 'clock_flag_unsettled', updated_at = now()
+       where fixture_id = ${room.fixtureId}`,
+  );
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the hold" }).toBe("held");
+  await expect(p.getByTestId("room-flag-notice")).toHaveAttribute("data-kind", "organiser");
+  await expect(p.getByTestId("room-flag-notice")).toHaveText(uiEn["externalPlay.room.flag.organiser"]!);
+  await expect(p.getByTestId("room-seam-held")).toHaveCount(0);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS)).toBe(ALL_WIDTHS.length);
+  await shoot(p, "flag-organiser");
+
+  // The organiser records it (what the queue's settle writes): the result replaces the lock.
+  const started = await apiJson(page.request, `/api/v1/fixtures/${room.fixtureId}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  const result = await apiJson(page.request, `/api/v1/fixtures/${room.fixtureId}/events`, "POST", {
+    expected_seq: 1,
+    type: "boardgame.result",
+    payload: { winner: room.black.entrantId, method: "time" },
+  });
+  expect(result.status, JSON.stringify(result.error)).toBeLessThan(300);
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the result" }).toBe("over");
+  await expect(p.getByTestId("room-result")).toContainText(uiEn["externalPlay.room.over.lost"]!);
+  await expect(p.getByTestId("room-flag-notice")).toHaveCount(0);
+  await ctx.close();
+});
+
 test("Seam A, the Lichess link revoked: the frozen player's board dimmed and read-only, Seat on hold, Link Lichess again, Back to fixture — the opponent plays on; both frozen, each reads the neutral hold, never A (R2-1) — at every width", async ({
   page,
   browser,

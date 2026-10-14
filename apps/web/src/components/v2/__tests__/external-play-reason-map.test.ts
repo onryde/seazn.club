@@ -89,9 +89,9 @@ describe("held copy: every reason, every locale", () => {
       fair_play: "Fair-play ending",
       // Final review P11 (the brief: "an organiser hold account_changed").
       account_changed: "Lichess account changed",
-      // T17B fix 2, D11 (the brief: "a needs-result reason like clock_flag_unsettled"). The words are the
-      // implementer's proposal, for the controller's review — not yet ruled.
-      clock_flag_unsettled: "Time ran out — not confirmed",
+      // T17B fix 2, D11 + controller ruling (2026-10-14): the organiser is confirming it, never "not confirmed" — the
+      // player's room reads "Time's up — your organiser is confirming the result"; the desk asks for that confirmation.
+      clock_flag_unsettled: "Time's up — confirm the result",
     };
     let checked = 0;
     for (const reason of NEEDS_REASONS) {
@@ -242,5 +242,24 @@ describe("FINDING (T16): `mismatch` has no producer", () => {
     expect(files.length, "anti-vacuity: sources scanned").toBeGreaterThan(10);
     const writers = files.filter((f) => /["'`]mismatch["'`]/.test(readFileSync(f, "utf8"))).map((f) => relative(root, f));
     expect(writers).toEqual([join("server", "external-play", "types.ts")]);
+  });
+});
+
+describe("D11 + D13 (controller ruling): the player's flag card and the organiser's desk chip agree", () => {
+  it("in every locale both open with the same time's-up clause, the desk never says 'not confirmed' — counted", () => {
+    const lead = (s: string) => s.split(/\s[—:]\s|:\s/)[0]!.trim();
+    let checked = 0;
+    for (const l of LOCALES) {
+      const room = DICTS[l]["externalPlay.room.flag.organiser"]!;
+      const desk = DICTS[l][HELD_TITLE_KEYS.clock_flag_unsettled]!;
+      expect([room, desk].every(Boolean), l).toBe(true);
+      expect(lead(desk), `${l}: "${desk}" vs "${room}"`).toBe(lead(room));
+      expect(desk.length, `${l}: the clause is not the whole line`).toBeGreaterThan(lead(desk).length);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    // The ruling's English, typed from it (never read from the dictionary first).
+    expect(DICTS.en["externalPlay.room.flag.organiser"]).toBe("Time's up — your organiser is confirming the result");
+    expect(DICTS.en[HELD_TITLE_KEYS.clock_flag_unsettled]!.toLowerCase()).not.toContain("not confirmed");
   });
 });

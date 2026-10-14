@@ -18,7 +18,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePlural, useLocale, useT } from "@/components/i18n/dict-provider";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
-import { remainingMs } from "./clock-math";
+import { moverFlagAt, remainingMs } from "./clock-math";
 import { ClocksStrip } from "./clocks-strip";
 import { RoomControls } from "./controls";
 import { OwnTile } from "./own-tile";
@@ -37,6 +37,7 @@ import {
   ClosedCard,
   BoardClosedCard,
   CreatingCard,
+  FlagNotice,
   MoveNoticeView,
   NotOpenedCard,
   OffForClubCard,
@@ -50,7 +51,7 @@ import {
 import { HeldSeam } from "./room-seams";
 import { cameraEnds, roomScreen } from "./room-screen";
 import { canMove, moveNotice, ownMeetingRetired, plyOf, type RoomState } from "./room-state";
-import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
+import { formatCountdown, formatTimeOfDay, useFlagFallen, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
 import { deliverCameraFault } from "./room-api";
@@ -340,6 +341,8 @@ export function Screen({
     </>
   );
   const now = useServerNow(state.skewMs, 1_000);
+  // T17B fix 2, D13: the side to move's clock at zero, the game not over — the board and every action lock.
+  const flagged = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);
   const countdownTo = (iso: string | null) => (iso !== null && now !== null ? formatCountdown(Date.parse(iso) - now) : null);
 
@@ -482,7 +485,7 @@ export function Screen({
               t={t}
             />
           </div>
-          <HeldSeam t={t} />
+          {flagged ? <FlagNotice kind="organiser" t={t} /> : <HeldSeam t={t} />}
         </div>
       );
     }
@@ -495,14 +498,14 @@ export function Screen({
         <div className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
           {cameraBanners}
           <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
-            <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} t={t} />
+            <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} held={flagged} t={t} />
           </div>
           <div data-testid="room-board" data-ply={plyOf(g)} className="order-3 mx-auto w-full min-w-0 max-w-[560px]">
             <Board
               fen={g.fen}
               orientation={snap.you.colour}
               lastMove={g.lastMove}
-              movable={canMove(state)}
+              movable={canMove(state) && !flagged}
               syncKey={state.syncKey}
               onMove={(uci) => void room.act({ kind: "move", uci })}
               label={boardLabel(g, false, t)}
@@ -510,7 +513,11 @@ export function Screen({
             />
           </div>
           <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
-            {notice !== null ? <MoveNoticeView kind={notice} className={notice === "invalid" ? "order-4" : "order-2"} t={t} /> : null}
+            {flagged ? (
+              <FlagNotice kind="lichess" className="order-2" t={t} />
+            ) : notice !== null ? (
+              <MoveNoticeView kind={notice} className={notice === "invalid" ? "order-4" : "order-2"} t={t} />
+            ) : null}
             {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} t={t} /> : null}
             <div data-testid="room-controls" className="order-6">
               <RoomControls
@@ -520,6 +527,7 @@ export function Screen({
                 drawOfferBy={g.drawOfferBy}
                 opponentName={snap.opponent.name}
                 busy={busy}
+                locked={flagged}
                 onAct={(a) => void room.act(a)}
                 t={t}
               />

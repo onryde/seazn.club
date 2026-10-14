@@ -16,6 +16,20 @@ export function formatTimeOfDay(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
 }
 
+/** T17B fix 2, D13: whether the server's clock has reached `flagAt` (clock-math
+ *  moverFlagAt) on this client — one timer to that instant, never a tick, so
+ *  the room does not re-render the board ten times a second to learn it. A new
+ *  instant (a new ply, a correction) starts afresh; false until mounted. */
+export function useFlagFallen(flagAt: number | null, skewMs: number): boolean {
+  const [fallenAt, setFallenAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (flagAt === null) return;
+    const id = setTimeout(() => setFallenAt(flagAt), Math.max(0, flagAt - (Date.now() + skewMs)));
+    return () => clearTimeout(id);
+  }, [flagAt, skewMs]);
+  return flagAt !== null && fallenAt === flagAt;
+}
+
 /** The server's "now" on this client (wall clock + the snapshot's skew),
  *  ticking every `tickMs`; null until mounted. */
 export function useServerNow(skewMs: number, tickMs: number | null): number | null {
