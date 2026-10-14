@@ -118,6 +118,7 @@ const logMock = vi.hoisted(() => ({
 }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
 
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { AfterContext } from "next/dist/server/after/after-context";
 import { workAsyncStorage, type WorkStore } from "next/dist/server/app-render/work-async-storage.external";
@@ -132,10 +133,13 @@ import { areTagsExpired } from "next/dist/server/lib/incremental-cache/tags-mani
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getPublicCompetition, getPublicFixture, orgTag } from "@/server/public-site/data";
+import { builtinModules } from "@seazn/engine/sports";
 import { createCompetition, deleteCompetition, patchCompetition } from "../competitions";
 import { archiveDivision, createDivision, deleteDivision, patchDivision, restoreDivision } from "../divisions";
 import { createEntrants } from "../entrants";
+import { slugify } from "../slugs";
 import { createStages, generateStageFixtures } from "../stages";
+import { createFromTemplate } from "../templates";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -558,5 +562,89 @@ describe.skipIf(!HAS_DB)("patchCompetition: any move between public, unlisted, p
       ]);
     }
     expect(fired, "per patch: org expiries flushed and broadcast").toEqual(patches.map(() => []));
+  });
+});
+
+/** The sports and variants the template below instantiates (sync:sports' own source). */
+async function seedTemplateSport(key: string): Promise<void> {
+  const mod = builtinModules.find((m) => m.key === key);
+  if (!mod) throw new Error(`engine no longer ships sport '${key}'`);
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values (${mod.key}, ${mod.key}, ${mod.version}, ${sql.json(mod.positions as never)})
+    on conflict (key) do nothing`;
+  for (const [variantKey, config] of Object.entries(mod.variants)) {
+    await sql`
+      insert into sport_variants (sport_key, key, name, config, is_system)
+      values (${mod.key}, ${variantKey}, ${variantKey}, ${sql.json((config ?? {}) as never)}, true)
+      on conflict do nothing`;
+  }
+}
+
+describe.skipIf(!HAS_DB)("a create heals a competition slug the shell cached as missing", () => {
+  const CREATES: Array<{
+    site: string;
+    readable: boolean;
+    create: (auth: AuthCtx, suffix: string) => { slug: string; run: () => Promise<{ slug: string }> };
+  }> = [
+    ...(["public", "unlisted", "private"] as const).map((visibility) => ({
+      site: `createCompetition (${visibility})`,
+      readable: visibility !== "private",
+      create: (auth: AuthCtx, suffix: string) => {
+        const slug = `healed-${visibility}-${suffix}`;
+        return {
+          slug,
+          run: () => createCompetition(auth, { ends_on: "2030-12-31", name: `Healed ${suffix}`, slug, visibility, branding: {} }),
+        };
+      },
+    })),
+    ...(["public", "private"] as const).map((visibility) => ({
+      site: `createFromTemplate (${visibility})`,
+      readable: visibility !== "private",
+      create: (auth: AuthCtx, suffix: string) => {
+        const name = `Healed Template ${visibility} ${suffix}`;
+        return {
+          slug: slugify(name),
+          run: () => createFromTemplate(auth, { template_key: "box-league", name, ends_on: "2030-12-31", visibility }),
+        };
+      },
+    })),
+  ];
+  const covered: string[] = [];
+
+  for (const c of CREATES) {
+    it(`${c.site}: ${c.readable ? "the org tag EXPIRES in the request and the next public read serves the new competition" : "fires nothing, and the slug stays refused"}`, async () => {
+      await seedTemplateSport("badminton");
+      const { auth } = await seedOrg("pro");
+      const orgSlug = await orgSlugOf(auth);
+      const { slug, run } = c.create(auth, randomUUID().slice(0, 8));
+      expect(await getPublicCompetition(orgSlug, slug), "premise: the slug is refused before the create").toBeNull();
+      const entry = shellEntryOf(orgSlug, slug);
+      expect(entry, "premise: the refusal is cached").toBeDefined();
+
+      const { result, calls } = await inRequest(run);
+
+      expect(result.slug, "premise: the create took the slug the probe asked for").toBe(slug);
+      const org = calls.filter((c) => c.tags.includes(orgTag(orgSlug))).map((c) => c.durations);
+      const peers = probe.broadcasts.filter((b) => b.tags.includes(orgTag(orgSlug))).map((b) => b.mode);
+      const after = await getPublicCompetition(orgSlug, slug);
+      if (c.readable) {
+        expect(org, "the org tag, EXPIRED, once").toEqual([{ expire: 0 }]);
+        expect(peers, "the other machines, told to expire it, once").toEqual(["expire"]);
+        expect(expired(entry!), "the cached refusal").toBe(true);
+        expect(after?.competition.slug, "the next public read").toBe(slug);
+      } else {
+        expect(org).toEqual([]);
+        expect(peers).toEqual([]);
+        expect(after, "a private competition stays refused").toBeNull();
+      }
+      covered.push(c.site);
+    });
+  }
+
+  it("the sweep reached every create site (zero is a failure)", () => {
+    expect(covered.length).toBeGreaterThan(0);
+    expect(covered).toEqual(CREATES.map((c) => c.site));
+    expect(covered).toHaveLength(5);
   });
 });

@@ -50,6 +50,8 @@ import {
   shouldFireMadePublic,
 } from "./competitions";
 import { fireDivisionCreated } from "./divisions";
+import { countsTowardPublicQuota } from "./entitlement-freeze";
+import { expireCompetitionShell } from "@/server/public-site/revalidate";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { assertConfigCarriesNoRules } from "./stages";
 import { validateStageProgression } from "./stage-seeding";
@@ -385,6 +387,9 @@ export async function instantiateTemplate(
     return { slug, divisions: divisionResults };
   });
 
+  // createCompetition's heal, for the same reason: a slug probed before this
+  // create is cached as missing in the competition shell.
+  if (countsTowardPublicQuota(visibility)) await expireCompetitionShell(auth.orgId, { competitionId });
   log.info(
     {
       event: "competition_from_template",

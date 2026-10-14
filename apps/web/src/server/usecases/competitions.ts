@@ -376,6 +376,10 @@ export async function createCompetition(
     await invalidateDiscoveryCache();
     fireDiscoveryRevalidate();
   }
+  // A slug someone probed before this create is cached as MISSING in the
+  // competition shell; only the org tag heals it. A private competition has
+  // no shell, so it changes no public read.
+  if (countsTowardPublicQuota(visibility)) await expireCompetitionShell(auth.orgId, { competitionId: row.id });
   // Activation event (feature 1) — first competition is the "aha" moment.
   // The visibility it was CREATED with, not the one that was asked for: a
   // degraded competition is a private one and the funnel must not read it as a
