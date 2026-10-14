@@ -7,7 +7,6 @@ export const DEADLINE_AFTER_MS = 20 * 60_000;
 export const MATCH_ROOM_TOKEN_TTL_MS = 24 * 60 * 60_000;
 export const MINT_CLAIM_STALE_MS = 30_000;
 export const LICHESS_TIMEOUT_MS = 10_000;
-export const ROOM_REREAD_MS = 15_000;
 
 export type PlayWindow = { emailAt: Date; opensAt: Date; deadline: Date };
 

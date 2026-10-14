@@ -6,11 +6,9 @@
 // log lines, never from time-controls.ts.
 import { describe, expect, it } from "vitest";
 import {
-  BOARD_API_MIN_ESTIMATED_SECONDS,
   SHIP1_TIME_CONTROLS,
   assertTimeControl,
   estimatedSeconds,
-  isBoardApiPlayable,
   lichessSpeedOf,
 } from "../time-controls";
 import type { TimeControl } from "../time-controls";
@@ -37,6 +35,14 @@ const clockOf = (key: string): BoardgameClockInput => {
  *  creation outcome, so it cannot drift from the evidence unnoticed. */
 const documentedCreatable = (limit: number) =>
   [0, 15, 30, 45, 60, 90].includes(limit) || (limit >= 0 && limit <= 10_800 && limit % 60 === 0);
+
+/** M13 as it was MEASURED (tc-boundary.log, spike-battery2.log): the Board API plays a game Lichess files as blitz or
+ *  slower — an estimate of limit + 40 × increment of at least 180 s. A rulebook transcription, kept in the test like
+ *  M14's: production enforces M13 through the catalogue alone (`isBoardApiPlayable` had no runtime caller and was
+ *  removed, final review M-4). The cases under "the two measured rules are INDEPENDENT" pin it to every measured
+ *  outcome. */
+const M13_CUTOFF_SECONDS = 180;
+const measuredPlayable = (tc: TimeControl) => tc.limitSeconds + 40 * tc.incrementSeconds >= M13_CUTOFF_SECONDS;
 
 describe("M14's documented rule agrees with every measured creation", () => {
   it("accepts each limit a spike created, and refuses each one a spike saw refused", () => {
@@ -76,8 +82,8 @@ describe("SHIP1_TIME_CONTROLS", () => {
     const failures: string[] = [];
     for (const tc of SHIP1_TIME_CONTROLS) {
       if (!documentedCreatable(tc.limitSeconds)) failures.push(`${tc.key}: clock.limit refused`);
-      if (!isBoardApiPlayable(tc)) {
-        failures.push(`${tc.key}: estimated ${estimatedSeconds(tc)}s < ${BOARD_API_MIN_ESTIMATED_SECONDS}s`);
+      if (!measuredPlayable(tc)) {
+        failures.push(`${tc.key}: estimated ${estimatedSeconds(tc)}s < ${M13_CUTOFF_SECONDS}s`);
       }
       checked++;
     }
@@ -110,7 +116,7 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
     const tc = { key: "2+1", limitSeconds: 120, incrementSeconds: 1 };
     expect(estimatedSeconds(tc)).toBe(160);
     expect(documentedCreatable(tc.limitSeconds)).toBe(true);
-    expect(isBoardApiPlayable(tc)).toBe(false);
+    expect(measuredPlayable(tc)).toBe(false);
   });
 
   // tc-boundary.log, 10:33:06Z — CHALLENGE REFUSED {"clock.limit":["Invalid value"]}
@@ -119,7 +125,7 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
   it("140+1 is playable by the formula and NOT creatable: clock.limit refused", () => {
     const tc = { key: "140s+1", limitSeconds: 140, incrementSeconds: 1 };
     expect(estimatedSeconds(tc)).toBe(180);
-    expect(isBoardApiPlayable(tc)).toBe(true);
+    expect(measuredPlayable(tc)).toBe(true);
     expect(documentedCreatable(tc.limitSeconds)).toBe(false);
   });
 
@@ -127,15 +133,15 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
   it("170+0 fails both", () => {
     const tc = { key: "170s+0", limitSeconds: 170, incrementSeconds: 0 };
     expect(documentedCreatable(tc.limitSeconds)).toBe(false);
-    expect(isBoardApiPlayable(tc)).toBe(false);
+    expect(measuredPlayable(tc)).toBe(false);
   });
 
   // tc-boundary.log, 10:33:39Z — speed=blitz, move http=200. The boundary,
   // exactly ON the cutoff.
   it("180+0 passes both, at the boundary", () => {
     const tc = { key: "3+0", limitSeconds: 180, incrementSeconds: 0 };
-    expect(estimatedSeconds(tc)).toBe(BOARD_API_MIN_ESTIMATED_SECONDS);
-    expect(isBoardApiPlayable(tc)).toBe(true);
+    expect(estimatedSeconds(tc)).toBe(M13_CUTOFF_SECONDS);
+    expect(measuredPlayable(tc)).toBe(true);
     expect(documentedCreatable(tc.limitSeconds)).toBe(true);
   });
 
@@ -146,13 +152,13 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
     // Added beyond the brief: the title's first half is a measured fact too
     // (§A: "challenge accepted at creation"), so it is asserted, not just named.
     expect(documentedCreatable(limit)).toBe(true);
-    expect(isBoardApiPlayable({ key: _k, limitSeconds: limit, incrementSeconds: inc })).toBe(false);
+    expect(measuredPlayable({ key: _k, limitSeconds: limit, incrementSeconds: inc })).toBe(false);
   });
 
   it("the cutoff is 180s, and one second under it is refused", () => {
-    expect(BOARD_API_MIN_ESTIMATED_SECONDS).toBe(180);
-    expect(isBoardApiPlayable({ key: "x", limitSeconds: 179, incrementSeconds: 0 })).toBe(false);
-    expect(isBoardApiPlayable({ key: "x", limitSeconds: 180, incrementSeconds: 0 })).toBe(true);
+    expect(M13_CUTOFF_SECONDS).toBe(180);
+    expect(measuredPlayable({ key: "x", limitSeconds: 179, incrementSeconds: 0 })).toBe(false);
+    expect(measuredPlayable({ key: "x", limitSeconds: 180, incrementSeconds: 0 })).toBe(true);
   });
 
   it("the 40× weighting is the measured one, not a guess", () => {
@@ -225,7 +231,7 @@ describe("assertTimeControl — the setup gate, on the clock the division STORES
   // picks from a curated list.
   it("a formula-passing clock off the list is still refused", () => {
     const off = { key: "20+0", limitSeconds: 1200, incrementSeconds: 0 };
-    expect(isBoardApiPlayable(off)).toBe(true);
+    expect(measuredPlayable(off)).toBe(true);
     expect(documentedCreatable(off.limitSeconds)).toBe(true);
     expect(() => assertTimeControl({ base: 1200, increment: 0 })).toThrow();
   });

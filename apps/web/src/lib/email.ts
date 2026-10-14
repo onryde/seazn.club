@@ -66,8 +66,6 @@ import {
   type SuspensionServedArgs,
   reportSubmittedTemplate,
   type ReportSubmittedArgs,
-  externalPlayReadyTemplate,
-  type ExternalPlayReadyArgs,
   externalPlayInviteTemplate,
   type ExternalPlayInviteArgs,
 } from "@/lib/email-templates";
@@ -249,20 +247,6 @@ export async function sendOfficialAssignedEmail(
     to,
     transactional: true,
     ...officialAssignedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
-}
-
-/** T−15 Lichess online play ready — durable CTA is the Seazn fixture URL. */
-export async function sendExternalPlayReadyEmail(
-  to: string,
-  args: ExternalPlayReadyArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
-  const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...externalPlayReadyTemplate(args, dict),
   });
 }
 

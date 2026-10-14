@@ -49,7 +49,7 @@ import { closeGuardFault, openGuardFault } from "@/server/external-play/video/gu
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
-import { SHIP1_TIME_CONTROLS, isBoardApiPlayable, type TimeControl } from "@/server/external-play/time-controls";
+import { SHIP1_TIME_CONTROLS, type TimeControl } from "@/server/external-play/time-controls";
 import { getFixtureState } from "../fixtures";
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
@@ -1630,27 +1630,13 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
 // Job 4 — the reconcile sweep (the abandoned-board sweep, spec §3.5 / §4).
 // ---------------------------------------------------------------------------
 
-/** M13's increment multiplier, RECOVERED from the playability predicate by
- *  probing it — never copied out of time-controls.ts. The predicate is
- *  `limit + B × increment >= FLOOR`: the smallest limit it accepts at +0 is
- *  the floor, at +1 it is floor − B. */
-function recoveredMoveBudget(): number {
-  const smallestAccepted = (increment: number): number => {
-    for (let limit = 0; limit <= 3600; limit++) {
-      if (isBoardApiPlayable({ key: "probe", limitSeconds: limit, incrementSeconds: increment })) return limit;
-    }
-    throw new Error(`isBoardApiPlayable accepts no control under an hour at +${increment}`);
-  };
-  const floor = smallestAccepted(0);
-  expect(floor, "a real floor, not zero").toBeGreaterThan(0);
-  return floor - smallestAccepted(1);
-}
+/** M13's increment weighting as MEASURED, never read from time-controls.ts: Lichess estimates a game at limit + 40 ×
+ *  increment (tc-boundary.log: 60+3 plays at 180 s, 60+2 is refused at 140 s — time-controls.test.ts pins both). */
+const M13_MOVE_WEIGHT = 40;
 
 describe("expectedEndAt — the budget moves with the time control", () => {
-  it("SWEEP_MOVE_BUDGET is the multiplier isBoardApiPlayable itself uses, recovered by probing it", () => {
-    const recovered = recoveredMoveBudget();
-    expect(recovered, "the increment multiplier the predicate uses").toBeGreaterThan(0);
-    expect(SWEEP_MOVE_BUDGET).toBe(recovered);
+  it("SWEEP_MOVE_BUDGET is the 40 moves of increment Lichess's own estimate weighs (M13, measured)", () => {
+    expect(SWEEP_MOVE_BUDGET).toBe(M13_MOVE_WEIGHT);
   });
 
   it("allows BOTH clocks to run out: never before 2 × the limit — every ship-1 control", () => {
@@ -1661,7 +1647,7 @@ describe("expectedEndAt — the budget moves with the time control", () => {
       expect(span, tc.key).toBeGreaterThanOrEqual(2 * tc.limitSeconds * 1000);
       // Both players' full budget: the limit plus B moves of increment, each.
       expect(span, `${tc.key}: 2 × (limit + B × increment)`).toBe(
-        2 * (tc.limitSeconds + recoveredMoveBudget() * tc.incrementSeconds) * 1000,
+        2 * (tc.limitSeconds + M13_MOVE_WEIGHT * tc.incrementSeconds) * 1000,
       );
       checked++;
     }
@@ -1712,7 +1698,7 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
    *  moves of increment each — from the RULEBOOK (the seed's clock and the
    *  recovered multiplier), never from expectedEndAt. */
   const endOf = (startedAt: Date) =>
-    new Date(startedAt.getTime() + 2 * (SEED_CLOCK.base + recoveredMoveBudget() * SEED_CLOCK.increment) * 1000);
+    new Date(startedAt.getTime() + 2 * (SEED_CLOCK.base + M13_MOVE_WEIGHT * SEED_CLOCK.increment) * 1000);
 
   it("a LIVE game is read at every tick while it runs: the moves made at Lichess are adopted and flagged MID-game", async () => {
     // Addendum (T11): the sweep is the main detector of out-of-band play —
@@ -2386,7 +2372,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
   const MIN = 60_000;
   const DEADLINE = DEADLINE_AFTER_MS / MIN; // window.ts: T+20 from the open
   const TICK = SWEEP_CADENCE_MS / MIN; // spec §4: the 5-minute cron
-  const SPAN = (2 * (SEED_CLOCK.base + recoveredMoveBudget() * SEED_CLOCK.increment)) / 60; // both clocks, B moves of increment
+  const SPAN = (2 * (SEED_CLOCK.base + M13_MOVE_WEIGHT * SEED_CLOCK.increment)) / 60; // both clocks, B moves of increment
   const HOLD = CREATION_429_HOLD_MS / MIN; // T9's queue hold after a 429
   const N = SWEEP_NO_TRUTH_HOLD_AFTER;
   /** M3/M4 ruling: one tick while reads bring the truth, doubling per empty
