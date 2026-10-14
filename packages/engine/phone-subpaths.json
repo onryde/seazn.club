@@ -1,0 +1,8 @@
+{
+  "subpaths": ["./core", "./sport", "./sports", "./sports/*"],
+  "closure": {
+    "modules": 46,
+    "measured": "2026-10-14",
+    "why": "value-import closure of the phone subpaths; re-pin deliberately when the engine grows"
+  }
+}

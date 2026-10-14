@@ -20,16 +20,18 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  assertBundleMatchesWalk,
   assertExactVersions,
   assertOutsideRepo,
   assertSameSet,
   checkTarballExports,
   declaredAppRoutes,
   devBundleModules,
-  engineModules,
+  engineDistPaths,
   exportSpecifiers,
   installSignalCleanup,
   installedVersion,
+  phoneSpecifiers,
   pickPnpm,
   requireChecked,
   runFixtures,
@@ -42,9 +44,6 @@ const ENGINE = path.resolve(HERE, "..");
 const REPO = path.resolve(ENGINE, "..", "..");
 const FIXTURE_NAMES = ["node", "next", "rn", "types"];
 
-/** Task 1b-3: the dev bundle of every phone subpath must hold at least this many engine modules. The 2026-10-14 static closure
- *  was 46; Batch 1c makes the count exact. */
-const RN_ENGINE_MODULE_FLOOR = 40;
 /** The platform Metro bundles for. (rn/package.json pins `@react-native-community/cli` 20.2.0: React Native 0.86.3's
  *  community-cli-plugin takes it as an optional peer with the range `*`, and `react-native/cli.js` exits without it.) */
 const RN_PLATFORM = "android";
@@ -287,12 +286,11 @@ async function nextFixture(ctx) {
   return declared.length;
 }
 
-/** Every phone subpath: core, sport and sports, and every sport directory (already checked against the workspace source). */
-function phoneSubpaths(ctx) {
-  const exportsMap = ctx.tarball.manifest.exports;
-  const fixed = ["./core", "./sport", "./sports"];
-  for (const k of [...fixed, "./sports/*"]) if (!(k in exportsMap)) throw new Error(`the packed manifest has no ${k}`);
-  return [...fixed.map((k) => k.slice(2)), ...ctx.tarball.sportDirs.map((d) => `sports/${d}`)];
+/** The specifiers of the phone subpaths (Task 1c-1): the subpaths of phone-subpaths.json, each an export of the packed manifest, with
+ *  `./sports/*` expanded over the sport directories the tarball holds (already checked against the workspace source). */
+function phoneSubpathSpecifiers(ctx) {
+  const { subpaths } = readJson(path.join(ENGINE, "phone-subpaths.json"));
+  return phoneSpecifiers({ subpaths, manifest: ctx.tarball.manifest, sportDirs: ctx.tarball.sportDirs });
 }
 
 function hermescPath(dir) {
@@ -301,9 +299,18 @@ function hermescPath(dir) {
 }
 
 async function rnFixture(ctx) {
+  // The static half first (scripts/engine-boundary.ts, on the workspace source): a closure that already reads a Node builtin, `process`
+  // or scheduling is a finding of its own, and the bundle below is then compared to the modules it walked.
+  const { checkPhoneSafety } = await import(pathToFileURL(path.join(ENGINE, "scripts", "engine-boundary.ts")).href);
+  const phone = checkPhoneSafety(ENGINE);
+  if (phone.violations.length > 0) throw new Error(`rn: the static phone rule is red, so there is nothing safe to bundle:\n${phone.violations.map((v) => `${v.file} ${v.kind}: ${v.detail}`).join("\n")}`);
+  info(`rn: static phone walk ${phone.walked.length} modules from ${phone.entries.length} entries`);
+
   const dir = await installFixture("rn", ctx);
-  const subpaths = phoneSubpaths(ctx);
-  const imports = subpaths.map((s, i) => `import * as m${i} from "@seazn/engine/${s}";`);
+  const specifiers = phoneSubpathSpecifiers(ctx);
+  const coreAt = specifiers.indexOf("@seazn/engine/core");
+  if (coreAt === -1) throw new Error("rn: phone-subpaths.json does not list ./core, which the entry folds with");
+  const imports = specifiers.map((s, i) => `import * as m${i} from "${s}";`);
   const index = [
     ...imports,
     'import { badminton } from "@seazn/engine/sports/setbased";',
@@ -312,9 +319,9 @@ async function rnFixture(ctx) {
     "// ledger. Nothing here is EXECUTED: Metro resolves and transforms it, and hermesc compiles the production bundle.",
     "const cfg = badminton.configSchema.parse({});",
     'const lineups = { home: { entrantId: "H", slots: [] }, away: { entrantId: "A", slots: [] } };',
-    "const state = m0.foldMatch(badminton, cfg, lineups, []);",
+    `const state = m${coreAt}.foldMatch(badminton, cfg, lineups, []);`,
     "",
-    `globalThis.__enginePackProof = { state, modules: [${subpaths.map((_, i) => `m${i}`).join(", ")}] };`,
+    `globalThis.__enginePackProof = { state, modules: [${specifiers.map((_, i) => `m${i}`).join(", ")}] };`,
     "",
   ].join("\n");
   writeFileSync(path.join(dir, "index.js"), index);
@@ -339,9 +346,11 @@ async function rnFixture(ctx) {
 
   await bundle("index.js", "dev.bundle.js", true);
   const paths = devBundleModules(readFileSync(path.join(dir, "dev.bundle.js"), "utf8"));
-  const engine = engineModules(paths, ["@seazn/engine", enginePkg.name]);
-  info(`rn: dev bundle ${paths.length} modules, ${engine.length} from @seazn/engine/dist (${subpaths.length} subpaths imported)`);
-  if (engine.length < RN_ENGINE_MODULE_FLOOR) throw new Error(`rn: only ${engine.length} engine modules reached the dev bundle, expected at least ${RN_ENGINE_MODULE_FLOOR}:\n${engine.join("\n")}`);
+  const engine = engineDistPaths(paths, ["@seazn/engine", enginePkg.name]);
+  info(`rn: dev bundle ${paths.length} modules, ${engine.length} from @seazn/engine/dist (${specifiers.length} subpaths imported)`);
+  // exactly the modules the static walk found, as their dist/ twins: this replaces 1b-3's interim floor
+  const agreed = assertBundleMatchesWalk({ bundle: engine, walked: phone.walked });
+  info(`rn: the dev bundle holds exactly the ${agreed} modules the static phone walk found`);
 
   await bundle("index.js", "out.js", false);
   await compile("out.js", "out.hbc");

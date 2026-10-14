@@ -12,22 +12,27 @@ import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
 import {
+  assertBundleMatchesWalk,
   assertExactVersions,
   assertOutsideRepo,
   assertSameSet,
   checkTarballExports,
   declaredAppRoutes,
   devBundleModules,
+  distTwin,
+  engineDistPaths,
   engineModules,
   exportSpecifiers,
   installSignalCleanup,
   installedVersion,
+  phoneSpecifiers,
   pickPnpm,
   requireChecked,
   runFixtures,
   sourceSportDirs,
   sportDirsOf,
 } from "../pack-proof/lib.mjs";
+import { checkPhoneSafety } from "../scripts/engine-boundary.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(ENGINE, "..", "..");
@@ -226,6 +231,92 @@ describe("the Metro dev bundle reader", () => {
       "node_modules/@seazn/engine/dist/sport/index.js",
     ]);
     expect(() => engineModules(paths, [])).toThrow(/at least one package name/);
+  });
+});
+
+// Engine-split Task 1c-1: the rn leg imports the phone subpaths of phone-subpaths.json (not a list typed in run.mjs) and holds the Metro
+// dev bundle to the static phone walk of scripts/engine-boundary.ts: the same modules, in their dist/ spelling, no more and no fewer.
+// Single-sport reason: no sport is involved - this is a module-graph rule.
+describe("the phone subpaths the rn leg imports", () => {
+  const phone = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { subpaths: string[] };
+  const manifest = { exports: pkg.publishConfig.exports };
+
+  it("are the listed subpaths, each a key of the packed manifest, with ./sports/* expanded over the source's sport directories", () => {
+    const sportDirs = sourceSportDirs(ENGINE);
+    const got = phoneSpecifiers({ subpaths: phone.subpaths, manifest, sportDirs });
+    expect(sportDirs.length, "anti-vacuity: the sport directories").toBeGreaterThan(5);
+    expect(got.length).toBe(phone.subpaths.filter((s) => !s.includes("*")).length + sportDirs.length);
+    expect(got.slice(0, 3)).toEqual(["@seazn/engine/core", "@seazn/engine/sport", "@seazn/engine/sports"]);
+    for (const d of sportDirs) expect(got).toContain(`@seazn/engine/sports/${d}`);
+    expect(got.some((x) => x.includes("*"))).toBe(false);
+  });
+
+  it("honours the alias, keeps the list's order, and refuses what it cannot import: nothing, an unexported subpath, an unknown pattern", () => {
+    const m = { exports: { "./a": {}, "./b/*": {}, "./sports/*": {} } };
+    expect(phoneSpecifiers({ subpaths: ["./a", "./sports/*"], manifest: m, sportDirs: ["x", "y"], name: "pkg" })).toEqual(["pkg/a", "pkg/sports/x", "pkg/sports/y"]);
+    expect(() => phoneSpecifiers({ subpaths: [], manifest: m, sportDirs: ["x"] })).toThrow(/lists no subpath/);
+    expect(() => phoneSpecifiers({ subpaths: ["./nope"], manifest: m, sportDirs: ["x"] })).toThrow(/not an export/);
+    expect(() => phoneSpecifiers({ subpaths: ["./b/*"], manifest: m, sportDirs: ["x"] })).toThrow(/no known expansion/);
+    expect(() => phoneSpecifiers({ subpaths: ["./sports/*"], manifest: m, sportDirs: [] })).toThrow(/no sport directory/);
+    expect(() => phoneSpecifiers({ subpaths: ["a"], manifest: { exports: { a: {} } }, sportDirs: ["x"] })).toThrow(/not a \.\/ subpath/);
+    expect(() => phoneSpecifiers({ subpaths: ["./a"], manifest: {}, sportDirs: ["x"] })).toThrow(/not an export/);
+  });
+});
+
+describe("the dev bundle is held to the static phone walk", () => {
+  it("distTwin maps src/<path>.ts to dist/<path>.js and nothing else", () => {
+    expect(distTwin("src/core/index.ts")).toBe("dist/core/index.js");
+    expect(distTwin("src/sports/setbased/set.ts")).toBe("dist/sports/setbased/set.js");
+    for (const bad of ["dist/core/index.js", "src/core/index.js", "core/index.ts", "lib/src/core/index.ts", "src/core/x.d.ts.map"]) expect(() => distTwin(bad), bad).toThrow(/not a src/);
+  });
+
+  it("engineDistPaths keeps the engine's modules under either spelling, as their dist/ paths", () => {
+    const paths = [
+      "index.js",
+      "node_modules/.pnpm/@onryde+seazn-engine@file+x/node_modules/@onryde/seazn-engine/dist/core/index.js",
+      "node_modules/@seazn/engine/dist/sport/index.js",
+      "node_modules/zod/dist/x.js",
+    ];
+    expect(engineDistPaths(paths, ["@seazn/engine", "@onryde/seazn-engine"])).toEqual(["dist/core/index.js", "dist/sport/index.js"]);
+  });
+
+  const walked = ["src/core/index.ts", "src/core/a.ts", "src/sport/index.ts"];
+  const bundle = ["dist/core/index.js", "dist/core/a.js", "dist/sport/index.js"];
+
+  it("passes when the bundle holds exactly the walked modules (in any order) and reports how many", () => {
+    expect(assertBundleMatchesWalk({ bundle, walked })).toBe(3);
+    expect(assertBundleMatchesWalk({ bundle: [...bundle].reverse(), walked })).toBe(3);
+  });
+
+  it("refuses a walked module the bundle lacks, naming it, and a bundled module the walk never reached, naming it", () => {
+    expect(() => assertBundleMatchesWalk({ bundle: bundle.slice(0, 2), walked })).toThrow(/absent from the dev bundle[\s\S]*dist\/sport\/index\.js/);
+    expect(() => assertBundleMatchesWalk({ bundle: [...bundle, "dist/core/sneaky.js"], walked })).toThrow(/never walked[\s\S]*dist\/core\/sneaky\.js/);
+    // either alone is a failure, and the message names only the side that is wrong
+    expect(() => assertBundleMatchesWalk({ bundle: bundle.slice(0, 2), walked })).not.toThrow(/never walked/);
+  });
+
+  it("refuses an empty walk: a comparison against nothing is satisfied by nothing", () => {
+    expect(() => assertBundleMatchesWalk({ bundle: [], walked: [] })).toThrow(/empty/);
+  });
+
+  it("holds against the real engine: the walk's modules all have a dist/ twin the build emits, and the count is the recorded closure", () => {
+    const real = checkPhoneSafety(ENGINE);
+    const cfg = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { closure: { modules: number } };
+    const twins = real.walked.map(distTwin);
+    expect(twins.length).toBe(cfg.closure.modules);
+    expect(new Set(twins).size, "no two sources share a twin").toBe(twins.length);
+    expect(assertBundleMatchesWalk({ bundle: twins, walked: real.walked })).toBe(cfg.closure.modules);
+  });
+
+  it("run.mjs imports the subpaths from phone-subpaths.json, runs the static walk, and compares the bundle to it (no module-count floor)", () => {
+    const source = readFileSync(join(PROOF, "run.mjs"), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    // the calls themselves, not the import lines that also name them
+    expect(source).toContain('readJson(path.join(ENGINE, "phone-subpaths.json"))');
+    expect(source).toContain("phoneSpecifiers({ subpaths,");
+    expect(source).toContain("checkPhoneSafety(ENGINE)");
+    expect(source).toContain("phone.violations.length > 0");
+    expect(source).toContain("assertBundleMatchesWalk({ bundle: engine, walked: phone.walked })");
+    expect(source).not.toContain("RN_ENGINE_MODULE_FLOOR");
   });
 });
 

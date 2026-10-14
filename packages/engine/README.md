@@ -56,6 +56,10 @@ Import only from these. Nothing else in the package is public.
 
 Importing a subpath registers nothing: the sport registry is filled only by an explicit `registerBuiltins(registry)`.
 
+The phone-safe subpaths are `./core`, `./sport`, `./sports` and `./sports/*` (listed in `phone-subpaths.json`). They and everything they
+import by value read no Node builtin, no `process` and nothing from `./scheduling`, so a React Native app can import them. `pnpm boundary`
+walks that closure; the packed-tarball proof bundles it with Metro and compiles the bundle with Hermes.
+
 ## Peer dependencies
 
 - `zod` is required (`^4.4.3`). The consumer owns the one zod instance the schemas are built with.

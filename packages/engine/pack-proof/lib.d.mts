@@ -39,3 +39,7 @@ export declare function installSignalCleanup(input: {
   before?: () => void;
   proc?: { once(signal: string, handler: () => void): unknown; exit(code: number): unknown };
 }): void;
+export declare function phoneSpecifiers(input: { subpaths: readonly string[]; manifest: { exports?: unknown }; sportDirs: readonly string[]; name?: string }): string[];
+export declare function distTwin(srcPath: string): string;
+export declare function engineDistPaths(paths: readonly string[], names: readonly string[]): string[];
+export declare function assertBundleMatchesWalk(input: { bundle: readonly string[]; walked: readonly string[] }): number;

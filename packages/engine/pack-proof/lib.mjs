@@ -107,6 +107,66 @@ export function engineModules(paths, names) {
   return paths.filter((p) => names.some((n) => p.includes(`/node_modules/${n}/dist/`) || p.startsWith(`node_modules/${n}/dist/`)) && p.endsWith(".js"));
 }
 
+// ------------------------------------------------------------------------------------------------ the phone subpaths (Task 1c-1)
+
+/** The specifiers the rn entry imports: the subpaths of phone-subpaths.json, each of which must be an export of the PACKED manifest,
+ *  with `./sports/*` expanded over `sportDirs` (the only pattern with an expansion). Refuses an empty list: an entry that imports
+ *  nothing bundles nothing. `name` is the alias the fixtures install under. */
+export function phoneSpecifiers({ subpaths, manifest, sportDirs, name = "@seazn/engine" }) {
+  if (!Array.isArray(subpaths) || subpaths.length === 0) throw new Error("phone-subpaths.json lists no subpath: an entry that imports nothing proves nothing");
+  const exp = manifest.exports;
+  const out = [];
+  for (const sub of subpaths) {
+    if (typeof sub !== "string" || !sub.startsWith("./")) throw new Error(`phone subpath ${String(sub)} is not a ./ subpath`);
+    if (exp === null || typeof exp !== "object" || !Object.hasOwn(exp, sub)) throw new Error(`phone subpath ${sub} is not an export of the packed manifest`);
+    if (!sub.includes("*")) {
+      out.push(`${name}/${sub.slice(2)}`);
+    } else if (sub === "./sports/*") {
+      if (sportDirs.length === 0) throw new Error("./sports/* has no sport directory to expand over");
+      for (const dir of sportDirs) out.push(`${name}/sports/${dir}`);
+    } else {
+      throw new Error(`phone subpath pattern "${sub}" has no known expansion: teach phoneSpecifiers how to enumerate it`);
+    }
+  }
+  return out;
+}
+
+/** The dist/ file `src/<path>.ts` compiles to. */
+export function distTwin(srcPath) {
+  const m = /^src\/(.+)\.ts$/.exec(srcPath);
+  if (m === null) throw new Error(`${srcPath} is not a src/**/*.ts module`);
+  return `dist/${m[1]}.js`;
+}
+
+/** The engine's modules among a bundle's module paths, each as its path below the package (`dist/core/index.js`), whichever spelling of
+ *  the package name Metro recorded. */
+export function engineDistPaths(paths, names) {
+  return engineModules(paths, names).map((p) => {
+    for (const n of names) {
+      const marker = `node_modules/${n}/dist/`;
+      const at = p.lastIndexOf(marker);
+      if (at !== -1 && (at === 0 || p[at - 1] === "/")) return `dist/${p.slice(at + marker.length)}`;
+    }
+    throw new Error(`${p} matched engineModules but not any of its package names`);
+  });
+}
+
+/** The Metro dev bundle must hold exactly the modules the static phone walk found (scripts/engine-boundary.ts), as their dist/ twins.
+ *  A module walked but not bundled means the walk follows an import the build erases; a module bundled but not walked means the walk
+ *  misses an import form, which is how a Node builtin would reach a phone unseen. Returns how many modules both agree on. */
+export function assertBundleMatchesWalk({ bundle, walked }) {
+  if (walked.length === 0) throw new Error("the static phone walk is empty: a comparison against nothing is satisfied by nothing");
+  const expected = new Set(walked.map(distTwin));
+  const got = new Set(bundle);
+  const missing = [...expected].filter((x) => !got.has(x)).sort();
+  const extra = [...got].filter((x) => !expected.has(x)).sort();
+  const problems = [];
+  if (missing.length > 0) problems.push(`${missing.length} module(s) walked statically but absent from the dev bundle (a value import the build erases?):\n${missing.join("\n")}`);
+  if (extra.length > 0) problems.push(`${extra.length} module(s) in the dev bundle but never walked (the static walk missed an import form):\n${extra.join("\n")}`);
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+  return expected.size;
+}
+
 /** Run every selected fixture, never stopping at the first failure (CI should show every red leg at once). `fixtures` maps a
  *  name to `async (ctx) => N`. A thrown error and a count that is not a positive integer are both failures. `log` receives
  *  each `<name>: <N> checked` line. Returns `{ results, failures }`. */
