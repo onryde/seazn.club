@@ -5,10 +5,12 @@
 // shell's own behaviour is the match-room suite's; this file proves the gate.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { HttpError } from "@/lib/errors";
+import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
 
-const room = vi.hoisted(() => ({ readRoom: vi.fn() }));
-vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: room.readRoom }));
+const room = vi.hoisted(() => ({ readRoom: vi.fn(), roomGrantDowngraded: vi.fn() }));
+vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: room.readRoom, roomGrantDowngraded: room.roomGrantDowngraded }));
 const auth = vi.hoisted(() => ({ getCurrentUser: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: auth.getCurrentUser }));
 const org = vi.hoisted(() => ({ publicOrgOrNull: vi.fn() }));
@@ -50,6 +52,8 @@ const find = (els: ReactElement[], type: unknown) => els.find((e) => e.type === 
 beforeEach(() => {
   vi.clearAllMocks();
   room.readRoom.mockReset();
+  // An intact grant unless a test says otherwise (P10: Lichess is asked once per load).
+  room.roomGrantDowngraded.mockReset().mockResolvedValue(false);
   auth.getCurrentUser.mockReset();
   org.publicOrgOrNull.mockResolvedValue({ org: { default_locale: "nl" } });
 });
@@ -70,7 +74,7 @@ describe("match-room page", () => {
     expect(room.readRoom).toHaveBeenCalledWith({ kind: "token", token: "tok.en/1" }, "f1");
     expect(auth.getCurrentUser).not.toHaveBeenCalled();
     const shell = find(els, RoomShell)!;
-    expect(shell.props).toEqual({ initial: SNAP, token: "tok.en/1", selfPath: "/shared/org/comp/div/fixtures/f1/play?t=tok.en%2F1" });
+    expect(shell.props).toEqual({ initial: SNAP, token: "tok.en/1", selfPath: "/shared/org/comp/div/fixtures/f1/play?t=tok.en%2F1", grantRefused: false });
     expect((find(els, DictProvider)!.props as { locale: string }).locale, "the org's language").toBe("nl");
   });
 
@@ -86,6 +90,7 @@ describe("match-room page", () => {
     auth.getCurrentUser.mockResolvedValue(null);
     const els = await render();
     expect(room.readRoom).not.toHaveBeenCalled();
+    expect(room.roomGrantDowngraded, "no identity, nobody to ask Lichess about").not.toHaveBeenCalled();
     expect(find(els, RoomShell)).toBeUndefined();
     expect((find(els, RoomHeaderless)!.props as { fixtureHref: string }).fixtureHref).toBe("/shared/org/comp/div/fixtures/f1");
   });
@@ -95,6 +100,50 @@ describe("match-room page", () => {
     const els = await render("bad");
     expect(find(els, RoomShell)).toBeUndefined();
     expect(find(els, RoomHeaderless)).toBeDefined();
+    expect(room.roomGrantDowngraded, "a refused room asks Lichess nothing").not.toHaveBeenCalled();
+  });
+
+  it("P10: a grant Lichess says no longer plays opens the room on the re-link screen; an intact grant opens it on check-in", async () => {
+    // A check-in snapshot (window open, no game), complete enough for the shell to paint.
+    const full: RoomSnapshot = {
+      fixtureId: "f1",
+      serverNow: "2026-10-14T10:00:00.000Z",
+      phase: "open",
+      scheduledAt: null,
+      roundOpenedAt: "2026-10-14T09:55:00.000Z",
+      opensAt: "2026-10-14T09:55:00.000Z",
+      deadline: "2026-10-14T10:15:00.000Z",
+      links: SNAP.links,
+      meta: { divisionName: "Open", roundNo: 1, boardNo: 1, limitSeconds: 600, incrementSeconds: 5 },
+      orgSlug: "org",
+      you: { colour: "white", name: "Ada", checkedIn: false },
+      opponent: { colour: "black", name: "Bo", checkedIn: false },
+      cameraPolicy: "off",
+      opponentPresence: null,
+      frozen: null,
+      canAct: false,
+      otherAccount: null,
+      onlineChessOff: false,
+      creation: null,
+      game: null,
+      held: false,
+      result: null,
+      watchUrl: null,
+      realtime: null,
+    };
+    let checked = 0;
+    for (const downgraded of [true, false]) {
+      room.readRoom.mockReset().mockResolvedValue(full);
+      room.roomGrantDowngraded.mockReset().mockResolvedValue(downgraded);
+      const page = await MatchRoomPage({ params: Promise.resolve(PARAMS), searchParams: Promise.resolve({ t: "tok" }) });
+      expect(room.roomGrantDowngraded.mock.calls, "asked once, with the page's own identity").toEqual([[{ kind: "token", token: "tok" }, "f1"]]);
+      expect((find(walk(page), RoomShell)!.props as { grantRefused: boolean }).grantRefused).toBe(downgraded);
+      const html = renderToStaticMarkup(page as ReactElement);
+      expect(html.includes('data-testid="room-state-relink"'), `downgraded=${downgraded}: the re-link screen`).toBe(downgraded);
+      expect(html.includes('data-testid="room-checkin"'), `downgraded=${downgraded}: check-in`).toBe(!downgraded);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("any OTHER failure is a real fault — it reaches the error boundary, never the friendly card", async () => {
