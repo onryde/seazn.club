@@ -7,13 +7,19 @@
 //    when it was still there.
 // 2. The navigation was `router.push`, so Back restored the deleted club's
 //    page from the client router cache.
+// 3. (Owner option A, 2026-10-14) Even once it stayed put, the refusal
+//    rendered in the tab's TOP banner — off-screen at every width when the
+//    organiser is down at the Delete button (320: 1136px above the fold). A
+//    delete failure, and its paywall, now render inside the danger zone,
+//    beside the button; every other failure on the tab stays at the top.
 //
 // INTERACTION test on purpose (`renderIsland`, not `renderToStaticMarkup`):
 // both defects live in what the click DOES with the DELETE's outcome, which a
 // static render cannot exercise (repo standing trap: "pure-builder tests
 // cannot see wiring").
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import type { ReactElement } from "react";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { OverviewTab } from "../overview-tab";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -24,6 +30,8 @@ const h = vi.hoisted(() => ({
   calls: [] as { url: string; method?: string }[],
   /** What the DELETE does this test: resolve, or throw this error. */
   deleteOutcome: null as null | Error,
+  /** What the profile PATCH does: resolve, or throw this error. */
+  patchOutcome: null as null | Error,
   /** What the confirm dialog answers. */
   confirmAnswer: true,
   router: { push: vi.fn(), replace: vi.fn(), refresh: vi.fn() },
@@ -36,6 +44,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     apiV1: vi.fn(async (url: string, options?: { method?: string }) => {
       h.calls.push({ url, method: options?.method });
       if (options?.method === "DELETE" && h.deleteOutcome) throw h.deleteOutcome;
+      if (options?.method === "PATCH" && h.patchOutcome) throw h.patchOutcome;
       return {};
     }),
   };
@@ -81,6 +90,30 @@ function deleteButton(island: ReturnType<typeof render>) {
   return propsOf(found[0]!).onClick as () => Promise<void>;
 }
 
+/** The danger-zone card: the one <section> whose subtree holds the Delete button. */
+function dangerZone(island: ReturnType<typeof render>): ReactElement {
+  const label = testMsg("clubs.delete");
+  const zones = island
+    .tree()
+    .filter(
+      (e) =>
+        e.type === "section" &&
+        walk(propsOf(e).children as never).some(
+          (c) => c.type === "button" && textOf(propsOf(c).children as never) === label,
+        ),
+    );
+  expect(zones).toHaveLength(1);
+  return zones[0]!;
+}
+
+/** Every role="alert" carrying `text`, split by where it renders. */
+function alertsSaying(island: ReturnType<typeof render>, text: string) {
+  const says = (e: ReactElement) => propsOf(e).role === "alert" && textOf(propsOf(e).children as never).includes(text);
+  const inZone = walk(propsOf(dangerZone(island)).children as never).filter(says).length;
+  const everywhere = island.tree().filter(says).length;
+  return { inZone, elsewhere: everywhere - inZone };
+}
+
 const deletes = () => h.calls.filter((c) => c.method === "DELETE");
 const navigations = () => h.router.push.mock.calls.length + h.router.replace.mock.calls.length;
 
@@ -88,6 +121,7 @@ describe("club hub danger zone — Delete", () => {
   beforeEach(() => {
     h.calls.length = 0;
     h.deleteOutcome = null;
+    h.patchOutcome = null;
     h.confirmAnswer = true;
     h.router.push.mockClear();
     h.router.replace.mockClear();
@@ -104,7 +138,8 @@ describe("club hub danger zone — Delete", () => {
 
     expect(deletes()).toHaveLength(1);
     expect(navigations()).toBe(0);
-    expect(island.text()).toContain("Club still has entries in a live division.");
+    // Beside the button that caused it, once — not in the tab's top banner.
+    expect(alertsSaying(island, "Club still has entries in a live division.")).toEqual({ inZone: 1, elsewhere: 0 });
   });
 
   it("a DELETE that throws a non-Error still stays put and shows the fallback sentence", async () => {
@@ -115,7 +150,7 @@ describe("club hub danger zone — Delete", () => {
 
     expect(deletes()).toHaveLength(1);
     expect(navigations()).toBe(0);
-    expect(island.text()).toContain(testMsg("clubs.overview.saveFailed"));
+    expect(alertsSaying(island, testMsg("clubs.overview.saveFailed"))).toEqual({ inZone: 1, elsewhere: 0 });
   });
 
   it("a DELETE refused on plan stays put and shows the upgrade gate, not a navigation", async () => {
@@ -126,8 +161,22 @@ describe("club hub danger zone — Delete", () => {
     await deleteButton(island)();
 
     expect(navigations()).toBe(0);
-    const gate = island.tree().find((e) => propsOf(e).feature === "clubs.hub");
-    expect(gate).toBeDefined();
+    const isGate = (e: ReactElement) => propsOf(e).feature === "clubs.hub";
+    expect(walk(propsOf(dangerZone(island)).children as never).filter(isGate)).toHaveLength(1);
+    expect(island.tree().filter(isGate)).toHaveLength(1); // and not also at the top
+  });
+
+  it("a failure that is NOT the delete (the profile save) stays in the tab's top banner", async () => {
+    h.patchOutcome = new Error("Slug already taken.");
+    const island = render();
+    const save = island
+      .tree()
+      .filter((e) => e.type === "button" && textOf(propsOf(e).children as never) === testMsg("clubs.overview.save"));
+    expect(save).toHaveLength(1);
+
+    await (propsOf(save[0]!).onClick as () => Promise<void>)();
+
+    expect(alertsSaying(island, "Slug already taken.")).toEqual({ inZone: 0, elsewhere: 1 });
   });
 
   it("a DELETE that succeeds REPLACES the history entry with the directory, so Back cannot restore the deleted club", async () => {

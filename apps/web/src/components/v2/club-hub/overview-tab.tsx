@@ -3,7 +3,7 @@
 // home_primary/home_secondary/away_primary/away_secondary), contacts CRUD, and a
 // danger zone. patchClub + the contacts routes finally get a UI. The kit stripe
 // in the page header reads the same colours this tab edits.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -61,6 +61,12 @@ function roleLabelKey(role: string): MessageKey {
     : "clubs.contact.role.other") as MessageKey;
 }
 
+/** Where an action's failure is shown: its error sentence and its paywall. */
+interface FailureSink {
+  error: (message: string | null) => void;
+  paywall: (featureKey: string | null) => void;
+}
+
 export function OverviewTab({
   club,
   canEdit,
@@ -77,6 +83,19 @@ export function OverviewTab({
   const confirmDialog = useConfirm();
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<string | null>(null);
+  // The delete's own failure, shown in the danger zone beside its button: the
+  // tab's top banner is off-screen at every width from down there (320: over
+  // 1100px above the fold), so a refusal read as nothing happening.
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletePaywall, setDeletePaywall] = useState<string | null>(null);
+  // The danger zone is the page's last card, so an organiser who scrolled to
+  // it has the page at its bottom edge, and an outcome appended under the
+  // button lands below the fold. Bring it into view — `nearest`, so nothing
+  // moves when it is already on screen.
+  const deleteOutcomeRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (deleteError || deletePaywall) deleteOutcomeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [deleteError, deletePaywall]);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     name: club.name,
@@ -89,21 +108,25 @@ export function OverviewTab({
   const [colors, setColors] = useState<Record<string, string>>(club.colors ?? {});
   const [contact, setContact] = useState({ role_key: "secretary", full_name: "", email: "", phone: "" });
 
-  /** Resolves `true` only when `fn` succeeded. A failure is shown here (error
-   *  or paywall) and reported as `false`, so a caller that moves on afterwards
-   *  — the club delete navigates away — can stay put and leave it on screen. */
-  async function run(fn: () => Promise<unknown>): Promise<boolean> {
+  /** Resolves `true` only when `fn` succeeded. A failure is shown through
+   *  `show` — the tab's top banner unless the caller names its own place — and
+   *  reported as `false`, so a caller that moves on afterwards (the club delete
+   *  navigates away) can stay put and leave it on screen. */
+  async function run(
+    fn: () => Promise<unknown>,
+    show: FailureSink = { error: setError, paywall: setPaywall },
+  ): Promise<boolean> {
     setBusy(true);
-    setError(null);
-    setPaywall(null);
+    show.error(null);
+    show.paywall(null);
     try {
       await fn();
       router.refresh();
       return true;
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED")
-        setPaywall(String(err.extra.feature_key ?? ""));
-      else setError(err instanceof Error ? err.message : msg("clubs.overview.saveFailed"));
+        show.paywall(String(err.extra.feature_key ?? ""));
+      else show.error(err instanceof Error ? err.message : msg("clubs.overview.saveFailed"));
       return false;
     } finally {
       setBusy(false);
@@ -396,7 +419,10 @@ export function OverviewTab({
                 tone: "danger",
               });
               if (!ok) return;
-              const deleted = await run(() => apiV1(`/api/v1/clubs/${club.id}`, { method: "DELETE" }));
+              const deleted = await run(() => apiV1(`/api/v1/clubs/${club.id}`, { method: "DELETE" }), {
+                error: setDeleteError,
+                paywall: setDeletePaywall,
+              });
               // A refused delete stays here with its reason on screen; the
               // club still exists. `replace`, not `push`: Back must not
               // restore the deleted club's page from the router cache.
@@ -405,6 +431,21 @@ export function OverviewTab({
           >
             {msg("clubs.delete")}
           </button>
+          {/* The delete's own outcome, under the button that caused it. The
+              scroll margin lands the card's own bottom edge on screen too, so
+              the outcome never sits clipped against the edge of the screen. */}
+          <div ref={deleteOutcomeRef} className="scroll-mb-6">
+            {deletePaywall && (
+              <div className="mt-3">
+                <UpgradeGate feature={deletePaywall} viewerPlan={viewerPlan} />
+              </div>
+            )}
+            {deleteError && (
+              <p role="alert" className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
+                {deleteError}
+              </p>
+            )}
+          </div>
         </section>
       )}
     </div>
