@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
+import { NEEDS_REASONS, SEAT_HOLD_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { HELD_TITLE_KEYS, heldBody, namesByColour } from "../external-play-held-copy";
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
@@ -17,12 +17,13 @@ const DICTS = Object.fromEntries(
 const SEATS = ["white", "black", "both", null] as const;
 const NAMES = { whiteName: "Rafael Quintero", blackName: "Mei Lin Chu" };
 
-/** Every sentence a held card can show: each reason, and token_revoked once
- *  per seat V442 admits (plus unknown). */
+/** Every sentence a held card can show: each reason, and each SEAT hold
+ *  (token_revoked, account_changed — read from their declaration) once per
+ *  seat V442 admits (plus unknown). */
 function everyBody(): { label: string; reason: NeedsReason; key: string; vars?: { name: string } }[] {
   const out: { label: string; reason: NeedsReason; key: string; vars?: { name: string } }[] = [];
   for (const reason of NEEDS_REASONS) {
-    const seats = reason === "token_revoked" ? SEATS : ([null] as const);
+    const seats = (SEAT_HOLD_REASONS as readonly string[]).includes(reason) ? SEATS : ([null] as const);
     for (const seat of seats) {
       const b = heldBody({ reason, revokedSeat: seat, ...NAMES });
       out.push({ label: `${reason}/${seat ?? "-"}`, reason, key: b.key, vars: b.vars });
@@ -54,7 +55,8 @@ describe("held copy: every reason, every locale", () => {
 
   it("a sentence per reason (and per revoked seat): present, translated, its {name} filled — counted", () => {
     const bodies = everyBody();
-    expect(bodies.length, "13 reasons + 3 more token_revoked seats").toBe(NEEDS_REASONS.length + SEATS.length - 1);
+    expect(SEAT_HOLD_REASONS, "the seat holds the sweep widens (final re-review P11 (1))").toEqual(["token_revoked", "account_changed"]);
+    expect(bodies.length, "13 reasons + 3 more seats for each of the 2 seat holds").toBe(NEEDS_REASONS.length + SEAT_HOLD_REASONS.length * (SEATS.length - 1));
     let checked = 0;
     for (const l of LOCALES) {
       for (const b of bodies) {
@@ -97,11 +99,37 @@ describe("held copy: every reason, every locale", () => {
   });
 
   it("final review P11: the account change's sentence is its own, as the brief words it — not another hold's", () => {
+    // No seat recorded: a create in flight (no colours yet), where the hold freezes both seats.
     const b = heldBody({ reason: "account_changed", revokedSeat: null, ...NAMES });
     expect(DICTS.en[b.key]).toBe(
       "A player linked a different Lichess account while this game was being played or set up. It can no longer be played from Seazn. The game may still be running on Lichess.",
     );
-    expect(b.vars, "it names nobody: the hold records no seat (V442's seat is token_revoked's alone)").toBeUndefined();
+    expect(b.vars, "it names nobody: no seat is recorded").toBeUndefined();
+  });
+
+  it("final re-review P11 (2): the account change names the seat it froze — White's or Black's player by name, the opponent left able to play; both seats names nobody — counted", () => {
+    // Typed from the ruling (P11 (1): the opponent plays on; P11 (2): name the side), not read from the map.
+    const EXPECTED = {
+      white: "Rafael Quintero (White) linked a different Lichess account during this game, so their moves can no longer be made from Seazn. The game may still be running on Lichess.",
+      black: "Mei Lin Chu (Black) linked a different Lichess account during this game, so their moves can no longer be made from Seazn. The game may still be running on Lichess.",
+      // "both" is reached by a second seat hold widening the first, or a provider error on a held board — so it names
+      // the first cause only, and says what is true of every path: neither seat plays from Seazn.
+      both: "A player linked a different Lichess account during this game, and neither player's moves can now be made from Seazn. The game may still be running on Lichess.",
+    } as const;
+    const tokenKeys = new Set(SEATS.map((seat) => heldBody({ reason: "token_revoked", revokedSeat: seat, ...NAMES }).key));
+    const keys = new Set<string>();
+    let checked = 0;
+    for (const seat of ["white", "black", "both"] as const) {
+      const b = heldBody({ reason: "account_changed", revokedSeat: seat, ...NAMES });
+      const en = DICTS.en[b.key]!.replace("{name}", b.vars?.name ?? "{name}");
+      expect(en, seat).toBe(EXPECTED[seat]);
+      expect(tokenKeys.has(b.key), `${seat}: not a revoked token's sentence`).toBe(false);
+      keys.add(b.key);
+      checked++;
+    }
+    keys.add(heldBody({ reason: "account_changed", revokedSeat: null, ...NAMES }).key);
+    expect(keys.size, "four seats, four sentences").toBe(4);
+    expect(checked).toBe(3);
   });
 
   it("a revoked token is NEVER a no-show (design §3.6): each seat's sentence says so, and none is a no-show's sentence", () => {
@@ -126,6 +154,10 @@ describe("held copy: every reason, every locale", () => {
       ["token_revoked", "black", "Mei Lin Chu"],
       ["token_revoked", "both", undefined],
       ["token_revoked", null, undefined],
+      ["account_changed", "white", "Rafael Quintero"],
+      ["account_changed", "black", "Mei Lin Chu"],
+      ["account_changed", "both", undefined],
+      ["account_changed", null, undefined],
     ];
     let checked = 0;
     for (const [reason, seat, name] of cases) {

@@ -114,6 +114,27 @@ describe("a held card", () => {
     expect(t.indexOf("Rafael Quintero vs"), "White first").toBeGreaterThan(-1);
   });
 
+  it("final re-review P11 (2): an account change names the re-linked seat's player by colour, in every locale — counted", () => {
+    // Home plays Black here, so the name must follow the colour V442 recorded, not the side.
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const h = card(
+        render({ held: [held({ fixtureId: "f1", reason: "account_changed", revokedSeat: "black", whiteSide: "away", homeName: "Mei Lin Chu", awayName: "Rafael Quintero" })] }, locale),
+        "f1",
+      );
+      const t = text(h);
+      expect(t, locale).toContain("Mei Lin Chu (");
+      expect(t, `${locale}: not White's player`).not.toContain("Rafael Quintero (");
+      expect(t, `${locale}: no raw slot or key`).not.toMatch(/\{name\}|externalPlay\./);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    const en = text(card(render({ held: [held({ fixtureId: "f1", reason: "account_changed", revokedSeat: "black", whiteSide: "away", homeName: "Mei Lin Chu", awayName: "Rafael Quintero" })] }), "f1"));
+    expect(en).toContain(
+      "Mei Lin Chu (Black) linked a different Lichess account during this game, so their moves can no longer be made from Seazn. The game may still be running on Lichess.",
+    );
+  });
+
   it("every reason renders its own title in every locale, never a raw key — counted", () => {
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as Locale[]) {
