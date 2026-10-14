@@ -138,9 +138,11 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     const { divisionId } = await seedDivision(auth, "tennis", "tour");
     const stageId = await seedStage(auth, divisionId, 1);
 
+    // W2c Task 11: the engine DECLARES tennis's `points` (a points-scope key), so the answer is now the sharper
+    // RULE_NOT_SETTABLE (declared, but never a stage rule) rather than UNKNOWN_RULE_KEY. Still a 400 from the allowlist.
     await expect(
       putStageRules(auth, stageId, { rules: { points: { win: 5, loss: 0 } } }),
-    ).rejects.toMatchObject({ status: 400, code: "UNKNOWN_RULE_KEY" });
+    ).rejects.toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: "points" } });
 
     // The positive half, and the reason the status code matters: tennis's own
     // configSchema ACCEPTS a top-level `points`, so the merged-config parse
@@ -158,16 +160,10 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     expect(merged.success).toBe(true);
   }, 30_000);
 
-  it("refuses a sport outside the sets-based four", async () => {
-    const auth = await seedOrg();
-    const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
-    const stageId = await seedStage(auth, divisionId, 1);
-    await expect(putStageRules(auth, stageId, { rules: { bestOf: 3 } })).rejects.toMatchObject({
-      status: 400,
-      code: "SPORT_NOT_SUPPORTED",
-    });
-  }, 30_000);
-
+  // PENDING REWRITE (rebase 2026-10-23, ruling D1): main's two chess tests below pin the pre-W2c sport gate
+  // (SPORT_NOT_SUPPORTED, STAGE_RULES_SPORTS), which W2c X-SR-1 / Task 17 remove. They are carried verbatim through the
+  // rebase and rewritten at the tip to pin D1: a Lichess division's stage refuses a stage clock, rungs still save, and
+  // the division clock is unchanged.
   // Review of PR #986: the Match rules clock is the division's alone on an online (Lichess) division. A stage cannot carry
   // one: the per-stage format is only for the four sets-based sports, whose rule fields emit no `clock`, and a chess stage is
   // refused at the sport gate before any key is looked at - so the Lichess challenge (guard.ts onlinePlayClock, which reads
@@ -205,7 +201,6 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     expect(STAGE_RULES_SPORTS.has("boardgame"), "chess is not among them").toBe(false);
     expect(configKeysFor("boardgame").has("clock"), "the premise: chess's own rule fields DO emit one (the division's)").toBe(true);
   });
-
   it("422s when the MERGED config fails the module schema", async () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "tennis", "tour");

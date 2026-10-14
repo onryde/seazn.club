@@ -26,6 +26,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { divisionRefusals } from "./rule-locks";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
+import { refuseInvalidatedStageRules } from "./stage-rules-merge";
 import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
 import {
@@ -41,6 +42,7 @@ import {
   dropNamedPublicDocuments,
   expireCompetitionShell,
   fireOrgRevalidate,
+  fireDivisionRevalidate,
   fireScoreRevalidate,
 } from "@/server/public-site/revalidate";
 // D5/P8: same trim/lowercase/dedupe/drop-empties rule the courts path uses
@@ -803,6 +805,9 @@ export async function patchDivision(
   // W2c X-SR-4: the fields this save did not apply because a started stage depends on them. Assigned inside the
   // transaction and returned beside the row; `[]` when nothing was refused.
   let refused: RefusedField[] = [];
+  // W2c Task 11 (carry (b) of the batch-3 re-review): whether this save re-wrote a stored walkover score. Set in the
+  // transaction, read after it commits.
+  let rewroteAwards = false;
   const cameraGate = async (ptx: Tx) => {
     await ptx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
     roundOpened = await anyRoundOpened(ptx, id, new Date());
@@ -1172,8 +1177,11 @@ export async function patchDivision(
         }
         effective.variant_key = variantRefusal ? current.variant_key : (patch.variant_key ?? current.variant_key);
         effective.config = tx.json(nextConfig as never);
+        // W2c Task 11 (batch-1 I-A): no stage that carries its own rules may be left invalid by this config - asked
+        // only when the save really moves the config (an unchanged one leaves every stage exactly as it was valid).
+        if (configApplied) await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key);
         // W2c Task 14 (I-A one layer up): no unstarted match's own format may be left invalid by this config.
-        await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule);
+        await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);
         // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE the write — re-written after it.
         held = await heldAwards(tx, tx`division_id = ${id}`);
       }
@@ -1251,7 +1259,7 @@ export async function patchDivision(
       },
     );
     // batch-3 I1: under the format the division now plays, in this transaction (`award-rewrite.ts`).
-    await rewriteHeldAwards(tx, held);
+    rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;
     return written;
   }, cameraPolicyNamed ? { privilegedPrelude: cameraGate } : {}).catch((err: unknown) => {
     // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
@@ -1268,6 +1276,10 @@ export async function patchDivision(
     if (isAgeCutoffCheckViolation(err)) throw new HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER);
     throw err;
   });
+  // W2c Task 11 (carry (b) of the batch-3 re-review): a format save that re-wrote a walkover's stored score must reach
+  // the public pages now, not after their cache expires (15-300 s) - the same tags `putStageRules` fires after its own
+  // re-write. Synchronous and after the commit, like that one (Next flushes a request's revalidations once).
+  if (rewroteAwards) fireDivisionRevalidate(row.id, row.competition_id);
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, matching the pattern in patchCompetition.
   if (previousSlug) {

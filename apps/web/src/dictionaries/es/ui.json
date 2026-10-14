@@ -2355,6 +2355,7 @@
   "rules.err.ruleNotSettableBecause": "{field} no se puede ajustar aquí: {reason}.",
   "rules.err.pointsRuleInexpressible": "Estos puntos aún no se pueden ajustar por fase: {reason}.",
   "rules.err.fixtureHasOwnFormat": "{match} tiene su propio formato y esto lo eliminaría: devuélvelo primero al formato de su fase.",
+  "rules.err.fixtureOwnFormatNoLongerFits": "{match} tiene su propio formato, que ya no encaja: devuélvelo primero al formato de su fase.",
   "rules.err.match": "Partido {n}",
   "rules.err.thisMatch": "Este partido",
   "rules.err.matchSays": "{match}: {reason}",

@@ -92,6 +92,7 @@ describe("the server's English is the en dictionary", () => {
       ["RULE_NOT_SETTABLE", { field: "bestOf", reason: "it is set per stage" }, say(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "bestOf", reason: "it is set per stage" })],
       ["POINTS_RULE_INEXPRESSIBLE", { reason: "x" }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: "x" })],
       ["FIXTURE_HAS_OWN_FORMAT", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: "Match 3" })],
+      ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: "Match 3" })],
     ];
     const seen = new Set<string>();
     for (const [code, p, want] of table) {
@@ -125,6 +126,7 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       ["POINTS_RULE_INEXPRESSIBLE", {}, null],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: 3 }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: null }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.thisMatch) })],
+      ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { fixture_id: "f", fixture_no: 3, field: "extraTime" }, sayEs(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
     ];
     const seen = new Set<string>();
     let localized = 0;

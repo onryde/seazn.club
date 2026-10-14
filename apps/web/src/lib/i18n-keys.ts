@@ -5848,6 +5848,7 @@ export type DictionaryKey =
   | "rules.err.fixtureDecidedWithoutPlay"
   | "rules.err.fixtureFormatLocked"
   | "rules.err.fixtureHasOwnFormat"
+  | "rules.err.fixtureOwnFormatNoLongerFits"
   | "rules.err.formatDoesNotFitPlay"
   | "rules.err.match"
   | "rules.err.matchSays"

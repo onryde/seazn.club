@@ -21,6 +21,10 @@ export const RULE_ERROR_STATUS = {
   /** W2c Task 14 — a delete (rebuild, Undo of a generation, pool clear, Swiss reshape) that would take a match's own
    *  format with it (`fixture-override-guards.ts`). The organiser sets that match back to its stage's format first. */
   FIXTURE_HAS_OWN_FORMAT: 409,
+  /** W2c Task 11 — a stage or division save that would leave an UNSTARTED match's own format unable to fit the stage it
+   *  plays in (a decider the match shortened, now shorter than the match's; `fixture-override-guards.ts`). The sibling of
+   *  FIXTURE_HAS_OWN_FORMAT: that one is a delete taking the format away, this one a save invalidating it. */
+  FIXTURE_OWN_FORMAT_NO_LONGER_FITS: 409,
 } as const;
 
 /** X-SR-5 (owner P-4 "A") — why a correction does not fit the recorded play when the engine's fold did NOT refuse it:
@@ -44,6 +48,7 @@ export const RULE_ERROR_KEYS = {
   RULE_NOT_SETTABLE: "rules.err.ruleNotSettable",
   POINTS_RULE_INEXPRESSIBLE: "rules.err.pointsRuleInexpressible",
   FIXTURE_HAS_OWN_FORMAT: "rules.err.fixtureHasOwnFormat",
+  FIXTURE_OWN_FORMAT_NO_LONGER_FITS: "rules.err.fixtureOwnFormatNoLongerFits",
 } as const satisfies Record<RuleErrorCode, MessageKey>;
 
 /** Why a match's format is locked (`FIXTURE_FORMAT_LOCKED`'s `extra.reason`): FINISHED (finalized or cancelled), or
@@ -111,7 +116,8 @@ function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
     case "POINTS_RULE_INEXPRESSIBLE":
       return m(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: p.reason ?? "" });
     case "FIXTURE_HAS_OWN_FORMAT":
-      return m(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: p.match ?? m(RULE_ERROR_SUPPORT_KEYS.thisMatch) });
+    case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":
+      return m(RULE_ERROR_KEYS[code], { match: p.match ?? m(RULE_ERROR_SUPPORT_KEYS.thisMatch) });
     case "STAGE_FORMAT_LOCKED":
     case "DIVISION_TABLE_RULES_LOCKED":
     case "DIVISION_FORMAT_LOCKED":
@@ -156,6 +162,7 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
     case "POINTS_RULE_INEXPRESSIBLE":
       return null; // no emitter yet, and its reason is English: the caller keeps the message
     case "FIXTURE_HAS_OWN_FORMAT":
+    case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":
       return sentence(code, { match }, m);
     case "STAGE_FORMAT_LOCKED":
       return typeof x.stage_name === "string" ? sentence(code, { stage: x.stage_name }, m) : null;

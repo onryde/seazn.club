@@ -1,0 +1,136 @@
+// W2c Task 11 (batch-1 I-A) — a DIVISION save re-asks, for every stage that carries its own rules, the question the
+// stage PUT asked when they were saved. Since owner P-2 "A" the division's config can change after a stage stored
+// `config.rules`; the merged `{division ⊕ stage.rules}` can then be a config the sport's schema refuses (Pool B's
+// `cap: 21` under a division whose `setTo` is now 25), or a `pointsMap` can stop answering the set scores a stage's
+// own `bestOf` can end on. Both used to be frozen as saved and surfaced later as a crash in the standings.
+//
+// The refusal names the stage and rolls the whole save back. Every refusal is paired with its positive (the same save
+// with the stage's rules out of the way goes through), so a guard that refuses everything cannot pass. Expected values
+// come from the engine's own schema (`configSchema`, `variants`), never from numbers typed against the code under test.
+// Single sport (badminton): the guard is `stageRulesProblem`, sport-blind code that reads only the sport's schema; the
+// per-sport sweep of the stage door is stage-rules-every-sport.test.ts.
+import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
+import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { createCompetition } from "../competitions";
+import { createDivision, patchDivision } from "../divisions";
+import { createStages } from "../stages";
+import { putStageRules } from "../stage-rules";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const c = g._sql;
+  g._sql = undefined;
+  await c?.end();
+});
+
+const badminton = builtinModules.find((m) => m.key === "badminton")!;
+const SHORT = badminton.variants.short as Record<string, unknown>;
+
+async function seed(config: Record<string, unknown>, stageNames: string[]) {
+  const suffix = randomUUID().slice(0, 8);
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug) values (${"Ia " + suffix}, ${"ia-" + suffix}) returning id`;
+  await setOrgPlan(orgId);
+  await invalidateOrgEntitlements(orgId);
+  const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Ia Cup " + suffix, visibility: "private", branding: {} });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open", slug: "open-" + suffix, sport_key: "badminton", variant_key: "short", config,
+  });
+  const stages: string[] = [];
+  for (const [i, name] of stageNames.entries()) {
+    const [st] = await createStages(auth, division.id, { seq: i + 1, kind: "league", name, config: {}, progression: null });
+    stages.push(st!.id);
+  }
+  return { auth, divisionId: division.id, stages };
+}
+const divisionConfigOf = async (id: string) => (await sql<{ c: unknown }[]>`select config as c from divisions where id = ${id}`)[0]!.c;
+
+describe.skipIf(!HAS_DB)("I-A: a division format save never leaves a stage's own rules unparseable", () => {
+  // Pool B caps its sets at 21; the division then moves to 25-point games (cap 30). The stage's 21 is below the new
+  // target - the engine's own refusal ("cap must be ≥ the set target"), asserted off its schema below.
+  const POOL_CAP = 21;
+  const moved = { ...SHORT, setTo: 25, finalSetTo: 25, cap: 30 };
+
+  it("premise: the engine refuses Pool B's cap under the moved division, and accepts both halves apart", () => {
+    expect(badminton.configSchema.safeParse({ ...SHORT, cap: POOL_CAP }).success, "Pool B's rules are valid today").toBe(true);
+    expect(badminton.configSchema.safeParse(moved).success, "the moved division is valid alone").toBe(true);
+    expect(badminton.configSchema.safeParse({ ...moved, cap: POOL_CAP }).success, "the merge is the engine's refusal").toBe(false);
+  });
+
+  it("refused 422 CONFIG_INVALID naming the stage, the engine's issues on the wire; the division is unchanged", async () => {
+    const s = await seed(SHORT, ["Pool A", "Pool B"]);
+    await putStageRules(s.auth, s.stages[1]!, { rules: { cap: POOL_CAP } });
+    const before = await divisionConfigOf(s.divisionId);
+    const err = await patchDivision(s.auth, s.divisionId, { config: moved }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 422, code: "CONFIG_INVALID", extra: { stage_id: s.stages[1], stage_name: "Pool B" } });
+    expect(String((err as Error).message)).toContain("Pool B");
+    expect(String((err as Error).message), "Pool A carries no rules and is not named").not.toContain("Pool A");
+    const engine = badminton.configSchema.safeParse({ ...moved, cap: POOL_CAP });
+    expect(engine.success, "the premise: the engine refuses the merge").toBe(false);
+    // ONE wire shape for CONFIG_INVALID's issues, `{path, message}` (http.ts forwards the engine's so).
+    expect((err as { extra: { issues?: unknown } }).extra.issues).toEqual(engine.success ? [] : engine.error.issues.map((i) => ({ path: i.path, message: i.message })));
+    expect(await divisionConfigOf(s.divisionId), "rolled back whole").toEqual(before);
+  });
+
+  it("positive pairs: the same save goes through once Pool B's rules are cleared, or when they still fit", async () => {
+    const cleared = await seed(SHORT, ["Pool A", "Pool B"]);
+    await putStageRules(cleared.auth, cleared.stages[1]!, { rules: { cap: POOL_CAP } });
+    await putStageRules(cleared.auth, cleared.stages[1]!, { rules: null });
+    await expect(patchDivision(cleared.auth, cleared.divisionId, { config: moved })).resolves.toBeDefined();
+
+    const fits = await seed(SHORT, ["Pool A", "Pool B"]);
+    await putStageRules(fits.auth, fits.stages[1]!, { rules: { cap: POOL_CAP } });
+    const stillFits = { ...SHORT, setTo: 15, finalSetTo: 15, cap: 30 }; // 21 >= 15: Pool B's cap still sits above the target
+    expect(badminton.configSchema.safeParse({ ...stillFits, cap: POOL_CAP }).success).toBe(true);
+    await expect(patchDivision(fits.auth, fits.divisionId, { config: stillFits })).resolves.toBeDefined();
+  });
+
+  it("empty case: a division with no stage rules at all saves as before", async () => {
+    const s = await seed(SHORT, ["Pool A"]);
+    await expect(patchDivision(s.auth, s.divisionId, { config: moved })).resolves.toBeDefined();
+  });
+
+  it("a save that does not move the config is not asked (a stage already invalid is not this save's doing)", async () => {
+    const s = await seed(SHORT, ["Pool A"]);
+    // Raw-seeded: the stage PUT would refuse this, so it can only exist as a row written before the guard.
+    await sql`update stages set config = config || ${sql.json({ rules: { cap: 5 } } as never)} where id = ${s.stages[0]!}`;
+    expect(badminton.configSchema.safeParse({ ...SHORT, cap: 5 }).success, "the premise: the stored rules are invalid").toBe(false);
+    await expect(patchDivision(s.auth, s.divisionId, { name: "Renamed" })).resolves.toBeDefined();
+  });
+});
+
+describe.skipIf(!HAS_DB)("I-A: a division pointsMap edit never leaves a stage's own bestOf unanswered", () => {
+  // A map that enumerates the Bo5 scores (no "*"): the stage PUT accepts bestOf 5 against it.
+  const FULL: Record<string, [number, number]> = { "2-0": [2, 0], "2-1": [2, 0], "3-0": [2, 0], "3-1": [2, 0], "3-2": [2, 0] };
+  const WITHOUT_3_2: Record<string, [number, number]> = Object.fromEntries(Object.entries(FULL).filter(([score]) => score !== "3-2"));
+
+  it("refused 422 POINTS_MAP_INCOMPLETE naming the stage and the score; the division is unchanged", async () => {
+    const s = await seed({ ...SHORT, pointsMap: FULL }, ["Pool A", "Pool B"]);
+    await putStageRules(s.auth, s.stages[1]!, { rules: { bestOf: 5 } });
+    const before = await divisionConfigOf(s.divisionId);
+    const err = await patchDivision(s.auth, s.divisionId, { config: { ...SHORT, pointsMap: WITHOUT_3_2 } }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE", extra: { stage_id: s.stages[1], stage_name: "Pool B" } });
+    expect(String((err as Error).message)).toContain("Pool B");
+    expect(String((err as Error).message), "the score the map no longer answers").toContain("3-2");
+    expect(String((err as Error).message), "a score it still answers is not listed").not.toContain("3-1");
+    expect(await divisionConfigOf(s.divisionId), "rolled back whole").toEqual(before);
+  });
+
+  it("positive pairs: a wildcard answers it, and a stage that leaves bestOf alone is not asked", async () => {
+    const wild = await seed({ ...SHORT, pointsMap: FULL }, ["Pool A", "Pool B"]);
+    await putStageRules(wild.auth, wild.stages[1]!, { rules: { bestOf: 5 } });
+    await expect(patchDivision(wild.auth, wild.divisionId, { config: { ...SHORT, pointsMap: { ...WITHOUT_3_2, "*": [2, 0] } } })).resolves.toBeDefined();
+
+    const other = await seed({ ...SHORT, pointsMap: FULL }, ["Pool A", "Pool B"]);
+    await putStageRules(other.auth, other.stages[1]!, { rules: { setTo: 13 } });
+    await expect(patchDivision(other.auth, other.divisionId, { config: { ...SHORT, pointsMap: WITHOUT_3_2 } })).resolves.toBeDefined();
+  });
+});

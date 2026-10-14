@@ -11,8 +11,7 @@ import "server-only";
 // receives client REFERENCES, not values, and `configKeysFor` would silently
 // derive nothing. `@/lib/match-rules` is directive-free precisely so this
 // import returns real functions.
-import { EngineError } from "@seazn/engine/core";
-import { configKeysFor, STAGE_RULES_SPORTS } from "@/lib/match-rules";
+import type { StageKind } from "@seazn/engine/core";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
@@ -21,6 +20,8 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { heldAwards, rewriteHeldAwards } from "./award-rewrite";
+import { refuseInvalidatedOverrides } from "./fixture-override-guards";
+import { mergedStageRules, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
 // The format-lock predicate lives in rule-locks.ts (moved from here, W2c Task 2): the division PATCH asks the same
 // question per stage, and both halves must read one definition of "started".
 import { lockedStageIdsAmong } from "./rule-locks";
@@ -35,8 +36,7 @@ import { lockedStageIdsAmong } from "./rule-locks";
  * only client-visible signal is `fixtures.status`, which is exactly the
  * non-monotonic predicate `lockedStageIdsAmong`'s comment (rule-locks.ts) rejects.
  *
- * Call it only for a sport in `STAGE_RULES_SPORTS` — the panel renders no row
- * for any other sport, so the page should not pay for the query.
+ * W2c Task 11: every sport has a stage rules row now, so the division page loads this for every sport.
  */
 export async function formatLockedStageIds(auth: AuthCtx, divisionId: string): Promise<string[]> {
   return withTenant(auth.orgId, async (tx) => {
@@ -51,50 +51,14 @@ export async function formatLockedStageIds(auth: AuthCtx, divisionId: string): P
 }
 
 /**
- * D10 — the final set scores a `bestOf` match can END on that the division's
- * `pointsMap` cannot answer.
+ * `PUT /stages/:id/rules` — the stage's own match rules, for EVERY sport (W2c Task 11).
  *
- * `pointsMap` is looked up by the final set score (`setbased/kernel.ts`
- * `matchPoints`): exact `"W-L"`, else `"*"`, else `invalid()`, which THROWS.
- * And `pointsMap` is deliberately NOT in the per-stage allowlist — no
- * `RuleField` writes it — so it cannot move with the format. A division whose
- * map enumerates only the scores ITS OWN bestOf reaches, plus a stage
- * overridden to a different bestOf, produces a score no entry answers and the
- * standings page throws. Not a wrong number: a crash, on a save this endpoint
- * had already reported as successful.
- *
- * The reachable set is DERIVED, never a table typed in here: a side wins on
- * `⌈bestOf/2⌉` sets (the kernel's `majority`, and the schema refuses an even
- * `bestOf`), so the loser holds 0..⌈bestOf/2⌉−1 and no other final score
- * exists. A forfeit pays the same lookup at its CREDITED score (W2b X-WO-1):
- * the winner is credited the majority and the offender keeps the sets it won,
- * which is inside that same set, so this check prices every forfeit too. Only
- * a bye still pays `cleanSweepPair`.
- *
- * Returns `[]` — no opinion — for a config with no `pointsMap` at all. That is
- * what excludes TENNIS, which pays a flat `points {win, loss}`: derived from
- * the parsed config rather than from a sport list that would need keeping in
- * step with `STAGE_RULES_SPORTS`.
+ * What is settable is the ENGINE's declaration, per stage kind and variant (`stageTopKeysFor`, `stage-rules-merge.ts`),
+ * not a list kept here: a key the sport never declares is UNKNOWN_RULE_KEY, a declared key this stage cannot set (or a
+ * points key) is RULE_NOT_SETTABLE. The body is a fragment that MERGES into the stored rules (carry I2): a key it omits
+ * is kept, a null removes that key, `{}` and `null` clear them all. The merged result must parse with the division's
+ * config, a `bestOf` must be answered by its points map, and no unstarted match's own format may stop fitting.
  */
-function unansweredSetScores(bestOf: unknown, pointsMap: unknown): string[] {
-  if (typeof bestOf !== "number" || !Number.isInteger(bestOf) || bestOf < 1) return [];
-  if (typeof pointsMap !== "object" || pointsMap === null || Array.isArray(pointsMap)) return [];
-  const map = pointsMap as Record<string, unknown>;
-  // `Object.hasOwn` rather than `in` or a truthiness check. Be honest about
-  // what that buys HERE: nothing yet. Every key looked up below is CONSTRUCTED
-  // (`"*"`, `"${w}-${l}"`), and `Object.prototype` declares none of those, so
-  // `in` would answer identically today — this is an equivalent mutant, not a
-  // live guard, and no test can kill it. It is written this way because the
-  // engine reads the SAME map with a bare `cfg.pointsMap[key]`
-  // (`setbased/kernel.ts` `matchPoints`), and if a future caller ever looks up
-  // a key it did not build, `hasOwn` is the form that stays correct.
-  if (Object.hasOwn(map, "*")) return [];
-  const winning = Math.ceil(bestOf / 2);
-  return Array.from({ length: winning }, (_, lost) => `${winning}-${lost}`).filter(
-    (scoreKey) => !Object.hasOwn(map, scoreKey),
-  );
-}
-
 export async function putStageRules(
   auth: AuthCtx,
   stageId: string,
@@ -113,31 +77,22 @@ export async function putStageRules(
       {
         division_id: string;
         stage_name: string;
+        stage_kind: StageKind;
         competition_id: string;
         sport_key: string;
+        variant_key: string;
         module_version: string;
         division_config: Record<string, unknown> | null;
       }[]
     >`
-      select s.division_id, s.name as stage_name, d.competition_id, d.sport_key, d.module_version,
-             d.config as division_config
+      select s.division_id, s.name as stage_name, s.kind as stage_kind, d.competition_id, d.sport_key, d.variant_key,
+             d.module_version, d.config as division_config
         from stages s join divisions d on d.id = s.division_id
        where s.id = ${stageId}`;
     // `withTenant` scopes the read to this org, so another tenant's stage is
     // indistinguishable from a missing one — 404, never 403.
     if (!stage) throw new HttpError(404, "stage not found");
     assertNotFrozen(frozen, stage.competition_id);
-
-    // D2a — the sport gate is a guard, not prose. Without it a football
-    // division could POST `rules.points`, a shape SPORT_RULES.football
-    // genuinely emits, and the overlay would feed it to standingsDelta with
-    // the standings.custom_points entitlement never consulted.
-    if (!STAGE_RULES_SPORTS.has(stage.sport_key))
-      throw new HttpError(
-        400,
-        `${stage.sport_key} does not support per-stage match rules`,
-        "SPORT_NOT_SUPPORTED",
-      );
 
     // The division advisory lock every sibling stage writer takes
     // (`stages.ts` replaceStages/deleteStage, overrideStandings, issueChallenge)
@@ -165,99 +120,53 @@ export async function putStageRules(
         { stage_name: stage.stage_name },
       );
 
-    // D2 — the allowlist is the union of the CONFIG keys each field's build()
-    // emits, never the FORM keys. For tennis the two diverge three ways
-    // (setType→set, noAd→game, tiebreakWinBy→tiebreak), so a `f.key` list
-    // would refuse four of its five overrides.
-    //
-    // Checked over the keys AS SENT, BEFORE the null strip below. The other
-    // order looks equivalent and is not: `{notAKey: null}` would strip to an
-    // empty fragment and never meet the allowlist at all, so a misspelled rule
-    // would answer 200 and change nothing — the worst shape available, because
-    // the organiser is told the save worked.
-    if (input.rules !== null) {
-      const allowed = configKeysFor(stage.sport_key);
-      for (const key of Object.keys(input.rules))
-        if (!allowed.has(key))
-          throw new HttpError(
-            400,
-            `"${key}" is not a match rule for ${stage.sport_key}`,
-            "UNKNOWN_RULE_KEY",
-          );
-    }
+    // D2 / Task 11 — the allowlist is the engine's declaration for THIS stage's kind and variant, over the config
+    // keys (never the editor's form keys), checked over the keys AS SENT, before the merge below drops a null. The
+    // module is resolved at the division's pinned version, as every other reader of its config does.
+    const module_ = resolveModule(stage.sport_key, stage.module_version);
+    if (input.rules !== null) refuseUnsettableKeys(module_, stage.sport_key, stage.stage_kind, stage.variant_key, Object.keys(input.rules));
+
+    // The stored rules, read UNDER the division lock (the read above this lock could be stale). The merge is computed
+    // here, on the JS side, and written whole: every stage writer takes this lock, so nothing moves in between.
+    const [{ rules: stored }] = await tx<{ rules: unknown }[]>`select config -> 'rules' as rules from stages where id = ${stageId}`;
 
     // "Inherit" is key ABSENCE, never an explicit null — the overlay spreads
     // what it is given, so a null reaching the column blanks the division's
-    // value instead of deferring to it.
-    const fragment =
-      input.rules === null
-        ? {}
-        : Object.fromEntries(
-            Object.entries(input.rules).filter(([, v]) => v !== null && v !== undefined),
-          );
+    // value instead of deferring to it. `{rules: null}`, `{rules: {}}` and an
+    // emptied merge are one intent — inherit the division's format — so all
+    // three land on the same `- 'rules'`. Storing an empty `rules: {}` instead
+    // would leave a key that overrides nothing: the overlay would walk it for
+    // no reason, and every `"rules" in config` reader (the panel's "Same as
+    // division" state) would report an override that is not there.
+    const next = mergedStageRules(stored, input.rules);
 
-    // `{rules: null}`, `{rules: {}}` and `{rules: {bestOf: null}}` are one
-    // intent — inherit the division's format — so all three land on the same
-    // `- 'rules'`. Storing an empty `rules: {}` instead would leave a key that
-    // overrides nothing: the overlay would walk it for no reason, and every
-    // `"rules" in config` reader (the panel's "Same as division" state) would
-    // report an override that is not there.
     // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE this save — re-written after it, under the
     // format the stage now plays (`award-rewrite.ts`). The stage lock above does not count them as play.
     const held = await heldAwards(tx, tx`stage_id = ${stageId}`);
 
-    if (Object.keys(fragment).length === 0) {
+    if (next === null) {
       // `- 'rules'` removes the KEY. Writing null instead would leave a null
       // the overlay copies over the division's value.
       await tx`update stages set config = config - 'rules' where id = ${stageId}`;
-      await rewriteHeldAwards(tx, held);
-      return { rules: null, divisionId: stage.division_id, competitionId: stage.competition_id };
+    } else {
+      // Validate the MERGE, store the FRAGMENT: `division ⊕ rules` through the sport's schema (the merged parse, in
+      // `stage-rules-merge.ts`), and — when the body moves `bestOf` — whether the division's `pointsMap` answers it
+      // (D10: checked only when this save actually moves `bestOf`; a division already missing entries for its OWN
+      // format is a division-level problem this endpoint did not cause and cannot fix).
+      const moved = input.rules !== null && setsBestOf(input.rules);
+      const problem = stageRulesProblem(module_, stage.division_config, next, moved);
+      if (problem !== null) throw stageSaveRefusal(problem, stage.sport_key);
+      // Server-side merge (§T2): six other writers rewrite this column from a
+      // JS-side read, and a spread of a stale read would revert this write.
+      await tx`
+        update stages set config = config || ${tx.json({ rules: next } as never)}
+         where id = ${stageId}`;
     }
-
-    // Validate the MERGE, store the FRAGMENT. The fragment alone cannot be
-    // parsed — the schema's defaults would fill it out — and storing
-    // `parsed.data` would write a defaults-materialised copy of the whole
-    // division format into `config.rules`, pinning the stage to every division
-    // key forever. Note this parse ACCEPTS `points` for tennis: the allowlist
-    // above is the only thing keeping it out, which is why it is a guard.
-    const module_ = resolveModule(stage.sport_key, stage.module_version);
-    const parsed = module_.configSchema.safeParse({
-      ...(stage.division_config ?? {}),
-      ...fragment,
-    });
-    if (!parsed.success)
-      throw new EngineError("CONFIG_INVALID", `invalid ${stage.sport_key} config`, {
-        issues: parsed.error.issues,
-      });
-
-    // D10 — the merged config is structurally valid and can still crash
-    // standings. Checked only when the fragment actually moves `bestOf`: a
-    // division already missing entries for its OWN format is a division-level
-    // problem this endpoint did not cause and cannot fix, so refusing an
-    // unrelated `setTo` override for it would block a save for no reason.
-    // See `unansweredSetScores` for why the reachable set is derived.
-    if (Object.hasOwn(fragment, "bestOf")) {
-      const merged = parsed.data as { bestOf?: unknown; pointsMap?: unknown };
-      const missing = unansweredSetScores(merged.bestOf, merged.pointsMap);
-      if (missing.length > 0)
-        throw new HttpError(
-          422,
-          `best of ${String(merged.bestOf)} can end ${missing.join(", ")}, ` +
-            `and this division's points table has no entry for ` +
-            `${missing.length === 1 ? "that score" : "those scores"} and no "*" fallback — ` +
-            `add them to the division's points table first, or standings for this stage ` +
-            `would fail`,
-          "POINTS_MAP_INCOMPLETE",
-        );
-    }
-
-    // Server-side merge (§T2): six other writers rewrite this column from a
-    // JS-side read, and a spread of a stale read would revert this write.
-    await tx`
-      update stages set config = config || ${tx.json({ rules: fragment } as never)}
-       where id = ${stageId}`;
+    // Task 14's overnight ruling: no unstarted match's own format may be left unable to fit the stage it now plays
+    // in. Read from the row just written, so a refusal rolls this save back whole.
+    await refuseInvalidatedOverrides(tx, stage.division_id, stage.division_config, module_, stage.variant_key, stageId);
     await rewriteHeldAwards(tx, held);
-    return { rules: fragment, divisionId: stage.division_id, competitionId: stage.competition_id };
+    return { rules: next, divisionId: stage.division_id, competitionId: stage.competition_id };
   });
 
   // AFTER the transaction commits, and not voided. `stages.ts` has four

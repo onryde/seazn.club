@@ -23,6 +23,7 @@ import { createStages, generateStageFixtures, rebuildStageFixtures } from "../st
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
+import { putStageRules } from "../stage-rules";
 import { swissBoardsForField } from "@/lib/swiss-shell";
 import { seedOrg } from "./_seed";
 
@@ -196,4 +197,164 @@ describe.skipIf(!HAS_DB)("I-A one layer up: a division save never makes an unsta
   // No "started match" case: a frozen snapshot locks its stage (rule-locks.ts `lockedStageIdsAmong`), and X-SR-4 then
   // refuses every field that stage inherits before this guard runs — so the guard's `config_snapshot is null` scope is
   // unobservable through a division save (recorded as an equivalent mutant in the task report).
+});
+
+// W2c Task 11 (Task 14's overnight ruling, for BOTH writers of a format): a stage's rules save and a division's config
+// save must not leave an UNSTARTED match's own format unable to fit the stage it plays in. The match's override may
+// differ from its stage only inside the engine's bound (X-SR-2 `checkFixtureOverride`: a decider the match shortened
+// must stay no longer than its stage's); a save that moves the stage under it is REFUSED by name
+// (FIXTURE_OWN_FORMAT_NO_LONGER_FITS, 409), never a silent drop. The sports and keys come from the engine's own
+// `matchBound` declarations (below), not from a list typed here.
+interface BoundCase {
+  sport: string;
+  variant: string;
+  /** The decider key (top-level), and the four values of it: the stage's, the match's own (shorter), one the match no
+   *  longer fits, and one it still fits. */
+  key: string;
+  wide: unknown;
+  own: unknown;
+  tooShort: unknown;
+  fits: unknown;
+}
+const BOUND_CASES: BoundCase[] = [
+  {
+    sport: "football", variant: "11-a-side", key: "extraTime",
+    wide: { enabled: true, halfMinutes: 15 }, own: { enabled: true, halfMinutes: 10 },
+    tooShort: { enabled: true, halfMinutes: 5 }, fits: { enabled: true, halfMinutes: 12 },
+  },
+  {
+    sport: "icehockey", variant: "iihf", key: "overtime",
+    wide: { kind: "sudden_death", minutes: 5, skaters: 3 }, own: { kind: "sudden_death", minutes: 3, skaters: 3 },
+    tooShort: { kind: "sudden_death", minutes: 2, skaters: 3 }, fits: { kind: "sudden_death", minutes: 4, skaters: 3 },
+  },
+  {
+    sport: "hockey", variant: "fih-shootout", key: "shootout",
+    wide: { attempts: 5, suddenDeath: true, clockSeconds: 8 }, own: { attempts: 3, suddenDeath: true, clockSeconds: 8 },
+    tooShort: { attempts: 2, suddenDeath: true, clockSeconds: 8 }, fits: { attempts: 4, suddenDeath: true, clockSeconds: 8 },
+  },
+];
+const noLongerFits = (id: string, no: number) => ({
+  status: 409, code: "FIXTURE_OWN_FORMAT_NO_LONGER_FITS", extra: { fixture_id: id, fixture_no: no },
+  message: expect.stringContaining(`Match ${no} has its own format that no longer fits`),
+});
+const storedRules = async (stageId: string) => (await sql<{ r: unknown }[]>`select config -> 'rules' as r from stages where id = ${stageId}`)[0]!.r;
+const divisionConfigOf = async (id: string) => (await sql<{ c: unknown }[]>`select config as c from divisions where id = ${id}`)[0]!.c;
+/** The sports the ENGINE gives a match-scoped decider bound (`matchBound`), by their declarations. */
+const boundSports = () =>
+  builtinModules
+    .filter((m) => Object.values(m.ruleKeys as Record<string, { matchBound?: unknown }>).some((f) => f.matchBound !== undefined))
+    .map((m) => m.key)
+    .sort();
+
+describe("Task 11: the bound cases cover every sport the engine bounds (anti-vacuity)", () => {
+  it("the table's sports are exactly the sports declaring a matchBound, and each case's key is one they bound", () => {
+    expect(boundSports(), "a sport that gains a matchBound owes a case here").toEqual(BOUND_CASES.map((c) => c.sport).sort());
+    let checked = 0;
+    for (const c of BOUND_CASES) {
+      const m = builtinModules.find((x) => x.key === c.sport)!;
+      const bounded = Object.entries(m.ruleKeys as Record<string, { matchBound?: unknown }>)
+        .filter(([, f]) => f.matchBound !== undefined)
+        .map(([k]) => k.split(".")[0]);
+      expect(bounded, `${c.sport} bounds ${c.key}`).toContain(c.key);
+      expect(m.configSchema.safeParse({ ...(m.variants[c.variant] as object), [c.key]: c.wide }).success, `${c.sport} wide`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(BOUND_CASES.length);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match's own format unable to fit", () => {
+  for (const c of BOUND_CASES) {
+    const seed = async () => {
+      const m = builtinModules.find((x) => x.key === c.sport)!;
+      const b = await seedBracket({ sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2, stageRules: { [c.key]: c.wide } });
+      void m;
+      const id = b.fixtureIds[0]!;
+      await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
+      expect((await sql<{ o: unknown }[]>`select rules_override o from fixtures where id = ${id}`)[0]!.o, `${c.sport}: the premise, the override is stored`).not.toBeNull();
+      return { b, id, no: await fixtureNo(id) };
+    };
+
+    it(`${c.sport}: shortening the stage under the match's own ${c.key} is refused naming the match, and nothing is written`, async () => {
+      const { b, id, no } = await seed();
+      const before = await storedRules(b.stageId);
+      await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.tooShort } })).rejects.toMatchObject(noLongerFits(id, no));
+      expect(await storedRules(b.stageId), "the refused save rolled back whole").toEqual(before);
+      expect((await sql<{ o: unknown }[]>`select rules_override o from fixtures where id = ${id}`)[0]!.o, "and the override was not dropped").not.toBeNull();
+    });
+
+    it(`${c.sport}: positive pair, a stage value the match still fits goes through`, async () => {
+      const { b } = await seed();
+      await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.fits } })).resolves.toEqual({ rules: { [c.key]: c.fits } });
+      expect(await storedRules(b.stageId)).toEqual({ [c.key]: c.fits });
+    });
+  }
+
+  it("clearing the stage's rules is a save too: the match is asked against what the stage inherits", async () => {
+    // football: the division's extra time is 5-minute halves, the stage's own 15 and the match's own 10 (a leaf: the
+    // writer stores only what the match changed against its stage). Without the stage's rules the stage is the division's.
+    const c = BOUND_CASES[0]!;
+    const base = builtinModules.find((x) => x.key === c.sport)!.variants[c.variant] as Record<string, unknown>;
+    const b = await seedBracket({
+      sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2,
+      divisionConfig: { ...base, [c.key]: c.tooShort }, stageRules: { [c.key]: c.wide },
+    });
+    const id = b.fixtureIds[0]!;
+    await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
+    await expect(putStageRules(b.auth, b.stageId, { rules: null })).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id)));
+    expect(await storedRules(b.stageId), "the clear rolled back").toEqual({ [c.key]: c.wide });
+    // …and with the match's format set back, the same clear goes through.
+    await writeFixtureRulesOverride(b.auth, [id], null);
+    await expect(putStageRules(b.auth, b.stageId, { rules: null })).resolves.toEqual({ rules: null });
+    expect(await storedRules(b.stageId)).toBeNull();
+  });
+
+  it("a match that is decided or finished is not asked (its format is a correction's business), the same save goes through", async () => {
+    const c = BOUND_CASES[0]!;
+    let checked = 0;
+    for (const status of ["cancelled", "finalized"]) {
+      const b = await seedBracket({ sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2, stageRules: { [c.key]: c.wide } });
+      const id = b.fixtureIds[0]!;
+      await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
+      await sql`update fixtures set status = ${status} where id = ${id}`;
+      await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.tooShort } }), status).resolves.toBeDefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("an override carrying a key the sport never declared (raw-seeded; the one writer refuses it) does not lock every later save", async () => {
+    const c = BOUND_CASES[0]!;
+    const b = await seedBracket({ sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2, stageRules: { [c.key]: c.wide } });
+    await sql`update fixtures set rules_override = ${sql.json({ notARule: 1 } as never)} where id = ${b.fixtureIds[0]!}`;
+    await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.tooShort } })).resolves.toBeDefined();
+  });
+});
+
+describe.skipIf(!HAS_DB)("Task 11: a DIVISION save never leaves an unstarted match's own format unable to fit", () => {
+  for (const c of BOUND_CASES) {
+    const seed = async () => {
+      const m = builtinModules.find((x) => x.key === c.sport)!;
+      const base = m.variants[c.variant] as Record<string, unknown>;
+      // The stage inherits the division's value: no stage rules, the decider lives on the division.
+      const b = await seedBracket({ sport: c.sport, variant: c.variant, stageKind: "knockout", entrants: 2, divisionConfig: { ...base, [c.key]: c.wide } });
+      const id = b.fixtureIds[0]!;
+      await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
+      return { b, id, base, no: await fixtureNo(id) };
+    };
+
+    it(`${c.sport}: shortening the division's ${c.key} under the match's own is refused naming the match; the division is unchanged`, async () => {
+      const { b, id, base, no } = await seed();
+      const before = await divisionConfigOf(b.divisionId);
+      await expect(patchDivision(b.auth, b.divisionId, { config: { ...base, [c.key]: c.tooShort } })).rejects.toMatchObject(noLongerFits(id, no));
+      expect(await divisionConfigOf(b.divisionId)).toEqual(before);
+    });
+
+    it(`${c.sport}: positive pair, a division value the match still fits goes through`, async () => {
+      const { b, base } = await seed();
+      await expect(patchDivision(b.auth, b.divisionId, { config: { ...base, [c.key]: c.fits } })).resolves.toBeDefined();
+      expect((await divisionConfigOf(b.divisionId) as Record<string, unknown>)[c.key]).toEqual(c.fits);
+    });
+  }
 });

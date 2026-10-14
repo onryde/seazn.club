@@ -2400,6 +2400,7 @@
   "rules.err.ruleNotSettableBecause": "{field} ne peut pas être réglé ici : {reason}.",
   "rules.err.pointsRuleInexpressible": "Ces points ne peuvent pas encore être réglés par phase : {reason}.",
   "rules.err.fixtureHasOwnFormat": "{match} a son propre format, et cette action le supprimerait : rétablissez d'abord le format de sa phase.",
+  "rules.err.fixtureOwnFormatNoLongerFits": "{match} a son propre format, qui ne convient plus : rétablissez d'abord le format de sa phase.",
   "rules.err.match": "Rencontre {n}",
   "rules.err.thisMatch": "Cette rencontre",
   "rules.err.matchSays": "{match} : {reason}",

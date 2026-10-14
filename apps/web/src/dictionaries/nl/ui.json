@@ -2355,6 +2355,7 @@
   "rules.err.ruleNotSettableBecause": "{field} kan hier niet worden ingesteld — {reason}.",
   "rules.err.pointsRuleInexpressible": "Deze punten kunnen nog niet per fase worden ingesteld — {reason}.",
   "rules.err.fixtureHasOwnFormat": "{match} heeft een eigen format, en dit zou het verwijderen — zet het eerst terug naar het format van de fase.",
+  "rules.err.fixtureOwnFormatNoLongerFits": "{match} heeft een eigen format dat niet meer past — zet het eerst terug naar het format van de fase.",
   "rules.err.match": "Wedstrijd {n}",
   "rules.err.thisMatch": "Deze wedstrijd",
   "rules.err.matchSays": "{match}: {reason}",

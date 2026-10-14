@@ -17,7 +17,6 @@ import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "
 import { listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
-import { STAGE_RULES_SPORTS } from "@/lib/match-rules";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
 // predicate is a second copy of the rule (F3 ultrareview finding 9 was a
@@ -418,13 +417,11 @@ export default async function DivisionPage({
   // panel cannot derive this: `FIXTURE_COLS` does not carry `config_snapshot`
   // (a payload-budget ruling, stages.ts:147-162) and `score_events` reaches no
   // prop, leaving only the non-monotonic `fixtures.status`. Same per-stage
-  // shape as `rosterDrift` above, and skipped entirely for a sport with no
-  // per-stage rules — the row never renders there, so the page should not pay
-  // for the query.
+  // shape as `rosterDrift` above. W2c Task 11: every sport has a stage rules row
+  // now, so the lock is read for every sport (the page skips it only where the
+  // row is not shown at all: another tab, or a viewer who cannot edit).
   const formatLockedStages =
-    tab === "fixtures" && editable && STAGE_RULES_SPORTS.has(division.sport_key)
-      ? await formatLockedStageIds(auth, id)
-      : [];
+    tab === "fixtures" && editable ? await formatLockedStageIds(auth, id) : [];
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.

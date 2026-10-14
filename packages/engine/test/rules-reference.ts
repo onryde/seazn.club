@@ -43,7 +43,7 @@ export const CHECKER_FILES: readonly string[] = [
  *  proof commit deletes the entry and fills the row's `proved by`; W2c Task 23 requires the map empty. */
 export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
   ["X-SR-3", "W2c Task 11"], ["X-SR-6", "W2c Task 12"], ["X-SR-7", "W2c Task 15"], ["X-PT-1", "W2c Task 13"],
-  ["CK-SO-1", "W2c Task 12"], ["CA-AB-2", "W2c Task 11"], ["GN-AB-2", "W2c Task 11"],
+  ["CK-SO-1", "W2c Task 12"],
   ["IH-KO-1", "W2c Task 12"], ["FB-SO-1", "W2c Task 12"],
 ]);
 

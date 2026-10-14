@@ -27,6 +27,7 @@ import { lockedStageIdsAmong } from "../rule-locks";
 import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
+import { movingFragment } from "./_stage-probe";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -40,6 +41,20 @@ vi.mock("@/server/engine-db/awarded-state", async (importOriginal) => {
     ...real,
     awardFoldsUnder: (...args: Parameters<typeof real.awardFoldsUnder>) =>
       steer.refuse.has(args[4].fixtureId) ? { ok: false as const, reason: "steered: this format refuses the walkover" } : real.awardFoldsUnder(...args),
+  };
+});
+
+// W2c Task 11 (carry (b) of the batch-3 re-review): a save that re-writes a walkover's stored score must reach the public
+// pages. The spy wraps the REAL revalidation (it still runs); it only records which division was asked for.
+const revalidated = vi.hoisted(() => [] as { divisionId: string; competitionId: string | undefined }[]);
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...real,
+    fireDivisionRevalidate: (...args: Parameters<typeof real.fireDivisionRevalidate>) => {
+      revalidated.push({ divisionId: args[0], competitionId: args[1] });
+      return real.fireDivisionRevalidate(...args);
+    },
   };
 });
 
@@ -143,7 +158,7 @@ const currentConfig = async (divisionId: string) =>
 
 describe.skipIf(!HAS_DB)("X-SR-5 I1 a format save re-writes the walkovers no event records", () => {
   it("badminton, the STAGE door: a stage-rules save moving bestOf re-writes the F14 walkover's score under the new format; clearing the rules re-writes it back", async () => {
-    // single-sport: the stage door serves the set sports only (STAGE_RULES_SPORTS) until Task 11; the division door is swept below.
+    // single-sport: the set-sport headline (bestOf) read as a number; every sport's stage door and division door are swept below.
     const w = await f14Walkover("badminton", "bwf");
     const before = await expectStoredIsTheFold(w, "the premise, as generated");
     const bestOf = Number((await padCfg(w) as { bestOf: number }).bestOf) + 2;
@@ -203,6 +218,37 @@ describe.skipIf(!HAS_DB)("X-SR-5 I1 a format save re-writes the walkovers no eve
     expect(await stored(playedAward), "the award after play keeps its ledger's fold").toEqual(playedBefore);
   }, 60_000);
 
+  it("every sport's STAGE door: a stage-rules save that moves the format re-writes the F14 walkover; clearing the rules re-writes it back (counted)", async () => {
+    let walkovers = 0;
+    let moved = 0;
+    let witnessedCfg = 0;
+    const swept: string[] = [];
+    for (const m of builtinModules) {
+      const variant = Object.keys(m.variants)[0]!;
+      const w = await f14Walkover(m.key, variant);
+      walkovers++;
+      // A (key, value) a knockout stage can save that the division does not already hold: the engine's parse of the preset
+      // with and without it (a save of the held value moves nothing, and the sweep would pass with no re-write).
+      const pick = movingFragment(m as AnySportModule, variant, "knockout");
+      expect(pick, `${m.key}: some knockout stage rule moves the format`).not.toBeNull();
+      const cfgBefore = canonicalJson(await padCfg(w));
+      await putStageRules(w.auth, w.stageId, { rules: pick!.frag });
+      if (canonicalJson(await padCfg(w)) !== cfgBefore) moved++;
+      const after = await expectStoredIsTheFold(w, `${m.key}.${pick!.key} saved on the stage`);
+      if ((after.state as { cfg?: unknown }).cfg !== undefined) witnessedCfg++;
+      // The second call: back to the division's format - the stored score follows it back.
+      await putStageRules(w.auth, w.stageId, { rules: null });
+      await expectStoredIsTheFold(w, `${m.key} after clearing the stage rules`);
+      expect(canonicalJson(await padCfg(w)), `${m.key}: cleared, the format is the division's again`).toBe(cfgBefore);
+      swept.push(`${m.key}.${pick!.key}`);
+    }
+    console.info(`I1 stage sweep: ${walkovers} sports with an F14 walkover, ${swept.length} re-written through a stage save (${swept.join(", ")})`);
+    expect(walkovers, "anti-vacuity: every registered sport was asked").toBe(builtinModules.length);
+    expect(swept.length).toBe(walkovers);
+    expect(moved, "every sport's stage save moved the walkover's resolved format").toBe(walkovers);
+    expect(witnessedCfg, "every sport's stored award state carries the cfg it was folded under, so a stale row is visible").toBe(walkovers);
+  }, 900_000);
+
   it("every sport's division door: a change of variant re-writes the F14 walkover under the format it now resolves (counted)", async () => {
     let walkovers = 0;
     let moved = 0;
@@ -236,6 +282,36 @@ describe.skipIf(!HAS_DB)("X-SR-5 I1 a format save re-writes the walkovers no eve
     expect(swept.length).toBe(walkovers);
     expect(moved, "every sport's variant change moved the walkover's resolved format").toBe(walkovers);
   }, 600_000);
+});
+
+describe.skipIf(!HAS_DB)("X-SR-5 I1 a save that re-writes a walkover revalidates the division's public pages", () => {
+  it("the division door: revalidated when the save re-wrote a walkover, not when nothing was re-written (the empty case first)", async () => {
+    // single-sport: the revalidation call is sport-blind; the per-sport re-write is swept above.
+    const w = await f14Walkover("badminton", "bwf");
+    const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${w.divisionId}`;
+    const config = await currentConfig(w.divisionId);
+    const bestOf = Number((config as { bestOf?: number }).bestOf ?? ((await padCfg(w)) as { bestOf: number }).bestOf) + 2;
+    const mine = () => revalidated.filter((r) => r.divisionId === w.divisionId);
+
+    revalidated.length = 0;
+    await patchDivision(w.auth, w.divisionId, { name: "Renamed " + randomUUID().slice(0, 4) });
+    expect(mine(), "a save that moves no format re-writes nothing and revalidates nothing").toEqual([]);
+
+    await patchDivision(w.auth, w.divisionId, { config: { ...config, bestOf } });
+    expect(mine(), "the save re-wrote the walkover: its public pages are told, with the competition").toEqual([{ divisionId: w.divisionId, competitionId }]);
+
+    revalidated.length = 0;
+    await patchDivision(w.auth, w.divisionId, { config: { ...config, bestOf } });
+    expect(mine(), "the same save again re-writes nothing: nothing to tell").toEqual([]);
+  }, 60_000);
+
+  it("the stage door: revalidated by the save", async () => {
+    const w = await f14Walkover("badminton", "bwf");
+    const bestOf = Number(((await padCfg(w)) as { bestOf: number }).bestOf) + 2;
+    revalidated.length = 0;
+    await putStageRules(w.auth, w.stageId, { rules: { bestOf } });
+    expect(revalidated.filter((r) => r.divisionId === w.divisionId)).toHaveLength(1);
+  }, 60_000);
 });
 
 describe.skipIf(!HAS_DB)("I1 one 'started': every format door reads format-standing.ts", () => {
