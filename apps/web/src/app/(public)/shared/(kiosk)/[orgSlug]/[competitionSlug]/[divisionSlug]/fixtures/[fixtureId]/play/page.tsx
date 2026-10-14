@@ -18,7 +18,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { RoomShell } from "@/components/public-site/match-room/room-shell";
-import { RoomHeaderless } from "@/components/public-site/match-room/room-unavailable";
+import { RoomHeaderless, RoomRepairingHeaderless } from "@/components/public-site/match-room/room-unavailable";
 import { getCurrentUser } from "@/lib/auth";
 import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
@@ -76,6 +76,8 @@ export default async function MatchRoomPage({
   const fixturePath = routes.sharedFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
 
   let snapshot: RoomSnapshot | null = null;
+  // Final re-review 4, I2: the board is being re-paired (the server's 409) — no snapshot yet, but not "not yours".
+  let repairing = false;
   // Final review P10: Lichess's word on the player's grant, asked ONCE per page load (never by the room's polls).
   let grantRefused = false;
   const identity = await identityFor(token);
@@ -85,10 +87,21 @@ export default async function MatchRoomPage({
       grantRefused = await roomGrantDowngraded(identity, fixtureId);
     } catch (err) {
       // Only the room's own refusal reads as "not available"; anything else
-      // is a real fault and goes to the error boundary. A board being
-      // re-paired (fix round 4b) leaves no snapshot to poll on: the same card.
-      if (!(err instanceof HttpError && (err.status === 404 || err.code === ROOM_BEING_REPAIRED))) throw err;
+      // is a real fault and goes to the error boundary — save a board being
+      // re-paired (fix round 4b), which is its own card (I2).
+      if (err instanceof HttpError && err.status === 409 && err.code === ROOM_BEING_REPAIRED) repairing = true;
+      else if (!(err instanceof HttpError && err.status === 404)) throw err;
     }
+  }
+
+  if (snapshot === null && repairing) {
+    // No snapshot to run a room on: the re-pair card, headerless, re-asking this page at the room's cadence
+    // until the board is paired to this player again (the room) or the room refuses them (card 7).
+    return (
+      <DictProvider dict={ui} locale={locale}>
+        <RoomRepairingHeaderless t={(k, v) => t(ui, k, v)} />
+      </DictProvider>
+    );
   }
 
   if (snapshot === null) {
