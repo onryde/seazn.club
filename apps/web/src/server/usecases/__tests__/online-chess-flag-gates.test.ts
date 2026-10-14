@@ -89,6 +89,8 @@ import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { joinTeamEntry, submitRegistrationGroup } from "../registration-submit";
+import { publicRegistrationInfo } from "../registrations";
+import { builtinModules } from "@seazn/engine/sports";
 import { createGameIfReady } from "../external-play/create-game";
 import { resendExternalPlayNotice } from "../external-play/invite";
 import { openRound } from "../external-play/open-round";
@@ -660,6 +662,75 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
       checked++;
     }
     expect(checked).toBe(FLAG_STATES.length * 2);
+  });
+
+  // Final review M-11: the entries step states online play only for a sport that can be played online
+  // (publicRegistrationInfo: supportsOnlinePlay AND onlinePlay 'lichess'); the submit and the join link demanded the
+  // link on the stored config alone. Unreachable through the API, which refuses 'lichess' for any other sport — so the
+  // stored state is forced by labelled SQL, and the answer must come from the sport check. Registry sweep, flag ON.
+  /** What the entries step tells this division's registrants: does it play online? */
+  const statedOnline = async (g: { orgSlug: string; compSlug: string; divisionId: string }) =>
+    (await publicRegistrationInfo(g.orgSlug, g.compSlug)).divisions.find((d) => d.division_id === g.divisionId)!.online_play;
+
+  it("M-11: the submit demands the link exactly where the entries step states online play — boardgame, and no other sport whatever its stored config (registry sweep)", async () => {
+    let checked = 0;
+    for (const mod of builtinModules) {
+      overrideOn();
+      const g = await onlineRegistration("individual", "auto");
+      if (mod.key !== "boardgame") await sql`update divisions set sport_key = ${mod.key} where id = ${g.divisionId}`;
+      flagIs(FLAG_STATES[0]!);
+      const stated = await statedOnline(g);
+      expect(stated, `${mod.key}: the entries step`).toBe(mod.key === "boardgame");
+      // The entries step's answer is kept per club: forgotten, so the submit asks (or not) on its own.
+      forgetOnlineChessFlagCache();
+      flags.isServerFeatureEnabled.mockClear();
+      const answer = await submitRegistrationGroup(
+        { orgSlug: g.orgSlug, compSlug: g.compSlug },
+        {
+          contact: contact(),
+          privacy_consent: true,
+          entries: [{ division_id: g.divisionId, entrant_kind: "individual", players: [{ full_name: "Solo Player" }], answers: {} }],
+        },
+      ).then(
+        () => "accepted",
+        (e: unknown) => (e instanceof HttpError ? (e.code ?? `${e.status} ${e.message}`) : String(e)),
+      );
+      // Another sport may refuse this entry for its own reasons; it is never asked for a Lichess link.
+      if (stated) expect(answer, mod.key).toBe("LICHESS_LINK_REQUIRED");
+      else expect(answer, mod.key).not.toBe("LICHESS_LINK_REQUIRED");
+      expect(flags.isServerFeatureEnabled.mock.calls.length > 0, `${mod.key}: the flag asked`).toBe(stated);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: sports swept").toBe(builtinModules.length);
+    expect(builtinModules.some((m) => m.key === "boardgame"), "premise: the one online sport is in the registry").toBe(true);
+  });
+
+  it("M-11: the join link likewise — a team of another sport with a stored onlinePlay 'lichess' asks no joiner for a link (registry sweep)", async () => {
+    let checked = 0;
+    for (const mod of builtinModules) {
+      overrideOn();
+      const g = await onlineRegistration("team", "manual");
+      // The team entry is made as chess with the flag OFF (as the join-link test above does); the sport moves after.
+      flagIs(FLAG_STATES[1]!);
+      const res = await submitRegistrationGroup(
+        { orgSlug: g.orgSlug, compSlug: g.compSlug },
+        { contact: contact(), privacy_consent: true, entries: [{ division_id: g.divisionId, entrant_kind: "team", team_name: "Knights", players: [], answers: {} }] },
+      );
+      const joinCode = res.entries[0]!.join_code!;
+      if (mod.key !== "boardgame") await sql`update divisions set sport_key = ${mod.key} where id = ${g.divisionId}`;
+      flagIs(FLAG_STATES[0]!);
+      const stated = await statedOnline(g);
+      expect(stated, `${mod.key}: the entries step`).toBe(mod.key === "boardgame");
+      // privacy_consent false: the check right AFTER the link demand, so the two answers tell the gates apart.
+      const err = await joinTeamEntry({ sessionUserId: null }, { join_code: joinCode, player: { full_name: "Joiner" }, privacy_consent: false }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      if (stated) expect(err, mod.key).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+      else expect(err, mod.key).toMatchObject({ status: 422, message: "Please agree to the privacy policy to join" });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: sports swept").toBe(builtinModules.length);
   });
 
   it("the organiser's roster: flag ON refuses an unlinked player; flag OFF or PostHog throwing enters them", async () => {
