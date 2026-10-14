@@ -105,7 +105,7 @@ const EXEMPT: readonly Exemption[] = [
     fn: "holdBoardsOnAccountChange",
     sites: 1,
     reason:
-      "final review P11: a re-link to a different Lichess account finds the boards this user SITS AT whose game is live or mid-create, to hold them for the organiser; who appeared is never asked, credits nothing",
+      "final review P11: a re-link to a different Lichess account (account_changed) OR an unlink (token_revoked, P11 (4)) finds the boards this user SITS AT whose game is live or mid-create, to hold them for the organiser; who appeared is never asked, credits nothing",
   },
   // Registration finds a person in the player lane (persons_org_user_lane_uq).
   { file: "src/server/usecases/registrations.ts", fn: "resolvePlayerPerson", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
