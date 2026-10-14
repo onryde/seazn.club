@@ -29,6 +29,7 @@ import {
   matchRoomPathBySql,
 } from "./helpers";
 import { roundGameSql, seedOnlineRound } from "./match-room-kit";
+import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import {
   HIT_TARGET_FLOOR_PX,
   consentedAnonymousState,
@@ -4863,10 +4864,15 @@ test("boardgame v3 pad: the pairing card (pre) and the halves + Draw tile (live)
 
 // W2a Task 12 (spec §5.5, UI-2 option B; BG-KO-1, BG-KO-2 per ruling 82). A drawn chess KNOCKOUT game goes to its
 // tie-break, which is the only thing the pad offers: a three-step sheet (rung → winner → optional score). Each step
-// must be reachable and hold at this width, and the Armageddon winner step must offer the SAME options here as at
-// 1280 — membership and order, never a groomed shrink (AGENTS.md, the phone composition). Options are read by their
-// chassis data hook (`data-choice-option-id`, preflight C24), never by a testid or a translated label.
-test("chess tie-break (W2a): every step of the knockout tie-break sheet is reachable and holds at this width; the Armageddon options match 1280", async ({
+// must be reachable and hold at this width.
+//
+// W2c Task 21 (S5, BG-KO-2): the Armageddon is no longer a winner tap. It is three screens — Who had Black?, Result?, then
+// a read-back with one Confirm — and EACH must offer the SAME controls here as at 1280, membership and order, never a
+// groomed shrink (AGENTS.md, the phone composition). The entrants carry 43-character names: a short name hides the
+// wrap, and the read-back sentence is where a long one lands. Options are read by their chassis data hook
+// (`data-choice-option-id`, preflight C24), never by a testid or a translated label; the sentence and the labels are
+// read from the dictionary, never typed.
+test("chess tie-break (W2a): every step of the knockout tie-break sheet is reachable and holds at this width; the Armageddon's three screens match 1280", async ({
   page,
   request,
 }, testInfo) => {
@@ -4883,17 +4889,26 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
     variant_key: "classical",
   });
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
-  const added = await addEntrantsViaApi(request, div.data!.id, ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], "individual");
+  const longNames = [
+    "Alexandria Montgomery-Featherstonehaugh III",
+    "Bartholomew Wolfeschlegelstein-Hausenberger",
+    "Christopherson Van der Berg-Oosterhuizen Jr",
+    "Dominique Castellanos-Villaverde de la Cruz",
+  ];
+  const added = await addEntrantsViaApi(request, div.data!.id, longNames, "individual");
   expect(added.ids).toHaveLength(4);
+  const nameOf = new Map(added.ids.map((id, i) => [id, longNames[i]!]));
   const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "knockout", name: "Cup" });
   const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   let fixtureId: string | null = null;
+  let awayEntrantId = "";
   for (const id of fixtureIds) {
     const f = await apiJson<{ home_entrant_id: string | null; away_entrant_id: string | null }>(request, `/api/v1/fixtures/${id}`);
-    if (f.data?.home_entrant_id && f.data.away_entrant_id) { fixtureId = id; break; }
+    if (f.data?.home_entrant_id && f.data.away_entrant_id) { fixtureId = id; awayEntrantId = f.data.away_entrant_id; break; }
   }
   expect(fixtureId, "a first-round game with both players").not.toBeNull();
+  expect(nameOf.get(awayEntrantId), "the away entrant is one of the four named players").toBeTruthy();
   for (const [type, payload] of [["core.start", {}], ["boardgame.result", { winner: null, method: "agreement" }]] as const) {
     const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
     const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: st.data!.last_seq, type, payload });
@@ -4904,6 +4919,13 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   const optionIds = () => v3Sheet(page).locator("[data-choice-option-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-choice-option-id")));
   const backButton = () => v3Sheet(page).getByRole("button", { name: "Back", exact: true });
   const projectWidth = page.viewportSize()!.width;
+  /** Nothing in the open sheet is wider than the box that clips it (a scrollable region would be reachable; clipped content is not),
+   *  and the page does not scroll sideways. The names are 43 characters: this is the check a short name cannot fail. */
+  const expectSheetNotClipped = async (screen: string) => {
+    const o = await overflowingIn(page, '[data-role="v3-sheet"]', "*", "the tie-break sheet is missing");
+    expect(o.clipped, `${screen}: nothing in the sheet is clipped at ${projectWidth}`).toEqual([]);
+    await expectNoHorizontalScroll(page);
+  };
 
   await page.goto(await fixturePath(page.request, fixtureId!), { waitUntil: "load" });
   await dismissCookieBanner(page);
@@ -4915,28 +4937,72 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   // Step 1 — the rung. Exactly the engine's three, no lots.
   expect(await optionIds()).toEqual(["rapid", "blitz", "armageddon"]);
   for (const id of ["rapid", "blitz", "armageddon"]) await assertTapFloor(option(id), `rung ${id}`);
-  await expectNoHorizontalScroll(page);
+  await expectSheetNotClipped("Rung step");
   // Step 2 — the winner (rapid), then step 3 — the optional score.
   await option("rapid").click();
   expect(await optionIds()).toEqual(["home", "away"]);
   await assertTapFloor(option("away"), "rapid winner");
-  await expectNoHorizontalScroll(page);
+  await expect(option("away")).toHaveText(nameOf.get(awayEntrantId)!);
+  await expectSheetNotClipped("Rapid winner step");
   await option("away").click();
   expect(await optionIds()).toEqual(["none", "2–0", "1½–½"]);
   await assertTapFloor(option("none"), "score none");
-  await expectNoHorizontalScroll(page);
-  // Back twice to the rung, then Armageddon: its winner step, here and at 1280.
+  await expectSheetNotClipped("Score step");
+  // Back twice to the rung, then the Armageddon: three screens, each here and at 1280.
   await backButton().click();
   await backButton().click();
   await option("armageddon").click();
-  await expect(v3Sheet(page).getByText("In Armageddon a draw means Black advances.")).toBeVisible();
-  const here = await optionIds();
-  expect(here).toEqual(["home", "away"]);
-  await expectNoHorizontalScroll(page);
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await expect(option("home")).toBeVisible();
-  const desktop = await optionIds();
-  expect(here, `the Armageddon options at ${projectWidth} vs 1280: membership and order`).toEqual(desktop);
+  const dict = dlDict("en");
+  const hint = v3Sheet(page).getByText(dict["pad.boardgame.tiebreak.armageddonHint"]!);
+  const phoneViewport = page.viewportSize()!;
+  /** Every control the sheet shows, in DOM order: the choice options by their option id, the rest by testid or label. */
+  const controls = () =>
+    v3Sheet(page)
+      .locator("button, [data-choice-option-id]")
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-choice-option-id") ?? e.getAttribute("data-testid") ?? (e.textContent ?? "").trim()));
+  /** The control set at this width, then at 1280 — the same screen, the same state — then back to the project's width. */
+  const sameControlsAt1280 = async (screen: string): Promise<string[]> => {
+    const here = await controls();
+    expect(here.length, `${screen}: the sheet shows controls`).toBeGreaterThan(0);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(v3Sheet(page)).toBeVisible();
+    const desktop = await controls();
+    await page.setViewportSize(phoneViewport);
+    await expect(v3Sheet(page)).toBeVisible();
+    expect(here, `${screen} at ${projectWidth} vs 1280: membership and order`).toEqual(desktop);
+    return here;
+  };
+
+  // Screen 1 — Who had Black? Exactly the two entrants, named in full; no hint (it is the result step's).
+  const blackIds = await sameControlsAt1280("Black step");
+  expect(blackIds.filter((id) => id.startsWith("black-")), "Black step: the two entrants").toEqual(["black-home", "black-away"]);
+  await expect(v3Sheet(page).getByText(dict["pad.boardgame.tiebreak.black.title"]!)).toBeVisible();
+  await expect(hint, "the Black step carries no hint").toHaveCount(0);
+  await expect(option("black-away")).toHaveText(nameOf.get(awayEntrantId)!);
+  for (const id of ["black-home", "black-away"]) await assertTapFloor(option(id), `Black ${id}`);
+  await expectSheetNotClipped("Black step");
+  await option("black-away").click();
+
+  // Screen 2 — Result? The engine's three, each labelled by the dictionary, the hint showing.
+  await expect(hint).toBeVisible();
+  const resultIds = await sameControlsAt1280("Result step");
+  expect(resultIds.filter((id) => id.startsWith("result-")), "Result step: the engine's results, in its order").toEqual(ARMAGEDDON_RESULTS.map((r) => `result-${r}`));
+  for (const r of ARMAGEDDON_RESULTS) {
+    await expect(option(`result-${r}`)).toHaveText(dict[`pad.boardgame.armageddon.result.${r}`]!);
+    await assertTapFloor(option(`result-${r}`), `result ${r}`);
+  }
+  await expectSheetNotClipped("Result step");
+  await option("result-draw").click();
+
+  // Screen 3 — the read-back: the sentence in full, then one Confirm that is a real tap target.
+  const sentence = dict["pad.boardgame.tiebreak.confirm.drawn"]!.replace("{name}", nameOf.get(awayEntrantId)!);
+  await expect(v3Sheet(page).getByTestId("pad-sheet-summary")).toHaveText(sentence);
+  const readBackIds = await sameControlsAt1280("Read-back step");
+  expect(readBackIds.filter((id) => id === "pad-sheet-confirm"), "the read-back offers exactly one Confirm").toHaveLength(1);
+  expect(readBackIds.some((id) => id.startsWith("black-") || id.startsWith("result-")), "the read-back offers no choice to re-tap").toBe(false);
+  await assertTapFloor(v3Sheet(page).getByTestId("pad-sheet-confirm"), "Confirm");
+  await assertTapFloor(backButton(), "Back on the read-back");
+  await expectSheetNotClipped("Read-back step");
   // Nothing was written by walking the sheet.
   const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fixtureId}/events`);
   expect(events.data!.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);

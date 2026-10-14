@@ -46,6 +46,7 @@ const shownFor = (step: GuidedSheetStep, answers: Record<string, string>) => ste
 /** The ids of the steps a scorer who has answered `answers` sees, in declaration order (the chassis' own `when` rule). */
 const visibleIds = (sheet: GuidedSheetSpec, answers: Record<string, string>) => sheet.steps.filter((s) => shownFor(s, answers)).map((s) => s.id);
 /** A chess knockout drawn into its tie-break under a stage that plays exactly `rungs` (absent = every rung). */
+// single-sport: the tie-break rungs and the Armageddon are chess's alone — boardgame is the only module declaring a decider (pinned by the registry sweep above)
 const stageView = (rungs?: readonly TiebreakRung[], names?: PadHostView["entrantNames"]) =>
   liveView("boardgame", {
     stageKind: "knockout",
@@ -281,7 +282,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
 
   it("BG-KO-2 with no name known the confirm line falls back to Home/Away, and a seated player's name wins over the entrant's", () => {
     const view = (personNames: Record<string, string>, entrantNames: PadHostView["entrantNames"]) =>
-      liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], personNames, entrantNames });
+      liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], personNames, entrantNames }); // single-sport: the Armageddon read-back is chess's alone (see the registry sweep above)
     const line = (v: PadHostView) => {
       const c = buildSheets(v, tEn)[TIEBREAK_TILE_ID]!.steps.find((s) => s.id === "confirm")!;
       if (c.kind !== "confirm") throw new Error("unreachable");

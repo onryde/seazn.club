@@ -5,7 +5,7 @@ import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { builtinModules } from "@seazn/engine/sports";
 import { forfeitAdmission, playRecorded } from "@seazn/engine/core";
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../src/lib/forfeit-phase-refusal";
-import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
+import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -35,9 +35,13 @@ async function post(r: APIRequestContext, id: string, type: string, payload: unk
 const UI_EN = JSON.parse(
   readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
 ) as Record<string, string>;
-const ui = (key: string) => {
+const ui = (key: string, vars: Readonly<Record<string, string>> = {}) => {
   expect(UI_EN[key], `ui.json has ${key}`).toBeTruthy();
-  return UI_EN[key]!;
+  // The app's `{name}` interpolation; a placeholder with no value is a test bug, never silently left in the text.
+  return UI_EN[key]!.replace(/\{(\w+)\}/g, (_, name: string) => {
+    expect(vars[name], `ui(${key}) is missing {${name}}`).toBeDefined();
+    return vars[name]!;
+  });
 };
 const ABANDON = () => ui("score.abandon");
 
@@ -52,15 +56,18 @@ async function crop(target: Locator | Page, name: string, width: number) {
 
 /** Loop R M7(c): a later tie-break step's header — Back on the title's row (above every option, never on a line of its
  *  own between them), and the hyphenated "tie-break" one unbroken run (320 split it "TIE-" / "BREAK?"). */
-async function expectSheetHeadOneRow(page: Page, width: number) {
+async function expectSheetHeadOneRow(page: Page, width: number, opts: { hyphenated?: boolean; below?: Locator } = {}) {
+  const { hyphenated: hasHyphen = true, below = pad(page).locator("[data-choice-option-id]").first() } = opts;
   const b = pad(page).getByRole("button", { name: "Back", exact: true });
   const head = b.locator("xpath=..");
   const title = head.locator("p.mk-eyebrow");
   const [bb, tb] = [(await b.boundingBox())!, (await title.boundingBox())!];
   expect(bb.y, `${width}: Back starts within the title's rows`).toBeLessThan(tb.y + tb.height);
   expect(bb.x, `${width}: Back is right of the title`).toBeGreaterThanOrEqual(tb.x + tb.width - 1);
-  const firstOption = (await pad(page).locator("[data-choice-option-id]").first().boundingBox())!;
-  expect(bb.y + bb.height, `${width}: Back sits above the options`).toBeLessThanOrEqual(firstOption.y);
+  const firstBelow = (await below.boundingBox())!;
+  expect(bb.y + bb.height, `${width}: Back sits above the step's content`).toBeLessThanOrEqual(firstBelow.y);
+  // Only the titles that name the "tie-break" carry the unbroken run (W2c Task 21: the Black, Result and Confirm titles do not).
+  if (!hasHyphen) return;
   const hyphenated = title.locator("span.whitespace-nowrap");
   await expect(hyphenated).toHaveCount(1);
   expect(await hyphenated.evaluate((el) => el.getClientRects().length), `${width}: "tie-break" on one line`).toBe(1);
@@ -69,8 +76,9 @@ async function expectSheetHeadOneRow(page: Page, width: number) {
 type Visibility = "private" | "public";
 async function knockout(
   r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], visibility: Visibility = "private", people?: string[],
+  divisionConfig?: Record<string, unknown>,
 ) {
-  return staged(r, sport, variant, "knockout", names, visibility, people);
+  return staged(r, sport, variant, "knockout", names, visibility, people, divisionConfig);
 }
 
 /** Fix round 2 (N1) — the D-6 shape: SINGLES entrants whose `display_name` snapshot is whatever the entry flow wrote
@@ -97,6 +105,7 @@ async function addSinglesWithMembers(r: APIRequestContext, divisionId: string, n
 
 async function staged(
   r: APIRequestContext, sport: string, variant: string, kind: "knockout" | "league", names: string[], visibility: Visibility = "private", people?: string[],
+  divisionConfig?: Record<string, unknown>,
 ) {
   // Preflight C14: the variant is one the sport declares (module.variants), never a guessed literal.
   expect(Object.keys(builtinModules.find((m) => m.key === sport)?.variants ?? {}), `${sport} declares ${variant}`).toContain(variant);
@@ -105,14 +114,17 @@ async function staged(
     name: `W2a ${sport} ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
     visibility,
   });
-  const div = await apiJson<{ id: string; slug: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Cup", sport_key: sport, variant_key: variant });
+  const div = await apiJson<{ id: string; slug: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Cup", sport_key: sport, variant_key: variant, ...(divisionConfig !== undefined ? { config: divisionConfig } : {}),
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   // A team sport's entrants are teams (`assertRosterFits` refuses an individual football entrant).
   const added =
     people === undefined
       ? await addEntrantsViaApi(r, div.data!.id, names, sport === "football" ? "team" : "individual")
       : await addSinglesWithMembers(r, div.data!.id, names, people);
   expect(added.ids, `entrants for ${sport}`).toHaveLength(names.length);
-  const { fixtureIds } = await createStageAndGenerate(r, div.data!.id, { kind, name: "Cup" });
+  const { fixtureIds, stageId } = await createStageAndGenerate(r, div.data!.id, { kind, name: "Cup" });
   const started = await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, `start ${sport}: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   const all = await Promise.all(fixtureIds.map((id) => read(r, id)));
@@ -122,7 +134,7 @@ async function staged(
   const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
   /** What the screen CALLS each entrant: its member for a D-6 singles entrant, else the snapshot. */
   const shownAs = new Map(added.ids.map((id, i) => [id, people?.[i] ?? names[i]!]));
-  return { divisionId: div.data!.id, sf, ready, compSlug: comp.data!.slug, divSlug: div.data!.slug, nameOf, shownAs };
+  return { divisionId: div.data!.id, stageId, sf, ready, compSlug: comp.data!.slug, divSlug: div.data!.slug, nameOf, shownAs };
 }
 
 /** Who sits in the fixture a semi's winner feeds — read from the row, not inferred. */
@@ -597,8 +609,11 @@ const LOTS_HINT = "Decided by lot? Ask the organiser to settle the match.";
 const back = (page: Page) => pad(page).getByRole("button", { name: "Back", exact: true });
 
 /** A chess knockout game drawn into its tie-break (BG-KO-1): the drawn result moves the fold to phase "tiebreak". */
-async function drawnChessKnockout(r: APIRequestContext, d6?: { names: string[]; people: string[] }) {
-  const ko = d6 === undefined ? await knockout(r, "boardgame", "classical") : await knockout(r, "boardgame", "classical", d6.names, "private", d6.people);
+async function drawnChessKnockout(r: APIRequestContext, d6?: { names: string[]; people: string[] }, divisionConfig?: Record<string, unknown>) {
+  const ko =
+    d6 === undefined
+      ? await knockout(r, "boardgame", "classical", undefined, "private", undefined, divisionConfig)
+      : await knockout(r, "boardgame", "classical", d6.names, "private", d6.people, divisionConfig);
   await post(r, ko.sf.id, "core.start");
   await post(r, ko.sf.id, RESULT_DRAWN.type, RESULT_DRAWN.payload);
   // Preflight C25 / ruling C12: in phase tiebreak the outcome is null, so the status is in_play — never needs_decision.
@@ -609,8 +624,38 @@ async function drawnChessKnockout(r: APIRequestContext, d6?: { names: string[]; 
 }
 const RESULT_DRAWN = { type: "boardgame.result", payload: { winner: null, method: "agreement" } } as const;
 
+/** The tie-break rungs the division plays, read BACK from the API: its `tiebreakRungs` list in its order, else every rung
+ *  (`effectiveRungs`; absent means all). W2c Task 21 — the pad is checked against what the product says the stage plays,
+ *  never a typed three. (There is no `GET /stages/{id}`; the rung list is a division decider on this branch, Task 17 moves
+ *  the editor to the stage.) */
+async function stageRungs(r: APIRequestContext, divisionId: string): Promise<string[]> {
+  const div = await apiJson<{ config: { tiebreakRungs?: string[] } | null }>(r, `/api/v1/divisions/${divisionId}`);
+  expect(div.status, `division read-back: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  return [...(div.data!.config?.tiebreakRungs ?? TIEBREAK_RUNGS)];
+}
+type Side = "home" | "away";
+type ArmageddonResult = (typeof ARMAGEDDON_RESULTS)[number];
+/** BG-KO-2 as the rulebook states it: White won -> the other entrant advances; Black won or a draw -> Black advances. */
+const advancerOf = (black: Side, result: ArmageddonResult): Side => (result === "white" ? (black === "home" ? "away" : "home") : black);
+/** The sheet's own option ids (boardgame.tsx BLACK_OPTION_PREFIX / RESULT_OPTION_PREFIX; also the matrix adapter's). */
+const blackId = (side: Side) => `black-${side}`;
+const resultId = (result: ArmageddonResult) => `result-${result}`;
+const optionIds = (page: Page) =>
+  pad(page).locator("[data-choice-option-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-choice-option-id")));
+const summary = (page: Page) => pad(page).getByTestId("pad-sheet-summary");
+const confirmButton = (page: Page) => pad(page).getByTestId("pad-sheet-confirm");
+/** Open the tie-break sheet and walk an Armageddon to its read-back (no confirm). Returns the sentence the pad shows. */
+async function armageddonToReadBack(page: Page, black: Side, result: ArmageddonResult): Promise<string> {
+  await tile(page, "tiebreak").click();
+  await option(page, "armageddon").click();
+  await option(page, blackId(black)).click();
+  await option(page, resultId(result)).click();
+  await expect(confirmButton(page), "the read-back step is up").toBeVisible();
+  return (await summary(page).textContent()) ?? "";
+}
+
 test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
-  test("BG-KO-1 + BG-KO-2 (ruling 82): the chess tie-break — lots is the organiser's, the Armageddon hint shows on Armageddon only, exactly two winners named as the entrants, and the tapped winner advances", async ({ page, request }) => {
+  test("BG-KO-1 + BG-KO-2 (ruling 82): the chess tie-break — lots is the organiser's, the rung step offers the stage's rungs, the Armageddon hint shows on the Armageddon result step only, and the Armageddon is Black then the result — never a winner", async ({ page, request }) => {
     const ko = await drawnChessKnockout(request);
     const { sf } = ko;
     await page.goto(await fixturePath(request, sf.id));
@@ -626,26 +671,192 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     await expect(tappableHalves(page), "no half records a result while the tie-break is owed").toHaveCount(0);
     await tile(page, "tiebreak").click();
     await expect(pad(page).getByText(LOTS_HINT)).toBeVisible();
-    await expect(pad(page).locator("[data-choice-option-id]")).toHaveCount(3); // rapid, blitz, armageddon — no lots
+    // W2c BG-KO-3: the rung step offers what the STAGE plays, read back over the API — never a typed three, and never lots.
+    const rungs = await stageRungs(request, ko.divisionId);
+    expect(rungs.length, "the stage plays at least one rung (anti-vacuity: an empty list would make every check below vacuous)").toBeGreaterThan(0);
+    await expect(pad(page).locator("[data-choice-option-id]")).toHaveCount(rungs.length);
+    expect(await optionIds(page), "the rung step: the stage's rungs, in the stage's order").toEqual(rungs);
     const hint = pad(page).getByText(ARMAGEDDON_HINT);
-    for (const rung of ["rapid", "blitz"]) {
+    let timed = 0;
+    for (const rung of rungs.filter((r) => r !== "armageddon")) {
       await option(page, rung).click();
       await expect(option(page, "home"), `${rung}: the winner step is open`).toBeVisible();
       await expect(hint, `${rung}: no Armageddon hint`).toHaveCount(0);
       await back(page).click();
       await expect(option(page, "armageddon")).toBeVisible();
+      timed++;
     }
+    expect(timed, "the default stage plays rapid and blitz as well as the Armageddon").toBe(TIEBREAK_RUNGS.length - 1);
+    // The Armageddon (BG-KO-2): who had Black, then how it ended. Step 1 — Black, exactly the two entrants, named as the
+    // screen names them (I2, fix round 1: no pairing card was recorded, so never "Home"/"Away"). The hint is the RESULT
+    // step's, not this one's.
     await option(page, "armageddon").click();
-    await expect(hint).toBeVisible(); // the positive pair of the two negatives above
-    await expect(pad(page).locator("[data-choice-option-id]"), "exactly the two entrants; no 'drawn' choice").toHaveCount(2);
-    // I2 (fix round 1, spec §5.5 "two entrants, always"): no pairing card was recorded, so the options read the
-    // ENTRANTS' names — never "Home"/"Away" — and their ids stay home/away.
-    await expect(option(page, "home")).toHaveText(ko.nameOf.get(sf.home_entrant_id!)!);
-    await expect(option(page, "away")).toHaveText(ko.nameOf.get(sf.away_entrant_id!)!);
-    await option(page, "away").click();
+    await expect(option(page, blackId("home"))).toBeVisible();
+    await expect(hint, "the Black step carries no hint: it belongs to the result step").toHaveCount(0);
+    expect(await optionIds(page), "exactly the two entrants; no 'drawn' choice, no winner").toEqual([blackId("home"), blackId("away")]);
+    await expect(option(page, blackId("home"))).toHaveText(ko.nameOf.get(sf.home_entrant_id!)!);
+    await expect(option(page, blackId("away"))).toHaveText(ko.nameOf.get(sf.away_entrant_id!)!);
+    // Step 2 — the result: the engine's own three, each labelled by the dictionary, the hint now showing (the positive
+    // pair of the negatives above).
+    await option(page, blackId("away")).click();
+    await expect(hint).toBeVisible();
+    expect(await optionIds(page), "the engine's results, in the engine's order").toEqual(ARMAGEDDON_RESULTS.map(resultId));
+    for (const result of ARMAGEDDON_RESULTS) await expect(option(page, resultId(result))).toHaveText(ui(`pad.boardgame.armageddon.result.${result}`));
+    // Step 3 — the read-back. Nothing has been written by walking the sheet; the Confirm writes the Armageddon.
+    await option(page, resultId("draw")).click();
+    await expect(summary(page)).toHaveText(ui("pad.boardgame.tiebreak.confirm.drawn", { name: ko.nameOf.get(sf.away_entrant_id!)! }));
+    await expect(hint, "the read-back step carries no hint").toHaveCount(0);
+    expect(((await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!).map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
+    await confirmButton(page).click();
     await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.away_entrant_id, method: "tiebreak_armageddon" });
     await expect.poll(() => seatedInFinal(sf.id)).toContain(sf.away_entrant_id);
     await expect(tile(page, "tiebreak"), "decided: the tie-break is gone").toHaveCount(0);
+  });
+
+  test("BG-KO-2 the Armageddon sheet records Black and advances Black on a draw", async ({ page, request }) => {
+    const ko = await drawnChessKnockout(request);
+    const { sf } = ko;
+    await page.goto(await fixturePath(request, sf.id));
+    const sentence = await armageddonToReadBack(page, "away", "draw");
+    expect(sentence).toBe(ui("pad.boardgame.tiebreak.confirm.drawn", { name: ko.nameOf.get(sf.away_entrant_id!)! }));
+    await confirmButton(page).click();
+    await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.away_entrant_id, method: "tiebreak_armageddon" });
+    await expect.poll(() => seatedInFinal(sf.id)).toContain(sf.away_entrant_id);
+    expect(await seatedInFinal(sf.id), "the home entrant is NOT the one advanced").not.toContain(sf.home_entrant_id);
+    // The ledger holds the FACTS, exactly: who had Black and the result — and no winner key at all (the engine derives it).
+    const events = (await apiJson<{ type: string; payload: Record<string, unknown> }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
+    expect(events.filter((e) => e.type === "boardgame.tiebreak").map((e) => e.payload)).toEqual([{ rung: "armageddon", black: sf.away_entrant_id, result: "draw" }]);
+  });
+
+  test("BG-KO-2 positive pair: White wins advances the OTHER entrant", async ({ page, request }) => {
+    const ko = await drawnChessKnockout(request);
+    const { sf } = ko;
+    await page.goto(await fixturePath(request, sf.id));
+    // Black is the away entrant and WHITE wins, so the home entrant advances: the opposite of the draw above.
+    const sentence = await armageddonToReadBack(page, "away", "white");
+    expect(sentence).toBe(ui("pad.boardgame.tiebreak.confirm.won", { name: ko.nameOf.get(sf.home_entrant_id!)!, colour: ui("pad.boardgame.tiebreak.colour.white") }));
+    await confirmButton(page).click();
+    await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "tiebreak_armageddon" });
+    await expect.poll(() => seatedInFinal(sf.id)).toContain(sf.home_entrant_id);
+    const events = (await apiJson<{ type: string; payload: Record<string, unknown> }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
+    expect(events.filter((e) => e.type === "boardgame.tiebreak").map((e) => e.payload)).toEqual([{ rung: "armageddon", black: sf.away_entrant_id, result: "white" }]);
+  });
+
+  // The rest of the Black x result table, one browser run each: the two named above are two cells of six, and "one sample
+  // is not a parity sweep". The expected advancer is the rulebook's (BG-KO-2), never read off the payload the pad built.
+  {
+    const named = new Set(["away/draw", "away/white"]);
+    let cells = 0;
+    for (const black of ["home", "away"] as const)
+      for (const result of ARMAGEDDON_RESULTS) {
+        if (named.has(`${black}/${result}`)) continue;
+        cells++;
+        test(`BG-KO-2 Black=${black}, ${result}: the ${advancerOf(black, result)} entrant advances`, async ({ page, request }) => {
+          const ko = await drawnChessKnockout(request);
+          const { sf } = ko;
+          await page.goto(await fixturePath(request, sf.id));
+          const advancer = advancerOf(black, result);
+          const entrantOf = (side: Side) => (side === "home" ? sf.home_entrant_id! : sf.away_entrant_id!);
+          const sentence = await armageddonToReadBack(page, black, result);
+          expect(sentence).toBe(
+            result === "draw"
+              ? ui("pad.boardgame.tiebreak.confirm.drawn", { name: ko.nameOf.get(entrantOf(advancer))! })
+              : ui("pad.boardgame.tiebreak.confirm.won", {
+                  name: ko.nameOf.get(entrantOf(advancer))!,
+                  colour: ui(result === "white" ? "pad.boardgame.tiebreak.colour.white" : "pad.boardgame.tiebreak.colour.black"),
+                }),
+          );
+          await confirmButton(page).click();
+          await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: entrantOf(advancer), method: "tiebreak_armageddon" });
+          const events = (await apiJson<{ type: string; payload: Record<string, unknown> }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
+          expect(events.filter((e) => e.type === "boardgame.tiebreak").map((e) => e.payload)).toEqual([{ rung: "armageddon", black: entrantOf(black), result }]);
+        });
+      }
+    // Anti-vacuity: 2 colours x the engine's results, minus the two named tests.
+    if (cells !== 2 * ARMAGEDDON_RESULTS.length - named.size) throw new Error(`the Armageddon table loop built ${cells} tests`);
+  }
+
+  test("Back from the Armageddon result step returns to Black, and a changed Black rewrites the read-back; nothing is written until Confirm", async ({ page, request }) => {
+    const ko = await drawnChessKnockout(request);
+    const { sf } = ko;
+    await page.goto(await fixturePath(request, sf.id));
+    await tile(page, "tiebreak").click();
+    await option(page, "armageddon").click();
+    await option(page, blackId("away")).click();
+    await option(page, resultId("draw")).click();
+    await expect(summary(page)).toHaveText(ui("pad.boardgame.tiebreak.confirm.drawn", { name: ko.nameOf.get(sf.away_entrant_id!)! }));
+    // Back from the read-back, then back from the result: the Black step again.
+    await back(page).click();
+    await expect(option(page, resultId("draw"))).toBeVisible();
+    await back(page).click();
+    await expect(option(page, blackId("home"))).toBeVisible();
+    // Change Black to the home entrant and walk forward again: the read-back names the HOME entrant now.
+    await option(page, blackId("home")).click();
+    await option(page, resultId("draw")).click();
+    await expect(summary(page)).toHaveText(ui("pad.boardgame.tiebreak.confirm.drawn", { name: ko.nameOf.get(sf.home_entrant_id!)! }));
+    expect((await read(request, sf.id)).status, "still awaiting its tie-break").toBe("in_play");
+    expect(((await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!).map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
+    await confirmButton(page).click();
+    await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "tiebreak_armageddon" });
+  });
+
+  test("BG-KO-3 the pad offers only the rungs the stage plays, in the stage's order — and that order is not the engine's", async ({ page, request }) => {
+    // ["armageddon", "rapid"] is NOT TIEBREAK_RUNGS order, so a pad that re-sorts to the canonical list fails here; blitz is
+    // dropped, so a pad that offers every rung fails too.
+    const configured = ["armageddon", "rapid"];
+    expect(TIEBREAK_RUNGS.indexOf("rapid"), "precondition: the engine plays rapid before the Armageddon").toBeLessThan(TIEBREAK_RUNGS.indexOf("armageddon"));
+    const ko = await drawnChessKnockout(request, undefined, { tiebreakRungs: configured });
+    const { sf } = ko;
+    expect(await stageRungs(request, ko.divisionId), "the product reads the list back as configured").toEqual(configured);
+    await page.goto(await fixturePath(request, sf.id));
+    await tile(page, "tiebreak").click();
+    expect(await optionIds(page), "the pad offers the stage's rungs in the stage's order").toEqual(configured);
+    await expect(option(page, "blitz"), "a rung the stage does not play is not offered").toHaveCount(0);
+    // The listed first rung is a live path: the Armageddon, end to end, with Black = home and a drawn game -> home advances.
+    await option(page, "armageddon").click();
+    await option(page, blackId("home")).click();
+    await option(page, resultId("draw")).click();
+    await confirmButton(page).click();
+    await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "tiebreak_armageddon" });
+  });
+
+  test("BG-KO-3 a rung list carried by the STAGE's own rules — where the stage editor writes it — reaches the pad and beats the division's", async ({ page, request }) => {
+    // The division carries no list (every rung); the stage's `rules.tiebreakRungs` is the narrower, reordered one. The API's
+    // stage-rules writer does not take chess yet (STAGE_RULES_SPORTS), so the stage row is written directly: the seam under
+    // test is the resolver and the pad, not the writer.
+    const ko = await knockout(request, "boardgame", "classical");
+    expect(await stageRungs(request, ko.divisionId), "precondition: the division plays every rung").toEqual([...TIEBREAK_RUNGS]);
+    const own = ["blitz", "armageddon"];
+    expect(own, "precondition: the stage's list differs from the division's").not.toEqual([...TIEBREAK_RUNGS]);
+    await withDb(async (sql) => {
+      await sql`update stages set config = config || ${sql.json({ rules: { tiebreakRungs: own } })} where id = ${ko.stageId}`;
+    });
+    await post(request, ko.sf.id, "core.start");
+    await post(request, ko.sf.id, RESULT_DRAWN.type, RESULT_DRAWN.payload);
+    expect((await read(request, ko.sf.id)).status, "a stage that still plays rungs awaits its tie-break").toBe("in_play");
+    await page.goto(await fixturePath(request, ko.sf.id));
+    await tile(page, "tiebreak").click();
+    expect(await optionIds(page), "the pad offers the STAGE's rungs, in the stage's order — not the division's").toEqual(own);
+    await expect(option(page, "rapid"), "a rung the stage does not play is not offered").toHaveCount(0);
+    // And the stage's blitz is a live path: blitz, the away entrant, no score.
+    await option(page, "blitz").click();
+    await option(page, "away").click();
+    await option(page, "none").click();
+    await expect.poll(async () => (await read(request, ko.sf.id)).outcome).toMatchObject({ kind: "win", winner: ko.sf.away_entrant_id, method: "tiebreak_blitz" });
+  });
+
+  test("BG-KO-3 an empty rung list offers no tie-break tile: the drawn game is held for the organiser", async ({ page, request }) => {
+    const ko = await knockout(request, "boardgame", "classical", undefined, "private", undefined, { tiebreakRungs: [] });
+    const { sf } = ko;
+    expect(await stageRungs(request, ko.divisionId), "the product reads the empty list back as empty").toEqual([]);
+    await post(request, sf.id, "core.start");
+    await post(request, sf.id, RESULT_DRAWN.type, RESULT_DRAWN.payload);
+    const held = await read(request, sf.id);
+    expect(held.status, "an empty list holds a drawn game for the organiser").toBe("needs_decision");
+    await page.goto(await fixturePath(request, sf.id));
+    // The positive pair first: the page IS the held fixture's, and says so.
+    await expect(page.getByTestId("needs-decision")).toBeVisible();
+    await expect(tile(page, "tiebreak"), "no rung to play: no tie-break tile").toHaveCount(0);
   });
 
   test("a rapid tie-break with its score: the winner and the score land on the ledger as tapped", async ({ page, request }) => {
@@ -1005,16 +1216,35 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await back(page).click();
       await back(page).click();
       await option(page, "armageddon").click();
-      await expect(pad(page).getByText(ARMAGEDDON_HINT)).toBeVisible();
-      await expect(option(page, "home")).toHaveText(shownAs.get(sf.home_entrant_id!)!);
+      // W2c Task 21 (S5): the Armageddon is three screens — Who had Black?, Result?, then the read-back with its Confirm.
+      // Each is held to the same bar as the steps above: no sideways scroll, Back on the title's row, 44px real tap targets.
+      const homeName = shownAs.get(sf.home_entrant_id!)!;
+      const awayName = shownAs.get(sf.away_entrant_id!)!;
+      const tapTarget = async (loc: Locator, what: string) => {
+        const box = (await loc.boundingBox())!;
+        expect(box.height, `${w} ${what}: a 44px tap target`).toBeGreaterThanOrEqual(44);
+        expect(box.x + box.width, `${w} ${what}: inside the viewport`).toBeLessThanOrEqual(w);
+        expect(await hitsItself(loc), `${w} ${what}: a tap at its centre lands on it`).toBe(true);
+      };
+      await expect(option(page, blackId("home"))).toHaveText(homeName);
+      await expect(option(page, blackId("away"))).toHaveText(awayName);
+      await expect(pad(page).getByText(ARMAGEDDON_HINT)).toHaveCount(0);
       await expectNoHorizontalScroll(page);
-      await crop(pad(page), "pad-tiebreak-armageddon", w);
-      for (const id of ["home", "away"]) {
-        const box = await option(page, id).boundingBox();
-        expect(box!.height, `${w} ${id}: a 44px tap target`).toBeGreaterThanOrEqual(44);
-        expect(box!.x + box!.width, `${w} ${id}: inside the viewport`).toBeLessThanOrEqual(w);
-      }
-      await back(page).click();
+      await expectSheetHeadOneRow(page, w, { hyphenated: false });
+      await crop(pad(page), "pad-tiebreak-black", w);
+      for (const side of ["home", "away"] as const) await tapTarget(option(page, blackId(side)), `Black ${side}`);
+      await option(page, blackId("away")).click();
+      await expect(pad(page).getByText(ARMAGEDDON_HINT)).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await expectSheetHeadOneRow(page, w, { hyphenated: false });
+      await crop(pad(page), "pad-tiebreak-result", w);
+      for (const result of ARMAGEDDON_RESULTS) await tapTarget(option(page, resultId(result)), `result ${result}`);
+      await option(page, resultId("draw")).click();
+      await expect(summary(page)).toHaveText(ui("pad.boardgame.tiebreak.confirm.drawn", { name: awayName }));
+      await expectNoHorizontalScroll(page);
+      await expectSheetHeadOneRow(page, w, { hyphenated: false, below: summary(page) });
+      await crop(pad(page), "pad-tiebreak-confirm", w);
+      await tapTarget(confirmButton(page), "Confirm");
       await pad(page).getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(option(page, "rapid")).toHaveCount(0);
       steps++;
