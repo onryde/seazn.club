@@ -5957,6 +5957,7 @@
   "externalPlay.watch.list.starting": "Starting",
   "externalPlay.yourBoard.title": "Your board",
   "externalPlay.yourBoard.cta": "Go to your board",
+  "externalPlay.yourBoard.home": "Player home",
   "externalPlay.yourBoard.state.online_chess_off": "Online play isn't available for this match right now.",
   "externalPlay.yourBoard.state.not_opened": "Your round hasn't been opened yet. You'll get an email when it is.",
   "externalPlay.yourBoard.state.before": "Your board opens shortly before your game.",

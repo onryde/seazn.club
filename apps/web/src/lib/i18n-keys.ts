@@ -2628,6 +2628,7 @@ export type DictionaryKey =
   | "externalPlay.watch.title"
   | "externalPlay.watch.viewOnly"
   | "externalPlay.yourBoard.cta"
+  | "externalPlay.yourBoard.home"
   | "externalPlay.yourBoard.state.before"
   | "externalPlay.yourBoard.state.check_in"
   | "externalPlay.yourBoard.state.closed"
