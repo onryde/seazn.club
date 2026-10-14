@@ -1,7 +1,6 @@
 import "server-only";
-import { forbidsLevelResult } from "@seazn/engine/core";
-import type { DeciderOffSource } from "@/lib/stage-decider-off";
-import { stageScopedCfg } from "./stage-cfg";
+import { liveStageCfg, type DeciderOffSource } from "@/lib/stage-decider-off";
+import { STAGE_DECIDER_KEYS } from "./stage-cfg";
 
 /** The fixture's stage, as every caller already reads it: its kind (the overlay's switch) and its config (the
  *  stage-scoped overlay `stageScopedCfg` applies). Null/undefined = no stage row (a fixture outside any stage). */
@@ -154,12 +153,9 @@ export function mergeRulesOverride(decided: Record<string, unknown>, ov: unknown
  *  format against it and builds the corrected cfg as `mergeRulesOverride(liveCfg(…), override)`, exactly the last
  *  step below. It reads no fixture row, so it is not a `resolveFixtureCfg` site. */
 export function liveCfg(divisionCfg: unknown, stage: FixtureStageSource | null | undefined, module: DeciderSource): unknown {
-  const scoped = stageScopedCfg(divisionCfg, stage?.config, module);
-  if (!forbidsLevelResult(stage?.kind)) return scoped;
-  if (scoped === null || typeof scoped !== "object" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is
-  const parsed = module.configSchema.safeParse(scoped);
-  const overlay = module.bracketDeciders((parsed.success ? parsed.data : scoped) as never);
-  return Object.keys(overlay).length === 0 ? scoped : { ...(scoped as Record<string, unknown>), ...overlay };
+  // The composition is lib/stage-decider-off.ts `liveStageCfg` (fix round 2, review M-3): the format-matrix harness folds
+  // under the same code, never a copy.
+  return liveStageCfg(divisionCfg, stage, module, STAGE_DECIDER_KEYS);
 }
 
 /**

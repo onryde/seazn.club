@@ -11,11 +11,12 @@ import "server-only";
 // `{division ⊕ the rules the stage will store}`. Every door that creates a stage calls `validatedStageConfig`:
 // `createStages` (and through it `replaceStages`, which also asks it BEFORE its delete) and template instantiation.
 import type { StageKind } from "@seazn/engine/core";
-import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { HttpError } from "@/lib/errors";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { STAGE_DECIDER_KEYS } from "@/server/engine-db/stage-cfg";
-import { mergedStageRules, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal, withoutNulls } from "./stage-rules-merge";
+import { storedStageRules } from "@/lib/stage-decider-off";
+import { refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -39,10 +40,9 @@ export function withStageDefaults(
   carried: Record<string, unknown> | null = null,
 ): Record<string, unknown> {
   const { rules: sent, ...rest } = config;
-  // A stored null is inherit, the same as the key's absence (the PUT never stores one; a legacy row might).
-  const base = carried !== null ? withoutNulls(carried) : stageDefaultsFor(module, kind, variant);
-  const provided = isObj(sent) ? sent : {};
-  const rules = Object.keys(provided).length === 0 ? base : mergedStageRules(base, provided);
+  // lib/stage-decider-off.ts `storedStageRules` (fix round 2, review M-3): the base and the merge, shared with the
+  // format-matrix harness.
+  const rules = storedStageRules(module, kind, variant, sent, carried);
   return rules !== null && Object.keys(rules).length > 0 ? { ...rest, rules } : rest;
 }
 

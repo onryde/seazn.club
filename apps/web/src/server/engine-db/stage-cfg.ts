@@ -1,5 +1,5 @@
 import "server-only";
-import { stageRulesOverlay, type DeciderOffSource } from "@/lib/stage-decider-off";
+import { stageScopedCfgOf, type DeciderOffSource } from "@/lib/stage-decider-off";
 
 // PROMPT-61 §2 — stage-scoped decider overlay. A groups+knockout division
 // keeps one sport config, but the knockout STAGE may carry `shootout` /
@@ -25,14 +25,10 @@ export function stageScopedCfg(
   stageCfg: Record<string, unknown> | null | undefined,
   module: DeciderOffSource | null,
 ): unknown {
-  if (stageCfg == null) return divisionCfg;
   // Rules first, decider keys second (see above). A stored null is "inherit" (dropped), and a `false` on a decider whose
-  // engine off is null is that null (W2c Task 12 fix round 1, R-T12-1): `stageRulesOverlay` is THE one mapping, shared
-  // with the format-matrix harness (R-T12-3), so Task 13b, which reworks this file, keeps calling it.
-  const overlay = stageRulesOverlay(module, divisionCfg, stageCfg.rules);
-  for (const key of STAGE_DECIDER_KEYS) {
-    if (stageCfg[key] !== undefined) overlay[key] = stageCfg[key];
-  }
-  if (Object.keys(overlay).length === 0) return divisionCfg;
-  return { ...(divisionCfg as Record<string, unknown>), ...overlay };
+  // engine off is null is that null (W2c Task 12 fix round 1, R-T12-1). The composition lives in lib/stage-decider-off.ts
+  // (`stageScopedCfgOf`, fix round 2, review M-3), shared with the format-matrix harness so neither keeps a copy; this
+  // file keeps the `STAGE_DECIDER_KEYS` literal (tools/bench's validate-pack mirror test text-pins it here). Task 13b,
+  // which reworks the resolver, keeps calling it.
+  return stageScopedCfgOf(divisionCfg, stageCfg, module, STAGE_DECIDER_KEYS);
 }

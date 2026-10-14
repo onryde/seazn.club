@@ -12,13 +12,17 @@
 // and read as itself; chess's rung list and carrom's tie board refuse null too). Anywhere else a `false` reaches the
 // sport's schema unmapped and is refused there by name (CONFIG_INVALID), as any other value it does not take.
 //
-// `stageRulesOverlay` is THE one mapping of a stage's stored rules onto its division (R-T12-3): the product's resolver
-// (`stageScopedCfg`, server/engine-db/stage-cfg.ts) and the format-matrix harness (`tools/matrix/lib/sport-cfg.ts`) both
-// call it, so neither keeps a copy. Its own module, importing nothing but the engine's sport barrel (a bare package; the
-// harness loads it under plain node, pinned in tools/matrix/__tests__/boundary.test.ts), so the e2e rig helper
-// (`e2e/stage-deciders.ts`) and the harness ask the same questions.
-import type { StageKind } from "@seazn/engine/core";
-import { deciderKeysFor, type AnySportModule, type RuleKeys } from "@seazn/engine/sport";
+// `stageRulesOverlay` is THE one mapping of a stage's stored rules onto its division (R-T12-3). Since fix round 2 (review
+// M-3) this module also holds the rest of the stage-cfg COMPOSITION, so the product and the format-matrix harness
+// (`tools/matrix/lib/sport-cfg.ts`) run the same code rather than a copy each:
+// - `storedStageRules`: the rules a new stage stores (`usecases/stage-defaults.ts` `withStageDefaults` calls it);
+// - `mergedStageRules`: how a save merges (`usecases/stage-rules-merge.ts` re-exports it);
+// - `stageScopedCfgOf` / `liveStageCfg`: the resolver's stage overlay and bracket deciders (`engine-db/stage-cfg.ts`
+//   `stageScopedCfg` and `engine-db/fixture-cfg.ts` `liveCfg` call them with their `STAGE_DECIDER_KEYS`).
+// The module imports nothing but the engine's barrels (bare packages), so the harness loads it under plain node (pinned in
+// tools/matrix/__tests__/boundary.test.ts), and the e2e rig helper (`e2e/stage-deciders.ts`) asks the same questions.
+import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
+import { deciderKeysFor, stageDefaultsFor, type AnySportModule, type RuleKeys } from "@seazn/engine/sport";
 
 /** The two members of a sport module the question needs; every SportModule satisfies it. */
 export interface DeciderOffSource {
@@ -66,4 +70,113 @@ export function decidersOffRules(module: AnySportModule, variant: string, kind: 
   if (!Object.hasOwn(module.variants, variant)) throw new Error(`decidersOffRules: ${module.key} declares no variant '${variant}'`);
   const division = module.configSchema.parse(module.variants[variant]) as Record<string, unknown>;
   return Object.fromEntries(deciderKeysFor(module, kind, variant).map((k) => [k, offByFalse(module, division, k) ? false : (division[k] ?? null)]));
+}
+
+/** The rules as the overlay reads them: a null or undefined value is "inherit" (`stageRulesOverlay`), never a value. */
+export const withoutNulls = (o: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
+
+/**
+ * The rules a stage carries AFTER a save, or null when it carries none (carry I2 of Task 8's review).
+ *
+ * A save MERGES into what is stored: a key the body omits is kept, a key it names is replaced, and a null VALUE removes
+ * that key ("inherit" is key ABSENCE, never a stored null: the resolver's overlay spreads what it is given, so a null
+ * reaching the column would BLANK the division's value). An EMPTY list is a value (chess's `tiebreakRungs: []`, "held for
+ * the organiser") and is stored as sent. `rules: null` and `{}` clear everything: they are the one way to say "all of it".
+ * Stored nulls (rows written before the strip) are dropped on the way through. Whatever is left empty is null.
+ *
+ * Keys must have passed `refuseUnsettableKeys` first: the loop writes a body key into a fresh object by name.
+ */
+export function mergedStageRules(
+  stored: unknown,
+  sent: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (sent === null || Object.keys(sent).length === 0) return null;
+  const out: Record<string, unknown> = isObj(stored) ? withoutNulls(stored) : {};
+  for (const [k, v] of Object.entries(sent)) {
+    if (v === null || v === undefined) delete out[k];
+    else out[k] = v;
+  }
+  return Object.keys(out).length === 0 ? null : out;
+}
+
+/**
+ * W2c Task 12 — the rules a NEW stage stores, or null for none: a BASE, then the rules `sent` with the create, merged as
+ * a save merges (`mergedStageRules`). Absent, null or `{}` rules keep the base whole: a create has nothing stored to
+ * clear. The base is the sport's preset for this kind and variant, UNLESS `replaceStages` matched this slot to a stage
+ * it is replacing (`carried`, the old stage's stored rules): then the carry IS the base, and the preset is not laid under
+ * it (fix round 2, R-T12-4). A matched slot's stored rules are its whole format, so a preset key absent from them, or no
+ * stored rules at all (`{}`, "Same as division"), is the organiser's clear. A genuinely new slot (`carried` null) starts
+ * from its preset.
+ */
+export function storedStageRules(
+  module: AnySportModule,
+  kind: StageKind,
+  variant: string | null,
+  sent: unknown,
+  carried: Record<string, unknown> | null = null,
+): Record<string, unknown> | null {
+  // A stored null is inherit, the same as the key's absence (the PUT never stores one; a legacy row might).
+  const base = carried !== null ? withoutNulls(carried) : stageDefaultsFor(module, kind, variant);
+  const provided = isObj(sent) ? sent : {};
+  const rules = Object.keys(provided).length === 0 ? base : mergedStageRules(base, provided);
+  return rules;
+}
+
+/** A stage, as the resolver reads it: its kind (the bracket overlay's switch) and its config (the stage overlay). */
+export interface StageCfgSource {
+  readonly kind: string | null | undefined;
+  readonly config: Record<string, unknown> | null | undefined;
+}
+/** The members of a sport module the composition needs; every SportModule satisfies it. */
+export interface BracketDeciderSource extends DeciderOffSource {
+  readonly configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown } };
+  bracketDeciders(cfg: never): Record<string, unknown>;
+}
+
+/** PROMPT-61 §2 and design 2026-09-17 §T1 — the stage-scoped cfg: the division, then the stage's stored `rules`
+ *  (`stageRulesOverlay`), then the stage's own top-level `topLevelKeys` (the product passes `STAGE_DECIDER_KEYS`, which
+ *  stay the single winner for those keys). Identity when the stage overlays nothing, so callers pass the result on
+ *  unconditionally. */
+export function stageScopedCfgOf(
+  divisionCfg: unknown,
+  stageCfg: Record<string, unknown> | null | undefined,
+  module: DeciderOffSource | null,
+  topLevelKeys: readonly string[],
+): unknown {
+  if (stageCfg == null) return divisionCfg;
+  const overlay = stageRulesOverlay(module, divisionCfg, stageCfg.rules);
+  for (const key of topLevelKeys) {
+    if (stageCfg[key] !== undefined) overlay[key] = stageCfg[key];
+  }
+  if (Object.keys(overlay).length === 0) return divisionCfg;
+  return { ...(divisionCfg as Record<string, unknown>), ...overlay };
+}
+
+/** `division ⊕ stage.rules ⊕ bracketDeciders(kind)`: the cfg a fixture with no snapshot and no override folds (its
+ *  STAGE's format; `engine-db/fixture-cfg.ts` `liveCfg`). A bracket stage kind (`forbidsLevelResult`) gets the sport's
+ *  `bracketDeciders` over the safe-parse of the scoped cfg (W2a ruling 76): a throwing parse would make the read path
+ *  stricter than the fold. A JSON-null division config stays as it is. */
+export function liveStageCfg(
+  divisionCfg: unknown,
+  stage: StageCfgSource | null | undefined,
+  module: BracketDeciderSource,
+  topLevelKeys: readonly string[],
+): unknown {
+  const scoped = stageScopedCfgOf(divisionCfg, stage?.config, module, topLevelKeys);
+  if (!forbidsLevelResult(stage?.kind)) return scoped;
+  if (scoped === null || typeof scoped !== "object" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is
+  const parsed = module.configSchema.safeParse(scoped);
+  const overlay = module.bracketDeciders((parsed.success ? parsed.data : scoped) as never);
+  return Object.keys(overlay).length === 0 ? scoped : { ...(scoped as Record<string, unknown>), ...overlay };
+}
+
+/** The cfg the fixtures of a stage CREATED with `rules` fold under before any edit, event or override: what the create
+ *  door stores (`storedStageRules`, no carry) read through the resolver (`liveStageCfg`). The format-matrix harness's
+ *  `stageCfg` is exactly this. The product reaches the same value through `validatedStageConfig` and `liveCfg`, which
+ *  is the differential pinned in usecases/__tests__/stage-cfg-composition.test.ts. A created stage never carries a
+ *  top-level decider (the create door refuses one), so no top-level key is read here. */
+export function postedStageCfg(module: AnySportModule, divisionCfg: unknown, kind: StageKind, variant: string | null, rules?: unknown): unknown {
+  const stored = storedStageRules(module, kind, variant, rules ?? null);
+  return liveStageCfg(divisionCfg, { kind, config: stored === null ? {} : { rules: stored } }, module, []);
 }

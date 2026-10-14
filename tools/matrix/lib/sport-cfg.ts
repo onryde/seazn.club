@@ -21,9 +21,9 @@
 //    with rules (a hold-path cell's every-decider-off, `decidersOffRulesFor`)
 //    passes them, or the in-process fold diverges from the product's.
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
-import { effectiveEntrantModel, stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { effectiveEntrantModel, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { decidersOffRules, stageRulesOverlay } from "../../../apps/web/src/lib/stage-decider-off.ts";
+import { decidersOffRules, postedStageCfg } from "../../../apps/web/src/lib/stage-decider-off.ts";
 
 export class UnknownSport extends Error {
   readonly sportKey: string;
@@ -95,23 +95,16 @@ export function drawsAllowed(sportKey: string, cfg: unknown, stageKind: StageKin
  *  own declaration, never a table typed here. `drawsAllowed` is unchanged: it answers a different question (may
  *  this fixture end level, by stage kind).
  *
- *  W2c Task 12, fix round 1 (R-T12-3): first, the rules the PRODUCT stores on the stage and overlays, exactly as it
- *  does. At create a stage is written with its sport's preset for its kind and the division's variant
- *  (`stageDefaultsFor`), the `rules` the create sent winning key by key (a sent null removes a preset key); the resolver
- *  then lays them over the division through `stageRulesOverlay` (apps/web lib/stage-decider-off.ts, the one mapping:
- *  a null is inherit, a period sport's `false` is the engine's null), and a bracket stage gets the bracket deciders
- *  over the parse of that (`liveCfg`). `rules` are what the harness POSTED with the stage, never the product's
- *  read-back. A stage whose kind and variant declare no preset, that was posted no rules and is not a bracket is
- *  returned as it came, untouched. */
+ *  W2c Task 12, fix rounds 1 and 2 (R-T12-3, review M-3): the PRODUCT's composition, imported, never re-composed:
+ *  apps/web lib/stage-decider-off.ts `postedStageCfg`, which is what the create door stores (`storedStageRules`: its
+ *  sport's preset for its kind and the division's variant, the posted `rules` merged over it, a sent null removing a
+ *  preset key) read through the resolver (`liveStageCfg`: the division, the stage's rules through the one mapping, then
+ *  the bracket deciders over the parse). The product's own door and resolver equal it, a counted differential in
+ *  apps/web usecases/__tests__/stage-cfg-composition.test.ts. `rules` are what the harness POSTED with the stage, never
+ *  the product's read-back. A stage whose kind and variant declare no preset, that was posted no rules and is not a
+ *  bracket is returned as it came, untouched. */
 export function stageCfg(sportKey: string, cfg: unknown, stageKind: StageKind, variantKey: string, rules?: Readonly<Record<string, unknown>>): unknown {
-  const m = sportModule(sportKey);
-  const stored = { ...stageDefaultsFor(m, stageKind, variantKey), ...(rules ?? {}) };
-  const overlay = stageRulesOverlay(m, cfg, stored);
-  const scoped = Object.keys(overlay).length === 0 ? cfg : { ...(cfg as Record<string, unknown>), ...overlay };
-  if (!forbidsLevelResult(stageKind)) return scoped;
-  const parsed = m.configSchema.safeParse(scoped);
-  const deciders = m.bracketDeciders((parsed.success ? parsed.data : scoped) as never) as Record<string, unknown>;
-  return { ...(scoped as Record<string, unknown>), ...deciders };
+  return postedStageCfg(sportModule(sportKey), cfg, stageKind, variantKey, rules);
 }
 
 /** The `config.rules` a HOLD-PATH cell posts on a stage of `stageKind` (a cell whose scenario is "a level knockout is

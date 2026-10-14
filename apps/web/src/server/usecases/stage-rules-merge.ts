@@ -13,6 +13,7 @@ import { EngineError, type StageKind } from "@seazn/engine/core";
 import { sportTopKeys, stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import type { Tx } from "@/lib/db";
 import { stageScopedCfg } from "@/server/engine-db/stage-cfg";
+import { withoutNulls } from "@/lib/stage-decider-off";
 import { configIssuesOf } from "@/lib/config-issue-copy";
 import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
@@ -49,33 +50,9 @@ export function refuseUnsettableKeys(
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
-/** The rules as the overlay reads them: a null or undefined value is "inherit" (`stage-cfg.ts`), never a value. */
-export const withoutNulls = (o: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
-
-/**
- * The rules a stage carries AFTER a save, or null when it carries none (carry I2 of Task 8's review).
- *
- * A save MERGES into what is stored: a key the body omits is kept, a key it names is replaced, and a null VALUE removes
- * that key ("inherit" is key ABSENCE, never a stored null: the resolver's overlay spreads what it is given, so a null
- * reaching the column would BLANK the division's value). An EMPTY list is a value (chess's `tiebreakRungs: []`, "held for
- * the organiser") and is stored as sent. `rules: null` and `{}` clear everything: they are the one way to say "all of it".
- * Stored nulls (rows written before the strip) are dropped on the way through. Whatever is left empty is null.
- *
- * Keys must have passed `refuseUnsettableKeys` first: the loop writes a body key into a fresh object by name.
- */
-export function mergedStageRules(
-  stored: unknown,
-  sent: Record<string, unknown> | null,
-): Record<string, unknown> | null {
-  if (sent === null || Object.keys(sent).length === 0) return null;
-  const out: Record<string, unknown> = isObj(stored) ? withoutNulls(stored) : {};
-  for (const [k, v] of Object.entries(sent)) {
-    if (v === null || v === undefined) delete out[k];
-    else out[k] = v;
-  }
-  return Object.keys(out).length === 0 ? null : out;
-}
+// `withoutNulls` and `mergedStageRules` (how a save merges) live in lib/stage-decider-off.ts with the rest of the stage-cfg
+// composition (fix round 2, review M-3): the create door and the format-matrix harness merge with the same code.
+export { mergedStageRules, withoutNulls } from "@/lib/stage-decider-off";
 
 /**
  * D10 — the final set scores a `bestOf` match can END on that the division's

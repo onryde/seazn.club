@@ -37,10 +37,11 @@ const BRACKET_NEXT_MATCH = "apps/web/src/lib/bracket-next-match.ts";
 const FORFEIT_PHASE_REFUSAL = "apps/web/src/lib/forfeit-phase-refusal.ts";
 // W2c Task 1: the match-rules table is a DIRECTORY (one file per sport); its registry is the only entry the matrix names.
 const MATCH_RULES_DIR = "apps/web/src/lib/match-rules";
-// W2c Task 12 fix round 1 (R-T12-3): stage-decider-off.ts holds the PRODUCT's one mapping of a stage's stored rules onto
-// its division (stageRulesOverlay: a null is inherit, a period sport's `false` the engine's null) and its every-decider-off
-// builder; sport-cfg.ts's stageCfg layers through them rather than keep a copy. Its one value import is the engine's
-// sport barrel, a bare package @seazn/matrix depends on (pinned below), so plain node loads it with no alias.
+// W2c Task 12 fix rounds 1 and 2 (R-T12-3, review M-3): stage-decider-off.ts holds the PRODUCT's stage-cfg composition
+// (the one mapping `stageRulesOverlay`, the create's `storedStageRules`, the resolver's `liveStageCfg`, and
+// `postedStageCfg` over them) and its every-decider-off builder; sport-cfg.ts's stageCfg calls it rather than keep a
+// copy. Its value imports are the engine's core and sport barrels, bare packages @seazn/matrix depends on (pinned below),
+// so plain node loads it with no alias.
 const STAGE_DECIDER_OFF = "apps/web/src/lib/stage-decider-off.ts";
 const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
@@ -158,16 +159,21 @@ describe("tools/matrix import boundary", () => {
     expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
   });
 
-  it("the product's stage-rules mapping is a file plain node can load: it exists, loads only the engine's sport barrel (a package the matrix depends on), and only sport-cfg.ts names it", () => {
+  it("the product's stage-cfg composition is a file plain node can load: it exists, loads only the engine's core and sport barrels (a package the matrix depends on), only sport-cfg.ts names it, and stageCfg delegates whole to it", () => {
     const file = join(REPO, STAGE_DECIDER_OFF);
     expect(existsSync(file), STAGE_DECIDER_OFF).toBe(true);
     const imports = importsOf(file);
-    expect(imports.filter((i) => !i.typeOnly).map((i) => i.spec), `${STAGE_DECIDER_OFF} must load nothing but @seazn/engine/sport`).toEqual(["@seazn/engine/sport"]);
+    expect(imports.filter((i) => !i.typeOnly).map((i) => i.spec).sort(), `${STAGE_DECIDER_OFF} must load nothing but the engine's core and sport barrels`).toEqual(["@seazn/engine/core", "@seazn/engine/sport"]);
     expect(imports.filter((i) => !i.spec.startsWith("@seazn/engine/")).map((i) => i.spec), `${STAGE_DECIDER_OFF} names nothing outside the engine, not even as a type`).toEqual([]);
     const deps = (JSON.parse(readFileSync(join(MATRIX, "package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
     expect(Object.keys(deps), "@seazn/matrix depends on the engine the file imports").toContain("@seazn/engine");
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === STAGE_DECIDER_OFF)).map((m) => relative(MATRIX, m));
     expect(naming).toEqual(["lib/sport-cfg.ts"]);
+    // Review M-3: the harness folds under the PRODUCT's composition, never its own. `stageCfg` is one call to
+    // `postedStageCfg`, the function apps/web's stage-cfg-composition.test.ts diffs against the create door and resolver.
+    const sportCfg = readFileSync(join(MATRIX, "lib/sport-cfg.ts"), "utf8");
+    const body = /export function stageCfg\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(sportCfg)?.[1] ?? "";
+    expect(body.trim(), "stageCfg delegates whole to the product").toBe("return postedStageCfg(sportModule(sportKey), cfg, stageKind, variantKey, rules);");
   });
 
   // W2c Task 1: lib/match-rules/ became a directory, and the matrix CLIs (`matrix:*`) load it under plain
