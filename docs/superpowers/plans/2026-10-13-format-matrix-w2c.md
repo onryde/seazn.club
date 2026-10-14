@@ -4642,6 +4642,8 @@ Notes:
 
 ### Task 19: S2 + S4 (match) — the match rules block on the fixture console, plus the run-sheet tag
 
+> **Carried from the batch-3 fix round.** A stage or division format save that cannot re-fit an event-less walkover is refused 409 `FORMAT_DOES_NOT_FIT_PLAY`; today the division and stage editors render it as English `err.message`. Switch them to `ruleRefusalText` (the localized refusal map, batch-3 M1) and test one non-English locale.
+
 > **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
 
 > **Carried from Task 5.** The football `extraTime` web field builds `{enabled, halfMinutes: 15}` on "On". As a match override against a stage whose extra time is shorter (or off), that is refused by the engine's `off_or_shorter` bound. The match form must seed extra time FROM THE STAGE's resolved value (and offer only off or shorter), never the field's default. Test: stage ET 2×10 → match form opens at 10, "On" with 15 is not offered.
@@ -4863,6 +4865,8 @@ Width test in `mobile.spec.ts`: "W2c match rules block at every width". It opens
 
 ---
 ### Task 20: S4 — division settings name what is locked (UI)
+
+> **Carried from the batch-3 fix round.** A stage or division format save that cannot re-fit an event-less walkover is refused 409 `FORMAT_DOES_NOT_FIT_PLAY`; today the division and stage editors render it as English `err.message`. Switch them to `ruleRefusalText` (the localized refusal map, batch-3 M1) and test one non-English locale.
 
 > **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
 
