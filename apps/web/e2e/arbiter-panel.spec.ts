@@ -624,9 +624,19 @@ test.describe("arbiter panel", () => {
       minted.push(participantId);
       await route.fulfill({ json: { ok: true, data: { authToken: "e2e-not-a-token", participantId, white: [], black: [] } } });
     });
-    await page.route(/\/external-play\/arbiter\/[^/]+$/, async (route) => {
+    // A hand-back is counted where the browser SENDS it — its request event — and page.route only answers it. The
+    // tab-away DELETE is a keepalive request issued while the page unloads: CI's trace (run 38524988078, both
+    // attempts) shows it sent with the right id, after the join had answered, yet never handed to this route, so a
+    // count kept in the route handler read a release the panel had made as missing. The request event is the
+    // signal the trace itself records. One that misses the route reaches the server, where the id is unknown.
+    const handBack = /\/external-play\/arbiter\/[^/]+$/;
+    page.context().on("request", (req) => {
+      if (req.method() === "DELETE" && handBack.test(new URL(req.url()).pathname)) {
+        handedBack.push(decodeURIComponent(req.url().split("/").pop()!));
+      }
+    });
+    await page.route(handBack, async (route) => {
       if (route.request().method() !== "DELETE") return route.fallback();
-      handedBack.push(decodeURIComponent(route.request().url().split("/").pop()!));
       await route.fulfill({ json: { ok: true, data: { removed: true } } });
     });
 
