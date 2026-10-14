@@ -66,7 +66,7 @@ import {
 } from "@/lib/credits";
 import { ageAt, isMinor, requiresDob, requiresGender } from "./registration-eligibility";
 import { audit } from "./audit";
-import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 
@@ -2092,10 +2092,9 @@ export async function publicRegistrationInfo(
 
   // T16: online play is stated only while the club is offered online chess — asked once, and only when a division
   // could play online at all (a club with no online division asks PostHog nothing).
-  const couldPlayOnline = rows.some((r) => supportsOnlinePlay(r.sport_key) && readOnlinePlay(r.config) === "lichess");
+  const couldPlayOnline = rows.some(divisionPlaysOnline);
   const offered = couldPlayOnline && (await onlineChessOffered({ orgId: comp.org_id, userId: null }));
-  const onlinePlay = (r: (typeof rows)[number]) =>
-    offered && supportsOnlinePlay(r.sport_key) && readOnlinePlay(r.config) === "lichess";
+  const onlinePlay = (r: (typeof rows)[number]) => offered && divisionPlaysOnline(r);
 
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {

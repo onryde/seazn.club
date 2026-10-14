@@ -18,6 +18,14 @@ export function supportsOnlinePlay(sportKey: string): boolean {
   return sportKey === "boardgame";
 }
 
+/** Whether a division plays online: a sport that can (supportsOnlinePlay) set to Lichess. ONE predicate (final
+ *  review M-11) for the registration path: the entries step's statement (registrations.ts publicRegistrationInfo)
+ *  and the link demand at submit and at the join link (registration-submit.ts) read THIS, so a stored onlinePlay on a
+ *  sport that cannot play online is stated by neither and demanded by neither. */
+export function divisionPlaysOnline(d: { sport_key: string; config: unknown }): boolean {
+  return supportsOnlinePlay(d.sport_key) && readOnlinePlay(d.config) === "lichess";
+}
+
 /** Validate and normalise an onlinePlay patch value for a sport. */
 export function assertOnlinePlayValue(
   sportKey: string,

@@ -52,7 +52,7 @@ import {
   seasonStartYearFrom,
   type EligibilityIssue,
 } from "./registration-eligibility";
-import { readOnlinePlay } from "@/server/external-play/online-play";
+import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 
@@ -565,10 +565,7 @@ export async function submitRegistrationGroup(
     // M7 (T16 fix round 1): asked AS THE CLUB (`userId: null`), exactly as the entries step's public read
     // (registrations.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
     // and this demand cannot disagree. The person is still the one whose link is checked.
-    if (
-      readOnlinePlay(divCtx.config) === "lichess" &&
-      (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))
-    ) {
+    if (divisionPlaysOnline(divCtx) && (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))) {
       if (!entry.registering_self) {
         throw new HttpError(
           422,
@@ -1238,10 +1235,7 @@ export async function joinTeamEntry(
   if (issues.length > 0) throw eligibilityError(issues);
 
   // T20: as at submit — no Lichess link is demanded while the club is not offered online chess, asked as the club (M7).
-  if (
-    readOnlinePlay(divCtx.config) === "lichess" &&
-    (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))
-  ) {
+  if (divisionPlaysOnline(divCtx) && (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))) {
     await assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null);
   }
 
