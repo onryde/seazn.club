@@ -105,7 +105,10 @@ vi.mock("../invite", async (importOriginal) => {
 
 import { openRound, roundOpenedAt } from "../open-round";
 import { bridgeTakesInvites } from "../invite";
-import { organiserOverrideVideo, seatPlayer } from "../preflight";
+import { organiserOverrideVideo, seatPlayer, type PreflightDeps } from "../preflight";
+import { sweepExternalPlay } from "../sweep";
+import { log } from "@/server/logger";
+import { addParticipant, endMeeting, ensureMeeting, refreshParticipantToken } from "@/server/external-play/video/realtimekit";
 import { createGameIfReady } from "../create-game";
 import { resolveExternalPlay } from "../resolve";
 import { holdForOrganiser, writeResultFrom } from "../result";
@@ -1478,3 +1481,208 @@ async function seedOnlineSwissUnstarted() {
   await sql`update fixtures set scheduled_at = '2026-10-01T12:10:00Z' where stage_id = ${stage!.id}`;
   return { stageId: stage!.id, owner, ownerUserId: owner.userId! };
 }
+
+// Final re-review N-2 (Important): one meeting per fixture, for life, meant a board re-paired after its round opened
+// could not seat its NEW players once the sweep had ended the old pairing's meeting — ensureMeeting answers
+// VIDEO_MEETING_ENDED under optional as well as required — and until then the new pairing joined the old players'
+// meeting. A fresh window is a fresh pairing: the re-open that re-stamps the window deletes the meetings of the round's
+// game-less boards (participants cascade) and ends any still active at RealtimeKit after its commit. Driven through
+// the reviewer's path: the real unpair → sweep → generate → re-open → seat, RealtimeKit faked at its HTTP boundary.
+describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (N-2)", () => {
+  const RTK_ENV = {
+    CLOUDFLARE_ACCOUNT_ID: "acct-n2",
+    REALTIMEKIT_API_TOKEN: "rtk-n2",
+    REALTIMEKIT_APP_ID: "app-n2",
+    REALTIMEKIT_PLAYER_PRESET: "seazn_chess_player",
+    REALTIMEKIT_ARBITER_PRESET: "seazn_chess_arbiter",
+  };
+  beforeEach(() => {
+    for (const [k, v] of Object.entries(RTK_ENV)) vi.stubEnv(k, v);
+    return () => vi.unstubAllEnvs();
+  });
+
+  /** RealtimeKit at its HTTP boundary; the adapter functions are the real ones, so the meeting rows are real. The
+   *  camera is reported live, so a required seat seats on its first claim. */
+  function fakeRtk() {
+    const http: string[] = [];
+    const tag = randomUUID().slice(0, 8);
+    let seq = 0;
+    const reply = (status: number, data: unknown) =>
+      new Response(JSON.stringify({ success: true, data }), { status, headers: { "content-type": "application/json" } });
+    const fetch = (async (url: string | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const path = new URL(String(url)).pathname.replace(/^.*\/realtime\/kit\/app-n2/, "");
+      http.push(`${method} ${path}`);
+      let m: RegExpMatchArray | null;
+      if (method === "POST" && path === "/meetings") return reply(201, { id: `n2-${tag}-${++seq}` });
+      if (method === "POST" && /^\/meetings\/[^/]+\/participants$/.test(path)) {
+        const id = `n2p-${tag}-${++seq}`;
+        return reply(201, { id, token: `jwt-${id}` });
+      }
+      if (method === "POST" && (m = path.match(/^\/meetings\/[^/]+\/participants\/([^/]+)\/token$/))) {
+        return reply(200, { token: `jwt-regen-${m[1]}-${++seq}` });
+      }
+      if (method === "POST" && /^\/meetings\/[^/]+\/active-session\/kick-all$/.test(path)) return reply(200, {});
+      if (method === "PATCH" && (m = path.match(/^\/meetings\/([^/]+)$/))) return reply(200, { id: m[1], status: "INACTIVE" });
+      throw new Error(`fake RealtimeKit: unrouted ${method} ${path}`);
+    }) as typeof globalThis.fetch;
+    const video: NonNullable<PreflightDeps["video"]> = {
+      ensureMeeting: (fixtureId) => ensureMeeting(fixtureId, { fetch }),
+      addParticipant: (a) => addParticipant(a, { fetch }),
+      hasLiveVideoPublisher: async () => true,
+      refreshParticipantToken: (a) => refreshParticipantToken(a, { fetch }),
+    };
+    return { http, video, end: (meetingId: string) => endMeeting(meetingId, { fetch }) };
+  }
+
+  const meetingsOf = (fixtureId: string) =>
+    sql<{ meeting_id: string; ended_at: Date | null }[]>`
+      select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`;
+  const participantsOf = async (fixtureId: string) =>
+    (await sql<{ person_id: string | null }[]>`
+      select person_id from fixture_video_participants where fixture_id = ${fixtureId} order by created_at, id`).map((r) => r.person_id);
+  const reopen = (s: { stageId: string; ownerUserId: string }, now: Date, end: (id: string) => Promise<void>) =>
+    openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }, { now, endMeeting: end });
+
+  it("unpair → (sweep) → re-pair → re-open → seat: seated with a participant in a NEW meeting, the old one gone — both camera policies × the old meeting ended by the sweep or still active — counted", async () => {
+    let checked = 0;
+    for (const policy of ["optional", "required"] as const) {
+      for (const ended of [true, false]) {
+        const label = `${policy}, old meeting ${ended ? "ended by the sweep" : "still active"}`;
+        const rtk = fakeRtk();
+        const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: policy });
+        const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+        const t0 = new Date();
+        expect(await open(s, 1, t0), label).toMatchObject({ opened: true });
+        const [b] = await swissRound1(s.stageId);
+        const fixtureId = b!.fixtureId;
+        // The first pairing: both players check in, so the old meeting holds two participants.
+        for (const entrant of [b!.home, b!.away]) {
+          const got = await seatPlayer({ fixtureId, personId: personOf.get(entrant!)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video });
+          expect(got.seated, `${label}: premise — the first pairing seats`).toBe(true);
+        }
+        const [old] = await meetingsOf(fixtureId);
+        expect(old, `${label}: premise — the first pairing's meeting`).toBeDefined();
+        expect(await participantsOf(fixtureId), `${label}: premise — both old players in it`).toHaveLength(2);
+
+        await unpairSwissRound(s.owner, s.stageId);
+        let later = new Date(t0.getTime() + 2 * MIN);
+        if (ended) {
+          later = new Date(t0.getTime() + DEADLINE_AFTER_MS + 2 * MIN);
+          // `serialise: false`: an org-scoped pass that must not take the one-pass lock — another file's pass holding
+          // it (external-play-sweep.test.ts, in a parallel run) would skip this one, and this one would skip theirs.
+          const report = await sweepExternalPlay({ now: later, orgIds: [s.orgId], endMeeting: rtk.end, serialise: false });
+          expect(report.meetingsEnded, `${label}: premise — the sweep ended the unpaired board's meeting`).toBe(1);
+          expect((await meetingsOf(fixtureId))[0]!.ended_at, `${label}: premise`).not.toBeNull();
+        }
+        await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+        const reopenAt = new Date(later.getTime() + MIN);
+        const mark = rtk.http.length;
+        expect(await reopen(s, reopenAt, rtk.end), label).toMatchObject({ opened: true });
+        const atReopen = rtk.http.slice(mark).filter((c) => c.includes(old!.meeting_id));
+        // RealtimeKit: an active old meeting is ended at the re-open (kick-all, then INACTIVE); one already ended is
+        // not asked again.
+        expect(atReopen, `${label}: the old meeting at RealtimeKit`).toEqual(
+          ended ? [] : [`POST /meetings/${old!.meeting_id}/active-session/kick-all`, `PATCH /meetings/${old!.meeting_id}`],
+        );
+        expect(await meetingsOf(fixtureId), `${label}: the old meeting's row went with the re-open`).toEqual([]);
+
+        const re = (await swissRound1(s.stageId)).find((r) => r.fixtureId === fixtureId);
+        expect(re, `${label}: premise — the board is re-paired`).toBeDefined();
+        const newHome = personOf.get(re!.home!)!;
+        const seat = await seatPlayer({ fixtureId, personId: newHome }, { now: new Date(reopenAt.getTime() + MIN), video: rtk.video });
+        expect(seat, `${label}: the new pairing seats, with a participant`).toMatchObject({
+          seated: true,
+          participant: { participantId: expect.any(String), authToken: expect.any(String) },
+        });
+        const fresh = await meetingsOf(fixtureId);
+        expect(fresh, label).toHaveLength(1);
+        expect(fresh[0]!.meeting_id, `${label}: a fresh meeting, never the old one`).not.toBe(old!.meeting_id);
+        expect(fresh[0]!.ended_at, label).toBeNull();
+        expect(await participantsOf(fixtureId), `${label}: only the new pairing's player — the old participants went with their meeting`).toEqual([newHome]);
+        checked += 1;
+      }
+    }
+    expect(checked, "2 policies × 2 states of the old meeting").toBe(4);
+  });
+
+  it("never silent, never blocking: RealtimeKit refusing the old meeting's end is logged by meeting, and the re-open and its invites stand", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+    const t0 = new Date();
+    expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+    const [b] = await swissRound1(s.stageId);
+    expect(await seatPlayer({ fixtureId: b!.fixtureId, personId: personOf.get(b!.home!)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video }))
+      .toMatchObject({ seated: true });
+    const [old] = await meetingsOf(b!.fixtureId);
+    await unpairSwissRound(s.owner, s.stageId);
+    await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      mail.sent.length = 0;
+      const refuse = vi.fn(async () => {
+        throw new Error("staged: RealtimeKit down");
+      });
+      expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), refuse)).toEqual({ opened: true, invited: 4, skipped: [] });
+      expect(refuse.mock.calls).toEqual([[old!.meeting_id]]);
+      expect(mail.sent, "every invite went out").toHaveLength(4);
+      expect(await meetingsOf(b!.fixtureId), "the row is gone all the same").toEqual([]);
+      const logged = errorSpy.mock.calls as unknown[][];
+      expect(logged).toHaveLength(1);
+      expect(logged[0]![0]).toMatchObject({ meetingId: old!.meeting_id, stageId: s.stageId, roundNo: 1 });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("the positive pair: a re-open that KEEPS the window (a re-invite) deletes no meeting and ends nothing", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+    const emailOf = new Map(s.players.map((p) => [p.entrantId, p.email]));
+    const [b, b2] = await swissRound1(s.stageId);
+    // One seat's invite fails, so a later open has a seat left to invite — and the round has invited seats.
+    mail.fail.add(emailOf.get(b2!.away!)!);
+    const t0 = new Date();
+    expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+    expect(await seatPlayer({ fixtureId: b!.fixtureId, personId: personOf.get(b!.home!)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video }))
+      .toMatchObject({ seated: true });
+    const before = await meetingsOf(b!.fixtureId);
+    expect(before, "premise: a meeting").toHaveLength(1);
+    mail.fail.clear();
+    const mark = rtk.http.length;
+    expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toEqual({ opened: true, invited: 1, skipped: [] });
+    expect(await auditTypes(s.competitionId), "premise: a re-invite, the window kept").toEqual(["external_play.round_opened", "external_play.round_reinvited"]);
+    expect(await meetingsOf(b!.fixtureId)).toEqual(before);
+    expect(rtk.http.slice(mark), "nothing ended at RealtimeKit").toEqual([]);
+  });
+
+  it("the guard: at a re-stamp, a board a game stands behind keeps its meeting; the game-less board's goes", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+    const t0 = new Date();
+    expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+    const [b] = await swissRound1(s.stageId);
+    expect(await seatPlayer({ fixtureId: b!.fixtureId, personId: personOf.get(b!.home!)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video }))
+      .toMatchObject({ seated: true });
+    await unpairSwissRound(s.owner, s.stageId);
+    await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+    const [x, y] = await swissRound1(s.stageId);
+    const gameBoard = x!.fixtureId === b!.fixtureId ? y! : x!;
+    // A game on file that no open bound (so the round still reads "nobody invited", and the window re-stamps): its
+    // meeting is the game's, and must outlive the re-stamp.
+    const gameMeeting = `n2-game-${randomUUID().slice(0, 8)}`;
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, white_lichess_id, black_lichess_id)
+      values (${gameBoard.fixtureId}, ${s.orgId}, 'live', now(), ${`g${randomUUID().slice(0, 7)}`}, 'home', 'w-n2', 'b-n2')`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${gameBoard.fixtureId}, ${s.orgId}, ${gameMeeting})`;
+    const mark = rtk.http.length;
+    expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toMatchObject({ opened: true });
+    expect(await auditTypes(s.competitionId), "premise: the window re-stamped").toEqual(["external_play.round_opened", "external_play.round_reopened"]);
+    expect(await meetingsOf(gameBoard.fixtureId), "the game's meeting stands").toEqual([{ meeting_id: gameMeeting, ended_at: null }]);
+    expect(await meetingsOf(b!.fixtureId), "the game-less board's meeting went").toEqual([]);
+    expect(rtk.http.slice(mark).some((c) => c.includes(gameMeeting)), "the game's meeting is not ended").toBe(false);
+  });
+});

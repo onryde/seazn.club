@@ -25,6 +25,13 @@ import "server-only";
 //     for a partly invited round.
 //   - A board a game stands behind (or may: T9's create marker) is never
 //     invited into and counts on neither side of that rule.
+//   - A fresh window is a fresh pairing (final re-review N-2): the re-stamp
+//     deletes the video meetings of the round's boards that never had a game
+//     (their participants cascade), in the same transaction, and ends any
+//     still active at RealtimeKit after the commit, best effort. A meeting
+//     was one per fixture for life, so a re-paired board's new players met
+//     the old pairing's meeting — joined it, or, once the sweep had ended it,
+//     could not check in at all (VIDEO_MEETING_ENDED, under optional too).
 //   - Each seat is stamped BEFORE its mail is sent and un-stamped if the send
 //     fails, so a re-open retries it and nobody is mailed twice. A crash
 //     between the stamp and the send loses that one invite; the organiser's
@@ -42,6 +49,7 @@ import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
+import { endMeeting } from "@/server/external-play/video/realtimekit";
 import { roomPhase } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
@@ -70,7 +78,12 @@ export async function roundOpenedAt(a: { stageId: string; roundNo: number }): Pr
 
 /** Test seam only — the route passes none. `now` stamps `opened_at` and the
  *  seat stamps, and is the clock the window is judged on. */
-export type OpenRoundDeps = { now?: Date; origin?: string };
+export type OpenRoundDeps = {
+  now?: Date;
+  origin?: string;
+  /** T7's teardown, for the meetings a re-stamp deletes (N-2). */
+  endMeeting?: (meetingId: string) => Promise<void>;
+};
 
 type StageRow = {
   orgId: string;
@@ -101,7 +114,7 @@ type Claim = { board: Board; seat: InviteSeat };
 
 type Decision =
   | { kind: "nothing"; skipped: OpenRoundSkip[] }
-  | { kind: "opened" | "reopened" | "reinvited"; open: RoundOpenRow; claims: Claim[] };
+  | { kind: "opened" | "reopened" | "reinvited"; open: RoundOpenRow; claims: Claim[]; staleMeetings: string[] };
 
 const AUDIT_TYPE = {
   opened: "external_play.round_opened",
@@ -270,6 +283,7 @@ export async function openRound(
 
     let open: RoundOpenRow;
     let kind: "opened" | "reopened" | "reinvited";
+    let staleMeetings: string[] = [];
     if (!existing) {
       const [row] = await tx<RoundOpenRow[]>`
         insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
@@ -288,6 +302,21 @@ export async function openRound(
         returning id, opened_at as "roundOpenedAt", opened_by as "openedBy"`;
       open = row!;
       kind = "reopened";
+      // N-2: the meetings of the last window's pairing. A board that ever had a game keeps its meeting — the camera
+      // evidence of that game (a live one is never invited into, above). Only the still-active ones are ended at
+      // RealtimeKit, after the commit.
+      staleMeetings = (
+        await tx<{ meeting_id: string; ended_at: Date | null }[]>`
+          delete from fixture_video_meetings m
+           where m.fixture_id in ${tx(ids)}
+             and not exists (
+               select 1 from fixture_external_play ep
+                where ep.fixture_id = m.fixture_id
+                  and (ep.challenge_id is not null or ep.create_sent_at is not null))
+          returning m.meeting_id, m.ended_at`
+      )
+        .filter((r) => r.ended_at === null)
+        .map((r) => r.meeting_id);
     } else {
       open = existing;
       kind = "reinvited";
@@ -308,11 +337,24 @@ export async function openRound(
         }
       }
     }
-    return { kind, open, claims };
+    return { kind, open, claims, staleMeetings };
   });
 
   if (decision.kind === "nothing") {
     return { opened: false, reason: "already_open", skipped: decision.skipped };
+  }
+
+  // N-2: its row is gone, so nothing of ours hands out a token for it again; ending it stops the old pairing's
+  // cameras at the vendor. Best effort and never silent — a failure leaves an unused meeting, never a blocked open.
+  for (const meetingId of decision.staleMeetings) {
+    try {
+      await (deps.endMeeting ?? endMeeting)(meetingId);
+    } catch (err) {
+      log.error(
+        { stageId: a.stageId, roundNo: a.roundNo, meetingId, err: err instanceof Error ? err.message : String(err) },
+        "openRound: could not end a re-paired board's old meeting at RealtimeKit — its row is gone and it is no longer used",
+      );
+    }
   }
 
   // Sent AFTER the commit: a mail cannot be rolled back, so the stamp is
