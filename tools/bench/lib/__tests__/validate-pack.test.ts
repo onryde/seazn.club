@@ -10,9 +10,13 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { FORFEIT_REASONS, foldMatchWithStoppage } from "@seazn/engine/core";
+import { BRACKET_KINDS, FORFEIT_REASONS, StageKind, foldMatchWithStoppage } from "@seazn/engine/core";
+import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
+// The product's own stage composition (W2c Task 13b, R-T12-3): an import-free
+// apps/web module (engine barrels only; tools/matrix boundary.test.ts pins it).
+import { decidersOffRules } from "../../../../apps/web/src/lib/stage-decider-off.ts";
 import { PackSchema, fixtureKey } from "../pack-schema.ts";
 import { fillPeriodMarkers, reconstructSetRallies } from "../reconstruct.ts";
 import {
@@ -2155,10 +2159,12 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
 // ===========================================================================
 
 describe("validatePack — a stream's declared stageRef binds it to a stage", () => {
-  /** A two-stage football division: a league group, then a knockout that turns
-   *  `shootout` on. A goalless fixture is a decided DRAW under the division
-   *  cfg and an UNDECIDED shootout under the knockout stage's overlay, so
-   *  which stage a stream binds to is directly observable in the outcome. */
+  /** A two-stage football division: a league group, then a knockout created
+   *  as the product creates one, with its kind's PRESET (extra time and
+   *  penalties on, X-SR-6; W2c Task 13b). A goalless fixture is a decided
+   *  DRAW under the division cfg and UNDECIDED (into extra time) under the
+   *  knockout stage's, so which stage a stream binds to is directly
+   *  observable in the outcome. */
   const twoStage = (stageRef: string | undefined): Record<string, unknown> => ({
     schemaVersion: 1,
     suite: "_unit",
@@ -2179,7 +2185,7 @@ describe("validatePack — a stream's declared stageRef binds it to a stage", ()
             seq: 2,
             kind: "knockout",
             name: "KO",
-            config: { shootout: true },
+            config: {},
           },
         ],
       },
@@ -2213,8 +2219,8 @@ describe("validatePack — a stream's declared stageRef binds it to a stage", ()
   });
 
   it("folds under the NAMED stage's decider overlay", () => {
-    // Bound to the knockout: `shootout` overlays, the goalless match enters the
-    // shootout phase and never decides. This is the assertion that proves the
+    // Bound to the knockout: its preset overlays, the goalless match goes on
+    // into extra time and never decides. This is the assertion that proves the
     // field is CONSULTED — a schema that merely accepts it leaves this green.
     const finding = onlyError(validatePack(twoStage("s-ko"), UNIT).findings);
     expect(finding.code).toBe("fold.not_decided");
@@ -2234,7 +2240,12 @@ describe("validatePack — a stream's declared stageRef binds it to a stage", ()
     expect(warnings(result.findings).map((f) => f.code)).toEqual([
       "fold.stage_overlay_unbindable",
     ]);
-    expect(warnings(result.findings)[0]?.message).toContain("[shootout]");
+    // The keys the knockout's format differs from the division's in: its
+    // preset's, from the engine's own `stageDefaults` (the division plays none
+    // of them: extra time off, no shoot-out).
+    const preset = Object.keys(stageDefaultsFor(football, "knockout", "11-a-side")).sort();
+    expect(preset, "the premise: the knockout preset sets keys").toContain("shootout");
+    expect(warnings(result.findings)[0]?.message).toContain(`[${preset.join(", ")}]`);
     expect(warnings(result.findings)[0]?.message).toContain(
       "1 of its stream(s) name no stage",
     );
@@ -2498,51 +2509,111 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
 });
 
 // ===========================================================================
-// The mirrored product constant, checked against the product itself
+// The stage fold is the PRODUCT's composition, not a mirror (W2c Task 13b)
 // ===========================================================================
 
-describe("STAGE_DECIDER_KEYS — the mirror is diffed against apps/web, not itself", () => {
-  it("equals the product's own constant, read as TEXT", () => {
-    // GLOBAL.md forbids IMPORTING from apps/web (the `@/` aliases do not
-    // resolve here and most of that tree is `server-only`). Reading the file
-    // as text is not importing it, and it is the only thing that can catch the
-    // failure the mirror actually has: the PRODUCT adding a third key. A test
-    // asserting the mirror against a copy of itself cannot.
-    const source = readFileSync(
-      path.join(REPO_ROOT, "apps/web/src/server/engine-db/stage-cfg.ts"),
-      "utf8",
-    );
-    const literal = /const STAGE_DECIDER_KEYS = \[([^\]]*)\] as const;/.exec(
-      source,
-    );
-    // Red on ABSENCE rather than skipping: a bench that cannot see the product
-    // it mirrors must say so, not quietly pass.
-    expect(
-      literal,
-      "STAGE_DECIDER_KEYS not found in engine-db/stage-cfg.ts",
-    ).not.toBeNull();
-    const productKeys = [...(literal?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(
-      (m) => m[1],
-    );
-    expect(productKeys.length).toBeGreaterThan(0);
+const sportOf = (key: string): AnySportModule => {
+  const m = builtinModules.find((x) => x.key === key);
+  if (m === undefined) throw new Error(`no sport ${key}`);
+  return m as AnySportModule;
+};
+const football = sportOf("football");
+/** A football division's cfg as stage 0 resolves it (`resolveDivisionCfg`, the one shared resolution). */
+function footballDivision(cfgOverrides: Record<string, unknown> = {}): unknown {
+  const r = resolveDivisionCfg(football, { variantKey: "11-a-side", cfgOverrides });
+  if (!r.ok) throw new Error(`football 11-a-side: ${r.reason}`);
+  return r.cfg;
+}
+/** Every decider of an 11-a-side knockout switched off, by the product's own builder (X-SR-6's held arm). */
+const HELD = decidersOffRules(football, "11-a-side");
 
-    // Driven through the mirror rather than read off a copied array: the
-    // overlay must carry every key the product carries, and nothing else.
-    const stageCfg = Object.fromEntries(productKeys.map((k) => [k, `v-${k}`]));
-    stageCfg["legs"] = 3;
-    expect(stageScopedFoldCfg({ base: 1 }, stageCfg)).toEqual({
-      base: 1,
-      ...Object.fromEntries(productKeys.map((k) => [k, `v-${k}`])),
-    });
+describe("stageScopedFoldCfg — the PRODUCT's stage composition (lib/stage-decider-off.ts), never a mirror (W2c Task 13b)", () => {
+  // Until Task 13b this file kept a hand mirror of the product's top-level
+  // decider keys, pinned by reading stage-cfg.ts as TEXT, and folded a stage
+  // WITHOUT the preset the product writes at create (R-T12-3's latent gap).
+  // The product's composition imports nothing but the engine's barrels, so the
+  // bench now calls it: the cfg a stream folds under is the one the product's
+  // fixture would.
+  it("imports the product's composition and keeps no decider list of its own", () => {
+    const source = readFileSync(path.join(REPO_ROOT, "tools/bench/lib/validate-pack.ts"), "utf8");
+    expect(source).toMatch(
+      /import \{[^}]*\bpostedStageCfg\b[^}]*\} from "\.\.\/\.\.\/\.\.\/apps\/web\/src\/lib\/stage-decider-off\.ts";/,
+    );
+    expect(source, "no hand mirror of a product constant").not.toContain("STAGE_DECIDER_KEYS");
+  });
+
+  it("a new stage folds under its kind's PRESET (the engine's stageDefaults), every sport x variant x kind (counted)", () => {
+    let presetKeys = 0;
+    let identities = 0;
+    for (const m of builtinModules as readonly AnySportModule[]) {
+      for (const variant of Object.keys(m.variants)) {
+        const r = resolveDivisionCfg(m, { variantKey: variant, cfgOverrides: {} });
+        if (!r.ok) throw new Error(`${m.key}/${variant}: ${r.reason}`);
+        for (const kind of StageKind.options) {
+          const cfg = stageScopedFoldCfg(m, r.cfg, { kind, config: {} }, variant) as Record<string, unknown>;
+          const preset = stageDefaultsFor(m, kind, variant);
+          for (const [k, v] of Object.entries(preset)) {
+            expect(cfg[k], `${m.key}/${variant}/${kind}.${k}`).toEqual(v);
+            presetKeys++;
+          }
+          if (!BRACKET_KINDS.has(kind) && Object.keys(preset).length === 0) {
+            expect(cfg, `${m.key}/${variant}/${kind}: no preset, no bracket: the division's own cfg`).toBe(r.cfg);
+            identities++;
+          }
+        }
+      }
+    }
+    expect(presetKeys, "anti-vacuity: preset keys were checked").toBeGreaterThan(0);
+    expect(identities, "anti-vacuity: table stages were checked").toBeGreaterThan(0);
+  });
+
+  it("the division's VARIANT reaches the preset: a youth knockout plays a 3-kick shoot-out (11-a-side: 5)", () => {
+    const youth = resolveDivisionCfg(football, { variantKey: "youth", cfgOverrides: {} });
+    if (!youth.ok) throw new Error("football youth");
+    const want = stageDefaultsFor(football, "knockout", "youth")["shootoutAttempts"];
+    expect(want, "the premise: youth's preset differs from 11-a-side's").not.toEqual(
+      stageDefaultsFor(football, "knockout", "11-a-side")["shootoutAttempts"],
+    );
+    const cfg = stageScopedFoldCfg(football, youth.cfg, { kind: "knockout", config: {} }, "youth") as Record<string, unknown>;
+    expect(cfg["shootoutAttempts"]).toEqual(want);
+  });
+
+  it("D3: nothing at a stage config's top level is read; the same decider under rules is", () => {
+    const division = footballDivision({ shootout: false });
+    const fold = (config: Record<string, unknown>): Record<string, unknown> =>
+      stageScopedFoldCfg(football, division, { kind: "knockout", config }, "11-a-side") as Record<string, unknown>;
+    expect(fold({ rules: HELD })["shootout"], "held").toBe(false);
+    expect(fold({ rules: HELD, shootout: true })["shootout"], "a top-level shootout is ignored").toBe(false);
+    expect(fold({ rules: { ...HELD, shootout: true } })["shootout"], "under rules it is the stage's").toBe(true);
+  });
+
+  it("is the identity when the stream binds no stage", () => {
+    const division = footballDivision();
+    expect(stageScopedFoldCfg(football, division, undefined, "11-a-side")).toBe(division);
+  });
+
+  it("overlays a table stage's rules per key; an explicit null in rules is inherit, not a value", () => {
+    const badminton = sportOf("badminton");
+    const r = resolveDivisionCfg(badminton, { variantKey: "bwf", cfgOverrides: {} });
+    if (!r.ok) throw new Error("badminton bwf");
+    const division = r.cfg as Record<string, unknown>;
+    expect(division["bestOf"], "the premise: BWF plays best of 3").toBe(3);
+    const one = stageScopedFoldCfg(badminton, division, { kind: "league", config: { rules: { bestOf: 1 } } }, "bwf") as Record<string, unknown>;
+    expect(one["bestOf"]).toBe(1);
+    expect(one["setTo"]).toBe(division["setTo"]);
+    const inherit = stageScopedFoldCfg(badminton, division, { kind: "league", config: { rules: { bestOf: null } } }, "bwf") as Record<string, unknown>;
+    expect(inherit["bestOf"]).toBe(3);
   });
 });
 
-describe("stageScopedFoldCfg — the product's stage overlay (two decider keys + rules)", () => {
-  // A goalless football match, ended by its two period markers. With
-  // `shootout` off it is a decided draw; with `shootout` on the same events
-  // leave the match in its SHOOTOUT phase, undecided. The division declares
-  // it OFF and the STAGE turns it on — so this is green only if the overlay
-  // actually reaches the fold, not merely if the overlay function is correct.
+describe("stageScopedFoldCfg — the stage's format reaches the fold (preset, rules, held)", () => {
+  // A goalless football match, ended by its two period markers. The division
+  // plays no decider (extra time off, no shoot-out): a decided draw. A
+  // knockout created as the product creates one carries its PRESET (extra time
+  // and penalties on), so the same events go on into extra time, undecided —
+  // green only if the stage's format actually reaches the fold, not merely if
+  // the function is right. A HELD knockout posts every decider off (the
+  // product's `decidersOffRules`, X-SR-6's held arm) and is a draw again.
   const goalless = (
     stageConfig: Record<string, unknown>,
   ): Record<string, unknown> => ({
@@ -2597,21 +2668,31 @@ describe("stageScopedFoldCfg — the product's stage overlay (two decider keys +
   });
 
   it("is APPLIED at the fold, not merely correct in isolation", () => {
-    expectClean(validatePack(goalless({}), UNIT), []);
+    // Held: every decider off, a decided draw.
+    expectClean(validatePack(goalless({ rules: HELD }), UNIT), []);
 
-    const applied = validatePack(goalless({ shootout: true }), UNIT);
-    expect(onlyError(applied.findings).code).toBe("fold.not_decided");
+    // The preset, with nothing sent: the product's new knockout plays extra
+    // time, so the match is not decided at full time.
+    const preset = validatePack(goalless({}), UNIT);
+    expect(onlyError(preset.findings).code, "the preset reaches the fold").toBe("fold.not_decided");
     // And NO warning: a single-stage division binds its overlay, so there is
     // nothing unbindable to report. Without this the unbindable warning could
     // fire on every pack that declares a decider key at all.
-    expect(warnings(applied.findings)).toEqual([]);
+    expect(warnings(preset.findings)).toEqual([]);
+
+    // One decider switched back on in the stage's rules: the shoot-out.
+    const ruled = validatePack(goalless({ rules: { ...HELD, shootout: true } }), UNIT);
+    expect(onlyError(ruled.findings).code).toBe("fold.not_decided");
+
+    // D3: the same key at the config's TOP level is read by nothing.
+    expectClean(validatePack(goalless({ rules: HELD, shootout: true }), UNIT), []);
   });
 
   it("is NOT applied in a multi-stage division, and the risk is named", () => {
     // The division cannot bind a stream to a stage, so no overlay is applied
-    // — even though a stage declares one. The fold therefore runs on the
-    // division's own cfg (shootout OFF) and the match is a decided draw.
-    const pack = goalless({ shootout: true }) as unknown as {
+    // — even though both knockouts carry their preset. The fold therefore
+    // runs on the division's own cfg (no decider) and the match is a draw.
+    const pack = goalless({}) as unknown as {
       divisions: { stages: Record<string, unknown>[] }[];
     };
     pack.divisions[0]!.stages.push({
@@ -2630,11 +2711,17 @@ describe("stageScopedFoldCfg — the product's stage overlay (two decider keys +
     const warning = warnings(result.findings)[0];
     expect(warning?.code).toBe("fold.stage_overlay_unbindable");
     expect(warning?.where).toBe("divisions[ref=d1]");
-    expect(warning?.message).toContain("[shootout]");
+    // Every key the knockouts' format differs from the division's in: the
+    // preset's, from the engine (the division plays none of them).
+    const presetKeys = Object.keys(stageDefaultsFor(football, "knockout", "11-a-side")).sort();
+    expect(warning?.message).toContain(`[${presetKeys.join(", ")}]`);
 
-    // And a multi-stage division that declares NO decider key says nothing —
-    // the warning must not fire on every multi-stage pack.
-    const quiet = goalless({}) as unknown as {
+    // And a multi-stage division whose stages play the division's own format
+    // says nothing — the warning must not fire on every multi-stage pack. Each
+    // preset key sent as null removes it (the product's way to start a stage
+    // from the division's rules), so neither stage overlays anything.
+    const nulls = Object.fromEntries(presetKeys.map((k) => [k, null]));
+    const quiet = goalless({ rules: nulls }) as unknown as {
       divisions: { stages: Record<string, unknown>[] }[];
     };
     quiet.divisions[0]!.stages.push({
@@ -2642,7 +2729,7 @@ describe("stageScopedFoldCfg — the product's stage overlay (two decider keys +
       seq: 2,
       kind: "knockout",
       name: "KO2",
-      config: {},
+      config: { rules: nulls },
     });
     expectClean(
       validatePack(quiet as unknown as Record<string, unknown>, UNIT),
@@ -2658,7 +2745,7 @@ describe("stageScopedFoldCfg — the product's stage overlay (two decider keys +
     equals: unknown,
     path: string,
   ): Record<string, unknown> => {
-    const pack = goalless({}) as unknown as {
+    const pack = goalless({ rules: HELD }) as unknown as {
       expected: Record<string, unknown>;
     };
     pack.expected["specials"] = [
@@ -2708,50 +2795,6 @@ describe("stageScopedFoldCfg — the product's stage overlay (two decider keys +
     ).toBe("special.state");
   });
 
-  it("overlays ONLY shootout and extraTime from the stage's own top level", () => {
-    const base = { setTo: 21, shootout: false };
-    expect(
-      stageScopedFoldCfg(base, {
-        legs: 3,
-        shootout: true,
-        extraTime: { halves: 2 },
-      }),
-    ).toEqual({ setTo: 21, shootout: true, extraTime: { halves: 2 } });
-  });
-
-  it("is the identity when the stage sets neither key", () => {
-    const base = { setTo: 21 };
-    expect(stageScopedFoldCfg(base, { legs: 3 })).toBe(base);
-    expect(stageScopedFoldCfg(base, undefined)).toBe(base);
-  });
-
-  // Per-stage match rules (design 2026-09-17 §T1). The mirror gained the same
-  // second source as the product resolver; without these three the bench could
-  // silently lose the `rules` half and fold every overridden stage under the
-  // division's format, which is precisely what the header above says this
-  // mirror exists to prevent.
-  it("overlays the stage's rules fragment per key", () => {
-    expect(stageScopedFoldCfg({ bestOf: 1, setTo: 21 }, { rules: { bestOf: 3 } })).toEqual({
-      bestOf: 3,
-      setTo: 21,
-    });
-  });
-
-  it("lets the stage's own decider keys win over anything in rules", () => {
-    const out = stageScopedFoldCfg(
-      { shootout: "none" },
-      { shootout: "best_of_five", rules: { shootout: "sudden_death" } },
-    ) as Record<string, unknown>;
-    expect(out.shootout).toBe("best_of_five");
-  });
-
-  it("treats an explicit null in rules as inherit, not as a value", () => {
-    const out = stageScopedFoldCfg({ bestOf: 3 }, { rules: { bestOf: null } }) as Record<
-      string,
-      unknown
-    >;
-    expect(out.bestOf).toBe(3);
-  });
 });
 
 // ===========================================================================
@@ -3023,6 +3066,7 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
       const cfg = cfgOf(sportModule, variantKey);
       const events = reconstructSetRallies({
         stage: undefined,
+        variantKey: variantKey,
         module: sportModule,
         cfg,
         lineups: pair,
@@ -3057,6 +3101,7 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
       const goal = { type: `${key}.goal`, payload: { by: "@e-home" } };
       const events = fillPeriodMarkers({
         stage: undefined,
+        variantKey: variantKey,
         module: sportModule,
         cfg,
         lineups: pair,
