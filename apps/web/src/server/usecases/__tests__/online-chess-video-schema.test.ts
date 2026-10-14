@@ -211,7 +211,9 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
 
   // camera_connection_problems (T14 fix round 5, ruling 1): the NEUTRAL flag
   // job 5 raises when our safeguard's stamps pile up in one match.
-  it.each(["camera_lost", "out_of_band_play", "camera_connection_problems"])("accepts an open %s flag", async (kind) => {
+  // multiple_devices (T17B fix 2, D9; V444): job 5's flag for a player
+  // connected from more than one place at the same time in the match.
+  it.each(["camera_lost", "out_of_band_play", "camera_connection_problems", "multiple_devices"])("accepts an open %s flag", async (kind) => {
     expect(await attempt(sql`
       insert into fixture_play_flags (fixture_id, org_id, kind, person_id)
       values (${fixtureId}, ${orgId}, ${kind}, ${personId})`,

@@ -20,6 +20,7 @@ import { captureError } from "@/lib/sentry";
 import {
   boardMoveNo,
   parseCameraLostNote,
+  parseMultipleDevicesNote,
   parseOutOfBandNote,
   type ArbiterBoard,
   type ArbiterBoardState,
@@ -399,9 +400,13 @@ async function flagView(
         stamps: stamped.stamps,
       };
     }
+    case "multiple_devices":
+      // T17B fix 2, D9: read from job 5's note, strictly (a note it cannot
+      // read is null, and the card says so in general words).
+      return { id: f.id, kind: "multiple_devices", at, personName: ctx.nameOf(f.personId), report: parseMultipleDevicesNote(f.note) };
     default:
-      // V439's CHECK names exactly three kinds. A guard, not a comment: a
-      // fourth is refused loudly rather than drawn as one of the three.
+      // V439's CHECK (widened by V444) names exactly four kinds. A guard, not
+      // a comment: a fifth is refused loudly rather than drawn as one of them.
       throw new HttpError(500, `fixture_play_flags row with unknown kind ${JSON.stringify(f.kind)}`, "FLAG_KIND_UNKNOWN");
   }
 }

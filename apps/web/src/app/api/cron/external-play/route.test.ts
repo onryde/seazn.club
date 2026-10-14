@@ -61,6 +61,7 @@ describe("POST /api/cron/external-play", () => {
       cameraSettled: 6,
       cameraFlags: 7,
       connectionFlags: 8,
+      deviceFlags: 12,
       arbitersRemoved: 9,
       scanned: 15,
       deferred: 11,
@@ -89,7 +90,7 @@ describe("POST /api/cron/external-play", () => {
     expect(ROW, "the external-play row").toBeDefined();
     const zero = {
       skipped: 0, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
-      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, arbitersRemoved: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
+      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, deviceFlags: 0, arbitersRemoved: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
     };
     const cases: [string, object, Record<string, number | "unreadable">][] = [
       ["a clean pass", zero, {}],

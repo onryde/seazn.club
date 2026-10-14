@@ -32,7 +32,7 @@ import type { CameraPolicy } from "@/lib/camera-policy";
 import { fixtureCameraPolicyAt } from "@/server/external-play/camera-policy";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
-import { matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
+import { concurrentConnections, matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
 import { cameraMatchWindow, matchGuardFaults } from "@/server/external-play/video/match-window";
 import {
   endMeeting,
@@ -87,6 +87,10 @@ export type SweepReport = {
    *  safeguard's stamps past a threshold in one match — told, never an
    *  accusation (T14 fix round 5). */
   connectionFlags: number;
+  /** multiple_devices flags written this pass (job 5): a player connected
+   *  from more than one place at the same time in the match (T17B fix 2,
+   *  D9) — evidence, never a block. */
+  deviceFlags: number;
   /** Arbiter watches ended this pass (job 6): removed at RealtimeKit and
    *  stamped, or stamped for a room already torn down. */
   arbitersRemoved: number;
@@ -803,6 +807,13 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
 // ask RealtimeKit nothing. Evidence for the organiser, NEVER a
 // sanction (D10): a fixture_play_flags row, and nothing else moves.
 //
+// The union can be masked (T17B fix 2, D9 — measured live, JTcfKXow): a
+// player who plays from a camera-less tab while a second tab of theirs has
+// its camera on shows no camera off. So the same reports are read once more
+// for overlap: a player with MORE THAN ONE connection at the same time inside
+// the match is a `multiple_devices` flag (V444) naming when and how many —
+// flagged, never blocked. A reload is sequential, never "at once".
+//
 // One settle per room: `camera_evidence_at` is stamped, conditionally on
 // null, in the SAME transaction as the flags — a re-run, or a pass racing
 // this one, writes no second flag (V442). A room whose reports never become
@@ -848,7 +859,7 @@ async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
      order by m.ended_at, m.fixture_id`;
 }
 
-type CameraFlag = { kind: "camera_lost" | "camera_connection_problems"; personId: string; note: string };
+type CameraFlag = { kind: "camera_lost" | "camera_connection_problems" | "multiple_devices"; personId: string; note: string };
 
 /** Every player's camera over the window, or `not_ready` while any session
  *  is live or any report is not final. A RealtimeKit failure THROWS. */
@@ -928,6 +939,19 @@ async function readCameraEvidence(
           `${stamped.intervals.map((iv) => `${iv.from} to ${iv.to}`).join("; ") || "no time inside it"}; camera required`,
       });
     }
+    // D9: more than one connection at once is told, whatever the union says.
+    // Its note leads with the count and the overlap's total (arbiter-view.ts
+    // parseMultipleDevicesNote reads it back).
+    const together = concurrentConnections(window, reports);
+    if (together.intervals.length > 0) {
+      flags.push({
+        kind: "multiple_devices",
+        personId,
+        note:
+          `${together.devices} camera connections at once for ${Math.round(together.seconds)} s in the match: ` +
+          `${together.intervals.map((iv) => `${iv.from} to ${iv.to}`).join("; ")}; camera required`,
+      });
+    }
     const off = matchCameraOff(window, reports, faults);
     if (off.offIntervals.length === 0) continue;
     const intervals = off.offIntervals
@@ -963,6 +987,7 @@ async function settleCamera(pass: Pass, c: CameraCandidate, flags: readonly Came
   pass.report.cameraSettled++;
   pass.report.cameraFlags += written.filter((f) => f.kind === "camera_lost").length;
   pass.report.connectionFlags += written.filter((f) => f.kind === "camera_connection_problems").length;
+  pass.report.deviceFlags += written.filter((f) => f.kind === "multiple_devices").length;
 }
 
 async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDeps): Promise<void> {
@@ -1121,6 +1146,7 @@ function emptyReport(skipped: 0 | 1): SweepReport {
     cameraSettled: 0,
     cameraFlags: 0,
     connectionFlags: 0,
+    deviceFlags: 0,
     arbitersRemoved: 0,
     scanned: 0,
     deferred: 0,

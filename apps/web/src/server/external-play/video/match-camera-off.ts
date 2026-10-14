@@ -30,6 +30,14 @@
 // stamped time over GUARD_FAULT_FLAG_SECONDS, or more than
 // GUARD_FAULT_FLAG_STAMPS stamps — the organiser is told, neutrally
 // (stampedInMatch → job 5's camera_connection_problems flag).
+//
+// The union can be MASKED (T17B fix 2, D9, measured live in JTcfKXow): a
+// player who plays from a camera-less tab while a second tab of theirs keeps
+// its camera on shows no camera off at all. Flagged, never blocked: where one
+// player had MORE THAN ONE connection at the same time inside the match
+// (concurrentConnections → job 5's multiple_devices flag), the organiser is
+// told when and how many. Tying moves to the device that had the camera is
+// the owner's design question, out of scope here.
 import {
   PEER_REPORT_MIN_CADENCE_MS,
   VIDEO_OFF_GAP_CADENCES,
@@ -185,5 +193,56 @@ export function matchCameraOff(
     offSeconds: offIntervals.reduce((n, iv) => n + iv.seconds, 0),
     offIntervals,
     connections: reports.length,
+  };
+}
+
+export type ConcurrentConnections = {
+  /** The most connections the player had at one instant inside the window
+   *  (0 with none, 1 when never more than one at a time). */
+  devices: number;
+  /** Where two or more were connected at once, clipped to the window, merged,
+   *  in order. Empty when `devices` < 2. */
+  intervals: { from: string; to: string }[];
+  /** The intervals' total, in seconds. */
+  seconds: number;
+};
+
+/** One player's connections at the SAME time over one match window (D9).
+ *  Overlap is strict: a connection that joins at the very instant another
+ *  left is sequential — a reload (measured: the vendor stamps the old peer's
+ *  leave before the new peer's join). Each connection's span is its own
+ *  report's [joined_at, left_at], whatever its camera did. */
+export function concurrentConnections(
+  window: { from: Date; to: Date },
+  reports: readonly { joinedAt: string; leftAt: string }[],
+): ConcurrentConnections {
+  const [w0, w1] = windowSpan(window);
+  const edges: [number, 1 | -1][] = [];
+  for (const r of reports) {
+    const a = Math.max(Date.parse(r.joinedAt), w0);
+    const b = Math.min(Date.parse(r.leftAt), w1);
+    if (b > a) edges.push([a, 1], [b, -1]);
+  }
+  // At one instant a leave is taken before a join, so touching spans never
+  // count as at once.
+  edges.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let open = 0;
+  let devices = 0;
+  let since: number | null = null;
+  const spans: Span[] = [];
+  for (const [t, d] of edges) {
+    open += d;
+    devices = Math.max(devices, open);
+    if (open >= 2 && since === null) since = t;
+    if (open < 2 && since !== null) {
+      if (t > since) spans.push([since, t]);
+      since = null;
+    }
+  }
+  const merged = clippedUnion(spans, w0, w1);
+  return {
+    devices,
+    intervals: merged.map(([a, b]) => ({ from: new Date(a).toISOString(), to: new Date(b).toISOString() })),
+    seconds: merged.reduce((n, [a, b]) => n + (b - a), 0) / 1000,
   };
 }

@@ -10,6 +10,7 @@ import {
   boardMoveNo,
   fullMoveOf,
   parseCameraLostNote,
+  parseMultipleDevicesNote,
   parseOutOfBandNote,
   timelineSegments,
 } from "../arbiter-view";
@@ -117,6 +118,52 @@ describe("parseCameraLostNote", () => {
     let checked = 0;
     for (const note of bad) {
       expect(parseCameraLostNote(note), String(note)).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(bad.length);
+  });
+});
+
+// T17B fix 2, D9: the sweep's job-5 note for a player connected from more than one place at once. The texts are the
+// ones external-play-sweep.test.ts (D9) asserts the producer writes; that suite also reads them back through the loader.
+describe("parseMultipleDevicesNote", () => {
+  const A = "2026-10-12T19:31:05.000Z";
+  const B = "2026-10-12T19:36:45.000Z";
+  const C = "2026-10-12T19:40:00.000Z";
+  const D = "2026-10-12T19:41:00.000Z";
+
+  it("one overlap, and two overlaps with three at once — the count, the total and every interval, in order", () => {
+    const cases: [string, unknown][] = [
+      [
+        `2 camera connections at once for 340 s in the match: ${A} to ${B}; camera required`,
+        { devices: 2, seconds: 340, intervals: [{ from: A, to: B }] },
+      ],
+      [
+        `3 camera connections at once for 400 s in the match: ${A} to ${B}; ${C} to ${D}; camera required`,
+        { devices: 3, seconds: 400, intervals: [{ from: A, to: B }, { from: C, to: D }] },
+      ],
+    ];
+    let checked = 0;
+    for (const [note, want] of cases) {
+      expect(parseMultipleDevicesNote(note), note).toEqual(want);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
+  it("anything it cannot read is null — never a guessed count", () => {
+    const bad = [
+      null,
+      "",
+      `1 camera connections at once for 340 s in the match: ${A} to ${B}; camera required`, // one is not "at once"
+      `2 camera connections at once for 340 s in the match: ; camera required`, // no interval
+      `2 camera connections at once for 340 s in the match: ${B} to ${A}; camera required`, // backwards
+      `2 camera connections at once for 340 s in the match: soon to ${B}; camera required`,
+      `camera off 189 s of 1260 s in the match: ${A} to ${B}; from 1 camera connection over 1 session; camera required`,
+    ];
+    let checked = 0;
+    for (const note of bad) {
+      expect(parseMultipleDevicesNote(note), String(note)).toBeNull();
       checked += 1;
     }
     expect(checked, "anti-vacuity").toBe(bad.length);

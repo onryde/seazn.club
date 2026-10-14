@@ -6,7 +6,7 @@
 // client panel (components/v2/arbiter-panel.tsx), so it imports nothing that
 // is server-only. The two note readers below read the evidence notes the
 // flags' PRODUCERS write — reconcile (out_of_band_play) and the sweep's job 5
-// (camera_lost). They are strict: a note they cannot read is null and the
+// (camera_lost, and multiple_devices — T17B fix 2, D9). They are strict: a note they cannot read is null and the
 // panel says so in general words, never a guessed number. The duration of a
 // `camera_connection_problems` flag is NEVER read from its note (controller
 // addendum 2026-10-12): the loader reads it from fixture_video_guard_faults.
@@ -107,7 +107,27 @@ export type ArbiterFlag =
        *  note. Both null when there is no match window to read them over. */
       seconds: number | null;
       stamps: number | null;
+    }
+  | {
+      id: string;
+      /** T17B fix 2, D9: the player was connected from more than one place
+       *  at the same time in the match. Evidence, never a block. */
+      kind: "multiple_devices";
+      at: string;
+      personName: string | null;
+      /** From the sweep's note; null when it could not be read. */
+      report: MultipleDevicesReport | null;
     };
+
+/** The sweep's job-5 multiple_devices note, as it states it (D9). */
+export type MultipleDevicesReport = {
+  /** The most connections at one instant: always 2 or more. */
+  devices: number;
+  /** Total seconds with two or more connected at once. */
+  seconds: number;
+  /** Where they overlapped, in order. */
+  intervals: { from: string; to: string }[];
+};
 
 export type ArbiterBoard = {
   fixtureId: string;
@@ -209,6 +229,25 @@ export function parseCameraLostNote(note: string | null): CameraOffReport | null
   }
   if (intervals.length === 0) return null;
   return { offSeconds, windowSeconds, intervals, connections: Number(m[4]), sessions: Number(m[5]) };
+}
+
+/** sweep.ts job 5 (`readCameraEvidence`, T17B fix 2, D9):
+ *  "{n} camera connections at once for {s} s in the match: {from} to {to};
+ *  …; camera required". n is 2 or more — one is never "at once". */
+export function parseMultipleDevicesNote(note: string | null): MultipleDevicesReport | null {
+  if (note === null) return null;
+  const m = /^(\d+) camera connections at once for (\d+) s in the match: (.+); camera required$/.exec(note);
+  if (!m) return null;
+  const devices = Number(m[1]);
+  if (devices < 2) return null;
+  const intervals: { from: string; to: string }[] = [];
+  for (const part of m[3]!.split("; ")) {
+    const iv = /^(\S+) to (\S+)$/.exec(part);
+    if (!iv || !ISO.test(iv[1]!) || !ISO.test(iv[2]!)) return null;
+    if (Date.parse(iv[2]!) < Date.parse(iv[1]!)) return null;
+    intervals.push({ from: iv[1]!, to: iv[2]! });
+  }
+  return { devices, seconds: Number(m[2]), intervals };
 }
 
 /** The off intervals as positions on a bar the length of the match window. */
