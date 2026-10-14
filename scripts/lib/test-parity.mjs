@@ -88,7 +88,7 @@ export function diffIds(before, after, ledger) {
       if (!e.to || !nAfter.has(e.to)) problems.push(`LEDGER-TARGET-MISSING ${e.to ?? "(none)"}`);
       else if (!surplusBefore.has(e.id) || !open(claimedAfter, surplusAfter, e.to)) problems.push(`LEDGER-INVALID ${e.id} -> ${e.to}`);
       else {
-        if (open(claimedBefore, surplusBefore, e.id)) claim(claimedBefore, e.id);
+        claim(claimedBefore, e.id);
         claim(claimedAfter, e.to);
       }
     } else if (e.fate === "added" && open(claimedAfter, surplusAfter, e.id)) claim(claimedAfter, e.id);

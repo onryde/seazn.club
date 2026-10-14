@@ -6,6 +6,8 @@
 
 **Execution note (2026-10-14, batch 1b review m4):** collect parity ids with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` on BOTH sides, every batch. The engine's vitest config has `isolate: false` and `src/import/plan.property.test.ts` imports `./plan.test.ts`, so without `--isolate` the attribution of 19 ids depends on worker scheduling and the script reports unaccounted ids that still exist (1b review: 19 unaccounted without it, 0 with). The `scripts/lib/test-parity.mjs` header says the same.
 
+**Execution note (2026-10-14, batch 1d-0):** `scripts/lib/test-parity.mjs` compares ids as a MULTISET since `497849e76`. A duplicate title inside one test file (`scripts/__tests__/mutate.test.ts`, `z3-retirement-drift.test.ts` have them) no longer blocks a run: identical duplicates are `both` copy for copy, a change in the count is before-only or after-only one copy at a time, and each ledger entry accounts exactly one copy. The same id arriving from two reports of ONE side (a report listed twice, or two roots whose relative paths collide) still exits 2.
+
 **Revision 2 (2026-10-14)** — rewritten after the Opus plan review (`docs/superpowers/specs/engine-split/reviews/plan-phase1.md`: 1 BLOCKER, 19 MAJOR, 24 MINOR). Each fix cites its finding as `[R#]`.
 
 **Goal:** Inside the monorepo, make `@seazn/engine` a pure, publishable, phone-safe library: the placement client moves out behind a port, a compiled `dist/` is published as canaries, the tests that read across the package boundary are rehomed in both directions, fold epochs are pinned to the golden corpora, and the server refuses outdated engine epochs. After this, Phases 2a and 2b are pure relocations.
@@ -876,15 +878,17 @@ export const ENGINE_PREFIX = git("rev-parse", "--show-prefix"); // "packages/eng
 **The simulated engine repo** used by Tasks 1d-1 and 1d-6:
 
 1. `rsync -a --exclude node_modules --exclude dist packages/engine/ "$SIM/"` with `SIM=$(mktemp -d)`.
-2. `mkdir -p "$SIM/.github/workflows" && cp .github/workflows/mutation.yml "$SIM/.github/workflows/"`.
+2. `mkdir -p "$SIM/.github/workflows" && sed 's#packages/engine/##g' .github/workflows/mutation.yml > "$SIM/.github/workflows/mutation.yml"`. 2b re-roots the workflow's `packages/engine/` paths when it moves the file (spec §5.4), so the simulation does the same; a verbatim copy names paths that do not exist in the simulated repo.
+2b. `grep -a '^packages/engine/' .gitignore | sed 's#^packages/engine/##' > "$SIM/.gitignore"`. The engine repo has its own `.gitignore`; the root's `packages/engine/` lines, prefix stripped, are `sim-report.json`, `reports/mutation/`, `SURVIVORS.md`, `.stryker-tmp/` and `dist/` (re-read the root file for the exact set; do not type it). Without it `stryker-outputs-ignored.test.ts` cannot pass by construction.
 3. `cd "$SIM" && git init -q && git add -A && git commit -qm sim && pnpm install`.
-4. Record the resolved `vitest` and `typescript` versions next to every run: there is no lockfile, so versions float. [R31]
+4. Record the resolved `vitest` and `typescript` versions next to every run: there is no lockfile, so versions float. [R31] (1d-1 run: vitest 4.1.11, typescript 6.0.3, `.bin/tsc` = typescript-native 7.0.2, node 26.8.2, pnpm 11.17.0.)
+5. **Expected result of the 11 `test/stryker-*.test.ts` files in the simulated repo after 1d-1: 281 of 281 green**, the same 281 as in the monorepo. Before 1d-1 the same run had 3 of the 11 red (`stryker-outputs-ignored` uncollected, `stryker-sizing` 3 tests, `stryker-changed-lines` 1), which is the true red for the task.
 
 ### Task 1d-1: Stryker tests and `stryker-changed.mjs`, layout-agnostic
 
 **Files:** `packages/engine/test/layout.ts` (create), `test/stryker-outputs-ignored.test.ts` (:12-13, :32, :40-54), `test/stryker-sizing.test.ts` (:884-961), `test/stryker-changed-lines.test.ts` (:142, :162, :325-330), `scripts/stryker-changed.mjs` (:67) + its `.d.mts`, `test/stryker-matrix.test.ts` (:18, :30), `tools/matrix/__tests__/matrix-workflow.test.ts` (the Stryker-figure assertions). Tell the mutation session before starting.
 
-- [ ] **Step 1:** In `stryker-changed.mjs:67`, build the diff matcher from the checkout prefix: `` new RegExp(`^\\+\\+\\+ b/${escapeRegExp(prefix)}(src/.+)$`) ``, where `prefix` comes from `git rev-parse --show-prefix` run in the engine dir. Export `enginePrefix()` and declare it in the `.d.mts`. Add no tests: parametrise the existing synthetic-diff tests (:142, :162) over `ENGINE_PREFIX`, keeping their titles.
+- [ ] **Step 1:** In `stryker-changed.mjs:67`, build the diff matcher from the checkout prefix: `` new RegExp(`^\\+\\+\\+ b/${escapeRegExp(prefix)}(src/.+)$`) ``, where `prefix` comes from `git rev-parse --show-prefix` run in the engine dir. Export `enginePrefix()` and declare it in the `.d.mts`. Add one test only, the `enginePrefix` test (ledgered `added`: it reads a scratch repo at the root and a monorepo-shaped one); parametrise the existing synthetic-diff tests (:142, :162) over `ENGINE_PREFIX`, `"packages/engine/"` and `""` (`rangesFromDiff` takes the prefix as an optional third argument, so the monorepo run alone exercises both layouts), keeping their titles.
 - [ ] **Step 2:** In `stryker-outputs-ignored.test.ts`, `REPO` becomes `GIT_TOPLEVEL`, the workflow path becomes `path.join(GIT_TOPLEVEL, ".github/workflows/mutation.yml")`, and `packages/engine/...` literals become `` `${ENGINE_PREFIX}...` ``.
 - [ ] **Step 3:** In `stryker-matrix.test.ts:18,30`, the spawn cwd becomes `GIT_TOPLEVEL`, and literals become `ENGINE_PREFIX`.
 - [ ] **Step 4: `stryker-sizing.test.ts:922` cross-quote: split, not delete** [R20, spec §5.4].
@@ -893,7 +897,7 @@ export const ENGINE_PREFIX = git("rev-parse", "--show-prefix"); // "packages/eng
   - The `matrix-workflow.test.ts` half becomes a new test in `matrix-workflow.test.ts` that reads `packages/engine/stryker-measured.json` (a reverse read, inventoried in 1d-6), with a ledger entry `split`, its `to` pointing at the new id.
   - The NOTES list (:884) drops the matrix-workflow path, and `:952` reads `mutation.yml` via `GIT_TOPLEVEL`.
   - The `MATRIX_RUNNER` → `STRYKER_RUNNER` rename is NOT done in Phase 1 (D32g).
-- [ ] **Step 5:** Run the five engine files and `matrix-workflow.test.ts` with JSON. Then run the same five in the simulated engine repo. The same ids must pass. A test needing `HEAD^1` history must SKIP with a named reason, never fail.
+- [ ] **Step 5:** Run the eleven `test/stryker-*.test.ts` files and `matrix-workflow.test.ts` with JSON. Then run the same eleven in the simulated engine repo. The same ids must pass. A test needing `HEAD^1` history must SKIP with a named reason, never fail.
 - [ ] **Step 6: Mutate once.** Hardcode `ENGINE_PREFIX = "packages/engine/"`; the simulated run goes red. Revert.
 - [ ] **Four types:**
   - unit: these files;
@@ -964,7 +968,7 @@ export const ENGINE_PREFIX = git("rev-parse", "--show-prefix"); // "packages/eng
   - unchanged (reads a path that stays).
 
   Include `client-graph-no-server-barrel.test.ts:20` (reads `packages/engine/package.json`), both z3 tests, `lock-isolation.test.ts`, and the 1b-x `scripts/__tests__` files. This file is an input to the 2b plan.
-- [ ] **Simulated engine repo.** Collecting the whole engine package in the simulated repo must succeed for every file. A collect-time read of a monorepo path fails collection, as four files did before this batch. Then run only the files this batch touched, AND the three files 1b added whose tests read the monorepo by design: `test/pack-proof.test.ts`, `test/publish-manifest.test.ts` and `test/canary.test.ts`, plus `pack:proof --only types`. **There must be zero failures that name a monorepo path** except the reads in the next item, each of which is expected to fail here and owes a recorded 2b fate.
+- [ ] **Simulated engine repo** (built by the recipe above, including steps 2 and 2b). Collecting the whole engine package in the simulated repo must succeed for every file. A collect-time read of a monorepo path fails collection, as four files did before this batch. Then run only the files this batch touched, AND the three files 1b added whose tests read the monorepo by design: `test/pack-proof.test.ts`, `test/publish-manifest.test.ts` and `test/canary.test.ts`, plus `pack:proof --only types`. **There must be zero failures that name a monorepo path** except the reads in the next item, each of which is expected to fail here and owes a recorded 2b fate.
 - [ ] **1b engine → monorepo reads (batch 1b review M2).** 1b added reads the collect-only run cannot see, because they happen at run time. Record a 2b fate for each in `reverse-inventory.md` (the 2b plan consumes it) and name the engine-repo replacement:
   - (a) the **Next, React and TypeScript versions** `pack-proof/run.mjs` reads from `apps/web/package.json` for the Next and RN fixtures (`REPO` = `engine/../..`); at 2b they come from the engine repo's own devDependencies;
   - (b) the root **`packageManager`** field `run.mjs` reads to pick the pnpm version (`pickPnpm`); at 2b it is the engine repo's own `packageManager`;
@@ -1305,3 +1309,4 @@ Worktree `engine-split-1f`.
 - The Phase 2a plan is written after Batch 1a merges, against the tree as it is then.
 - The Phase 2b plan is written at W2e close. It takes `ledgers/*.json` and `reverse-inventory.md` as inputs, and also does the D32g `STRYKER_RUNNER` rename and the D32d `tools-import-guard` drop.
 - After each batch merges, update the spec status line and the `project_engine_split_sequencing` memory.
+- Notes the 2b plan inherits from 1d-1: the retired-figure phrase scan (`RETIRED` in `stryker-sizing.test.ts`) no longer covers `tools/matrix/__tests__/matrix-workflow.test.ts`, because that file lies outside the engine package and was dropped from the NOTES list (accepted in the 1d-0/1d-1 review). It leaves the engine's reach with the `mutation.yml` tests when those move to the engine repo at 2b, so nothing is owed for it unless that file keeps quoting sizing figures after the move. The same file's fan-out test (split out in 1d-1) reads `packages/engine/stryker-measured.json`; it is a reverse read inventoried in 1d-6.

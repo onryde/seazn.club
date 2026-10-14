@@ -6,6 +6,11 @@
 // (publish-manifest.test.ts); the lint assertion moved to pack-proof.test.ts, which imports nothing from src/.
 //
 // This holds the rule, not the one file: no engine test file that imports ESLint reaches src/ through its static imports.
+//
+// The same sandbox breaks test/layout.ts (engine-split 1d-1): it asks git where the engine sits in its checkout, and the sandbox is a
+// copy under .stryker-tmp/, so `git rev-parse --show-prefix` answers ".stryker-tmp/sandbox-x/" (or "packages/engine/.stryker-tmp/...") and
+// every path built from ENGINE_PREFIX or GIT_TOPLEVEL is wrong (or git is absent and the import throws). So the second rule: no engine
+// test file that reaches test/layout.ts, directly or through a helper, reaches src/.
 // Single-sport reason: no sport is involved - this is a file-graph rule.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,6 +75,17 @@ function eslintTestsReachingSrc(engineDir: string): { scanned: number; loadsEsli
   const loadsEslint = files.filter((f) => IMPORTS_ESLINT.test(readFileSync(f, "utf8")));
   const offenders = loadsEslint.filter((f) => [...reachable(f, engineDir)].some((r) => r.startsWith(srcDir)));
   return { scanned: files.length, loadsEslint: loadsEslint.map((f) => relative(engineDir, f)), offenders: offenders.map((f) => relative(engineDir, f)) };
+}
+
+/** The test files that reach test/layout.ts through their relative imports (directly or through a helper) and, through them, a file under
+ *  src/. `importers` is how many reach the layout at all, which the real tree must not leave at zero. */
+function layoutTestsReachingSrc(engineDir: string): { scanned: number; importers: string[]; offenders: string[] } {
+  const files = testFiles(engineDir);
+  const srcDir = join(engineDir, "src") + "/";
+  const layout = join(engineDir, "test/layout.ts");
+  const importers = files.filter((f) => reachable(f, engineDir).has(layout));
+  const offenders = importers.filter((f) => [...reachable(f, engineDir)].some((r) => r.startsWith(srcDir)));
+  return { scanned: files.length, importers: importers.map((f) => relative(engineDir, f)), offenders: offenders.map((f) => relative(engineDir, f)) };
 }
 
 // spelled in two halves so THIS file's text holds no `from "eslint"` of its own (the scan reads every test file, this one included)
@@ -142,5 +158,57 @@ describe("no engine test that loads ESLint reaches src/ (Stryker's related set r
       "src/lint.test.ts": `import { ESLint } from "${E}";\n`,
     });
     expect(eslintTestsReachingSrc(dir).offenders).toEqual(["src/lint.test.ts"]);
+  });
+});
+
+describe("no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox)", () => {
+  it("holds on the real package, and the scan saw both the tests and a layout importer", () => {
+    const r = layoutTestsReachingSrc(ENGINE);
+    expect(r.scanned, "test files scanned").toBeGreaterThan(50);
+    // anti-vacuity: stryker-outputs-ignored.test.ts is a layout importer that is meant to exist; a scan that stops finding one has stopped looking
+    expect(r.importers).toContain("test/stryker-outputs-ignored.test.ts");
+    expect(r.offenders).toEqual([]);
+  });
+
+  it("catches a layout importer that reaches src/ directly, through a helper, through an index, and by a dynamic import", () => {
+    const dir = tree({
+      "src/a.ts": "export const a = 1;\n",
+      "src/sub/index.ts": "export const s = 1;\n",
+      "test/layout.ts": "export const ENGINE_PREFIX = '';\n",
+      "test/helper.ts": 'export { a } from "../src/a.ts";\n',
+      "test/direct.test.ts": 'import { ENGINE_PREFIX } from "./layout.ts";\nimport { a } from "../src/a.ts";\n',
+      "test/indirect.test.ts": 'import { ENGINE_PREFIX } from "./layout.ts";\nimport { a } from "./helper.ts";\n',
+      "test/via-index.test.ts": 'import { ENGINE_PREFIX } from "./layout.ts";\nimport { s } from "../src/sub";\n',
+      "test/dynamic.test.ts": 'import { ENGINE_PREFIX } from "./layout.ts";\nawait import("../src/a.ts");\n',
+      "test/extensionless.test.ts": 'import { ENGINE_PREFIX } from "./layout";\nimport { a } from "./helper";\n',
+      "test/layout-via-helper.ts": 'export { ENGINE_PREFIX } from "./layout.ts";\n',
+      "test/through-helper.test.ts": 'import { ENGINE_PREFIX } from "./layout-via-helper.ts";\nimport { a } from "../src/a.ts";\n',
+    });
+    const r = layoutTestsReachingSrc(dir);
+    expect(r.offenders.sort()).toEqual(["test/direct.test.ts", "test/dynamic.test.ts", "test/extensionless.test.ts", "test/indirect.test.ts", "test/through-helper.test.ts", "test/via-index.test.ts"]);
+    expect(r.importers.length, "every case imports the layout").toBe(6);
+    expect(r.scanned).toBe(6);
+  });
+
+  it("passes a layout importer that never reaches src/, and a src-importing test that never reaches the layout", () => {
+    const dir = tree({
+      "src/a.ts": "export const a = 1;\n",
+      "test/layout.ts": "export const ENGINE_PREFIX = '';\n",
+      "test/layout-only.test.ts": 'import { ENGINE_PREFIX } from "./layout.ts";\n',
+      "test/src-only.test.ts": 'import { a } from "../src/a.ts";\n',
+    });
+    const r = layoutTestsReachingSrc(dir);
+    expect(r.offenders).toEqual([]);
+    expect(r.importers).toEqual(["test/layout-only.test.ts"]);
+    expect(r.scanned).toBe(2);
+  });
+
+  it("is not fooled by a cycle through the layout, and counts a layout importer under src/ itself as reaching src/", () => {
+    const dir = tree({
+      "test/layout.ts": 'import "./a.test.ts";\n',
+      "test/a.test.ts": 'import "./layout.ts";\n',
+      "src/uses-layout.test.ts": 'import "../test/layout.ts";\n',
+    });
+    expect(layoutTestsReachingSrc(dir).offenders).toEqual(["src/uses-layout.test.ts"]);
   });
 });

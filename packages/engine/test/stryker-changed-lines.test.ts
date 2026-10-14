@@ -174,6 +174,9 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
     // the prefix is literal text, never a pattern: a "." in it matches a "." only
     expect(rangesFromDiff(["+++ b/e.g/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, "e.g/")).toEqual(["src/core/events.ts:2-2"]);
     expect(rangesFromDiff(["+++ b/exg/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, "e.g/")).toEqual([]);
+    // the start of the line is anchored: a `+++ b/...` that is only the TAIL of a line names no file, and its hunks are nobody's
+    expect(rangesFromDiff(["+x +++ b/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, "")).toEqual([]);
+    expect(rangesFromDiff(["+++ b/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, ""), "the anchored form of the same line is a file").toEqual(["src/core/events.ts:2-2"]);
   });
 
   it("rangesFromDiff and rangesFromUntracked keep only mutable, measured source, and name every file they skip (review I-1)", () => {

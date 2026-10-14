@@ -1,6 +1,6 @@
 {
   "batch": "1d",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1d, built against the batch base 0fa3b66fc (main after 1b). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` (--isolate on BOTH sides: batch 1b review m4), from the engine package for the engine report and from the repo root with the engine's vitest binary for the other two. Task 1d-0 (scripts/lib/test-parity.mjs compares ids as a multiset, commit 497849e76): scripts/__tests__/test-parity.test.ts, collected whole on both sides; the two tests that asserted a duplicate id is refused are retired (behaviour deliberately reversed) and the multiset tests are added. Task 1d-1 (Stryker tests and stryker-changed.mjs layout-agnostic): engine = the eleven test/stryker-*.test.ts files (outputs-ignored, sizing, changed-lines, matrix, cuts, floor, generator-exclusion, groups, runner, sandbox-safe, vitest-runner), tools/matrix = __tests__/matrix-workflow.test.ts. No moved test changed its title except the split fan-out test of stryker-sizing.test.ts (retitled 'the workflow quotes' for the engine half; the matrix-workflow.test.ts half is a new test in that file). The enginePrefix test is the only added engine test. Later tasks of batch 1d append their own entries to this file.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1d, built against the batch base 0fa3b66fc (main after 1b). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` (--isolate on BOTH sides: batch 1b review m4), from the engine package for the engine report and from the repo root with the engine's vitest binary for the other two. Task 1d-0 (scripts/lib/test-parity.mjs compares ids as a multiset, commit 497849e76): scripts/__tests__/test-parity.test.ts, collected whole on both sides; the two tests that asserted a duplicate id is refused are retired (behaviour deliberately reversed) and the multiset tests are added. Task 1d-1 (Stryker tests and stryker-changed.mjs layout-agnostic): engine = the eleven test/stryker-*.test.ts files (outputs-ignored, sizing, changed-lines, matrix, cuts, floor, generator-exclusion, groups, runner, sandbox-safe, vitest-runner), tools/matrix = __tests__/matrix-workflow.test.ts. No moved test changed its title except the split fan-out test of stryker-sizing.test.ts (retitled 'the workflow quotes' for the engine half; the matrix-workflow.test.ts half is a new test in that file). The enginePrefix test is the only added engine test. Later tasks of batch 1d append their own entries to this file. Review fix of 1d-1 (commit 'fix(engine): 1d-1 review'): test/stryker-sandbox-safe.test.ts gains the four layout-importer tests (`added`); the anchor pin and the dropped equivalent guard in test-parity change assertions or code, no title.",
   "entries": [
     {
       "id": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
@@ -98,6 +98,26 @@
       "id": "scripts/__tests__/test-parity.test.ts › testIds — a collection that did not collect is not a collection › keeps both copies of a duplicate id within one report: the report is a multiset, not a set",
       "fate": "added",
       "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › catches a layout importer that reaches src/ directly, through a helper, through an index, and by a dynamic import",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › holds on the real package, and the scan saw both the tests and a layout importer",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › is not fooled by a cycle through the layout, and counts a layout importer under src/ itself as reaching src/",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › passes a layout importer that never reaches src/, and a src-importing test that never reaches the layout",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
     }
   ]
 }
