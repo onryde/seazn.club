@@ -11,11 +11,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveGroup } from "../scripts/stryker-cuts.mjs";
 import { filesOf, globMatches } from "../scripts/stryker-files.mjs";
 import { STRYKER_GROUPS, STRYKER_SPLITS } from "../stryker.groups.mjs";
+import { GIT_TOPLEVEL } from "./layout.ts";
 import { selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO = resolve(ENGINE, "..", "..");
 const NON_PROBE = Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe");
 const TIMEOUTS = JSON.parse(readFileSync(join(ENGINE, "stryker-timeouts.json"), "utf8")) as Record<string, number>;
 
@@ -25,9 +25,9 @@ function matrixCli(script: string, cwd: string, event: string | null, group: str
   const r = spawnSync(process.execPath, args, { cwd, encoding: "utf8", timeout: SPAWN_MS });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
-// As the workflow runs it: from the repository root, by its path.
+// As the workflow runs it: from the repository root (the git checkout the engine sits in), by its path.
 const REAL = join(ENGINE, "scripts/stryker-matrix.mjs");
-const real = (event: string | null, group: string | null) => matrixCli(REAL, REPO, event, group);
+const real = (event: string | null, group: string | null) => matrixCli(REAL, GIT_TOPLEVEL, event, group);
 
 /** The matrix a successful run printed: one `matrix=` line of JSON and nothing else (the line is appended to $GITHUB_OUTPUT). */
 function parsed(o: Out): { group: string; timeout: number; cut: string }[] {

@@ -1,0 +1,103 @@
+{
+  "batch": "1d",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1d, built against the batch base 0fa3b66fc (main after 1b). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` (--isolate on BOTH sides: batch 1b review m4), from the engine package for the engine report and from the repo root with the engine's vitest binary for the other two. Task 1d-0 (scripts/lib/test-parity.mjs compares ids as a multiset, commit 497849e76): scripts/__tests__/test-parity.test.ts, collected whole on both sides; the two tests that asserted a duplicate id is refused are retired (behaviour deliberately reversed) and the multiset tests are added. Task 1d-1 (Stryker tests and stryker-changed.mjs layout-agnostic): engine = the eleven test/stryker-*.test.ts files (outputs-ignored, sizing, changed-lines, matrix, cuts, floor, generator-exclusion, groups, runner, sandbox-safe, vitest-runner), tools/matrix = __tests__/matrix-workflow.test.ts. No moved test changed its title except the split fan-out test of stryker-sizing.test.ts (retitled 'the workflow quotes' for the engine half; the matrix-workflow.test.ts half is a new test in that file). The enginePrefix test is the only added engine test. Later tasks of batch 1d append their own entries to this file.",
+  "entries": [
+    {
+      "id": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "fate": "split",
+      "to": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "reason": "1d-1 (spec 5.4, R20): the engine half keeps the mutation.yml quote assertions (retitled: the test no longer reads matrix-workflow.test.ts); same legs/hours/wall derivation and the same three workflow phrases"
+    },
+    {
+      "id": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "fate": "split",
+      "to": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the fan-out figures this file quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "reason": "1d-1 (spec 5.4, R20): the matrix-workflow.test.ts half, which asserted that file quotes the same figures, moves into that file because it sits outside the engine package; it derives the legs, hours each and the FIFO walls at 20/12/8 slots from packages/engine/stryker-measured.json (a reverse read, inventoried in 1d-6) and refuses a part on a pace, which the engine's sizing test already forbids at merge"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — what a ledger entry may account for › refuses a duplicate id within one side, naming it",
+      "fate": "retired",
+      "reason": "1d-0 (test-parity multiset): ids are counted, so a duplicate title within one side is no longer refused; the opposite behaviour is asserted by the new 'duplicate ids are counted' tests (all added below)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › testIds — a collection that did not collect is not a collection › throws on a duplicate id within one report, naming it",
+      "fate": "retired",
+      "reason": "1d-0 (test-parity multiset): ids are counted, so a duplicate title within one side is no longer refused; the opposite behaviour is asserted by the new 'duplicate ids are counted' tests (all added below)"
+    },
+    {
+      "id": "test/stryker-changed-lines.test.ts › changed-lines Stryker (W2a Task 0b) › enginePrefix: the engine directory's path below its git checkout's root, empty when the engine is the root",
+      "fate": "added",
+      "reason": "1d-1: enginePrefix() is new (the diff matcher is built from the checkout prefix); it is read in a scratch repo at the root and in a monorepo-shaped one, and against the real checkout's prefix"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a `moved` entry moves ONE copy of a duplicated id: the copy that stayed is `both`, the one that left is accounted",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a `split` of a duplicated id still fans one copy out to several targets",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a duplicate added is after-only 1, and stays unaccounted without a ledger",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a duplicate that exists identically before and after is `both`, copy for copy, and nothing is unaccounted",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a target with a surplus of one cannot be claimed twice, even when its id also exists as an unchanged duplicate",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › accounts exactly one added copy per `added` entry",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › accounts exactly one copy per ledger entry: a surplus of two needs two `retired` entries, and a third accounts nothing",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › both copies of a duplicate moving needs two entries; one entry leaves the other copy and its twin target unaccounted",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › one of two copies removed is before-only 1 (the id itself, not a suffixed twin), and stays unaccounted without a ledger",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › refuses `added`/`retired` for a duplicate whose count did not change (the id is `both`, nothing was added or retired)",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › test-parity CLI (spawned) › exit 0, counting every copy, when a duplicate title exists identically before and after",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › test-parity CLI (spawned) › exit 1 when a duplicate title was added",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › test-parity CLI (spawned) › exit 1, naming the id, when one copy of a duplicate title vanished; `--ledger` retired accounts that one copy",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › testIds — a collection that did not collect is not a collection › keeps both copies of a duplicate id within one report: the report is a multiset, not a set",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    }
+  ]
+}

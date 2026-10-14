@@ -58,13 +58,25 @@ export function parseMutateRanges(value, engine) {
   });
 }
 
-/** `git diff -U0` text → the new-side line ranges of the measured source files under packages/engine/src; every other file
- *  the diff names is handed to `onSkip` with the reason. @param {string} diff @param {(file: string, why: string) => void} [onSkip] */
-export function rangesFromDiff(diff, onSkip = () => {}) {
+/** Where `engine` sits inside its git checkout, as `git diff` spells it: "packages/engine/" in the monorepo, "" in the engine's own repo
+ *  (2b). A diff names a file by its path from the repository root, so the matcher below is built from this and from nothing typed.
+ *  @param {string} [engine] */
+export function enginePrefix(engine = join(import.meta.dirname, "..")) {
+  return execFileSync("git", ["rev-parse", "--show-prefix"], { cwd: engine, encoding: "utf8" }).trim();
+}
+
+/** @param {string} text */
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** `git diff -U0` text → the new-side line ranges of the measured source files under the engine's src (`prefix`, the checkout's: see
+ *  enginePrefix); every other file the diff names is handed to `onSkip` with the reason.
+ *  @param {string} diff @param {(file: string, why: string) => void} [onSkip] @param {string} [prefix] */
+export function rangesFromDiff(diff, onSkip = () => {}, prefix = enginePrefix()) {
   /** @type {string[]} */ const out = [];
   /** @type {string | null} */ let file = null;
+  const engineFile = new RegExp(`^\\+\\+\\+ b/${escapeRegExp(prefix)}(src/.+)$`);
   for (const line of diff.split("\n")) {
-    const f = /^\+\+\+ b\/packages\/engine\/(src\/.+)$/.exec(line);
+    const f = engineFile.exec(line);
     if (f) {
       const why = notMutable(f[1]);
       if (why !== null) onSkip(f[1], why);

@@ -25,9 +25,12 @@ import { describe, expect, it } from "vitest";
 import { resolveGroup, resolveSplit, topLevelStatements } from "../scripts/stryker-cuts.mjs";
 import { STRYKER_GROUPS, STRYKER_SPLITS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 import { groupMutants, mutantCount, mutantsOf, mutantsOfText, parseEntry, selected, type Found, type Selected } from "./stryker-coverage.ts";
+import { GIT_TOPLEVEL } from "./layout.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+/** The workflow the sizing notes quote, read from the git checkout the engine sits in (the monorepo's root, or the engine repo's own). */
+const WORKFLOW = join(GIT_TOPLEVEL, ".github/workflows/mutation.yml");
 const GB = 1024 ** 3;
 
 // ---- the rulebook, typed here and never derived from the groups or the timeouts under test ---------------------------------
@@ -879,9 +882,11 @@ describe("test/stryker-coverage.ts reads a group's mutate list as Stryker does (
 // and a comment cannot fail a test, so the figures the notes quote are held to the measured ones here, and the retired ones are
 // refused by name.
 describe("the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2)", () => {
-  const read = (f: string): string => readFileSync(join(ENGINE, f), "utf8");
-  /** Every file whose comments speak of the rate, the ceiling, the timeouts' calibration or what a cut loses. */
-  const NOTES = ["stryker.groups.mjs", "stryker.config.mjs", "scripts/stryker-matrix.mjs", "scripts/stryker-cuts.mjs", "../../.github/workflows/mutation.yml", "test/stryker-cuts.test.ts", "../../tools/matrix/__tests__/matrix-workflow.test.ts"];
+  /** A path under the engine, or an absolute one (resolve keeps it). */
+  const read = (f: string): string => readFileSync(resolve(ENGINE, f), "utf8");
+  /** Every file within the engine package, plus the workflow it ships with, whose comments speak of the rate, the ceiling, the timeouts' calibration or what a cut loses.
+   *  (tools/matrix/__tests__/matrix-workflow.test.ts is not here: it lives outside the package and quotes the fan-out figures itself, held to the measured ones by its own test.) */
+  const NOTES = ["stryker.groups.mjs", "stryker.config.mjs", "scripts/stryker-matrix.mjs", "scripts/stryker-cuts.mjs", WORKFLOW, "test/stryker-cuts.test.ts"];
   /** What the notes said before the measurements: each phrase is a claim the measured figures falsify. */
   const RETIRED: [RegExp, string][] = [
     [/\(69, about 3 hours each/, "69 legs of about 3 hours each (79 legs of about 1.6 hours since the run was cut again)"],
@@ -919,7 +924,7 @@ describe("the comments that quote the sizing quote the measured figures (T20-FIX
     expect(checked, "files x retired phrases checked").toBe(NOTES.length * RETIRED.length);
   });
 
-  it("the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)", () => {
+  it("the fan-out figures the workflow quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)", () => {
     /** The org's concurrent hosted jobs, account-wide (GitHub Free; ruling T20-FIX1): what an uncapped dispatch can hold. */
     const ORG_SLOTS = 20;
     const order = Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe");
@@ -939,14 +944,12 @@ describe("the comments that quote the sizing quote the measured figures (T20-FIX
     expect(figure.legs, "legs in a dispatch of `all`").toBe(81);
     // the figures differ from one another, so a note that quoted one for another would be wrong
     expect(new Set([figure.all, figure.at12, figure.at8]).size, "three different walls").toBe(3);
-    const workflow = read("../../.github/workflows/mutation.yml");
+    const workflow = read(WORKFLOW);
     for (const phrase of [`(${figure.legs}, about ${figure.each} hours each, ${figure.jobHours} job-hours`, `for about ${figure.all} hours`, `takes about ${figure.at12} hours (about ${figure.at8} at 8)`]) {
       expect(workflow, `mutation.yml quotes "${phrase}"`).toContain(phrase);
     }
-    const pin = read("../../tools/matrix/__tests__/matrix-workflow.test.ts");
-    for (const phrase of [`${figure.legs} legs, about ${figure.each} hours each`, `for about ${figure.all} hours`, `takes about ${figure.at12} hours instead of about ${figure.at8} at 8`]) {
-      expect(pin, `matrix-workflow.test.ts quotes "${phrase}"`).toContain(phrase);
-    }
+    // The other half, that tools/matrix/__tests__/matrix-workflow.test.ts quotes the same figures, moved there (engine-split 1d-1, spec §5.4:
+    // a test of this package reads nothing outside it but the workflow it ships with).
   });
 
   it("the notes quote the run the timeouts come from, and the cuts note says what a member cut never scores", () => {
@@ -958,7 +961,7 @@ describe("the comments that quote the sizing quote the measured figures (T20-FIX
     expect(groups, "member cuts are named where cuts are described").toMatch(/member/i);
     expect(groups, "and the list of what they never score").toContain("stryker-unscored.json");
     expect(groups, `the loss the list holds (${UNSCORED.length})`).toContain(`There are ${UNSCORED.length} of them`);
-    const workflow = read("../../.github/workflows/mutation.yml");
+    const workflow = read(WORKFLOW);
     expect(workflow, "the workflow header names the run").toContain(String(MEASURED.run.id));
     expect(workflow, "and the file the timeouts are derived from").toContain("stryker-measured.json");
     const matrix = read("scripts/stryker-matrix.mjs");
