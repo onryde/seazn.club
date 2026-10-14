@@ -309,7 +309,8 @@ export function DeleteAccountButton() {
         throw new Error(data.error ?? "Failed to delete account");
       }
       setPhase("done");
-      window.location.href = "/";
+      // Full load on purpose (not router.push): the session is gone; drop the signed-in client tree.
+      window.location.assign(new URL("/", window.location.origin));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setPhase("confirm");

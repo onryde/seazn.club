@@ -392,7 +392,7 @@ export function OverviewTab({
               });
               if (!ok) return;
               await run(() => apiV1(`/api/v1/clubs/${club.id}`, { method: "DELETE" }));
-              window.location.href = "/directory?tab=clubs";
+              router.push("/directory?tab=clubs");
             }}
           >
             {msg("clubs.delete")}

@@ -443,7 +443,6 @@ export function safeNextPath(next: unknown): string | null {
   if (!next.startsWith("/") || next.startsWith("//")) return null;
   // Backslashes and control characters (CR/LF included, which have no business
   // in a redirect target) never appear in a legitimate internal path.
-  // eslint-disable-next-line no-control-regex
   if (/[\\\u0000-\u001f\u007f]/.test(next)) return null;
   // The authority: resolve against a sentinel origin and require it to survive.
   // Anything that escapes — scheme, host, or an authority smuggled through a
