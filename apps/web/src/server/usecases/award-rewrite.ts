@@ -18,7 +18,7 @@ import { matchName } from "./fixture-override-guards";
 // (`writeAwardedMatchState(…, {rewrite: true})`). Never refused for the score it moves: only an award that will not hold
 // under the new format (`awardFoldsUnder`: the engine refusing the forfeit, the fold deciding another award) is a named
 // 409 on the save. No shipped sport's walkover reaches that arm (award-fit.test.ts's header); it is a guard, reached
-// through the real saves by award-rewrite-refusal.test.ts. Its own module, with no usecase import, so `stage-rules.ts` and `divisions.ts` can both call it.
+// through the real saves by eventless-award-rewrite.test.ts ("both doors refuse by name"). Its own module, with no usecase import, so `stage-rules.ts` and `divisions.ts` can both call it.
 
 type FixtureScope = postgres.PendingQuery<postgres.Row[]>;
 
