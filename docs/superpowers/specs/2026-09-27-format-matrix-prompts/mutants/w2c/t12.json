@@ -1,7 +1,7 @@
 [
  {
   "id": "t12-defaults",
-  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "const base = carried !== null ? withoutNulls(carried) : stageDefaultsFor(module, kind, variant);",
   "replace": "const base = carried !== null ? withoutNulls(carried) : {};",
   "killers": [
@@ -16,7 +16,7 @@
  },
  {
   "id": "t12-carry-precedence",
-  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "const base = carried !== null ? withoutNulls(carried) : stageDefaultsFor(module, kind, variant);",
   "replace": "const base = { ...stageDefaultsFor(module, kind, variant), ...(carried ?? {}) };",
   "killers": [
@@ -38,7 +38,7 @@
  },
  {
   "id": "t12-precedence",
-  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "const rules = Object.keys(provided).length === 0 ? base : mergedStageRules(base, provided);",
   "replace": "const rules = base;",
   "killers": [
@@ -53,7 +53,7 @@
  },
  {
   "id": "t12-precedence-order",
-  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "mergedStageRules(base, provided);",
   "replace": "mergedStageRules(provided, base);",
   "killers": [
@@ -423,9 +423,9 @@
  },
  {
   "id": "t12-fr1-livecfg-off",
-  "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
-  "find": "stageScopedCfg(divisionCfg, stage?.config, module)",
-  "replace": "stageScopedCfg(divisionCfg, stage?.config, null)",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
+  "find": "stageScopedCfgOf(divisionCfg, stage?.config, module, topLevelKeys)",
+  "replace": "stageScopedCfgOf(divisionCfg, stage?.config, null, topLevelKeys)",
   "killers": [
    {
     "cwd": "apps/web",
@@ -601,9 +601,9 @@
  },
  {
   "id": "t12-fr3-preset-layer",
-  "file": "tools/matrix/lib/sport-cfg.ts",
-  "find": "const stored = { ...stageDefaultsFor(m, stageKind, variantKey), ...(rules ?? {}) };",
-  "replace": "const stored = { ...(rules ?? {}) };",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
+  "find": "const stored = storedStageRules(module, kind, variant, rules ?? null);",
+  "replace": "const stored = isObj(rules) && Object.keys(rules).length > 0 ? rules : null;",
   "killers": [
    {
     "cwd": ".",
@@ -615,7 +615,7 @@
    {
     "cwd": "apps/web",
     "files": [
-     "src/server/usecases/__tests__/matrix-stage-cfg-differential.test.ts"
+     "src/server/usecases/__tests__/stage-cfg-composition.test.ts"
     ],
     "name": "every sport x variant x kind, both arms the matrix posts"
    }
@@ -623,9 +623,9 @@
  },
  {
   "id": "t12-fr3-one-mapping",
-  "file": "tools/matrix/lib/sport-cfg.ts",
-  "find": "const overlay = stageRulesOverlay(m, cfg, stored);",
-  "replace": "const overlay = stageRulesOverlay(null, cfg, stored);",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
+  "find": "const overlay = stageRulesOverlay(module, divisionCfg, stageCfg.rules);",
+  "replace": "const overlay = stageRulesOverlay(null, divisionCfg, stageCfg.rules);",
   "killers": [
    {
     "cwd": ".",
@@ -759,7 +759,22 @@
     "files": [
      "src/server/engine-db/__tests__/seed-bracket-held-guard.test.ts"
     ],
-    "name": "for the named variants by name, before any write"
+    "name": "for the named variants by name, before any I/O"
+   }
+  ]
+ },
+ {
+  "id": "t12-fr4-seed-bracket-guard-order",
+  "file": "apps/web/src/server/engine-db/__tests__/helpers/seed-bracket.ts",
+  "find": "  if (opts.stageRules !== undefined && opts.stageRules !== \"division\" && Object.keys(opts.stageRules).length === 0) {\n    const played = divisionPlayedDeciders(opts.sport, variant, opts.stageKind, opts.divisionConfig);\n    if (played.length > 0) {\n      throw new Error(\n        `seedBracket: stageRules {} is not every decider off for ${opts.sport}/${variant} — its division plays ${played.join(\", \")}. ` +\n          `Pass decidersOffRules(sport, variant, kind) for a held rig, or \"division\" to keep the division's deciders on purpose.`,\n      );\n    }\n  }\n  const suffix = randomUUID().slice(0, 8);\n  const [{ id: orgId }] = await sql<{ id: string }[]>`\n    insert into organizations (name, slug) values (${\"Bo \" + suffix}, ${\"bo-\" + suffix}) returning id`;\n",
+  "replace": "  const suffix = randomUUID().slice(0, 8);\n  const [{ id: orgId }] = await sql<{ id: string }[]>`\n    insert into organizations (name, slug) values (${\"Bo \" + suffix}, ${\"bo-\" + suffix}) returning id`;\n  if (opts.stageRules !== undefined && opts.stageRules !== \"division\" && Object.keys(opts.stageRules).length === 0) {\n    const played = divisionPlayedDeciders(opts.sport, variant, opts.stageKind, opts.divisionConfig);\n    if (played.length > 0) {\n      throw new Error(\n        `seedBracket: stageRules {} is not every decider off for ${opts.sport}/${variant} — its division plays ${played.join(\", \")}. ` +\n          `Pass decidersOffRules(sport, variant, kind) for a held rig, or \"division\" to keep the division's deciders on purpose.`,\n      );\n    }\n  }\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/seed-bracket-held-guard.test.ts"
+    ],
+    "name": "for the named variants by name, before any I/O"
    }
   ]
  },

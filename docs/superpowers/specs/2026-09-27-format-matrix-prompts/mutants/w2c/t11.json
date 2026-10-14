@@ -105,7 +105,7 @@
  },
  {
   "id": "t11-merge-keeps",
-  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "const out: Record<string, unknown> = isObj(stored) ? withoutNulls(stored) : {};",
   "replace": "const out: Record<string, unknown> = {};",
   "killers": [
@@ -127,7 +127,7 @@
  },
  {
   "id": "t11-merge-null-removes",
-  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "if (v === null || v === undefined) delete out[k];",
   "replace": "if (v === null || v === undefined) out[k] = v;",
   "killers": [
@@ -142,7 +142,7 @@
  },
  {
   "id": "t11-clear-empty",
-  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "if (sent === null || Object.keys(sent).length === 0) return null;",
   "replace": "if (sent === null) return null;",
   "killers": [
@@ -157,7 +157,7 @@
  },
  {
   "id": "t11-empty-result-null",
-  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "return Object.keys(out).length === 0 ? null : out;",
   "replace": "return out;",
   "killers": [
@@ -677,7 +677,7 @@
  },
  {
   "id": "t11-stored-null-merge",
-  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "file": "apps/web/src/lib/stage-decider-off.ts",
   "find": "const out: Record<string, unknown> = isObj(stored) ? withoutNulls(stored) : {};",
   "replace": "const out: Record<string, unknown> = isObj(stored) ? { ...stored } : {};",
   "killers": [

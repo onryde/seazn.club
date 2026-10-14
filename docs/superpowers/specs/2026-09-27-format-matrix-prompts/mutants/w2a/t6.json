@@ -1,7 +1,7 @@
 [
   {
     "id": "overlay-off",
-    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "file": "apps/web/src/lib/stage-decider-off.ts",
     "find": "  if (!forbidsLevelResult(stage?.kind)) return scoped;\n",
     "replace": "  return scoped;\n",
     "killers": [
@@ -31,7 +31,7 @@
   },
   {
     "id": "overlay-first",
-    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "file": "apps/web/src/lib/stage-decider-off.ts",
     "find": "{ ...(scoped as Record<string, unknown>), ...overlay }",
     "replace": "{ ...overlay, ...(scoped as Record<string, unknown>) }",
     "killers": [
@@ -46,7 +46,7 @@
   },
   {
     "id": "parse-throws",
-    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "file": "apps/web/src/lib/stage-decider-off.ts",
     "find": "  const parsed = module.configSchema.safeParse(scoped);\n  const overlay = module.bracketDeciders((parsed.success ? parsed.data : scoped) as never);\n",
     "replace": "  const overlay = module.bracketDeciders((module.configSchema as unknown as { parse(v: unknown): unknown }).parse(scoped) as never);\n",
     "killers": [
@@ -61,7 +61,7 @@
   },
   {
     "id": "empty-overlay-copies",
-    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "file": "apps/web/src/lib/stage-decider-off.ts",
     "find": "Object.keys(overlay).length === 0 ? scoped : ",
     "replace": "",
     "killers": [
@@ -76,7 +76,7 @@
   },
   {
     "id": "json-null",
-    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "file": "apps/web/src/lib/stage-decider-off.ts",
     "find": "  if (scoped === null || typeof scoped !== \"object\" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is\n",
     "replace": "",
     "killers": [
