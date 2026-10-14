@@ -85,7 +85,7 @@
         "files": [
           "src/sports/boardgame/tiebreak.test.ts"
         ],
-        "name": "BG-KO-2 \\(ruling 82\\): the engine records the armageddon winner the scorer taps — either side, with or without colours"
+        "name": "BG-KO-2 \\(ruling 82, D7\\): an Armageddon records Black and the result"
       }
     ]
   },

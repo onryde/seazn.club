@@ -33,6 +33,11 @@ const say = (key: string, vars: Record<string, string | number> = {}) =>
 
 const CODES = Object.keys(RULE_ERROR_STATUS) as RuleErrorCode[];
 
+/** A reader in another language: es, so a pass cannot be the English wire text (whose en copy is the same sentence). */
+const ES = es as unknown as Record<string, string>;
+const msgEs = (key: string, vars: Record<string, string | number> = {}) =>
+  ES[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (name in vars ? String(vars[name]) : h));
+
 describe("every W2c refusal code has a key, in all four locales", () => {
   it("one key per code (the code table and the key table name the same codes) and per fit reason and lock reason", () => {
     expect(CODES.length, "anti-vacuity: the code table is not empty").toBeGreaterThan(0);
@@ -103,10 +108,6 @@ describe("the server's English is the en dictionary", () => {
 });
 
 describe("ruleRefusalText — the client reads the code and its extra, in the reader's language", () => {
-  /** A reader in another language: es, so a pass cannot be the English wire text. */
-  const ES = es as unknown as Record<string, string>;
-  const msgEs = (key: string, vars: Record<string, string | number> = {}) =>
-    ES[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (name in vars ? String(vars[name]) : h));
   const sayEs = msgEs;
 
   it("each code, with the extra its emitter sends (counted)", () => {
@@ -156,20 +157,21 @@ describe("stages-panel reads the code, not the English (M1: undo, rebuild, and t
       fixture_id: "f",
       fixture_no: 3,
     });
-  const want = say(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: say(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) });
+  // Read in es: the server's message IS the en sentence, so an en reader could not tell the code from the message.
+  const want = msgEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: msgEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) });
 
   it("Undo: the refusal reads its dictionary sentence", () => {
-    expect(undoRefusalMessage(own(), msg)).toBe(want);
+    expect(undoRefusalMessage(own(), msgEs as never)).toBe(want);
   });
 
   it("Rebuild: the refusal reads its dictionary sentence; an unrecognised one keeps its message, a non-Error the generic", () => {
-    expect(rebuildErrorText(own(), msg)).toBe(want);
+    expect(rebuildErrorText(own(), msgEs as never)).toBe(want);
     expect(rebuildErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg)).toBe("division is mid-solve");
     expect(rebuildErrorText("nope", msg)).toBe(say("schedule.error.failed"));
   });
 
   it("a generate/complete/delete refusal (classifyActError) reads it too, and an unrecognised one keeps its message", () => {
-    expect(classifyActError(own(), msg, "en")).toMatchObject({ text: want });
+    expect(classifyActError(own(), msgEs as never, "es")).toMatchObject({ text: want });
     expect(classifyActError(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg, "en").text).toBe("division is mid-solve");
   });
 });

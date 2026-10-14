@@ -239,11 +239,11 @@ describe.skipIf(!HAS_DB)("I1 a format save re-writes the walkovers no event reco
 });
 
 describe.skipIf(!HAS_DB)("I1 one 'started': every format door reads format-standing.ts", () => {
-  it("five fixture shapes: the stage lock locks on PLAYED only, the per-match writer reports PLAYED or DECIDED WITHOUT PLAY (counted)", async () => {
+  it("six fixture shapes: the stage lock locks on PLAYED only, the per-match writer reports PLAYED or DECIDED WITHOUT PLAY (counted)", async () => {
     // single-sport: the shapes are ledger shapes (a frozen cfg, an event, a void, an award), the same in every sport.
     const w = await f14Walkover("badminton", "bwf", 16);
-    expect(w.others.length, "the premise: four other seated lines").toBeGreaterThanOrEqual(4);
-    const [started, voided, legacy, unstarted] = w.others as [string, string, string, string];
+    expect(w.others.length, "the premise: five other seated lines").toBeGreaterThanOrEqual(5);
+    const [started, voided, legacy, unstarted, refrozen] = w.others as [string, string, string, string, string];
     const locked = () => withTenant(w.auth.orgId, (tx) => lockedStageIdsAmong(tx, [w.stageId]));
 
     // The ruling: a walkover decided without play locks no format — the save re-writes its score instead.
@@ -255,6 +255,11 @@ describe.skipIf(!HAS_DB)("I1 one 'started': every format door reads format-stand
     await appendEvent(w.auth.orgId, voided, 1, { type: "core.void", payload: {}, voids: startId });
     await appendEvent(w.auth.orgId, legacy, 0, { type: "core.start", payload: {} });
     await sql`update fixtures set config_snapshot = null, config_snapshot_at = null where id = ${legacy}`;
+    // A frozen cfg and no event. No product path leaves one (the freeze rides the first event, the staff re-freeze
+    // refuses a fixture with no snapshot, and nothing deletes events), so it is raw-seeded: D1's predicate counts the
+    // snapshot on its own, and this is the shape that tells that half from the event half.
+    await sql`update fixtures set config_snapshot = ${sql.json((await loadFixturePadCfg(w.auth, refrozen)).cfg as never)}, config_snapshot_at = now() where id = ${refrozen}`;
+    expect(Number((await sql<{ n: number }[]>`select count(*)::int n from score_events where fixture_id = ${refrozen}`)[0]!.n), "the premise: no event").toBe(0);
 
     // Each shape's standing BY DEFINITION (format-standing.ts's header), never read off the code.
     const shapes: { label: string; id: string; played: boolean; decidedWithoutPlay: boolean }[] = [
@@ -263,6 +268,7 @@ describe.skipIf(!HAS_DB)("I1 one 'started': every format door reads format-stand
       { label: "started (frozen cfg + an event)", id: started, played: true, decidedWithoutPlay: false },
       { label: "its only event voided", id: voided, played: true, decidedWithoutPlay: false },
       { label: "events, no frozen cfg (pre-V347)", id: legacy, played: true, decidedWithoutPlay: false },
+      { label: "a frozen cfg, no event (raw-seeded)", id: refrozen, played: true, decidedWithoutPlay: false },
     ];
     let checked = 0;
     for (const sh of shapes) {
@@ -276,7 +282,7 @@ describe.skipIf(!HAS_DB)("I1 one 'started': every format door reads format-stand
       checked++;
     }
     expect(checked, "anti-vacuity: every shape was asked").toBe(shapes.length);
-    expect(shapes.filter((sh) => sh.played).length, "both answers are witnessed").toBe(3);
+    expect(shapes.filter((sh) => sh.played).length, "both answers are witnessed").toBe(4);
     expect(await locked(), "a played line locks the stage").toEqual(new Set([w.stageId]));
   }, 120_000);
 });

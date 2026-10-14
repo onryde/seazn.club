@@ -196,7 +196,7 @@
     "files": [
      "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
     ],
-    "name": "five fixture shapes"
+    "name": "fixture shapes: the stage lock locks on PLAYED only"
    }
   ]
  },
@@ -998,7 +998,7 @@
     "files": [
      "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
     ],
-    "name": "five fixture shapes"
+    "name": "fixture shapes: the stage lock locks on PLAYED only"
    },
    {
     "cwd": "apps/web",
@@ -1020,7 +1020,7 @@
     "files": [
      "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
     ],
-    "name": "five fixture shapes"
+    "name": "fixture shapes: the stage lock locks on PLAYED only"
    }
   ]
  },
@@ -1035,7 +1035,7 @@
     "files": [
      "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
     ],
-    "name": "five fixture shapes"
+    "name": "fixture shapes: the stage lock locks on PLAYED only"
    },
    {
     "cwd": "apps/web",
@@ -1072,7 +1072,7 @@
     "files": [
      "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
     ],
-    "name": "five fixture shapes"
+    "name": "fixture shapes: the stage lock locks on PLAYED only"
    },
    {
     "cwd": "apps/web",
