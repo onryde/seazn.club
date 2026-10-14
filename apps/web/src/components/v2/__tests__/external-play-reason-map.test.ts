@@ -89,6 +89,9 @@ describe("held copy: every reason, every locale", () => {
       fair_play: "Fair-play ending",
       // Final review P11 (the brief: "an organiser hold account_changed").
       account_changed: "Lichess account changed",
+      // T17B fix 2, D11 (the brief: "a needs-result reason like clock_flag_unsettled"). The words are the
+      // implementer's proposal, for the controller's review — not yet ruled.
+      clock_flag_unsettled: "Time ran out — not confirmed",
     };
     let checked = 0;
     for (const reason of NEEDS_REASONS) {

@@ -145,7 +145,21 @@ function readGameFull(line: string): BoardGameFull | null {
   let parsed: unknown;
   try { parsed = JSON.parse(line); } catch { return null; }
   if (!isRecord(parsed) || parsed.type !== "gameFull" || !nonEmpty(parsed.id) || !isRecord(parsed.state)) return null;
-  const st = parsed.state;
+  return readState(parsed.state, { gameId: parsed.id, whiteId: playerId(parsed.white), blackId: playerId(parsed.black) });
+}
+
+/** A later line of an open board stream (T17B fix 2, D11): `gameState` — the state object `gameFull` carries, on its
+ *  own (lila BotJsonView `gameState`) — read onto the game the first line named. `skip` for a line of another kind
+ *  (chatLine, opponentGone: nothing a result reads); null for a `gameState` that cannot be read. */
+function readGameStateLine(line: string, ids: Pick<BoardGameFull, "gameId" | "whiteId" | "blackId">): BoardGameFull | "skip" | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return null; }
+  if (!isRecord(parsed)) return null;
+  if (parsed.type !== "gameState") return "skip";
+  return readState(parsed, ids);
+}
+
+function readState(st: Record<string, unknown>, ids: Pick<BoardGameFull, "gameId" | "whiteId" | "blackId">): BoardGameFull | null {
   if (typeof st.moves !== "string" || typeof st.status !== "string") return null;
   const wtime = numOrNull(st.wtime);
   const btime = numOrNull(st.btime);
@@ -155,9 +169,7 @@ function readGameFull(line: string): BoardGameFull | null {
   const movesUci = moves === "" ? [] : moves.split(/\s+/);
   if (!movesUci.every((m) => UCI_RE.test(m))) return null;
   const common: Omit<BoardGameFull, "status"> = {
-    gameId: parsed.id,
-    whiteId: playerId(parsed.white),
-    blackId: playerId(parsed.black),
+    ...ids,
     movesUci,
     whiteMs: wtime,
     blackMs: btime,
@@ -176,7 +188,23 @@ function readGameFull(line: string): BoardGameFull | null {
  *  Racing the signal as well as relying on fetch's own abort is what makes
  *  the timeout hold for a body that ignores it. */
 async function firstLine(body: ReadableStream<Uint8Array> | null, signal: AbortSignal): Promise<string | null> {
-  if (body === null) return null;
+  let first: string | null = null;
+  await eachLine(body, signal, (line) => {
+    first = line;
+    return "stop";
+  });
+  return first;
+}
+
+/** Every non-blank line of an NDJSON body, in order, to `take` — until it answers "stop", the body ends (its last,
+ *  unterminated line included), a line outgrows STREAM_LINE_MAX, or `signal` fires. The body is CANCELLED on every way
+ *  out. `firstLine` is this, stopped at the first. */
+async function eachLine(
+  body: ReadableStream<Uint8Array> | null,
+  signal: AbortSignal,
+  take: (line: string) => "more" | "stop",
+): Promise<void> {
+  if (body === null) return;
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const aborted = new Promise<never>((_, reject) => {
@@ -192,21 +220,62 @@ async function firstLine(body: ReadableStream<Uint8Array> | null, signal: AbortS
       let nl = buffer.indexOf("\n");
       while (nl >= 0) {
         const line = buffer.slice(0, nl).trim();
-        if (line !== "") return line;
         buffer = buffer.slice(nl + 1);
+        if (line !== "" && take(line) === "stop") return;
         nl = buffer.indexOf("\n");
       }
-      if (buffer.length > STREAM_LINE_MAX) return null;
+      if (buffer.length > STREAM_LINE_MAX) return;
       if (done) {
         const rest = (buffer + decoder.decode()).trim();
-        return rest === "" ? null : rest;
+        if (rest !== "") take(rest);
+        return;
       }
     }
   } catch {
-    return null;
+    return;
   } finally {
     reader.cancel().catch(() => {});
   }
+}
+
+/** T17B fix 2, D11 — the settling read's body. The first line must be a readable `gameFull` (else `unavailable`, as
+ *  ever, within LICHESS_TIMEOUT_MS); then the stream stays open up to `holdMs` while Lichess's own CheckOnline tick
+ *  (lila GameStateStream.scala:118-124, 7 s after the stream opened) can flag the side to move and push the final
+ *  state. Each `gameState` line replaces the state in hand; the read ends at the first FINAL one (any status but
+ *  `created`/`started`), at a state line it cannot read (keeping the last good one — never a guessed game), when
+ *  the stream ends, or when the hold runs out. Bounded: `closer` aborts the race when the hold expires. */
+async function settlingRead(
+  body: ReadableStream<Uint8Array> | null,
+  signal: AbortSignal,
+  holdMs: number,
+  closer: AbortController,
+): Promise<GameStreamRead> {
+  let game: BoardGameFull | null = null;
+  let firstRaw = "";
+  let hold: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await eachLine(body, signal, (line) => {
+      if (game === null) {
+        game = readGameFull(line);
+        if (game === null) {
+          firstRaw = line.slice(0, 500);
+          return "stop";
+        }
+        if (game.status !== "created" && game.status !== "started") return "stop";
+        hold = setTimeout(() => closer.abort(), holdMs);
+        return "more";
+      }
+      const next = readGameStateLine(line, game);
+      if (next === "skip") return "more";
+      if (next === null) return "stop";
+      game = next;
+      return next.status === "created" || next.status === "started" ? "more" : "stop";
+    });
+  } finally {
+    if (hold !== null) clearTimeout(hold);
+  }
+  if (game === null) return { ok: false, code: "unavailable", raw: firstRaw };
+  return { ok: true, game };
 }
 
 /** M6 and M12 are both 400s. Matched on the measured sentence, not on a
@@ -489,9 +558,10 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
      *  (`gameFull`), close. The export STALLS mid-game (M16, re-measured
      *  2026-10-11: 5 plies against the stream's 8 at the same instant), so
      *  this is the only source of mid-game moves, clocks and status.
-     *  MEASURED 2026-10-11 (record.log in the fixtures README): a read settles
-     *  an expired clock, visible on the NEXT read — the stream itself still
-     *  said `started` with `wtime: 0` on the first read after expiry.
+     *  A first-line read never flags an expired clock: lila flags it from an
+     *  OPEN stream's CheckOnline tick, 7 s in (T17B fix 2, D11 — the T11
+     *  "settles on the NEXT read" premise was false, game x0JKlePc). `holdMs`
+     *  keeps the stream open that long for the settling read.
      *
      *  Bounded by LICHESS_TIMEOUT_MS like every call here, and the body is
      *  cancelled once the line is in: nothing stays open (§4). A refusal
@@ -499,9 +569,15 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
      *  `rate_limited`); a 404, a 5xx, a thrown fetch, a timeout and any first
      *  line that is not a readable `gameFull` are `unavailable`, never a
      *  guessed game. `raw` is the error body only — never the token. */
-    async readGameStream(a: { token: string; gameId: string }): Promise<GameStreamRead> {
+    async readGameStream(a: { token: string; gameId: string; holdMs?: number }): Promise<GameStreamRead> {
       const closer = new AbortController();
-      const signal = AbortSignal.any([AbortSignal.timeout(LICHESS_TIMEOUT_MS), closer.signal]);
+      const holdMs = a.holdMs ?? 0;
+      // A settling read (T17B fix 2, D11): the whole read is bounded by LICHESS_TIMEOUT_MS plus the hold, and the hold
+      // itself (settlingRead) ends it once the first line is in.
+      const signal =
+        holdMs > 0
+          ? AbortSignal.any([AbortSignal.timeout(LICHESS_TIMEOUT_MS + holdMs), closer.signal])
+          : AbortSignal.any([AbortSignal.timeout(LICHESS_TIMEOUT_MS), closer.signal]);
       try {
         let r: Response;
         try {
@@ -517,10 +593,13 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
           const raw = await r.text().catch(() => "");
           return { ok: false, code: classifyBoardError(r.status, raw), raw };
         }
-        const line = await firstLine(r.body, signal);
-        if (line === null) return { ok: false, code: "unavailable", raw: "" };
-        const game = readGameFull(line);
-        return game === null ? { ok: false, code: "unavailable", raw: line.slice(0, 500) } : { ok: true, game };
+        if (holdMs <= 0) {
+          const line = await firstLine(r.body, signal);
+          if (line === null) return { ok: false, code: "unavailable", raw: "" };
+          const game = readGameFull(line);
+          return game === null ? { ok: false, code: "unavailable", raw: line.slice(0, 500) } : { ok: true, game };
+        }
+        return await settlingRead(r.body, signal, holdMs, closer);
       } finally {
         closer.abort();
       }

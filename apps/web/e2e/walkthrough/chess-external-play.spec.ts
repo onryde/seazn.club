@@ -748,17 +748,18 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(meetingA, "board 1 had a meeting").toBeDefined();
     expect(video.meetingStatus(meetingA!.meeting_id), "board 1's room is closed at RealtimeKit").toBe("INACTIVE");
     expect(meetingA!.ended_at, "and stamped ended").not.toBeNull();
-    // MEASURED (gamefull-expired-1 then -2): the first read after expiry still
-    // says `started`, White at 0, and settles the flag at Lichess. We declare
-    // no flag from our own arithmetic, so the fixture is not decided yet.
-    expect(lichess.game(gameB)?.status, "the sweep's read settled the flag at Lichess").toBe("outoftime");
-    expect((await fixtureState(page, boardB.fixtureId)).status, "decided on the read that SAW started").not.toBe("decided");
+    // T17B fix 2, D11: the first read after expiry says `started`, White at 0
+    // — and a first-line read never flags it (lila flags from an OPEN stream's
+    // check, 7 s in; the fixture server models that, FLAG_CHECK_MS). So the
+    // sweep reads once more on a HELD stream, and Lichess flags it there. We
+    // declare no flag from our own arithmetic: the result is Lichess's.
+    expect(lichess.game(gameB)?.status, "Lichess flagged it on the held read").toBe("outoftime");
+    expect((await fixtureState(page, boardB.fixtureId)).status, "decided on the sweep's own settling read").toBe("decided");
+    expect(await lastResultWinner(boardB.fixtureId), "out of time: the side NOT to move wins").toBe(B.black.entrantId);
 
     await nobodyReadItForAnHour(boardB.fixtureId);
-    const s2 = await sweep(page);
-    expect(s2.reconciled).toBeGreaterThanOrEqual(1);
-    expect((await fixtureState(page, boardB.fixtureId)).status).toBe("decided");
-    expect(await lastResultWinner(boardB.fixtureId), "out of time: the side NOT to move wins").toBe(B.black.entrantId);
+    await sweep(page);
+    expect((await fixtureState(page, boardB.fixtureId)).status, "a second sweep changes nothing").toBe("decided");
     // A Lichess timeout is a NORMAL win, not a forfeit (§3.6).
     expect(await forfeitEventCountSql(boardB.fixtureId), "a timeout was written as a forfeit").toBe(0);
     // And exactly once: a third sweep is a no-op.

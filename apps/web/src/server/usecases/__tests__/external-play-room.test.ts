@@ -862,9 +862,9 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — act and clock-zero tr
   });
 
   it("m5: one Lichess read per (game, ply) per cooldown — both players reporting at once read once; a client's spaced retry and the next ply read again", async () => {
-    // The client spaces its own reports CLOCK_ZERO_SPACING_MS apart (and a
-    // flag settles on Lichess's NEXT read), so the server's cooldown must be
-    // shorter than that spacing, or it would swallow the retry that settles it.
+    // The client spaces its own reports at least CLOCK_ZERO_SPACING_MS apart,
+    // so the server's cooldown must be shorter than that, or it would swallow
+    // a retry — the next read is how a flag Lichess settles late is seen.
     expect(CLOCK_ZERO_COOLDOWN_MS).toBeGreaterThan(0);
     expect(CLOCK_ZERO_COOLDOWN_MS).toBeLessThan(CLOCK_ZERO_SPACING_MS);
     const s = await seed();
@@ -886,6 +886,34 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — act and clock-zero tr
          set moves_uci = ${sql.json(["e2e4", "e7e5", "g1f3"] as never)}, move_count = 3, white_ms = 600000, black_ms = 10000
        where fixture_id = ${s.fixtureId}`;
     expect(await report(s.away, CLOCK_ZERO_COOLDOWN_MS + 1)).toEqual({ reconciled: true });
+    expect(rec).toHaveBeenCalledTimes(3);
+  });
+
+  it("D11: a report while the (game, ply)'s read is still out never starts a second read — the settling read holds ~9 s; once it answers, or fails, the next report reads", async () => {
+    const s = await seed();
+    const lastMoveAt = new Date(now.getTime() - 60_000);
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"], whiteMs: 10_000, blackMs: 600_000, lastMoveAt });
+    let release!: () => void;
+    let calls = 0;
+    const rec = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) await new Promise<void>((r) => (release = r));
+      if (calls === 2) throw new Error("lichess down");
+      return null;
+    });
+    const report = (who: { userId: string }, ms: number) =>
+      reportClockZero({ kind: "session", userId: who.userId }, s.fixtureId, deps({ now: new Date(now.getTime() + ms), reconcile: rec }));
+    const first = report(s.home, 0);
+    await vi.waitFor(() => expect(rec).toHaveBeenCalledTimes(1));
+    // Past the cooldown, from either player — the first read is still out.
+    expect(await report(s.home, CLOCK_ZERO_COOLDOWN_MS + 500), "the reporter's own spaced retry").toEqual({ reconciled: false });
+    expect(await report(s.away, CLOCK_ZERO_COOLDOWN_MS * 2 + 1), "the opponent's").toEqual({ reconciled: false });
+    expect(rec).toHaveBeenCalledTimes(1);
+    release();
+    expect(await first).toEqual({ reconciled: true });
+    // Answered: the next report past the cooldown reads again — and a read that FAILS frees the (game, ply) too.
+    await expect(report(s.home, CLOCK_ZERO_COOLDOWN_MS * 4)).rejects.toThrow("lichess down");
+    expect(await report(s.home, CLOCK_ZERO_COOLDOWN_MS * 6)).toEqual({ reconciled: true });
     expect(rec).toHaveBeenCalledTimes(3);
   });
 

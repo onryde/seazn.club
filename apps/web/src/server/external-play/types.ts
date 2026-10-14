@@ -49,6 +49,10 @@ export const NEEDS_REASONS = [
   // while their game was live or mid-create — the recorded account is no
   // longer theirs, and its grant was revoked by the re-link (M-2).
   "account_changed",
+  // V445 (T17B fix 2, D11): the side to move's clock ran out and Lichess still
+  // reports the game `started` a minute later — never a flag of ours; the
+  // organiser decides, with the evidence (reconcile.ts).
+  "clock_flag_unsettled",
 ] as const;
 export type NeedsReason = (typeof NEEDS_REASONS)[number];
 

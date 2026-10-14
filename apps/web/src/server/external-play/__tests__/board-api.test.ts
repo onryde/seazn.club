@@ -944,6 +944,94 @@ describe("readGameStream — the reconcile read: the board stream's first line (
     expect(two.state.status, "premise: expired-2 settled it").toBe("outoftime");
   });
 
+  // T17B fix 2, D11 (lila ad760137c, read 2026-10-14 — source, NOT measured): an OPEN board stream's CheckOnline
+  // tick, 7 s after it opens, publishes QuietFlagCheck, which flags a side to move that is out of time; the stream
+  // then pushes the final `gameState` (FinishGame → onGameOver → pushState) and closes (GameStateStream.scala:118-139,
+  // RoundAsyncActor.scala:252-254). A read that closes at the first line never reaches that tick — measured live:
+  // game x0JKlePc sat at `started`, White at 0, through every such read for 7 minutes. So the settling read holds
+  // the stream open and takes the state lines that follow, until one is final or the hold runs out.
+  describe("with holdMs — the settling read (T17B fix 2, D11)", () => {
+    const fullLine = recordedLine("gamefull-expired-1.ndjson"); // started, White at 0
+    const settled = parsedLine("gamefull-expired-2.ndjson").state; // outoftime, winner black
+    const stateLine = (st: Record<string, unknown>) => JSON.stringify({ type: "gameState", ...st }) + "\n";
+
+    it("holds the stream past the first line and takes the FINAL state Lichess pushes on it — then closes", async () => {
+      const b = openBody([fullLine + "\n", stateLine(settled)]);
+      const f = vi.fn(async () => streamRes(b.body));
+      const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game", holdMs: 5_000 });
+      const first = parsedLine("gamefull-expired-1.ndjson");
+      expect(out).toEqual({
+        ok: true,
+        game: {
+          gameId: first.id,
+          whiteId: first.white.id,
+          blackId: first.black.id,
+          movesUci: settled.moves.split(" "),
+          whiteMs: settled.wtime,
+          blackMs: settled.btime,
+          incrementMs: settled.winc,
+          status: settled.status,
+          winner: settled.winner,
+          drawOffer: { white: false, black: false },
+        },
+      });
+      expect(settled.status, "premise: the pushed state is final").toBe("outoftime");
+      expect(b.cancelled(), "closed once the final state is in").toBe(true);
+    });
+
+    it("no final state within the hold: the latest state read, the stream closed when the hold runs out — bounded", async () => {
+      const b = openBody([fullLine + "\n"]);
+      const f = vi.fn(async () => streamRes(b.body));
+      const t0 = Date.now();
+      const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game", holdMs: 120 });
+      const took = Date.now() - t0;
+      expect(out).toMatchObject({ ok: true, game: { status: "started", whiteMs: 0 } });
+      expect(took, "it held the stream").toBeGreaterThanOrEqual(100);
+      expect(took, "…and no longer than the hold").toBeLessThan(2_000);
+      expect(b.cancelled()).toBe(true);
+    });
+
+    it("takes every state line in order — a later non-final state (a draw offer) is merged; lines of another kind are skipped", async () => {
+      const first = parsedLine("gamefull-expired-1.ndjson").state;
+      const b = openBody([
+        fullLine + "\n",
+        JSON.stringify({ type: "chatLine", username: "x", text: "hi", room: "player" }) + "\n",
+        JSON.stringify({ type: "opponentGone", gone: true, claimWinInSeconds: 30 }) + "\n",
+        stateLine({ ...first, bdraw: true }),
+      ]);
+      const f = vi.fn(async () => streamRes(b.body));
+      const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game", holdMs: 120 });
+      expect(out).toMatchObject({ ok: true, game: { status: "started", drawOffer: { white: false, black: true } } });
+    });
+
+    it("a state line it cannot read ends the hold on the last good state — never a guessed game", async () => {
+      const b = openBody([fullLine + "\n", stateLine({ moves: "e2e4 zz", wtime: 0, btime: 1, winc: 0, binc: 0, status: "outoftime" })]);
+      const f = vi.fn(async () => streamRes(b.body));
+      const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game", holdMs: 5_000 });
+      expect(out).toMatchObject({ ok: true, game: { status: "started", winner: null } });
+      expect(b.cancelled()).toBe(true);
+    });
+
+    it("the stream ending on its own ends the hold at once (Lichess closes a finished game's stream)", async () => {
+      const f = vi.fn(async () => res(fullLine + "\n" + stateLine(settled), 200));
+      const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game", holdMs: 5_000 });
+      expect(out).toMatchObject({ ok: true, game: { status: "outoftime", winner: "black" } });
+    });
+
+    it("the empty case: no holdMs (or 0) is the first-line read, closed at once — a second line is never waited for", async () => {
+      let checked = 0;
+      for (const holdMs of [undefined, 0]) {
+        const b = openBody([fullLine + "\n", stateLine(settled)]);
+        const f = vi.fn(async () => streamRes(b.body));
+        const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game", ...(holdMs === undefined ? {} : { holdMs }) });
+        expect(out, String(holdMs)).toMatchObject({ ok: true, game: { status: "started" } });
+        expect(b.cancelled()).toBe(true);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+  });
+
   it("a standing draw offer is read from wdraw/bdraw; an absent key is no offer", async () => {
     // lila BotJsonView.scala (46d24871f) `.add("wdraw" -> isOfferingDraw)`, and
     // scalalib's JsObject `add(key, Boolean)` writes the key ONLY when true —

@@ -60,6 +60,10 @@ export const HOLD_REASONS = [
   // game plays on at Lichess, so reconcile keeps reading it and the snapshot
   // that ends it replaces this hold; only the re-linked seat is frozen.
   "account_changed",
+  // T17B fix 2, D11: Lichess has not settled a flag a minute after it fell
+  // (reconcile.ts). Mid-game too: reconcile keeps reading, and Lichess's own
+  // end (it may still flag, or a player resigns) replaces this hold.
+  "clock_flag_unsettled",
 ] as const satisfies readonly NeedsReason[];
 
 export type HoldReason = (typeof HOLD_REASONS)[number];
@@ -81,7 +85,7 @@ type NoShowReason = (typeof NO_SHOW_REASONS)[keyof typeof NO_SHOW_REASONS];
  *  (holdForOrganiser's T10/T11 callers). The snapshot that ENDS the game is
  *  newer and strictly more informative, so its hold replaces these; nothing
  *  else is ever replaced (review I1; controller ruling, fix round 1). */
-const MID_GAME_REASONS = ["token_revoked", "provider_error", "account_changed"] as const satisfies readonly HoldReason[];
+const MID_GAME_REASONS = ["token_revoked", "provider_error", "account_changed", "clock_flag_unsettled"] as const satisfies readonly HoldReason[];
 
 /** A hold's answer is the reason the row now STORES — which is the caller's
  *  only when it landed — so the organiser's queue and this answer agree.

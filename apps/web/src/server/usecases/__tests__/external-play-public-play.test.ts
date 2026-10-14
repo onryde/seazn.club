@@ -138,7 +138,10 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
     ];
     // Every hold the organiser owes an answer to, before a move: the fixture page says why, so the row offers nothing.
     const HELD = ["no_show_white", "no_show_black", "no_show_both", "not_started", "aborted", "mismatch", "provider_error",
-      "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play"] as const;
+      "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play",
+      // T17B fix 2, D11: written only past a flag (two plies on file), so before a move it is the CHECK's word alone —
+      // still a hold the organiser answers, so the row offers nothing.
+      "clock_flag_unsettled"] as const;
     for (const reason of HELD) cells.push([`held: ${reason}`, before({ status: "needs_organiser", needs_reason: reason }), null]);
     expect([...HELD, "token_revoked", "account_changed"].sort(), "every hold reason is a cell").toEqual([...NEEDS_REASONS].sort());
     let checked = 0;
@@ -162,6 +165,8 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
       ["a game being played", { status: "live" }, true, { kind: "live" }, FINAL],
       ["a seat's token revoked (the game goes on)", { status: "needs_organiser", needs_reason: "token_revoked" }, true, { kind: "live" }, FINAL],
       ["held for fair play", { status: "needs_organiser", needs_reason: "fair_play" }, true, null, FINAL],
+      // T17B fix 2, D11: a clock ran out and Lichess has not ended the game — the result waits on the organiser.
+      ["held: a flag Lichess has not settled", { status: "needs_organiser", needs_reason: "clock_flag_unsettled" }, true, null, FINAL],
       ["held: a knockout draw (the game is over)", { status: "needs_organiser", needs_reason: "tiebreak_owed" }, true, FINAL, FINAL],
       ["the bridge closed", { status: "finished" }, true, FINAL, FINAL],
     ];
