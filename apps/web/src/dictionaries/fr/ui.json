@@ -6087,7 +6087,7 @@
   "externalPlay.room.checkin.closesAt": "à {time}",
   "externalPlay.room.checkin.cameraOn": "Caméra allumée",
   "externalPlay.room.checkin.micOff": "Micro coupé",
-  "externalPlay.room.checkin.privacy": "{name} ne voit jamais votre vidéo. Seul votre organisateur peut la consulter.",
+  "externalPlay.room.checkin.privacy": "Côté {name}, l'échiquier n'est pas configuré pour afficher votre vidéo. Votre organisateur peut la regarder en direct ; elle n'est pas enregistrée.",
   "externalPlay.room.checkin.opponentIn": "{name} s'est enregistré",
   "externalPlay.room.checkin.opponentNotIn": "{name} ne s'est pas encore enregistré",
   "externalPlay.room.checkin.cta": "M'enregistrer",

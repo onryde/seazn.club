@@ -6087,7 +6087,7 @@
   "externalPlay.room.checkin.closesAt": "a las {time}",
   "externalPlay.room.checkin.cameraOn": "Cámara encendida",
   "externalPlay.room.checkin.micOff": "Micro apagado",
-  "externalPlay.room.checkin.privacy": "{name} nunca ve tu vídeo. Solo tu organizador puede revisarlo.",
+  "externalPlay.room.checkin.privacy": "El tablero de {name} no está configurado para mostrar tu vídeo. Tu organizador puede verlo en directo; no se graba.",
   "externalPlay.room.checkin.opponentIn": "{name} se ha registrado",
   "externalPlay.room.checkin.opponentNotIn": "{name} aún no se ha registrado",
   "externalPlay.room.checkin.cta": "Registrarme",
