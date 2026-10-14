@@ -127,7 +127,7 @@ const mintLink = mintMatchRoomLink;
  */
 export async function seedMatchRoom(
   request: APIRequestContext,
-  opts: { names: [string, string]; open?: boolean },
+  opts: { names: [string, string]; open?: boolean; cameraPolicy?: "required" | "optional" },
 ): Promise<SeededRoom> {
   const label = `Room ${TAG} ${randomUUID().slice(0, 4)}`;
   const people: { name: string; email: string; userId: string; personId: string; lichessId: string }[] = [];
@@ -159,6 +159,11 @@ export async function seedMatchRoom(
   });
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   const divisionId = div.data!.id;
+  if (opts.cameraPolicy) {
+    // The division settings' own write (division-settings.tsx saveCameraPolicy), before Start locks it.
+    const cam = await apiJson(request, `/api/v1/divisions/${divisionId}`, "PATCH", { camera_policy: opts.cameraPolicy });
+    expect(cam.status, `camera policy: ${JSON.stringify(cam.error)}`).toBeLessThan(300);
+  }
 
   const ents = await apiJson<{ id: string }[]>(
     request,

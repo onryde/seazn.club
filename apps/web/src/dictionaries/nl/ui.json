@@ -6088,7 +6088,7 @@
   "externalPlay.room.checkin.cameraOn": "Camera aan",
   "externalPlay.room.checkin.cameraStarting": "Je camera wordt gecontroleerd…",
   "externalPlay.room.checkin.micOff": "Microfoon uit",
-  "externalPlay.room.checkin.privacy": "Het bord van {name} is niet ingesteld om je video te tonen. Je organisator kan live meekijken; je video wordt niet opgenomen.",
+  "externalPlay.room.checkin.privacy": "Het bord van je tegenstander is niet ingesteld om je camera te tonen. Je organisator kan live meekijken; je beeld wordt niet opgenomen.",
   "externalPlay.room.checkin.opponentIn": "{name} is ingecheckt",
   "externalPlay.room.checkin.opponentNotIn": "{name} is nog niet ingecheckt",
   "externalPlay.room.checkin.cta": "Inchecken",
