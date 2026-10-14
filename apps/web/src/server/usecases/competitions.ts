@@ -751,10 +751,18 @@ export async function patchCompetition(
   // best-effort like the grants below: the write has committed, so a failed
   // slug read is logged, never a 500 for a publish that succeeded.
   if (listingChanged) await cacheDel(orgLiveCacheKey(auth.orgId));
-  if (exposureChanged) await expireCompetitionShell(auth.orgId, { competitionId: id });
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, same reasoning as the discovery invalidation above.
   if (previousSlug) await invalidateSlugCache("competition", auth.orgId, previousSlug, row.slug);
+  // A rename moves the competition to a new slug, so the shell must expire for
+  // it too: the old URL redirects only once its cached shell is gone (the page
+  // asks `sharedRenameTarget` when the shell is missing), and the hub — keyed by
+  // id, loaded by the URL's slug — would otherwise store an old-URL visit's
+  // refusal under that id and 404 the new URL. Content-only edits (description,
+  // dates, branding, a status past draft) stay on the shell's TTL.
+  if (exposureChanged || previousSlug !== null) {
+    await expireCompetitionShell(auth.orgId, { competitionId: id });
+  }
   // Lifecycle events (feature 1): tournament start/finish. Pure helper so
   // the rule is unit-tested without a DB (mirrors shouldFireMadePublic).
   const lifecycleEvent = competitionLifecycleEvent(statusChangedTo);

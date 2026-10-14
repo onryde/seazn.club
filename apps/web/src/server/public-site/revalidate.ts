@@ -299,10 +299,13 @@ export function fireOrgRevalidate(orgSlug: string): void {
  * the ORG tag alone — a missing competition's refusal included. So a write that
  * changes which competitions or divisions the shell can answer for must expire
  * that tag: a division created, restored, archived, deleted or renamed (a new
- * slug); a competition created publicly readable, deleted, or moved between
- * public, unlisted, private and draft. Otherwise the page answers from before
- * the write — "This link is no longer valid" for a new division, or a
- * competition just made private still served — until the entry ages out:
+ * slug); a competition created publicly readable, deleted, renamed (a new slug:
+ * the old URL redirects only once its shell is gone, and the hub, keyed by id
+ * but loaded by the URL's slug, must not keep an old-URL visit's refusal), or
+ * moved between public, unlisted, private and draft. Otherwise the page answers
+ * from before the write — "This link is no longer valid" for a new division or
+ * a renamed competition, or a competition just made private still served —
+ * until the entry ages out:
  * ~32 minutes on stg, 2026-10-14, where a suspended machine's cache clock does
  * not run. `fireOrgRevalidate`, so `{ expire: 0 }`: the organiser's next look
  * at the public page is the read that must be fresh.

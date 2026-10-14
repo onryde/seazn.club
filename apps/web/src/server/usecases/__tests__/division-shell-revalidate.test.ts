@@ -129,10 +129,13 @@ import {
 import { executeRevalidates } from "next/dist/server/revalidation-utils";
 import { defaultConfig } from "next/dist/server/config-shared";
 import FileSystemCache from "next/dist/server/lib/incremental-cache/file-system-cache";
-import { areTagsExpired } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
+import { areTagsExpired, tagsManifest } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getPublicCompetition, getPublicFixture, orgTag } from "@/server/public-site/data";
+import { getPublicCompetitionHub } from "@/server/public-site/competition-hub";
+import { sharedRenameTarget } from "@/server/slug-resolve";
+import { routes } from "@/lib/routes";
 import { builtinModules } from "@seazn/engine/sports";
 import { createCompetition, deleteCompetition, patchCompetition } from "../competitions";
 import { archiveDivision, createDivision, deleteDivision, patchDivision, restoreDivision } from "../divisions";
@@ -193,7 +196,29 @@ async function inRequest<T>(handler: () => Promise<T>): Promise<{ result: T; cal
   res.emit("close");
   await Promise.all(waitingOn);
   await sleep(3);
+  await clocksPast(out.calls.flatMap((c) => c.tags));
   return out;
+}
+
+/** Next stamps an expiry with `Date.now()` and judges it against
+ *  `performance.timeOrigin + performance.now()` (tags-manifest.external.js), and
+ *  under load the second clock can trail the first by more than the sleep
+ *  above, so an expired entry reads as live for a few ms. Wait, bounded, until
+ *  the judging clock has passed every expiry this request stamped — the same
+ *  instant a real reader would first see it. */
+async function clocksPast(tags: string[]): Promise<void> {
+  // Immediate expiries only: a 'max' stamps `expired` a year ahead, which no
+  // reader is owed yet.
+  const wallNow = Date.now();
+  const latest = Math.max(
+    0,
+    ...tags.map((tag) => tagsManifest.get(tag)?.expired ?? 0).filter((expired) => expired <= wallNow),
+  );
+  const deadline = Date.now() + 2_000;
+  while (performance.timeOrigin + performance.now() < latest) {
+    if (Date.now() > deadline) throw new Error("the two clocks Next compares did not converge within 2 s");
+    await sleep(1);
+  }
 }
 
 const expired = (entry: { tags: string[]; cachedAt: number }) => areTagsExpired(entry.tags, entry.cachedAt);
@@ -542,7 +567,7 @@ describe.skipIf(!HAS_DB)("patchCompetition: any move between public, unlisted, p
     expect(walked).toEqual(owed);
   });
 
-  it("a patch that moves neither visibility nor draft fires no org expiry: published → live, a description edit, a re-sent visibility", async () => {
+  it("a patch that moves neither visibility, draft nor slug fires no org expiry: published → live, a description edit, a re-sent visibility, a re-sent name", async () => {
     const { auth } = await seedOrg("pro");
     const orgSlug = await orgSlugOf(auth);
     const comp = await createCompetition(auth, {
@@ -552,7 +577,12 @@ describe.skipIf(!HAS_DB)("patchCompetition: any move between public, unlisted, p
       branding: {},
     });
     await patchCompetition(auth, comp.id, { status: "published" });
-    const patches = [{ status: "live" as const }, { description: "Now with a description" }, { visibility: "public" as const }];
+    const patches = [
+      { status: "live" as const },
+      { description: "Now with a description" },
+      { visibility: "public" as const },
+      { name: "Steady Exposure Cup" },
+    ];
     const fired: unknown[][] = [];
     for (const patch of patches) {
       const { calls } = await inRequest(() => patchCompetition(auth, comp.id, patch));
@@ -562,6 +592,58 @@ describe.skipIf(!HAS_DB)("patchCompetition: any move between public, unlisted, p
       ]);
     }
     expect(fired, "per patch: org expiries flushed and broadcast").toEqual(patches.map(() => []));
+  });
+});
+
+// A rename moves the competition to a new slug; the old URL must answer with a
+// redirect (the page asks `sharedRenameTarget` only when the shell is MISSING
+// for that slug) and the new one must be served. The hub's entry is keyed by
+// the competition's ID but loaded by the slug in the URL, so an old-URL visit
+// against a stale shell stores a refusal under that id, and the NEW URL then
+// 404s off it.
+describe.skipIf(!HAS_DB)("patchCompetition rename: the old URL redirects and the new URL is served", () => {
+  async function renameScene(tag: string) {
+    const { auth } = await seedOrg("pro");
+    const orgSlug = await orgSlugOf(auth);
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: `Before Rename ${tag}`,
+      visibility: "public",
+      branding: {},
+    });
+    await createDivision(auth, comp.id, { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    // A visit under the old URL that cached the shell (a division page reads it).
+    expect(await getPublicCompetition(orgSlug, comp.slug), "premise: the old URL's shell is cached").not.toBeNull();
+    const { result: renamed, calls } = await inRequest(() =>
+      patchCompetition(auth, comp.id, { name: `After Rename ${tag}` }),
+    );
+    expect(renamed.slug, "premise: the rename moved the slug").not.toBe(comp.slug);
+    return { orgSlug, oldSlug: comp.slug, newSlug: renamed.slug, id: comp.id, calls };
+  }
+
+  it("the old URL: the org tag EXPIRES in the request, the cached shell is gone, and the page's rename lookup redirects to the new slug", async () => {
+    const s = await renameScene("old-url");
+    expect(
+      s.calls.filter((c) => c.tags.includes(orgTag(s.orgSlug))).map((c) => c.durations),
+      "the org tag, EXPIRED, once",
+    ).toEqual([{ expire: 0 }]);
+    expect(await getPublicCompetition(s.orgSlug, s.oldSlug), "the old URL's shell").toBeNull();
+    expect(await sharedRenameTarget(s.orgSlug, s.oldSlug), "the redirect the page issues").toBe(
+      routes.shared(s.orgSlug, s.newSlug),
+    );
+  });
+
+  it("the new URL is served after a visit to the old one (the hub, cached by id, must not keep the old URL's refusal)", async () => {
+    const s = await renameScene("new-url");
+    // The old-URL visit, as the competition page makes it: the hub, then the shell.
+    await getPublicCompetitionHub(s.orgSlug, s.oldSlug);
+    await getPublicCompetition(s.orgSlug, s.oldSlug);
+
+    const hub = await getPublicCompetitionHub(s.orgSlug, s.newSlug);
+    const shell = await getPublicCompetition(s.orgSlug, s.newSlug);
+
+    expect(shell?.competition.id, "the new URL's shell").toBe(s.id);
+    expect(hub, "the new URL's hub").not.toBeNull();
   });
 });
 
