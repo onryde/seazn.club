@@ -12,6 +12,9 @@ import "server-only";
 // `createStages` (and through it `replaceStages`, which also asks it BEFORE its delete) and template instantiation.
 import type { StageKind } from "@seazn/engine/core";
 import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { HttpError } from "@/lib/errors";
+import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
+import { STAGE_DECIDER_KEYS } from "@/server/engine-db/stage-cfg";
 import { mergedStageRules, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal, withoutNulls } from "./stage-rules-merge";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -45,7 +48,7 @@ export function withStageDefaults(
 
 /**
  * `withStageDefaults`, validated (SC-P8: a create takes `config.rules` on the stage PUT's terms). Throws, writing
- * nothing: UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (400) for a key sent that the sport never declares or this kind and
+ * nothing: VALIDATION (400, `field`) for a top-level `shootout` / `extraTime` (moved to `config.rules`), from any caller; UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (400) for a key sent that the sport never declares or this kind and
  * variant cannot set; CONFIG_INVALID (422, the engine's `issues`) when the division's config under the rules the stage
  * would store is one the sport refuses; POINTS_MAP_INCOMPLETE (422) when the rules sent move `bestOf` past what the
  * division's points table answers. The merged parse runs on the rules as STORED (the preset or the carry included), so a
@@ -60,6 +63,13 @@ export function validatedStageConfig(
   config: Record<string, unknown>,
   carried: Record<string, unknown> | null = null,
 ): Record<string, unknown> {
+  // Fix round 2 (review gap hunt): the API's schema refuses a top-level decider, but an internal caller reaches this
+  // door with no schema in front of it, so the door refuses it too, by name, before anything is merged or written.
+  for (const key of STAGE_DECIDER_KEYS) {
+    if (Object.hasOwn(config, key)) {
+      throw new HttpError(400, `config.${key}: ${STAGE_DECIDER_MOVED}`, "VALIDATION", { field: `config.${key}` });
+    }
+  }
   const sent = isObj(config.rules) ? config.rules : {};
   refuseUnsettableKeys(module, sportKey, kind, variant, Object.keys(sent));
   const out = withStageDefaults(module, kind, variant, config, carried);
