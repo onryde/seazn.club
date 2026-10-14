@@ -47,7 +47,7 @@ import {
   VideoDownCard,
 } from "./room-cards";
 import { HeldSeam } from "./room-seams";
-import { roomScreen } from "./room-screen";
+import { cameraEnds, roomScreen } from "./room-screen";
 import { canMove, moveNotice, ownMeetingRetired, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
@@ -146,7 +146,8 @@ export function RoomShell({
     [participantId, fixtureId, token],
   );
   // The participant id rides along (R3-1): a token for ANOTHER participant is another meeting, and the camera moves.
-  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId);
+  // T17B fix 2 (D8a): at the result or the closed card the camera leaves its meeting, and the camera light goes off.
+  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId, cameraEnds(state));
   // The pill reads this client's own meeting join (review I8): no server call.
   const presence = useOpponentPresence(camera, cameraOn ? snap.opponentPresence : null);
 

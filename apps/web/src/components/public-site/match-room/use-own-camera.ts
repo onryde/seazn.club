@@ -18,33 +18,52 @@ export function useOwnCamera(
   stamp: CameraFaultStamp | null = null,
   /** R3-1: whose token it is — another participant is another meeting, and the camera moves to it. */
   participantId: string | null = null,
+  /** T17B fix 2 (D8a): the room is over or closed (room-screen `cameraEnds`) — leave the meeting at once, and join
+   *  nothing while it stays so. A board that comes back from its closed card (a hold lifted) gets a fresh session.
+   *  Neither screen shows the camera, so the ended session's last view is never painted. */
+  ended = false,
 ) {
   const [view, setView] = useState<CameraView>({ status: "idle", track: null });
   const session = useRef<ReturnType<typeof cameraSession> | null>(null);
   const joinRef = useRef(join);
-  // The session lives for the page; the stamp names the latest seat.
+  // A session lives until the room ends (or the page goes); the stamp names the latest seat.
   const stampRef = useRef(stamp);
   useEffect(() => {
     stampRef.current = stamp;
   });
+  // The presence hook subscribes ONCE; each session relays its link changes to whoever is subscribed now.
+  const linkListeners = useRef(new Set<() => void>());
 
   useEffect(() => {
+    if (ended) return;
+    const listeners = linkListeners.current; // one Set for the hook's life
     const s = cameraSession(joinRef.current, setView, { stamp: (state) => stampRef.current?.(state) });
     session.current = s;
+    const unrelay = s.onLinkChange(() => {
+      for (const cb of [...listeners]) cb();
+    });
     return () => {
+      unrelay();
       session.current = null;
       void s.stop();
     };
-  }, []);
+  }, [ended]);
 
+  // `ended` too: a fresh session (the room back from its closed card) starts with the seat's token in hand. While
+  // ended there is no session to start.
   useEffect(() => {
     if (authToken) void session.current?.start(authToken, participantId);
-  }, [authToken, participantId]);
+  }, [authToken, participantId, ended]);
 
   const stream = useMemo(() => (view.track ? new MediaStream([view.track]) : null), [view.track]);
   // Stable: the presence hook's effect depends on them.
   const link = useCallback((): MeetingLink | null => session.current?.link() ?? null, []);
-  const onLinkChange = useCallback((cb: () => void) => session.current?.onLinkChange(cb) ?? (() => {}), []);
+  const onLinkChange = useCallback((cb: () => void) => {
+    linkListeners.current.add(cb);
+    return () => {
+      linkListeners.current.delete(cb);
+    };
+  }, []);
   return {
     status: view.status,
     stream,

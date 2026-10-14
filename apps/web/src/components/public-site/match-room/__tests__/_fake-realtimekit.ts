@@ -249,11 +249,28 @@ class FakeParticipants extends Emitter {
   }
 }
 
+/** A local track as the browser holds it: `stop()` ends it for good (the camera light goes off). */
+export function fakeLocalTrack(id: string): MediaStreamTrack & { stops: number } {
+  const t = {
+    id,
+    kind: "video",
+    readyState: "live" as MediaStreamTrackState,
+    stops: 0,
+    stop() {
+      t.stops += 1;
+      t.readyState = "ended";
+    },
+  };
+  return t as unknown as MediaStreamTrack & { stops: number };
+}
+
 class FakeSelf extends Emitter {
   id = "self-peer";
   stageStatus = "ON_STAGE";
   videoEnabled = true;
-  videoTrack = { id: "own-camera" } as unknown as MediaStreamTrack;
+  videoTrack = fakeLocalTrack("own-camera");
+  /** The camera as captured, before the SDK's video middlewares (SDK l.20470 cleanUpTracks stops both). */
+  rawVideoTrack = fakeLocalTrack("own-camera-raw");
   constructor(public userId: string) {
     super();
   }

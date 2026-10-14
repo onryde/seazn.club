@@ -3,7 +3,7 @@
 // and preflight's refusal list, never from room-screen.ts. The empty case
 // first: an open window with nothing happened yet is the check-in.
 import { describe, expect, it } from "vitest";
-import { roomScreen, seatRefusalScreen } from "../room-screen";
+import { cameraEnds, roomScreen, seatRefusalScreen } from "../room-screen";
 import { initialRoomState, roomReducer, type RoomState } from "../room-state";
 import type { RoomGame, RoomSnapshot, SeatRefusal } from "../room-snapshot";
 
@@ -279,5 +279,40 @@ describe("roomScreen — the camera settling (room-shell's context)", () => {
       checked += 1;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// T17B fix 2 (D8a), controller ruling: when the room reaches a closed or result phase the client LEAVES the meeting
+// and stops every local track. Typed from the ruling, never read from room-screen.ts: the game-over screen and the
+// closed card end the camera; every screen where a game may still be played, or the camera is still owed, keeps it.
+describe("cameraEnds (T17B fix 2, D8a)", () => {
+  const cases: { why: string; state: RoomState; ends: boolean }[] = [
+    { why: "the empty case: the check-in", state: st(), ends: false },
+    { why: "a live game", state: st({ game: GAME }), ends: false },
+    { why: "a held game (the arbiter may still need its camera)", state: st({ game: GAME, canAct: false }), ends: false },
+    { why: "the game is over at Lichess", state: st({ game: { ...GAME, over: true } }), ends: true },
+    { why: "a result is written, board or not", state: st({ result: { outcome: "won", method: null, score: "1–0" } }), ends: true },
+    { why: "the window closed with no game", state: st({ phase: "closed" }), ends: true },
+    { why: "a hold with no game", state: st({ held: true, canAct: false }), ends: true },
+    { why: "not opened yet", state: st({ phase: "before" }), ends: false },
+    { why: "your seat frozen mid-game", state: st({ game: GAME, frozen: "you", canAct: false }), ends: false },
+    { why: "a board being re-paired", state: st({ game: GAME }, { repairing: true }), ends: false },
+  ];
+  it("the result and the closed card end the camera; every other screen keeps it — counted", () => {
+    let checked = 0;
+    for (const c of cases) {
+      expect(cameraEnds(c.state), c.why).toBe(c.ends);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    expect(cases.filter((c) => c.ends).length, "anti-vacuity: both answers reached").toBeGreaterThan(0);
+    expect(cases.filter((c) => !c.ends).length).toBeGreaterThan(0);
+  });
+
+  it("over outranks everything that would keep it: a frozen seat, a held board, a stale seat refusal", () => {
+    const result = { outcome: "lost" as const, method: "resign" as const, score: "0–1" };
+    expect(cameraEnds(st({ game: GAME, frozen: "you", canAct: false, result }))).toBe(true);
+    expect(cameraEnds(st({ game: GAME, canAct: false, result }))).toBe(true);
+    expect(cameraEnds(st({ result }, { seat: refused("camera_lost") }))).toBe(true);
   });
 });

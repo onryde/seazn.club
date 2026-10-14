@@ -863,11 +863,13 @@ describe("R3-1: the meeting is retired under a seated player — one quiet re-cl
     const island = await seatedRoom(cam.cam);
     cam.drop(); // roomLeft: a socket drop, a media-node drop, an arbiter's kick — the client cannot tell them apart
     for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+    expect(cam.left.n, "a drop is not a leave").toBe(0);
     getAnswer = () => seatedSnap("p-own", { phase: "closed" }); // the sweep ended the meeting: its row and participant stay
     for (let i = 0; i < 2; i += 1) await settle(IDLE_POLL_MS);
     expect(seatPosts(), "no re-claim").toBe(1);
     expect(join.fn, "no re-join").toHaveBeenCalledTimes(1);
-    expect(cam.left.n).toBe(0);
+    // T17B fix 2 (D8a): the closed card is where the camera ends — left once, and never joined again.
+    expect(cam.left.n).toBe(1);
     island.unmount();
   });
 
@@ -1005,5 +1007,104 @@ describe("fix round 4b: the room reads on through a re-pair, and stops only on a
       checked += 1;
     }
     expect(checked, "anti-vacuity: refusals").toBe(3);
+  });
+});
+
+// T17B fix 2 (D8a), measured on stg: after the checkmate both cameras kept publishing (white 45 → 71.6 MB) until the
+// sweep's teardown six minutes later, with no <video> on the page. Ruling: when the room reaches a closed or result
+// phase the client leaves the meeting at once (its leave stops every local track: camera-loader.test.ts). The other
+// direction too — a board that comes back (a voided result, re-paired) gets its camera back.
+describe("the game ends: the camera leaves at once (T17B fix 2, D8a)", () => {
+  const GAME_ON = {
+    gameId: "g1",
+    moves: ["e2e4", "e7e5"],
+    fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+    lastMove: ["e7", "e5"] as [string, string],
+    turn: "white" as const,
+    whiteMs: 590_000,
+    blackMs: 592_000,
+    clockAsOf: new Date(T0).toISOString(),
+    clockRunning: false,
+    drawOfferBy: null,
+    over: false,
+  };
+  const RESULT = { outcome: "won" as const, method: "mate" as const, score: "1–0" };
+  const inPlay = (over: Partial<RoomSnapshot> = {}) =>
+    snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, game: GAME_ON, opponentPresence: { participantId: "rtk-opp" }, ...over });
+  const counted = () => {
+    const left = { n: 0 };
+    return { left, cam: { ...liveCamera(), leave: async () => void (left.n += 1) } satisfies OwnCamera };
+  };
+
+  it("a live board whose result lands leaves the meeting once — and no later poll, nor the unmount, joins or leaves again", async () => {
+    getAnswer = () => inPlay();
+    seatAnswers = [() => ({ snapshot: inPlay(), seat: { seated: true, participant: PARTICIPANT }, create: null })];
+    const { left, cam } = counted();
+    join.fn.mockResolvedValue(cam);
+    const island = renderIsland(RoomShell, { initial: inPlay(), token: "tok", selfPath: "/x" });
+    await settle();
+    expect(screenOf(island)).toBe("live");
+    expect(join.fn, "premise: the camera joined").toHaveBeenCalledTimes(1);
+    expect(left.n, "premise: nothing left yet").toBe(0);
+
+    getAnswer = () => inPlay({ game: { ...GAME_ON, over: true }, result: RESULT });
+    await settle(IDLE_POLL_MS);
+    expect(screenOf(island)).toBe("over");
+    expect(left.n, "left at the result").toBe(1);
+
+    for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+    expect([join.fn.mock.calls.length, left.n], "nothing joins after the result, and nothing leaves twice").toEqual([1, 1]);
+    expect(seatPosts(), "no seat is asked after the result").toBe(1);
+    island.unmount();
+    expect(left.n, "the unmount has nothing left to leave").toBe(1);
+  });
+
+  it("the window closing with no game leaves too (card 6) — the closed phase, not only a result", async () => {
+    const open = () => snap({ you: { colour: "white", name: "Bo Lind", checkedIn: false } });
+    getAnswer = () => open();
+    seatAnswers = [() => ({ snapshot: open(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } })];
+    const { left, cam } = counted();
+    join.fn.mockResolvedValue(cam);
+    const island = renderIsland(RoomShell, { initial: open(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle();
+    expect(join.fn, "premise: the camera joined for the check-in").toHaveBeenCalledTimes(1);
+    getAnswer = () => snap({ phase: "closed" });
+    await settle(IDLE_POLL_MS);
+    expect(screenOf(island)).toBe("closed");
+    expect(left.n).toBe(1);
+    island.unmount();
+  });
+
+  // A board seen over stays over on this page (room-state mergeSnapshot keeps the game on file), so a result's way
+  // back is a reload — a fresh mount, a fresh camera. The way back that IS reachable in-page: a hold with no game.
+  it("the other direction: a hold with no game (card 6) leaves; when it lifts, the check-in gets a fresh camera — and the pill hears it", async () => {
+    const open = () => snap({ you: { colour: "white", name: "Bo Lind", checkedIn: false }, opponentPresence: { participantId: "rtk-opp" } });
+    getAnswer = () => open();
+    seatAnswers = [() => ({ snapshot: open(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } })];
+    const first = counted();
+    const second = meetingCamera();
+    join.fn.mockResolvedValueOnce(first.cam).mockResolvedValueOnce(second.cam);
+    const island = renderIsland(RoomShell, { initial: open(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle();
+    expect(join.fn, "premise: joined for the check-in").toHaveBeenCalledTimes(1);
+
+    getAnswer = () => snap({ held: true, canAct: false, opponentPresence: { participantId: "rtk-opp" } });
+    await settle(IDLE_POLL_MS);
+    expect([screenOf(island), first.left.n], "held with no game: card 6, and left").toEqual(["closed", 1]);
+
+    getAnswer = () => open();
+    await settle(IDLE_POLL_MS);
+    expect(screenOf(island), "the hold lifted").toBe("checkin");
+    // Back where it was before the hold: the camera re-joins with the seat's own token, at once.
+    expect(join.fn.mock.calls, "a fresh join").toEqual([["own-rtk-token"], ["own-rtk-token"]]);
+    // The opponent pill follows the NEW camera's meeting, not the one left at the hold — heard at once (its link
+    // change, relayed), not on the next local tick.
+    second.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: true }] });
+    await settle();
+    const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
+    expect(propsOf(screen!).presence, "the pill reads the fresh meeting").toBe(true);
+    island.unmount();
   });
 });

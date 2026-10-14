@@ -96,6 +96,15 @@ const sentryReport: D7Report = (event, err) => {
 };
 const ALL_KINDS = ["video", "screenshareVideo", "audio", "screenshareAudio"] as const;
 
+/** Every local track the SDK holds for this client — the captured camera and what it sends, and the microphone it
+ *  never opens (audio: false) — stopped once each; an absent one is skipped. */
+function stopLocalTracks(self: Meeting["self"]): void {
+  const held = [self.videoTrack, self.rawVideoTrack, self.audioTrack, self.rawAudioTrack] as (MediaStreamTrack | undefined)[];
+  for (const track of new Set(held)) {
+    if (track && typeof track.stop === "function") track.stop();
+  }
+}
+
 /** The join did not hold because OUR guard could not (D7) — never the
  *  player's camera, permission or device. camera-session re-joins. */
 export class D7GuardError extends Error {
@@ -277,11 +286,17 @@ export function makeJoinOwnCamera(
       },
       async leave() {
         stopQuiet();
-        // After a fail-close the meeting is already being left: the same leave.
-        if (leaving !== null) return leaving;
-        await meeting.leave();
-        joinedAt = null;
-        changed();
+        try {
+          // After a fail-close the meeting is already being left: the same leave.
+          if (leaving !== null) return await leaving;
+          await meeting.leave();
+          joinedAt = null;
+          changed();
+        } finally {
+          // T17B fix 2 (D8a): the camera light goes off whatever the SDK's leave reached. Its own cleanup stops these
+          // too (SDK l.24549 cleanupSelf → l.20470 cleanUpTracks), but only once its leave gets that far.
+          stopLocalTracks(self);
+        }
       },
       onFault(cb) {
         let live = true;

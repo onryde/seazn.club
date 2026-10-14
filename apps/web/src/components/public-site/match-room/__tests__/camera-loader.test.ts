@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { join as pathJoin } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { D7_MAX_ATTEMPTS, D7_QUIET_RETRY_MS, D7GuardError, makeJoinOwnCamera, type D7Report, type OwnCamera } from "../camera-loader";
-import { fakeRealtimeKit, MODELLED_SDK_VERSION, type FakeMeeting } from "./_fake-realtimekit";
+import { fakeLocalTrack, fakeRealtimeKit, MODELLED_SDK_VERSION, type FakeMeeting } from "./_fake-realtimekit";
 
 const OPP = { peer: "opp-peer", user: "rtk-opponent" };
 const ARB = { peer: "arb-peer", user: "rtk-arbiter" };
@@ -627,5 +627,47 @@ describe("the player's own camera (unchanged behaviour, now under test)", () => 
     off();
     m.self.emit("videoUpdate", { videoEnabled: false, videoTrack: m.self.videoTrack });
     expect(seen).toEqual([false, true]);
+  });
+});
+
+// T17B fix 2 (D8a), measured on stg: after the checkmate both players' cameras kept publishing for six minutes, until
+// the sweep's teardown. The room now leaves at the result; this is the leave's own half: the camera light goes off
+// whether or not the SDK's leave got as far as its own cleanup (SDK l.24549 cleanupSelf → l.20470 cleanUpTracks).
+describe("the owner's leave ends every local track (T17B fix 2, D8a)", () => {
+  it("a leave stops the camera's tracks — the captured one and the one the SDK sends — once each", async () => {
+    const rtk = fakeRealtimeKit();
+    const cam = await makeJoinOwnCamera(rtk.load)("own-token");
+    const self = rtk.meetings[0]!.self;
+    const tracks = [self.videoTrack, self.rawVideoTrack];
+    expect(tracks.map((t) => t.readyState), "premise: the camera is on").toEqual(["live", "live"]);
+    await cam.leave();
+    expect(rtk.meetings[0]!.calls, "the meeting was left").toContain("leave");
+    expect(tracks.map((t) => t.readyState)).toEqual(["ended", "ended"]);
+    expect(tracks.map((t) => t.stops), "stopped once each").toEqual([1, 1]);
+  });
+
+  it("a leave the SDK refuses still turns the camera light off — and still says it failed", async () => {
+    const rtk = fakeRealtimeKit();
+    const cam = await makeJoinOwnCamera(rtk.load)("own-token");
+    const m = rtk.meetings[0]!;
+    m.failNext.leave = 1;
+    await expect(cam.leave()).rejects.toThrow("injected leave failure");
+    expect([m.self.videoTrack.readyState, m.self.rawVideoTrack.readyState]).toEqual(["ended", "ended"]);
+  });
+
+  it("a track the SDK has not got (no camera yet, audio off) is skipped, never a throw — the empty case", async () => {
+    const rtk = fakeRealtimeKit();
+    const cam = await makeJoinOwnCamera(rtk.load)("own-token");
+    const self = rtk.meetings[0]!.self as unknown as Record<string, unknown>;
+    self.videoTrack = undefined;
+    self.rawVideoTrack = undefined;
+    await expect(cam.leave()).resolves.toBeUndefined();
+    // And the pair: a track present beside an absent one is still stopped.
+    const rtk2 = fakeRealtimeKit();
+    const cam2 = await makeJoinOwnCamera(rtk2.load)("own-token");
+    const raw = fakeLocalTrack("raw-only");
+    Object.assign(rtk2.meetings[0]!.self, { videoTrack: undefined, rawVideoTrack: raw });
+    await cam2.leave();
+    expect(raw.readyState).toBe("ended");
   });
 });
