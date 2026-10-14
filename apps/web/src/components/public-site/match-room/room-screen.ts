@@ -59,6 +59,14 @@ export type ScreenContext = {
   cameraSettling?: boolean;
 };
 
+/** T17B fix 2 (D8a, controller ruling): the screens on which the player's camera is over — the result, and the
+ *  closed card. The room leaves its meeting there (room-shell → use-own-camera). Every other screen may still have a
+ *  game, or a camera owed: a held board, a frozen seat, a board being re-paired keep it. */
+export function cameraEnds(s: RoomState): boolean {
+  const kind = roomScreen(s).kind;
+  return kind === "over" || kind === "closed";
+}
+
 export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   const snap = s.snap;
   if (s.notFound) return { kind: "unavailable" };
