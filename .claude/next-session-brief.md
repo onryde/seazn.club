@@ -158,7 +158,7 @@ before standing anything up. The traps that cost the most:
   `numFailedTestSuites` counts failed **describe blocks**, not files — it will
   not reconcile with the file count, and that is not a collection failure. The
   real collection tell is a suite with **zero** `assertionResults`.
-- **The engine has its own lint task** (`@seazn/engine#lint`) that the repo-root
+- **The engine has its own lint task** (`@onryde/seazn-engine#lint`) that the repo-root
   `npm run lint` does NOT cover. Run both, via `rtk proxy`, and read `✖ N problems`.
 - Prefix `cd <abs worktree> &&` in the SAME call as anything you judge. cwd
   resets between calls, and it bit me again this session mid-way through a gate.

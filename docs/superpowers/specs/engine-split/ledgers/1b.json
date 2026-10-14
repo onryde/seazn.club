@@ -1,13 +1,61 @@
 {
   "batch": "1b",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds). No test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file.",
   "entries": [
     {
       "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › is published under the GitHub owner's scope",
       "fate": "added"
     },
     {
-      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › every workspace that depends on the engine imports it as @seazn/engine through the alias",
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › every workspace that depends on the engine imports it as @seazn/engine through the alias, in every dependency field",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › accepts a tree that is right everywhere, and counts what it judged",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › follows pnpm-workspace.yaml, not a typed list: a stale consumer under a glob the repo did not have before is found, and ignored when the glob is absent",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › judges a stale devDependencies even when dependencies is correct (no ?? shadowing)",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › judges a stale dependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › judges a stale devDependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › judges a stale peerDependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › judges a stale optionalDependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › refuses the scoped name as a key in dependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › refuses the scoped name as a key in devDependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › refuses the scoped name as a key in peerDependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › refuses the scoped name as a key in optionalDependencies",
+      "fate": "added"
+    },
+    {
+      "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › the scan itself (scratch repos) › refuses a workspace glob shape it cannot expand rather than skipping it",
       "fate": "added"
     }
   ]
