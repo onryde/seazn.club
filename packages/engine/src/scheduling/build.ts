@@ -117,6 +117,7 @@ import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
 // The engine reaches a solver and a logger only through the ports in `solver-port.ts` (engine-split D11, D25): this file
 // imports no transport, reads no env and opens no socket. Type-only, so nothing here binds at runtime.
+import { assertEnginePorts } from "./solver-port.ts";
 import type { EngineLogger, PlacementSolver, SolveBuildInput, SolveBuildOutcome } from "./solver-port.ts";
 
 const MS_PER_MIN = 60_000;
@@ -1157,6 +1158,14 @@ export const MAX_SOLVER_QUEUE = 2;
 let queued = 0;
 
 export function buildSchedule(input: BuildInput): Promise<BuildResult> {
+  // First of all: before the log line, the queue, the size gate, and above all before the `try` around the solver call, which
+  // would fold a missing `solve` into `solver_unavailable` (see `assertEnginePorts`). A rejected promise, not a synchronous
+  // throw, so the function never throws where its callers `.catch`.
+  try {
+    assertEnginePorts(input, "buildSchedule");
+  } catch (e) {
+    return Promise.reject(e instanceof Error ? e : new TypeError(String(e)));
+  }
   input.log.info(
     { fixtures: input.fixtures.length, courts: input.config.courts.length },
     "buildSchedule: start",

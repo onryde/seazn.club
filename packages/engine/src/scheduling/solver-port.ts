@@ -151,7 +151,16 @@ export interface SolveContext {
   readonly requestId: string;
 }
 
-/** Rejecting is how a solver says "no answer". A rejection MAY carry a string `failure`, which build.ts duck-types. */
+/**
+ * Rejecting is how a solver says "no answer". A rejection MAY carry a string `failure`, which build.ts duck-types.
+ *
+ * **A solver MUST settle (resolve or reject) within `input.wallSeconds` plus a transport margin.** The engine does not race
+ * `solve` against a clock: it awaits it. A call that never settles is therefore never freed, and it pins one of
+ * `MAX_SOLVER_QUEUE` slots for the life of the process (`queued` in `build.ts` drops only when the solve settles), after which
+ * every further build in that process answers `solver_busy` without asking anyone. Today the bound is the gRPC client's own
+ * deadline (`deadlineMsFor` in `@seazn/scheduler`'s `placement-client.ts`: `wallSeconds` plus a margin); an adapter that talks
+ * to anything else must enforce the same bound itself.
+ */
 export type PlacementSolver = (input: SolveBuildInput, ctx: SolveContext) => Promise<SolveBuildOutcome>;
 
 type LogFn = (fields: Record<string, unknown>, message: string) => void;
@@ -170,6 +179,30 @@ export const silentLogger: EngineLogger = {
   warn() {},
   error() {},
 };
+
+const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+
+/**
+ * D29 at RUN time: `solve` and `log` are required on {@link BuildInput} and on the decomposed repair's input, and the type
+ * alone does not hold that. It is erased in compiled JS (phase 1b publishes it), and an `any` or a hand-built input reaches the
+ * same code. Called at the very top of `buildSchedule` and `repairDecomposedCpsat`, ahead of every `try` and every fallback: a
+ * missing `solve` caught by `buildSchedule`'s catch-all around the solver call logged "placement service unavailable" and
+ * returned a greedy board stamped `solver_unavailable` — an inert seam dressed as an outage. A forgotten port is a programmer
+ * error and surfaces as one.
+ */
+export function assertEnginePorts(input: { solve?: unknown; log?: unknown }, caller: string): void {
+  if (typeof input.solve !== "function") {
+    throw new TypeError(
+      `${caller}: input.solve is required (a PlacementSolver). A caller with no solver passes one that rejects, and gets the greedy board with solver_unavailable.`,
+    );
+  }
+  const log = input.log as Partial<Record<string, unknown>> | null | undefined;
+  for (const level of LOG_LEVELS) {
+    if (typeof log?.[level] !== "function") {
+      throw new TypeError(`${caller}: input.log is required (an EngineLogger) and input.log.${level} is not a function. silentLogger is the quiet one.`);
+    }
+  }
+}
 
 /** A build request without its ports — the shape tests and callers assemble before choosing a solver [R23]. */
 export type BuildProblem = Omit<BuildInput, "solve" | "log">;

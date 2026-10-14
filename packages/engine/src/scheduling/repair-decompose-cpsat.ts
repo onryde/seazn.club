@@ -145,6 +145,7 @@ import {
   type RepairComponentReport,
 } from "./repair-decompose.ts";
 import { buildSchedule, type BuildInput } from "./build.ts";
+import { assertEnginePorts } from "./solver-port.ts";
 import type { EngineLogger, PlacementSolver } from "./solver-port.ts";
 
 /**
@@ -343,6 +344,9 @@ function nudgeForward(
 export async function repairDecomposedCpsat(
   input: DecomposedCpsatRepairInput,
 ): Promise<DecomposedRepairResult> {
+  // Before the "already verifies" early return below, which never touches either port: a caller that forgot one would not find
+  // out until the first real violation arrived.
+  assertEnginePorts(input, "repairDecomposedCpsat");
   // `performance.now()`: ambient wall-clock reads are banned engine-wide
   // (scripts/engine-boundary.ts).
   const t0 = performance.now();
