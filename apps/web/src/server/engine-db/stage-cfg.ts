@@ -1,4 +1,5 @@
 import "server-only";
+import { offByFalse, type DeciderOffSource } from "@/lib/stage-decider-off";
 
 // PROMPT-61 §2 — stage-scoped decider overlay. A groups+knockout division
 // keeps one sport config, but the knockout STAGE may carry `shootout` /
@@ -22,6 +23,7 @@ export const STAGE_DECIDER_KEYS = ["shootout", "extraTime"] as const;
 export function stageScopedCfg(
   divisionCfg: unknown,
   stageCfg: Record<string, unknown> | null | undefined,
+  module: DeciderOffSource | null,
 ): unknown {
   if (stageCfg == null) return divisionCfg;
   const overlay: Record<string, unknown> = {};
@@ -33,7 +35,12 @@ export function stageScopedCfg(
       // nulls, so a null reaching here would BLANK the division's value
       // instead of leaving it alone. The endpoint strips nulls on the way in;
       // this is the second half of that contract, for rows written before it.
-      if (v !== null && v !== undefined) overlay[k] = v;
+      //
+      // W2c Task 12 fix round 1 (R-T12-1): and "off", for a decider whose engine off is null (the period sports'
+      // overtime and shoot-out), is an explicit `false`, read here as that null — THE one place the stage encoding is
+      // mapped (`lib/stage-decider-off.ts` says which keys). Task 13b, which reworks this file, carries this branch.
+      if (v === false && module !== null && offByFalse(module, divisionCfg, k)) overlay[k] = null;
+      else if (v !== null && v !== undefined) overlay[k] = v;
   for (const key of STAGE_DECIDER_KEYS) {
     if (stageCfg[key] !== undefined) overlay[key] = stageCfg[key];
   }

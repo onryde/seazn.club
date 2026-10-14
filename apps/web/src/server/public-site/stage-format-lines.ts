@@ -43,7 +43,7 @@ export function stageFormatLines(
   const out: StageFormatLine[] = [];
   for (const stage of [...stages].sort((a, b) => a.seq - b.seq)) {
     // No rules is identity inside `stageScopedCfg`, so it needs no guard here.
-    const effective = stageScopedCfg(divisionCfg, { rules: stage.rules });
+    const effective = stageScopedCfg(divisionCfg, { rules: stage.rules }, module_ ?? null);
     const line = effectiveRulesLine(sportKey, module_, effective, divisionCfg);
     if (line !== null) out.push({ stageId: stage.id, stageName: stage.name, line });
   }

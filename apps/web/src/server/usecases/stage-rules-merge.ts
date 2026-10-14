@@ -12,6 +12,7 @@ import "server-only";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { sportTopKeys, stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import type { Tx } from "@/lib/db";
+import { stageScopedCfg } from "@/server/engine-db/stage-cfg";
 import { configIssuesOf } from "@/lib/config-issue-copy";
 import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
@@ -142,7 +143,10 @@ export function stageRulesProblem(
   rules: Record<string, unknown>,
   checkPointsMap: boolean,
 ): StageRulesProblem | null {
-  const parsed = module.configSchema.safeParse({ ...(isObj(divisionConfig) ? divisionConfig : {}), ...rules });
+  // Through the resolver itself (`stageScopedCfg`), so what is validated is what a match folds: a null is inherit, and a
+  // decider's `false` is the engine's off where that off is null (fix round 1, R-T12-1). Anywhere else a `false` reaches
+  // the schema as sent and is refused there by name, as any value the sport does not take.
+  const parsed = module.configSchema.safeParse(stageScopedCfg(isObj(divisionConfig) ? divisionConfig : {}, { rules }, module));
   if (!parsed.success) return { kind: "invalid", issues: parsed.error.issues };
   if (checkPointsMap) {
     const merged = parsed.data as { bestOf?: unknown; pointsMap?: unknown };
