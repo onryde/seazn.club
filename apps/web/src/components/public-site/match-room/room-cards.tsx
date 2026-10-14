@@ -143,6 +143,25 @@ export function CameraCard({
   );
 }
 
+/** T17B fix 2 (D2) · The browser refused the camera. Try again cannot cure it — the refusal is on this page's
+ *  connection — so the one action is to reload once the camera is allowed. */
+export function CameraBlockedCard({ onReload, t }: { onReload: () => void; t: RoomT }) {
+  return (
+    <StateCard
+      testId="room-state-camera-blocked"
+      icon="cameraOff"
+      title={t("externalPlay.room.state.cameraBlocked.title")}
+      action={
+        <button type="button" data-testid="room-state-reload" className={PRIMARY} onClick={onReload}>
+          {t("externalPlay.room.state.cameraBlocked.reload")}
+        </button>
+      }
+    >
+      <Body>{t("externalPlay.room.state.cameraBlocked.body")}</Body>
+    </StateCard>
+  );
+}
+
 /** 4 · Video service down: Check again. */
 export function VideoDownCard({ busy, onRetry, t }: { busy: boolean; onRetry: () => void; t: RoomT }) {
   return (

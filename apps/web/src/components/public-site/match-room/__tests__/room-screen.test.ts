@@ -83,10 +83,14 @@ describe("roomScreen", () => {
     });
   });
 
-  it("every seat refusal has its card (preflight's nine reasons; canvas cards 1, 2, 3, 4, 6, 7, 8)", () => {
+  it("every seat refusal has its screen (preflight's eleven reasons; canvas cards 1, 2, 3, 4, 6, 7, 8, T17B's blocked card, and the check-in for a camera still starting)", () => {
     const want: Record<SeatRefusal, string> = {
       camera_required: "cameraRequired",
       camera_lost: "cameraLost",
+      // T17B fix 2 (D2), the ruling: a camera still starting is NOT a terminal card — the room re-asks; a browser
+      // that refused the camera is its own card.
+      camera_starting: "checkin",
+      camera_blocked: "cameraBlocked",
       video_unavailable: "videoDown",
       lichess_link_required: "relink",
       lichess_reconsent_required: "relink",
@@ -101,7 +105,7 @@ describe("roomScreen", () => {
       expect(roomScreen(st({}, { seat: refused(reason) })).kind, reason).toBe(kind);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: refusal reasons").toBe(9);
+    expect(checked, "anti-vacuity: refusal reasons").toBe(11);
   });
 
   it("a game on file is the live room — whatever stale seat refusal or window the state still holds", () => {

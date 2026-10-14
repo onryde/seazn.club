@@ -25,14 +25,24 @@
 // the real RealtimeKit SDK in that page cannot join a meeting this stub
 // minted. Neither half seats anyone; the spec says who is present.
 //
+// The same rule holds for the CAMERA (T17B fix 2, D2): every join gets a peer
+// whose peer report (`/sessions/peer-report/{peer}`) is built from an
+// in-process camera state — `on` by default, the measured honest camera:
+// `media_permission{VIDEO, ACCEPTED}` and `video_on`, with NO producer samples
+// (measured: samples arrive minutes late, so the seat never reads them) —
+// changed only by `setLivePublisher`'s `camera` and `setPeerCamera`. Shapes
+// are the measured live ones (T17B, 2026-10-14): a DENIED peer logs
+// `video_on`, `media_permission{VIDEO, DENIED}` and `video_off` at one instant.
+//
 // What is NOT measured (owed live, task-17-report.md): the exact 404 body of
 // an active-session with nobody in it (modelled as RealtimeKit's documented
-// error envelope, which is what the adapter reads), the kick/DELETE bodies,
-// GET /sessions' shape, and whether a reload adds a session row or only peer
-// events (modelled as a new row; the adapter's listPeerIds handles both).
-// Participant rows carry the measured fields (rtk-peer-report.log tail:
-// `id` the session participant id, `user_id` our add-participant id,
-// `peer_events[].peer_id`).
+// error envelope, which is what the adapter reads), the kick/DELETE bodies and
+// GET /sessions' shape. A reload adds a new PEER under the same session row
+// (MEASURED, T17B 2026-10-14) — modelled so; a rejoin after the session ended
+// is a new session and so a new row. Participant rows carry the measured
+// fields (`id` the session participant id, `user_id` our add-participant id,
+// `peer_events[]` with `event_name` PEER_JOINING | PEER_LEAVING, `peer_id`,
+// `created_at`).
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 /** 4321 is the Lichess fixture's, 4319 the AI fixture's. CI and ci-local.sh
@@ -78,6 +88,12 @@ export interface FixtureSession {
   status: "LIVE" | "ENDED";
 }
 
+/** The camera a joining peer's report shows (T17B fix 2, D2), as measured:
+ *  `on` — ACCEPTED + `video_on`; `denied` — the browser refused it; `off` —
+ *  ACCEPTED, then turned off; `pending` — a report with no events yet;
+ *  `none` — no report at all (RealtimeKit's not-found). */
+export type FixtureCamera = "on" | "denied" | "off" | "pending" | "none";
+
 export interface RealtimeKitFixtureServer {
   url: string;
   port: number;
@@ -88,9 +104,19 @@ export interface RealtimeKitFixtureServer {
    *  new peer, opening a session if the meeting has none LIVE); `false`
    *  leaves (the session ENDS when the last one leaves). Throws for an
    *  unknown, removed or deactivated participant. */
-  setLivePublisher(participantId: string, live: boolean): void;
+  setLivePublisher(participantId: string, live: boolean, opts?: { camera?: FixtureCamera }): void;
+  /** Append a `video_on` / `video_off` to this participant's CURRENT peer's
+   *  report (a camera turned off or back on mid-session). Throws when the
+   *  participant has no connected peer. */
+  setPeerCamera(participantId: string, event: "video_on" | "video_off"): void;
+  /** This participant's current peer: the latest PEER_JOINING with no
+   *  PEER_LEAVING after it, or null. */
+  currentPeer(participantId: string): string | null;
   /** D11's outage: every route answers 503 until cleared. */
   setUnavailable(down: boolean): void;
+  /** An outage on the peer report ALONE (D2): GET /sessions/peer-report/{peer}
+   *  answers 503 while every other route still works, until cleared. */
+  setPeerReportsUnavailable(down: boolean): void;
   /** Serve a recorded peer report's `data` for GET /sessions/peer-report/{peerId}. */
   servePeerReport(peerId: string, data: unknown): void;
   participant(participantId: string): FixtureParticipant | null;
@@ -112,8 +138,26 @@ type Row = {
   preset: string;
   joinedAt: string;
   leftAt: string | null;
-  peerEvents: { event: "PEER_JOINING" | "PEER_LEAVING"; peer_id: string; participant_id: string; created_at: string }[];
+  peerEvents: { event_name: "PEER_JOINING" | "PEER_LEAVING"; peer_id: string; participant_id: string; created_at: string }[];
 };
+type PeerEvent = { name: string; timestamp: string; metadata?: Record<string, string> };
+
+/** The measured report events of a joining peer (T17B q2-peer-*.json). */
+function joinEvents(camera: FixtureCamera, at: string): PeerEvent[] | null {
+  const permission = (p: string): PeerEvent => ({ name: "media_permission", metadata: { device_type: "VIDEO", permission: p }, timestamp: at });
+  switch (camera) {
+    case "on":
+      return [{ name: "audio_off", timestamp: at }, { name: "video_on", timestamp: at }, permission("ACCEPTED"), { name: "precall_begin", timestamp: at }];
+    case "denied":
+      return [{ name: "audio_off", timestamp: at }, { name: "video_on", timestamp: at }, permission("DENIED"), { name: "video_off", timestamp: at }, { name: "precall_begin", timestamp: at }];
+    case "off":
+      return [{ name: "audio_off", timestamp: at }, { name: "video_on", timestamp: at }, permission("ACCEPTED"), { name: "precall_begin", timestamp: at }, { name: "video_off", timestamp: at }];
+    case "pending":
+      return [];
+    case "none":
+      return null;
+  }
+}
 type Session = { id: string; meetingId: string; status: "LIVE" | "ENDED"; startedAt: string; endedAt: string | null };
 
 const RTK_NOT_FOUND = (message: string) => ({ success: false, error: { code: 404, message } });
@@ -147,7 +191,10 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
   const sessions = new Map<string, Session>();
   const rows: Row[] = [];
   const peerReports = new Map<string, string>();
+  /** peer id → its row and its report's events (null: no report served). */
+  const peerCameras = new Map<string, { rowId: string; events: PeerEvent[] | null }>();
   let down = false;
+  let peerReportsDown = false;
   let seq = 0;
   const next = (p: string) => `${p}-${(++seq).toString(36).padStart(4, "0")}-${Date.now().toString(36)}`;
   const iso = () => new Date().toISOString();
@@ -159,11 +206,19 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
     s.status = "ENDED";
     s.endedAt = iso();
   };
+  const livePeers = (r: Row) =>
+    r.peerEvents
+      .filter((e) => e.event_name === "PEER_JOINING")
+      .filter((j) => !r.peerEvents.some((e) => e.event_name === "PEER_LEAVING" && e.peer_id === j.peer_id));
   const leave = (r: Row) => {
     if (r.leftAt !== null) return;
     r.leftAt = iso();
-    const joining = r.peerEvents.find((e) => e.event === "PEER_JOINING");
-    if (joining) r.peerEvents.push({ ...joining, event: "PEER_LEAVING", created_at: r.leftAt });
+    for (const j of livePeers(r)) r.peerEvents.push({ ...j, event_name: "PEER_LEAVING", created_at: r.leftAt });
+  };
+  const currentPeerOf = (participantId: string): string | null => {
+    const mine = rows.filter((r) => r.userId === participantId && r.leftAt === null && sessions.get(r.sessionId)?.status === "LIVE");
+    const live = mine.flatMap(livePeers);
+    return live.at(-1)?.peer_id ?? null;
   };
   const rowJson = (r: Row, withEvents: boolean) => ({
     id: r.id,
@@ -279,9 +334,24 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       }
       if ((m = /^\/sessions\/peer-report\/([^/]+)$/.exec(path)) && method === "GET") {
         route("GET /sessions/peer-report/:peer");
+        if (peerReportsDown) return send(res, 503, OUTAGE);
         const recorded = peerReports.get(m[1]!);
-        if (recorded === undefined) return send(res, 404, RTK_NOT_FOUND("Peer not found"));
-        return res.writeHead(200, { "content-type": "application/json" }).end(`{"success":true,"data":${recorded}}`);
+        if (recorded !== undefined) {
+          return res.writeHead(200, { "content-type": "application/json" }).end(`{"success":true,"data":${recorded}}`);
+        }
+        const cam = peerCameras.get(m[1]!);
+        const row = cam ? rows.find((r) => r.id === cam.rowId) : undefined;
+        // RealtimeKit's measured body for a peer it has no report for.
+        if (!cam || cam.events === null || !row) return send(res, 404, RTK_NOT_FOUND(`No peer event exists for id ${m[1]!}`));
+        return ok(res, {
+          participant: {
+            ...rowJson(row, false),
+            peer_report: {
+              metadata: { events: cam.events, sdk_name: "web-core", sdk_version: "2.0.2", room_view_type: "groupCall" },
+              quality: { video_producer: [], video_producer_cumulative: {} },
+            },
+          },
+        });
       }
       if ((m = /^\/sessions\/([^/]+)\/participants$/.exec(path)) && method === "GET") {
         route("GET /sessions/:id/participants");
@@ -324,7 +394,7 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
     port: boundPort,
     kitPath,
     calls,
-    setLivePublisher(participantId, live) {
+    setLivePublisher(participantId, live, opts = {}) {
       const p = participants.get(participantId);
       if (!p) throw new Error(`setLivePublisher: no participant ${participantId} — nobody minted it`);
       if (p.deleted) throw new Error(`setLivePublisher: participant ${participantId} was removed; its token can never re-join`);
@@ -336,12 +406,17 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
           s = { id: next("ses"), meetingId: mt.id, status: "LIVE", startedAt: iso(), endedAt: null };
           sessions.set(s.id, s);
         }
-        const rowId = next("sp");
         const at = iso();
-        rows.push({
-          id: rowId, sessionId: s.id, userId: p.id, subject: p.subject, preset: p.preset, joinedAt: at, leftAt: null,
-          peerEvents: [{ event: "PEER_JOINING", peer_id: next("peer"), participant_id: rowId, created_at: at }],
-        });
+        // MEASURED (T17B): a reload is a new peer under the SAME row of the live session.
+        let row = rows.find((r) => r.sessionId === s.id && r.userId === p.id);
+        if (!row) {
+          row = { id: next("sp"), sessionId: s.id, userId: p.id, subject: p.subject, preset: p.preset, joinedAt: at, leftAt: null, peerEvents: [] };
+          rows.push(row);
+        }
+        row.leftAt = null;
+        const peer = next("peer");
+        row.peerEvents.push({ event_name: "PEER_JOINING", peer_id: peer, participant_id: row.id, created_at: at });
+        peerCameras.set(peer, { rowId: row.id, events: joinEvents(opts.camera ?? "on", at) });
         return;
       }
       const s = liveSession(mt.id);
@@ -349,8 +424,20 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       for (const r of rows) if (r.sessionId === s.id && r.userId === p.id) leave(r);
       endIfEmpty(s);
     },
+    setPeerCamera(participantId, event) {
+      const peer = currentPeerOf(participantId);
+      const cam = peer === null ? undefined : peerCameras.get(peer);
+      if (!cam) throw new Error(`setPeerCamera: participant ${participantId} has no connected peer`);
+      cam.events = [...(cam.events ?? []), { name: event, timestamp: iso() }];
+    },
+    currentPeer(participantId) {
+      return currentPeerOf(participantId);
+    },
     setUnavailable(d) {
       down = d;
+    },
+    setPeerReportsUnavailable(d) {
+      peerReportsDown = d;
     },
     servePeerReport(peerId, data) {
       peerReports.set(peerId, JSON.stringify(data));
@@ -385,7 +472,9 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       sessions.clear();
       rows.length = 0;
       peerReports.clear();
+      peerCameras.clear();
       down = false;
+      peerReportsDown = false;
     },
     close() {
       return new Promise<void>((resolve) => {

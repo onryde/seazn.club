@@ -1532,7 +1532,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     const video: NonNullable<PreflightDeps["video"]> = {
       ensureMeeting: (fixtureId) => ensureMeeting(fixtureId, { fetch }),
       addParticipant: (a) => addParticipant(a, { fetch }),
-      hasLiveVideoPublisher: async () => true,
+      seatCameraEvidence: async () => ({ state: "on" as const, since: new Date() }),
       refreshParticipantToken: (a) => refreshParticipantToken(a, { fetch }),
     };
     return { http, video, end: (meetingId: string) => endMeeting(meetingId, { fetch }) };

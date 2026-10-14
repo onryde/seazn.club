@@ -10,11 +10,11 @@ import {
   endMeeting,
   ensureMeeting,
   fetchVideoOffCoverage,
-  hasLiveVideoPublisher,
   listMeetingSessions,
   listPeerIds,
   refreshParticipantToken,
   removeParticipant,
+  seatCameraEvidence,
 } from "../realtimekit";
 
 const ENV_KEYS = [
@@ -524,7 +524,7 @@ const RECORDED = JSON.parse(
   };
 };
 
-describe("hasLiveVideoPublisher", () => {
+describe("seatCameraEvidence: presence first (the reads the seat gate rests on)", () => {
   const SESSION = "sess-1";
   const ME = "p-1"; // the participantId addParticipant returned
   const live = { status: 200, body: { success: true, data: { id: SESSION, status: "LIVE" } } };
@@ -537,13 +537,41 @@ describe("hasLiveVideoPublisher", () => {
   /** A session-participant row. `id` is the SESSION PARTICIPANT id and
    *  `user_id` the participant id addParticipant returned — measured as two
    *  different values (README beside the fixture; 7dde4a246). */
+  /** Its one peer is `peer-<userId>-<n>`, LEFT with the row (measured shape: `peer_events[]` with `event_name`,
+   *  `peer_id`, `created_at` — T17B q2-live-parts-bothon). */
   const row = (userId: string, leftAt: string | null, n = 0) => ({
     id: `conn-${userId}-${n}`,
     user_id: userId,
     custom_participant_id: "s",
     joined_at: "2026-10-01T12:00:00Z",
     left_at: leftAt,
+    peer_events: [
+      { event_name: "PEER_JOINING", peer_id: `peer-${userId}-${n}`, created_at: "2026-10-01T12:00:00Z" },
+      ...(leftAt === null ? [] : [{ event_name: "PEER_LEAVING", peer_id: `peer-${userId}-${n}`, created_at: leftAt }]),
+    ],
   });
+  /** The measured camera-ON peer's report (evidence t17b-peer-reports-live.json, "on"). */
+  const cameraOn = {
+    status: 200,
+    body: {
+      success: true,
+      data: {
+        participant: {
+          peer_report: {
+            metadata: {
+              events: [
+                { name: "audio_off", timestamp: "2026-10-01T12:00:00Z" },
+                { name: "video_on", timestamp: "2026-10-01T12:00:00Z" },
+                { name: "media_permission", metadata: { device_type: "VIDEO", permission: "ACCEPTED" }, timestamp: "2026-10-01T12:00:00Z" },
+                { name: "precall_begin", timestamp: "2026-10-01T12:00:00Z" },
+              ],
+            },
+          },
+        },
+      },
+    },
+  };
+  const reportPeer = (url: string) => url.split("/sessions/peer-report/")[1] ?? null;
 
   it("sweeps every reachable state and reports the count", async () => {
     configure();
@@ -551,52 +579,58 @@ describe("hasLiveVideoPublisher", () => {
     // Premise for the recorded-shape case: the session participant id and the
     // persistent participant id really are different values.
     expect(rec.id, "premise: recorded row has distinct id and user_id").not.toBe(rec.user_id);
-    const cases: { name: string; me?: string; responses: { status: number; body: unknown }[]; want: boolean }[] = [
-      { name: "empty case: no active session at all", responses: [noSession], want: false },
-      { name: "session exists but has ENDED", responses: [ended], want: false },
-      { name: "live session, nobody in the participant list", responses: [live, participants([])], want: false },
+    // `peer`: the peer whose report a present participant is judged on — the current one, never a peer that left.
+    const cases: { name: string; me?: string; responses: { status: number; body: unknown }[]; want: "absent" | "on"; peer?: string }[] = [
+      { name: "empty case: no active session at all", responses: [noSession], want: "absent" },
+      { name: "session exists but has ENDED", responses: [ended], want: "absent" },
+      { name: "live session, nobody in the participant list", responses: [live, participants([])], want: "absent" },
       {
         name: "live session, our participant has never joined",
         responses: [live, participants([row("someone-else", null)])],
-        want: false,
+        want: "absent",
       },
       {
         name: "live session, our participant joined and LEFT",
         responses: [live, participants([row(ME, "2026-10-01T12:05:00Z")])],
-        want: false,
+        want: "absent",
       },
       {
         name: "live session, our participant is joined and present",
-        responses: [live, participants([row(ME, null)])],
-        want: true,
+        responses: [live, participants([row(ME, null)]), cameraOn],
+        want: "on",
+        peer: `peer-${ME}-0`,
       },
       {
         name: "present row whose left_at key is ABSENT, not null",
-        responses: [live, participants([{ id: "conn-x", user_id: ME, joined_at: "2026-10-01T12:00:00Z" }])],
-        want: true,
+        responses: [live, participants([{ id: "conn-x", user_id: ME, joined_at: "2026-10-01T12:00:00Z", peer_events: row(ME, null).peer_events }]), cameraOn],
+        want: "on",
+        peer: `peer-${ME}-0`,
       },
       {
         // Matching on the row's `id` (the brief's original predicate) would
         // never see this participant: that is the session participant id.
         name: "recorded row shape: matched by user_id, present",
         me: rec.user_id,
-        responses: [live, participants([{ ...rec, peer_report: undefined, left_at: null }])],
-        want: true,
+        responses: [live, participants([{ ...rec, peer_report: undefined, left_at: null, peer_events: row(rec.user_id, null).peer_events }]), cameraOn],
+        want: "on",
+        peer: `peer-${rec.user_id}-0`,
       },
       {
         name: "a row whose session participant id equals our participantId but belongs to someone else",
         responses: [live, participants([{ ...row("someone-else", null), id: ME }])],
-        want: false,
+        want: "absent",
       },
       {
         name: "SEQUENCE: reloaded — old connection LEFT, new connection present",
-        responses: [live, participants([row(ME, "2026-10-01T12:03:00Z", 1), row(ME, null, 2)])],
-        want: true,
+        responses: [live, participants([row(ME, "2026-10-01T12:03:00Z", 1), row(ME, null, 2)]), cameraOn],
+        want: "on",
+        peer: `peer-${ME}-2`,
       },
       {
         name: "SEQUENCE: same rows, newest first",
-        responses: [live, participants([row(ME, null, 2), row(ME, "2026-10-01T12:03:00Z", 1)])],
-        want: true,
+        responses: [live, participants([row(ME, null, 2), row(ME, "2026-10-01T12:03:00Z", 1)]), cameraOn],
+        want: "on",
+        peer: `peer-${ME}-2`,
       },
       {
         name: "SEQUENCE: reloaded twice and finally left — every connection has left",
@@ -604,20 +638,18 @@ describe("hasLiveVideoPublisher", () => {
           live,
           participants([row(ME, "2026-10-01T12:03:00Z", 1), row(ME, "2026-10-01T12:09:00Z", 2)]),
         ],
-        want: false,
+        want: "absent",
       },
     ];
     let checked = 0;
-    const outcomes = new Set<boolean>();
+    const outcomes = new Set<string>();
     for (const c of cases) {
       const stub = stubFetch(c.responses);
-      const got = await hasLiveVideoPublisher(
-        { meetingId: "mtg-1", participantId: c.me ?? ME },
-        { fetch: stub.fetch },
-      );
-      expect(got, c.name).toBe(c.want);
+      const got = await seatCameraEvidence({ meetingId: "mtg-1", participantId: c.me ?? ME }, { fetch: stub.fetch });
+      expect(got.state, c.name).toBe(c.want);
       expect(stub.calls.length, `${c.name}: every scripted response was used`).toBe(c.responses.length);
-      outcomes.add(got);
+      expect(reportPeer(stub.calls.at(-1)!.url), `${c.name}: the peer judged`).toBe(c.peer ?? null);
+      outcomes.add(got.state);
       checked += 1;
     }
     expect(checked, "anti-vacuity: every state the REST API can report").toBe(cases.length);
@@ -625,22 +657,23 @@ describe("hasLiveVideoPublisher", () => {
     expect(outcomes.size, "a predicate that only ever answers one way proves nothing").toBe(2);
   });
 
-  it("reads the active session, then that session's participants at the maximum page size", async () => {
+  it("reads the active session, then that session's participants WITH their peer events at the maximum page size, then the current peer's report", async () => {
     configure();
-    const stub = stubFetch([live, participants([row(ME, null)])]);
-    await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch });
+    const stub = stubFetch([live, participants([row(ME, null)]), cameraOn]);
+    await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch });
     expect(stub.calls.map((c) => `${c.method} ${c.url.split("/realtime/kit/app-1")[1]}`)).toEqual([
       "GET /meetings/mtg-1/active-session",
-      // per_page defaults to 25 (OpenAPI); every reload adds a row, so ask for
-      // the maximum, 200.
-      `GET /sessions/${SESSION}/participants?per_page=200`,
+      // per_page defaults to 25 (OpenAPI); ask for the maximum, 200. The peer
+      // events name the peers — the only ids the peer report takes.
+      `GET /sessions/${SESSION}/participants?include_peer_events=true&per_page=200`,
+      `GET /sessions/peer-report/peer-${ME}-0`,
     ]);
   });
 
   it("does not ask for the participant list at all when the session is not live", async () => {
     configure();
     const stub = stubFetch([ended]); // a second call throws
-    expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch })).toBe(false);
+    expect((await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch })).state).toBe("absent");
     expect(stub.calls.length).toBe(1);
   });
 
@@ -702,7 +735,7 @@ describe("hasLiveVideoPublisher", () => {
     for (const c of cases) {
       const stub = stubFetch([c.first, answerable]);
       await expect(
-        hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }),
+        seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }),
         c.name,
       ).rejects.toMatchObject({ name: "RealtimeKitError", code: "unavailable", message: expect.stringMatching(c.message) });
       checked += 1;
@@ -710,8 +743,8 @@ describe("hasLiveVideoPublisher", () => {
     expect(checked, "anti-vacuity").toBe(cases.length);
     expect(checked).toBeGreaterThanOrEqual(17);
     // Positive controls: the two answers that DO mean "not live".
-    expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([noSession]).fetch })).toBe(false);
-    expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([ended]).fetch })).toBe(false);
+    expect((await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([noSession]).fetch })).state).toBe("absent");
+    expect((await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([ended]).fetch })).state).toBe("absent");
   });
 
   it("RealtimeKit's 'no session yet' 404 is read by its envelope, not by the exact typing of its code", async () => {
@@ -740,9 +773,9 @@ describe("hasLiveVideoPublisher", () => {
     ];
     let checked = 0;
     for (const c of cases) {
-      // The second response would answer TRUE if the code went on to ask.
+      // The second response would answer present if the code went on to ask.
       const stub = stubFetch([{ status: 404, body: c.body }, answerable]);
-      expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }), c.name).toBe(false);
+      expect((await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch })).state, c.name).toBe("absent");
       expect(stub.calls.length, `${c.name}: answered from the 404 alone`).toBe(1);
       checked += 1;
     }
@@ -798,7 +831,7 @@ describe("hasLiveVideoPublisher", () => {
       configure(c.unconfigured ? { REALTIMEKIT_PLAYER_PRESET: "" } : {});
       const stub = stubFetch(c.responses);
       await expect(
-        hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }),
+        seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }),
         c.name,
       ).rejects.toMatchObject({ name: "RealtimeKitError", code: c.code });
       checked += 1;
@@ -810,8 +843,114 @@ describe("hasLiveVideoPublisher", () => {
     // finding us on a full page, not about page size itself.
     configure();
     const withMe = [...fullPage.slice(0, 199), row(ME, null)];
-    const ok = stubFetch([live, participants(withMe)]);
-    expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: ok.fetch })).toBe(true);
+    const ok = stubFetch([live, participants(withMe), cameraOn]);
+    expect((await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: ok.fetch })).state).toBe("on");
+  });
+
+  // ─── T17B fix 2 (D2): the current peer's camera ─────────────────────────
+  //
+  // Expected states come from the ruling (ACCEPTED + latest video_on seats;
+  // DENIED is blocked; ACCEPTED then video_off is off; no evidence is
+  // starting) and the SDK's own permission values (web-core 2.0.2: ACCEPTED,
+  // DENIED, SYSTEM_DENIED, COULD_NOT_START, …) — never from the adapter.
+  const T0 = "2026-10-01T12:00:00.000Z";
+  const T1 = "2026-10-01T12:00:05.000Z";
+  const perm = (permission: string, device_type = "VIDEO", timestamp = T0) => ({ name: "media_permission", metadata: { device_type, permission }, timestamp });
+  const ev = (name: string, timestamp = T0) => ({ name, timestamp });
+  const report = (events: unknown) => ({ status: 200, body: { success: true, data: { participant: { peer_report: { metadata: { events } } } } } });
+
+  it("the camera on the current peer's report, swept: every state the ruling names, and the edges that tell them apart", async () => {
+    configure();
+    const cases: { name: string; report: { status: number; body: unknown }; want: string }[] = [
+      { name: "the measured honest camera: ACCEPTED, video_on, no producer samples", report: cameraOn, want: "on" },
+      { name: "the measured DENIED peer: video_on, DENIED, video_off at one instant", report: report([ev("audio_off"), ev("video_on"), perm("DENIED"), ev("video_off"), ev("precall_begin")]), want: "blocked" },
+      { name: "SYSTEM_DENIED (an OS privacy setting) is a refusal too", report: report([ev("video_on"), perm("SYSTEM_DENIED")]), want: "blocked" },
+      { name: "DENIED anywhere for VIDEO wins, even beside a later ACCEPTED", report: report([perm("DENIED"), ev("video_on", T1), perm("ACCEPTED", "VIDEO", T1)]), want: "blocked" },
+      { name: "an AUDIO denial is not the camera's", report: report([ev("video_on"), perm("ACCEPTED"), perm("DENIED", "AUDIO")]), want: "on" },
+      { name: "ACCEPTED, then video_off", report: report([ev("video_on"), perm("ACCEPTED"), ev("video_off", T1)]), want: "off" },
+      { name: "ACCEPTED, off, then back on: the latest wins", report: report([ev("video_on"), perm("ACCEPTED"), ev("video_off", T1), ev("video_on", "2026-10-01T12:00:09.000Z")]), want: "on" },
+      // Ordered by timestamp, not by position: a batch uploaded out of order still reads its latest.
+      { name: "a later video_off listed BEFORE an earlier video_on", report: report([ev("video_off", T1), perm("ACCEPTED"), ev("video_on", T0)]), want: "off" },
+      // Ties keep the report's own order (the SDK logs a join's events at one millisecond).
+      { name: "video_on then video_off at the same instant", report: report([perm("ACCEPTED"), ev("video_on"), ev("video_off")]), want: "off" },
+      { name: "video_on with NO permission yet (the prompt unanswered) is intent, not proof", report: report([ev("audio_off"), ev("video_on"), ev("precall_begin")]), want: "starting" },
+      { name: "ACCEPTED but no on/off event yet", report: report([perm("ACCEPTED")]), want: "starting" },
+      { name: "a camera that could not start (busy device)", report: report([ev("video_on"), perm("COULD_NOT_START"), ev("video_off")]), want: "starting" },
+      { name: "empty case: no events at all", report: report([]), want: "starting" },
+      { name: "a report with no metadata yet", report: { status: 200, body: { success: true, data: { participant: { peer_report: null } } } }, want: "starting" },
+      { name: "RealtimeKit's own 'no peer event exists' 404 (measured body)", report: { status: 404, body: { success: false, error: { code: 404, message: "No peer event exists for id x" } } }, want: "starting" },
+      { name: "a peer-report 503", report: { status: 503, body: { success: false } }, want: "unreadable" },
+      { name: "a 404 that is not RealtimeKit's (an HTML page)", report: { status: 404, body: "<html>" }, want: "unreadable" },
+      { name: "events is not a list", report: report({ video_on: true }), want: "unreadable" },
+      { name: "an event with no name", report: report([{ timestamp: T0 }]), want: "unreadable" },
+      { name: "an event whose timestamp is not a date", report: report([perm("ACCEPTED"), ev("video_on", "yesterday")]), want: "unreadable" },
+      { name: "no participant in the report", report: { status: 200, body: { success: true, data: { peer_report: {} } } }, want: "unreadable" },
+    ];
+    let checked = 0;
+    const seen = new Set<string>();
+    for (const c of cases) {
+      const stub = stubFetch([live, participants([row(ME, null)]), c.report]);
+      const got = await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch });
+      expect(got.state, c.name).toBe(c.want);
+      // Every present answer carries the current peer's join, which the seat's wait runs from.
+      expect("since" in got && got.since.toISOString(), `${c.name}: since`).toBe(T0);
+      if (got.state === "unreadable") expect(got.error, c.name).toBeInstanceOf(RealtimeKitError);
+      seen.add(got.state);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect([...seen].sort(), "every present state is reached").toEqual(["blocked", "off", "on", "starting", "unreadable"]);
+  });
+
+  it("the CURRENT peer: the latest PEER_JOINING with no PEER_LEAVING, across the participant's present rows — swept", async () => {
+    configure();
+    const joining = (peer: string, at: string) => ({ event_name: "PEER_JOINING", peer_id: peer, created_at: at });
+    const leaving = (peer: string, at: string) => ({ event_name: "PEER_LEAVING", peer_id: peer, created_at: at });
+    const mine = (peerEvents: unknown) => ({ id: "conn-me", user_id: ME, joined_at: T0, left_at: null, peer_events: peerEvents });
+    const cases: { name: string; rows: unknown[]; peer: string | null; want?: string }[] = [
+      // MEASURED (T17B): a reload is a new peer under the SAME row.
+      { name: "a reload under one row: the old peer left, the new one judged", rows: [mine([joining("old", T0), leaving("old", T1), joining("new", "2026-10-01T12:00:06.000Z")])], peer: "new" },
+      { name: "two tabs open: the later join is judged", rows: [mine([joining("a", T0), joining("b", T1)])], peer: "b" },
+      { name: "two tabs, listed newest first", rows: [mine([joining("b", T1), joining("a", T0)])], peer: "b" },
+      { name: "the later tab closed: the earlier, still open, is judged", rows: [mine([joining("a", T0), joining("b", T1), leaving("b", "2026-10-01T12:00:07.000Z")])], peer: "a" },
+      { name: "every peer has left though the row lags: absent, no report asked", rows: [mine([joining("a", T0), leaving("a", T1)])], peer: null, want: "absent" },
+      { name: "a present row with no peer events at all: absent", rows: [mine([])], peer: null, want: "absent" },
+      { name: "another participant's newer peer is never mine", rows: [mine([joining("a", T0)]), { id: "conn-x", user_id: "someone-else", left_at: null, peer_events: [joining("z", T1)] }], peer: "a" },
+      { name: "unknown event names are ignored", rows: [mine([{ event_name: "PEER_CREATED", peer_id: "q", created_at: T1 }, joining("a", T0)])], peer: "a" },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const responses = [live, participants(c.rows), ...(c.peer === null ? [] : [cameraOn])];
+      const stub = stubFetch(responses);
+      const got = await seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch });
+      expect(got.state, c.name).toBe(c.want ?? "on");
+      expect(stub.calls.length, `${c.name}: every scripted response was used`).toBe(responses.length);
+      expect(reportPeer(stub.calls.at(-1)!.url), `${c.name}: the peer judged`).toBe(c.peer);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+  });
+
+  it("peer events we cannot read THROW (an outage, never 'camera off') — swept", async () => {
+    configure();
+    const mine = (peerEvents: unknown) => ({ id: "conn-me", user_id: ME, joined_at: T0, left_at: null, peer_events: peerEvents });
+    const cases: { name: string; rows: unknown[] }[] = [
+      { name: "peer_events missing", rows: [{ id: "conn-me", user_id: ME, left_at: null }] },
+      { name: "peer_events not a list", rows: [mine({ PEER_JOINING: "p" })] },
+      { name: "an event without a peer_id", rows: [mine([{ event_name: "PEER_JOINING", created_at: T0 }])] },
+      { name: "a PEER_JOINING without a date", rows: [mine([{ event_name: "PEER_JOINING", peer_id: "p", created_at: "soon" }])] },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const stub = stubFetch([live, participants(c.rows), cameraOn]);
+      await expect(seatCameraEvidence({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }), c.name).rejects.toMatchObject({
+        name: "RealtimeKitError",
+        code: "unavailable",
+      });
+      expect(stub.calls.length, `${c.name}: no report asked`).toBe(2);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
   });
 });
 

@@ -43,7 +43,7 @@ import {
 } from "../external-play/room";
 import { seatPlayer } from "../external-play/preflight";
 import { startLichessFixtureServer } from "../../../../e2e/lichess-fixture-server";
-import { hasLiveVideoPublisher } from "@/server/external-play/video/realtimekit";
+import { seatCameraEvidence } from "@/server/external-play/video/realtimekit";
 import { GUARD_FAULT_MAX_STAMPS } from "@/server/external-play/video/guard-faults";
 import { GUARD_FAULT_FLAG_STAMPS } from "@/server/external-play/video/match-camera-off";
 import { CAMERA_FAULT_PING_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
@@ -931,7 +931,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
     vi.stubGlobal("fetch", fetchSpy);
     try {
       // Positive control: this watch DOES see a vendor call when one is made.
-      await hasLiveVideoPublisher({ meetingId: "mtg-control", participantId: "pt-control" }).catch(() => null);
+      await seatCameraEvidence({ meetingId: "mtg-control", participantId: "pt-control" }).catch(() => null);
       expect(fetchSpy.mock.calls.length, "control: the watch sees RealtimeKit").toBeGreaterThan(0);
       expect(String((fetchSpy.mock.calls[0] as unknown as [string])[0])).toContain("realtime");
       fetchSpy.mockClear();

@@ -1,9 +1,12 @@
 import "server-only";
 // The seat (spec §5.2, §3.2). A player is seated only when the MEETING
-// reports them present in a live session — never on anything the client
-// sends. The POC gated check-in on a client-supplied camera boolean; that is
-// forgeable and is on the do-not-copy list (§10). There is no parameter here
-// a browser could set.
+// reports them present in a live session, and (T17B fix 2, D2) their current
+// peer's own RealtimeKit report shows the camera granted and on — never on
+// anything the client sends US. The POC gated check-in on a client-supplied
+// camera boolean; that is forgeable and is on the do-not-copy list (§10).
+// There is no parameter here a browser could set. (The peer report is
+// client-uploaded telemetry too, read from the vendor — the accepted
+// residual, spec §5.2.)
 //
 // D12: the window hangs off `stage_round_opens.opened_at` (read through
 // round-open.ts, the one reader of the stamp), not `fixtures.scheduled_at`.
@@ -22,10 +25,11 @@ import {
   RealtimeKitError,
   addParticipant,
   ensureMeeting,
-  hasLiveVideoPublisher,
   refreshParticipantToken,
+  seatCameraEvidence,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
+import { CAMERA_EVIDENCE_DEADLINE_MS } from "@/components/public-site/match-room/room-snapshot";
 import {
   effectiveBridge,
   ensureBridgeRow,
@@ -35,15 +39,20 @@ import {
   type SidePlayer,
 } from "./guard";
 
-/** Every reason a seat can be refused. The two camera refusals carry the
+/** Every reason a seat can be refused. The four camera refusals carry the
  *  caller's OWN participant token (controller ruling Q1, 2026-10-09): under
  *  `required` a player becomes live only by joining the meeting, so the token
  *  to join with must reach them BEFORE they are seated — a refusal that
- *  carried none would leave no way to ever be seated. Every other refusal
- *  carries nothing. */
+ *  carried none would leave no way to ever be seated (and would drop the
+ *  camera a starting one has just joined with). Every other refusal carries
+ *  nothing. */
 export const SEAT_REFUSAL_REASONS = [
   "camera_required",
   "camera_lost",
+  // T17B fix 2 (D2): joined, the camera's own report not in yet — the room
+  // re-asks; and the browser refused the camera.
+  "camera_starting",
+  "camera_blocked",
   "window_closed",
   "not_a_player",
   "round_not_open",
@@ -60,7 +69,7 @@ export type { GrantRefusal };
 
 export type SeatResult =
   | { seated: true; participant: ParticipantToken | null }
-  | { seated: false; reason: "camera_required" | "camera_lost"; participant: ParticipantToken }
+  | { seated: false; reason: CameraRefusal; participant: ParticipantToken }
   | {
       seated: false;
       reason:
@@ -72,10 +81,13 @@ export type SeatResult =
         | GrantRefusal;
     };
 
+/** The seat refusals that carry the caller's own participant token. */
+export type CameraRefusal = "camera_required" | "camera_lost" | "camera_starting" | "camera_blocked";
+
 type Video = {
   ensureMeeting: typeof ensureMeeting;
   addParticipant: typeof addParticipant;
-  hasLiveVideoPublisher: typeof hasLiveVideoPublisher;
+  seatCameraEvidence: typeof seatCameraEvidence;
   refreshParticipantToken: typeof refreshParticipantToken;
 };
 
@@ -85,7 +97,7 @@ export type PreflightDeps = {
   video?: Video;
 };
 
-const REAL_VIDEO: Video = { ensureMeeting, addParticipant, hasLiveVideoPublisher, refreshParticipantToken };
+const REAL_VIDEO: Video = { ensureMeeting, addParticipant, seatCameraEvidence, refreshParticipantToken };
 
 /** T2's assertLichessConsentForPlay as a seat reason: its two 422s map to
  *  `lichess_link_required` / `lichess_reconsent_required` (the codes T14's
@@ -226,9 +238,16 @@ function isReentry(f: OnlinePlayFixture, player: SidePlayer): boolean {
 }
 
 /** `required`: seated only when the meeting reports this participant joined to
- *  a live session and not left (T7 hasLiveVideoPublisher; camera-on itself is
- *  the preset's job). Re-asked on EVERY claim, which is what makes seatPlayer
- *  the freshness check T9 runs immediately before creating a game. */
+ *  a live session and not left AND its current peer's own report shows the
+ *  camera granted and on (T17B fix 2, D2: `seatCameraEvidence`; the preset
+ *  enforces nothing — measured). Re-asked on EVERY claim, which is what makes
+ *  seatPlayer the freshness check T9 runs immediately before creating a game.
+ *
+ *  Until the report holds the evidence the answer is `camera_starting`, for
+ *  CAMERA_EVIDENCE_DEADLINE_MS from the peer's join; past it, the camera
+ *  refusal. A peer-report read that FAILS is waited out the same way and then
+ *  rethrown — the outage path (`video_unavailable`), never a seat. A browser
+ *  that refused the camera is `camera_blocked` at once. */
 async function verifyRequiredSeat(
   a: { fixtureId: string; personId: string },
   now: Date,
@@ -239,11 +258,19 @@ async function verifyRequiredSeat(
   const [prior] = await sql<{ last_publisher_seen_at: Date | null }[]>`
     select last_publisher_seen_at from fixture_video_participants
      where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
-  const live = await video.hasLiveVideoPublisher({
+  const camera = await video.seatCameraEvidence({
     meetingId: meeting.meetingId,
     participantId: participant.participantId,
   });
-  if (live) {
+  if (camera.state === "blocked") return { seated: false, reason: "camera_blocked", participant };
+  if (camera.state === "starting" || camera.state === "unreadable") {
+    // Waited from the peer's OWN join; a vendor clock ahead of ours is a
+    // negative wait, which is still inside it.
+    const waited = now.getTime() - camera.since.getTime();
+    if (waited < CAMERA_EVIDENCE_DEADLINE_MS) return { seated: false, reason: "camera_starting", participant };
+    if (camera.state === "unreadable") throw camera.error;
+  }
+  if (camera.state === "on") {
     await sql`
       update fixture_video_participants set last_publisher_seen_at = ${now}
        where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;

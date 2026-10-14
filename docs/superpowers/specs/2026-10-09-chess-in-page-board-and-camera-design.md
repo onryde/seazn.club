@@ -324,6 +324,19 @@ events. It is fetched once, at least 2 minutes after the player leaves or the ma
 retrying until `left_at` is set and `duration` > 0. It is never `no_video_fraction` alone,
 never an input to the seat gate, and never automatic.
 
+**Amended 2026-10-14 (T17B fix 2, measured live on stg).** Two readings above were wrong.
+The preset does **not** enforce camera-on: a player whose browser DENIED the camera joined
+on the player preset, was seated, and a game was created. And the peer report is **not**
+frozen during a session: `media_permission` was on it 1.4 s after PEER_JOINING, while the
+`video_producer` samples arrived late and in batches (none in 90 s from a peer publishing
+6 MB). So the seat now reads the player's **current peer's** report — the latest
+PEER_JOINING with no PEER_LEAVING — and seats only on `media_permission{VIDEO, ACCEPTED}`
+with the latest `video_on`/`video_off` being `video_on`; a denial is `camera_blocked`, and
+no evidence yet is `camera_starting` (the room re-asks every 1 s; the server waits 15 s from
+the peer's join, then refuses). Samples are never required.
+**Residual, accepted:** the report is client-uploaded SDK telemetry, so a tampered client
+could forge it; this closes the honest-browser gap, not a determined forger.
+
 ### 5.3 What each person sees
 - **A player sees their own tile only** (D7). Local preview; no subscription to the
   opponent.

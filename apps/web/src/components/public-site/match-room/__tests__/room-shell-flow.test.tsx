@@ -18,10 +18,10 @@ vi.mock("../camera-loader", async (actual) => ({
 }));
 
 import { RoomShell, Screen } from "../room-shell";
-import { CameraGaveUpNotice } from "../room-cards";
+import { CameraBlockedCard, CameraGaveUpNotice } from "../room-cards";
 import { initialRoomState } from "../room-state";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, STAMP_RETRY_MS } from "../camera-session";
-import type { RoomSnapshot } from "../room-snapshot";
+import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomSnapshot } from "../room-snapshot";
 import type { MeetingLink, OwnCamera } from "../camera-loader";
 import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
 import { useOpponentPresence } from "../use-own-camera";
@@ -229,6 +229,126 @@ describe("camera required: check in → refused for camera → the camera joins 
     expect(screenOf(island)).toBe("cameraRequired");
     expect(join.fn, "one join for the whole flow").toHaveBeenCalledTimes(1);
     island.unmount();
+  });
+
+  // T17B fix 2 (D2): the seat waits for the camera's own report. `camera_starting` is not a terminal card — the room
+  // re-asks on CAMERA_EVIDENCE_POLL_MS; `camera_blocked` is, and its one action reloads.
+  /** What the shell hands the screen: is the room still re-asking a starting camera? (The check-in's own button is
+   *  drawn from it — checkin-privacy.test.tsx paints that.) */
+  const checkingOf = (island: Island) => {
+    const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
+    return propsOf(screen!).checkingCamera;
+  };
+  const checkInOf = (island: Island) => {
+    const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
+    return propsOf(screen!).tryAgain as () => void;
+  };
+  const starting = () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_starting", participant: PARTICIPANT } });
+
+  it("camera_starting: the check-in stays up and says it is checking, the room re-asks every poll step, and the seat lands", async () => {
+    seatAnswers = [
+      () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } }),
+      starting,
+      starting,
+      () => ({
+        snapshot: snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, creation: { state: "creating" } }),
+        seat: { seated: true, participant: PARTICIPANT },
+      }),
+    ];
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle(1_500); // the camera is up: the presence retry asks again …
+    expect(seatPosts()).toBe(2);
+    expect(screenOf(island), "starting is the check-in, never a card").toBe("checkin");
+    expect(checkingOf(island), "the button waits, and says why").toBe(true);
+    await settle(CAMERA_EVIDENCE_POLL_MS - 1);
+    expect(seatPosts(), "not before the step").toBe(2);
+    await settle(1);
+    expect(seatPosts(), "… then the room re-asks on the poll step").toBe(3);
+    await settle(CAMERA_EVIDENCE_POLL_MS);
+    expect(seatPosts()).toBe(4);
+    expect(screenOf(island)).toBe("creating");
+    expect(checkingOf(island)).toBe(false);
+    await settle(CAMERA_EVIDENCE_POLL_MS * 5);
+    expect(seatPosts(), "seated: the polling stops").toBe(4);
+    island.unmount();
+  });
+
+  it("camera_starting that never resolves is BOUNDED: CAMERA_EVIDENCE_MAX_POLLS re-asks, then the check-in button is offered again — and pressing it starts a new wait", async () => {
+    seatAnswers = [
+      () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } }),
+      ...Array.from({ length: 1 + CAMERA_EVIDENCE_MAX_POLLS + 1 }, () => starting),
+    ];
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle(1_500);
+    expect(seatPosts()).toBe(2);
+    for (let i = 0; i < CAMERA_EVIDENCE_MAX_POLLS + 5; i += 1) await settle(CAMERA_EVIDENCE_POLL_MS);
+    expect(seatPosts(), "two claims, then exactly the bound").toBe(2 + CAMERA_EVIDENCE_MAX_POLLS);
+    expect(screenOf(island)).toBe("checkin");
+    expect(checkingOf(island), "the check-in button is offered again").toBe(false);
+    checkInOf(island)(); // the check-in's own press (Screen wires onCheckIn to it)
+    await settle(0);
+    expect(checkingOf(island), "the press starts a fresh wait").toBe(true);
+    await settle(CAMERA_EVIDENCE_POLL_MS);
+    expect(seatPosts(), "the press, then a fresh poll").toBe(2 + CAMERA_EVIDENCE_MAX_POLLS + 2);
+    island.unmount();
+  });
+
+  it("camera_blocked: the blocked card, whose one action reloads — and the room never re-asks on its own", async () => {
+    seatAnswers = [
+      () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } }),
+      () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_blocked", participant: PARTICIPANT } }),
+    ];
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle(1_500);
+    expect(seatPosts()).toBe(2);
+    expect(screenOf(island)).toBe("cameraBlocked");
+    await settle(30_000);
+    expect(seatPosts(), "no re-ask: only a reload can cure it").toBe(2);
+    expect(join.fn, "the camera stayed joined with the refusal's token").toHaveBeenCalledTimes(1);
+    island.unmount();
+
+    // The card's one action is the reload, and its own button is what fires it.
+    const onReload = vi.fn();
+    const card = renderIsland(CameraBlockedCard, { onReload, t: ((k: string) => k) as never });
+    // The card is a StateCard whose `action` slot holds its one button.
+    const cards = [...new Set(walk(card.tree()).filter((e) => propsOf(e).testId === "room-state-camera-blocked"))];
+    expect(cards).toHaveLength(1);
+    const action = propsOf(cards[0]!).action as Parameters<typeof propsOf>[0];
+    const buttons = [action, ...walk(action)].filter((e) => typeof propsOf(e).onClick === "function");
+    expect([...new Set(buttons)], "one action").toHaveLength(1);
+    expect(propsOf(buttons[0]!)["data-testid"]).toBe("room-state-reload");
+    (propsOf(buttons[0]!).onClick as () => void)();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    card.unmount();
+
+    // …and the screen hands the card the page's reload.
+    const reload = vi.fn();
+    const s0 = snap();
+    const state = initialRoomState(s0, T0);
+    const noop = async () => null;
+    const screen = renderIsland(Screen, {
+      screen: { kind: "cameraBlocked" },
+      state,
+      room: { state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never,
+      camera: { status: "live", stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} },
+      busy: false,
+      tryAgain: () => {},
+      relinkHref: "/x",
+      locale: "en",
+      t: ((k: string) => k) as never,
+      plural: ((k: string) => k) as never,
+      reload,
+    });
+    const blocked = [...new Set(walk(screen.tree()).filter((e) => e.type === CameraBlockedCard))];
+    expect(blocked).toHaveLength(1);
+    expect(propsOf(blocked[0]!).onReload).toBe(reload);
+    screen.unmount();
   });
 
   it("cameras OFF: no RealtimeKit join at all, whatever the seat answer carries", async () => {

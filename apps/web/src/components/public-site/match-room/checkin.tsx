@@ -20,12 +20,14 @@ type Props = {
   stream: MediaStream | null;
   cameraOn: boolean;
   busy: boolean;
+  /** T17B fix 2 (D2): the seat answered `camera_starting` and the room is re-asking — the button waits, and says so. */
+  checkingCamera?: boolean;
   onCheckIn: () => void;
   t: RoomT;
   plural: RoomPlural;
 };
 
-export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, onCheckIn, t, plural }: Props) {
+export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, checkingCamera = false, onCheckIn, t, plural }: Props) {
   const colour = t(snap.you.colour === "white" ? "externalPlay.room.colour.white" : "externalPlay.room.colour.black");
   const done = snap.you.checkedIn;
   return (
@@ -82,11 +84,11 @@ export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, onCh
       <button
         type="button"
         data-testid="room-checkin-cta"
-        disabled={done || busy}
+        disabled={done || busy || checkingCamera}
         onClick={onCheckIn}
         className="min-h-12 rounded-xl border-0 bg-[#7c3aed] text-base font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#c9bdf0]"
       >
-        {t(done ? "externalPlay.room.checkin.done" : "externalPlay.room.checkin.cta")}
+        {t(done ? "externalPlay.room.checkin.done" : checkingCamera ? "externalPlay.room.checkin.cameraStarting" : "externalPlay.room.checkin.cta")}
       </button>
     </div>
   );

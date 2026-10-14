@@ -70,7 +70,7 @@ vi.mock("@/server/external-play/video/realtimekit", async (importOriginal) => {
     ...actual,
     ensureMeeting: down,
     addParticipant: down,
-    hasLiveVideoPublisher: down,
+    seatCameraEvidence: down,
     refreshParticipantToken: down,
   };
 });
@@ -103,7 +103,7 @@ const down = (): never => {
 const VIDEO: NonNullable<PreflightDeps["video"]> = {
   ensureMeeting: down,
   addParticipant: down,
-  hasLiveVideoPublisher: down,
+  seatCameraEvidence: down,
   refreshParticipantToken: down,
 };
 

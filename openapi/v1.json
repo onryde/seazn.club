@@ -53240,7 +53240,7 @@
         ]
       },
       "post": {
-        "summary": "Take the seat for this fixture: the camera gate is server-verified (RealtimeKit presence) under policy `required`, never a client claim. Stamps the check-in inside the round's window; once both players are in, the Lichess game is created. Answers { snapshot, seat }. 409 ROOM_BEING_REPAIRED as the GET",
+        "summary": "Take the seat for this fixture: under policy `required` the camera gate is read from RealtimeKit (presence, and the current peer's own report showing the camera granted and on), never from a claim sent to this API. Seat refusals `camera_starting` (joined, the camera's report not in yet: ask again shortly) and `camera_blocked` (the browser refused the camera) carry the caller's own participant token, as `camera_required` and `camera_lost` do. Stamps the check-in inside the round's window; once both players are in, the Lichess game is created. Answers { snapshot, seat }. 409 ROOM_BEING_REPAIRED as the GET",
         "tags": [
           "fixtures"
         ],

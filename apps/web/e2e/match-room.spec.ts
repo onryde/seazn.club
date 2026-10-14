@@ -1282,6 +1282,70 @@ test("T17B fix 1: the room's document may use the camera — served Permissions-
   await camBrowser.close();
 });
 
+test("T17B fix 2: the seat's camera verdicts in the browser — a camera still starting keeps the check-in, its button waiting and the room re-asking each second; a browser that refused it gets the blocked card, whose Reload reloads — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  expect(await screenOf(p)).toBe("checkin");
+  // No browser here can make a RealtimeKit peer (the SDK refuses the fixture's token), so the seat's VERDICT is
+  // composed at the route: the room's own snapshot, read without side effects (a GET of the same link), and the
+  // refusal the seat answers. The verdicts themselves are the real seat's, against the measured peer reports
+  // (external-play-seat-camera.test.ts); this proves what the browser does with them.
+  let verdict: "camera_starting" | "camera_blocked" = "camera_starting";
+  let claims = 0;
+  await p.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      claims += 1;
+      const read = await route.fetch({ method: "GET" });
+      const snapshot = ((await read.json()) as { data: unknown }).data;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: { snapshot, seat: { seated: false, reason: verdict, participant: { participantId: "e2e-part", authToken: "e2e-rtk" } }, create: null },
+          requestId: "e2e",
+        }),
+      });
+    },
+  );
+
+  await p.getByTestId("room-checkin-cta").click();
+  await expect(p.getByTestId("room-checkin-cta"), "the button waits, and says why").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
+  await expect(p.getByTestId("room-checkin-cta")).toBeDisabled();
+  expect(await screenOf(p), "starting is never a card").toBe("checkin");
+  const first = claims;
+  await expect.poll(() => claims, { timeout: 5_000, message: "the room re-asks on its own" }).toBeGreaterThanOrEqual(first + 2);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "camera-starting");
+
+  verdict = "camera_blocked";
+  await expect.poll(() => screenOf(p), { timeout: 5_000, message: "the next re-ask lands the refusal" }).toBe("cameraBlocked");
+  await expect(p.getByRole("heading", { name: uiEn["externalPlay.room.state.cameraBlocked.title"]! })).toBeVisible();
+  await expect(p.getByText(uiEn["externalPlay.room.state.cameraBlocked.body"]!)).toBeVisible();
+  await expect(p.getByTestId("room-checkin-cta"), "no check-in to press").toHaveCount(0);
+  const atBlocked = claims;
+  await p.waitForTimeout(3_000);
+  expect(claims, "blocked is not re-asked: only a reload can cure it").toBe(atBlocked);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "camera-blocked");
+
+  // The card's one action reloads the page (a new peer is the only way back).
+  await p.setViewportSize({ width: 1280, height: 900 });
+  const reloaded = p.waitForEvent("load");
+  await p.getByTestId("room-state-reload").click();
+  await reloaded;
+  await expect(p.getByTestId("match-room")).toBeVisible();
+  expect(await screenOf(p), "the fresh page is the check-in again").toBe("checkin");
+  await ctx.close();
+});
+
 test("round not opened: the player, signed in, is told so — no check-in", async ({ page, browser }) => {
   test.setTimeout(120_000);
   const room = await seedMatchRoom(page.request, {
