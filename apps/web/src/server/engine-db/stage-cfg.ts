@@ -1,5 +1,5 @@
 import "server-only";
-import { offByFalse, type DeciderOffSource } from "@/lib/stage-decider-off";
+import { stageRulesOverlay, type DeciderOffSource } from "@/lib/stage-decider-off";
 
 // PROMPT-61 §2 — stage-scoped decider overlay. A groups+knockout division
 // keeps one sport config, but the knockout STAGE may carry `shootout` /
@@ -26,21 +26,10 @@ export function stageScopedCfg(
   module: DeciderOffSource | null,
 ): unknown {
   if (stageCfg == null) return divisionCfg;
-  const overlay: Record<string, unknown> = {};
-  // Rules first, decider keys second (see above).
-  const rules = stageCfg.rules;
-  if (rules != null && typeof rules === "object" && !Array.isArray(rules))
-    for (const [k, v] of Object.entries(rules as Record<string, unknown>))
-      // "Inherit" is key ABSENCE, never an explicit null: a spread copies
-      // nulls, so a null reaching here would BLANK the division's value
-      // instead of leaving it alone. The endpoint strips nulls on the way in;
-      // this is the second half of that contract, for rows written before it.
-      //
-      // W2c Task 12 fix round 1 (R-T12-1): and "off", for a decider whose engine off is null (the period sports'
-      // overtime and shoot-out), is an explicit `false`, read here as that null — THE one place the stage encoding is
-      // mapped (`lib/stage-decider-off.ts` says which keys). Task 13b, which reworks this file, carries this branch.
-      if (v === false && module !== null && offByFalse(module, divisionCfg, k)) overlay[k] = null;
-      else if (v !== null && v !== undefined) overlay[k] = v;
+  // Rules first, decider keys second (see above). A stored null is "inherit" (dropped), and a `false` on a decider whose
+  // engine off is null is that null (W2c Task 12 fix round 1, R-T12-1): `stageRulesOverlay` is THE one mapping, shared
+  // with the format-matrix harness (R-T12-3), so Task 13b, which reworks this file, keeps calling it.
+  const overlay = stageRulesOverlay(module, divisionCfg, stageCfg.rules);
   for (const key of STAGE_DECIDER_KEYS) {
     if (stageCfg[key] !== undefined) overlay[key] = stageCfg[key];
   }
