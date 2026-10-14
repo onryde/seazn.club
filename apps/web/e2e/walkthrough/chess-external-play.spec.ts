@@ -515,6 +515,43 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(traces, "opening a round makes no video call").toBe(0);
   });
 
+  test("final review P10: a grant narrowed AT LICHESS shows the re-link screen as the room loads — asked once per load, never by the polls", async ({ browser }) => {
+    test.setTimeout(budget(3));
+    // Board 2's first player: board 1's seating test, next, is left exactly as it was. Nobody here checks in.
+    const b = round.boards[1]!;
+    const p = b.home;
+    const token = p.lichessToken!;
+    /** Lichess's token test asked about THIS player's token (lila: no auth, the token in the body). */
+    const asked = () => lichess.calls.filter((c) => c.method === "POST" && c.path === "/api/token/test" && Object.hasOwn(c.body, token)).length;
+    const before = asked();
+    lichess.setTokenScopes(token, ["challenge:read"]); // narrowed at lichess.org: no play scope left
+    const ctx = await playerContext(browser);
+    const page = await openRoom(ctx, b, p);
+    await expect(screen(page), "Lichess's word, at once — no act was needed").toHaveAttribute("data-screen", "relink", { timeout: 30_000 });
+    await expect(page.getByTestId("room-state-relink")).toBeVisible();
+    expect(asked() - before, "asked once, for the load").toBe(1);
+    const shots = process.env.ROOM_SHOTS_DIR;
+    if (shots) {
+      for (const width of [320, 768, 1280]) {
+        await page.setViewportSize({ width, height: width === 1280 ? 900 : width === 768 ? 1024 : 700 });
+        await page.waitForTimeout(250);
+        await page.screenshot({ path: `${shots}/p10-relink-on-load-${width}.png`, fullPage: true, caret: "initial" });
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
+    // The room's own read does not ask again: the answer is the page load's.
+    await page.waitForResponse((r) => r.request().method() === "GET" && /\/external-play\/room$/.test(new URL(r.url()).pathname), { timeout: IDLE_POLL_MS + 10_000 });
+    await expect(screen(page)).toHaveAttribute("data-screen", "relink");
+    expect(asked() - before, "the poll asked Lichess nothing").toBe(1);
+    // The grant back at Lichess: the next load asks again, and the room is the check-in.
+    lichess.setTokenScopes(token, ["board:play", "challenge:write", "challenge:read"]);
+    await page.reload();
+    await expect(screen(page)).toHaveAttribute("data-screen", "checkin", { timeout: 30_000 });
+    expect(asked() - before, "a reload is a new load").toBe(2);
+    expect(await checkedInAt(b.fixtureId, p.personId), "nobody was seated").toBeNull();
+    await ctx.close();
+  });
+
   let white: Page;
   let black: Page;
   let boardA: RoundBoard;
