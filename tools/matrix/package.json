@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@seazn/engine": "workspace:*",
+    "@seazn/engine": "workspace:@onryde/seazn-engine@*",
     "@seazn/reference": "workspace:*",
     "fast-check": "^3",
     "playwright": "^1.61.1",

@@ -79,7 +79,7 @@ run it more than once in each arm before believing either colour.
   migrating rows first 500s them. Migration before narrowing, always.
 - `grep` here reports source files as "Binary file … matches" — use
   `git grep` / `-a`. Counts under `apps/` must exclude `.next/types`.
-- Engine has its **own** lint task (`@seazn/engine#lint`); root lint skips it.
+- Engine has its **own** lint task (`@onryde/seazn-engine#lint`); root lint skips it.
   apps/web typecheck peaks ~2.8 GB (`NODE_OPTIONS=--max-old-space-size=6144`);
   `tsc | tail; echo $?` reports tail's status — have the command write
   `EXIT=$?` itself.

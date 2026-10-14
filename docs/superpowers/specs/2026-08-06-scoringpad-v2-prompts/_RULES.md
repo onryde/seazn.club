@@ -120,7 +120,7 @@ variants) + **golden replay** (frozen corpora, 11 sports) + **mutation proof**
   filters** — a typo silently runs a subset and reports green. Confirm the paths
   in `.testResults[].name` before believing a count.
 - Lint via `rtk proxy npm run lint`, read `✖ N problems`. The root lint does
-  **not** cover `packages/engine` — that has its own `@seazn/engine#lint`.
+  **not** cover `packages/engine` — that has its own `@onryde/seazn-engine#lint`.
 - S6 — a bare `tsc`/`vitest`/`eslint` invocation (no `rtk proxy` prefix) can
   return FABRICATED output, not just a misleading summary: `npx tsc --version`
   returned the string "TypeScript: No errors found" and `npx vitest --version`

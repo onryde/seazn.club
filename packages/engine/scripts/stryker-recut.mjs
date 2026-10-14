@@ -1,4 +1,4 @@
-// CLI: pnpm --filter @seazn/engine mutation:recut <file> <parts> [--extra <mutants>] [--open <Host,...>] [--table]      (from packages/engine)
+// CLI: pnpm --filter ./packages/engine mutation:recut <file> <parts> [--extra <mutants>] [--open <Host,...>] [--table]      (run from the repo root: a --filter PATH is resolved against the cwd; <file> is relative to packages/engine)
 // W1d Task 15, fix round 1, I1 / T15-CUT: proposes the cuts for splitting one source file into <parts> Stryker legs. Run it
 // when test/stryker-sizing.test.ts says a leg is over the 200-minute line (or empty), or when a file grows past what its legs
 // hold; paste its STRYKER_SPLITS line into stryker.groups.mjs, give each leg of the file `<file>#N`, and re-derive
@@ -24,7 +24,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { cutUnits, planSplit, resolveSplit, topLevelStatements, unitMutants } from "./stryker-cuts.mjs";
 
-const USAGE = "usage: pnpm --filter @seazn/engine mutation:recut <file> <parts> [--extra <mutants>] [--open <Host,...>] [--table]   (the file relative to packages/engine)";
+const USAGE = "usage: pnpm --filter ./packages/engine mutation:recut <file> <parts> [--extra <mutants>] [--open <Host,...>] [--table]   (run from the repo root; the file is relative to packages/engine)";
 
 function refuse(message) {
   process.stderr.write(`stryker-recut: ${message}\n${USAGE}\n`);

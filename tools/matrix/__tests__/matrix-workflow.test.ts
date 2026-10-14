@@ -1709,7 +1709,7 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     expect(floorStep.body, "no step-level `if:` that could skip it").not.toMatch(/^ {8}if:/m);
     expect(floorLine).toBe('pnpm mutation:floor --check-all ../../floors-in --legs "$LEGS" --skip-if-no-floors');
     // the install the jobs share is the engine's own (Stryker, vitest and the TypeScript parser are its devDependencies)
-    for (const job of ["mutate", "floors"] as const) expect(MJOBS[job], job).toContain("run: pnpm install --frozen-lockfile --filter @seazn/engine...");
+    for (const job of ["mutate", "floors"] as const) expect(MJOBS[job], job).toContain("run: pnpm install --frozen-lockfile --filter ./packages/engine... --fail-if-no-match");
     expect(MUT).not.toMatch(/run: pnpm install --frozen-lockfile\s*$/m);
     // the artifacts the job unpacks are those of the families it judges: every non-probe leg is in a family
     expect(Object.values(STRYKER_FAMILIES).flat().sort()).toEqual(Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe").sort());

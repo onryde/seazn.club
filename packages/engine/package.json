@@ -1,9 +1,14 @@
 {
-  "name": "@seazn/engine",
+  "name": "@onryde/seazn-engine",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Pure tournament engine for seazn.club — zero effectful deps (design corpus: engine/).",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/onryde/seazn.club",
+    "directory": "packages/engine"
+  },
   "exports": {
     "./core": "./src/core/index.ts",
     "./sport": "./src/sport/index.ts",
@@ -27,6 +32,100 @@
     "./scheduling/tz": "./src/scheduling/tz.ts",
     "./testkit": "./src/testkit/index.ts"
   },
+  "files": [
+    "dist",
+    "rules"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "exports": {
+      "./core": {
+        "types": "./dist/core/index.d.ts",
+        "default": "./dist/core/index.js"
+      },
+      "./sport": {
+        "types": "./dist/sport/index.d.ts",
+        "default": "./dist/sport/index.js"
+      },
+      "./sports": {
+        "types": "./dist/sports/index.d.ts",
+        "default": "./dist/sports/index.js"
+      },
+      "./sports/*": {
+        "types": "./dist/sports/*/index.d.ts",
+        "default": "./dist/sports/*/index.js"
+      },
+      "./stats": {
+        "types": "./dist/stats/index.d.ts",
+        "default": "./dist/stats/index.js"
+      },
+      "./competition": {
+        "types": "./dist/competition/index.d.ts",
+        "default": "./dist/competition/index.js"
+      },
+      "./exports": {
+        "types": "./dist/exports/index.d.ts",
+        "default": "./dist/exports/index.js"
+      },
+      "./history": {
+        "types": "./dist/history/index.d.ts",
+        "default": "./dist/history/index.js"
+      },
+      "./import": {
+        "types": "./dist/import/index.d.ts",
+        "default": "./dist/import/index.js"
+      },
+      "./officials": {
+        "types": "./dist/officials/index.d.ts",
+        "default": "./dist/officials/index.js"
+      },
+      "./scheduling": {
+        "types": "./dist/scheduling/index.d.ts",
+        "default": "./dist/scheduling/index.js"
+      },
+      "./scheduling/bracket-layout": {
+        "types": "./dist/scheduling/bracket-layout.d.ts",
+        "default": "./dist/scheduling/bracket-layout.js"
+      },
+      "./scheduling/calendar": {
+        "types": "./dist/scheduling/calendar.d.ts",
+        "default": "./dist/scheduling/calendar.js"
+      },
+      "./scheduling/court-windows": {
+        "types": "./dist/scheduling/court-windows.d.ts",
+        "default": "./dist/scheduling/court-windows.js"
+      },
+      "./scheduling/capacity": {
+        "types": "./dist/scheduling/capacity.d.ts",
+        "default": "./dist/scheduling/capacity.js"
+      },
+      "./scheduling/grid-step": {
+        "types": "./dist/scheduling/grid-step.d.ts",
+        "default": "./dist/scheduling/grid-step.js"
+      },
+      "./scheduling/health": {
+        "types": "./dist/scheduling/health.d.ts",
+        "default": "./dist/scheduling/health.js"
+      },
+      "./scheduling/rest-floor": {
+        "types": "./dist/scheduling/rest-floor.d.ts",
+        "default": "./dist/scheduling/rest-floor.js"
+      },
+      "./scheduling/swiss": {
+        "types": "./dist/scheduling/swiss.d.ts",
+        "default": "./dist/scheduling/swiss.js"
+      },
+      "./scheduling/tz": {
+        "types": "./dist/scheduling/tz.d.ts",
+        "default": "./dist/scheduling/tz.js"
+      },
+      "./testkit": {
+        "types": "./dist/testkit/index.d.ts",
+        "default": "./dist/testkit/index.js"
+      }
+    }
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
@@ -35,6 +134,8 @@
     "sim:replay": "node --experimental-strip-types scripts/sim-replay.ts",
     "schema:snapshot": "node --experimental-strip-types scripts/schema-snapshot.ts",
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
+    "build:dist": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript-native/bin/tsc -p tsconfig.build.json",
+    "pack:proof": "node pack-proof/run.mjs",
     "lint": "eslint",
     "sim:matrix": "node --experimental-strip-types scripts/sim-replay.ts --matrix",
     "mutation": "stryker run stryker.config.mjs",
@@ -42,10 +143,17 @@
     "mutation:recut": "node scripts/stryker-recut.mjs"
   },
   "peerDependencies": {
+    "fast-check": "^3",
+    "vitest": "^4.1.11",
     "zod": "^4.4.3"
   },
-  "dependencies": {
-    "zod": "^4.4.3"
+  "peerDependenciesMeta": {
+    "fast-check": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@eslint/js": "^9",
@@ -57,6 +165,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "^8",
     "typescript-native": "npm:typescript@7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "zod": "^4.4.3"
   }
 }

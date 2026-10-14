@@ -350,7 +350,7 @@ export function anchorRecords(splits, readText, lenient = false) {
 }
 
 const ANCHORS_FILE = "packages/engine/stryker-anchors.json";
-const RECUT_COMMAND = "pnpm --filter @seazn/engine mutation:recut <file> <parts> [--extra <mutants>] [--open <Host,...>]";
+const RECUT_COMMAND = "pnpm --filter ./packages/engine mutation:recut <file> <parts> [--extra <mutants>] [--open <Host,...>] (from the repo root)";
 
 /** The faults of the ordinal anchors of `splits` against what `records` pinned them to, as messages ([] when there are none), and
  *  how many anchors were checked (zero is the caller's failure). An anchor is at fault when it names no statement any more, when

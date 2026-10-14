@@ -1,4 +1,4 @@
-// CLI: pnpm --filter @seazn/engine mutation:floor <mode> ...        (node --experimental-strip-types scripts/stryker-floor.ts)
+// CLI: pnpm --filter ./packages/engine mutation:floor <mode> ...        (node --experimental-strip-types scripts/stryker-floor.ts)
 // W1d Task 15 (D14; rulings 66, 67; T15-CUT): the Stryker floor. Run from packages/engine: the floor file, the equivalents file
 // and every relative path below are read against the working directory.
 //

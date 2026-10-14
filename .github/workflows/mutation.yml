@@ -284,7 +284,7 @@ jobs:
           node-version: 26
           cache: pnpm
       # Only the engine and what it needs (Stryker, vitest and the parser are its devDependencies): the apps' trees are never run here.
-      - run: pnpm install --frozen-lockfile --filter @seazn/engine...
+      - run: pnpm install --frozen-lockfile --filter ./packages/engine... --fail-if-no-match
       # The incremental file can carry the last run's results forward, so an unchanged mutant is not re-run, but only while the
       # cache entry survives: GitHub evicts an entry not read for 7 days, and a weekly run sits on that edge, so budget it as cold
       # (MUTATION.md section 9). The probe's file is also saved by main's push run (the `push:` trigger), which a PR probe restores
@@ -406,7 +406,7 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter @seazn/engine...
+      - run: pnpm install --frozen-lockfile --filter ./packages/engine... --fail-if-no-match
       # Each leg's artifact (mutation-<leg>, rooted at packages/engine/) unpacks to floors-in/mutation-<leg>/reports/mutation/<leg>.json.
       - uses: actions/download-artifact@v4
         with:

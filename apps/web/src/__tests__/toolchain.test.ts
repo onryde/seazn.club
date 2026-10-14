@@ -360,7 +360,7 @@ describe("toolchain: pnpm workspace", () => {
     ) as { dependencies: Record<string, string> };
     // `"*"` makes pnpm hit the registry for a private package and fail with
     // "No authorization header" — it must be the workspace protocol.
-    expect(web.dependencies["@seazn/engine"]).toBe("workspace:*");
+    expect(web.dependencies["@seazn/engine"]).toBe("workspace:@onryde/seazn-engine@*");
   });
 
   /**
@@ -451,11 +451,42 @@ describe("toolchain: pnpm workspace", () => {
      * devDependencies — where every other root script dep correctly lives —
      * would drop them from the deploy install and ERR_MODULE_NOT_FOUND every
      * staging release.
+     *
+     * `zod` is on the list for a different reason (engine-split 1b-2, R34): no
+     * root script imports it. It is @onryde/seazn-engine's PEER now, and a peer
+     * is not installed for a workspace package under `--prod`, so
+     * packages/engine/node_modules is not even created. `sync:sports` loads
+     * @seazn/engine/sports -> src/sports/football/football.ts -> `zod`, and that
+     * file finds it only by walking up to the ROOT node_modules, which holds
+     * only what the root lists in `dependencies`. Verified on a clean worktree:
+     * with zod in devDependencies the deploy install dies with
+     * ERR_MODULE_NOT_FOUND "Cannot find package 'zod'" on that import.
      */
     const root = rootManifest();
     const prod = new Set(Object.keys(root.dependencies ?? {}));
-    for (const dep of ["@seazn/engine", "postgres", "stripe"]) {
+    for (const dep of ["@seazn/engine", "postgres", "stripe", "zod"]) {
       expect(prod.has(dep), `root dependencies must include ${dep}`).toBe(true);
+    }
+  });
+
+  it("every required peer of the engine is a root dependency, derived from the engine's own manifest", () => {
+    /**
+     * The list above names zod by hand, which is right for today's peer and silent about tomorrow's: a second required peer
+     * added to packages/engine/package.json would pass every local run and every dev-deps CI job, then die on the deploy
+     * install with the same ERR_MODULE_NOT_FOUND. So the set is read from the engine, not typed here: every peer not marked
+     * optional in `peerDependenciesMeta`. (fast-check and vitest are optional: only the testkit loads them.)
+     */
+    const engine = JSON.parse(readFileSync(join(REPO_ROOT, "packages/engine/package.json"), "utf8")) as {
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    const required = Object.keys(engine.peerDependencies ?? {}).filter((p) => engine.peerDependenciesMeta?.[p]?.optional !== true);
+    // anti-vacuity: an engine that lost its peers, or a filter that dropped them all, would make the loop below check nothing
+    expect(required, "required peers of the engine").toContain("zod");
+    expect(required.length).toBeGreaterThan(0);
+    const prod = new Set(Object.keys(rootManifest().dependencies ?? {}));
+    for (const dep of required) {
+      expect(prod.has(dep), `root dependencies must include the engine's required peer ${dep}`).toBe(true);
     }
   });
 

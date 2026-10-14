@@ -229,7 +229,7 @@ const INSTRUMENT_BUDGET_MS = 120_000;
 
 /** Each leg with its `mutate` list as Stryker reads it: the parts of a split file (`file#N`) resolved to `file:a-b`. */
 const legs: [string, string[]][] = Object.keys(STRYKER_GROUPS).map((g) => [g, resolveGroup(g)]);
-const RECUT = "pnpm --filter @seazn/engine mutation:recut <file> <parts> [--extra <mutants of the leg's other files>] [--open <Host,...>]";
+const RECUT = "pnpm --filter ./packages/engine mutation:recut <file> <parts> [--extra <mutants of the leg's other files>] [--open <Host,...>] (from the repo root)";
 const counts = async () => {
   const out: Record<string, number> = {};
   for (const [g, globs] of legs) out[g] = await groupMutants(ENGINE, globs);

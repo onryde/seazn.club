@@ -123,7 +123,7 @@ jobs:
       - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json
       # D14 (W1d): a Stryker floor never falls. HEAD^1 as for the lock gate. Absent at HEAD^1
       # (PR-A's own first run) means "no floors yet": the CLI exits 0 for it.
-      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1
+      - run: pnpm --filter ./packages/engine --fail-if-no-match mutation:floor --check-file-against HEAD^1
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh
@@ -565,6 +565,48 @@ jobs:
           name: sim-failures
           path: packages/engine/sim-failures/
           if-no-files-found: ignore
+
+  # -------------------------------------------------------------------------
+  # Engine packed-tarball proof (engine-split Task 1b-3, D14). The engine is consumed from
+  # the workspace as TypeScript source, but a registry consumer gets the tarball `pnpm pack`
+  # makes: compiled dist/, and `exports` rewritten from publishConfig. Nothing else in CI
+  # looks at that artifact. This builds it, packs it, and installs it into four fixtures in
+  # scratch directories OUTSIDE the repo: Node strip-types, a Next build with no
+  # transpilePackages, a Metro bundle compiled by Hermes, and tsc with skipLibCheck off.
+  # Each prints `<fixture>: <N> checked`; zero is a failure. Same shape as the `engine` job
+  # above: the paths-filter stays inside the job, and the install is unconditional (it also
+  # fills the store cache), so an apps/web-only PR costs this job its set-up and nothing else.
+  # -------------------------------------------------------------------------
+  engine-pack:
+    name: Engine packed-tarball proof
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # paths-filter reads the PR's changed files via the API; the repo's
+    # default GITHUB_TOKEN is restricted and 403s without this.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: engine-changes
+        with:
+          filters: |
+            engine:
+              - 'packages/engine/**'
+              - 'pnpm-lock.yaml'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # run.mjs builds dist/, packs it with the repo-pinned pnpm (asserting the version it ran), and fails on any fixture
+      # that errors or checks nothing. The fixture installs reach the public npm registry.
+      - name: Pack the engine and consume the tarball (node, next, rn, types)
+        if: steps.engine-changes.outputs.engine == 'true'
+        run: node packages/engine/pack-proof/run.mjs
 
   # -------------------------------------------------------------------------
   # Security gate (doc 07 §4): secret scan + dependency audit. Secret leaks

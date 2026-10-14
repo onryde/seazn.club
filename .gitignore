@@ -65,6 +65,8 @@ packages/engine/sim-report.json
 packages/engine/reports/mutation/
 packages/engine/SURVIVORS.md
 packages/engine/.stryker-tmp/
+# Engine split (1b-2): the tsc emit the published tarball ships (`build:dist`). Workspace consumers read src, never this.
+packages/engine/dist/
 .playwright-mcp/
 # Superpowers visual-companion brainstorm sessions
 .superpowers/

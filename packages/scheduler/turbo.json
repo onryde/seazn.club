@@ -2,8 +2,10 @@
   "$schema": "https://turborepo.dev/schema.json",
   "extends": ["//"],
   "tasks": {
-    // The lint is type-aware (recommendedTypeChecked) over @seazn/engine types (the solver port, the clock), so its
-    // cache key must hold the engine's sources as typecheck's does: `^build` puts @seazn/engine#build in the hash.
+    // The lint is type-aware (recommendedTypeChecked) over the engine's types, imported as `@seazn/engine` (the alias key; the
+    // package's name is @onryde/seazn-engine; the solver port, the clock), so its cache key must hold the engine's sources
+    // as typecheck's does: `^build` puts @onryde/seazn-engine#build (whose inputs are the engine's files, read as src by
+    // workspace consumers) in the hash.
     // Without it an engine type change could restore a stale green lint from the remote cache (the same review M-4
     // that packages/reference/turbo.json answers). Pinned by tools/matrix/__tests__/workspace-wiring.test.ts, which spawns
     // turbo's dry-run graph for this package as it does for @seazn/reference.

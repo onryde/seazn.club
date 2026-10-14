@@ -1,7 +1,10 @@
 // scripts/lib/test-parity.mjs
 // The same tests before and after a move, or every difference accounted for in a ledger (engine-split spec §5.4, D23, D32a).
-// Collect ids with `vitest run -t "__parity_collect_only__" --reporter=json`: no test body runs, every collected test
+// Collect ids with `vitest run --isolate -t "__parity_collect_only__" --reporter=json`: no test body runs, every collected test
 // (it.skip / skipIf / todo included) is reported. `vitest list --json` drops skipped tests, so it is not used.
+// ALWAYS pass `--isolate`, on BOTH sides. The engine's vitest config has `isolate: false`, and a test file that imports another test file
+// (src/import/plan.property.test.ts imports ./plan.test.ts) then has that file's tests attributed to whichever worker reached it first: 19 ids
+// move between the two files depending on scheduling, so a default collection reports "unaccounted" ids that are not gone (batch 1b review m4).
 // Exit codes: 0 everything accounted, 1 ids unaccounted, 2 invalid or vacuous input.
 import { readFileSync } from "node:fs";
 import path from "node:path";

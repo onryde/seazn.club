@@ -22,11 +22,16 @@
   "globalDependencies": ["tsconfig.scripts.json", "scripts/**", "tools/**"],
 
   "tasks": {
-    // apps/web is the only package with a build; @seazn/engine ships raw TS via
-    // exports and has no build script, so `^build` is a no-op edge that exists
-    // to keep the ordering correct if the engine ever gains one. The dependency
-    // graph (`"@seazn/engine": "*"`) already makes an engine source change
-    // invalidate the web build.
+    // apps/web is the only package with a build; the engine (package name
+    // @onryde/seazn-engine, consumed as `@seazn/engine` through the workspace
+    // alias `"@seazn/engine": "workspace:@onryde/seazn-engine@*"`) has no
+    // `build` script, so `^build` is a no-op edge that exists to keep the
+    // ordering correct if the engine ever gains one. Workspace consumers read
+    // src; the published tarball is dist, built by `build:dist` (engine-split
+    // §5.2), deliberately NOT named `build`: `typecheck` dependsOn `^build`, so a
+    // `build` script would put the emit into every turbo typecheck and build
+    // for work nothing in the workspace reads. The dependency graph (the alias
+    // edge) already makes an engine source change invalidate the web build.
     "build": {
       "dependsOn": ["^build"],
       // .next/cache is Next's own incremental compiler cache and is restored

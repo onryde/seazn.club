@@ -73,7 +73,8 @@ jobs:
           node-version: 26
           cache: pnpm
       # See stg.yml's identical step for why --prod and why it's transitive
-      # into @seazn/engine's own dependencies section.
+      # into @seazn/engine's own dependencies section (and why zod, the engine's
+      # peer, must be in the ROOT's `dependencies`).
       - run: pnpm install --frozen-lockfile --prod
 
       - name: Cache Flyway CLI

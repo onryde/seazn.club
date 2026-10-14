@@ -4,6 +4,8 @@
 
 **Execution note (2026-10-14, batch 1a):** the parity script lives at `scripts/lib/test-parity.mjs` (moved from `scripts/` because `tools-tests-typecheck` requires every `scripts` declaration twin under `scripts/lib`). Live scheduler tests are under `packages/scheduler/src/__tests__/`.
 
+**Execution note (2026-10-14, batch 1b review m4):** collect parity ids with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` on BOTH sides, every batch. The engine's vitest config has `isolate: false` and `src/import/plan.property.test.ts` imports `./plan.test.ts`, so without `--isolate` the attribution of 19 ids depends on worker scheduling and the script reports unaccounted ids that still exist (1b review: 19 unaccounted without it, 0 with). The `scripts/lib/test-parity.mjs` header says the same.
+
 **Revision 2 (2026-10-14)** — rewritten after the Opus plan review (`docs/superpowers/specs/engine-split/reviews/plan-phase1.md`: 1 BLOCKER, 19 MAJOR, 24 MINOR). Each fix cites its finding as `[R#]`.
 
 **Goal:** Inside the monorepo, make `@seazn/engine` a pure, publishable, phone-safe library: the placement client moves out behind a port, a compiled `dist/` is published as canaries, the tests that read across the package boundary are rehomed in both directions, fold epochs are pinned to the golden corpora, and the server refuses outdated engine epochs. After this, Phases 2a and 2b are pure relocations.
@@ -962,7 +964,14 @@ export const ENGINE_PREFIX = git("rev-parse", "--show-prefix"); // "packages/eng
   - unchanged (reads a path that stays).
 
   Include `client-graph-no-server-barrel.test.ts:20` (reads `packages/engine/package.json`), both z3 tests, `lock-isolation.test.ts`, and the 1b-x `scripts/__tests__` files. This file is an input to the 2b plan.
-- [ ] **Simulated engine repo.** Collecting the whole engine package in the simulated repo must succeed for every file. A collect-time read of a monorepo path fails collection, as four files did before this batch. Then run only the files this batch touched. **There must be zero failures that name a monorepo path.**
+- [ ] **Simulated engine repo.** Collecting the whole engine package in the simulated repo must succeed for every file. A collect-time read of a monorepo path fails collection, as four files did before this batch. Then run only the files this batch touched, AND the three files 1b added whose tests read the monorepo by design: `test/pack-proof.test.ts`, `test/publish-manifest.test.ts` and `test/canary.test.ts`, plus `pack:proof --only types`. **There must be zero failures that name a monorepo path** except the reads in the next item, each of which is expected to fail here and owes a recorded 2b fate.
+- [ ] **1b engine → monorepo reads (batch 1b review M2).** 1b added reads the collect-only run cannot see, because they happen at run time. Record a 2b fate for each in `reverse-inventory.md` (the 2b plan consumes it) and name the engine-repo replacement:
+  - (a) the **Next, React and TypeScript versions** `pack-proof/run.mjs` reads from `apps/web/package.json` for the Next and RN fixtures (`REPO` = `engine/../..`); at 2b they come from the engine repo's own devDependencies;
+  - (b) the root **`packageManager`** field `run.mjs` reads to pick the pnpm version (`pickPnpm`); at 2b it is the engine repo's own `packageManager`;
+  - (c) the **`../../node_modules/typescript-native/bin/tsc`** path in `build:dist` (pinned verbatim at `publish-manifest.test.ts`); and the types fixture's TS 7 and TS 6 binaries read from the root `node_modules` (`run.mjs`); at 2b the compilers are the engine repo's own devDependencies, so the script path, `run.mjs` and the pin change together;
+  - (d) the root **`pnpm-workspace.yaml` `@babel/core` override** (`pack-proof.test.ts` reads it): spec §7 step 6 deletes the root file at 2b, so the override moves into the engine repo's `pnpm-workspace.yaml` or `package.json` `pnpm.overrides`, and the test reads it there;
+  - (e) the root **`.gitignore` `dist/` entry**: the engine repo gets its own `.gitignore` with `dist/`.
+  - The engine ESLint tests (`pack-proof.test.ts`) load `eslint.config.mjs`, which imports `../../scripts/lib/tools-import-guard.mjs`: the guard is copied into the engine repo or the import is dropped, decided with the rest of the 2b lint config.
 - [ ] **Four types:** unit: the parity run; e2e and smoke n/a (inventory and ledger); regression: the simulated-repo collection.
 - [ ] Commit the ledger and the inventory: `docs(engine-split): 1d parity ledger and the reverse inventory for 2b`.
 

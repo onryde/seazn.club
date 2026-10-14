@@ -38,6 +38,14 @@ export default defineConfig([
     "coverage/**",
     ".vite/**",
     ".vite-temp/**",
+    // The tsc emit the published tarball ships (build:dist, engine-split 1b-2): generated, and outside the tsconfig the typed rules need.
+    "dist/**",
+    // The four consumer fixtures of pack-proof (1b-3). They import the PACKED package by its name from a scratch directory and are
+    // not part of this package's program; run.mjs and lib.mjs beside them are linted (below).
+    "pack-proof/node/**",
+    "pack-proof/next/**",
+    "pack-proof/rn/**",
+    "pack-proof/types/**",
   ]),
 
   js.configs.recommended,
@@ -165,6 +173,14 @@ export default defineConfig([
   {
     // Hand-run benchmarks: printing the table IS their output.
     files: ["scripts/**/*.ts"],
+    rules: { "no-console": "off" },
+  },
+
+  {
+    // pack-proof/run.mjs and lib.mjs (1b-3) are plain JS run with `node` alone, like scripts/*.mjs: no tsconfig, so no type
+    // information, and printing the per-fixture count IS the output.
+    files: ["pack-proof/*.mjs"],
+    extends: [tseslint.configs.disableTypeChecked],
     rules: { "no-console": "off" },
   },
 ]);

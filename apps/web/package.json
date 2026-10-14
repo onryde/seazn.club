@@ -21,7 +21,7 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "@formatjs/intl-localematcher": "^0.8.12",
     "@scalar/api-reference-react": "^0.9.54",
-    "@seazn/engine": "workspace:*",
+    "@seazn/engine": "workspace:@onryde/seazn-engine@*",
     "@seazn/scheduler": "workspace:*",
     "@sentry/nextjs": "^10.62.0",
     "@stripe/react-stripe-js": "^6.7.0",
