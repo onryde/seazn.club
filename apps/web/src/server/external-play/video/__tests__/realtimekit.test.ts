@@ -192,8 +192,8 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
       if (!created) {
         created = true;
         await sql`
-          insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
-          values (${s.fixtureId}, ${s.orgId}, ${winner})`;
+          insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+          values (${s.fixtureId}, ${s.orgId}, ${winner}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
         return new Response(JSON.stringify({ success: true, data: { id: orphan } }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -237,8 +237,8 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
     const s = await seedFixture();
     const ended = mtg("ended");
     await sql`
-      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at)
-      values (${s.fixtureId}, ${s.orgId}, ${ended}, now())`;
+      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
+      values (${s.fixtureId}, ${s.orgId}, ${ended}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
     // Positive control: the stub WOULD hand out a fresh meeting if asked, so
     // the zero-call assertion below is a decision, not a stub that refused.
     const stub = stubFetch([
@@ -268,8 +268,8 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
         created = true;
         // Created AND torn down while our POST was in flight.
         await sql`
-          insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at)
-          values (${s.fixtureId}, ${s.orgId}, ${mtg("ended-winner")}, now())`;
+          insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
+          values (${s.fixtureId}, ${s.orgId}, ${mtg("ended-winner")}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
         return new Response(JSON.stringify({ success: true, data: { id: orphan } }), { status: 200 });
       }
       return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });

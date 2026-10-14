@@ -56,8 +56,8 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       returning id`;
     meetinglessFixtureId = other!.id;
     await sql`
-      insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
-      values (${fixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`})`;
+      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      values (${fixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`;
   });
 
   afterAll(async () => {
@@ -66,11 +66,31 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
 
   it("one meeting per fixture — a second insert collides on the primary key", async () => {
     expect(await attempt(sql`
-      insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
-      values (${fixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`})`,
+      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      values (${fixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`,
     )).toEqual({
       accepted: false, code: "23505", constraint: "fixture_video_meetings_pkey",
     });
+  });
+
+  it("R2-2: a meeting names the pairing it was made for — an insert without either entrant is refused, on the meetingless fixture (counted)", async () => {
+    // On the fixture with NO meeting, so the primary key cannot answer first (the not-null check would win anyway; this
+    // keeps the refusal the column's alone).
+    let checked = 0;
+    for (const missing of ["home_entrant_id", "away_entrant_id"] as const) {
+      const [f] = await sql<{ home: string; away: string }[]>`
+        select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${meetinglessFixtureId}`;
+      const got = await sql`
+        insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+        values (${meetinglessFixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`},
+                ${missing === "home_entrant_id" ? null : f!.home}, ${missing === "away_entrant_id" ? null : f!.away})`.then(
+        () => ({ accepted: true as const }),
+        (err: { code?: string; column_name?: string }) => ({ accepted: false as const, code: err.code, column: err.column_name }),
+      );
+      expect(got, missing).toEqual({ accepted: false, code: "23502", column: missing });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   // V442 (T13, controller ruling C1): camera evidence is read after the

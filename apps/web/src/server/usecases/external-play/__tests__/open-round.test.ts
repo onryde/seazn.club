@@ -1503,7 +1503,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
 
   /** RealtimeKit at its HTTP boundary; the adapter functions are the real ones, so the meeting rows are real. The
    *  camera is reported live, so a required seat seats on its first claim. */
-  function fakeRtk() {
+  function fakeRtk(hooks: { onCreate?: () => Promise<unknown> } = {}) {
     const http: string[] = [];
     const tag = randomUUID().slice(0, 8);
     let seq = 0;
@@ -1514,7 +1514,10 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       const path = new URL(String(url)).pathname.replace(/^.*\/realtime\/kit\/app-n2/, "");
       http.push(`${method} ${path}`);
       let m: RegExpMatchArray | null;
-      if (method === "POST" && path === "/meetings") return reply(201, { id: `n2-${tag}-${++seq}` });
+      if (method === "POST" && path === "/meetings") {
+        await hooks.onCreate?.();
+        return reply(201, { id: `n2-${tag}-${++seq}` });
+      }
       if (method === "POST" && /^\/meetings\/[^/]+\/participants$/.test(path)) {
         const id = `n2p-${tag}-${++seq}`;
         return reply(201, { id, token: `jwt-${id}` });
@@ -1538,6 +1541,11 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
   const meetingsOf = (fixtureId: string) =>
     sql<{ meeting_id: string; ended_at: Date | null }[]>`
       select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`;
+  /** A meeting on file for the board's CURRENT pairing (R2-2: a meeting records the pair it was made for). */
+  const insertMeeting = (fixtureId: string, meetingId: string) =>
+    sql`
+      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      select f.id, f.org_id, ${meetingId}, f.home_entrant_id, f.away_entrant_id from fixtures f where f.id = ${fixtureId}`;
   const participantsOf = async (fixtureId: string) =>
     (await sql<{ person_id: string | null }[]>`
       select person_id from fixture_video_participants where fixture_id = ${fixtureId} order by created_at, id`).map((r) => r.person_id);
@@ -1677,7 +1685,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     await sql`
       insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, white_lichess_id, black_lichess_id)
       values (${gameBoard.fixtureId}, ${s.orgId}, 'live', now(), ${`g${randomUUID().slice(0, 7)}`}, 'home', 'w-n2', 'b-n2')`;
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${gameBoard.fixtureId}, ${s.orgId}, ${gameMeeting})`;
+    await insertMeeting(gameBoard.fixtureId, gameMeeting);
     const mark = rtk.http.length;
     expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toMatchObject({ opened: true });
     expect(await auditTypes(s.competitionId), "premise: the window re-stamped").toEqual(["external_play.round_opened", "external_play.round_reopened"]);
@@ -1716,7 +1724,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
         values (${board!.fixtureId}, ${s.orgId}, ${c.row.status}, now(), ${c.row.challenge ? `g${randomUUID().slice(0, 7)}` : null},
                 ${c.row.challenge ? "home" : null}, ${c.row.challenge ? "w-r23" : null}, ${c.row.challenge ? "b-r23" : null},
                 ${ago(c.row.sentAgoMs)}, ${ago(c.row.claimAgoMs)})`;
-      await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${board!.fixtureId}, ${s.orgId}, ${meeting})`;
+      await insertMeeting(board!.fixtureId, meeting);
       const mark = rtk.http.length;
       expect(await reopen(s, reopenAt, rtk.end), c.label).toMatchObject({ opened: true });
       expect(await auditTypes(s.competitionId), `${c.label}: premise — the window re-stamped`).toEqual([
@@ -1728,5 +1736,338 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       checked++;
     }
     expect(checked).toBe(CASES.length);
+  });
+  // ── Final re-review 2, R2-2: the meeting is keyed to its PAIRING, not the fixture ───────────────────────────────
+  // A re-pair keeps the fixture row, and T16's lobby (lobby.ts, the "Your board" door) seats a newcomer inside the
+  // OLD window with no re-open — so a fixture-keyed meeting put the newcomer in the previous pairing's room, with the
+  // player who moved away still holding a participant in it. ensureMeeting is the one door every path takes (the
+  // lobby, a re-open, a direct link, the arbiter): a meeting made for another pair is replaced, and a new pairing
+  // never joins it.
+  const paired = async (stageId: string, fixtureId: string) => (await swissRound1(stageId)).find((b) => b.fixtureId === fixtureId)!;
+  const vendorCreates = (http: string[]) => http.filter((c) => c === "POST /meetings").length;
+
+  it("R2-2 (a)(b), the lobby path: re-paired with NO re-open, the newcomer seats into a FRESH meeting; neither the player who moved nor the one who stayed is left in a live old room; the stayer re-seats into the same fresh one — both camera policies, counted", async () => {
+    let checked = 0;
+    for (const policy of ["optional", "required"] as const) {
+      const rtk = fakeRtk();
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: policy });
+      const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+      const t0 = new Date();
+      expect(await open(s, 1, t0), policy).toMatchObject({ opened: true });
+      const [b1] = await swissRound1(s.stageId);
+      const fixtureId = b1!.fixtureId;
+      for (const entrant of [b1!.home, b1!.away]) {
+        const got = await seatPlayer({ fixtureId, personId: personOf.get(entrant)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video });
+        expect(got.seated, `${policy}: premise — the first pairing seats`).toBe(true);
+      }
+      const [old] = await meetingsOf(fixtureId);
+      expect(await participantsOf(fixtureId), `${policy}: premise — both old players in the old meeting`).toHaveLength(2);
+
+      await unpairSwissRound(s.owner, s.stageId);
+      await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+      const now1 = await paired(s.stageId, fixtureId);
+      const before = new Set([b1!.home, b1!.away]);
+      const newcomer = [now1.home, now1.away].find((e) => !before.has(e))!;
+      const stayer = [now1.home, now1.away].find((e) => before.has(e))!;
+      const mover = [b1!.home, b1!.away].find((e) => e !== stayer)!;
+      expect([newcomer, stayer, mover].every(Boolean), `${policy}: premise — a newcomer, a stayer, a mover`).toBe(true);
+      expect(await auditTypes(s.competitionId), `${policy}: premise — NO re-open: the old window stands`).toEqual(["external_play.round_opened"]);
+
+      // The newcomer comes in through the lobby: the room's seat call, three minutes into the OLD window.
+      const mark = rtk.http.length;
+      const seat = await seatPlayer({ fixtureId, personId: personOf.get(newcomer)! }, { now: new Date(t0.getTime() + 3 * MIN), video: rtk.video });
+      expect(seat, `${policy}: the newcomer seats, with a participant`).toMatchObject({ seated: true, participant: { participantId: expect.any(String) } });
+      const fresh = await meetingsOf(fixtureId);
+      expect(fresh, policy).toHaveLength(1);
+      expect(fresh[0]!.meeting_id, `${policy}: (a) a fresh meeting, never the old one`).not.toBe(old!.meeting_id);
+      expect(fresh[0]!.ended_at, policy).toBeNull();
+      expect(await participantsOf(fixtureId), `${policy}: (b) only the newcomer — the mover and the stayer went with the old meeting`).toEqual([
+        personOf.get(newcomer),
+      ]);
+      // (b) at RealtimeKit: the old room is ended — kick-all, then INACTIVE — so no old participant's token is live in it.
+      expect(rtk.http.slice(mark).filter((c) => c.includes(old!.meeting_id)), `${policy}: the old meeting ended at RealtimeKit`).toEqual([
+        `POST /meetings/${old!.meeting_id}/active-session/kick-all`,
+        `PATCH /meetings/${old!.meeting_id}`,
+      ]);
+      expect(vendorCreates(rtk.http.slice(mark)), `${policy}: one meeting created`).toBe(1);
+
+      // The sequence: the stayer re-seats into the SAME fresh meeting; a second call of the newcomer creates nothing.
+      const mark2 = rtk.http.length;
+      expect((await seatPlayer({ fixtureId, personId: personOf.get(stayer)! }, { now: new Date(t0.getTime() + 4 * MIN), video: rtk.video })).seated).toBe(true);
+      expect((await seatPlayer({ fixtureId, personId: personOf.get(newcomer)! }, { now: new Date(t0.getTime() + 4 * MIN), video: rtk.video })).seated).toBe(true);
+      expect(await meetingsOf(fixtureId), `${policy}: still the fresh meeting`).toEqual(fresh);
+      expect(vendorCreates(rtk.http.slice(mark2)), `${policy}: no meeting created again`).toBe(0);
+      expect(new Set(await participantsOf(fixtureId)), policy).toEqual(new Set([personOf.get(newcomer), personOf.get(stayer)]));
+      expect(await participantsOf(fixtureId), `${policy}: the mover is never in it`).not.toContain(personOf.get(mover));
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("R2-2 (c): a board's own pairing keeps its meeting across reloads — with a game on file and without; nothing is created or ended again — counted", async () => {
+    let checked = 0;
+    for (const game of [false, true]) {
+      const rtk = fakeRtk();
+      const s = await seedOnlineSwiss({ players: 2, pairing: "fold", cameraPolicy: "required" });
+      const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+      const t0 = new Date();
+      expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+      const [b] = await swissRound1(s.stageId);
+      for (const e of [b!.home, b!.away]) await seatPlayer({ fixtureId: b!.fixtureId, personId: personOf.get(e)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video });
+      const [m] = await meetingsOf(b!.fixtureId);
+      if (game) {
+        await sql`
+          update fixture_external_play set status = 'live', challenge_id = ${`g${randomUUID().slice(0, 7)}`}, white_side = 'home',
+                 white_lichess_id = 'w-r22', black_lichess_id = 'b-r22'
+           where fixture_id = ${b!.fixtureId}`;
+      }
+      const mark = rtk.http.length;
+      for (let reload = 0; reload < 3; reload++) {
+        for (const e of [b!.home, b!.away]) {
+          const got = await seatPlayer({ fixtureId: b!.fixtureId, personId: personOf.get(e)! }, { now: new Date(t0.getTime() + 2 * MIN), video: rtk.video });
+          expect(got.seated, `game ${game}, reload ${reload}`).toBe(true);
+        }
+      }
+      expect(await meetingsOf(b!.fixtureId), `game ${game}`).toEqual([{ meeting_id: m!.meeting_id, ended_at: null }]);
+      expect(vendorCreates(rtk.http.slice(mark)), `game ${game}: no meeting created`).toBe(0);
+      expect(rtk.http.slice(mark).filter((c) => c.startsWith("PATCH") || c.includes("kick-all")), `game ${game}: nothing ended`).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("R2-2, the guard: a meeting made for ANOTHER pairing that a game IS or MAY BE on file behind is never replaced and never joined — refused by name, each evidence arm; a stale claim is no game, and is replaced — counted", async () => {
+    // Cannot happen through the product: M-10's lock (stages.ts lockBoardsRefusingOnlineGames) refuses a re-pair
+    // over a game. The stamp is moved by hand to reach the refusal.
+    type Arm = { label: string; set: (fixtureId: string) => Promise<unknown>; refused: boolean };
+    const ARMS: Arm[] = [
+      { label: "a recorded challenge", refused: true, set: (id) => sql`update fixture_external_play set status = 'live', challenge_id = ${`g${randomUUID().slice(0, 7)}`}, white_side = 'home', white_lichess_id = 'w', black_lichess_id = 'b' where fixture_id = ${id}` },
+      { label: "a sent create", refused: true, set: (id) => sql`update fixture_external_play set create_sent_at = now() where fixture_id = ${id}` },
+      { label: "a live mint claim", refused: true, set: (id) => sql`update fixture_external_play set mint_claimed_at = now() where fixture_id = ${id}` },
+      { label: "a stale mint claim", refused: false, set: (id) => sql`update fixture_external_play set mint_claimed_at = now() - interval '1 hour' where fixture_id = ${id}` },
+    ];
+    let checked = 0;
+    for (const arm of ARMS) {
+      const rtk = fakeRtk();
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+      const t0 = new Date();
+      expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+      const [b1, b2] = await swissRound1(s.stageId);
+      const meetingId = `r22g-${randomUUID().slice(0, 8)}`;
+      await insertMeeting(b1!.fixtureId, meetingId);
+      // The stamp names another pair (board 2's home in place of board 1's).
+      await sql`update fixture_video_meetings set away_entrant_id = ${b2!.home} where fixture_id = ${b1!.fixtureId}`;
+      await arm.set(b1!.fixtureId);
+      const mark = rtk.http.length;
+      if (arm.refused) {
+        await expect(rtk.video.ensureMeeting(b1!.fixtureId), arm.label).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_PAIRING_CHANGED" });
+        expect(await meetingsOf(b1!.fixtureId), `${arm.label}: kept`).toEqual([{ meeting_id: meetingId, ended_at: null }]);
+        expect(rtk.http.slice(mark), `${arm.label}: RealtimeKit never asked`).toEqual([]);
+      } else {
+        const got = await rtk.video.ensureMeeting(b1!.fixtureId);
+        expect(got.meetingId, arm.label).not.toBe(meetingId);
+        expect(await meetingsOf(b1!.fixtureId), arm.label).toEqual([{ meeting_id: got.meetingId, ended_at: null }]);
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(ARMS.length);
+  });
+
+  it("R2-2, the empty case: a board with no pairing (unpaired) gets no meeting — refused by name, RealtimeKit never asked", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    expect(await open(s, 1, new Date())).toMatchObject({ opened: true });
+    const [b1] = await swissRound1(s.stageId);
+    await unpairSwissRound(s.owner, s.stageId);
+    await expect(rtk.video.ensureMeeting(b1!.fixtureId)).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_UNPAIRED" });
+    expect(rtk.http).toEqual([]);
+    expect(await meetingsOf(b1!.fixtureId)).toEqual([]);
+  });
+
+  it("R2-2, the race: a board changed while a player's participant is being minted stores nothing — each arm alone: its meeting replaced, the board re-paired under its meeting, the player moved off it — refused by name; the retry decides — counted", async () => {
+    type Arm = { label: string; change: (b1: BoardSeat, b2: BoardSeat, replacement: string) => Promise<unknown>; retrySeats: boolean };
+    const ARMS: Arm[] = [
+      {
+        // The meeting id moved (another seat retired the stale room and made the pairing's own); the pair and the
+        // player stand.
+        label: "its meeting replaced",
+        retrySeats: true,
+        change: async (b1, _b2, replacement) => {
+          await sql`delete from fixture_video_meetings where fixture_id = ${b1.fixtureId}`;
+          await insertMeeting(b1.fixtureId, replacement);
+        },
+      },
+      {
+        // The same meeting row, the player still on the board — but the board's OTHER seat changed: the meeting
+        // is an earlier pairing's now.
+        label: "the board re-paired under its meeting",
+        retrySeats: true,
+        change: (b1, b2) => sql`update fixtures set away_entrant_id = ${b2.away} where id = ${b1.fixtureId}`,
+      },
+      {
+        // The same meeting row, and its stamp follows the board — but the player is no longer on it.
+        label: "the player moved off the board",
+        retrySeats: false,
+        change: async (b1, b2) => {
+          await sql`update fixtures set home_entrant_id = ${b2.home} where id = ${b1.fixtureId}`;
+          await sql`update fixture_video_meetings set home_entrant_id = ${b2.home} where fixture_id = ${b1.fixtureId}`;
+        },
+      },
+    ];
+    let checked = 0;
+    for (const arm of ARMS) {
+      const rtk = fakeRtk();
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+      const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+      const t0 = new Date();
+      expect(await open(s, 1, t0), arm.label).toMatchObject({ opened: true });
+      const [b1, b2] = await swissRound1(s.stageId);
+      const personId = personOf.get(b1!.home)!;
+      const replacement = `r22r-${randomUUID().slice(0, 8)}`;
+      let changed = 0;
+      // Staged in the dependency: the mint returns only after the board has changed.
+      const video = {
+        ...rtk.video,
+        addParticipant: async (a: Parameters<typeof rtk.video.addParticipant>[0]) => {
+          const minted = await rtk.video.addParticipant(a);
+          if (changed === 0) {
+            changed += 1;
+            await arm.change(b1!, b2!, replacement);
+          }
+          return minted;
+        },
+      };
+      await expect(seatPlayer({ fixtureId: b1!.fixtureId, personId }, { now: new Date(t0.getTime() + MIN), video }), arm.label).rejects.toMatchObject({
+        status: 409,
+        code: "VIDEO_MEETING_REPLACED",
+      });
+      expect(changed, `${arm.label}: premise — the change ran mid-mint`).toBe(1);
+      expect(await participantsOf(b1!.fixtureId), `${arm.label}: nothing stored`).toEqual([]);
+      const retry = await seatPlayer({ fixtureId: b1!.fixtureId, personId }, { now: new Date(t0.getTime() + MIN), video });
+      if (arm.retrySeats) {
+        expect(retry.seated, `${arm.label}: the retry seats`).toBe(true);
+        const [m] = await meetingsOf(b1!.fixtureId);
+        expect(await participantsOf(b1!.fixtureId), `${arm.label}: into the pairing's own meeting`).toEqual([personId]);
+        if (arm.label === "its meeting replaced") expect(m!.meeting_id).toBe(replacement);
+      } else {
+        expect(retry, `${arm.label}: the retry is refused as no player of this board`).toEqual({ seated: false, reason: "not_a_player" });
+        expect(await participantsOf(b1!.fixtureId), arm.label).toEqual([]);
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(ARMS.length);
+  });
+  it("R2-2, the retire judges and deletes in ONE statement: a stale meeting that the pairing's own seat has just replaced, or that a game has just appeared behind, is never taken — staged behind a SHARE lock, each arm, counted", async () => {
+    type Arm = { label: string; land: (tx: Awaited<ReturnType<typeof sql.reserve>>, fixtureId: string, fresh: string) => Promise<unknown>; fresh: boolean };
+    const ARMS: Arm[] = [
+      {
+        label: "a concurrent seat made the pairing's own meeting",
+        fresh: true,
+        land: async (tx, fixtureId, fresh) => {
+          await tx`delete from fixture_video_meetings where fixture_id = ${fixtureId}`;
+          await tx`
+            insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+            select f.id, f.org_id, ${fresh}, f.home_entrant_id, f.away_entrant_id from fixtures f where f.id = ${fixtureId}`;
+        },
+      },
+      {
+        label: "a game appeared behind the stale meeting",
+        fresh: false,
+        land: (tx, fixtureId) => tx`update fixture_external_play set create_sent_at = now() where fixture_id = ${fixtureId}`,
+      },
+    ];
+    let checked = 0;
+    for (const arm of ARMS) {
+      const rtk = fakeRtk();
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+      expect(await open(s, 1, new Date()), arm.label).toMatchObject({ opened: true });
+      const [b1, b2] = await swissRound1(s.stageId);
+      const stale = `r22s-${randomUUID().slice(0, 8)}`;
+      const fresh = `r22f-${randomUUID().slice(0, 8)}`;
+      await insertMeeting(b1!.fixtureId, stale);
+      await sql`update fixture_video_meetings set away_entrant_id = ${b2!.home} where fixture_id = ${b1!.fixtureId}`;
+      const holder = await sql.reserve();
+      let outcome: { ok: { meetingId: string } } | { err: unknown };
+      try {
+        await holder`begin`;
+        // Plain selects pass a SHARE lock; the retire's DELETE (ROW EXCLUSIVE) waits on it — after its read saw the
+        // stale meeting, before it judges.
+        await holder`lock table fixture_video_meetings in share mode`;
+        const pid = await backendPid(holder);
+        let done = false;
+        const racing = rtk.video.ensureMeeting(b1!.fixtureId).then(
+          (ok) => ({ ok }),
+          (err: unknown) => ({ err }),
+        ).finally(() => {
+          done = true;
+        });
+        const parked = await pollWaitersBehind(pid, { queryLike: "%delete from fixture_video_meetings%", finished: () => done });
+        expect(parked, `${arm.label}: premise — the retire is parked behind the lock`).toBeGreaterThanOrEqual(1);
+        await arm.land(holder, b1!.fixtureId, fresh);
+        await holder`commit`;
+        outcome = await racing;
+      } finally {
+        await holder`rollback`.catch(() => undefined);
+        holder.release();
+      }
+      if (arm.fresh) {
+        expect(outcome, `${arm.label}: the pairing's own meeting is handed out`).toEqual({ ok: { meetingId: fresh } });
+        expect(await meetingsOf(b1!.fixtureId), `${arm.label}: and kept`).toEqual([{ meeting_id: fresh, ended_at: null }]);
+        expect(rtk.http.filter((c) => c.includes(fresh)), `${arm.label}: and never ended`).toEqual([]);
+      } else {
+        expect(outcome, arm.label).toMatchObject({ err: { status: 409, code: "VIDEO_MEETING_PAIRING_CHANGED" } });
+        expect(await meetingsOf(b1!.fixtureId), `${arm.label}: the game's meeting is kept`).toEqual([{ meeting_id: stale, ended_at: null }]);
+        expect(rtk.http.filter((c) => c.includes(stale)), `${arm.label}: and never ended`).toEqual([]);
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(ARMS.length);
+  });
+
+  it("R2-2, a lost create race to a meeting made for ANOTHER pairing is never handed out — no game behind it: unavailable (a retry heals); a game: refused by name — counted", async () => {
+    let checked = 0;
+    for (const game of [false, true]) {
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+      expect(await open(s, 1, new Date())).toMatchObject({ opened: true });
+      const [b1, b2] = await swissRound1(s.stageId);
+      const other = `r22o-${randomUUID().slice(0, 8)}`;
+      let landed = 0;
+      // Staged at the create's own round trip: another pairing's meeting lands on the board while ours is made.
+      const rtk = fakeRtk({
+        onCreate: async () => {
+          if (landed++ > 0) return;
+          await insertMeeting(b1!.fixtureId, other);
+          await sql`update fixture_video_meetings set away_entrant_id = ${b2!.home} where fixture_id = ${b1!.fixtureId}`;
+          if (game) await sql`update fixture_external_play set create_sent_at = now() where fixture_id = ${b1!.fixtureId}`;
+        },
+      });
+      const got = rtk.video.ensureMeeting(b1!.fixtureId);
+      if (game) await expect(got, "a game").rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_PAIRING_CHANGED" });
+      else await expect(got, "no game").rejects.toMatchObject({ name: "RealtimeKitError", status: 503, code: "unavailable" });
+      expect(landed, "premise — the other meeting landed mid-create").toBe(1);
+      expect(await meetingsOf(b1!.fixtureId), `game ${game}: the other meeting stands`).toEqual([{ meeting_id: other, ended_at: null }]);
+      if (!game) {
+        // The retry retires it and makes the pairing's own.
+        const retry = await rtk.video.ensureMeeting(b1!.fixtureId);
+        expect(retry.meetingId).not.toBe(other);
+        expect(await meetingsOf(b1!.fixtureId)).toEqual([{ meeting_id: retry.meetingId, ended_at: null }]);
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+  it("R2-2: an ENDED meeting of another pairing (no game) is retired without asking RealtimeKit again, and the pairing gets its own — never VIDEO_MEETING_ENDED", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    expect(await open(s, 1, new Date())).toMatchObject({ opened: true });
+    const [b1, b2] = await swissRound1(s.stageId);
+    const ended = `r22e-${randomUUID().slice(0, 8)}`;
+    await insertMeeting(b1!.fixtureId, ended);
+    await sql`update fixture_video_meetings set away_entrant_id = ${b2!.home}, ended_at = now() where fixture_id = ${b1!.fixtureId}`;
+    const got = await rtk.video.ensureMeeting(b1!.fixtureId);
+    expect(got.meetingId).not.toBe(ended);
+    expect(await meetingsOf(b1!.fixtureId)).toEqual([{ meeting_id: got.meetingId, ended_at: null }]);
+    expect(rtk.http.filter((c) => c.includes(ended)), "an ended meeting is not asked again").toEqual([]);
+    expect(rtk.http.filter((c) => c === "POST /meetings")).toHaveLength(1);
   });
 });

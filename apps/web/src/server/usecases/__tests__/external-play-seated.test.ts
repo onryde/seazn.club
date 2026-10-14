@@ -25,8 +25,8 @@ afterAll(async () => {
 });
 
 async function meeting(fixtureId: string, orgId: string): Promise<void> {
-  await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
-            values (${fixtureId}, ${orgId}, ${`m-${randomUUID().slice(0, 8)}`})`;
+  await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+            values (${fixtureId}, ${orgId}, ${`m-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`;
 }
 
 /** The roster edit a re-seat is: the entrant's member person replaced. */

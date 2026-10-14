@@ -251,6 +251,14 @@ create table fixture_video_meetings (
   org_id     uuid not null references organizations(id) on delete cascade,
   provider   text not null default 'realtimekit' check (provider in ('realtimekit')),
   meeting_id text not null unique,
+  -- The PAIRING the meeting was made for (final re-review 2, R2-2, 2026-10-14): the fixture's two entrants when it
+  -- was created. A re-pair keeps the fixture row, and the lobby seats a newcomer inside the old window, so the
+  -- fixture alone cannot tell this board's players from the last pairing's. ensureMeeting replaces a meeting made
+  -- for another pair (no game behind it), and never seats a new pairing in one. A stamp to compare, never joined:
+  -- no foreign key, so an entrant deleted later only leaves it differing. Never null: a board with no pairing gets
+  -- no meeting.
+  home_entrant_id uuid not null,
+  away_entrant_id uuid not null,
   created_at timestamptz not null default now(),
   ended_at   timestamptz null
 );

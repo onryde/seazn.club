@@ -30,6 +30,8 @@ import "server-only";
 // on a Required division is a tournament played with no camera at all.
 import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
+import { liveMintClaimSince } from "@/server/external-play/window";
+import { log } from "@/server/logger";
 
 export const REALTIMEKIT_TIMEOUT_MS = 10_000;
 
@@ -216,31 +218,100 @@ async function cfEnvelope(
 }
 
 /** `fixture_id` is the table's primary key, so a fixture has exactly one
- *  meeting row for life — an ENDED one included. Once torn down (at the
+ *  meeting row at a time — an ENDED one included. Once torn down (at the
  *  result, or at T+20 when nobody came — spec §5.2) there is nothing left to
- *  join, and creating another would only make a billable meeting the row can
- *  never point at. */
+ *  join for THAT pairing, and creating another would only make a billable
+ *  meeting the row can never point at. */
 function meetingEnded(fixtureId: string): HttpError {
   return new HttpError(409, `video meeting for fixture ${fixtureId} has ended`, "VIDEO_MEETING_ENDED");
 }
 
+/** R2-2: a meeting made for another pairing with a game behind it. Cannot happen through the product — M-10's lock
+ *  (stages.ts lockBoardsRefusingOnlineGames) refuses a re-pair over a game — so it is refused by name: the meeting
+ *  is that game's camera evidence, never replaced and never joined by a new pairing. */
+function pairingChanged(fixtureId: string): HttpError {
+  return new HttpError(409, `the video meeting for fixture ${fixtureId} belongs to an earlier pairing's game`, "VIDEO_MEETING_PAIRING_CHANGED");
+}
+
+/** R2-2, the empty case: a board with no pairing (unpaired, or a bye) has nobody to meet. */
+function unpaired(fixtureId: string): HttpError {
+  return new HttpError(409, `fixture ${fixtureId} has no pairing to make a video meeting for`, "VIDEO_MEETING_UNPAIRED");
+}
+
+/** A board whose meeting is a GAME's camera evidence: a game IS or MAY BE on file behind the bridge row `ep` at
+ *  `now` — a recorded challenge, a sent create (T9's marker), or a LIVE mint claim (T9 in flight, before its
+ *  marker; R2-3, the bound is the sweep's: liveMintClaimSince). The one rule for a meeting a re-pair left behind:
+ *  the re-open spares it (N-2), and ensureMeeting never replaces it (R2-2). Reads the alias `ep`. */
+export function gameEvidenceOn(now: Date) {
+  return sql`(ep.challenge_id is not null or ep.create_sent_at is not null
+              or (ep.status = 'pending' and ep.mint_claimed_at >= ${liveMintClaimSince(now)}))`;
+}
+
+type MeetingOnFile = { meetingId: string; endedAt: Date | null; samePair: boolean; evidence: boolean };
+
+/** The board's meeting row, and whether it was made for the board's CURRENT pairing (R2-2). */
+async function meetingOnFile(fixtureId: string, now: Date): Promise<MeetingOnFile | null> {
+  const [row] = await sql<MeetingOnFile[]>`
+    select m.meeting_id as "meetingId", m.ended_at as "endedAt",
+           (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair",
+           exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)}) as evidence
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where m.fixture_id = ${fixtureId}`;
+  return row ?? null;
+}
+
+/** R2-2: retire the board's meeting if it is (still) another pairing's with no game behind it — its row (its
+ *  participants cascade: the player who moved, and the one who stayed, who re-seats into the new pairing's meeting),
+ *  then the room at RealtimeKit, so no token of the old pairing is live in it. ONE statement judges and deletes, so
+ *  a meeting a concurrent seat has just made for this pairing, or one a game has since appeared behind, is never
+ *  taken: the caller's next read decides. An ended meeting is not asked again. Ending is best effort and never
+ *  silent — its row is gone, so nothing hands out a token for it. */
+async function retireStaleMeeting(fixtureId: string, now: Date, deps: RealtimeKitDeps): Promise<void> {
+  const gone = await sql<{ meeting_id: string; ended_at: Date | null }[]>`
+    delete from fixture_video_meetings m
+     using fixtures f
+     where m.fixture_id = ${fixtureId} and f.id = m.fixture_id
+       and (m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
+       and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})
+    returning m.meeting_id, m.ended_at`;
+  const retired = gone[0];
+  if (!retired || retired.ended_at !== null) return;
+  try {
+    await endMeeting(retired.meeting_id, deps);
+  } catch (err) {
+    log.error(
+      { fixtureId, meetingId: retired.meeting_id, err: err instanceof Error ? err.message : String(err) },
+      "realtimekit: could not end an earlier pairing's meeting — its row is gone and it is no longer used",
+    );
+  }
+}
+
 /** Created when the FIRST player arrives in the window, not after both check
  *  in — preflight needs something to join (spec §5.2). Idempotent per
- *  fixture; the loser of a creation race deactivates its own meeting rather
- *  than leaving a billable room nobody joins. */
+ *  PAIRING (final re-review 2, R2-2): a re-pair keeps the fixture, so the
+ *  meeting records the two entrants it was made for, and one made for
+ *  another pair is retired and a fresh one made — every path to a seat
+ *  (the lobby, a re-open, a direct link) and the arbiter's watch come
+ *  through here. The loser of a creation race deactivates its own meeting
+ *  rather than leaving a billable room nobody joins. */
 export async function ensureMeeting(fixtureId: string, deps: RealtimeKitDeps = {}): Promise<MeetingRef> {
   const cfg = requireConfig();
-  const [existing] = await sql<{ meeting_id: string; ended_at: Date | null }[]>`
-    select meeting_id, ended_at from fixture_video_meetings
-     where fixture_id = ${fixtureId}`;
+  const now = new Date();
+  const existing = await meetingOnFile(fixtureId, now);
   if (existing) {
-    if (existing.ended_at !== null) throw meetingEnded(fixtureId);
-    return { meetingId: existing.meeting_id };
+    if (existing.samePair) {
+      if (existing.endedAt !== null) throw meetingEnded(fixtureId);
+      return { meetingId: existing.meetingId };
+    }
+    if (existing.evidence) throw pairingChanged(fixtureId);
+    await retireStaleMeeting(fixtureId, now, deps);
   }
 
-  const [fixture] = await sql<{ org_id: string }[]>`
-    select org_id from fixtures where id = ${fixtureId}`;
+  const [fixture] = await sql<{ org_id: string; home: string | null; away: string | null }[]>`
+    select org_id, home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`;
   if (!fixture) throw new HttpError(404, "fixture not found", "NOT_FOUND");
+  if (fixture.home === null || fixture.away === null) throw unpaired(fixtureId);
 
   // Outside any transaction — an open transaction across an outbound HTTP
   // call holds a row lock, or a pooled connection, for the whole round trip
@@ -254,9 +325,11 @@ export async function ensureMeeting(fixtureId: string, deps: RealtimeKitDeps = {
   if (typeof data.id !== "string" || data.id === "") {
     throw new RealtimeKitError(502, "unavailable", "RealtimeKit create meeting returned no id");
   }
+  // The pair stamped is the one READ above, before the create: a re-pair landing during the round trip leaves this
+  // meeting stale on arrival, so the next read retires it — it never labels an older pairing's room as the new one's.
   const inserted = await sql<{ meeting_id: string }[]>`
-    insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
-    values (${fixtureId}, ${fixture.org_id}, ${data.id})
+    insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+    values (${fixtureId}, ${fixture.org_id}, ${data.id}, ${fixture.home}, ${fixture.away})
     on conflict (fixture_id) do nothing
     returning meeting_id`;
   const mine = inserted[0];
@@ -270,11 +343,17 @@ export async function ensureMeeting(fixtureId: string, deps: RealtimeKitDeps = {
     { method: "PATCH", body: { status: "INACTIVE" } },
     deps,
   ).catch(() => undefined);
-  const [winner] = await sql<{ meeting_id: string; ended_at: Date | null }[]>`
-    select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`;
+  const winner = await meetingOnFile(fixtureId, now);
   if (!winner) throw new RealtimeKitError(503, "unavailable", "meeting row vanished mid-race");
-  if (winner.ended_at !== null) throw meetingEnded(fixtureId);
-  return { meetingId: winner.meeting_id };
+  // The winner is the board's only if it was made for this pairing (R2-2): a stale row on file now — a game appeared
+  // behind it before the retire, or another pairing's create landed after it — is refused, never handed to a new
+  // pairing.
+  if (!winner.samePair) {
+    if (winner.evidence) throw pairingChanged(fixtureId);
+    throw new RealtimeKitError(503, "unavailable", "the board's meeting changed while one was being made");
+  }
+  if (winner.endedAt !== null) throw meetingEnded(fixtureId);
+  return { meetingId: winner.meetingId };
 }
 
 /** Presets, not code, are what make the camera mandatory: the `player`
