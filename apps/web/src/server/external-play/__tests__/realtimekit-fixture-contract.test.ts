@@ -105,6 +105,21 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     expect(fx.participantFor("person-1")?.id).toBe(a.participantId);
   });
 
+  it("T17B D3, measured: add-participant is IDEMPOTENT on the custom id within a meeting — the SAME participant, a fresh token; another custom id or another meeting is a new one; a deleted one's custom id mints anew", async () => {
+    const id = await meeting();
+    const a = await addParticipant({ meetingId: id, subject: "user-1", preset: "arbiter" });
+    const again = await addParticipant({ meetingId: id, subject: "user-1", preset: "arbiter" });
+    expect(again.participantId, "the vendor's answer to a repeated custom id").toBe(a.participantId);
+    expect(again.authToken).not.toBe(a.authToken);
+    const other = await addParticipant({ meetingId: id, subject: "user-2", preset: "arbiter" });
+    expect(other.participantId).not.toBe(a.participantId);
+    const elsewhere = await addParticipant({ meetingId: await meeting(), subject: "user-1", preset: "arbiter" });
+    expect(elsewhere.participantId, "per meeting").not.toBe(a.participantId);
+    await removeParticipant({ meetingId: id, participantId: a.participantId });
+    const fresh = await addParticipant({ meetingId: id, subject: "user-1", preset: "arbiter" });
+    expect(fresh.participantId, "a deleted participant is never handed back").not.toBe(a.participantId);
+  });
+
   it("presence: no session is 'not live' (RealtimeKit's 404 body), setLivePublisher makes THIS participant live with the honest camera, and leaving ends it", async () => {
     const id = await meeting();
     const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
