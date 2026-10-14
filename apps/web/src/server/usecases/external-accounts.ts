@@ -149,15 +149,18 @@ export async function upsertLichessLink(
   link: { externalUserId: string; username: string; scopes: string[]; token: string },
 ): Promise<void> {
   const sealed = Buffer.from(await sealPlayerToken(link.token), "base64");
-  // M-2: the token this write replaces, read under the row's lock so a concurrent re-link cannot slip between.
+  // M-2: the token this write replaces, read under the row's lock so a concurrent re-link cannot slip between — and
+  // (P11) the Lichess account it replaces.
   let replaced: Uint8Array | null = null;
+  let replacedAccount: string | null = null;
   try {
     await sql.begin(async (tx) => {
-      const [prior] = await tx<{ access_token_enc: Uint8Array | null }[]>`
-        select access_token_enc from user_external_accounts
+      const [prior] = await tx<{ access_token_enc: Uint8Array | null; external_user_id: string }[]>`
+        select access_token_enc, external_user_id from user_external_accounts
          where user_id = ${userId} and provider = 'lichess'
            for update`;
       replaced = prior?.access_token_enc ?? null;
+      replacedAccount = prior?.external_user_id ?? null;
       await tx`
         insert into user_external_accounts (
           user_id, provider, external_user_id, username,
@@ -184,6 +187,14 @@ export async function upsertLichessLink(
       );
     }
     throw err;
+  }
+  // Final review P11: a DIFFERENT account leaves every live or mid-create board of this player recorded for an account
+  // that is no longer theirs — held for the organiser, BEFORE the old grant is revoked, so the organiser's reason is
+  // the account change rather than the revoked token the next move would meet. The same account changes nothing. A
+  // dynamic import: the hold pulls the result writer, which the link's other importers never need.
+  if (replacedAccount !== null && replacedAccount !== link.externalUserId) {
+    const { holdBoardsOnAccountChange } = await import("./external-play/account-changed");
+    await holdBoardsOnAccountChange(userId, { from: replacedAccount, to: link.externalUserId });
   }
   await revokeReplacedGrant(userId, replaced, link.token);
 }

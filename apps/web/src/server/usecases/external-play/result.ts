@@ -54,6 +54,11 @@ export const HOLD_REASONS = [
   // deadline — T9 refuses before it could recover it, so the sweep holds it
   // with T9's own reason for exactly that state (types.ts).
   "create_outcome_unknown",
+  // Final review P11: the player re-linked a different Lichess account while
+  // the game was live or mid-create (external-play/account-changed.ts). The
+  // organiser's to settle: not a mid-game diagnosis, so reconcile stops
+  // reading the game and nothing replaces this hold.
+  "account_changed",
 ] as const satisfies readonly NeedsReason[];
 export type HoldReason = (typeof HOLD_REASONS)[number];
 

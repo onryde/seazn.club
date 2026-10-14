@@ -32,8 +32,8 @@ function everyBody(): { label: string; reason: NeedsReason; key: string; vars?: 
 }
 
 describe("held copy: every reason, every locale", () => {
-  it("the vocabulary itself is not empty (12 reasons at V441) — the sweeps below are not vacuous", () => {
-    expect(NEEDS_REASONS.length).toBeGreaterThanOrEqual(12);
+  it("the vocabulary itself is not empty (13 reasons at V441, P11) — the sweeps below are not vacuous", () => {
+    expect(NEEDS_REASONS.length).toBeGreaterThanOrEqual(13);
   });
 
   it("a chip title per reason: present in each locale, translated, and distinct from every other reason's — counted", () => {
@@ -54,7 +54,7 @@ describe("held copy: every reason, every locale", () => {
 
   it("a sentence per reason (and per revoked seat): present, translated, its {name} filled — counted", () => {
     const bodies = everyBody();
-    expect(bodies.length, "12 reasons + 3 more token_revoked seats").toBe(NEEDS_REASONS.length + SEATS.length - 1);
+    expect(bodies.length, "13 reasons + 3 more token_revoked seats").toBe(NEEDS_REASONS.length + SEATS.length - 1);
     let checked = 0;
     for (const l of LOCALES) {
       for (const b of bodies) {
@@ -85,6 +85,8 @@ describe("held copy: every reason, every locale", () => {
       create_outcome_unknown: "Game may already exist",
       tiebreak_owed: "Winner to be decided",
       fair_play: "Fair-play ending",
+      // Final review P11 (the brief: "an organiser hold account_changed").
+      account_changed: "Lichess account changed",
     };
     let checked = 0;
     for (const reason of NEEDS_REASONS) {
@@ -92,6 +94,14 @@ describe("held copy: every reason, every locale", () => {
       checked++;
     }
     expect(checked).toBe(NEEDS_REASONS.length);
+  });
+
+  it("final review P11: the account change's sentence is its own, as the brief words it — not another hold's", () => {
+    const b = heldBody({ reason: "account_changed", revokedSeat: null, ...NAMES });
+    expect(DICTS.en[b.key]).toBe(
+      "A player linked a different Lichess account while this game was being played or set up. It can no longer be played from Seazn. The game may still be running on Lichess.",
+    );
+    expect(b.vars, "it names nobody: the hold records no seat (V442's seat is token_revoked's alone)").toBeUndefined();
   });
 
   it("a revoked token is NEVER a no-show (design §3.6): each seat's sentence says so, and none is a no-show's sentence", () => {

@@ -35,6 +35,11 @@
 --    ended the game for a fair-play violation (status `cheat`). The organiser
 --    sees a fair-play verdict Lichess already made, never a provider fault —
 --    amended here for the same reason as item 4.
+--
+-- 6. needs_reason gains 'account_changed' (final review P11): a player
+--    re-linked a DIFFERENT Lichess account while their game was live or
+--    mid-create, so the recorded account is no longer theirs. Amended here
+--    for the same reason as item 4.
 alter table fixture_external_play
   drop column url_white,
   drop column url_black,
@@ -48,5 +53,6 @@ alter table fixture_external_play
     'token_revoked', 'double_walkover_blocked',
     'create_outcome_unknown',
     'tiebreak_owed',
-    'fair_play'
+    'fair_play',
+    'account_changed'
   ));
