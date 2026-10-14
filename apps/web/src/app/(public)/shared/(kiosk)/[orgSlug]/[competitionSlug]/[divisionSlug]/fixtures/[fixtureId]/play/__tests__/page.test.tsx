@@ -23,11 +23,15 @@ const nav = vi.hoisted(() => ({
 vi.mock("next/navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/navigation")>()),
   redirect: nav.redirect,
+  // I2: the re-pair card's page re-asker (RepairingRefresh) reads the router; never called in a static render.
+  useRouter: () => ({ refresh: vi.fn() }),
 }));
 
 import MatchRoomPage, { dynamic, generateMetadata } from "../page";
 import { RoomShell } from "@/components/public-site/match-room/room-shell";
-import { RoomHeaderless } from "@/components/public-site/match-room/room-unavailable";
+import { RoomHeaderless, RoomRepairingHeaderless } from "@/components/public-site/match-room/room-unavailable";
+import { RepairingRefresh } from "@/components/public-site/match-room/room-repairing-refresh";
+import NL from "@/dictionaries/nl/ui.json";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
 const PARAMS = { orgSlug: "org", competitionSlug: "comp", divisionSlug: "div", fixtureId: "f1" };
@@ -103,12 +107,25 @@ describe("match-room page", () => {
     expect(room.roomGrantDowngraded, "a refused room asks Lichess nothing").not.toHaveBeenCalled();
   });
 
-  it("fix round 4b: a page loaded while the board is being re-paired (409) has no snapshot to poll on — the same not-available card, never the error boundary; any OTHER 409 is a fault", async () => {
+  it("final re-review 4, I2: a page loaded inside a re-pair gap (409) is the re-pair card, headerless — never card 7's 'it may belong to other players' — with the page re-asker; never the error boundary; any OTHER 409 is a fault", async () => {
     room.readRoom.mockRejectedValue(new HttpError(409, "This board is being re-paired", "ROOM_BEING_REPAIRED"));
-    const els = await render("tok");
+    const page = await MatchRoomPage({ params: Promise.resolve(PARAMS), searchParams: Promise.resolve({ t: "tok" }) });
+    const els = walk(page);
     expect(find(els, RoomShell)).toBeUndefined();
-    expect(find(els, RoomHeaderless)).toBeDefined();
+    expect(find(els, RoomHeaderless), "never card 7").toBeUndefined();
+    expect(find(els, RoomRepairingHeaderless), "the re-pair card").toBeDefined();
+    expect(find(walk(RoomRepairingHeaderless({ t: (k) => k })), RepairingRefresh), "and the page re-asker").toBeDefined();
+    const html = renderToStaticMarkup(page as ReactElement);
+    expect(html).toContain('data-screen="repairing"');
+    expect(html, "in the org's language").toContain(NL["externalPlay.room.state.repairing.title"]);
+    expect(html).not.toContain(NL["externalPlay.room.state.unavailable.body"]);
+    expect(html).not.toContain(NL["externalPlay.room.state.unavailable.title"]);
     expect(room.roomGrantDowngraded, "nothing asked of Lichess").not.toHaveBeenCalled();
+    // The positive pair: the room's 404 is card 7, and re-asks nothing.
+    room.readRoom.mockRejectedValue(new HttpError(404, "This match room could not be found", "NOT_FOUND"));
+    const gone = await MatchRoomPage({ params: Promise.resolve(PARAMS), searchParams: Promise.resolve({ t: "tok" }) });
+    expect(find(walk(gone), RoomHeaderless)).toBeDefined();
+    expect(renderToStaticMarkup(gone as ReactElement)).toContain(NL["externalPlay.room.state.unavailable.body"]);
     room.readRoom.mockRejectedValue(new HttpError(409, "conflict", "SOMETHING_ELSE"));
     await expect(render("tok")).rejects.toMatchObject({ status: 409, code: "SOMETHING_ELSE" });
   });

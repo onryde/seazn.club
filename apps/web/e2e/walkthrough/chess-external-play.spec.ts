@@ -1181,4 +1181,116 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await nctx.close();
     await sctx.close();
   });
+
+  test("I2: the player who stays RELOADS inside the re-pair gap — the re-pair card, never 'not available'; the page re-asks itself, lands in the room once re-paired, and is seated in the NEW meeting with no further action", async ({ page, browser, request }) => {
+    test.setTimeout(budget(10));
+    // Its own Swiss round, as R3-1's: playable, so the game can really be made at the fixture.
+    const names = [`Qi Reload ${TAG}`, `Ray Reload ${TAG}`, `Sol Reload ${TAG}`, `Tao Reload ${TAG}`];
+    const r = await seedOnlineRound(request, names, { camera: "required", stage: "swiss", clock: TC, playable: true });
+    expect(r.boards, "four players pair into two boards").toHaveLength(2);
+    for (const b of r.boards) for (const pl of [b.home, b.away]) lichess.registerToken(pl.lichessToken!, pl.lichessId);
+    const people = new Map(r.boards.flatMap((b) => [b.home, b.away]).map((p) => [p.entrantId, p]));
+    const pairs = () =>
+      withDb((sql) => sql<{ id: string; home: string | null; away: string | null }[]>`
+        select id, home_entrant_id as home, away_entrant_id as away from fixtures
+         where stage_id = ${r.stageId} and round_no = 1 order by seq_in_round`);
+    const meetingsOf = (fixtureId: string) =>
+      withDb((sql) => sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${fixtureId}`);
+    const isRoom = (u: string) => /\/external-play\/room$/.test(new URL(u).pathname);
+    const board1 = r.boards.find((b) => [b.home, b.away].some((pl) => pl.name === names[0]))!;
+    expect(board1, "premise — the top seed is paired in round 1").toBeDefined();
+    const stayer = [board1.home, board1.away].find((pl) => pl.name === names[0])!;
+
+    // ── the stayer checks in ALONE under the first pairing ──
+    const sctx = await playerContext(browser);
+    const sp = await openRoom(sctx, board1, stayer);
+    await expect(screen(sp)).toHaveAttribute("data-screen", "checkin");
+    await sp.getByTestId("room-checkin-cta").click();
+    await expect(screen(sp)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    const first = video.participantFor(stayer.personId)!;
+    video.setLivePublisher(first.id, true);
+    await sp.getByTestId("room-state-retry").click();
+    await expect(screen(sp)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    expect(await checkedInAt(board1.fixtureId, stayer.personId), "premise — checked in").not.toBeNull();
+    const [old] = await meetingsOf(board1.fixtureId);
+    expect(old?.meeting_id, "premise — seated in the first pairing's meeting").toBe(first.meetingId);
+
+    // ── the organiser unpairs; the stayer RELOADS inside the gap ──
+    const stamp = await roundOpenedAtSql(r.stageId, 1);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.fixturesTab);
+    await page.getByTestId("stage-unpair").click();
+    await expect.poll(async () => (await pairs()).filter((f) => f.home !== null || f.away !== null).length, { timeout: 30_000 }).toBe(0);
+    const reloaded = await sp.reload();
+    expect(reloaded?.status(), "the page renders, never the error boundary").toBe(200);
+    await expect(screen(sp), "the re-pair card").toHaveAttribute("data-screen", "repairing");
+    await expect(sp.getByTestId("room-state-repairing")).toContainText(uiEn["externalPlay.room.state.repairing.title"]!);
+    await expect(sp.getByText(uiEn["externalPlay.room.state.unavailable.body"]!), "never 'it may belong to other players'").toHaveCount(0);
+    let widths = 0;
+    for (const width of [320, 768, 1280]) {
+      await sp.setViewportSize({ width, height: width === 1280 ? 900 : width === 768 ? 1024 : 700 });
+      await sp.waitForTimeout(250);
+      const { scroll, client } = await sp.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+      expect(scroll, `no horizontal page scroll at ${width}px`).toBeLessThanOrEqual(client);
+      widths += 1;
+      if (process.env.ROOM_SHOTS_DIR) await sp.screenshot({ path: `${process.env.ROOM_SHOTS_DIR}/i2-repairing-on-load-${width}.png`, fullPage: true, caret: "initial" });
+    }
+    expect(widths, "anti-vacuity: widths").toBe(3);
+    // Everything the page does from here, it does by itself.
+    const stayerClaims: string[] = [];
+    sp.on("request", (req) => {
+      if (req.method() === "POST" && isRoom(req.url())) stayerClaims.push(req.url());
+    });
+    // It re-asks itself (router.refresh) at the room's cadence — and stays on the card while the gap lasts.
+    const asked = await sp.waitForRequest((req) => req.headers()["rsc"] === "1" && new URL(req.url()).pathname.endsWith("/play"), {
+      timeout: IDLE_POLL_MS + 10_000,
+    });
+    expect(asked.method(), "a re-ask of the page").toBe("GET");
+    await expect(screen(sp), "still the gap").toHaveAttribute("data-screen", "repairing");
+
+    // ── the organiser re-pairs, with NO re-open; the page lands in the room on its own ──
+    const landed = sp.waitForResponse((res) => res.request().method() === "POST" && isRoom(res.url()), { timeout: IDLE_POLL_MS + 20_000 });
+    const repaired = await apiJson(page.request, `/api/v1/stages/${r.stageId}/generate`, "POST", { pairing: "rank_adjacent" });
+    expect(repaired.status, `re-pair round 1: ${JSON.stringify(repaired.error)}`).toBeLessThan(300);
+    expect((await roundOpenedAtSql(r.stageId, 1))!.getTime(), "premise — no re-open").toBe(stamp!.getTime());
+    const now1 = (await pairs()).find((f) => f.id === board1.fixtureId)!;
+    expect([now1.home, now1.away], "premise — the top seed stayed on the board").toContain(stayer.entrantId);
+    const newcomer = people.get([now1.home, now1.away].find((e) => e !== null && e !== stayer.entrantId)!)!;
+    // The room's own re-entry claim (checked in, cameras on) — no tap.
+    const answer = await landed;
+    expect(answer.status(), "the landing claim is answered").toBe(200);
+    await expect(screen(sp), "in the room again").not.toHaveAttribute("data-screen", "repairing");
+    const fresh = await meetingsOf(board1.fixtureId);
+    expect(fresh, "one meeting on file").toHaveLength(1);
+    expect(fresh[0]!.meeting_id, "a NEW meeting: the first pairing's is retired").not.toBe(old!.meeting_id);
+    expect(video.meetingStatus(old!.meeting_id)).toBe("INACTIVE");
+    const second = video.participantFor(stayer.personId)!;
+    expect(second.meetingId, "the stayer's participant is in the NEW meeting").toBe(fresh[0]!.meeting_id);
+    const seat = ((await answer.json()) as { data: { seat: { participant: { participantId: string } | null } | null } }).data.seat;
+    expect(seat?.participant?.participantId, "and the page holds its token").toBe(second.id);
+
+    // ── the newcomer arrives by the lobby; the game is made under `required` ──
+    const nctx = await playerContext(browser);
+    const np = await nctx.newPage();
+    const fixturePage = publicFixturePath(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId);
+    await loginUi(np, newcomer.email, fixturePage);
+    await np.waitForURL((u) => u.pathname === fixturePage);
+    const card = np.getByTestId("your-board");
+    await expect(card).toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
+    await card.getByTestId("your-board-link").click();
+    await np.waitForURL((u) => u.pathname === routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
+    await expect(screen(np)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    await np.getByTestId("room-checkin-cta").click();
+    await expect(screen(np)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    expect((await meetingsOf(board1.fixtureId)).map((m) => m.meeting_id), "the newcomer joins the stayer's new meeting").toEqual([fresh[0]!.meeting_id]);
+    video.setLivePublisher(second.id, true);
+    video.setLivePublisher(video.participantFor(newcomer.personId)!.id, true);
+    await np.getByTestId("room-state-retry").click();
+    await expectLichessReached(() => lichessCallsFor([stayer, newcomer]).length, board1.fixtureId, 30_000);
+    await expect.poll(async () => (await bridgeRow(board1.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
+    await expect(screen(sp), "the reloaded page goes live with no tap").toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
+    expect(stayerClaims, "one claim after the reload — the room's own landing — never a loop").toHaveLength(1);
+    await nctx.close();
+    await sctx.close();
+  });
 });
