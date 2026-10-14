@@ -24,9 +24,20 @@
 //   M11  The export's `clocks` is CENTISECONDS, one entry PER PLY, beside a
 //        seconds `clock` envelope whose totalTime = limit + 40 x increment.
 //   M16  An export of a game in play withholds its last 3 plies once past 5.
-//   T11  A read SETTLES an expired clock, visible on the NEXT read: the first
-//        board-stream read after expiry still says `started` with the flagged
-//        side's time at 0 (gamefull-expired-1.ndjson, then -2).
+//   T11  (REPLACED, T17B fix 2 D11) An expired clock is NOT settled by a read
+//        that closes at its first line: game x0JKlePc (2026-10-14, stg) sat at
+//        `started` with White at 0 through every such read for 7 minutes.
+//        lila (ad760137c, read 2026-10-14, source NOT measured) settles a flag
+//        from an OPEN board stream: GameStateStream.scala:118-124 — SetOnline
+//        schedules CheckOnline 7 s later, which publishes
+//        RoundBus.QuietFlagCheck (and re-arms); RoundAsyncActor.scala:252-254
+//        then calls finisher.outOfTime when the side to move is out of time,
+//        and the stream pushes the final gameState (FinishGame → onGameOver →
+//        pushState) before it closes. So here: a stream held open
+//        FLAG_CHECK_MS with the side to move at zero gets `outoftime` pushed
+//        on that same stream; a stream closed sooner settles nothing. The
+//        recorded pair (gamefull-expired-1.ndjson, then -2) stays the shape
+//        of the two lines.
 //   D    Draws (T17 live probe, t17-live-lichess.md §2): every draw call answers
 //        200 {"ok":true}; the stream's wdraw/bdraw is the only witness. No
 //        offer before ply 2; a yes to the opponent's standing offer draws; a
@@ -111,10 +122,11 @@ export interface LichessFixtureServer {
   setTokenScopes(token: string, scopes: readonly string[]): void;
   /** M3: allow `count` creates per `windowMs`, then 429. Off until called. */
   setCreateBudget(count: number, windowMs: number): void;
-  /** The side to move's clock has run out, with nobody reading. The NEXT
-   *  board-stream read reports `started` with that side's time at 0 and
-   *  settles the flag; the read after it reports `outoftime` (T11, measured).
-   *  Throws before ply 2 — Lichess's clock is not running yet. */
+  /** The side to move's clock has run out, with nobody reading. Every
+   *  board-stream read reports `started` with that side's time at 0; only a
+   *  stream held open FLAG_CHECK_MS settles the flag, pushing `outoftime` on
+   *  that stream (T11 as replaced — lila, cited above). Throws before ply 2 —
+   *  Lichess's clock is not running yet. */
   expireClock(gameId: string): void;
   /** Serve a recorded export body verbatim for GET /game/export/{id}. */
   serveRawExport(gameId: string, body: unknown): void;
@@ -159,6 +171,10 @@ const CHALLENGE_LISTED_MS = 30_000;
 /** The board-stream connection stays open the way Lichess's does, until the
  *  reader cancels; this caps a reader that never does. */
 const STREAM_HOLD_MS = 30_000;
+
+/** lila GameStateStream.scala:118-124 (ad760137c): an open board stream's CheckOnline tick — 7 s after it opens, and
+ *  every 7 s after — publishes QuietFlagCheck, which flags a side to move that is out of time (T11 above). */
+export const FLAG_CHECK_MS = 7_000;
 
 type Game = {
   id: string;
@@ -494,15 +510,26 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
         if (!g || g.status === "created" || g.status === "canceled" || colourOf(g, me) === null) {
           return send({ error: "fixture: no such game for you" }, 404);
         }
-        // T11 (measured): the first read after expiry reports the zero and
-        // `started`; it settles the flag, which the NEXT read shows.
+        // T11 as replaced (lila, cited above): the read reports what Lichess holds — `started` with the zero, for a
+        // flag nobody has checked. Only the open stream's CheckOnline tick settles it, on this same stream.
         const line = JSON.stringify(gameFull(g, now)) + "\n";
-        const mover = turnOf(g);
-        if (g.status === "started" && g.uci.length >= 2 && remainingNow(g, mover, now) <= 0) finish(g, "outoftime", other(mover));
         res.writeHead(200, { "content-type": "application/x-ndjson" });
         res.write(line);
         const hold = setTimeout(() => res.end(), STREAM_HOLD_MS);
-        res.on("close", () => clearTimeout(hold));
+        const check = setInterval(() => {
+          if (g.status !== "started" || g.uci.length < 2) return;
+          const mover = turnOf(g);
+          if (remainingNow(g, mover, Date.now()) > 0) return;
+          g.remaining[mover] = 0;
+          finish(g, "outoftime", other(mover));
+          // FinishGame → onGameOver → pushState: the final state on the open stream, then the stream ends.
+          res.write(JSON.stringify(gameFull(g, Date.now()).state) + "\n");
+          res.end();
+        }, FLAG_CHECK_MS);
+        res.on("close", () => {
+          clearTimeout(hold);
+          clearInterval(check);
+        });
         return;
       }
 
@@ -606,8 +633,8 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
       const g = games.get(id);
       if (!g || g.status !== "started") throw new Error(`expireClock: ${id} is not a game in play`);
       if (g.uci.length < 2) throw new Error(`expireClock: ${id} — Lichess's clock is not running before both sides move`);
-      // As if the time had passed: the running side's clock reads zero. A
-      // stream read settles it (above) — nothing here finishes the game.
+      // As if the time had passed: the running side's clock reads zero. Only a
+      // stream held open settles it (above) — nothing here finishes the game.
       g.remaining[turnOf(g)] = 0;
       g.lastMoveAt = Date.now();
     },

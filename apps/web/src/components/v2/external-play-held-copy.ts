@@ -26,6 +26,7 @@ export const HELD_TITLE_KEYS: Readonly<Record<NeedsReason, DictionaryKey>> = {
   tiebreak_owed: "externalPlay.held.tiebreakOwed",
   fair_play: "externalPlay.held.fairPlay",
   account_changed: "externalPlay.held.accountChanged",
+  clock_flag_unsettled: "externalPlay.held.clockFlagUnsettled",
 };
 
 export type HeldCopyInput = {
@@ -90,6 +91,11 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
         case null:
           return { key: "externalPlay.reason.accountChanged" };
       }
+    // falls through only if V442's seat vocabulary grows — tsc refuses that
+    case "clock_flag_unsettled":
+      // T17B fix 2, D11: no seat is recorded for it (V442's revoked_seat is a seat hold's), so it names nobody; the
+      // side and the times are the hold's detail.
+      return { key: "externalPlay.reason.clockFlagUnsettled" };
   }
 }
 

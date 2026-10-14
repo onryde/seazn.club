@@ -27,16 +27,20 @@ const LOBBY_DEBOUNCE_MS = 250;
 export const ROOM_STATE_EVENT = "room_state";
 export const LOBBY_CHANGED_EVENT = "lobby_changed";
 export const CLOCK_ZERO_SPACING_MS = 3_000;
-export const CLOCK_ZERO_ATTEMPTS = 5;
+/** T17B fix 2, D11 (controller ruling): the longest gap between two reports for one (game, ply). */
+export const CLOCK_ZERO_MAX_SPACING_MS = 30_000;
 
 export type ClockZeroReport = { key: string; attempts: number; at: number };
 
 /** Whether a clock-zero report may go now, and the record if so: the first
- *  for a (game, ply) at once, later ones CLOCK_ZERO_SPACING_MS apart, at most
- *  CLOCK_ZERO_ATTEMPTS in all. A new ply starts afresh. */
+ *  for a (game, ply) at once, the next CLOCK_ZERO_SPACING_MS later, each gap
+ *  after that doubled, never more than CLOCK_ZERO_MAX_SPACING_MS — and no
+ *  cap (D11: x0JKlePc sat at zero for 7 minutes past the old cap of 5, with
+ *  nobody asking again). A new ply starts afresh. */
 export function nextClockZeroReport(prev: ClockZeroReport | null, key: string, now: number): ClockZeroReport | null {
   if (prev === null || prev.key !== key) return { key, attempts: 1, at: now };
-  if (prev.attempts >= CLOCK_ZERO_ATTEMPTS || now - prev.at < CLOCK_ZERO_SPACING_MS) return null;
+  const spacing = Math.min(CLOCK_ZERO_SPACING_MS * 2 ** Math.min(prev.attempts - 1, 16), CLOCK_ZERO_MAX_SPACING_MS);
+  if (now - prev.at < spacing) return null;
   return { key, attempts: prev.attempts + 1, at: now };
 }
 
@@ -187,11 +191,12 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
   );
 
   // ── clock zero ───────────────────────────────────────────────────────────
-  // The clocks call this on every tick at zero; it reports at most once per
-  // CLOCK_ZERO_SPACING_MS and CLOCK_ZERO_ATTEMPTS times per (game, ply). A
-  // report can rightly find nothing yet: the server allows itself a margin,
-  // and Lichess settles a flag on its NEXT read (lila, measured) — so a
-  // later report for the same ply is how the flag is finally read.
+  // The clocks call this on every tick at zero; it reports on the backoff of
+  // nextClockZeroReport, for as long as the (game, ply) sits at zero. A report
+  // can rightly find nothing yet: the server allows itself a margin, and
+  // Lichess flags only on an open stream's check (reconcile.ts, D11) — so a
+  // later report for the same ply is how a late flag is finally read; past a
+  // minute the server holds the board for the organiser instead.
   const zero = useRef<ClockZeroReport | null>(null);
   const clockZero = useCallback(async () => {
     const g = stateRef.current.snap.game;

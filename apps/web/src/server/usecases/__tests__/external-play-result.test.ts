@@ -1018,7 +1018,8 @@ describe.runIf(HAS_DB)("Review Focus 1 — the player revoked our token on liche
     // T13 fix round 1 (I3): the sweep holds a create whose outcome nobody can
     // prove past the deadline as T9's own create_outcome_unknown.
     // Final review P11: a re-link to a different Lichess account (external-play/account-changed.ts).
-    const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked", "not_started", "create_outcome_unknown", "account_changed"] as const;
+    // T17B fix 2, D11: reconcile holds a flag Lichess has not settled a minute after it fell.
+    const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked", "not_started", "create_outcome_unknown", "account_changed", "clock_flag_unsettled"] as const;
     expect([...HOLD_REASONS].sort(), "the union is exactly the callers' reasons").toEqual([...REASONS].sort());
     let checked = 0;
     for (const reason of REASONS) {

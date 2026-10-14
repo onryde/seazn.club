@@ -53,6 +53,8 @@ export const PUBLIC_HOLD: Record<NeedsReason, PublicHold | null> = {
   // Final re-review P11 (1): one seat's link, like a revoked token — the game plays on at Lichess and reconcile
   // keeps reading it, so the spectators keep the live board.
   account_changed: null,
+  // T17B fix 2, D11: a clock ran out and Lichess has not ended the game — the result waits on the organiser.
+  clock_flag_unsettled: "confirm",
 };
 
 /** The fixture's recorded result, for the finished board's header ("X won · Checkmate · move 30 · 1–0"). Read

@@ -140,7 +140,10 @@ export type SweepDeps = {
  *  external-play/route.test.ts pins it below the Worker's figure. RESIDUAL, as stream-tick's: one row's worst case is
  *  not under 15 s — every Lichess and RealtimeKit request is bounded at 10 s, and a reconcile can make three in a row
  *  plus a 3 s broadcast — so a row started just inside the budget against a stalled vendor can still outlive the
- *  Worker. That reads as a Worker timeout (an error, one Sentry event an hour under R2), never as silence. */
+ *  Worker. That reads as a Worker timeout (an error, one Sentry event an hour under R2), never as silence. T17B fix 2,
+ *  D11 widens it: a board whose side to move is at zero is read again on a stream HELD ~9 s (reconcile
+ *  FLAG_SETTLE_HOLD_MS, bounded at LICHESS_TIMEOUT_MS + the hold), so a pass reads ~5 such boards before the budget
+ *  stops it; the rest are read on the next pass. */
 export const SWEEP_PASS_BUDGET_MS = 45_000;
 
 /** I-1: the jobs that call Lichess or RealtimeKit, so the pass budget applies to them. Job 0 (close) and job 1 (the

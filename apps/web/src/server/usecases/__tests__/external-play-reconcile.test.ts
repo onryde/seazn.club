@@ -32,14 +32,17 @@ import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import { exportGame as wiredExportGame, readGameStream as wiredReadGameStream } from "@/server/external-play/lichess/board-api";
 import { NEEDS_REASONS, type BoardCall } from "@/server/external-play/types";
 import { log } from "@/server/logger";
+import { FLAG_CHECK_MS } from "../../../../e2e/lichess-fixture-server";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { listFlaggedExternalPlay, loadArbiterRound, resyncExternalPlay } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
 import { createGameIfReady } from "../external-play/create-game";
+import { closeBridgeIfUnplayable } from "../external-play/bridge-close";
 import { act } from "../external-play/play";
 import {
-  FLAG_REREAD_MS,
+  FLAG_SETTLE_HOLD_MS,
+  FLAG_UNSETTLED_HOLD_MS,
   RECONCILE_TRIGGERS,
   reconcile,
   revokedSeatOf,
@@ -87,6 +90,8 @@ const lichess = vi.hoisted(() => {
   type Answer = { status: number; body: string };
   type Wire = {
     calls: { kind: "stream" | "export" | "other"; gameId: string; token: string | null }[];
+    /** D11: the holdMs of every SETTLING stream read, in order (a first-line read records nothing). */
+    holds: number[];
     onStream: (c: { gameId: string; token: string | null }) => Answer;
     onExport: (c: { gameId: string }) => Answer;
     reset(): void;
@@ -95,10 +100,12 @@ const lichess = vi.hoisted(() => {
   const refused = (what: string): Answer => ({ status: 503, body: `no ${what} scripted` });
   const state: Wire = {
     calls: [],
+    holds: [],
     onStream: () => refused("stream"),
     onExport: () => refused("export"),
     reset() {
       state.calls = [];
+      state.holds.length = 0;
       state.onStream = () => refused("stream");
       state.onExport = () => refused("export");
     },
@@ -139,7 +146,15 @@ vi.mock("@/server/external-play/lichess/board-api", async (importOriginal) => {
     baseUrl: "https://lichess.test",
     fetch: ((input: string | URL | Request, init?: RequestInit) => lichess.serve(String(input), init)) as typeof fetch,
   });
-  return { ...real, ...board, readGameStream: wired.readGameStream, exportGame: wired.exportGame };
+  return {
+    ...real,
+    ...board,
+    readGameStream: (a: Parameters<typeof wired.readGameStream>[0]) => {
+      if ((a.holdMs ?? 0) > 0) lichess.holds.push(a.holdMs!);
+      return wired.readGameStream(a);
+    },
+    exportGame: wired.exportGame,
+  };
 });
 
 beforeEach(() => {
@@ -357,17 +372,19 @@ async function fixtureStatus(fixtureId: string): Promise<string> {
 const streams = () => lichess.calls.filter((c) => c.kind === "stream");
 const exports = () => lichess.calls.filter((c) => c.kind === "export");
 
-/** Deps a case observes: the clock, the room, the flag re-read's sleep. */
-function observed(now: Date = READ) {
+/** Deps a case observes: the clock, the room, and (D11) the holdMs of each settling read from here on. */
+function observed(now: Date = READ, over: Partial<ReconcileDeps> = {}) {
   const sent: RoomBroadcast[] = [];
-  const sleeps: number[] = [];
+  lichess.holds.length = 0;
   const deps: ReconcileDeps = {
     now,
     publish: async (_id, body) => { sent.push(body); },
-    sleep: async (ms) => { sleeps.push(ms); },
+    ...over,
   };
-  return { deps, sent, sleeps };
+  return { deps, sent, settles: lichess.holds };
 }
+/** D11: a gameFull line followed by the `gameState` Lichess pushes on the held stream (lila onGameOver → pushState). */
+const thenPushed = (full: string, pushed: GameFullJson) => `${full}${JSON.stringify({ type: "gameState", ...pushed.state })}\n`;
 /** The position after a line, by chess.js — the test's own oracle. */
 function fenOf(line: readonly string[]): string {
   const c = new Chess();
@@ -416,17 +433,13 @@ describe("RECONCILE_TRIGGERS — spec §3.5's five, a value a sweep can enumerat
     expect(lichess.calls).toEqual([]);
   });
 
-  it("the flag re-read waits the MEASURED gap between the recorded reads, not a guess", () => {
-    // README timeline: read 1 `started` at 10:13:17Z, read 2 `outoftime` at
-    // 10:13:20Z — the controller's ruling: 3 s, not the spec's 2 s.
-    const readme = fixtureText("README.md");
-    const at = (label: string) => {
-      const m = new RegExp(`(\\d\\d:\\d\\d:\\d\\d)Z ${label}`).exec(readme);
-      expect(m, `README names ${label}`).not.toBeNull();
-      return Date.parse(`2026-10-11T${m![1]}Z`);
-    };
-    expect(FLAG_REREAD_MS).toBe(at("EXPIRED read 2") - at("EXPIRED read 1"));
-    expect(FLAG_REREAD_MS).not.toBe(2_000);
+  it("D11: the settling read holds past lila's CheckOnline tick (cited), and the hold bound is the ruling's minute", () => {
+    // lila GameStateStream.scala:118-124 (ad760137c): the tick is 7 s after the stream opens — the fixture server's
+    // FLAG_CHECK_MS cites it. The hold must outlast it, or the read closes before Lichess can flag the side to move.
+    expect(FLAG_CHECK_MS, "lila's CheckOnline delay").toBe(7_000);
+    expect(FLAG_SETTLE_HOLD_MS).toBeGreaterThan(FLAG_CHECK_MS);
+    expect(FLAG_SETTLE_HOLD_MS, "…and stays a short read").toBeLessThanOrEqual(FLAG_CHECK_MS + 5_000);
+    expect(FLAG_UNSETTLED_HOLD_MS, "controller ruling: 60 s after the flag").toBe(60_000);
   });
 
   it("uciFromSan converts what chess.js can replay, stops at what it cannot, and castles king-to-g", () => {
@@ -702,16 +715,20 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
 });
 
 // ---------------------------------------------------------------------------
-// clock_zero: a read settles the flag, visible on the NEXT read (measured).
+// D11 (T17B fix 2): the flag. T11's "a read settles it, visible on the NEXT
+// read" was false (x0JKlePc sat at `started`, White at 0, for 7 minutes of
+// first-line reads); lila flags from an OPEN stream's CheckOnline tick (cited
+// in reconcile.ts). So a read that finds the side to move at zero reads once
+// more, holding the stream, on ANY trigger — and past a minute, holds the board.
 // ---------------------------------------------------------------------------
-describe.runIf(HAS_DB)("reconcile — clock_zero re-reads ONCE, after the measured 3 s", () => {
-  it("the recorded pair: `started` with White at 0, then `outoftime` (Black) on the re-read", async () => {
+describe.runIf(HAS_DB)("reconcile — D11: a clock at zero is read once more on a HELD stream, whatever the trigger", () => {
+  it("the recorded pair: `started` with White at 0, then `outoftime` (Black) pushed on the held stream", async () => {
     const g = await liveGame();
     let n = 0;
-    lichess.onStream = () => ok(gameFull(g, n++ === 0 ? EXPIRED_1 : EXPIRED_2));
-    const { deps, sleeps, sent } = observed();
+    lichess.onStream = () => ok(n++ === 0 ? gameFull(g, EXPIRED_1) : thenPushed(gameFull(g, EXPIRED_1), EXPIRED_2));
+    const { deps, settles, sent } = observed();
     const out = await reconcile(g.fixtureId, "clock_zero", deps);
-    expect(sleeps).toEqual([FLAG_REREAD_MS]);
+    expect(settles, "one settling read, held past the tick").toEqual([FLAG_SETTLE_HOLD_MS]);
     expect(streams().length).toBe(2);
     expect(out).toMatchObject({ source: "stream", result: { wrote: "decided" }, finished: true, adopted: LINE.length - 1 });
     expect((await resultsOf(g.fixtureId)).map((e) => e.payload.winner), "the winner Lichess reported").toEqual([g.black.entrantId]);
@@ -720,66 +737,127 @@ describe.runIf(HAS_DB)("reconcile — clock_zero re-reads ONCE, after the measur
     expect(sent.map((b) => b.status)).toEqual(["outoftime"]);
   });
 
-  it("still `started` after the re-read: returns, leaves it to the sweep — no flag of ours", async () => {
-    const g = await liveGame();
-    serveStream(gameFull(g, EXPIRED_1));
-    const { deps, sleeps } = observed();
-    const out = await reconcile(g.fixtureId, "clock_zero", deps);
-    expect(sleeps, "one re-read, never a loop").toEqual([FLAG_REREAD_MS]);
-    expect(streams().length).toBe(2);
-    expect(out).toMatchObject({ result: null, finished: false });
-    const r = await rowOf(g.fixtureId);
-    expect([r.status, r.finished_at, r.white_ms]).toEqual(["live", null, 0]);
-    expect(await resultsOf(g.fixtureId)).toEqual([]);
-  });
-
-  it("the same zero-clock line on every OTHER trigger is read once — counted", async () => {
+  it("every trigger reads a zero clock the same way: one settling read — counted", async () => {
     let checked = 0;
-    for (const trigger of RECONCILE_TRIGGERS.filter((t) => t !== "clock_zero")) {
+    for (const trigger of RECONCILE_TRIGGERS) {
       lichess.reset();
       const g = await liveGame();
-      serveStream(gameFull(g, EXPIRED_1));
-      const { deps, sleeps } = observed();
-      await reconcile(g.fixtureId, trigger, deps);
-      expect([sleeps, streams().length], trigger).toEqual([[], 1]);
+      let n = 0;
+      lichess.onStream = () => ok(n++ === 0 ? gameFull(g, EXPIRED_1) : thenPushed(gameFull(g, EXPIRED_1), EXPIRED_2));
+      const { deps, settles } = observed();
+      const out = await reconcile(g.fixtureId, trigger, deps);
+      expect([[...settles], streams().length, out?.finished], trigger).toEqual([[FLAG_SETTLE_HOLD_MS], 2, true]);
       checked++;
     }
-    expect(checked).toBe(RECONCILE_TRIGGERS.length - 1);
+    expect(checked, "anti-vacuity: triggers").toBe(RECONCILE_TRIGGERS.length);
   });
 
-  it("clock_zero on a clock that is NOT at zero (the mid recording) does not wait", async () => {
-    const g = await liveGame();
-    serveStream(gameFull(g, MID));
-    const { deps, sleeps } = observed();
-    await reconcile(g.fixtureId, "clock_zero", deps);
-    expect([sleeps, streams().length]).toEqual([[], 1]);
+  it("the empty cases: a clock NOT at zero, the zero on the WAITING side, a flag Lichess already settled — no settling read", async () => {
+    const cases: [string, (g: Game) => string][] = [
+      ["mid-game (the mid recording)", (g) => gameFull(g, MID)],
+      ["Black at 0, White to move", (g) => gameFull(g, MID, { btime: 0 })],
+      ["already settled (expired-2)", (g) => gameFull(g, EXPIRED_2)],
+    ];
+    let checked = 0;
+    for (const [why, line] of cases) {
+      lichess.reset();
+      const g = await liveGame();
+      serveStream(line(g));
+      const { deps, settles } = observed();
+      await reconcile(g.fixtureId, "clock_zero", deps);
+      expect([[...settles], streams().length], why).toEqual([[], 1]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
-  it("…nor when the zero is the WAITING side's (Black at 0, White to move)", async () => {
-    const g = await liveGame();
-    serveStream(gameFull(g, MID, { btime: 0 }));
-    const { deps, sleeps } = observed();
-    await reconcile(g.fixtureId, "clock_zero", deps);
-    expect(sleeps).toEqual([]);
-  });
-
-  it("clock_zero on a flag Lichess has ALREADY settled (expired-2) settles it at once — no wait", async () => {
-    const g = await liveGame();
-    serveStream(gameFull(g, EXPIRED_2));
-    const { deps, sleeps } = observed();
-    expect(await reconcile(g.fixtureId, "clock_zero", deps)).toMatchObject({ finished: true });
-    expect([sleeps, streams().length]).toEqual([[], 1]);
-  });
-
-  it("a re-read that cannot be made keeps the first read", async () => {
+  it("a settling read that cannot be made keeps the first read", async () => {
     const g = await liveGame();
     let n = 0;
     lichess.onStream = () => (n++ === 0 ? ok(gameFull(g, EXPIRED_1)) : status(503));
-    const { deps, sleeps } = observed();
+    const { deps, settles } = observed();
     const out = await reconcile(g.fixtureId, "clock_zero", deps);
-    expect(sleeps).toEqual([FLAG_REREAD_MS]);
+    expect([...settles], "the settling read tried both players' tokens").toEqual([FLAG_SETTLE_HOLD_MS, FLAG_SETTLE_HOLD_MS]);
     expect(out).toMatchObject({ source: "stream", adopted: LINE.length - 1, finished: false });
     expect((await rowOf(g.fixtureId)).move_count).toBe(LINE.length);
+  });
+});
+
+describe.runIf(HAS_DB)("reconcile — D11 (b, c): a flag Lichess has not settled is HELD a minute after it fell, never left", () => {
+  /** A live game the row has caught up with — the recorded mid-game line read at READ (T11's own write: the ledger at
+   *  LINE, `last_move_at` = READ, White's clock as at then) — so White's flag falls at READ + that clock. */
+  async function caughtUp(): Promise<{ g: Game; flagAt: number }> {
+    const g = await liveGame();
+    serveStream(gameFull(g, MID));
+    await reconcile(g.fixtureId, "sweep", observed(READ).deps);
+    const r = await rowOf(g.fixtureId);
+    expect([r.move_count, r.last_move_at?.toISOString(), r.white_ms], "premise: caught up at READ").toEqual([
+      LINE.length,
+      READ.toISOString(),
+      MID.state.wtime,
+    ]);
+    expect(LINE.length % 2, "premise: White to move").toBe(0);
+    return { g, flagAt: READ.getTime() + MID.state.wtime };
+  }
+  /** Lichess, still not settled: every read — the held one too — says `started`, White at 0, the same line. */
+  const unsettled = (g: Game) => serveStream(gameFull(g, EXPIRED_1, { moves: [...LINE] }));
+  const bridge = async (fixtureId: string) =>
+    (await sql<{ status: string; needs_reason: string | null; last_error: string | null; white_ms: number | null }[]>`
+      select status, needs_reason, last_error, white_ms from fixture_external_play where fixture_id = ${fixtureId}`)[0]!;
+
+  it("(c) a read that adds no plies with White at 0 keeps White's clock as at the move — never 0 + the time since", async () => {
+    const { g, flagAt } = await caughtUp();
+    unsettled(g);
+    await reconcile(g.fixtureId, "clock_zero", observed(new Date(flagAt + 20_000)).deps);
+    const r = await bridge(g.fixtureId);
+    expect(r.white_ms, "as at the move (x0JKlePc stored 389906 on a 5+0)").toBe(MID.state.wtime);
+    expect(r.white_ms!, "never above the time control").toBeLessThanOrEqual(300_000);
+  });
+
+  it("inside the bound (59.999 s after the flag): nothing held, nothing written — at the bound (60 s): HELD with the evidence", async () => {
+    const { g, flagAt } = await caughtUp();
+    unsettled(g);
+    const inside = await reconcile(g.fixtureId, "clock_zero", observed(new Date(flagAt + FLAG_UNSETTLED_HOLD_MS - 1)).deps);
+    expect(inside).toMatchObject({ result: null, finished: false });
+    expect((await bridge(g.fixtureId)).status, "the empty case: still live").toBe("live");
+    const at = new Date(flagAt + FLAG_UNSETTLED_HOLD_MS);
+    const held = await reconcile(g.fixtureId, "clock_zero", observed(at).deps);
+    expect(held).toMatchObject({ result: { wrote: "needs_organiser", reason: "clock_flag_unsettled" }, finished: false });
+    const r = await bridge(g.fixtureId);
+    expect([r.status, r.needs_reason]).toEqual(["needs_organiser", "clock_flag_unsettled"]);
+    // The evidence: the side, when its clock ran out, the read that still said `started`, and how long after.
+    expect(r.last_error).toContain(`white's clock ran out at ${new Date(flagAt).toISOString()}`);
+    expect(r.last_error).toContain(`on the read at ${at.toISOString()}`);
+    expect(r.last_error).toContain(`${FLAG_UNSETTLED_HOLD_MS / 1000} s later`);
+    expect(await resultsOf(g.fixtureId), "never a flag of ours").toEqual([]);
+  });
+
+  it("a SEQUENCE: held, read again (still held, once), then Lichess flags it at last — the result replaces the hold", async () => {
+    const { g, flagAt } = await caughtUp();
+    unsettled(g);
+    await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + 90_000)).deps);
+    expect((await bridge(g.fixtureId)).needs_reason, "premise: held").toBe("clock_flag_unsettled");
+    const again = await reconcile(g.fixtureId, "clock_zero", observed(new Date(flagAt + 120_000)).deps);
+    expect(again, "a held board is still read (RECONCILED_WHILE_HELD)").toMatchObject({ result: { wrote: "needs_organiser", reason: "clock_flag_unsettled" } });
+    let n = 0;
+    lichess.onStream = () => ok(n++ === 0 ? gameFull(g, EXPIRED_1, { moves: [...LINE] }) : thenPushed(gameFull(g, EXPIRED_1, { moves: [...LINE] }), EXPIRED_2));
+    const settled = await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + 150_000)).deps);
+    // T12 writes the result over a mid-game hold; the held row is closed by its one authority, the sweep's first job
+    // (bridge-close.ts) — reconcile finishes only ready/live rows (controller carry).
+    expect(settled).toMatchObject({ result: { wrote: "decided" }, finished: false });
+    expect((await resultsOf(g.fixtureId)).map((e) => e.payload.winner), "Lichess's own flag, Black wins").toEqual([g.black.entrantId]);
+    expect(await fixtureStatus(g.fixtureId)).toBe("decided");
+    expect(await closeBridgeIfUnplayable(g.fixtureId, new Date(flagAt + 151_000)), "the sweep's first job closes it").toBe(true);
+    const r = await bridge(g.fixtureId);
+    expect([r.status, r.needs_reason]).toEqual(["finished", null]);
+  });
+
+  it("a read that ADOPTED plies at the zero waits for the next read — the row's clock was an earlier move's", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, EXPIRED_1));
+    const out = await reconcile(g.fixtureId, "clock_zero", observed(later(10 * 60_000)).deps);
+    expect(out).toMatchObject({ adopted: LINE.length - 1, result: null });
+    expect((await bridge(g.fixtureId)).status).toBe("live");
   });
 });
 
@@ -820,7 +898,7 @@ describe.runIf(HAS_DB)("reconcile — a game end is written once and closes the 
     serveStream(gameFull(g, EXPIRED_1));
     await reconcile(g.fixtureId, "sweep", observed().deps);
     serveStream(gameFull(g, EXPIRED_2));
-    await reconcile(g.fixtureId, "game_end", observed(later(FLAG_REREAD_MS)).deps);
+    await reconcile(g.fixtureId, "game_end", observed(later(3_000)).deps); // the recorded reads' 3 s apart
     const r = await rowOf(g.fixtureId);
     expect(r.status, "premise: settled").toBe("finished");
     expect([r.white_ms, r.black_ms]).toEqual([EXPIRED_2.state.wtime, EXPIRED_2.state.btime]);
@@ -1431,7 +1509,8 @@ describe.runIf(HAS_DB)("reconcile — trigger × bridge status, and the held rea
     // diagnoses a final snapshot replaces; every other reason ends the game
     // or never began it.
     // Final re-review P11 (1): account_changed joins them — a re-link moves no game at Lichess.
-    const MID_GAME = new Set(["token_revoked", "provider_error", "account_changed"]);
+    // T17B fix 2, D11: clock_flag_unsettled too — Lichess may still flag it, or a player resign; its end is read.
+    const MID_GAME = new Set(["token_revoked", "provider_error", "account_changed", "clock_flag_unsettled"]);
     let read = 0;
     let skipped = 0;
     for (const reason of NEEDS_REASONS) {
@@ -1523,6 +1602,30 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
     expect([r.white_ms, r.black_ms], "M11: the export's clocks are never used").toEqual([before.white_ms, before.black_ms]);
     expect(r.status).toBe("finished");
     expect(sent.map((b) => b.status)).toEqual(["outoftime"]);
+  });
+
+  it("D11 (c): an export that adds no plies broadcasts the running clock counted down to the read — never as at the move — floored at 0", async () => {
+    const cases = [
+      { why: "10 s after the move", after: 10_000 },
+      { why: "long past the flag", after: 60 * 60_000 },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const g = await readyGame();
+      await play(g, LINE);
+      await noGrant(g.white);
+      await noGrant(g.black);
+      const before = await rowOf(g.fixtureId);
+      expect([before.move_count % 2, before.white_ms !== null, before.last_move_at !== null], "premise: White to move, clocks on file").toEqual([0, true, true]);
+      lichess.onExport = () => ok(exported(g, "export-expired.json"));
+      const { deps, sent } = observed(new Date(before.last_move_at!.getTime() + c.after));
+      const out = await reconcile(g.fixtureId, "sweep", deps);
+      expect(out, c.why).toMatchObject({ source: "export", adopted: 0, finished: true });
+      // V442: each clock is as at `last_move_at`; White's has been running since. Black's waits, as stored.
+      expect(sent.map((b) => [b.whiteMs, b.blackMs]), c.why).toEqual([[Math.max(0, before.white_ms! - c.after), before.black_ms]]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("an export BEHIND the ledger (M16) is ignored mid-game, and never rewinds a finished one", async () => {
@@ -2388,7 +2491,8 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
                   status: truth.end,
                   winner: truth.end === "outoftime" || truth.end === "resign" ? winner : null,
                 }));
-          const { deps, sleeps } = observed(at);
+          // D11: the unsettled-flag hold is its own suite's (its bound pinned there); here every read path runs.
+          const { deps, settles } = observed(at, { flagUnsettledAfterMs: Number.POSITIVE_INFINITY });
           const out = await reconcile(g.fixtureId, step.trigger, deps);
           counters.steps++;
           const label = `${path} step ${i} ${JSON.stringify(step)} truth=${JSON.stringify(truth)}`;
@@ -2406,10 +2510,11 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
             counters.withdrawn_closed++;
           } else {
             const perRead = step.mode === "stream" ? 1 : 2;
-            const reread = step.mode !== "export" && step.trigger === "clock_zero" && zero ? 1 : 0;
+            // D11: a zero clock is read once more, on a held stream, whatever the trigger.
+            const reread = step.mode !== "export" && zero ? 1 : 0;
             expect(streams().length, `${label}: stream reads`).toBe(perRead * (1 + reread));
             expect(exports().length, `${label}: export reads`).toBe(step.mode === "export" ? 1 : 0);
-            expect(sleeps, label).toEqual(reread ? [FLAG_REREAD_MS] : []);
+            expect([...settles], label).toEqual(reread ? Array<number>(perRead).fill(FLAG_SETTLE_HOLD_MS) : []);
             if (reread) counters.reread++;
             if (step.mode === "white_down") counters.white_down++;
             const trusted = step.mode !== "export" || truth.end !== null;
@@ -2462,7 +2567,7 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
           if (i === PATHS[path].length - 1) {
             const claimed: Record<PathName, () => boolean> = {
               stream_settles: () => model.closed && step.mode === "stream",
-              flag_reread: () => sleeps.length === 1,
+              flag_reread: () => settles.length > 0,
               export_settles: () => model.closed && step.mode === "export",
               export_ignored_then_aborted: () => model.heldFinal,
               t10_move_read_back: () => actClaim && model.ledger === 1 && out?.adopted === 0,

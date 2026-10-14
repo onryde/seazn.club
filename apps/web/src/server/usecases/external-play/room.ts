@@ -115,11 +115,14 @@ export const CLOCK_ZERO_TOLERANCE_MS = 2_000;
 
 /** One Lichess read per (game, ply) per this long, however many reports
  *  arrive — both players' clocks reach zero together (review m5). Shorter
- *  than the client's own report spacing (use-room CLOCK_ZERO_SPACING_MS), so
- *  a client's spaced retry — the read on which Lichess settles a flag — is
- *  never swallowed. Per process. */
+ *  than the client's own report spacing (use-room CLOCK_ZERO_SPACING_MS, its
+ *  shortest gap), so a client's spaced retry is never swallowed. Per process. */
 export const CLOCK_ZERO_COOLDOWN_MS = 2_500;
 const clockZeroReadAt = new Map<string, number>();
+/** T17B fix 2, D11: the (game, ply)s whose clock-zero read is still out. A read at zero now holds Lichess's stream
+ *  ~9 s (reconcile FLAG_SETTLE_HOLD_MS), longer than the cooldown, so a report meanwhile — either player's — would
+ *  start a second held read of the same thing. Skipped instead; freed when the read answers or fails. Per process. */
+const clockZeroInFlight = new Set<string>();
 
 const ROOM_NOT_FOUND = () => new HttpError(404, "This match room could not be found", "NOT_FOUND");
 const ROOM_REPAIRING = () => new HttpError(409, "This board is being re-paired", ROOM_BEING_REPAIRED);
@@ -604,13 +607,19 @@ export async function reportClockZero(
   const remaining = base - (now.getTime() - b.last_move_at.getTime());
   if (remaining > CLOCK_ZERO_TOLERANCE_MS) return { reconciled: false };
   const key = `${fixtureId}:${b.challenge_id}:${b.move_count}`;
+  if (clockZeroInFlight.has(key)) return { reconciled: false };
   const last = clockZeroReadAt.get(key);
   if (last !== undefined && now.getTime() - last < CLOCK_ZERO_COOLDOWN_MS) return { reconciled: false };
   clockZeroReadAt.set(key, now.getTime());
   if (clockZeroReadAt.size > 1_024) {
     for (const [k, at] of clockZeroReadAt) if (now.getTime() - at > 60_000) clockZeroReadAt.delete(k);
   }
-  await (deps.reconcile ?? ((id, trigger) => reconcile(id, trigger)))(fixtureId, "clock_zero");
+  clockZeroInFlight.add(key);
+  try {
+    await (deps.reconcile ?? ((id, trigger) => reconcile(id, trigger)))(fixtureId, "clock_zero");
+  } finally {
+    clockZeroInFlight.delete(key);
+  }
   return { reconciled: true };
 }
 

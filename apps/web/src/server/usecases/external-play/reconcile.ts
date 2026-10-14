@@ -19,13 +19,20 @@ import "server-only";
 // Nothing in this module may be built on a push that was never observed, and
 // nothing in this file may declare a flag from our own arithmetic.
 //
-// MEASURED 2026-10-11 (fixtures README, game Rc11Game): with no read for
-// ~3.5 min after the last move (~33 s past White's expiry), the first stream
-// read still said `started`
-// with `wtime: 0`; a second read 3 s later said `outoftime`, winner Black. A
-// read settles the flag, visible on the NEXT read. So on a local clock zero
-// we read, and if Lichess still says `started` with the mover's clock at zero
-// we read ONCE more after FLAG_REREAD_MS — then leave it to the sweep.
+// THE FLAG (T17B fix 2, D11 — replaces T11's "a read settles the flag, visible
+// on the NEXT read", measured ONCE on 2026-10-11 and FALSE in general): game
+// x0JKlePc (2026-10-14, stg) sat at `started` with White at 0 through every
+// first-line read for 7 minutes. lila (ad760137c, read 2026-10-14 — source, NOT
+// measured) flags from an OPEN board stream: its CheckOnline tick, 7 s after the
+// stream opens (GameStateStream.scala:118-124), publishes QuietFlagCheck, and
+// the round flags a side to move that is out of time (RoundAsyncActor.scala
+// :252-254), pushing the final state on that stream. A read closed at its first
+// line never reaches the tick. So whenever a read finds the side to move at
+// zero with the game `started` — on ANY trigger — we read once more, holding
+// the stream open FLAG_SETTLE_HOLD_MS past the tick (board-api settlingRead).
+// We still never declare a flag from our own arithmetic: if Lichess still says
+// `started` FLAG_UNSETTLED_HOLD_MS after the flag, the board is HELD for the
+// organiser (`clock_flag_unsettled`) with the evidence — never given up silently.
 //
 // Who writes what on the bridge row: T9 pending → ready; T10 ready → live
 // (first accepted move); THIS FILE ready/live → finished (+ finished_at). T12
@@ -57,20 +64,26 @@ import { endRoomAtResult, type RoomEndDeps } from "./room-end";
 export const RECONCILE_TRIGGERS = ["rejected_move", "clock_zero", "game_end", "organiser", "sweep"] as const;
 export type ReconcileTrigger = (typeof RECONCILE_TRIGGERS)[number];
 
-/** MEASURED 2026-10-11 (record.log: read 1 at 10:13:17Z `started`, read 2 at
- *  10:13:20Z `outoftime`). Not the 2 s the spec guessed before the measurement
- *  (controller ruling, addendum 3). */
-export const FLAG_REREAD_MS = 3_000;
+/** T17B fix 2, D11: how long the settling read holds the board stream open — past lila's CheckOnline tick, 7 s after
+ *  the stream opens (GameStateStream.scala:118-124, ad760137c), with room for the connection. */
+export const FLAG_SETTLE_HOLD_MS = 9_000;
+
+/** T17B fix 2, D11 (controller ruling): Lichess still reports `started` with the side to move at zero this long after
+ *  its clock ran out — the board is held for the organiser (`clock_flag_unsettled`), with the evidence. */
+export const FLAG_UNSETTLED_HOLD_MS = 60_000;
 
 export type ReconcileDeps = {
   now?: Date;
-  readStream?: (a: { token: string; gameId: string }) => Promise<GameStreamRead>;
+  /** `holdMs`: the settling read (D11) — the stream held open that long past its first line. */
+  readStream?: (a: { token: string; gameId: string; holdMs?: number }) => Promise<GameStreamRead>;
   exportGame?: (gameId: string) => Promise<GameSnapshot | null>;
   writeResult?: typeof writeResultFrom;
   publish?: (fixtureId: string, body: RoomBroadcast) => Promise<void>;
-  sleep?: (ms: number) => Promise<void>;
   /** T17B fix 2 (D8b): the camera room's end at the game's end (room-end.ts) — after the answer by default. */
   room?: RoomEndDeps;
+  /** T17B fix 2 (D11): FLAG_UNSETTLED_HOLD_MS unless a case says otherwise — the reconcile property's interleavings
+   *  leave the unsettled-flag hold to its own suite, which pins the default. */
+  flagUnsettledAfterMs?: number;
 };
 
 export type ReconcileOutcome = {
@@ -117,7 +130,7 @@ const IS_TERMINAL: Record<LichessStatus | "unrecognised", boolean> = {
  *  held row is the organiser's: its game is over (aborted, fair_play, a
  *  tie-break owed) or never ran (no-shows, not_started, a blocked double
  *  walkover, an unknown create), so reconcile neither reads nor writes it. */
-export const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error", "account_changed"] as const satisfies readonly HoldReason[];
+export const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error", "account_changed", "clock_flag_unsettled"] as const satisfies readonly HoldReason[];
 
 /** lila registers no draw offer before ply 2 (Game.scala `playerCanOfferDraw`,
  *  lila 3747530a1 — source, as T10 cites it); V442's CHECKs refuse one. */
@@ -131,8 +144,6 @@ const DRAW_MIN_PLY = 2;
 function closesTheBridge(r: ResultWrite): boolean {
   return r.wrote === "decided" || r.wrote === "draw" || r.wrote === "forfeit" || r.wrote === "none";
 }
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** chess.js plays `uci` on `board`, or null. lila also plays a castle written
  *  king-to-rook (scalachess Position.scala:401) and a suffixless promotion as
@@ -214,8 +225,8 @@ function snapshotOf(g: BoardGameFull): GameSnapshot {
 }
 
 /** A clock Lichess reads at zero while the game is still `started`: the flag
- *  is due and the NEXT read will show it (measured 2026-10-11). Read from
- *  Lichess's own clock for the side to move — never from ours. */
+ *  is due, and a held stream is the read on which Lichess makes it (D11, the
+ *  header). Read from Lichess's own clock for the side to move — never ours. */
 function flagDue(g: BoardGameFull): boolean {
   const moverMs = g.movesUci.length % 2 === 0 ? g.whiteMs : g.blackMs;
   return g.status === "started" && moverMs === 0;
@@ -253,7 +264,7 @@ type Truth =
  *  cannot be decrypted (503 LICHESS_TOKEN_UNAVAILABLE — an operator's key) is
  *  never swallowed: the export may still settle a finished game, and if it
  *  cannot, that error is what the caller gets. 429 stops every call. */
-async function readTruth(g: Game, deps: ReconcileDeps): Promise<Truth> {
+async function readTruth(g: Game, deps: ReconcileDeps, holdMs = 0): Promise<Truth> {
   const { home, away } = await loadSides(g.fixture);
   const seats: { colour: Colour; userId: string | null; linkedId: string | null; onFile: string }[] = [
     { colour: "white", ...seatOf(g.whiteSide === "home" ? home : away), onFile: g.whiteId },
@@ -277,7 +288,7 @@ async function readTruth(g: Game, deps: ReconcileDeps): Promise<Truth> {
       throw err;
     }
     if (token === null) continue; // no link, or a legacy identity-only one
-    const read = await readStream({ token, gameId: g.gameId });
+    const read = await readStream(holdMs > 0 ? { token, gameId: g.gameId, holdMs } : { token, gameId: g.gameId });
     // The line must be THIS game's: T12 answers `none` for a foreign game,
     // and `none` closes the bridge — so another game's line is no read.
     if (read.ok && read.game.gameId === g.gameId) {
@@ -359,9 +370,11 @@ export async function reconcile(
   };
 
   let truth = await readTruth(game, deps);
-  if (trigger === "clock_zero" && truth.source === "stream" && flagDue(truth.game)) {
-    await (deps.sleep ?? sleep)(FLAG_REREAD_MS);
-    const again = await readTruth(game, deps);
+  // D11: the side to move at zero, the game `started` — on any trigger, read once more with the stream held open past
+  // lila's CheckOnline tick, the one read on which Lichess flags it (see the header). A read that cannot be made keeps
+  // the first.
+  if (truth.source === "stream" && flagDue(truth.game)) {
+    const again = await readTruth(game, deps, FLAG_SETTLE_HOLD_MS);
     if (again.source !== "none") truth = again;
   }
 
@@ -511,9 +524,36 @@ function clocksAt(b: BridgeRow, g: BoardGameFull, ply: number, adopted: number, 
   const last = b.last_move_at;
   if (last === null || g.status !== "started" || ply < 2) return { whiteMs: g.whiteMs, blackMs: g.blackMs, lastMoveAt: last };
   const since = Math.max(0, at.getTime() - last.getTime());
+  // T17B fix 2, D11 (c): Lichess's reading of the running clock stops at 0, so a 0 says only "out of time by now" —
+  // 0 + the time since the move is no clock at all (x0JKlePc stored white_ms 389906 on a 5+0). No move was made since
+  // `last_move_at`, so the clock as at that move is still the one the row holds.
+  const asOfMove = (read: number, stored: number | null) => (read > 0 || stored === null ? read + since : stored);
   return ply % 2 === 0
-    ? { whiteMs: g.whiteMs + since, blackMs: g.blackMs, lastMoveAt: last }
-    : { whiteMs: g.whiteMs, blackMs: g.blackMs + since, lastMoveAt: last };
+    ? { whiteMs: asOfMove(g.whiteMs, b.white_ms), blackMs: g.blackMs, lastMoveAt: last }
+    : { whiteMs: g.whiteMs, blackMs: asOfMove(g.blackMs, b.black_ms), lastMoveAt: last };
+}
+
+/** T17B fix 2, D11 (b): the evidence for a flag Lichess has not settled — the side to move at zero, the game still
+ *  `started`, FLAG_UNSETTLED_HOLD_MS or more after that side's clock ran out — or null. The flag's instant is the
+ *  row's own (V442: each clock as at `last_move_at`), so a read that adopted plies (the row's clocks are an earlier
+ *  move's) waits for the next read. */
+function unsettledFlagEvidence(g: Game, lichess: BoardGameFull, adopted: number, at: Date, boundMs: number): string | null {
+  if (!flagDue(lichess) || adopted > 0) return null;
+  const b = g.bridge;
+  if (b.last_move_at === null) return null;
+  const mover: Colour = lichess.movesUci.length % 2 === 0 ? "white" : "black";
+  const asOfMove = mover === "white" ? b.white_ms : b.black_ms;
+  if (asOfMove === null) {
+    // V442 writes both clocks with every move from ply 2; the flag's instant is then the move itself (the earliest).
+    log.warn({ fixtureId: g.fixture.fixtureId, gameId: g.gameId, mover }, "lichess reconcile: a running clock with no stored time");
+  }
+  const flagAt = b.last_move_at.getTime() + Math.max(0, asOfMove ?? 0);
+  const past = at.getTime() - flagAt;
+  if (past < boundMs) return null;
+  return (
+    `lichess game ${g.gameId}: ${mover}'s clock ran out at ${new Date(flagAt).toISOString()}; Lichess still reported ` +
+    `"started" with ${mover} at 0 on the read at ${at.toISOString()}, ${Math.round(past / 1000)} s later — the flag is not settled`
+  );
 }
 
 async function applyStream(
@@ -634,7 +674,10 @@ async function applyStream(
   const applied = wrote.length > 0 ? adopted : 0;
 
   if (!IS_TERMINAL[lichess.status]) {
-    const held = t.revoked.length > 0 ? await holdRevoked(g, t.revoked) : null;
+    if (t.revoked.length > 0) return out({ result: await holdRevoked(g, t.revoked), adopted: applied });
+    // D11 (b): never give up on a flag silently — past the bound, the organiser decides, with the evidence.
+    const unsettled = unsettledFlagEvidence(g, lichess, adopted, t.at, deps.flagUnsettledAfterMs ?? FLAG_UNSETTLED_HOLD_MS);
+    const held = unsettled === null ? null : await holdForOrganiser({ fixtureId, reason: "clock_flag_unsettled", detail: unsettled });
     return out({ result: held, adopted: applied });
   }
   return settle(g, snapshot, t.at, deps, applied, "stream");
@@ -687,13 +730,22 @@ async function applyExport(
        and status in ('ready', 'live', 'needs_organiser') and draw_offer_by is not null`;
   const outcome = await settle(g, t.snapshot, t.at, deps, adopted, "export");
   // The board's last state for the room: the line we now hold, and the clocks
-  // as our row last knew them (the export's are never used).
+  // as our row last knew them (the export's are never used) — T17B fix 2, D11
+  // (c): the running side's counted down to this read, as every renderer
+  // counts it (V442: each clock is as at `last_move_at`), never sent as at the
+  // move. A read that adopted plies has no row clock for them: as stored.
   if (t.snapshot.status !== "unrecognised") {
     const limitMs = g.fixture.clock.limit * 1000;
+    const b = g.bridge;
+    const stored = { white: b.white_ms ?? limitMs, black: b.black_ms ?? limitMs };
+    if (adopted === 0 && b.last_move_at !== null && ours.length >= 2) {
+      const running: Colour = ours.length % 2 === 0 ? "white" : "black";
+      stored[running] = Math.max(0, stored[running] - Math.max(0, t.at.getTime() - b.last_move_at.getTime()));
+    }
     await broadcast(g, deps, {
       line,
-      whiteMs: g.bridge.white_ms ?? limitMs,
-      blackMs: g.bridge.black_ms ?? limitMs,
+      whiteMs: stored.white,
+      blackMs: stored.black,
       status: t.snapshot.status,
       drawOfferBy: null,
     });

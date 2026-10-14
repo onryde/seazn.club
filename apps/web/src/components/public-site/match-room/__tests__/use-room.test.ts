@@ -2,7 +2,7 @@
 // when a clock that reached zero is reported. The hook's wiring (the poll
 // effect, the realtime channel, the calls) is the room e2e's.
 import { describe, expect, it } from "vitest";
-import { CLOCK_ZERO_ATTEMPTS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, SETTLED_POLL_MS, nextClockZeroReport, pollIntervalMs, reReadDelayMs } from "../use-room";
+import { CLOCK_ZERO_MAX_SPACING_MS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, SETTLED_POLL_MS, nextClockZeroReport, pollIntervalMs, reReadDelayMs } from "../use-room";
 
 describe("pollIntervalMs", () => {
   it("a live game with no realtime channel polls fast; everything else slow", () => {
@@ -40,25 +40,36 @@ describe("nextClockZeroReport", () => {
     expect(nextClockZeroReport(first, K, 1000 + CLOCK_ZERO_SPACING_MS)).toEqual({ key: K, attempts: 2, at: 1000 + CLOCK_ZERO_SPACING_MS });
   });
 
-  it("at most CLOCK_ZERO_ATTEMPTS per ply, however long the clock sits at zero", () => {
+  // T17B fix 2, D11 (controller ruling): x0JKlePc sat at zero for 7 minutes past a 5-report cap — the room said
+  // nothing more and nobody asked again. No cap now: 3 s, then doubling, never more than 30 s apart.
+  it("D11: no cap — the gaps double from 3 s and hold at 30 s, for as long as the clock sits at zero (10 minutes, counted)", () => {
+    const sentAt: number[] = [0];
     let r = nextClockZeroReport(null, K, 0)!;
-    let sent = 1;
-    for (let now = 1; now < 600_000; now += 100) {
+    for (let now = 100; now <= 600_000; now += 100) {
       const n = nextClockZeroReport(r, K, now);
       if (n) {
         r = n;
-        sent += 1;
+        sentAt.push(now);
       }
     }
-    expect(sent).toBe(CLOCK_ZERO_ATTEMPTS);
-    expect(CLOCK_ZERO_ATTEMPTS).toBeGreaterThan(1); // a later report is how a flag Lichess settles late is read
+    const gaps = sentAt.slice(1).map((at, i) => at - sentAt[i]!);
+    // Typed from the ruling, never from the constants: 3, 6, 12, 24, then 30 s apart.
+    expect(gaps.slice(0, 6)).toEqual([3_000, 6_000, 12_000, 24_000, 30_000, 30_000]);
+    expect(new Set(gaps.slice(4)), "every later gap is the 30 s ceiling").toEqual(new Set([30_000]));
+    // 0, 3, 9, 21, 45 s, then every 30 s to 585 s: 5 + 18 reports in 10 minutes.
+    expect(sentAt.length, "anti-vacuity: reports in 10 minutes").toBe(23);
+    expect(r.attempts).toBe(23);
+    expect([CLOCK_ZERO_SPACING_MS, CLOCK_ZERO_MAX_SPACING_MS]).toEqual([3_000, 30_000]);
   });
 
-  it("a new ply (the opponent moved) starts afresh, even straight after the cap", () => {
+  it("a new ply (the opponent moved) starts afresh, even after many reports — the spacing back to 3 s", () => {
     let r = nextClockZeroReport(null, K, 0)!;
-    for (let i = 0; i < 10; i += 1) r = nextClockZeroReport(r, K, (i + 1) * CLOCK_ZERO_SPACING_MS) ?? r;
-    expect(r.attempts).toBe(CLOCK_ZERO_ATTEMPTS);
-    expect(nextClockZeroReport(r, "g1:13", r.at + 1)).toEqual({ key: "g1:13", attempts: 1, at: r.at + 1 });
+    for (let now = 100; now <= 300_000; now += 100) r = nextClockZeroReport(r, K, now) ?? r;
+    expect(r.attempts, "premise: well past the old cap of 5").toBeGreaterThan(5);
+    const fresh = nextClockZeroReport(r, "g1:13", r.at + 1)!;
+    expect(fresh).toEqual({ key: "g1:13", attempts: 1, at: r.at + 1 });
+    expect(nextClockZeroReport(fresh, "g1:13", fresh.at + 3_000 - 1)).toBeNull();
+    expect(nextClockZeroReport(fresh, "g1:13", fresh.at + 3_000)?.attempts).toBe(2);
   });
 });
 

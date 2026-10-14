@@ -19,6 +19,7 @@ import { Chess, type Square } from "chess.js";
 import fc from "fast-check";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FLAG_CHECK_MS,
   LICHESS_FIXTURE_PORT,
   startLichessFixtureServer,
   type LichessFixtureServer,
@@ -332,7 +333,11 @@ describe("lichess fixture server — the measured facts", () => {
     expect(stranger.ok).toBe(false);
   });
 
-  it("a read SETTLES an expired clock, visible on the NEXT read (gamefull-expired-1 then -2, measured 2026-10-11)", async () => {
+  // T17B fix 2, D11 — the T11 premise "a read settles the flag, visible on the NEXT read" was FALSE: game x0JKlePc
+  // (2026-10-14, stg) sat at `started`, White at 0, through every first-line read for 7 minutes. The fixture now
+  // follows lila (ad760137c — source, NOT measured; e2e/lichess-fixture-server.ts T11): only a stream held open past
+  // its CheckOnline tick (FLAG_CHECK_MS) flags the side to move, and pushes the final state on that stream.
+  it("an expired clock: every first-line read says `started` at 0 and settles nothing; a stream held past CheckOnline gets `outoftime` pushed", async () => {
     const id = await startGame();
     const eight = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6"];
     await play(id, ...eight);
@@ -340,17 +345,31 @@ describe("lichess fixture server — the measured facts", () => {
     fx.expireClock(id);
     const recorded1 = JSON.parse(readFileSync(join(RECORDED, "gamefull-expired-1.ndjson"), "utf8")).state;
     const recorded2 = JSON.parse(readFileSync(join(RECORDED, "gamefull-expired-2.ndjson"), "utf8")).state;
-    const first = await api.readGameStream({ token: B.token, gameId: id });
-    expect(first.ok && first.game.status).toBe(recorded1.status); // started
-    expect(first.ok && first.game.whiteMs).toBe(recorded1.wtime); // 0
-    expect(first.ok && first.game.winner).toBeNull();
-    const second = await api.readGameStream({ token: B.token, gameId: id });
-    expect(second.ok && second.game.status).toBe(recorded2.status); // outoftime
-    expect(second.ok && second.game.winner).toBe(recorded2.winner); // black
+    let quick = 0;
+    for (const token of [B.token, W.token, B.token]) {
+      const read = await api.readGameStream({ token, gameId: id });
+      expect(read.ok && [read.game.status, read.game.whiteMs, read.game.winner], `quick read ${quick + 1}`).toEqual([recorded1.status, recorded1.wtime, null]);
+      quick++;
+    }
+    expect(quick, "anti-vacuity: quick reads").toBe(3);
+    expect(fx.game(id)?.status, "no quick read settled it").toBe("started");
+    const t0 = Date.now();
+    const held = await api.readGameStream({ token: B.token, gameId: id, holdMs: FLAG_CHECK_MS + 2_000 });
+    expect(Date.now() - t0, "settled at the CheckOnline tick, not before").toBeGreaterThanOrEqual(FLAG_CHECK_MS - 50);
+    expect(held.ok && [held.game.status, held.game.winner], "pushed on the held stream").toEqual([recorded2.status, recorded2.winner]);
+    expect(held.ok && held.game.movesUci).toEqual(eight);
     // README: the export then agrees, and is complete.
     const snap = await api.exportGame(id);
     expect(snap).toMatchObject({ status: "outoftime", winner: "black" });
     expect(snap?.movesSan).toHaveLength(8);
+  });
+
+  it("a held stream on a clock NOT at zero settles nothing: the hold runs out on `started`", async () => {
+    const id = await startGame();
+    await play(id, "e2e4", "e7e5");
+    const held = await api.readGameStream({ token: W.token, gameId: id, holdMs: 200 });
+    expect(held.ok && held.game.status).toBe("started");
+    expect(fx.game(id)?.status).toBe("started");
   });
 
   it("M10: a pending draw offer shows in the stream (wdraw) and NOWHERE in the export; the other side's yes draws it", async () => {
