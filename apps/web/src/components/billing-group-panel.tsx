@@ -157,15 +157,14 @@ export function BillingGroupPanel({
   }
 
   // The first read: set from the request's own callback (never synchronously
-  // in the effect), and ignored if the panel unmounted while it was in flight.
+  // in the effect). It carries no stale-response guard on purpose: the panel
+  // renders nothing until this read lands (`groups === null` below), and every
+  // action — the only thing that starts a second read, `load()` — is a control
+  // inside that rendered panel, so a later read can never be overtaken by this
+  // one; and a set after unmount is ignored by React. A guard here would be
+  // protection for a race the UI cannot produce.
   useEffect(() => {
-    let ignore = false;
-    void fetchGroupsAndOffers().then((loaded) => {
-      if (!ignore) apply(loaded);
-    });
-    return () => {
-      ignore = true;
-    };
+    void fetchGroupsAndOffers().then(apply);
   }, []);
 
   if (groups === null) return null;

@@ -84,15 +84,14 @@ export function IncomingTransferOffers() {
   }
 
   // The first read: set from the request's own callback (never synchronously
-  // in the effect), and ignored if the card unmounted while it was in flight.
+  // in the effect). It carries no stale-response guard on purpose: the card
+  // renders nothing until an offer is in `incoming`, and the Accept control —
+  // the only thing that leads to a second read, `load()` — lives inside it, so
+  // a later read can never be overtaken by this one; and a set after unmount is
+  // ignored by React. A guard here would be protection for a race the UI cannot
+  // produce.
   useEffect(() => {
-    let ignore = false;
-    void fetchIncoming().then((offers) => {
-      if (!ignore) setIncoming(offers);
-    });
-    return () => {
-      ignore = true;
-    };
+    void fetchIncoming().then(setIncoming);
   }, []);
 
   // Nothing to hand you: the recipient card only exists while a live offer does.
