@@ -147,8 +147,43 @@ describe("diffIds — what a ledger entry may account for", () => {
   it("fails a stale ledger entry that accounts nothing, even alongside entries that do", () => {
     const ledger = { entries: [entry("f › b", "moved", "g › b"), entry("f › gone", "retired", undefined, "removed in an earlier PR")] };
     expect(diffIds(["f › a", "f › b"], ["f › a", "g › b"], ledger).unaccounted).toEqual(["LEDGER-UNUSED f › gone"]);
-    // An unknown fate accounts nothing either.
-    expect(diffIds(["f › a"], ["f › a"], { entries: [{ id: "f › a", fate: "bogus", reason: "x" } as unknown as LedgerEntry] }).unaccounted).toEqual(["LEDGER-UNUSED f › a"]);
+  });
+
+  // A ledger that is not `{ entries: [{ id, fate, ... }] }` is a refusal, never an empty ledger: reading a typo'd
+  // file as "no entries" would make the comparison stricter, but reading an unknown fate as "accounts nothing" hides
+  // which entry is wrong. (Distinct from LEDGER-UNUSED, which is a well-formed entry that does not apply.)
+  it.each([
+    ["undefined", undefined, /ledger must be/],
+    ["null", null, /ledger must be/],
+    ["an array", [], /ledger must be/],
+    ["an object with no `entries`", {}, /ledger must hold an "entries" array/],
+    ["`entries` that is not an array", { entries: {} }, /ledger must hold an "entries" array/],
+    ["`entries` under another key", { entry: [] }, /ledger must hold an "entries" array/],
+    ["an entry that is not an object", { entries: ["f › a"] }, /ledger entry #0 .*not an object/],
+    ["an entry with no id", { entries: [{ fate: "added", reason: "x" }] }, /ledger entry #0 .*no id/],
+    ["an entry with an empty id", { entries: [{ id: "", fate: "added", reason: "x" }] }, /ledger entry #0 .*no id/],
+    ["an entry with no fate", { entries: [{ id: "f › a", reason: "x" }] }, /ledger entry #0 .*unknown fate undefined/],
+    ["an entry with an unknown fate", { entries: [entry("f › ok", "added"), { id: "f › a", fate: "bogus", reason: "x" }] }, /ledger entry #1 .*unknown fate "bogus"/],
+  ])("refuses a malformed ledger: %s", (_name, ledger, message) => {
+    expect(() => diffIds(["f › a"], ["f › a"], ledger as unknown as { entries: LedgerEntry[] })).toThrow(message);
+  });
+
+  it("accepts a well-formed ledger of every fate (the positive pair of the refusals above)", () => {
+    const entries = [
+      entry("f › b", "moved", "g › b"),
+      entry("f › c", "rehomed", "g › c"),
+      entry("f › d", "split", "g › d"),
+      entry("f › e", "rewritten", "g › e"),
+      entry("f › n", "added"),
+      entry("f › r", "retired", undefined, "obsolete"),
+    ];
+    const before = ["f › a", "f › b", "f › c", "f › d", "f › e", "f › r"];
+    const after = ["f › a", "g › b", "g › c", "g › d", "g › e", "f › n"];
+    const d = diffIds(before, after, { entries });
+    expect(d.unaccounted).toEqual([]);
+    // Anti-vacuity: the entries were checked against five vanished ids and five new ones, not against nothing.
+    expect(d.onlyBefore).toEqual(["f › b", "f › c", "f › d", "f › e", "f › r"]);
+    expect(d.onlyAfter).toEqual(["g › b", "g › c", "g › d", "g › e", "f › n"]);
   });
 
   it("refuses a duplicate id within one side, naming it", () => {
@@ -283,6 +318,19 @@ describe("test-parity CLI (spawned)", () => {
     const r = run(args(rep(two)));
     expect(r.status, r.stdout).toBe(2);
     expect(r.stderr).toMatch(message);
+  }, SPAWN_MS + SLACK_MS);
+
+  it.each([
+    ["a file with no `entries` key", { entry: [] }, /ledger must hold an "entries" array/],
+    ["`entries` that is not an array", { entries: {} }, /ledger must hold an "entries" array/],
+    ["an entry with no id", { entries: [{ fate: "added", reason: "x" }] }, /ledger entry #0 .*no id/],
+    ["an entry with an unknown fate", { entries: [{ id: "a.test.ts › A › one", fate: "bogus", reason: "x" }] }, /ledger entry #0 .*unknown fate "bogus"/],
+  ])("exit 2 on a malformed `--ledger`: %s (never read as an empty ledger)", (_name, ledger, message) => {
+    const f = rep(two);
+    const r = run(["--before", `${f}=${ROOT}`, "--after", `${f}=${ROOT}`, "--ledger", write(ledger)]);
+    expect(r.status, r.stdout).toBe(2);
+    expect(r.stderr).toMatch(message);
+    expect(r.stdout).toBe(""); // refused before comparing anything
   }, SPAWN_MS + SLACK_MS);
 
   it("splits `<file>=<root>` at the LAST `=`: a report path may contain one", () => {

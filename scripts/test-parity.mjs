@@ -9,6 +9,7 @@ import { isMainModule } from "./lib/main-module.ts";
 
 const SEP = " › ";
 const NEEDS_TARGET = new Set(["moved", "rehomed", "split", "rewritten"]);
+const FATES = new Set([...NEEDS_TARGET, "added", "retired"]);
 
 // Ids that occur more than once. A duplicate would collapse into one entry in a Set, so a deleted twin would pass.
 function duplicates(ids) {
@@ -37,7 +38,19 @@ export function testIds(report, root) {
   return ids.sort();
 }
 
+// A ledger that is not `{ entries: [{ id, fate, ... }] }` is a refusal, never an empty ledger.
+function checkLedger(ledger) {
+  if (ledger === null || typeof ledger !== "object" || Array.isArray(ledger)) throw new Error(`ledger must be an object { "entries": [...] }, got ${JSON.stringify(ledger) ?? String(ledger)}`);
+  if (!Array.isArray(ledger.entries)) throw new Error(`ledger must hold an "entries" array`);
+  ledger.entries.forEach((e, i) => {
+    if (e === null || typeof e !== "object" || Array.isArray(e)) throw new Error(`ledger entry #${i} is not an object`);
+    if (typeof e.id !== "string" || e.id === "") throw new Error(`ledger entry #${i} has no id`);
+    if (!FATES.has(e.fate)) throw new Error(`ledger entry #${i} (${e.id}) has unknown fate ${JSON.stringify(e.fate) ?? "undefined"}; want one of ${[...FATES].join(", ")}`);
+  });
+}
+
 export function diffIds(before, after, ledger) {
+  checkLedger(ledger);
   for (const [side, ids] of [["before", before], ["after", after]]) {
     const dup = duplicates(ids);
     if (dup.length > 0) throw new Error(`duplicate test id in ${side}: ${dup.join("; ")}`);
@@ -52,7 +65,7 @@ export function diffIds(before, after, ledger) {
   // onlyBefore and onlyAfter are disjoint, so one set holds what the ledger has accounted on either side.
   const accounted = new Set();
   const problems = [];
-  for (const e of ledger?.entries ?? []) {
+  for (const e of ledger.entries) {
     if (NEEDS_TARGET.has(e.fate)) {
       // The id must really have gone and the target must really be new, else a deleted test passes as a move.
       // A target may be claimed once; a `split` is several entries with one id and different targets.
