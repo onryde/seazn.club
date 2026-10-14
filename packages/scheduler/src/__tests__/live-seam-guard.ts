@@ -21,7 +21,7 @@ export function assertNoSilentGreedy(results: readonly Pick<BuildResult, "status
   }
 }
 
-/** One question the engine put to the solver: it answered, or the adapter threw (the service could not be reached). */
+/** One question the engine put to the solver: it answered, or it did not (the adapter threw, or the service refused with `ERROR`). */
 export type SolverCall = { ok: true } | { ok: false; error: unknown };
 
 /**
@@ -35,7 +35,10 @@ export function recordSolver(solver: PlacementSolver): { solve: PlacementSolver;
   const solve: PlacementSolver = async (input, ctx) => {
     try {
       const outcome = await solver(input, ctx);
-      calls.push({ ok: true });
+      // A RESOLVED `ERROR` (SOLVER_BUSY, INVALID_REQUEST, proto drift) is a refusal, not an answer: build.ts folds it into
+      // greedy exactly as it folds a rejection. The outcome still goes back to the engine unchanged. INFEASIBLE and UNKNOWN
+      // are the service's legitimate answers and count as reached.
+      calls.push(outcome.status === "ERROR" ? { ok: false, error: outcome.error } : { ok: true });
       return outcome;
     } catch (error) {
       calls.push({ ok: false, error });
@@ -45,16 +48,20 @@ export function recordSolver(solver: PlacementSolver): { solve: PlacementSolver;
   return { solve, calls };
 }
 
+/** The text a failed call leaves in the assertion: an `Error`'s message, or a service `{ code, message }` as JSON. */
+function describeFailure(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return typeof error === "object" && error !== null ? JSON.stringify(error) : String(error);
+}
+
 /**
  * Throws unless the real solver was asked at least once and answered every time.
  *
  * - NO calls fails: a test that never reached the solver proves nothing about the seam.
- * - Any rejected call fails: the real adapter could not reach the service and the engine fell back to greedy.
+ * - Any rejected call, or call the service refused with `ERROR`, fails: the engine fell back to greedy.
  */
 export function assertSolverReached(calls: readonly SolverCall[]): void {
   expect(calls.length, "the solver was never asked: this run exercised no live seam").toBeGreaterThan(0);
-  expect(
-    calls.flatMap((c) => (c.ok ? [] : [String(c.error)])),
-    "the real adapter could not reach the service: this run silently exercised greedy",
-  ).toEqual([]);
+  const failures = calls.flatMap((c) => (c.ok ? [] : [describeFailure(c.error)]));
+  expect(failures, `the real adapter could not reach the service: this run silently exercised greedy (${failures.join("; ")})`).toEqual([]);
 }

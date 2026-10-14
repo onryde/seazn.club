@@ -402,7 +402,32 @@
       "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
     },
     {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a RESOLVED status ERROR as not reached, and still returns the outcome unchanged and unthrown",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
       "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a rejected call and rethrows the very same error",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a resolved FEASIBLE as reached: the service answered, whatever the answer",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a resolved INFEASIBLE as reached: the service answered, whatever the answer",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a resolved OPTIMAL as reached: the service answered, whatever the answer",
+      "fate": "added",
+      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › recordSolver / assertSolverReached (the live repair test cannot see a per-component status, so it counts the real adapter's calls) › records a resolved UNKNOWN as reached: the service answered, whatever the answer",
       "fate": "added",
       "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
     },

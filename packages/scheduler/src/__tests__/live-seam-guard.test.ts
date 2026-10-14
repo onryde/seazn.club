@@ -52,6 +52,29 @@ describe("recordSolver / assertSolverReached (the live repair test cannot see a 
     expect(calls).toEqual([{ ok: false, error: boom }]);
   });
 
+  it("records a RESOLVED status ERROR as not reached, and still returns the outcome unchanged and unthrown", async () => {
+    // build.ts folds a resolved ERROR (SOLVER_BUSY, INVALID_REQUEST, proto drift) into greedy exactly as it folds a rejection
+    const refused: SolveBuildOutcome = { ...OUTCOME, status: "ERROR", error: { code: "SOLVER_BUSY", message: "all workers busy" } };
+    const { solve, calls } = recordSolver(() => Promise.resolve(refused));
+    await expect(solve(INPUT, { requestId: "r3" })).resolves.toBe(refused);
+    expect(calls).toEqual([{ ok: false, error: refused.error }]);
+    expect(() => assertSolverReached(calls)).toThrow(/SOLVER_BUSY/);
+    // an ERROR that carries no detail is still a refusal
+    const bare = recordSolver(() => Promise.resolve({ ...OUTCOME, status: "ERROR" }));
+    await bare.solve(INPUT, { requestId: "r4" });
+    expect(() => assertSolverReached(bare.calls)).toThrow(/silently exercised greedy/);
+  });
+
+  it.each(["OPTIMAL", "FEASIBLE", "INFEASIBLE", "UNKNOWN"] as const)(
+    "records a resolved %s as reached: the service answered, whatever the answer",
+    async (status) => {
+      const { solve, calls } = recordSolver(() => Promise.resolve({ ...OUTCOME, status }));
+      await solve(INPUT, { requestId: "r5" });
+      expect(calls).toEqual([{ ok: true }]);
+      expect(() => assertSolverReached(calls)).not.toThrow();
+    },
+  );
+
   it("fails an empty list: a test whose solver was never asked proves nothing about the seam", () => {
     expect(() => assertSolverReached([])).toThrow(/never asked/);
   });
