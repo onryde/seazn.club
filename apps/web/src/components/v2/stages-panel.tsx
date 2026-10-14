@@ -13,6 +13,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { ruleRefusalText } from "@/lib/rule-errors";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { settingsSaveErrorText } from "@/lib/config-issue-copy";
@@ -755,7 +756,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         } else if (blocked) {
           setWarning(blocked);
         } else {
-          setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+          setError(rebuildErrorText(err, msg));
         }
       }
     } finally {
@@ -1882,6 +1883,8 @@ export function classifyActError(
   // errors.json; nothing on THIS path read it. No codes were added to that
   // allowlist — see seeding-error.ts's own scope note — this is a second
   // reader of copy that was already written and already tested.
+  const rule = ruleRefusalOf(err, msg);
+  if (rule !== null) return { tone: "error", text: rule, refresh: false };
   if (err instanceof ApiV1Error) {
     return { tone: "error", text: seedingErrorMessage(locale, err.code, err.message), refresh: false };
   }
@@ -1899,7 +1902,19 @@ export function classifyActError(
  *  keeps its own message, which is the one an organiser can quote. */
 export function undoRefusalMessage(err: unknown, msg: Msg): string {
   if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) return msg("history.error.played");
-  return err instanceof Error ? err.message : msg("schedule.error.undoFailed");
+  return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
+}
+
+/** W2c batch-3 M1: a rule-lock refusal (`FIXTURE_HAS_OWN_FORMAT` from a rebuild, an Undo or a Swiss reshape, and the
+ *  rest of `lib/rule-errors.ts`) said in the reader's language off its code — never the server's English sentence. */
+function ruleRefusalOf(err: unknown, msg: Msg): string | null {
+  return err instanceof ApiV1Error ? ruleRefusalText(err.code, err.extra, msg) : null;
+}
+
+/** Rebuild's red line when the refusal is not the amber STAGE_HAS_RESULTS (`rebuildBlockedMessage`). Exported pure for
+ *  the reason `classifyActError` is: the panel's tests never fire the handler. */
+export function rebuildErrorText(err: unknown, msg: Msg): string {
+  return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
 }
 
 /** Stage id → its name on this board, or undefined when the board does not

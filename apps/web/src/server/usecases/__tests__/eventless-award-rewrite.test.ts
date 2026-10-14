@@ -300,7 +300,9 @@ describe.skipIf(!HAS_DB)("I1 the save's one refusal: an award that will not hold
       let refused = 0;
       for (const [door, save] of doors) {
         const err = await save().catch((e: unknown) => e);
-        expect(err, door).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: w.id } });
+        expect(err, door).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: w.id, fixture_no: no } });
+        // The engine's own sentence is no fit reason: nothing for a client to say better (batch-3 M1).
+        expect((err as { extra: Record<string, unknown> }).extra.fit_reason, door).toBeUndefined();
         expect(String((err as Error).message), door).toBe(`${name}: steered: this format refuses the walkover`);
         refused++;
       }

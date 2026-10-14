@@ -15,6 +15,7 @@ import { EngineError } from "@seazn/engine/core";
 import { configKeysFor, STAGE_RULES_SPORTS } from "@/lib/match-rules";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import { resolveModule } from "@/server/engine-db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -111,13 +112,14 @@ export async function putStageRules(
     const [stage] = await tx<
       {
         division_id: string;
+        stage_name: string;
         competition_id: string;
         sport_key: string;
         module_version: string;
         division_config: Record<string, unknown> | null;
       }[]
     >`
-      select s.division_id, d.competition_id, d.sport_key, d.module_version,
+      select s.division_id, s.name as stage_name, d.competition_id, d.sport_key, d.module_version,
              d.config as division_config
         from stages s join divisions d on d.id = s.division_id
        where s.id = ${stageId}`;
@@ -155,10 +157,12 @@ export async function putStageRules(
     // two cannot drift; its header explains why this is not `fixtures.status`.
     const locked = (await lockedStageIdsAmong(tx, [stageId])).has(stageId);
     if (locked)
+      // Batch-3 M1: the spec's sentence (lib/rule-errors.ts), and the stage's name for a client to say it with.
       throw new HttpError(
-        409,
-        "this stage has already started — its match rules are locked",
+        RULE_ERROR_STATUS.STAGE_FORMAT_LOCKED,
+        ruleErrorMessage("STAGE_FORMAT_LOCKED", { stage: stage.stage_name }),
         "STAGE_FORMAT_LOCKED",
+        { stage_name: stage.stage_name },
       );
 
     // D2 — the allowlist is the union of the CONFIG keys each field's build()

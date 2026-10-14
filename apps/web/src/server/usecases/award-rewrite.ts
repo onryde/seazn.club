@@ -4,7 +4,7 @@ import type { MatchOutcome } from "@seazn/engine/core";
 import { canonicalJson } from "@/lib/canonical-json";
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
+import { RULE_ERROR_STATUS, fitReasonOf, ruleErrorMessage } from "@/lib/rule-errors";
 import { awardFoldsUnder, isScoredAward, ledgerOf, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import { matchName } from "./fixture-override-guards";
 
@@ -66,5 +66,6 @@ export const saveRefusal = (h: Pick<HeldAward, "id" | "fixtureNo">, reason: stri
     RULE_ERROR_STATUS.FORMAT_DOES_NOT_FIT_PLAY,
     `${matchName(h.fixtureNo)}: ${ruleErrorMessage("FORMAT_DOES_NOT_FIT_PLAY", { reason })}`,
     "FORMAT_DOES_NOT_FIT_PLAY",
-    { fixture_id: h.id },
+    // Batch-3 M1: the facts a client says it with (`ruleRefusalText`).
+    { fixture_id: h.id, fixture_no: h.fixtureNo, fit_reason: fitReasonOf(reason) },
   );

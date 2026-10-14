@@ -33,7 +33,8 @@ export function ownFormatLoss(hit: { id: string; fixture_no: number | null }): H
     RULE_ERROR_STATUS.FIXTURE_HAS_OWN_FORMAT,
     ruleErrorMessage("FIXTURE_HAS_OWN_FORMAT", { match: matchName(hit.fixture_no) }),
     "FIXTURE_HAS_OWN_FORMAT",
-    { fixture_id: hit.id },
+    // Batch-3 M1: the match's number, so a client names it in the reader's language (`ruleRefusalText`).
+    { fixture_id: hit.id, fixture_no: hit.fixture_no },
   );
 }
 

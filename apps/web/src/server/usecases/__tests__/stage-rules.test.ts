@@ -244,9 +244,13 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
 
     await appendEvent(auth.orgId, fixture!.id, 0, { type: "core.start", payload: {} });
 
+    // Batch-3 M1: the spec's sentence names the stage, and the refusal carries the name for a client to say it with.
+    const [{ name }] = await sql<{ name: string }[]>`select name from stages where id = ${stageId}`;
     await expect(putStageRules(auth, stageId, { rules: { bestOf: 5 } })).rejects.toMatchObject({
       status: 409,
       code: "STAGE_FORMAT_LOCKED",
+      message: `${name} has started — its rules are locked.`,
+      extra: { stage_name: name },
     });
     // Per STAGE, not per division — the sibling has not started.
     await expect(putStageRules(auth, siblingId, { rules: { bestOf: 5 } })).resolves.toBeTruthy();

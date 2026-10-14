@@ -484,7 +484,7 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
     expect(v.before.outcome, "the premise: open under the recorded cfg").toBeNull();
     expect(v.after.outcome, "the premise: the engine ends it under best of 1").not.toBeNull();
     const err = await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 }).catch((e: unknown) => e);
-    expect(err).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: id } });
+    expect(err).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: id, fit_reason: "ends" } });
     expect(String((err as Error).message)).toBe("This format would end the match as it stands");
     expect(await row(id)).toEqual(before);
     expect(await audit(id)).toHaveLength(0);
@@ -523,7 +523,9 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
       await expect(writeFixtureRulesOverride(b.auth, [b.fixtureIds[0]!], { bestOf: 1 })).rejects.toMatchObject({
         status: 409,
         code: "FIXTURE_FORMAT_LOCKED",
-        extra: { fixture_id: b.fixtureIds[0] },
+        // Batch-3 M1: why it is locked, for a client to say it with; the sentence says finished.
+        extra: { fixture_id: b.fixtureIds[0], reason: "finished" },
+        message: "This match is finished — its format is locked.",
       });
       checked++;
     }
@@ -928,7 +930,9 @@ describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 
       await expect(writeFixtureRulesOverride(odd.auth, [bye.id], { bestOf: 1 })).rejects.toMatchObject({
         status: 409,
         code: "FIXTURE_FORMAT_LOCKED",
-        extra: { fixture_id: bye.id },
+        // Batch-3 M1 (the review's note): a bye is no finished match — it was decided without play.
+        extra: { fixture_id: bye.id, reason: "decided" },
+        message: "This match was decided without play — its format can't be changed.",
       });
       expect((await row(bye.id)).rules_override).toBeNull();
       expect(await audit(bye.id)).toHaveLength(0);
@@ -987,7 +991,7 @@ describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 
                 outcome = ${sql.json({ kind: "award", winner: randomUUID(), loser: away, reason: "withdrew" })} where id = ${id}`;
     const before = await row(id);
     const err = await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 }).catch((e: unknown) => e);
-    expect(err).toMatchObject({ status: 409, code: "FIXTURE_FORMAT_LOCKED", extra: { fixture_id: id } });
+    expect(err).toMatchObject({ status: 409, code: "FIXTURE_FORMAT_LOCKED", extra: { fixture_id: id, reason: "decided" } });
     expect(await row(id)).toEqual(before);
     expect(await audit(id)).toHaveLength(0);
   });

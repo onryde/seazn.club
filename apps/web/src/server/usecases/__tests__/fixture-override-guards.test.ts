@@ -39,7 +39,7 @@ const badminton = builtinModules.find((m) => m.key === "badminton")!;
 const SHORT = badminton.configSchema.parse(badminton.variants.short) as { setTo: number; finalSetTo: number; cap: number | null; bestOf: number };
 const fixtureNo = async (id: string) => (await sql<{ fixture_no: number }[]>`select fixture_no from fixtures where id = ${id}`)[0]!.fixture_no;
 const count = async (stageId: string) => Number((await sql<{ n: string }[]>`select count(*)::text n from fixtures where stage_id = ${stageId}`)[0]!.n);
-const ownFormat = (id: string, no: number) => ({ status: 409, code: "FIXTURE_HAS_OWN_FORMAT", extra: { fixture_id: id }, message: expect.stringContaining(`Match ${no} has its own format`) });
+const ownFormat = (id: string, no: number) => ({ status: 409, code: "FIXTURE_HAS_OWN_FORMAT", extra: { fixture_id: id, fixture_no: no }, message: expect.stringContaining(`Match ${no} has its own format`) });
 
 describe.skipIf(!HAS_DB)("Task 10 gap: a delete never takes a match's own format with it", () => {
   it("rebuild: refused naming the match while one carries its own format; goes through once it is set back", async () => {

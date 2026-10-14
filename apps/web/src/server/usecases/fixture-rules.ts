@@ -5,7 +5,7 @@ import { canonicalJson } from "@/lib/canonical-json";
 import { withTenant, type Tx } from "@/lib/db";
 import { configIssuesOf } from "@/lib/config-issue-copy";
 import { HttpError } from "@/lib/errors";
-import { FORMAT_FIT_REASONS, RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
+import { FORMAT_FIT_REASONS, RULE_ERROR_STATUS, fitReasonOf, ruleErrorMessage, type FixtureLockReason } from "@/lib/rule-errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { LOCKED_FIXTURE_STATUSES, hasFrozenCfg, resolveModule } from "@/server/engine-db";
 import { awardFit, isScoredAward, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
@@ -185,26 +185,31 @@ function overrideFor(
   );
 }
 
-const lockedRefusal = (id: string) =>
-  new HttpError(RULE_ERROR_STATUS.FIXTURE_FORMAT_LOCKED, ruleErrorMessage("FIXTURE_FORMAT_LOCKED", {}), "FIXTURE_FORMAT_LOCKED", {
+// Batch-3 M1: each refusal carries the facts a client says it with (`lib/rule-errors.ts` `ruleRefusalText`): why a match
+// is locked (`reason`: finished, or decided without play — a bye, an award its format cannot re-score), and which fit
+// reason refused it (`fit_reason`, absent for the engine's own sentence).
+const lockedRefusal = (id: string, lock: FixtureLockReason) =>
+  new HttpError(RULE_ERROR_STATUS.FIXTURE_FORMAT_LOCKED, ruleErrorMessage("FIXTURE_FORMAT_LOCKED", { lock }), "FIXTURE_FORMAT_LOCKED", {
     fixture_id: id,
+    reason: lock,
   });
 const notFit = (id: string, reason: string) =>
   new HttpError(RULE_ERROR_STATUS.FORMAT_DOES_NOT_FIT_PLAY, ruleErrorMessage("FORMAT_DOES_NOT_FIT_PLAY", { reason }), "FORMAT_DOES_NOT_FIT_PLAY", {
     fixture_id: id,
+    fit_reason: fitReasonOf(reason),
   });
 
 /** (7a) An award no event records: `awardFit`'s verdict (the award's own walkover fold under the format it plays now
  *  and under `corrected`), as a named refusal. A bye is refused before its sides are read (it seats one side only). */
 async function assertAwardFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<void> {
-  if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id);
+  if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id, "decided");
   const award = await loadAward(tx, row.id);
   const verdict = awardFit(award.module, award.cfg, corrected, award.lineups, award.outcome, {
     fixtureId: row.id,
     recordedAt: new Date().toISOString(),
   });
   if (verdict.ok) return;
-  throw verdict.code === "FIXTURE_FORMAT_LOCKED" ? lockedRefusal(row.id) : notFit(row.id, verdict.reason);
+  throw verdict.code === "FIXTURE_FORMAT_LOCKED" ? lockedRefusal(row.id, "decided") : notFit(row.id, verdict.reason);
 }
 
 /** (7) X-SR-5: the recorded play, refolded under `corrected`, must fold, keep its outcome and keep its score. */
@@ -228,8 +233,7 @@ async function assertFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<v
   if (outcomesDiffer(before.outcome, after.outcome))
     reason = before.outcome === null ? FORMAT_FIT_REASONS.ends : FORMAT_FIT_REASONS.result;
   else if (before.summary.headline !== after.summary.headline) reason = FORMAT_FIT_REASONS.score;
-  if (reason !== null)
-    throw new HttpError(RULE_ERROR_STATUS.FORMAT_DOES_NOT_FIT_PLAY, reason, "FORMAT_DOES_NOT_FIT_PLAY", { fixture_id: row.id });
+  if (reason !== null) throw notFit(row.id, reason);
 }
 
 export async function writeFixtureRulesOverride(
@@ -275,7 +279,7 @@ export async function writeFixtureRulesOverride(
       if (!row) throw new HttpError(404, "fixture not found", undefined, { fixture_id: id });
       assertNotFrozen(frozen, row.competition_id);
       // (1)
-      if (LOCKED_FIXTURE_STATUSES.has(row.status)) throw lockedRefusal(id);
+      if (LOCKED_FIXTURE_STATUSES.has(row.status)) throw lockedRefusal(id, "finished");
       const m = resolveModule(row.sport_key, row.module_version);
       // The stage's format (`division ⊕ stage.rules ⊕ bracketDeciders`), as the resolver builds it for this row.
       const stageResolved = liveCfg(row.division_config, { kind: row.stage_kind, config: row.stage_config }, m);
