@@ -57,7 +57,7 @@ const provedTiers = (): { name: string; value: number }[] =>
 
 /** Did `p` settle inside `ms`? Used to assert a promise is STILL PENDING, which
  *  no matcher expresses. The window is not a threshold and not a claim about
- *  this machine: the only case that uses it holds the placement client open, so
+ *  this machine: the only case that uses it holds the injected solver open, so
  *  a pending promise cannot settle at any size of window, and a settled one has
  *  already settled before the timer is even armed. The timer is `unref`'d so a
  *  pending case cannot hold the worker open past the test. */
@@ -733,11 +733,10 @@ describe("buildSchedule", () => {
 
   // UN-SKIPPED (fix round 1): the injected fork keys off
   // `assignments.length === 2`, which needs placement's own board to actually
-  // have 2 cards — `placement-client.ts` is now ALSO `vi.doMock`'d (matching the
-  // existing `./calendar.ts` mock's own style, since `vi.resetModules()` +
-  // a fresh dynamic `import("./build.ts")` would otherwise re-resolve a
-  // real, un-mocked `placement-client.ts`), returning the file's own measured
-  // z3 shape for this corner case (`[b@C1+0, a@C1+30]`).
+  // have 2 cards — the injected `solve` returns the file's own measured z3
+  // shape for this corner case (`[b@C1+0, a@C1+30]`). Only `./calendar.ts` is
+  // `vi.doMock`'d: `vi.resetModules()` + a fresh dynamic `import("./build.ts")`
+  // would otherwise re-resolve the real one.
   it("hands back the greedy seed, LOUDLY, over a breach the solver INTRODUCED", async () => {
     // The rejection branch itself. A genuine encoder/verifier disagreement is
     // not constructible here — `build-encode-parity.test.ts` proves the two
@@ -932,8 +931,8 @@ describe("rejectedBlockingConflicts", () => {
  * two courts, asserting `courtImbalanceMinutes === 0`, on a board greedy
  * already balances 2-2.
  */
-// UN-SKIPPED (fix round 1), 4 of 5 cases: each is now driven by a
-// `vi.spyOn(await import("./placement-client.ts"))` mock returning the SAME
+// UN-SKIPPED (fix round 1), 4 of 5 cases: each is now driven by an
+// injected fake solver (`resolvingSolver`) returning the SAME
 // board the file's own "Measured:" comments already documented z3 producing
 // for that scenario — the point is "does OUR CODE correctly turn a solve
 // into the right `BuildResult`", not "does placement actually find that board",
@@ -1325,9 +1324,9 @@ describe("buildSchedule — the solver queue cap", () => {
   // C8 coverage loss 1, restored at the seam that replaced the lock.
   //
   // WHAT THE CASE ABOVE CANNOT SEE. It judges the cap from the outside, on
-  // statuses alone, and with no `PLACEMENT_SERVICE_HOST` every admitted call
-  // rejects inside `solveBuild` and comes back as a greedy board. So a build
-  // that was refused BEFORE the client and a build that called the client and
+  // statuses alone, and its calls take `unavailableSolver`, so every admitted
+  // call rejects at the solver and comes back as a greedy board. So a build
+  // that was refused BEFORE the solver and a build that called the solver and
   // fell back are indistinguishable there, and neither of the two admitted
   // calls ever has a solve in flight: nothing in that case is concurrent
   // except the counter arithmetic.
@@ -1335,7 +1334,7 @@ describe("buildSchedule — the solver queue cap", () => {
   // `build-teardown.test.ts` used to carry the other half — two concurrent
   // builds really in flight, neither wedged nor crossed — by holding the
   // process-wide z3 lock. C8 deleted the lock and the file with it and
-  // recorded the loss. Holding the placement client's promise open restages
+  // recorded the loss. Holding the injected solver's promise open restages
   // it: while two solves are pending, the third must be answered without a
   // third call being made, and when they settle each must carry ITS OWN board.
   it("holds two solves in flight, refuses the third before the client, and crosses neither board", async () => {
@@ -1421,7 +1420,7 @@ describe("buildSchedule — the solver queue cap", () => {
       expect(spy).toHaveBeenCalledTimes(2);
       // …and it was answered while the other two were genuinely stuck, which
       // is what stops this passing on a run where they had already finished.
-      // Structural, not timed: the client's promise cannot settle until
+      // Structural, not timed: the solver's promise cannot settle until
       // `release()` below, so any wait at all would be a wait forever.
       expect(await settledWithin(first, 50)).toBe(false);
       expect(await settledWithin(second, 50)).toBe(false);
@@ -1891,7 +1890,7 @@ describe("buildSchedule — Placement path", () => {
   // `ruleGroupIndices`. ANTI-CORRUPTION LAYER ONLY: the domain does not read
   // any of these three fields this round (`schema.py`'s module docstring,
   // "no model, no behaviour change"), so every case below is about what
-  // `build.ts` SENDS — never about what a mocked `solveBuild` reply does with
+  // `build.ts` SENDS — never about what a fake solver's reply does with
   // it, which would be unable to tell the difference either way.
 
   /** The scope kinds `buildRuleGroups` has a STATED wire representation for.

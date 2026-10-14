@@ -9,6 +9,8 @@
 // consumer's own test files, so vitest/fast-check stay devDependencies.
 // So is every `__tests__/` directory: its non-`.test.ts` files (fakes, scenario
 // tables) are helpers imported only by tests, and `solver-fakes.ts` imports `vi`.
+// That skip is only safe while nothing shipped imports from one, so the last test
+// below fails if any scanned file does.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,9 +20,10 @@ const MANIFEST = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url).pathname, "utf8"),
 ) as { dependencies?: Record<string, string> };
 
-/** `import … from "x"`, `export … from "x"`, bare `import "x"`, `import("x")`. */
+/** `import … from "x"`, `export … from "x"`, bare `import "x"`, `import("x")`. The `… ` part may not cross a quote or a `;`:
+ *  otherwise a bare `import "x"` is read as the head of the NEXT statement's `from` and its own specifier is never seen. */
 const SPECIFIER =
-  /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s*["']([^"']+)["']|(?:^|\n)\s*import\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g;
+  /(?:^|\n)\s*(?:import|export)[^"';]*?from\s*["']([^"']+)["']|(?:^|\n)\s*import\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g;
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -49,19 +52,30 @@ function packageOf(specifier: string): string {
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
 }
 
-function runtimeImports(): Map<string, string> {
-  const found = new Map<string, string>(); // package -> first file that imports it
+/** Every import specifier of every scanned (shipped) file, with the file (relative to src/) that wrote it. */
+function scannedSpecifiers(): { specifier: string; file: string }[] {
+  const out: { specifier: string; file: string }[] = [];
   for (const file of walk(SRC)) {
     const source = stripComments(readFileSync(file, "utf8"));
     for (const match of source.matchAll(SPECIFIER)) {
-      const specifier = match[1] ?? match[2] ?? match[3]!;
-      if (specifier.startsWith(".") || specifier.startsWith("node:")) continue;
-      const pkg = packageOf(specifier);
-      if (!found.has(pkg)) found.set(pkg, file.slice(SRC.length + 1));
+      out.push({ specifier: match[1] ?? match[2] ?? match[3]!, file: file.slice(SRC.length + 1) });
     }
+  }
+  return out;
+}
+
+function runtimeImports(): Map<string, string> {
+  const found = new Map<string, string>(); // package -> first file that imports it
+  for (const { specifier, file } of scannedSpecifiers()) {
+    if (specifier.startsWith(".") || specifier.startsWith("node:")) continue;
+    const pkg = packageOf(specifier);
+    if (!found.has(pkg)) found.set(pkg, file);
   }
   return found;
 }
+
+/** A relative specifier that reaches into a `__tests__/` directory: `./__tests__/x.ts`, `../__tests__/x.ts`. */
+const REACHES_INTO_TESTS = /^\.{1,2}\/(?:.*\/)?__tests__\//;
 
 describe("engine runtime dependencies", () => {
   it("declares every runtime import in `dependencies`, not `devDependencies`", () => {
@@ -88,5 +102,24 @@ describe("engine runtime dependencies", () => {
       "pino",
       "zod",
     ]);
+  });
+
+  it("is not blind to a shipped file importing a `__tests__/` helper, the one thing that makes skipping that directory safe", () => {
+    // the probe sees the shapes it forbids, and none it should allow
+    for (const bad of ["./__tests__/solver-fakes.ts", "../__tests__/x.ts", "./sub/__tests__/y.ts"]) {
+      expect(REACHES_INTO_TESTS.test(bad), bad).toBe(true);
+    }
+    for (const fine of ["./build.ts", "../calendar.ts", "./tests.ts", "./my__tests__/x.ts", "zod", "vitest"]) {
+      expect(REACHES_INTO_TESTS.test(fine), fine).toBe(false);
+    }
+    // and the scan itself sees a bare import that is followed by an import with a `from`
+    const sample = 'import "./__tests__/a.ts";\nimport { b } from "./b.ts";\nexport * from "./__tests__/c.ts";\n';
+    expect([...sample.matchAll(SPECIFIER)].map((m) => m[1] ?? m[2] ?? m[3])).toEqual(["./__tests__/a.ts", "./b.ts", "./__tests__/c.ts"]);
+    const all = scannedSpecifiers();
+    // anti-vacuity: the scan reads real relative imports, so an empty hit list means "nobody imports a test helper"
+    expect(all.filter((s) => s.specifier.startsWith(".")).length, "relative imports scanned").toBeGreaterThan(0);
+    expect(
+      all.filter((s) => REACHES_INTO_TESTS.test(s.specifier)).map((s) => `${s.file} imports ${s.specifier}`),
+    ).toEqual([]);
   });
 });

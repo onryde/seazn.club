@@ -84,7 +84,7 @@ function board(opts: { n: number; days: number; slotsPerCourtDay: number }): {
  * same reason: the only observable it had was the encode spy.
  *
  * What survives is the gate's own arithmetic, below. Restoring the wiring
- * assertion means spying on the placement client instead — worth doing, and
+ * assertion means counting the calls an injected fake solver receives — worth doing, and
  * not doable by editing this file alone.
  */
 

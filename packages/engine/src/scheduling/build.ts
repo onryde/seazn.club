@@ -1188,9 +1188,11 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   // teardown had to happen while the lock was still held, because a WASM heap
   // that only grows OOMs the process at about six consecutive solves.
   //
-  // None of that survives the solver. `solveBuild` is an out-of-process gRPC
-  // call to the placement service: no WASM heap, no `Solver` instance, no
-  // mutable process-wide state to serialise. Earlier rounds recorded the wrap
+  // None of that survives the solver. The solve is `input.solve`, the injected
+  // `PlacementSolver` (in production an out-of-process gRPC call to the
+  // placement service, owned by the caller's adapter, not by this file): no
+  // WASM heap, no `Solver` instance, no mutable process-wide state to
+  // serialise. Earlier rounds recorded the wrap
   // as vestigial and left it anyway, because dropping a process-wide lock is a
   // blast-radius change that wanted its own test first; C8 deleted the module
   // that owned the lock, which settles the question rather than re-opening it.
@@ -1202,7 +1204,7 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   // lock used to stage — two solves genuinely in flight, a third refused
   // before it reaches the client, neither board crossed — is back in
   // `build.test.ts` ("holds two solves in flight…"), staged by holding the
-  // placement client's promise open instead.
+  // injected solver's promise open instead.
   //
   // `finally` on the promise, not a `try`/`finally` around the call: the
   // decrement has to happen when the SOLVE settles, and it must run on the

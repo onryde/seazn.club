@@ -35,6 +35,7 @@ import {
 } from "../calendar.ts";
 import { solveBuild } from "../placement-client.ts";
 import { silentLogger, type BuildProblem, type PlacementSolver } from "../solver-port.ts";
+import { assertNoSilentGreedy } from "./live-seam-guard.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -237,17 +238,8 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
     const results = built.splice(0);
     const deliberate = expectUnavailable;
     expectUnavailable = false;
-    // Anti-vacuity: a test that never built anything proves nothing about the seam.
-    expect(results.length, "the test built no board over the live seam").toBeGreaterThan(0);
-    // The guard that stops the live seam testing greedy silently (plan Review Focus 2): with the service configured, a
-    // `solver_unavailable` means the real adapter failed to reach it, and most boards here are ones greedy alone can
-    // place, so nothing else would notice.
-    if (!deliberate) {
-      expect(
-        results.filter((r) => r.status === "solver_unavailable").length,
-        "the real adapter could not reach the service: this run silently exercised greedy",
-      ).toBe(0);
-    }
+    // Anti-vacuity and the no-silent-greedy guard (plan Review Focus 2), in a helper so a unit test can kill it without a service.
+    assertNoSilentGreedy(results, deliberate);
   });
 
   it("reaches Placement on a multi-court board whose greedy seed is off the grid — the shape that regressed", async () => {
