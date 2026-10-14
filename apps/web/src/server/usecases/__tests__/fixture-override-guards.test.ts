@@ -332,6 +332,21 @@ describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match'
   });
 });
 
+describe.skipIf(!HAS_DB)("Task 11: a stage that does not parse on its own is not the match's doing", () => {
+  it("a stage whose rules are invalid alone (raw-seeded, as a row written before the guard) does not get its match refused for it", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const id = b.fixtureIds[0]!;
+    const base = badminton.variants.short as Record<string, unknown>;
+    // The stage alone is the engine's refusal (cap below the set target); the match's own cap makes the MIX valid.
+    await sql`update stages set config = config || ${sql.json({ rules: { cap: 5 } } as never)} where id = ${b.stageId}`;
+    await sql`update fixtures set rules_override = ${sql.json({ cap: SHORT.setTo + 9 } as never)} where id = ${id}`;
+    expect(badminton.configSchema.safeParse({ ...base, cap: 5 }).success, "the premise: the stage is invalid alone").toBe(false);
+    expect(badminton.configSchema.safeParse({ ...base, cap: SHORT.setTo + 9 }).success, "the premise: the mix is valid").toBe(true);
+    // An unchanged config re-sent: the stage arm is not asked (nothing moved), the match arm is - and it is not refused.
+    await expect(patchDivision(b.auth, b.divisionId, { config: base }), "not refused for it").resolves.toBeDefined();
+  });
+});
+
 describe.skipIf(!HAS_DB)("Task 11: a DIVISION save never leaves an unstarted match's own format unable to fit", () => {
   for (const c of BOUND_CASES) {
     const seed = async () => {

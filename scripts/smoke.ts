@@ -33,6 +33,10 @@ import { hockey } from "@seazn/engine/sports/hockey";
 // Engine-split 1f (D31): the fold epoch a native client sends on a score write, read off the engine rather than typed. Loads under
 // plain `node --experimental-strip-types` (probed).
 import { foldEpochOf } from "@seazn/engine/sport";
+// W2c Task 11: the sport registry and the engine's own stage-key declaration, the expectation of the every-sport check
+// below (never a list of keys typed into the script).
+import { builtinModules } from "@seazn/engine/sports";
+import { stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
 // The overlay's sport palette, from the module `overlay-tokens.ts` re-exports
 // it out of (`paletteFor = resolveSportPalette`). Imported by relative path for
 // the same reason `@seazn/engine` is imported at all and `@/…` is not: this
@@ -7205,7 +7209,10 @@ async function stageRulesFormatSmoke(): Promise<void> {
  */
 async function w2cStageRulesSuite(): Promise<void> {
   const owner = newSession();
-  await signIn(owner, `delivered+w2c_${tag}@resend.dev`);
+  const who = await signIn(owner, `delivered+w2c_${tag}@resend.dev`);
+  // Task 11's every-sport check needs more divisions than the free plan allows in one competition (4); the Pro bump is
+  // the suite's own, after the seed-independent sign-in, and affects no check below it.
+  await setPlan(who.org_id, "pro", owner);
   // Task 2's owed check — the division lock names the started stage (X-SR-4). `h2h_points`, not `head_to_head`: the
   // v1 schema (TiebreakerKeyS) refuses the latter 400 VALIDATION before any lock is asked; the stored cascade is null,
   // so any accepted key is a change.
@@ -7219,6 +7226,80 @@ async function w2cStageRulesSuite(): Promise<void> {
     tableLocked,
   );
   await w2cFixtureRulesChecks(owner, fixtureId, unstartedId);
+  await w2cStageRulesEverySportChecks(owner);
+}
+
+/**
+ * W2c Task 11 (X-SR-1) — `PUT /stages/{id}/rules` is every sport's door now, over real HTTP: one division and one
+ * league stage per registered sport, saving the first stage key the ENGINE declares for it (`stageTopKeysFor`) at the
+ * value its own schema gives the variant. Then the two cases the old four-sport gate could not reach: a hockey league
+ * stage that keeps a fourth-quarter result on abandon (`q4_stands`), and a chess knockout stage that saves an EMPTY
+ * rung list, "held for the organiser" (carry I2: the merge stores an explicit []).
+ */
+async function w2cStageRulesEverySportChecks(owner: Session): Promise<void> {
+  const comp = v1data<{ id: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Every Sport ${tag}` }),
+  );
+  const stageFor = async (m: AnySportModule, variant: string, kind: "league" | "knockout", n: number) => {
+    const div = await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: `W2c ${m.key} ${kind} ${n}`,
+      sport_key: m.key,
+      variant_key: variant,
+      // generic has no all-default config: the variant's own declared one, as the engine states it.
+      config: m.variants[variant] as Record<string, unknown>,
+    });
+    const divId = v1data<{ id: string } | undefined>(div)?.id;
+    const stage = await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind, name: `S ${m.key}` });
+    return { div, stage, stageId: v1data<{ id: string } | undefined>(stage)?.id };
+  };
+
+  const failures: string[] = [];
+  let saved = 0;
+  for (const [n, m] of (builtinModules as readonly AnySportModule[]).entries()) {
+    const variant = Object.keys(m.variants)[0]!;
+    const base = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+    const key = [...stageTopKeysFor(m, "league", variant)].find((k) => base[k] !== undefined);
+    if (key === undefined) {
+      failures.push(`${m.key}: the engine declares no stage key with a value to save`);
+      continue;
+    }
+    const { div, stage, stageId } = await stageFor(m, variant, "league", n);
+    const put = await v1(owner, `/api/v1/stages/${stageId}/rules`, "PUT", { rules: { [key]: base[key] } });
+    const got = (put.json.data as { rules?: Record<string, unknown> } | undefined)?.rules;
+    if (div.status === 201 && stage.status === 201 && put.status === 200 && JSON.stringify(got?.[key]) === JSON.stringify(base[key])) saved++;
+    else failures.push(`${m.key}.${key}: division ${div.status}, stage ${stage.status}, PUT ${put.status} ${JSON.stringify(put.json.error ?? got)}`);
+  }
+  check(
+    `w2c: every sport accepts its stage keys (${saved} of ${builtinModules.length} sports saved one over HTTP)` +
+      (failures.length === 0 ? "" : ` — ${failures.join("; ")}`),
+    builtinModules.length > 0 && saved === builtinModules.length && failures.length === 0,
+  );
+
+  // Hockey, the sport whose league stage the old gate could not reach: a fourth-quarter result stands on abandon.
+  const hk = builtinModules.find((m) => m.key === "hockey") as AnySportModule;
+  const hkVariant = Object.keys(hk.variants)[0]!;
+  const hockeyStage = await stageFor(hk, hkVariant, "league", 100);
+  const q4 = await v1(owner, `/api/v1/stages/${hockeyStage.stageId}/rules`, "PUT", { rules: { abandonPolicy: "q4_stands" } });
+  const q4Rules = (q4.json.data as { rules?: { abandonPolicy?: unknown } } | undefined)?.rules;
+  check(
+    "w2c: a hockey stage saves q4_stands" +
+      (q4.status === 200 && q4Rules?.abandonPolicy === "q4_stands" ? "" : ` — got ${q4.status} ${JSON.stringify(q4.json.error ?? q4.json.data)}`),
+    q4.status === 200 && q4Rules?.abandonPolicy === "q4_stands",
+  );
+
+  // Chess (the boardgame sport), a knockout: an explicit empty rung list is a value the merge stores, and a second save
+  // that leaves it out keeps it.
+  const bg = builtinModules.find((m) => m.key === "boardgame") as AnySportModule;
+  const bgVariant = Object.keys(bg.variants)[0]!;
+  const chessStage = await stageFor(bg, bgVariant, "knockout", 101);
+  const empty = await v1(owner, `/api/v1/stages/${chessStage.stageId}/rules`, "PUT", { rules: { tiebreakRungs: [] } });
+  const emptyRules = (empty.json.data as { rules?: { tiebreakRungs?: unknown } } | undefined)?.rules;
+  const emptyKept = JSON.stringify(emptyRules?.tiebreakRungs) === "[]";
+  check(
+    "w2c: a chess knockout stage saves an empty rung list" +
+      (empty.status === 200 && emptyKept ? "" : ` — got ${empty.status} ${JSON.stringify(empty.json.error ?? empty.json.data)}`),
+    empty.status === 200 && emptyKept,
+  );
 }
 
 /**

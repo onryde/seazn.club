@@ -604,7 +604,7 @@
     "files": [
      "src/server/usecases/__tests__/division-locks.test.ts"
     ],
-    "name": "declares exactly the eight codes"
+    "name": "declares exactly the nine codes"
    },
    {
     "cwd": "apps/web",
@@ -693,7 +693,7 @@
  {
   "id": "t14-ia-division-save",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule);",
+  "find": "await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);",
   "replace": "",
   "killers": [
    {
@@ -819,8 +819,8 @@
  {
   "id": "b3-i1-stage-skip-fragment",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "       where id = ${stageId}`;\n    await rewriteHeldAwards(tx, held);\n",
-  "replace": "       where id = ${stageId}`;\n",
+  "find": "    await rewriteHeldAwards(tx, held);\n    return { rules: next,",
+  "replace": "    return { rules: next,",
   "killers": [
    {
     "cwd": "apps/web",
@@ -834,8 +834,8 @@
  {
   "id": "b3-i1-stage-skip-clear",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "config - 'rules' where id = ${stageId}`;\n      await rewriteHeldAwards(tx, held);\n",
-  "replace": "config - 'rules' where id = ${stageId}`;\n",
+  "find": "    await rewriteHeldAwards(tx, held);\n    return { rules: next,",
+  "replace": "    if (next !== null) await rewriteHeldAwards(tx, held);\n    return { rules: next,",
   "killers": [
    {
     "cwd": "apps/web",
@@ -864,7 +864,7 @@
  {
   "id": "b3-i1-division-skip",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "    await rewriteHeldAwards(tx, held);\n    return written;",
+  "find": "    rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;\n    return written;",
   "replace": "    return written;",
   "killers": [
    {

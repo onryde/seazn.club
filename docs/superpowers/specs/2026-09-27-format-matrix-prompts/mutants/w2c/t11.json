@@ -1,0 +1,605 @@
+[
+ {
+  "id": "t11-not-settable",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (!settable.has(key))",
+  "replace": "if (false)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "RULE_NOT_SETTABLE for a key this kind cannot set"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "every sport refuses its own points keys"
+   }
+  ]
+ },
+ {
+  "id": "t11-unknown",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (!declared.has(key)) throw new HttpError(400,",
+  "replace": "if (false) throw new HttpError(400,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "UNKNOWN_RULE_KEY for an undeclared key"
+   }
+  ]
+ },
+ {
+  "id": "t11-allowlist-before-strip",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "stage.stage_kind, stage.variant_key, Object.keys(input.rules));",
+  "replace": "stage.stage_kind, stage.variant_key, Object.keys(input.rules).filter((key) => input.rules![key] !== null));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "a key sent as null is judged too"
+   }
+  ]
+ },
+ {
+  "id": "t11-allowlist-skipped",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "if (input.rules !== null) refuseUnsettableKeys(",
+  "replace": "if (false) refuseUnsettableKeys(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "UNKNOWN_RULE_KEY for an undeclared key"
+   }
+  ]
+ },
+ {
+  "id": "t11-lock",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    if (locked)\n",
+  "replace": "    if (false && locked)\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "X-SR-3 rules lock at the first event"
+   }
+  ]
+ },
+ {
+  "id": "t11-lock-code",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "        \"STAGE_FORMAT_LOCKED\",\n        { stage_name: stage.stage_name },",
+  "replace": "        \"STAGE_FORMAT_LOCKED_X\",\n        { stage_name: stage.stage_name },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "X-SR-3 rules lock at the first event"
+   }
+  ]
+ },
+ {
+  "id": "t11-merge-keeps",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "const out: Record<string, unknown> = isObj(stored) ? withoutNulls(stored) : {};",
+  "replace": "const out: Record<string, unknown> = {};",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "keys the body omits are kept"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "chess knockout stored with"
+   }
+  ]
+ },
+ {
+  "id": "t11-merge-null-removes",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (v === null || v === undefined) delete out[k];",
+  "replace": "if (v === null || v === undefined) out[k] = v;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "keys the body omits are kept"
+   }
+  ]
+ },
+ {
+  "id": "t11-clear-empty",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (sent === null || Object.keys(sent).length === 0) return null;",
+  "replace": "if (sent === null) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "an empty fragment clears to the division"
+   }
+  ]
+ },
+ {
+  "id": "t11-empty-result-null",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "return Object.keys(out).length === 0 ? null : out;",
+  "replace": "return out;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "keys the body omits are kept"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules.test.ts"
+    ],
+    "name": "strips nulls"
+   }
+  ]
+ },
+ {
+  "id": "t11-merged-parse",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "const parsed = module.configSchema.safeParse({ ...(isObj(divisionConfig) ? divisionConfig : {}), ...rules });",
+  "replace": "const parsed = module.configSchema.safeParse({ ...(isObj(divisionConfig) ? divisionConfig : {}) });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "the merge is what is validated"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 CONFIG_INVALID naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-merged-parse-division",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "const parsed = module.configSchema.safeParse({ ...(isObj(divisionConfig) ? divisionConfig : {}), ...rules });",
+  "replace": "const parsed = module.configSchema.safeParse({ ...rules });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "the merge is what is validated"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 CONFIG_INVALID naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-points-map-gate",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "const moved = input.rules !== null && setsBestOf(input.rules);",
+  "replace": "const moved = false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules.test.ts"
+    ],
+    "name": "refuses the save, naming every reachable set score"
+   }
+  ]
+ },
+ {
+  "id": "t11-points-map-skipped",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (checkPointsMap) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules.test.ts"
+    ],
+    "name": "refuses the save, naming every reachable set score"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 POINTS_MAP_INCOMPLETE naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-refusal-issues",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "new EngineError(\"CONFIG_INVALID\", `invalid ${sportKey} config`, { issues: p.issues })",
+  "replace": "new EngineError(\"CONFIG_INVALID\", `invalid ${sportKey} config`, {})",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "CONFIG_INVALID carries the engine"
+   }
+  ]
+ },
+ {
+  "id": "t11-stage-override-fit",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "await refuseInvalidatedOverrides(tx, stage.division_id, stage.division_config, module_, stage.variant_key, stageId);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "shortening the stage under"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "clearing the stage's rules is a save too"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-arm",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "if (!check.ok && check.code !== \"UNKNOWN_RULE_KEY\") throw ownFormatNoLongerFits(r, check);",
+  "replace": "if (false) throw ownFormatNoLongerFits(r, check);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "shortening the stage under"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "shortening the division's"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-unknown-exempt",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "if (!check.ok && check.code !== \"UNKNOWN_RULE_KEY\") throw ownFormatNoLongerFits(r, check);",
+  "replace": "if (!check.ok) throw ownFormatNoLongerFits(r, check);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "does not lock every later save"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-error-extra",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "{ fixture_id: hit.id, fixture_no: hit.fixture_no, field: check.path }",
+  "replace": "{ fixture_id: hit.id }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "shortening the stage under"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-skips-parsed-stage",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "if (!stageParsed.success) continue;",
+  "replace": "if (!stageParsed.success) throw ownFormatNoLongerFits(r, { ok: false, code: \"RULE_NOT_SETTABLE\", path: \"\", reason: \"\" } as never);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "not refused for it"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-whole-values",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "for (const k of Object.keys(r.rules_override)) whole[k] = corrected[k];",
+  "replace": "for (const k of Object.keys(r.rules_override)) whole[k] = r.rules_override[k];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "shortening the stage under"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-variant",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);",
+  "replace": "await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, null);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "shortening the division's"
+   }
+  ]
+ },
+ {
+  "id": "t11-division-stage-arm",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "if (configApplied) await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 CONFIG_INVALID naming the stage"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 POINTS_MAP_INCOMPLETE naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-division-stage-gate",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "if (configApplied) await refuseInvalidatedStageRules(",
+  "replace": "await refuseInvalidatedStageRules(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "a save that does not move the config is not asked"
+   }
+  ]
+ },
+ {
+  "id": "t11-division-stage-name",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "`${stage.name}: ${pointsMapMessage(p)}`",
+  "replace": "pointsMapMessage(p)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 POINTS_MAP_INCOMPLETE naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-division-stage-extra",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "const extra = { stage_id: stage.id, stage_name: stage.name };",
+  "replace": "const extra = {};",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 CONFIG_INVALID naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-division-stage-issues",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "{ ...extra, issues: configIssuesOf({ issues: p.issues }) ?? undefined }",
+  "replace": "extra",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 CONFIG_INVALID naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-division-stage-rules-only",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "where division_id = ${divisionId} and config -> 'rules' is not null order by seq",
+  "replace": "where division_id = ${divisionId} and false order by seq",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "refused 422 CONFIG_INVALID naming the stage"
+   }
+  ]
+ },
+ {
+  "id": "t11-revalidate-division",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "if (rewroteAwards) fireDivisionRevalidate(row.id, row.competition_id);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "the division door: revalidated when the save re-wrote a walkover"
+   }
+  ]
+ },
+ {
+  "id": "t11-revalidate-always",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "if (rewroteAwards) fireDivisionRevalidate(row.id, row.competition_id);",
+  "replace": "fireDivisionRevalidate(row.id, row.competition_id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "the division door: revalidated when the save re-wrote a walkover"
+   }
+  ]
+ },
+ {
+  "id": "t11-rewrote-flag",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;",
+  "replace": "await rewriteHeldAwards(tx, held);\n    rewroteAwards = true;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "the division door: revalidated when the save re-wrote a walkover"
+   }
+  ]
+ },
+ {
+  "id": "t11-stage-revalidate",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "fireDivisionRevalidate(out.divisionId, out.competitionId);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "the stage door: revalidated by the save"
+   }
+  ]
+ },
+ {
+  "id": "t11-error-status",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "FIXTURE_OWN_FORMAT_NO_LONGER_FITS: 409,",
+  "replace": "FIXTURE_OWN_FORMAT_NO_LONGER_FITS: 400,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "declares exactly the nine codes"
+   }
+  ]
+ },
+ {
+  "id": "t11-copy-refusal-text",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "    case \"FIXTURE_OWN_FORMAT_NO_LONGER_FITS\":\n      return sentence(code, { match }, m);",
+  "replace": "    case \"FIXTURE_OWN_FORMAT_NO_LONGER_FITS\":\n      return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "each code, with the extra its emitter sends"
+   }
+  ]
+ },
+ {
+  "id": "t11-copy-message",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "    case \"FIXTURE_OWN_FORMAT_NO_LONGER_FITS\":\n      return m(RULE_ERROR_KEYS[code], { match: p.match ?? m(RULE_ERROR_SUPPORT_KEYS.thisMatch) });",
+  "replace": "    case \"FIXTURE_OWN_FORMAT_NO_LONGER_FITS\":\n      return \"\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "reads each code's en sentence"
+   }
+  ]
+ },
+ {
+  "id": "t11-stage-rewrite",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    await rewriteHeldAwards(tx, held);\n    return { rules: next, divisionId",
+  "replace": "    return { rules: next, divisionId",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
+    ],
+    "name": "every sport's STAGE door"
+   }
+  ]
+ }
+]
