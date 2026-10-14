@@ -409,8 +409,8 @@
  {
   "id": "t12-fr1-livecfg-off",
   "file": "apps/web/src/lib/stage-decider-off.ts",
-  "find": "stageScopedCfgOf(divisionCfg, stage?.config, module, topLevelKeys)",
-  "replace": "stageScopedCfgOf(divisionCfg, stage?.config, null, topLevelKeys)",
+  "find": "stageScopedCfgOf(divisionCfg, stage?.config, module)",
+  "replace": "stageScopedCfgOf(divisionCfg, stage?.config, null)",
   "killers": [
    {
     "cwd": "apps/web",
@@ -714,7 +714,7 @@
  {
   "id": "t12-fr4-door-guard",
   "file": "apps/web/src/server/usecases/stage-defaults.ts",
-  "find": "    if (Object.hasOwn(config, key)) {",
+  "find": "    if (TOP_LEVEL_DECIDERS.has(key)) {",
   "replace": "    if (false) {",
   "killers": [
    {
