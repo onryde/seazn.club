@@ -350,6 +350,9 @@ If RealtimeKit is unavailable under `Required`, the organiser may **override and
 without video, writing an audit row** (D11). A video vendor outage must not cancel a
 tournament.
 
+The audit row (`online_chess_audit`: who overrode, when, and their note) is a **staff record
+read by SQL only**; no screen shows it (ruling, final review M-8, 2026-10-14).
+
 ---
 
 ## 6. The match room
