@@ -1510,3 +1510,167 @@ describe("GuidedSheet — SheetConfirmStep (W2c Task 21)", () => {
     expect(b.done, "b opens the confirm step").toBe(false);
   });
 });
+
+// --- W2c Task 21 design pass (S5, owner sign-off): rows, colour discs, a context block ----------------------------------
+// The owner's mockup showed full-width rows, a colour cue by the players, and a line naming the round the scorer is in; the
+// first build used the chassis' pills and none of the rest. All three are OPT-IN (`layout`, `option.disc`, `step.context`), so
+// every sheet that sets none of them renders exactly what it did — the positive pairs below say so.
+
+const DESIGN_LONG_NAME = "Alexandria Montgomery-Featherstonehaugh III";
+const designSpec: GuidedSheetSpec = {
+  event: "x.event",
+  steps: [
+    {
+      id: "who",
+      kind: "choice",
+      title: K("who.title"),
+      layout: "rows",
+      options: [
+        { id: "home", label: "side.home", labelText: DESIGN_LONG_NAME },
+        { id: "away", label: "side.away" },
+      ],
+    },
+    {
+      id: "result",
+      kind: "choice",
+      title: K("result.title"),
+      layout: "rows",
+      context: (a) => [
+        { text: `round ${String(a.who)}` },
+        { label: "White", text: "Asha Rao", disc: "white" },
+        { label: "Black", text: "Priya Menon", disc: "black" },
+      ],
+      options: [
+        { id: "w", label: "res.w", disc: "white" },
+        { id: "b", label: "res.b", disc: "black" },
+        { id: "d", label: "res.d", disc: "split" },
+        { id: "n", label: "res.n" },
+      ],
+    },
+    {
+      id: "ok",
+      kind: "confirm",
+      title: K("ok.title"),
+      context: (a) => [{ text: `round ${String(a.who)}` }],
+      summary: (a) => `you picked ${String(a.result)}`,
+    },
+  ],
+  buildPayload: (a) => ({ who: a.who, result: a.result }),
+};
+const optionEls = (tree: ReturnType<typeof walk>) => tree.filter((el) => propsOf(el)["data-choice-option-id"] !== undefined);
+const classesOf = (el: ReturnType<typeof walk>[number]) => String(propsOf(el).className).split(/\s+/);
+const contextOf = (tree: ReturnType<typeof walk>) => tree.find((el) => propsOf(el)["data-testid"] === "pad-sheet-context");
+const contextLines = (tree: ReturnType<typeof walk>) => tree.filter((el) => propsOf(el)["data-testid"] === "pad-sheet-context-line");
+/** What the line READS: the harness joins every string with a space, and the DOM has one (the `{" "}` between label and name). */
+const lineText = (el: ReturnType<typeof walk>[number]) => textOf(el).replace(/\s+/g, " ").trim();
+const discsIn = (el: ReturnType<typeof walk>[number]) => walk(el).filter((e) => propsOf(e)["data-disc"] !== undefined);
+const designIsland = () => renderIsland(GuidedSheet, { spec: designSpec, views: numberViews, personNames: {}, t, onComplete: () => {} });
+
+describe("GuidedSheet — `layout: rows` (W2c Task 21 design pass)", () => {
+  it("a rows step renders every option as a full-width row — not a pill — that still carries its option id, a 48px floor and a wrapping label", () => {
+    const rows = optionEls(designIsland().tree());
+    expect(rows.map((o) => propsOf(o)["data-choice-option-id"]), "anti-vacuity: both options render").toEqual(["home", "away"]);
+    for (const row of rows) {
+      const id = String(propsOf(row)["data-choice-option-id"]);
+      const classes = classesOf(row);
+      for (const want of ["w-full", "rounded-xl", "text-left", "min-w-0", "break-words"]) expect(classes, `${id}: ${want}`).toContain(want);
+      expect(classes, `${id}: a row, not a pill`).not.toContain("rounded-full");
+      expect((propsOf(row).style as { minHeight?: number }).minHeight, `${id}: the tap floor`).toBeGreaterThanOrEqual(44);
+    }
+    expect(textOf(rows[0]!), "the long name is the label, in full").toBe(DESIGN_LONG_NAME);
+  });
+
+  it("the rows stack vertically, and a step with no `layout` is still the pill row it always was (the positive pair)", () => {
+    const stacks = (tree: ReturnType<typeof walk>) => {
+      const first = optionEls(tree)[0]!;
+      return tree.filter((el) => walk(propsOf(el).children as never).includes(first) && /\bflex\b/.test(String(propsOf(el).className ?? "")) && el !== first);
+    };
+    const rowStack = stacks(designIsland().tree()).at(-1)!;
+    expect(classesOf(rowStack), "rows stack in a column").toContain("flex-col");
+    const pillSpec: GuidedSheetSpec = { ...designSpec, steps: [{ ...designSpec.steps[0]!, layout: undefined } as GuidedSheetSpec["steps"][number]] };
+    const pillTree = renderIsland(GuidedSheet, { spec: pillSpec, views: numberViews, personNames: {}, t, onComplete: () => {} }).tree();
+    const pills = optionEls(pillTree);
+    expect(pills.length, "anti-vacuity: the pills render").toBe(2);
+    for (const pill of pills) {
+      expect(classesOf(pill), "no layout: the rounded-full pill").toContain("rounded-full");
+      expect(classesOf(pill), "no layout: not a full-width row").not.toContain("w-full");
+    }
+    expect(classesOf(stacks(pillTree).at(-1)!), "the pill row wraps").toContain("flex-wrap");
+  });
+
+  it("tapping a row advances exactly as tapping a pill does (forward on answer)", () => {
+    const island = designIsland();
+    click(findByText(buttonsOf(island.tree()), DESIGN_LONG_NAME));
+    expect(optionEls(island.tree()).map((o) => propsOf(o)["data-choice-option-id"])).toEqual(["w", "b", "d", "n"]);
+  });
+});
+
+describe("GuidedSheet — `option.disc` (W2c Task 21 design pass)", () => {
+  it("a disc is ONE aria-hidden marker beside the label and never part of it; an option with none renders none; the three discs differ", () => {
+    const island = designIsland();
+    click(findByText(buttonsOf(island.tree()), "side.away"));
+    const rows = optionEls(island.tree());
+    expect(rows.map((o) => propsOf(o)["data-choice-option-id"])).toEqual(["w", "b", "d", "n"]);
+    const discOf = (id: string) => discsIn(rows.find((o) => propsOf(o)["data-choice-option-id"] === id)!);
+    const kinds: string[] = [];
+    const classSets: string[] = [];
+    for (const [id, want] of [["w", "white"], ["b", "black"], ["d", "split"]] as const) {
+      const found = discOf(id);
+      expect(found, `${id}: exactly one disc`).toHaveLength(1);
+      expect(propsOf(found[0]!)["aria-hidden"], `${id}: decoration, the label already says it`).toBe("true");
+      expect(propsOf(found[0]!)["data-disc"]).toBe(want);
+      kinds.push(String(propsOf(found[0]!)["data-disc"]));
+      classSets.push(String(propsOf(found[0]!).className));
+      expect(textOf(rows.find((o) => propsOf(o)["data-choice-option-id"] === id)!), `${id}: the label is the text`).toBe(`res.${id}`);
+    }
+    expect(new Set(classSets).size, "white, black and split look different").toBe(3);
+    expect(kinds).toEqual(["white", "black", "split"]);
+    expect(discOf("n"), "an option with no disc renders none").toHaveLength(0);
+  });
+});
+
+describe("GuidedSheet — `step.context` (W2c Task 21 design pass)", () => {
+  it("a step with no context renders no context block (the empty case first), and one whose context is empty renders none either", () => {
+    expect(contextOf(designIsland().tree()), "the first step declares no context").toBeUndefined();
+    const emptySpec: GuidedSheetSpec = { ...designSpec, steps: [{ ...designSpec.steps[1]!, context: () => [] } as GuidedSheetSpec["steps"][number]] };
+    const tree = renderIsland(GuidedSheet, { spec: emptySpec, views: numberViews, personNames: {}, t, onComplete: () => {} }).tree();
+    expect(optionEls(tree).length, "anti-vacuity: the step itself renders").toBe(4);
+    expect(contextOf(tree), "an empty context is no block, not an empty box").toBeUndefined();
+  });
+
+  it("the block renders the lines the step derives from the answers so far — a plain line, then label + name with a disc — and Back-and-change rewrites it", () => {
+    const island = designIsland();
+    click(findByText(buttonsOf(island.tree()), "side.away"));
+    const tree = island.tree();
+    expect(contextOf(tree), "the result step shows its context").toBeDefined();
+    const lines = contextLines(tree);
+    expect(lines.map(lineText)).toEqual(["round away", "White Asha Rao", "Black Priya Menon"]);
+    expect(lines.map((l) => discsIn(l).map((d) => propsOf(d)["data-disc"])), "a disc only on the two colour lines").toEqual([[], ["white"], ["black"]]);
+    expect(discsIn(lines[1]!).every((d) => propsOf(d)["aria-hidden"] === "true")).toBe(true);
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.back"));
+    click(findByText(buttonsOf(island.tree()), DESIGN_LONG_NAME));
+    expect(contextLines(island.tree()).map(lineText)[0], "answering differently rewrites the line").toBe("round home");
+  });
+
+  it("in the MARKUP a labelled line reads 'White Asha Rao': a real space between the colour word and the name, so textContent and a screen reader do not run them together", () => {
+    // The node harness joins strings with a space of its own, so it cannot see the literal space the component renders.
+    const firstScreen: GuidedSheetSpec = {
+      event: "x.event",
+      steps: [{ id: "result", kind: "choice", title: K("result.title"), context: () => [{ label: "White", text: "Asha Rao", disc: "white" }], options: [{ id: "w", label: "res.w" }] }],
+      buildPayload: () => ({}),
+    };
+    const html = renderToStaticMarkup(createElement(GuidedSheet, { spec: firstScreen, views: numberViews, personNames: {}, t, onComplete: () => {} }));
+    expect(html).toMatch(/data-testid="pad-sheet-context-line"/);
+    expect(html, "label, a space, the name").toMatch(/>White<\/span> <span[^>]*>Asha Rao<\/span>/);
+    expect(html, "the disc is decoration").toMatch(/<span aria-hidden="true" data-disc="white"/);
+  });
+
+  it("the confirm step shows its context above the read-back", () => {
+    const island = designIsland();
+    click(findByText(buttonsOf(island.tree()), "side.away"));
+    click(findByText(buttonsOf(island.tree()), "res.w"));
+    const tree = island.tree();
+    expect(textOf(summaryOf(tree)!)).toBe("you picked w");
+    expect(contextLines(tree).map(lineText)).toEqual(["round away"]);
+  });
+});

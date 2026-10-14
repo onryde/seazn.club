@@ -682,14 +682,35 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * with no override renders the app's daylight signal pair. Absent means the
  * plain option button every pre-B4 step already rendered.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: MessageKey; options: SheetChoiceOption[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
+/**
+ * W2c Task 21 design pass (S5, owner sign-off) — three OPT-IN presentation fields, each absent on every sheet shipped before
+ * it, so those render exactly as they did.
+ *
+ * `layout: "rows"` stacks the options as full-width rows instead of the pill row. A row is the right shape when an option is a
+ * NAME (an entrant, up to ~43 characters at 320: a pill wraps it into a blob, a row wraps it as text) or a SENTENCE ("Drawn —
+ * Black advances"). The chess tie-break uses it for every step that decides something; the optional score keeps its short pills.
+ *
+ * `context(answers)` is the quiet block under the title that says where the scorer is and what they have already told the pad:
+ * the round being decided, and — once Black is known — who is White and who is Black. Evaluated at render against the answers
+ * so far, like `when`, so Back-and-change rewrites it. Pre-localised, skin-supplied (the sheet interpolates names no dictionary
+ * holds). Returning no lines renders no block.
+ */
+export interface SheetChoiceStep { id: string; kind: "choice"; title: MessageKey; options: SheetChoiceOption[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked; layout?: "rows"; context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[] }
+/**
+ * A colour disc: the chess piece colour a result or a line is ABOUT. `white` and `black` are the two sides' pieces; `split` is
+ * the draw, half of each. Always `aria-hidden` — the text beside it names the colour (a locale's own word), so the disc is the
+ * sighted channel for a fact a screen reader already has, never the only carrier (the `tone` swatch's own rule).
+ */
+export type SheetDisc = "white" | "black" | "split";
+/** One line of a step's context block: `text` (a name, a round), an optional `label` before it (the colour word) and an optional `disc`. */
+export interface SheetContextLine { text: string; label?: string; disc?: SheetDisc }
 /**
  * One option of a choice step. `label` is a dictionary KEY the chassis resolves (`t(label)`). `labelText`, when
  * present, is an already-resolved string that WINS over the key — the convention `TileSpec.labelText` set for a value
  * no dictionary can hold (a person's name). W2a Task 12: the chess tie-break's winner step names the two players; the
  * key stays the canonical fallback ("Home"/"Away"), so a sweep collecting every key still sees one per option.
  */
-export interface SheetChoiceOption { id: string; label: string; labelText?: string; tone?: readonly SportTone[] }
+export interface SheetChoiceOption { id: string; label: string; labelText?: string; tone?: readonly SportTone[]; disc?: SheetDisc }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
@@ -855,6 +876,8 @@ export interface SheetConfirmStep {
   title: MessageKey;
   summary(answers: Readonly<Record<string, string>>): string;
   when?: StepPredicate;
+  /** The same quiet context block a choice step may carry (`SheetChoiceStep.context`): the read-back sits under who is White and who is Black. */
+  context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[];
 }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep | SheetConfirmStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
