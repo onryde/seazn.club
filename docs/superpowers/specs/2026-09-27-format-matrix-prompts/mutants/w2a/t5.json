@@ -107,7 +107,7 @@
   {
     "id": "carrom-bracket-deciders-empty",
     "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "bracketDeciders: () => ({ tieBoard: \"extra\" as const }),",
+    "find": "bracketDeciders: (cfg) =>\n    cfg.abandonPolicy === \"share\"\n      ? { tieBoard: \"extra\" as const, abandonPolicy: \"replay\" as const }\n      : { tieBoard: \"extra\" as const },",
     "replace": "bracketDeciders: () => ({}),",
     "killers": [
       {

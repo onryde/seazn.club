@@ -2,8 +2,8 @@
   {
     "id": "kind-gate",
     "file": "apps/web/src/components/v2/needs-decision.tsx",
-    "find": "  if (!forbidsLevelResult(f.stageKind)) return false;\n",
-    "replace": "",
+    "find": "  return settleOffered(module, f.stageKind, {",
+    "replace": "  return settleOffered(module, \"knockout\", {",
     "killers": [
       {
         "cwd": "apps/web",
@@ -24,8 +24,8 @@
   {
     "id": "active-abandon",
     "file": "apps/web/src/components/v2/needs-decision.tsx",
-    "find": "!events.some((v) => v.voids_event_id === e.id)",
-    "replace": "true",
+    "find": "e.type === \"core.abandon\" && !events.some((v) => v.voids_event_id === e.id));",
+    "replace": "e.type === \"core.abandon\" && true);",
     "killers": [
       {
         "cwd": "apps/web",
@@ -39,8 +39,8 @@
   {
     "id": "decider-hook",
     "file": "apps/web/src/components/v2/needs-decision.tsx",
-    "find": "return settleApplies(module, {",
-    "replace": "return settleApplies({}, {",
+    "find": "return settleOffered(module, f.stageKind, {",
+    "replace": "return settleOffered({}, f.stageKind, {",
     "killers": [
       {
         "cwd": "apps/web",
@@ -285,8 +285,8 @@
   {
     "id": "r1-dh3-block-body-by-cause",
     "file": "apps/web/src/components/v2/needs-decision.tsx",
-    "find": "          {msg(BODY_KEY[props.cause])}",
-    "replace": "          {msg(\"score.needsDecision.body\")}",
+    "find": "{msg(heldBodyKey(props.cause, props.table === true))}",
+    "replace": "{msg(\"score.needsDecision.body\")}",
     "killers": [
       {
         "cwd": "apps/web",
@@ -345,8 +345,8 @@
   {
     "id": "r2-n2-console-passes-note-cause",
     "file": "apps/web/src/components/v2/fixture-console.tsx",
-    "find": "        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} />",
-    "replace": "        <HeldNote msg={msg} cause=\"level\" />",
+    "find": "<HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} table={inTableStage(stageKind)} />",
+    "replace": "<HeldNote msg={msg} cause=\"level\" table={inTableStage(stageKind)} />",
     "killers": [
       {
         "cwd": "apps/web",

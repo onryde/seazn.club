@@ -227,8 +227,8 @@
   {
     "id": "t4-q5-superover-match",
     "file": "packages/engine/src/sports/cricket/cricket.ts",
-    "find": "superOver: { scope: \"stage\", decider: true,",
-    "replace": "superOver: { scope: \"match\", decider: true,",
+    "find": "const SUPER_OVER_KEY: RuleKeyFact = { scope: \"stage\", decider: true,",
+    "replace": "const SUPER_OVER_KEY: RuleKeyFact = { scope: \"match\", decider: true,",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -362,8 +362,8 @@
   {
     "id": "t4-i1-superover-points",
     "file": "packages/engine/src/sports/cricket/cricket.ts",
-    "find": "superOver: { scope: \"stage\", decider: true,",
-    "replace": "superOver: { scope: \"points\", decider: true,",
+    "find": "const SUPER_OVER_KEY: RuleKeyFact = { scope: \"stage\", decider: true,",
+    "replace": "const SUPER_OVER_KEY: RuleKeyFact = { scope: \"points\", decider: true,",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -407,8 +407,8 @@
   {
     "id": "t4-i2-superover-every-variant",
     "file": "packages/engine/src/sports/cricket/cricket.ts",
-    "find": "superOver: { scope: \"stage\", decider: true, appliesTo: { variants: [\"t20\", \"odi\", \"hundred\"] } },",
-    "replace": "superOver: { scope: \"stage\", decider: true },",
+    "find": "const SUPER_OVER_KEY: RuleKeyFact = { scope: \"stage\", decider: true, appliesTo: { variants: [\"t20\", \"odi\", \"hundred\"] } };",
+    "replace": "const SUPER_OVER_KEY: RuleKeyFact = { scope: \"stage\", decider: true };",
     "killers": [
       {
         "cwd": "packages/engine",
