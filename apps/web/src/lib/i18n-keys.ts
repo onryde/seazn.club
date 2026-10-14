@@ -2556,6 +2556,7 @@ export type DictionaryKey =
   | "externalPlay.room.seatOnHold"
   | "externalPlay.room.seconds.one"
   | "externalPlay.room.seconds.other"
+  | "externalPlay.room.sound.label"
   | "externalPlay.room.standings"
   | "externalPlay.room.state.boardClosed.body"
   | "externalPlay.room.state.boardClosed.title"

@@ -6045,6 +6045,7 @@
   "externalPlay.room.header.meta": "{division} · Ronde {round}",
   "externalPlay.room.header.board": "Échiquier {board} · {clock}",
   "externalPlay.room.backAria": "Retour au match",
+  "externalPlay.room.sound.label": "Sons des coups",
   "externalPlay.room.backToFixture": "Retour au match",
   "externalPlay.room.standings": "Classement",
   "externalPlay.room.you": "Vous",

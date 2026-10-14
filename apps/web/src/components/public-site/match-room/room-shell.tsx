@@ -27,6 +27,7 @@ import { CameraNotice } from "./camera-notice";
 import { Checkin } from "./checkin";
 import { GameOver } from "./game-over";
 import { RoomHeader } from "./room-header";
+import { useRoomSounds, useSoundSwitch } from "./use-room-sounds";
 import {
   CameraBlockedCard,
   CameraCard,
@@ -154,6 +155,9 @@ export function RoomShell({
   const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId, cameraEnds(state));
   // The pill reads this client's own meeting join (review I8): no server call.
   const presence = useOpponentPresence(camera, cameraOn ? snap.opponentPresence : null);
+  // T17B fix 2 (D19): move sounds, and the header's switch for them.
+  const sound = useSoundSwitch();
+  useRoomSounds(state, sound.on);
 
   // Re-entry with cameras on: the seat is already ours, but the participant
   // token only ever arrives in a seat answer — claim once, quietly, so the
@@ -236,7 +240,7 @@ export function RoomShell({
 
   return (
     <div data-testid="match-room" data-screen={screen.kind} className="flex min-h-screen min-w-0 flex-col bg-[#fdfcf8] text-[#2e1065]">
-      <RoomHeader snap={snap} t={t} />
+      <RoomHeader snap={snap} t={t} sound={{ on: sound.on, onToggle: sound.toggle }} />
       <main className="mx-auto flex w-full min-w-0 max-w-[1040px] flex-1 flex-col px-4 pb-4 pt-3 md:p-6">
         <Screen
           screen={screen}
