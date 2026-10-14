@@ -40,6 +40,7 @@ import {
   OffForClubCard,
   RelinkCard,
   RevokedNotice,
+  SeatHeldNotice,
   UnavailableCard,
   VideoDownCard,
 } from "./room-cards";
@@ -304,14 +305,18 @@ export function Screen({
       return <UnavailableCard fixtureHref={snap.links.fixture} t={t} />;
     case "offForClub":
       return <OffForClubCard fixtureHref={snap.links.fixture} t={t} />;
-    case "revoked": {
+    case "revoked":
+    case "seatHeld": {
       // Seam A (owner-approved canvas): the frozen player's own board as it
       // stands — the clocks still running on Lichess, the board dimmed and
       // read-only, the amber notice and its one action, the way back, and
       // (owner tweak 2) the camera duty on the phone as on the desktop.
+      // R2-1: a hold the viewer did not cause keeps the layout, with the
+      // neutral notice in A's slot and no action.
       const g = snap.game;
+      const mine = screen.kind === "revoked";
       return (
-        <div data-testid="room-revoked" className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
+        <div data-testid={mine ? "room-revoked" : "room-seat-held"} className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
           {cameraBanners}
           {g !== null ? (
             <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
@@ -339,7 +344,7 @@ export function Screen({
           ) : null}
           <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
             <div className="order-2 min-w-0">
-              <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} t={t} />
+              {mine ? <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} t={t} /> : <SeatHeldNotice t={t} />}
             </div>
             {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} t={t} /> : null}
             <BackToFixture href={snap.links.fixture} className="order-6" t={t} />

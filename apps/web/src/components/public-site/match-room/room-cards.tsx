@@ -376,6 +376,23 @@ export function RevokedNotice({ relinkHref, otherAccount = null, t }: { relinkHr
   );
 }
 
+/** A's slot for a seat hold the viewer did NOT cause (final re-review 2, R2-1): both seats frozen, or the
+ *  opponent's change before a game existed. The held seam's own words — the board is with the organiser — in the
+ *  room's neutral palette, not A's amber, and NO action: nothing here is the viewer's to do, and a re-link lifts no
+ *  hold. Same box as A's notice, so the column and the aside keep their rhythm. */
+export function SeatHeldNotice({ t }: { t: RoomT }) {
+  return (
+    <div
+      data-testid="room-seat-held-notice"
+      role="status"
+      className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-[#e7e3f3] bg-white p-3 text-[#2e1065] md:gap-2 md:p-3.5"
+    >
+      <span className="text-[15px] font-semibold leading-[1.35] md:text-base">{t("externalPlay.room.state.held.title")}</span>
+      <span className="text-[13px] leading-[1.45] text-[#4a3a6b] md:text-sm">{t("externalPlay.room.state.held.body")}</span>
+    </div>
+  );
+}
+
 /** The room's way back to the fixture, as a full button (A, B). */
 export function BackToFixture({ href, className = "", t }: { href: string; className?: string; t: RoomT }) {
   return (

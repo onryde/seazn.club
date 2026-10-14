@@ -11,11 +11,17 @@ import "server-only";
 // whose grant the unlink revokes — and holds them as `token_revoked`: the unlink revokes Seazn's access, which is that
 // reason's sentence, while `account_changed` would tell the organiser another account was linked. Same seat, same
 // readers (both are SEAT_HOLD_REASONS).
+//
+// Final re-review 2, R2-1: a board mid-create records no colours yet, so its seat is the PAIRING's — whiteSideOf,
+// the one rule T9 created the game by (and refuses to create past, if it moved) and the room reads before a game
+// exists. A seat-less hold freezes both and blames nobody, so the player who changed nothing would read the same
+// as the one who did.
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
+import { whiteSideOf } from "./guard";
 import { holdForOrganiser, type RevokedSeat } from "./result";
 
-/** The seat the player sits at on this board, by colour — null while no colours are recorded (a create in flight). */
+/** The seat the player sits at on this board, by colour — null only when the colours could not be read. */
 function seatOf(b: { whiteSide: "home" | "away" | null; home: boolean; away: boolean }): RevokedSeat | null {
   if (b.whiteSide === null) return null;
   if (b.home && b.away) return "both";
@@ -29,12 +35,13 @@ function seatOf(b: { whiteSide: "home" | "away" | null; home: boolean; away: boo
  *  refused by the hold itself, and a board already held keeps its first diagnosis (holdForOrganiser). */
 export async function holdBoardsOnAccountChange(userId: string, change: { from: string; to: string | null }): Promise<void> {
   const act = change.to === null ? "unlink" : "re-link to a different account";
-  let boards: { fixtureId: string; whiteSide: "home" | "away" | null; home: boolean; away: boolean }[];
+  type Board = { fixtureId: string; orgId: string; whiteSide: "home" | "away" | null; home: boolean; away: boolean };
+  let boards: Board[];
   try {
-    boards = await sql<{ fixtureId: string; whiteSide: "home" | "away" | null; home: boolean; away: boolean }[]>`
+    boards = await sql<Board[]>`
       with mine as (
         select em.entrant_id from entrant_members em join persons p on p.id = em.person_id where p.user_id = ${userId})
-      select ep.fixture_id as "fixtureId", ep.white_side as "whiteSide",
+      select ep.fixture_id as "fixtureId", ep.org_id as "orgId", ep.white_side as "whiteSide",
              f.home_entrant_id in (select entrant_id from mine) as home,
              f.away_entrant_id in (select entrant_id from mine) as away
         from fixture_external_play ep
@@ -55,7 +62,19 @@ export async function holdBoardsOnAccountChange(userId: string, change: { from: 
   const held: string[] = [];
   for (const board of boards) {
     const { fixtureId } = board;
-    const seat = seatOf(board);
+    let whiteSide = board.whiteSide;
+    if (whiteSide === null) {
+      try {
+        whiteSide = await whiteSideOf(board);
+      } catch (err) {
+        // Held all the same, with no seat: both frozen, nobody blamed — never a board left unheld for want of a colour.
+        log.error(
+          { userId, fixtureId, err: err instanceof Error ? err.message : String(err) },
+          `lichess: ${act} could not read a mid-create board's colours — held with no seat`,
+        );
+      }
+    }
+    const seat = seatOf({ ...board, whiteSide });
     try {
       const r = await holdForOrganiser({ fixtureId, reason, detail, ...(seat === null ? {} : { seat }) });
       if (r.wrote === "needs_organiser" && r.reason === reason) held.push(fixtureId);

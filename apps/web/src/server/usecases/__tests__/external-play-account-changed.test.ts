@@ -18,6 +18,19 @@ vi.mock("../external-play/result", async (importOriginal) => {
   return { ...mod, holdForOrganiser: vi.fn(mod.holdForOrganiser) };
 });
 
+// The pairing's colours are the real rule; ONE case makes reading them fail (R2-1's fallback).
+const colours = vi.hoisted(() => ({ fail: false }));
+vi.mock("../external-play/guard", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../external-play/guard")>();
+  return {
+    ...mod,
+    whiteSideOf: vi.fn(async (f: Parameters<typeof mod.whiteSideOf>[0]) => {
+      if (colours.fail) throw new Error("colours unreadable");
+      return mod.whiteSideOf(f);
+    }),
+  };
+});
+
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
@@ -27,6 +40,11 @@ import { holdBoardsOnAccountChange } from "../external-play/account-changed";
 import { readRoom } from "../external-play/room";
 import { listNeedsOrganiserExternalPlay } from "../external-play";
 import { seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard, type SeedSide } from "./_external-play-seed";
+import { roomScreen } from "@/components/public-site/match-room/room-screen";
+import { initialRoomState } from "@/components/public-site/match-room/room-state";
+import { mintOrgOwnerAuth } from "../external-play/auth";
+import { getFixtureState } from "../fixtures";
+import { scoreEvent } from "../scoring";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -129,9 +147,10 @@ describe.runIf(HAS_DB)("a re-link to a different Lichess account holds the playe
         await relink(b[colour], to);
         const after = await bridgeOf(b.fixtureId);
         if (STATES[state].holds) {
-          // Final re-review P11 (1): a seat hold — the re-linked player's OWN seat (the bridge plays home White), or
-          // none while no colours are recorded (a create in flight: both frozen, V442).
-          const seat = STATES[state].row.challenge ? (colour === "home" ? "white" : "black") : null;
+          // Final re-review P11 (1): a seat hold — the re-linked player's OWN seat. The bridge plays home White; a
+          // create in flight records no colours, so the seat is the PAIRING's (R2-1) — home White too here, with no
+          // pairing card (chess.md §2: Swiss home is White). The Black-on-home pairing is its own case (R2-1 below).
+          const seat = colour === "home" ? "white" : "black";
           expect(after, `${state} ${colour}`).toMatchObject({ status: "needs_organiser", needs_reason: "account_changed", revoked_seat: seat });
           expect(after!.last_error, `${state} ${colour}: the organiser's detail names both accounts`).toContain(`${from} → ${to}`);
           held += 1;
@@ -309,8 +328,9 @@ describe.runIf(HAS_DB)("an unlink holds the player's live boards as token_revoke
         await unlink(b[colour]);
         const after = await bridgeOf(b.fixtureId);
         if (STATES[state].holds) {
-          // The bridge plays home White; no colours recorded (a create in flight) ⇒ no seat, both frozen (V442).
-          const seat = STATES[state].row.challenge ? (colour === "home" ? "white" : "black") : null;
+          // The bridge plays home White; a create in flight records no colours ⇒ the PAIRING's seat (R2-1), home
+          // White with no pairing card (chess.md §2).
+          const seat = colour === "home" ? "white" : "black";
           expect(after, `${state} ${colour}`).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: seat });
           expect(after!.last_error, `${state} ${colour}: the organiser's detail names the account`).toContain(b[colour].lichessId);
           held += 1;
@@ -401,5 +421,91 @@ describe.runIf(HAS_DB)("an unlink holds the player's live boards as token_revoke
     expect(logged[0]![0]).toMatchObject({ userId: b.home.userId, fixtureId: b.fixtureId });
     expect(revoked()).toEqual([`Bearer lio_seed_${b.home.lichessId}`]);
     expect(await getLichessAccessToken(b.home.userId), "the link is gone").toBeNull();
+  });
+});
+
+// Final re-review 2, R2-1: a hold an unlink or a re-link raises must not tell the player who did NOTHING that their
+// link was revoked, or send them to re-link. The player whose account changed keeps A (its own words and its
+// re-link); the other reads the neutral hold (no button). The expected screens are the brief's rule: on a live
+// board the innocent plays on (P11 (1)); on a mid-create board there is no game to play on, so the board is with
+// the organiser. Driven through the REAL unlink / re-link, the real room read and the real screen decision.
+describe.runIf(HAS_DB)("R2-1: whoever did not change reads a neutral hold, never 'your link was revoked'", () => {
+  const deps = () =>
+    ({
+      publish: vi.fn(async () => {}),
+      create: vi.fn(async () => ({ created: false as const, reason: "not_ready" as const })),
+      offered: vi.fn(async () => true),
+      mintRealtime: vi.fn(async () => "rt-token"),
+    }) as never;
+  const screenOf = async (userId: string, fixtureId: string) => {
+    const snap = await readRoom({ kind: "session", userId }, fixtureId, deps());
+    return roomScreen(initialRoomState(snap, Date.now())).kind;
+  };
+
+  it("both seats, both triggers (unlink, re-link), live and mid-create — the changer reads A, the other never does — counted", async () => {
+    const WANT = {
+      live: { changer: "revoked", other: "live" },
+      mid_create: { changer: "revoked", other: "seatHeld" },
+    } as const;
+    let checked = 0;
+    for (const trigger of ["unlink", "relink"] as const) {
+      for (const state of ["live", "mid_create"] as const) {
+        for (const changer of ["home", "away"] as const) {
+          const r = await round(1);
+          const b = r.boards[0]!;
+          await bridge(r, b, state);
+          const other = changer === "home" ? "away" : "home";
+          if (trigger === "unlink") await unlinkLichess(b[changer].userId);
+          else await relink(b[changer], freshAccount());
+          const label = `${trigger} ${state} ${changer}`;
+          expect((await bridgeOf(b.fixtureId))!.status, `${label}: premise — held`).toBe("needs_organiser");
+          expect(await screenOf(b[changer].userId, b.fixtureId), `${label}: the changer`).toBe(WANT[state].changer);
+          expect(await screenOf(b[other].userId, b.fixtureId), `${label}: the other player`).toBe(WANT[state].other);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(2 * 2 * 2);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("mid-create, the seat is the PAIRING's colour: with Black on home (a pairing card), home's re-link holds Black, and home's room is the frozen one", async () => {
+    const r = await round(1);
+    const b = r.boards[0]!;
+    const auth = await mintOrgOwnerAuth(r.orgId);
+    const st = await getFixtureState(auth, b.fixtureId);
+    await scoreEvent(auth, b.fixtureId, { expected_seq: st.last_seq, type: "boardgame.pairing", payload: { white: b.away.entrantId } });
+    await bridge(r, b, "mid_create");
+    await relink(b.home, freshAccount());
+    expect(await bridgeOf(b.fixtureId)).toMatchObject({ needs_reason: "account_changed", revoked_seat: "black" });
+    const home = await readRoom({ kind: "session", userId: b.home.userId }, b.fixtureId, deps());
+    const away = await readRoom({ kind: "session", userId: b.away.userId }, b.fixtureId, deps());
+    expect([home.you.colour, home.frozen], "home is Black, and frozen").toEqual(["black", "you"]);
+    expect([away.you.colour, away.frozen], "away is White, and plays nobody's freeze").toEqual(["white", "opponent"]);
+  });
+
+  it("never silent, never unheld: a mid-create board whose colours cannot be read is held with NO seat (both frozen, nobody blamed — each reads the neutral hold), logged by user and board; a live board's recorded colours are never asked", async () => {
+    const r = await round(2);
+    const [mid, live] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await sql`update fixtures set home_entrant_id = ${mid.home.entrantId} where id = ${live.fixtureId}`;
+    await bridge(r, mid, "mid_create");
+    await bridge(r, live, "live");
+    colours.fail = true;
+    try {
+      await relink(mid.home, freshAccount());
+    } finally {
+      colours.fail = false;
+    }
+    expect(await bridgeOf(mid.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "account_changed", revoked_seat: null });
+    expect(await bridgeOf(live.fixtureId), "the recorded colours stand").toMatchObject({ needs_reason: "account_changed", revoked_seat: "white" });
+    const logged = errorSpy.mock.calls as unknown[][];
+    expect(logged).toHaveLength(1);
+    expect(logged[0]![0]).toMatchObject({ userId: mid.home.userId, fixtureId: mid.fixtureId });
+    let checked = 0;
+    for (const side of [mid.home, mid.away]) {
+      expect(await screenOf(side.userId, mid.fixtureId), side === mid.home ? "home" : "away").toBe("seatHeld");
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 });

@@ -177,18 +177,35 @@ describe("Seam A — the Lichess link revoked: the frozen player's own room", ()
     expect(attrOf(html, "room-board", "data-on-hold")).toBe("true");
   });
 
-  it("both seats frozen: each player sees A — White and Black alike", () => {
+  it("final re-review 2, R2-1: a seat hold the viewer did NOT cause — both seats, or the opponent's with no game — is the neutral hold, in every locale: no 'your link was revoked', no Link Lichess again; the way back stays — counted", () => {
+    // Expected words from the dictionaries, never the component: the held seam's own two lines.
+    const CASES: [string, Partial<RoomSnapshot>, boolean][] = [
+      ["both frozen, White", { game: GAME, frozen: "both", you: { colour: "white", name: "Bo Lind", checkedIn: true }, opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true } }, true],
+      ["both frozen, Black", { game: GAME, frozen: "both", you: { colour: "black", name: "Bo Lind", checkedIn: true }, opponent: { colour: "white", name: "Ada Okonkwo", checkedIn: true } }, true],
+      ["the opponent's freeze, no game (a create in flight)", { game: null, frozen: "opponent", held: true }, false],
+    ];
     let checked = 0;
-    for (const colour of ["white", "black"] as const) {
-      const other = colour === "white" ? "black" : "white";
-      const s = revokedState({ frozen: "both", you: { colour, name: "Bo Lind", checkedIn: true }, opponent: { colour: other, name: "Ada Okonkwo", checkedIn: true } });
-      expect(roomScreen(s).kind, colour).toBe("revoked");
-      const html = paint(s);
-      expect(ids(html), colour).toContain("room-revoked-notice");
-      expect(textOf(html), colour).toContain(colour === "white" ? CANVAS.whiteSeatOnHold : "Black · seat on hold");
-      checked += 1;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      for (const [label, over, board] of CASES) {
+        const s = revokedState(over);
+        const at = `${locale} ${label}`;
+        expect(roomScreen(s).kind, at).toBe("seatHeld");
+        const html = paint(s, { locale });
+        const present = ids(html);
+        for (const id of ["room-seat-held", "room-seat-held-notice", "room-back-to-fixture"]) expect(present, `${at}: ${id}`).toContain(id);
+        for (const id of ["room-revoked-notice", "room-revoked-relink", "room-controls"]) expect(present, `${at}: ${id}`).not.toContain(id);
+        expect(present.includes("room-board"), `${at}: the board, dimmed, exactly when a game is on file`).toBe(board);
+        const text = textOf(html);
+        expect(text, at).toContain(d["externalPlay.room.state.held.title"]);
+        expect(text, at).toContain(d["externalPlay.room.state.held.body"]);
+        for (const k of ["externalPlay.room.state.revoked.title", "externalPlay.room.state.revoked.relink"]) expect(text, `${at}: ${k}`).not.toContain(d[k]);
+        expect(text, `${at}: no raw key`).not.toMatch(RAW_KEY);
+        expect(attrOf(html, "room-seat-held-notice", "role"), at).toBe("status");
+        checked += 1;
+      }
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(Object.keys(LOCALES).length * CASES.length);
   });
 
   it("the pairs: the OPPONENT's freeze leaves this board live, and a written result outranks A (I1)", () => {
