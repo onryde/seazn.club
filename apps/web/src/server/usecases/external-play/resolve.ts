@@ -80,6 +80,8 @@ type Board = {
   homeEntrantId: string | null;
   awayEntrantId: string | null;
   bridgeStatus: string;
+  /** M-5: the online game ever started — a move on file, or the start stamp the first move writes. */
+  bridgeStarted: boolean;
   needsReason: string | null;
   whiteSide: Side | null;
   stageKind: string | null;
@@ -105,6 +107,7 @@ async function loadBoard(auth: AuthCtx, fixtureId: string): Promise<Board> {
     select f.org_id as "orgId", f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.white_side as "whiteSide",
+           (ep.move_count > 0 or ep.started_at is not null) as "bridgeStarted",
            s.kind as "stageKind", o.default_locale as "orgLocale", f.winner_to_fixture, f.loser_to_fixture
       from fixtures f
       join divisions d on d.id = f.division_id
@@ -171,6 +174,7 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *    predicate) — another organiser must settle it;
  *  - 409 ALREADY_RESOLVED: the board already has its result when this settle reads it;
  *  - 409 ONLINE_GAME_OVER: the online game is over but the fixture is open (a voided result): the scoring pad's;
+ *  - 409 ONLINE_GAME_NEVER_STARTED (M-5): the same, for a board closed before its game started (no move, no start);
  *  - 409 BOARD_CHANGED: another writer changed it while this settle was on its way (two organisers at once: one
  *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled);
  *  - 409 NO_RESULT_CHANGED (M-7, fix round 4): the board's offer in place of a winner is no longer the one asked
@@ -199,7 +203,12 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
   // The online game is over while the fixture is open again: its result was voided on the pad (or a level result
   // entered there waits for its tie-break). The bridge cannot reopen a game Lichess ended, and the board has no result
   // to be "already" settled — the pad is where it is decided (T16 fix round 3, N4).
+  // M-5: a board closed before its game started (a no-show walkover, a pre-start settle) never had an online game
+  // to be "over" — its own answer, the same instruction.
   if (b.bridgeStatus === "finished") {
+    if (!b.bridgeStarted) {
+      throw new HttpError(409, "This board's online game never started — record its result on the scoring pad", "ONLINE_GAME_NEVER_STARTED");
+    }
     throw new HttpError(409, "This board's online game is over — record its result on the scoring pad", "ONLINE_GAME_OVER");
   }
   if (b.homeEntrantId === null || b.awayEntrantId === null) {

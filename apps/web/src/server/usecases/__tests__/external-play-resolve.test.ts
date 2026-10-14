@@ -641,6 +641,53 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
 
 });
 
+// Final review M-5 / parked 12: a board whose online game never started (closed by a no-show walkover or a pre-start
+// settle) said "This board's online game is over" once its result was voided on the pad. It has its own answer; a
+// board with a move or a start keeps ONLINE_GAME_OVER (reconcile's N4 suite drives that arm through the real writers).
+describe.runIf(HAS_DB)("resolveExternalPlay — a closed board whose online game never started (M-5)", () => {
+  /** Settle the board, void that result on the pad, and ask again: what the second settle is told. */
+  async function settleVoidAndAsk(r: SeedOnlineChessRoundResult, b: SeedRoundBoard) {
+    expect(await resolveExternalPlay(r.owner, b.fixtureId, "home_wins")).toEqual({ status: "finished" });
+    expect((await bridgeOf(b.fixtureId)).status, "premise: the settle closed the bridge").toBe("finished");
+    const [decided] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${b.fixtureId} and type in ('boardgame.result', 'core.forfeit')
+       order by seq desc limit 1`;
+    const fs = await getFixtureState(r.owner, b.fixtureId);
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: fs.last_seq, type: "core.void", payload: { event_id: decided!.id } });
+    const before = (await ledgerOf(b.fixtureId)).length;
+    const answer = await codeOf(resolveExternalPlay(r.owner, b.fixtureId, "home_wins"));
+    expect((await ledgerOf(b.fixtureId)).length, "nothing written").toBe(before);
+    return answer;
+  }
+
+  it("a no-show walkover voided on the pad: ONLINE_GAME_NEVER_STARTED, its own sentence pointing to the pad", async () => {
+    const r = await round();
+    const b = r.boards[0]!;
+    await holdAs(r, b, "no_show_black");
+    expect(await settleVoidAndAsk(r, b)).toEqual([409, "ONLINE_GAME_NEVER_STARTED"]);
+    const err = await resolveExternalPlay(r.owner, b.fixtureId, "home_wins").catch((e: unknown) => e as HttpError);
+    expect((err as HttpError).message).toBe("This board's online game never started — record its result on the scoring pad");
+  });
+
+  it("the pair, each half of 'started' on its own: a move on file, or a start stamp, keeps ONLINE_GAME_OVER", async () => {
+    // Stand-ins for what play.ts and reconcile write (move_count with its moves; started_at): each half pinned alone.
+    const halves = [
+      sql`moves_uci = '["e2e4","e7e5"]'::jsonb, move_count = 2`,
+      sql`started_at = now() - interval '2 minutes'`,
+    ];
+    let checked = 0;
+    for (const [i, set] of halves.entries()) {
+      const r = await round();
+      const b = r.boards[0]!;
+      await gameBridge(r, b, "live");
+      await sql`update fixture_external_play set ${set} where fixture_id = ${b.fixtureId}`;
+      expect(await settleVoidAndAsk(r, b), `half ${i}`).toEqual([409, "ONLINE_GAME_OVER"]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 // I-3, fix round 3 (controller ruling): the void is offered only where it cannot hold progression up — a league, or a
 // group stage's round-robin (a table completes over a void). Typed from the ruling, never from no-result.ts.
 const VOID_SAFE: ReadonlySet<string> = new Set(["league", "group"]);

@@ -207,6 +207,7 @@ export type DictionaryKey =
   | "arbiter.notice.noResultChanged"
   | "arbiter.notice.notPlayable"
   | "arbiter.notice.notRequired"
+  | "arbiter.notice.onlineGameNeverStarted"
   | "arbiter.notice.onlineGameOver"
   | "arbiter.notice.overridden"
   | "arbiter.notice.ownBoard"

@@ -6246,6 +6246,7 @@
   "arbiter.notice.alreadyResolved": "This board already has its result.",
   "arbiter.notice.boardChanged": "This board changed while you were deciding — reload to see it.",
   "arbiter.notice.onlineGameOver": "This board's online game is over. Record its result on the scoring pad.",
+  "arbiter.notice.onlineGameNeverStarted": "This board's online game never started. Record its result on the scoring pad.",
   "arbiter.notice.needsWinner": "A drawn knockout game needs a winner. Pick who goes through.",
   "arbiter.notice.knockoutNeedsWinner": "A knockout game needs a winner — adjudicate it or award it.",
   "arbiter.notice.swissNeedsResult": "A Swiss round needs every game decided — adjudicate it or award it.",
