@@ -669,7 +669,7 @@ export function ScheduleBoard({
     } catch (err) {
       actions.setError(err instanceof Error ? err.message : msg("board.freeze.error"));
     }
-  }, [single, actions, router]);
+  }, [single, actions, msg, router]);
   const board = useMemo(
     () => actions.board.filter((f) => visibleIds.has(f.division_id)),
     [actions.board, visibleIds],
@@ -1060,7 +1060,7 @@ export function ScheduleBoard({
         return next;
       });
     },
-    [actions.board, entrantNames, feedLabels],
+    [actions.board, entrantNames, feedLabels, msg],
   );
 
   const place = useCallback(
@@ -1077,7 +1077,7 @@ export function ScheduleBoard({
         );
       }
     },
-    [actions, entrantNames, feedLabels, pickedFixture],
+    [actions, entrantNames, feedLabels, msg, pickedFixture],
   );
 
   // Take the picked card off the board. Deliberately NOT `place(null, null)`:
@@ -1110,7 +1110,9 @@ export function ScheduleBoard({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pickedId]);
+    // `msg` re-subscribes the listener on a copy-catalog change, so the
+    // cancel is announced in the board's current language, not the old one.
+  }, [pickedId, msg]);
 
   // ------------------------------------------------- conflicts panel
   const visibleConflicts = useMemo(

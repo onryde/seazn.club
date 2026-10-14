@@ -41,7 +41,10 @@ export function MagicLink({
         setStatus("error");
         setError(e instanceof Error ? e.message : msg("magicLink.failed"));
       });
-  }, [token, next, router]);
+    // `msg` is listed because the failure copy reads it; its identity follows
+    // the copy catalog, so this can re-run — `ran` above makes every re-run a
+    // no-op, so the one-time token is still POSTed exactly once.
+  }, [token, next, router, msg]);
 
   return (
     <div className="card p-6 text-center">

@@ -384,7 +384,7 @@ export function useBoardActions(
       }
       return false;
     },
-    [board, entrantNames, feedLabels, router],
+    [board, entrantNames, feedLabels, msg, router],
   );
 
   const moveCard = useCallback(
@@ -588,7 +588,7 @@ export function useBoardActions(
         setBusy(false);
       }
     },
-    [fail, router],
+    [fail, msg, router],
   );
 
   const act = useCallback(

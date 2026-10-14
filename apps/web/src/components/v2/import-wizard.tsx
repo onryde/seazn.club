@@ -272,7 +272,7 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
       groups.set(key, list);
     }
     return [...groups.entries()];
-  }, [preview]);
+  }, [preview, msg]);
 
   /** Forward-ref → the name the op creates. `squad.add` points at a person by
    *  ref, so without this its chip reads as a bare label with no player on it,
