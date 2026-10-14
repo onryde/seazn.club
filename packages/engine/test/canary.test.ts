@@ -249,6 +249,18 @@ describe("checkCanaryTarball (what must not reach the registry)", () => {
     expect(() => gate(makeTarball(stray, files))).toThrow(/extra/);
   });
 
+  it("refuses a tarball whose exports have every right key and nothing to check under them: zero targets judged is a failure, not a pass", () => {
+    const hollow = goodManifest();
+    hollow.exports = Object.fromEntries(expectedKeys.map((k) => [k, {}])); // 22 keys, each an empty conditions object: no leaf for checkTarballExports to count
+    const tgz = makeTarball(hollow, distFilesOf(pkg.publishConfig.exports));
+    expect(() => gate(tgz)).toThrow(/checked nothing/);
+    const r = run(["check", tgz, VERSION]);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(/checked nothing/);
+    expect(expectedKeys.length).toBeGreaterThan(10);
+  });
+
   it("refuses a tarball with the wrong name or a version that is not the one derived for this run", () => {
     const files = distFilesOf(pkg.publishConfig.exports);
     expect(() => gate(makeTarball({ ...goodManifest(), name: "@seazn/engine" }, files))).toThrow(/@seazn\/engine/);

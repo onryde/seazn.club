@@ -1,6 +1,8 @@
-// Engine-split Task 1b-4 (D16): .github/workflows/engine-canary.yml, held by TEXT. There is no YAML library at the repo root, so the
-// parse below accepts exactly ONE layout (the one the workflow is written in) and a reshaped file reds a pin rather than parsing
-// into something vacuous.
+// Engine-split Task 1b-4 (D16): .github/workflows/engine-canary.yml, held by TEXT. There is no YAML library at the repo root (and none is
+// added: W1d review I8, see tools/matrix/__tests__/workflow-text.ts), so the parse below accepts exactly ONE layout (the one the workflow
+// is written in) and a reshaped file reds a pin rather than parsing into something vacuous. Where YAML allows several spellings of one
+// fact (a `permissions` value is a scalar, a flow map or a block map) the reader below takes all of them, and an unreadable spelling is
+// a value no pin accepts, never a skipped check.
 //
 // Why a pin table and not a handful of regexes: a publish workflow is outward-facing and runs only after a merge, so the first
 // time anyone sees it misbehave is on the registry. Every property that decides WHAT is published, WHERE, UNDER WHICH TAG and WITH
@@ -19,6 +21,7 @@ import { describe, expect, it } from "vitest";
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const WORKFLOW = ".github/workflows/engine-canary.yml";
 const CLI = "node packages/engine/pack-proof/canary.mjs";
+const PUBLISH = 'pnpm publish "$TARBALL" --tag canary --no-git-checks';
 const TARBALL = "${{ runner.temp }}/engine-canary/onryde-seazn-engine-${{ steps.version.outputs.version }}.tgz";
 
 // ------------------------------------------------------------------------------------------------------------------ the parse
@@ -29,15 +32,19 @@ type Step = {
   name: string | null;
   id: string | null;
   uses: string | null;
-  /** The `run:` script, dedented; a one-line `run: x` is just `x`. */
+  /** The `run:` script, dedented; a one-line `run: x` is just `x` (its continuation lines, which YAML folds into it, are appended). */
   run: string | null;
+  /** The comment after the `uses:` value (`# v4.3.0`), or null. */
+  usesComment: string | null;
   /** The step's top-level keys. */
   keys: string[];
   with: Record<string, string>;
   env: Record<string, string>;
 };
-type Job = { name: string; lines: string[]; needs: string | null; permissions: string[] | null; keys: string[]; steps: Step[] };
-type Workflow = { code: string[]; on: string[]; permissions: string[]; concurrency: string[]; jobs: Record<string, Job> };
+/** A `permissions` value: a scalar (`write-all`), or a map of scope to access. */
+type Perms = string | Record<string, string>;
+type Job = { name: string; lines: string[]; needs: string | null; permissions: Perms | null; keys: string[]; steps: Step[] };
+type Workflow = { code: string[]; on: string[]; permissions: Perms | null; concurrency: string[]; jobs: Record<string, Job> };
 
 const indentOf = (line: string) => line.length - line.trimStart().length;
 const isComment = (line: string) => /^\s*#/.test(line);
@@ -65,16 +72,56 @@ function mapOf(lines: string[], key: string, indent: number): Record<string, str
   return out;
 }
 
+const stripComment = (v: string) => v.replace(/\s+#.*$/, "").trim();
+
+/** The `permissions` key at `indent` spaces, in whichever spelling: absent (null), a scalar (`write-all`), a flow map (`{ packages: write }`)
+ *  or a block map. A spelling this does not read comes back as `<unreadable: ...>`, which no pin accepts. */
+function permissionsAt(lines: string[], indent: number): Perms | null {
+  const key = new RegExp(`^ {${indent}}permissions:(?: (.*))?$`);
+  const at = lines.findIndex((l) => key.test(l));
+  if (at === -1) return null;
+  const inline = stripComment(key.exec(lines[at])![1] ?? "");
+  if (inline === "") {
+    const out: Record<string, string> = {};
+    for (const l of lines.slice(at + 1)) {
+      if (l.trim() === "" || isComment(l)) continue;
+      if (indentOf(l) <= indent) break;
+      const m = /^ *([\w-]+): ?(.*)$/.exec(l);
+      if (m === null) return `<unreadable: ${l.trim()}>`;
+      out[m[1]] = stripComment(m[2]);
+    }
+    return out;
+  }
+  if (inline.startsWith("{")) {
+    if (!inline.endsWith("}")) return `<unreadable: ${inline}>`;
+    const out: Record<string, string> = {};
+    for (const part of inline.slice(1, -1).split(",").map((x) => x.trim()).filter((x) => x !== "")) {
+      const m = /^([\w-]+): *([\w-]+)$/.exec(part);
+      if (m === null) return `<unreadable: ${inline}>`;
+      out[m[1]] = m[2];
+    }
+    return out;
+  }
+  return /^[\w-]+$/.test(inline) ? inline : `<unreadable: ${inline}>`;
+}
+
+/** A canonical string for a permissions value, so key order and spelling do not matter. */
+const canon = (p: Perms | null) => (p === null ? "<absent>" : typeof p === "string" ? `scalar:${p}` : `map:${JSON.stringify(Object.entries(p).sort(([a], [b]) => a.localeCompare(b)))}`);
+
 function parseStep(raw: string[]): Step {
   const lines = raw.filter((l) => !isComment(l));
   lines[0] = lines[0].replace(/^ {6}- /, "        ");
   const keys = lines.flatMap((l) => /^ {8}([\w-]+):/.exec(l)?.slice(1) ?? []);
-  const scalar = (k: string) => lines.map((l) => new RegExp(`^ {8}${k}: ?(.*)$`).exec(l)?.[1]).find((v) => v !== undefined) ?? null;
+  const raws = (k: string) => lines.map((l) => new RegExp(`^ {8}${k}: ?(.*)$`).exec(l)?.[1]).find((v) => v !== undefined);
+  const scalar = (k: string) => {
+    const r = raws(k);
+    return r === undefined ? null : stripComment(r);
+  };
   let run: string | null = null;
   const runAt = lines.findIndex((l) => /^ {8}run:/.test(l));
   if (runAt !== -1) {
     const first = /^ {8}run: ?(.*)$/.exec(lines[runAt])![1];
-    if (first === "|") {
+    if (/^[|>][+-]?[0-9]?$/.test(first)) {
       const body: string[] = [];
       for (const l of lines.slice(runAt + 1)) {
         if (l.trim() !== "" && indentOf(l) < 10) break;
@@ -82,10 +129,18 @@ function parseStep(raw: string[]): Step {
       }
       run = `${body.join("\n").trimEnd()}\n`;
     } else {
-      run = first;
+      // a plain scalar: the lines indented under it continue it, and YAML folds them into one line with single spaces
+      const rest: string[] = [];
+      for (const l of lines.slice(runAt + 1)) {
+        if (l.trim() === "" || indentOf(l) < 10) break;
+        rest.push(l.trim());
+      }
+      run = [first, ...rest].join(" ");
     }
   }
-  return { lines, name: scalar("name"), id: scalar("id"), uses: scalar("uses"), run, keys, with: mapOf(lines, "with", 8), env: mapOf(lines, "env", 8) };
+  const usesRaw = raws("uses");
+  const usesComment = usesRaw === undefined ? null : (/\s+#\s*(.*)$/.exec(usesRaw)?.[1] ?? null);
+  return { lines, name: scalar("name"), id: scalar("id"), uses: scalar("uses"), usesComment, run, keys, with: mapOf(lines, "with", 8), env: mapOf(lines, "env", 8) };
 }
 
 function parseJob(name: string, text: string): Job {
@@ -96,12 +151,11 @@ function parseJob(name: string, text: string): Job {
   const raw = lines.slice(stepsAt + 1);
   const starts = raw.flatMap((l, i) => (l.startsWith("      - ") ? [i] : []));
   if (starts.length === 0) throw new Error(`job ${name} holds no step`);
-  const permissionsAt = head.indexOf("    permissions:");
   return {
     name,
     lines,
     needs: head.map((l) => /^ {4}needs: ?(.*)$/.exec(l)?.[1]).find((v) => v !== undefined) ?? null,
-    permissions: permissionsAt === -1 ? null : Object.entries(mapOf(head, "permissions", 4)).map(([k, v]) => `${k}: ${v}`),
+    permissions: permissionsAt(head, 4),
     keys: head.flatMap((l) => /^ {4}([\w-]+):/.exec(l)?.slice(1) ?? []),
     steps: starts.map((from, n) => parseStep(raw.slice(from, starts[n + 1] ?? raw.length))),
   };
@@ -120,7 +174,7 @@ function parse(text: string): Workflow {
     if (Object.hasOwn(jobs, name)) throw new Error(`job "${name}" is declared twice`);
     jobs[name] = parseJob(name, body.slice(from, starts[n + 1] ?? body.length).join("\n"));
   });
-  return { code: lines.filter((l) => l.trim() !== "" && !isComment(l)), on: topBlock(lines, "on"), permissions: topBlock(lines, "permissions"), concurrency: topBlock(lines, "concurrency"), jobs };
+  return { code: lines.filter((l) => l.trim() !== "" && !isComment(l)), on: topBlock(lines, "on"), permissions: permissionsAt(lines, 0), concurrency: topBlock(lines, "concurrency"), jobs };
 }
 
 // ----------------------------------------------------------------------------------------------------------------------- pins
@@ -153,16 +207,17 @@ const pinsOf = (root: { packageManager: string }): Record<string, (wf: Workflow)
       return v;
     },
     // Least privilege: the workflow default reads; ONLY the publish job writes packages; nothing anywhere can write contents or mint an id token.
+    // Read through the permissions reader (scalar, flow map and block map), so `write-all` and `{ packages: write }` are judged like the block spelling.
     permissions: (wf) => {
       const { v, is } = verdict();
-      is(JSON.stringify(wf.permissions) === JSON.stringify(["permissions:", "  contents: read"]), `top-level permissions are not exactly contents: read (${JSON.stringify(wf.permissions)})`);
-      is(JSON.stringify(wf.jobs.publish?.permissions) === JSON.stringify(["contents: read", "packages: write"]), `the publish job's permissions are not exactly contents: read + packages: write (${JSON.stringify(wf.jobs.publish?.permissions)})`);
+      is(canon(wf.permissions) === canon({ contents: "read" }), `top-level permissions are not exactly { contents: read } (${canon(wf.permissions)})`);
+      is(canon(wf.jobs.publish?.permissions ?? null) === canon({ contents: "read", packages: "write" }), `the publish job's permissions are not exactly { contents: read, packages: write } (${canon(wf.jobs.publish?.permissions ?? null)})`);
       for (const [name, job] of Object.entries(wf.jobs)) {
-        if (name !== "publish") is(job.permissions === null || JSON.stringify(job.permissions) === JSON.stringify(["contents: read"]), `job ${name} holds more than contents: read`);
+        if (name !== "publish") is(job.permissions === null || canon(job.permissions) === canon({ contents: "read" }), `job ${name} must carry no permissions key (it inherits contents: read) or exactly { contents: read }, got ${canon(job.permissions)}`);
       }
-      const writes = wf.code.filter((l) => /:\s*write\s*$/.test(l));
-      is(writes.length === 1 && writes[0].trim() === "packages: write", `exactly one "write" grant, packages: write, was expected; found ${JSON.stringify(writes)}`);
-      is(!wf.code.some((l) => /id-token|contents: write/.test(l)), "id-token or contents: write appears");
+      const writes = wf.code.flatMap((l) => (l.match(/\bwrite\b/g) ?? []).map(() => l.trim()));
+      is(writes.length === 1 && writes[0] === "packages: write", `exactly one "write" in the whole file, packages: write, was expected; found ${JSON.stringify(writes)}`);
+      is(!wf.code.some((l) => /id-token|read-all/.test(l)), "id-token or read-all appears");
       return v;
     },
     // pnpm packs and publishes: `publishConfig.exports` is applied by pnpm only, so `npm publish` ships exports -> src. One publish, of the tarball that was checked.
@@ -172,7 +227,10 @@ const pinsOf = (root: { packageManager: string }): Record<string, (wf: Workflow)
       is(!lines.some((l) => /(^|[\s;&|(])(npm|npx|yarn)\s/.test(l)), "a run line calls npm/npx/yarn");
       const publishes = lines.filter((l) => /\bpublish\b/.test(l));
       is(publishes.length === 1, `expected exactly one publish command, found ${publishes.length}`);
-      is(publishes[0]?.startsWith('pnpm publish "$TARBALL" ') === true, `the publish command is not \`pnpm publish "$TARBALL" ...\`: ${publishes[0]}`);
+      // the WHOLE line: any flag beyond these (--dry-run, --registry, --access, --provenance ...) changes what happens to the tarball, so none is allowed
+      is(publishes[0] === PUBLISH, `the publish command is not exactly \`${PUBLISH}\`: ${publishes[0]}`);
+      const publish = named(wf.jobs.publish, "Publish");
+      is(publish?.run === PUBLISH && JSON.stringify(publish.keys) === JSON.stringify(["name", "env", "run"]), `the Publish step is not exactly name + env + run: ${JSON.stringify(publish?.keys)} ${publish?.run}`);
       return v;
     },
     // The dist-tag is `canary`, never `latest` (and not omitted: npm's default tag IS latest).
@@ -233,13 +291,13 @@ const pinsOf = (root: { packageManager: string }): Record<string, (wf: Workflow)
       const { v, is } = verdict();
       for (const [name, job] of Object.entries(wf.jobs)) {
         is(job.lines.includes("    runs-on: ubuntu-latest"), `job ${name} is not on the literal ubuntu-latest runner`);
-        const pnpm = job.steps.find((s) => s.uses === "pnpm/action-setup@v4");
+        const pnpm = job.steps.find((s) => s.uses?.startsWith("pnpm/action-setup@"));
         is(pnpm?.with.version === pnpmPin, `job ${name}: pnpm/action-setup version is ${pnpm?.with.version}, the root pin is ${pnpmPin}`);
         const node = job.steps.find((s) => s.uses === "actions/setup-node@v5");
         is(node?.with["node-version"] === "26", `job ${name}: node-version is ${node?.with["node-version"]}, expected 26`);
         const installs = job.steps.filter((s) => s.run?.startsWith("pnpm install"));
         is(installs.length === 1 && installs[0].run?.includes("--frozen-lockfile") === true, `job ${name}: expected one frozen pnpm install`);
-        is(job.steps.findIndex((s) => s.uses === "pnpm/action-setup@v4") < job.steps.findIndex((s) => s.uses === "actions/setup-node@v5"), `job ${name}: setup-node comes before pnpm/action-setup`);
+        is(job.steps.findIndex((s) => s.uses?.startsWith("pnpm/action-setup@")) < job.steps.findIndex((s) => s.uses === "actions/setup-node@v5"), `job ${name}: setup-node comes before pnpm/action-setup`);
       }
       const node = wf.jobs.publish?.steps.find((s) => s.uses === "actions/setup-node@v5");
       is(node?.with["registry-url"] === "https://npm.pkg.github.com", `publish registry-url is ${node?.with["registry-url"]}`);
@@ -263,12 +321,39 @@ const pinsOf = (root: { packageManager: string }): Record<string, (wf: Workflow)
       const { v, is } = verdict();
       for (const s of scripts(wf)) is(!(s.includes("echo") && s.includes("TOKEN")), `a run block holds both echo and TOKEN:\n${s}`);
       for (const s of scripts(wf)) is(!/set -[a-z]*x|xtrace|printenv|\benv\b *(\||$)/m.test(s), `a run block traces or dumps the environment:\n${s}`);
+      is(!wf.code.some((l) => /secrets\[|toJSON\(|secrets\s*\}\}/.test(l)), "the secrets context is read by index, dumped (toJSON) or passed whole");
       const holders = wf.code.filter((l) => /secrets\.|github\.token/.test(l));
       is(holders.length === 1 && holders[0].trim() === "NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", `the token is referenced somewhere other than the one NODE_AUTH_TOKEN line: ${JSON.stringify(holders)}`);
       is(named(wf.jobs.publish, "Publish")?.env.NODE_AUTH_TOKEN === "${{ secrets.GITHUB_TOKEN }}", "the Publish step does not carry NODE_AUTH_TOKEN");
+      is(JSON.stringify(Object.keys(named(wf.jobs.publish, "Publish")?.env ?? {})) === JSON.stringify(["NODE_AUTH_TOKEN", "TARBALL"]), "the Publish step's env is not exactly NODE_AUTH_TOKEN + TARBALL");
       is(!wf.code.some((l) => /^(env| {4}env):/.test(l)), "a workflow- or job-level env: block exists (env belongs to steps)");
       const checkouts = stepsOf(wf).filter(({ step }) => step.uses?.startsWith("actions/checkout@"));
       is(checkouts.length === Object.keys(wf.jobs).length && checkouts.every(({ step }) => step.with["persist-credentials"] === "false"), "a checkout leaves the job token in .git/config (persist-credentials is not false)");
+      return v;
+    },
+    // No `${{ }}` expression inside a run script: an expression is substituted into the script text before the shell sees it, so a value an
+    // outsider controls (a branch name, a PR title) would be shell code. Values reach scripts through env: only.
+    injection: (wf) => {
+      const { v, is } = verdict();
+      const all = stepsOf(wf).filter(({ step }) => step.run !== null);
+      for (const { job, step } of all) is(!step.run!.includes("${{"), `a run script of ${job} holds an expression: ${step.run}`);
+      is(all.length >= 8, `expected at least 8 run scripts, found ${all.length}`);
+      return v;
+    },
+    // The exact set of actions each job uses. Only first-party `actions/*` may ride a tag; any other action in the job that holds the write
+    // token is pinned to a commit (a moved tag of third-party code would run beside the token), with the release it is as a comment.
+    actions: (wf) => {
+      const { v, is } = verdict();
+      const uses = (name: string) => (wf.jobs[name]?.steps ?? []).flatMap((s) => (s.uses === null ? [] : [s.uses]));
+      is(JSON.stringify(uses("proof")) === JSON.stringify(["actions/checkout@v5", "pnpm/action-setup@v4", "actions/setup-node@v5"]), `the proof job's actions are ${JSON.stringify(uses("proof"))}`);
+      const publish = uses("publish");
+      is(publish.length === 3 && publish[0] === "actions/checkout@v5" && publish[2] === "actions/setup-node@v5" && /^pnpm\/action-setup@[0-9a-f]{40}$/.test(publish[1] ?? ""), `the publish job's actions are not checkout@v5, pnpm/action-setup@<40 hex>, setup-node@v5: ${JSON.stringify(publish)}`);
+      const pnpm = wf.jobs.publish?.steps.find((s) => s.uses?.startsWith("pnpm/action-setup@"));
+      is(/^v4\.\d+\.\d+$/.test(pnpm?.usesComment ?? ""), `the pinned pnpm/action-setup carries no \`# v4.x.y\` comment: ${pnpm?.usesComment}`);
+      for (const { job, step } of stepsOf(wf)) {
+        if (step.uses === null) continue;
+        is(/^actions\/[\w-]+@v\d+$/.test(step.uses) || (job === "proof" && step.uses === "pnpm/action-setup@v4") || /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(step.uses), `${job}: ${step.uses} is neither a first-party tag nor a commit pin`);
+      }
       return v;
     },
     // Nothing here writes to the repository: no commit, tag, push or release (the committed package.json version is never changed).
@@ -322,9 +407,17 @@ const MUTANTS: { pin: string; label: string; apply: (text: string) => string }[]
   { pin: "trigger", label: "branch filter widened", apply: swap("branches: [main]", "branches: [main, 'feat/**']") },
   { pin: "permissions", label: "workflow-level packages: write", apply: swap("permissions:\n  contents: read\n", "permissions:\n  contents: read\n  packages: write\n") },
   { pin: "permissions", label: "the proof job also gets packages: write", apply: swap("  proof:\n", "  proof:\n    permissions:\n      contents: read\n      packages: write\n") },
+  { pin: "permissions", label: "the proof job: permissions: write-all", apply: swap("  proof:\n", "  proof:\n    permissions: write-all\n") },
+  { pin: "permissions", label: "the proof job: flow-style permissions: { packages: write }", apply: swap("  proof:\n", "  proof:\n    permissions: { packages: write }\n") },
+  { pin: "permissions", label: "the proof job: flow map granting id-token: write", apply: swap("  proof:\n", "  proof:\n    permissions: { contents: read, id-token: write }\n") },
+  { pin: "permissions", label: "the workflow: permissions: write-all", apply: swap("permissions:\n  contents: read\n\nconcurrency", "permissions: write-all\n\nconcurrency") },
   { pin: "permissions", label: "contents: write on the publish job", apply: swap("      contents: read\n      packages: write", "      contents: write\n      packages: write") },
   { pin: "pnpm-publish", label: "npm publish instead of pnpm publish", apply: swap('pnpm publish "$TARBALL"', 'npm publish "$TARBALL"') },
   { pin: "pnpm-publish", label: "publish the folder, not the checked tarball", apply: swap('pnpm publish "$TARBALL"', "pnpm publish packages/engine") },
+  { pin: "pnpm-publish", label: "publish also runs --dry-run", apply: swap("--no-git-checks\n", "--no-git-checks --dry-run\n") },
+  { pin: "pnpm-publish", label: "publish to another registry", apply: swap("--no-git-checks\n", "--no-git-checks --registry https://registry.npmjs.org\n") },
+  { pin: "pnpm-publish", label: "publish with --access restricted", apply: swap("--no-git-checks\n", "--no-git-checks --access restricted\n") },
+  { pin: "pnpm-publish", label: "publish keeps the old --access public", apply: swap("--no-git-checks\n", "--no-git-checks --access public\n") },
   { pin: "tag", label: "--tag latest", apply: swap("--tag canary", "--tag latest") },
   { pin: "tag", label: "no --tag (npm's default tag is latest)", apply: swap(" --tag canary", "") },
   { pin: "version", label: "the derive step swallows a failing script", apply: swap(`version="$(${CLI} version)"\n          echo "version=\${version}"`, `echo "version=$(${CLI} version)"`) },
@@ -349,6 +442,15 @@ const MUTANTS: { pin: string; label: string; apply: (text: string) => string }[]
   { pin: "token", label: "set -x in a run block", apply: swap(`run: ${CLI} set-version "$VERSION"`, `run: set -x; ${CLI} set-version "$VERSION"`) },
   { pin: "token", label: "the token moves to job-level env", apply: swap("    permissions:\n      contents: read\n      packages: write\n", "    permissions:\n      contents: read\n      packages: write\n    env:\n      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n") },
   { pin: "token", label: "the proof job's checkout keeps the credential", apply: swap("      - uses: actions/checkout@v5\n        with:\n          persist-credentials: false\n      - uses: pnpm/action-setup@v4\n        with:\n          version: 10.34.5\n      - uses: actions/setup-node@v5\n        with:\n          node-version: 26\n          cache: pnpm", "      - uses: actions/checkout@v5\n      - uses: pnpm/action-setup@v4\n        with:\n          version: 10.34.5\n      - uses: actions/setup-node@v5\n        with:\n          node-version: 26\n          cache: pnpm") },
+  { pin: "injection", label: "an expression in a one-line run script", apply: swap("run: pnpm --filter ./packages/engine --fail-if-no-match run build:dist", "run: pnpm --filter ./packages/engine --fail-if-no-match run build:dist && echo ${{ github.ref_name }}") },
+  { pin: "injection", label: "an expression in a block run script", apply: swap('echo "version=${version}" >> "$GITHUB_OUTPUT"', 'echo "version=${version}" >> "$GITHUB_OUTPUT"\n          echo "${{ github.head_ref }}"') },
+  { pin: "actions", label: "the publish job runs pnpm/action-setup by the moved tag", apply: swap("pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0", "pnpm/action-setup@v4") },
+  { pin: "actions", label: "the publish job runs pnpm/action-setup by a branch", apply: swap("pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0", "pnpm/action-setup@master # v4.3.0") },
+  { pin: "actions", label: "the commit pin loses its release comment", apply: swap("pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0", "pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1") },
+  { pin: "actions", label: "a third-party action joins the publish job", apply: swap("      - name: Derive the canary version\n", "      - uses: softprops/action-gh-release@v2\n      - name: Derive the canary version\n") },
+  { pin: "actions", label: "the proof job gains a third-party action", apply: swap("      - run: pnpm install --frozen-lockfile\n", "      - uses: someone/else@v1\n      - run: pnpm install --frozen-lockfile\n") },
+  { pin: "token", label: "the secret is read by index", apply: swap("${{ secrets.GITHUB_TOKEN }}", "${{ secrets['GITHUB_TOKEN'] }}") },
+  { pin: "token", label: "the whole secrets context is dumped into a step env", apply: swap("        env:\n          VERSION: ${{ steps.version.outputs.version }}\n        run: node packages/engine/pack-proof/canary.mjs set-version", "        env:\n          VERSION: ${{ steps.version.outputs.version }}\n          ALL: ${{ toJSON(secrets) }}\n        run: node packages/engine/pack-proof/canary.mjs set-version") },
   { pin: "no-repo-write", label: "tags the commit", apply: swap(`run: ${CLI} check "$TARBALL" "$VERSION"`, `run: |\n          ${CLI} check "$TARBALL" "$VERSION"\n          git tag "v$VERSION"`) },
   { pin: "tarball-identity", label: "publish a different tarball than the checked one", apply: swap("        env:\n          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TARBALL: ${{ runner.temp }}/engine-canary/onryde-seazn-engine-${{ steps.version.outputs.version }}.tgz", "        env:\n          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TARBALL: ${{ runner.temp }}/engine-canary/other.tgz") },
 ];
