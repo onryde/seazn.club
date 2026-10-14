@@ -946,6 +946,7 @@
   "settings.account.lichess.flash.not_configured": "Lichess-koppeling is nog niet geconfigureerd op deze server.",
   "settings.account.lichess.flash.already_linked": "Dat Lichess-account is al gekoppeld aan een ander Seazn-account.",
   "settings.account.lichess.flash.unavailable": "Lichess-koppeling is op dit moment niet beschikbaar voor die club.",
+  "settings.account.lichess.flash.key_unavailable": "Lichess-koppeling werkt nu niet door een probleem aan onze kant. Je Lichess-account is niet gekoppeld; probeer het later opnieuw.",
   "settings.account.lichess.consent.title": "Seazn doet jouw zetten",
   "settings.account.lichess.consent.body": "Om op het bord van Seazn te spelen hebben we toestemming nodig om zetten te doen in jouw Lichess-partijen. Die toestemming geldt niet alleen voor Seazn-wedstrijden, maar voor elke partij op je account. Je kunt de toestemming altijd intrekken door de koppeling te verbreken; dat trekt hem ook bij Lichess in.",
   "settings.account.lichess.consent.cta": "Lichess opnieuw koppelen",

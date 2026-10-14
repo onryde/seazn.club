@@ -6244,6 +6244,7 @@ export type DictionaryKey =
   | "settings.account.lichess.desc"
   | "settings.account.lichess.flash.account"
   | "settings.account.lichess.flash.already_linked"
+  | "settings.account.lichess.flash.key_unavailable"
   | "settings.account.lichess.flash.linked"
   | "settings.account.lichess.flash.not_configured"
   | "settings.account.lichess.flash.oauth_state"

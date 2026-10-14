@@ -946,6 +946,7 @@
   "settings.account.lichess.flash.not_configured": "La liaison Lichess n'est pas encore configurée sur ce serveur.",
   "settings.account.lichess.flash.already_linked": "Ce compte Lichess est déjà lié à un autre compte Seazn.",
   "settings.account.lichess.flash.unavailable": "La liaison Lichess n'est pas disponible pour ce club pour le moment.",
+  "settings.account.lichess.flash.key_unavailable": "La liaison Lichess ne fonctionne pas pour le moment, à cause d'un problème de notre côté. Votre compte Lichess n'a pas été lié ; réessayez plus tard.",
   "settings.account.lichess.consent.title": "Seazn jouera vos coups",
   "settings.account.lichess.consent.body": "Pour jouer sur l'échiquier de Seazn, nous avons besoin de l'autorisation de jouer des coups dans vos parties Lichess. Cette autorisation ne se limite pas aux matchs Seazn : elle couvre toute partie de votre compte. Vous pouvez la retirer à tout moment en dissociant le compte, ce qui la révoque aussi chez Lichess.",
   "settings.account.lichess.consent.cta": "Relier Lichess",

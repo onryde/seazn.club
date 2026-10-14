@@ -51,6 +51,13 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
   return { ...actual, isServerFeatureEnabled: flags.isServerFeatureEnabled };
 });
 
+// T17B fix 2 (D6): the logger, observed — a key failure is logged, and never with the token.
+const logged = vi.hoisted(() => ({ error: vi.fn() }));
+vi.mock("@/server/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/logger")>();
+  return { ...actual, log: new Proxy(actual.log, { get: (t, k) => (k === "error" ? logged.error : Reflect.get(t, k)) }) };
+});
+
 const upsertLichessLink = vi.hoisted(() => vi.fn());
 // Only `upsertLichessLink` is faked (the real one needs a database). The
 // module's `PLAY_SCOPES` is reproduced the way the real module derives it —
@@ -69,6 +76,7 @@ import { registerReturnPath } from "@/components/public-site/register/register-l
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import { GET } from "../route";
 import { GET as CALLBACK } from "../callback/route";
+import { sealPlayerToken } from "@/server/external-play/secrets";
 
 const STATE_COOKIE = "seazn_lichess_oauth_state";
 const VERIFIER_COOKIE = "seazn_lichess_oauth_verifier";
@@ -482,5 +490,65 @@ describe("GET /api/auth/lichess/callback", () => {
     const loc = path(res.headers.get("location")!);
     expect(loc.pathname).toBe("/me");
     expect(loc.searchParams.get("lichess")).toBe("already_linked");
+  });
+
+  // T17B fix 2 (D6), measured on stg: a LICHESS_TOKEN_KEK that is not 64 hex made the seal throw a plain Error, which
+  // the callback rethrew — the player saw a raw 500. The seal here is the REAL one (sealPlayerToken over the real
+  // envelope), so the error is the one production throws, not one this test invented.
+  it("D6: a malformed or missing LICHESS_TOKEN_KEK lands on next with key_unavailable — never a 500 — is logged without the token, and still revokes — swept", async () => {
+    const BAD = { unset: undefined, short: "ab".repeat(31), "not hex": "zz".repeat(32), "too long": "ab".repeat(33) };
+    let checked = 0;
+    for (const [label, value] of Object.entries(BAD)) {
+      cookieJar.clear();
+      cookieJar.set(STATE_COOKIE, "st");
+      cookieJar.set(VERIFIER_COOKIE, "ver");
+      cookieJar.set(NEXT_COOKIE, "/shared/o/c/d/fixtures/f1/play");
+      if (value === undefined) vi.stubEnv("LICHESS_TOKEN_KEK", undefined as unknown as string);
+      else vi.stubEnv("LICHESS_TOKEN_KEK", value);
+      upsertLichessLink.mockImplementationOnce(async (_userId: string, link: { token: string }) => {
+        await sealPlayerToken(link.token);
+      });
+      logged.error.mockClear();
+      const calls: [string, RequestInit][] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          calls.push([url, init]);
+          if (url.endsWith("/api/token") && init.method === "POST") return Response.json({ access_token: "secret-grant-tok" });
+          if (url.endsWith("/api/account")) return Response.json({ id: "alice", username: "Alice" });
+          if (url.endsWith("/api/token") && init.method === "DELETE") return new Response(null, { status: 204 });
+          return new Response(null, { status: 500 });
+        }),
+      );
+
+      const res = await CALLBACK(new Request("http://localhost/api/auth/lichess/callback?code=c&state=st"));
+
+      expect(res.status, `${label}: a redirect, never a 500`).toBeGreaterThanOrEqual(300);
+      expect(res.status, label).toBeLessThan(400);
+      const loc = path(res.headers.get("location")!);
+      expect(loc.pathname, `${label}: back where the flow started`).toBe("/shared/o/c/d/fixtures/f1/play");
+      expect(loc.searchParams.get("lichess"), label).toBe("key_unavailable");
+      expect(calls.some(([u, i]) => u.endsWith("/api/token") && i.method === "DELETE"), `${label}: the unstored grant is revoked`).toBe(true);
+      expect(logged.error, `${label}: logged once`).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(logged.error.mock.calls), `${label}: never the token`).not.toContain("secret-grant-tok");
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(BAD).length);
+  });
+
+  it("D6's positive pair: under a VALID key, another failure of the link (the database) is still the caller's error — never relabelled key_unavailable", async () => {
+    cookieJar.set(STATE_COOKIE, "st");
+    cookieJar.set(VERIFIER_COOKIE, "ver");
+    vi.stubEnv("LICHESS_TOKEN_KEK", "ab".repeat(32));
+    upsertLichessLink.mockRejectedValueOnce(new Error("connection refused"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/api/token") && init.method === "POST") return Response.json({ access_token: "tok" });
+        if (url.endsWith("/api/account")) return Response.json({ id: "alice", username: "Alice" });
+        return new Response(null, { status: 204 });
+      }),
+    );
+    await expect(CALLBACK(new Request("http://localhost/api/auth/lichess/callback?code=c&state=st"))).rejects.toThrow("connection refused");
   });
 });

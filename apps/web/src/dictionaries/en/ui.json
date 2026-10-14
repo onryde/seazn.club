@@ -946,6 +946,7 @@
   "settings.account.lichess.flash.not_configured": "Lichess linking is not configured on this server yet.",
   "settings.account.lichess.flash.already_linked": "That Lichess account is already linked to another Seazn account.",
   "settings.account.lichess.flash.unavailable": "Lichess linking is not available for that club right now.",
+  "settings.account.lichess.flash.key_unavailable": "Lichess linking isn't working on our side right now. Your Lichess account was not linked; please try again later.",
   "settings.account.lichess.consent.title": "Seazn will submit your moves",
   "settings.account.lichess.consent.body": "To play on Seazn's board, we need permission to make moves in your Lichess games. That permission is not limited to Seazn fixtures — it covers any game on your account. You can remove it at any time by unlinking, which also revokes it at Lichess.",
   "settings.account.lichess.consent.cta": "Re-link Lichess",

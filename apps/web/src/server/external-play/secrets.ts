@@ -7,7 +7,14 @@ import "server-only";
 // base64, not Buffer, because the declared interface is Promise<string>; the
 // column is bytea, and external-accounts.ts converts at the SQL boundary. The
 // async signature matches the authoritative interface — the crypto is sync.
-import { openWith, sealWith } from "@/server/relay/crypto";
+import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
+
+/** Whether LICHESS_TOKEN_KEK is set and well-formed (64 hex). False is the
+ *  `key_unavailable` case: a seal or an open under it throws a configuration
+ *  error, never a crypto one. */
+export function playerTokenKeyUsable(): boolean {
+  return hasValidKek("LICHESS_TOKEN_KEK");
+}
 
 export async function sealPlayerToken(plain: string): Promise<string> {
   return sealWith("LICHESS_TOKEN_KEK", plain).toString("base64");
