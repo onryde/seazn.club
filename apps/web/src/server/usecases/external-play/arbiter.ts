@@ -13,6 +13,7 @@ import "server-only";
 // the privileged `sql`, and only after the caller's organisation has been
 // proven to own the division or fixture.
 import type postgres from "postgres";
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
@@ -554,15 +555,28 @@ async function mintArbiter(
   a: { fixtureId: string; userId: string; meetingId: string },
   video: ArbiterVideo,
 ): Promise<ParticipantToken> {
-  // `subject` is RealtimeKit's custom_participant_id: an internal id, never
-  // an email or a name (realtimekit.ts addParticipant).
-  const minted = await video.addParticipant({ meetingId: a.meetingId, subject: a.userId, preset: "arbiter" });
+  // `subject` is RealtimeKit's custom_participant_id: internal ids only, never
+  // an email or a name (realtimekit.ts addParticipant). T17B fix 2 (D3): the
+  // vendor's add-participant is IDEMPOTENT on that id within a meeting
+  // (measured: the same id answers the SAME participant), so a bare user id
+  // handed a second open the first open's participant — the record refused
+  // it, the catch below deleted it at the vendor, and every open tab of that
+  // organiser lost its watch. Each OPEN is its own participant: the user id
+  // and a nonce.
+  const minted = await video.addParticipant({ meetingId: a.meetingId, subject: `${a.userId}:${randomUUID()}`, preset: "arbiter" });
   try {
     await sql`
       insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, user_id)
       values (${a.fixtureId}, null, 'arbiter', ${minted.participantId}, ${a.userId})`;
   } catch (err) {
     await video.removeParticipant({ meetingId: a.meetingId, participantId: minted.participantId }).catch(() => undefined);
+    // The vendor's participant is gone (or going): a record already holding it
+    // must not stay a live watch. Arbiter rows only (V442: a player's is never
+    // removed).
+    await sql`
+      update fixture_video_participants set removed_at = now()
+       where fixture_id = ${a.fixtureId} and participant_id = ${minted.participantId}
+         and preset = 'arbiter' and removed_at is null`;
     throw err;
   }
   return minted;

@@ -296,7 +296,14 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
         }
         // ONLY these two fields are read. Anything else a caller sends — a
         // `live`, a `cameraOk`, a media block — is dropped here.
-        const p: FixtureParticipant = { id: next("prt"), meetingId: m[1]!, subject: b.custom_participant_id, preset: b.preset_name, deleted: false };
+        // IDEMPOTENT on the custom id within a meeting, as RealtimeKit is
+        // (measured T17B, D3): the same custom_participant_id answers the SAME
+        // participant, with a fresh token. A deleted one's custom id mints a
+        // new participant (not measured: the vendor's answer after a delete).
+        const same = [...participants.values()].find(
+          (x) => x.meetingId === m![1] && x.subject === b.custom_participant_id && !x.deleted,
+        );
+        const p: FixtureParticipant = same ?? { id: next("prt"), meetingId: m[1]!, subject: b.custom_participant_id, preset: b.preset_name, deleted: false };
         participants.set(p.id, p);
         return ok(res, { id: p.id, token: next("rtk-token"), custom_participant_id: p.subject, preset_name: p.preset, created_at: iso() });
       }

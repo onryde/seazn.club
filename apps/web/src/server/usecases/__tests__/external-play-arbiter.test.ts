@@ -540,7 +540,10 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     expect(out.white).toEqual([white]);
     expect(out.black).toEqual([black]);
     expect(out.authToken).toBe("tok-add-1");
-    expect(calls).toEqual([`ensure:${board.fixtureId}`, `add:arbiter:${r.ownerUserId}`]);
+    // The custom id: the organiser's user id and a per-open nonce (T17B fix 2, D3) — internal ids only.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe(`ensure:${board.fixtureId}`);
+    expect(calls[1]).toMatch(new RegExp(`^add:arbiter:${r.ownerUserId}:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`));
     const rows = await arbiterRows(board.fixtureId);
     expect(rows.map((x) => [x.participant_id, x.user_id, x.person_id, x.removed_at])).toEqual([[out.participantId, r.ownerUserId, null, null]]);
     // Never a player's token: the answer has exactly these four fields.
@@ -576,6 +579,8 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     });
     await expect(joinAsArbiter(r.owner, board.fixtureId, { video })).rejects.toMatchObject({ code: "23505" });
     expect(calls).toEqual([`ensure:${board.fixtureId}`, "remove:dup-1"]);
+    // T17B fix 2 (D3): the participant the vendor delete took is no live watch on file either.
+    expect((await arbiterRows(board.fixtureId)).map((x) => [x.participant_id, x.removed_at !== null])).toEqual([["dup-1", true]]);
   });
 
   it("I2: only an owner or admin watches — a role the route let through (an accepted official, a viewer) is refused before anything is made", async () => {
