@@ -154,7 +154,9 @@ export function routeViaTemplate(spec: CaseSpec): CaseSpec {
  *  kind, effectiveStageConfig's config — `groups` sugar first (a group's
  *  pools.count), then `points`, then `config` spread last — and the
  *  progression verbatim, or null. What a template case "posted", so
- *  life-built-as-posted judges the build against the catalog (D11). */
+ *  life-built-as-posted judges the build against the catalog (D11). The
+ *  product also lays each stage kind's preset match rules over that config
+ *  (W2c Task 12, `validatedStageConfig`): not posted, so not judged here. */
 export function templateBodies(key: string, dir: string = CATALOG_DIR): StagePostBody[] {
   return templateField(key, dir).stages.map((s, i) => {
     const config: Record<string, unknown> = {};
