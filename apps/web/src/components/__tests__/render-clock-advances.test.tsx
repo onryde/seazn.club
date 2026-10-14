@@ -154,17 +154,23 @@ describe("a clock read during render advances on its own (react-hooks/purity)", 
       blackouts: [],
       pendingClaims: [],
     });
-    // The card is its own stateful component; drive it directly.
-    const cards = lane
-      .tree()
-      .filter((e) => typeof e.type === "function" && e.type.name === "AssignmentCard");
-    expect(cards).toHaveLength(1);
-    const Card = cards[0]!.type as (p: unknown) => ReactNode;
-    const card = renderIsland(Card, propsOf(cards[0]!));
+    // The LANE owns the clock (one interval for every card) and hands `now`
+    // down; the card is its own stateful component, driven with the props the
+    // lane gives it — re-read after the clock moves, the way React would.
+    const cardEl = () => {
+      const cards = lane
+        .tree()
+        .filter((e) => typeof e.type === "function" && e.type.name === "AssignmentCard");
+      expect(cards).toHaveLength(1);
+      return cards[0]!;
+    };
+    const Card = cardEl().type as (p: unknown) => ReactNode;
+    const card = renderIsland(Card, propsOf(cardEl()));
     const accept = () => card.tree().filter((e) => propsOf(e)["data-testid"] === "me-official-accept");
     expect(accept()).toHaveLength(1);
 
     vi.advanceTimersByTime(LATER_MS);
+    card.rerender(propsOf(cardEl()));
 
     expect(accept()).toHaveLength(0);
   });

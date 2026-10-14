@@ -92,7 +92,10 @@ describe("useBoardActions reports in the copy catalog it has NOW", () => {
     expect(board.actions().notice).toBe(msgFor("es", "board.stale"));
   });
 
-  it("autoRun(): an empty proposal after a catalog change reads in the new catalog", async () => {
+  // Witnesses the PAIR, not autoRun alone: autoRun lists `fail`, which now
+  // carries `msg`, so autoRun dropping its OWN `msg` dep would stay green here.
+  // It reds only when neither callback is refreshed by a catalog change.
+  it("autoRun() + fail(): an empty proposal after a catalog change reads in the new catalog", async () => {
     expect(msgFor("es", "board.action.nothingStage")).not.toBe(msgFor("en", "board.action.nothingStage"));
     const board = driveHook();
 
