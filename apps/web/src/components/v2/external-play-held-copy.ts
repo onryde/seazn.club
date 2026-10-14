@@ -30,15 +30,16 @@ export const HELD_TITLE_KEYS: Readonly<Record<NeedsReason, DictionaryKey>> = {
 
 export type HeldCopyInput = {
   reason: NeedsReason;
-  /** V442: the seat a token_revoked hold froze. */
+  /** V442: the seat a seat hold (token_revoked, account_changed) froze. */
   revokedSeat: "white" | "black" | "both" | null;
   whiteName: string;
   blackName: string;
 };
 
 /** The sentence's key and the name it carries, if any. A no-show names the
- *  colour that stayed away; a revoked token names the seat V442 recorded —
- *  never a no-show (design §3.6) — and an unknown seat names nobody. */
+ *  colour that stayed away; a revoked token or a changed account names the
+ *  seat V442 recorded — never a no-show (design §3.6) — and both seats or an
+ *  unknown seat names nobody. */
 export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { name: string } } {
   switch (row.reason) {
     case "no_show_white":
@@ -76,7 +77,19 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
     case "fair_play":
       return { key: "externalPlay.reason.fairPlay" };
     case "account_changed":
-      return { key: "externalPlay.reason.accountChanged" };
+      // Final re-review P11 (2): a seat hold since P11 (1), so it names the seat it froze, like token_revoked. "both"
+      // names nobody — a second seat hold or a provider error widens a held board to both, so only the first cause
+      // is known; null is a create in flight (no colours yet).
+      switch (row.revokedSeat) {
+        case "white":
+          return { key: "externalPlay.reason.accountChangedWhite", vars: { name: row.whiteName } };
+        case "black":
+          return { key: "externalPlay.reason.accountChangedBlack", vars: { name: row.blackName } };
+        case "both":
+          return { key: "externalPlay.reason.accountChangedBoth" };
+        case null:
+          return { key: "externalPlay.reason.accountChanged" };
+      }
   }
 }
 
