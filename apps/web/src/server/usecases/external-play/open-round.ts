@@ -50,7 +50,7 @@ import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/onlin
 import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import { endMeeting } from "@/server/external-play/video/realtimekit";
-import { roomPhase } from "@/server/external-play/window";
+import { liveMintClaimSince, roomPhase } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
@@ -302,9 +302,12 @@ export async function openRound(
         returning id, opened_at as "roundOpenedAt", opened_by as "openedBy"`;
       open = row!;
       kind = "reopened";
-      // N-2: the meetings of the last window's pairing. A board that ever had a game keeps its meeting — the camera
-      // evidence of that game (a live one is never invited into, above). Only the still-active ones are ended at
-      // RealtimeKit, after the commit.
+      // N-2: the meetings of the last window's pairing. A board a game IS or MAY BE on file behind keeps its
+      // meeting — the camera evidence of that game: a recorded challenge, a sent create (T9's marker), or a LIVE mint
+      // claim (T9 in flight, before its marker; R2-3 — the liveness bound is the sweep's, liveMintClaimSince). Every
+      // other board's meeting goes, with its participants: players who checked in through the lobby inside the old
+      // window are kicked too, because the window starts now for everyone. Only the still-active meetings are ended
+      // at RealtimeKit, after the commit.
       staleMeetings = (
         await tx<{ meeting_id: string; ended_at: Date | null }[]>`
           delete from fixture_video_meetings m
@@ -312,7 +315,8 @@ export async function openRound(
              and not exists (
                select 1 from fixture_external_play ep
                 where ep.fixture_id = m.fixture_id
-                  and (ep.challenge_id is not null or ep.create_sent_at is not null))
+                  and (ep.challenge_id is not null or ep.create_sent_at is not null
+                       or (ep.status = 'pending' and ep.mint_claimed_at >= ${liveMintClaimSince(now)})))
           returning m.meeting_id, m.ended_at`
       )
         .filter((r) => r.ended_at === null)

@@ -43,7 +43,7 @@ import {
   type RealtimeKitDeps,
 } from "@/server/external-play/video/realtimekit";
 import { EDITOR_ROLES } from "@/lib/types";
-import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
+import { liveMintClaimSince, windowFor } from "@/server/external-play/window";
 import { getFixtureState, listEvents } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
@@ -275,7 +275,7 @@ type BridgeFacts = {
 };
 
 function claimIsLive(pass: Pass, claimedAt: Date | null): boolean {
-  return claimedAt !== null && claimedAt.getTime() >= pass.now.getTime() - MINT_CLAIM_STALE_MS;
+  return claimedAt !== null && claimedAt.getTime() >= liveMintClaimSince(pass.now).getTime();
 }
 
 function gameMayBeOnFile(pass: Pass, r: BridgeFacts): boolean {
