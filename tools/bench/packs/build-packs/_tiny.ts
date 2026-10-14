@@ -735,6 +735,7 @@ const BADMINTON_STREAM = reconstructSetBasedStream({
   cfg: badmintonCfg.cfg,
   divisionRef: BADMINTON_DIVISION_REF,
   stage: BADMINTON_STAGE,
+  variantKey: "bwf",
   fixtureExtKey: BADMINTON_FIXTURE,
   home: BADMINTON_HOME,
   away: BADMINTON_AWAY,

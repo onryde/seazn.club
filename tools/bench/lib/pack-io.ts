@@ -128,8 +128,7 @@ export async function loadPackFile(file: string): Promise<PackLoad> {
  *
  * A HAND MIRROR of a product constant, which `tools/bench` cannot import
  * (GLOBAL.md: `@/` aliases do not resolve here and most of that tree is
- * `server-only`) — the same trade `validate-pack.ts` documents for
- * `STAGE_DECIDER_KEYS`. Mirrored only to REFUSE, never to predict: past this
+ * `server-only`). Mirrored only to REFUSE, never to predict: past this
  * bound the product mints fewer fixtures than the arithmetic below says, so a
  * pack that declares more gets a refusal naming the clamp instead of a fixture
  * count that is quietly wrong.

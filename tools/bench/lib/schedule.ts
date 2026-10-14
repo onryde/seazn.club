@@ -1254,9 +1254,9 @@ export async function readEngineArtifacts(
 
 /** `DivisionStatus`'s wire values (`apps/web/src/server/api-v1/schemas.ts:53`
  *  — `z.enum(["setup","scheduled","active","completed"])`). Hand mirrored,
- *  not imported: no PRODUCTION tools/bench file imports from apps/web
- *  (established convention — `IMPORT_CAPS` in `import.ts`,
- *  `STAGE_DECIDER_KEYS` in `validate-pack.ts`), even though `schemas.ts`
+ *  not imported: the bench's older convention (its other mirrors have since
+ *  become imports of import-free apps/web modules, e.g. `validate-pack.ts`'s
+ *  stage composition, W2c Task 13b), even though `schemas.ts`
  *  itself is safely importable (pure Zod, not server-only). A TEST file pins
  *  this against a REAL import of `DivisionStatus` (`schedule.test.ts`'s own
  *  "the mirror is diffed against apps/web, not itself" describe block, R05

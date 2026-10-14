@@ -13,8 +13,9 @@
 // sport's schema unmapped and is refused there by name (CONFIG_INVALID), as any other value it does not take.
 //
 // `stageRulesOverlay` is THE one mapping of a stage's stored rules onto its division (R-T12-3). Since fix round 2 (review
-// M-3) this module also holds the rest of the stage-cfg COMPOSITION, so the product and the format-matrix harness
-// (`tools/matrix/lib/sport-cfg.ts`) run the same code rather than a copy each:
+// M-3) this module also holds the rest of the stage-cfg COMPOSITION, so the product, the format-matrix harness
+// (`tools/matrix/lib/sport-cfg.ts`) and the bench's stage-0 fold (`tools/bench/lib/validate-pack.ts` `stageScopedFoldCfg`,
+// through `postedStageCfg`; Task 13b) run the same code rather than a copy each:
 // - `storedStageRules`: the rules a new stage stores (`usecases/stage-defaults.ts` `withStageDefaults` calls it);
 // - `mergedStageRules`: how a save merges (`usecases/stage-rules-merge.ts` re-exports it);
 // - `stageScopedCfgOf` / `liveStageCfg`: the resolver's stage overlay and bracket deciders (`engine-db/stage-cfg.ts`
