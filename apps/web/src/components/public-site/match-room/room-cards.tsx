@@ -388,6 +388,29 @@ const RESTORED = (
   </>
 );
 
+/** T17B fix 2, D13: the side to move's clock is at zero and the game is not
+ *  over — the room takes nothing more and says who settles it: Lichess (a live
+ *  board; reconcile asks it, D11) or the organiser (a held board). Between the
+ *  clocks and the controls, where the move notices sit. */
+export function FlagNotice({ kind, className = "", t }: { kind: "lichess" | "organiser"; className?: string; t: RoomT }) {
+  return (
+    <div
+      data-testid="room-flag-notice"
+      data-kind={kind}
+      role="status"
+      aria-live="polite"
+      className={`flex min-w-0 items-start gap-2.5 rounded-xl border border-[#c9bdf0] bg-[#f3effc] px-3 py-2.5 text-[#2e1065] ${className}`}
+    >
+      <LineIcon size={18} colour="#5b21b6" className="mt-px shrink-0">
+        {ICON.clock}
+      </LineIcon>
+      <span className="min-w-0 text-sm font-semibold leading-[1.35]">
+        {t(kind === "lichess" ? "externalPlay.room.flag.lichess" : "externalPlay.room.flag.organiser")}
+      </span>
+    </div>
+  );
+}
+
 /** A · Your Lichess link was revoked: the amber notice with the one thing
  *  that is the player's to do — link Lichess again. */
 /** A's notice. `otherAccount` (T14 re-review 5, I-2): the game is on another

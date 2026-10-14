@@ -2520,6 +2520,8 @@ export type DictionaryKey =
   | "externalPlay.room.drawOfferHint"
   | "externalPlay.room.drawOfferIncoming"
   | "externalPlay.room.drawOffered"
+  | "externalPlay.room.flag.lichess"
+  | "externalPlay.room.flag.organiser"
   | "externalPlay.room.header.board"
   | "externalPlay.room.header.meta"
   | "externalPlay.room.meta.description"

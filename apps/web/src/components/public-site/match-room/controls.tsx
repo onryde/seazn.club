@@ -29,6 +29,9 @@ type Props = {
   drawOfferBy: Colour | null;
   opponentName: string;
   busy: boolean;
+  /** T17B fix 2, D13: the side to move's clock is at zero — every action off (and an open confirm closed) until the
+   *  result, or a new ply, arrives. */
+  locked?: boolean;
   onAct: (action: RoomActBody) => void;
   t: RoomT;
 };
@@ -56,19 +59,21 @@ export function RoomControlsView({
   drawOfferBy,
   opponentName,
   busy,
+  locked = false,
   onAct,
   t,
   confirm,
   setConfirm,
 }: Props & { confirm: Confirming; setConfirm: (c: Confirming) => void }) {
   if (over) return null;
+  const off = busy || locked;
   const early = ply < ABORTABLE_BELOW_PLY;
   const opponent = firstName(opponentName);
   const incoming = drawOfferBy !== null && drawOfferBy !== you;
   const mine = drawOfferBy === you;
 
   const resign = (
-    <button type="button" data-testid="room-resign" className={DANGER} disabled={busy} onClick={() => setConfirm("resign")}>
+    <button type="button" data-testid="room-resign" className={DANGER} disabled={off} onClick={() => setConfirm("resign")}>
       {t("externalPlay.room.resign")}
     </button>
   );
@@ -80,7 +85,7 @@ export function RoomControlsView({
           <button type="button" data-testid="room-draw" className={PARKED} disabled>
             {t("externalPlay.room.drawAfterMoveOne")}
           </button>
-          <button type="button" data-testid="room-abort" className={SECONDARY} disabled={busy} onClick={() => setConfirm("abort")}>
+          <button type="button" data-testid="room-abort" className={SECONDARY} disabled={off} onClick={() => setConfirm("abort")}>
             {t("externalPlay.room.abort")}
           </button>
         </div>
@@ -100,7 +105,7 @@ export function RoomControlsView({
                 type="button"
                 data-testid="room-draw-decline"
                 className={SECONDARY}
-                disabled={busy}
+                disabled={off}
                 onClick={() => onAct({ kind: "draw", accept: false })}
               >
                 {t("externalPlay.room.declineDraw")}
@@ -109,7 +114,7 @@ export function RoomControlsView({
                 type="button"
                 data-testid="room-draw-accept"
                 className={PRIMARY}
-                disabled={busy}
+                disabled={off}
                 onClick={() => onAct({ kind: "draw", accept: true })}
               >
                 {t("externalPlay.room.acceptDraw")}
@@ -130,7 +135,7 @@ export function RoomControlsView({
                 type="button"
                 data-testid="room-draw"
                 className={SECONDARY}
-                disabled={busy}
+                disabled={off}
                 onClick={() => onAct({ kind: "draw", accept: true })}
               >
                 {t("externalPlay.room.offerDraw")}
@@ -144,7 +149,7 @@ export function RoomControlsView({
         </>
       )}
       <ConfirmDialog
-        open={confirm !== null}
+        open={confirm !== null && !locked}
         testId={confirm === "abort" ? "room-abort-confirm" : "room-resign-confirm"}
         title={t(confirm === "abort" ? "externalPlay.room.abortConfirm.title" : "externalPlay.room.resignConfirm.title")}
         // The button that opened it, named again: "Resign" / "Abort game".
