@@ -1406,6 +1406,37 @@ const confirmSpec: GuidedSheetSpec = {
 const summaryOf = (tree: ReturnType<typeof walk>) => tree.find((el) => propsOf(el)["data-testid"] === "pad-sheet-summary");
 const confirmOf = (tree: ReturnType<typeof walk>) => tree.find((el) => propsOf(el)["data-testid"] === "pad-sheet-confirm");
 
+describe("GuidedSheet — a long choice label wraps, it never overflows its row (W2c Task 21)", () => {
+  it("every choice button may not outgrow its row (max-w-full + min-w-0) and its label can break: a 43-character entrant name at 320 was 353px in a 260px card", () => {
+    const longName = "Alexandria Montgomery-Featherstonehaugh III";
+    const spec: GuidedSheetSpec = {
+      event: "x.event",
+      steps: [
+        {
+          id: "who",
+          kind: "choice",
+          title: K("who.title"),
+          options: [
+            { id: "home", label: "side.home", labelText: longName },
+            { id: "away", label: "side.away" },
+          ],
+        },
+      ],
+      buildPayload: (answers) => ({ who: answers.who }),
+    };
+    const island = renderIsland(GuidedSheet, { spec, views: numberViews, personNames: {}, t, onComplete: () => {} });
+    const options = island.tree().filter((el) => propsOf(el)["data-choice-option-id"] !== undefined);
+    expect(options.map((o) => propsOf(o)["data-choice-option-id"]), "anti-vacuity: both options render").toEqual(["home", "away"]);
+    for (const option of options) {
+      const classes = String(propsOf(option).className).split(/\s+/);
+      expect(classes, `${String(propsOf(option)["data-choice-option-id"])}: capped at its row's width`).toContain("max-w-full");
+      expect(classes, `${String(propsOf(option)["data-choice-option-id"])}: may shrink below its content`).toContain("min-w-0");
+      expect(classes, `${String(propsOf(option)["data-choice-option-id"])}: its label breaks`).toContain("break-words");
+    }
+    expect(textOf(options[0]!), "the long name is the label, in full").toBe(longName);
+  });
+});
+
 describe("GuidedSheet — SheetConfirmStep (W2c Task 21)", () => {
   it("the step machine: answering the choice lands ON the confirm step (not done), and confirming it completes with the earlier answers only", () => {
     const afterPick = answerStep(confirmSpec, initialSheetState(), "b");
