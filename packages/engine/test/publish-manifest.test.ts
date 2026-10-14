@@ -1,14 +1,20 @@
 // D14/D16/D25: what a registry consumer receives. The workspace keeps TS source exports until 2b (spec §5.2);
 // publishConfig.exports must mirror every one of them into dist/.
+//
+// This file imports src/ (the sideEffects check loads the registry), so under Stryker's `vitest.related: true` it is a related test for
+// every leg that reaches src/sport/registry.ts, and runs inside .stryker-tmp/sandbox-*, which holds packages/engine and nothing above it.
+// It therefore must not load ESLint: eslint.config.mjs imports ../../scripts/lib/tools-import-guard.mjs, absent in a sandbox, and the
+// dry run would stop with "failed tests in the initial test run". The lint-ignore assertion for dist/ lives in pack-proof.test.ts, which
+// imports nothing from src/; test/stryker-sandbox-safe.test.ts holds that rule.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
 import { createRegistry, registry } from "../src/sport/registry.ts";
 import { builtinModules, registerBuiltins } from "../src/sports/index.ts";
+import { sourceSportDirs } from "../pack-proof/lib.mjs";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(ENGINE, "package.json"), "utf8"));
@@ -26,6 +32,8 @@ describe("publish manifest", () => {
 
   it("ships dist and rules/, nothing private, to GitHub Packages", () => {
     expect(pkg.private).toBeUndefined();
+    // pnpm pack copies the repo's proprietary LICENSE.md into the tarball; the manifest has to say so rather than leave the registry's licence field blank
+    expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
     expect(pkg.files).toEqual(["dist", "rules"]);
     expect(pkg.publishConfig.registry).toBe("https://npm.pkg.github.com");
     // the entry in `files` is only a promise: the directory has to be where the entry says (anti-vacuity for the line above).
@@ -48,15 +56,6 @@ describe("publish manifest", () => {
     expect(pkg.repository).toEqual({ type: "git", url: "https://github.com/onryde/seazn.club", directory: "packages/engine" });
     expect(typeof pkg.scripts["build:dist"]).toBe("string");
     expect(pkg.scripts.build).toBeUndefined();
-  });
-
-  it("keeps the emitted dist out of the package's own lint, whose typed rules cannot parse a file outside the tsconfig", async () => {
-    const eslint = new ESLint({ cwd: ENGINE });
-    // the control: a file the config does lint, so "ignored" below is the dist rule and not an ignore-everything config
-    expect(await eslint.isPathIgnored(join(ENGINE, "src/core/index.ts")), "src/core/index.ts").toBe(false);
-    for (const f of ["dist/core/index.js", "dist/core/index.d.ts", "dist/testkit/conformance.js"]) {
-      expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(true);
-    }
   });
 
   it("clears dist before it emits, so a module deleted from src cannot survive a rebuild into the tarball", () => {
@@ -178,7 +177,13 @@ describe("sideEffects: false", () => {
   });
 
   it("holds: loading every exported entry point registers no sport into the shared registry", async () => {
-    const entries = Object.values<string>(pkg.exports).filter((t) => !t.includes("*"));
+    // the exports without a wildcard, and every concrete subpath the `./sports/*` wildcard expands to: one directory per sport family, each
+    // reached by a consumer as `@seazn/engine/sports/<dir>` and none of them loaded by `./sports` itself
+    const wildcard = Object.values<string>(pkg.exports).filter((t) => t.includes("*"));
+    expect(wildcard, "the one wildcard export is ./sports/*").toEqual(["./src/sports/*/index.ts"]);
+    const sportDirs = sourceSportDirs(ENGINE);
+    expect(sportDirs.length, "sport directories under src/sports").toBeGreaterThan(5);
+    const entries = [...Object.values<string>(pkg.exports).filter((t) => !t.includes("*")), ...sportDirs.map((d) => wildcard[0]!.replace("*", d))];
     for (const t of entries) await import(join(ENGINE, t));
     // the keys come from the engine's own declaration of what ships, never a list typed here
     expect(builtinModules.length, "shipped sport modules").toBeGreaterThan(0);

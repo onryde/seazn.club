@@ -199,11 +199,12 @@ const pinsOf = (root: { packageManager: string }): Record<string, (wf: Workflow)
   const named = (job: Job | undefined, name: string) => job?.steps.find((s) => s.name === name);
 
   return {
-    // The only trigger is a push to main that touches the engine. A pull_request / workflow_dispatch / schedule trigger would publish
-    // unreviewed or off-main code under the `canary` tag.
+    // The only trigger is a push to main that touches what the tarball is made of: the engine, the lockfile (the root typescript-native that
+    // compiles dist/ is pinned there; ci.yml's engine-pack filter lists the same two) and the root LICENSE.md pnpm copies into the tarball.
+    // A pull_request / workflow_dispatch / schedule trigger would publish unreviewed or off-main code under the `canary` tag.
     trigger: (wf) => {
       const { v, is } = verdict();
-      is(JSON.stringify(wf.on) === JSON.stringify(["on:", "  push:", "    branches: [main]", '    paths: ["packages/engine/**"]']), `on: is not exactly a push to main with paths packages/engine/** (${JSON.stringify(wf.on)})`);
+      is(JSON.stringify(wf.on) === JSON.stringify(["on:", "  push:", "    branches: [main]", '    paths: ["packages/engine/**", "pnpm-lock.yaml", "LICENSE.md"]']), `on: is not exactly a push to main with paths packages/engine/**, pnpm-lock.yaml and LICENSE.md (${JSON.stringify(wf.on)})`);
       return v;
     },
     // Least privilege: the workflow default reads; ONLY the publish job writes packages; nothing anywhere can write contents or mint an id token.
@@ -403,7 +404,11 @@ const moveBefore = (name: string, before: string) => (text: string) => {
 const MUTANTS: { pin: string; label: string; apply: (text: string) => string }[] = [
   { pin: "trigger", label: "also triggers on pull_request", apply: swap("on:\n  push:", "on:\n  pull_request:\n  push:") },
   { pin: "trigger", label: "also triggers on workflow_dispatch", apply: swap("on:\n  push:", "on:\n  workflow_dispatch:\n  push:") },
-  { pin: "trigger", label: "path filter widened to packages/**", apply: swap('paths: ["packages/engine/**"]', 'paths: ["packages/**"]') },
+  { pin: "trigger", label: "path filter widened to packages/**", apply: swap('"packages/engine/**", "pnpm-lock.yaml"', '"packages/**", "pnpm-lock.yaml"') },
+  { pin: "trigger", label: "path filter loses pnpm-lock.yaml (a lockfile-only TypeScript bump changes dist/ and publishes nothing)", apply: swap('"packages/engine/**", "pnpm-lock.yaml", "LICENSE.md"', '"packages/engine/**", "LICENSE.md"') },
+  { pin: "trigger", label: "path filter loses LICENSE.md", apply: swap('"pnpm-lock.yaml", "LICENSE.md"', '"pnpm-lock.yaml"') },
+  { pin: "trigger", label: "path filter loses the engine itself", apply: swap('["packages/engine/**", "pnpm-lock.yaml", "LICENSE.md"]', '["pnpm-lock.yaml", "LICENSE.md"]') },
+  { pin: "trigger", label: "path filter widened by another path", apply: swap('"LICENSE.md"]', '"LICENSE.md", "apps/**"]') },
   { pin: "trigger", label: "branch filter widened", apply: swap("branches: [main]", "branches: [main, 'feat/**']") },
   { pin: "permissions", label: "workflow-level packages: write", apply: swap("permissions:\n  contents: read\n", "permissions:\n  contents: read\n  packages: write\n") },
   { pin: "permissions", label: "the proof job also gets packages: write", apply: swap("  proof:\n", "  proof:\n    permissions:\n      contents: read\n      packages: write\n") },

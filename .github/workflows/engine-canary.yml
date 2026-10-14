@@ -1,7 +1,9 @@
 # Phase 1 canaries of @onryde/seazn-engine, published from the monorepo (engine-split spec 5.2 and 8, D16). There is no stable release from
 # here: the first 1.0.0 is cut by Changesets in the engine repo at 2b.
 #
-# A push to main that touches packages/engine/** runs two jobs:
+# A push to main that touches packages/engine/**, pnpm-lock.yaml or LICENSE.md runs two jobs. The first two are ci.yml's engine-pack filter
+# (the tarball's dist/ is compiled by the root typescript-native, which only the lockfile pins); LICENSE.md is the root file pnpm copies
+# into the tarball, so editing it changes what is published:
 #   proof    the packed-tarball proof (the same script as ci.yml's engine-pack job). Read-only; the fixtures install from public npm.
 #   publish  needs proof. Builds dist/, writes a canary version into the RUNNER's checkout of package.json (nothing is committed, tagged
 #            or pushed), packs with pnpm, refuses a tarball whose manifest points at source or whose dist/ is empty, and publishes THAT
@@ -20,7 +22,7 @@ name: engine-canary
 on:
   push:
     branches: [main]
-    paths: ["packages/engine/**"]
+    paths: ["packages/engine/**", "pnpm-lock.yaml", "LICENSE.md"]
 
 permissions:
   contents: read

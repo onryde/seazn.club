@@ -607,6 +607,16 @@ describe("the fixtures and wiring that make the run a proof", () => {
     expect(pkg.scripts["pack:proof"]).toBe("node pack-proof/run.mjs");
   });
 
+  it("keeps the emitted dist out of the package's own lint, whose typed rules cannot parse a file outside the tsconfig", async () => {
+    // (lives here, not in publish-manifest.test.ts: that file imports src/, and a test that does must not load ESLint under Stryker)
+    const eslint = new ESLint({ cwd: ENGINE });
+    // the control: a file the config does lint, so "ignored" below is the dist rule and not an ignore-everything config
+    expect(await eslint.isPathIgnored(join(ENGINE, "src/core/index.ts")), "src/core/index.ts").toBe(false);
+    for (const f of ["dist/core/index.js", "dist/core/index.d.ts", "dist/testkit/conformance.js"]) {
+      expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(true);
+    }
+  });
+
   it("keeps the fixture sources out of the package's lint (they import the PACKED name from outside the program), but lints the runner", async () => {
     const eslint = new ESLint({ cwd: ENGINE });
     for (const f of ["pack-proof/run.mjs", "pack-proof/lib.mjs"]) expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(false);
