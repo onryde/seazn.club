@@ -54,8 +54,14 @@ describe("privacy — the online-chess camera and the Lichess account link (I-4)
     expect(section).toContain("camera video");
   });
 
-  it("says players never receive their opponent's video, and that organisers can watch both", () => {
-    expect(section).toContain("Your opponent never receives your video");
+  it("says what the match room is SET UP to show — each player only their own camera — and that organisers can watch both", () => {
+    // Final re-review N-4: the player preset's max_video_streams = 0 is a device limit, not a security boundary
+    // (camera-loader.ts), and the tampered-client probe (T17 part B) is still owed. So the policy states the
+    // configuration and never an absolute: no "never", no "cannot", nothing a modified client could falsify.
+    expect(section).toContain("We configure each player’s match room to show only their own camera, so your opponent’s room is not set up to show your video.");
+    const camera = section.slice(section.indexOf("Your camera:"), section.indexOf("</li>", section.indexOf("Your camera:")));
+    expect(camera, "the camera bullet").not.toBe("");
+    for (const absolute of [/\bnever\b/i, /\bcannot\b/i, /\bcan&#x27;t\b/i, /\bguarantee/i]) expect(camera).not.toMatch(absolute);
     expect(section).toContain("can watch both players");
   });
 
