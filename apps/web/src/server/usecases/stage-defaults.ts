@@ -12,16 +12,21 @@ import "server-only";
 // `createStages` (and through it `replaceStages`, which also asks it BEFORE its delete) and template instantiation.
 import type { StageKind } from "@seazn/engine/core";
 import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
-import { mergedStageRules, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
+import { mergedStageRules, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal, withoutNulls } from "./stage-rules-merge";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /**
- * The stage config with its rules as a new stage stores them: the sport's preset for this kind and variant, then the
- * rules `replaceStages` carried for this slot (`carried`, an organiser's edits win over the preset), then the rules sent
- * with the create, merged the way the stage PUT merges a save (`mergedStageRules`): a key sent wins, a key sent as
- * null REMOVES that key (the stage inherits the division's value), a key not sent is kept. Absent, null or `{}` rules
- * keep the preset whole: a create has nothing stored to clear. No rules key at all when nothing is left.
+ * The stage config with its rules as a new stage stores them: a BASE, then the rules sent with the create, merged the
+ * way the stage PUT merges a save (`mergedStageRules`): a key sent wins, a key sent as null REMOVES that key (the stage
+ * inherits the division's value), a key not sent is kept. Absent, null or `{}` rules keep the base whole: a create has
+ * nothing stored to clear. No rules key at all when nothing is left.
+ *
+ * The base is the sport's preset for this kind and variant, UNLESS `replaceStages` matched this slot to a stage it is
+ * replacing (`carried`, the old stage's stored rules): then the carry IS the base and the preset is not laid under it
+ * (fix round 2, R-T12-4, R-T12-2's meaning: an organiser's removal is kept). A matched slot's stored rules are its whole
+ * format, so a preset key absent from them — or no stored rules at all (`{}`), "Same as division" — is the organiser's
+ * clear, never a gap to re-seed. A genuinely new slot (`carried` null) starts from its preset.
  */
 export function withStageDefaults(
   module: AnySportModule,
@@ -31,9 +36,10 @@ export function withStageDefaults(
   carried: Record<string, unknown> | null = null,
 ): Record<string, unknown> {
   const { rules: sent, ...rest } = config;
-  const preset = { ...stageDefaultsFor(module, kind, variant), ...carried };
+  // A stored null is inherit, the same as the key's absence (the PUT never stores one; a legacy row might).
+  const base = carried !== null ? withoutNulls(carried) : stageDefaultsFor(module, kind, variant);
   const provided = isObj(sent) ? sent : {};
-  const rules = Object.keys(provided).length === 0 ? preset : mergedStageRules(preset, provided);
+  const rules = Object.keys(provided).length === 0 ? base : mergedStageRules(base, provided);
   return rules !== null && Object.keys(rules).length > 0 ? { ...rest, rules } : rest;
 }
 
@@ -42,7 +48,7 @@ export function withStageDefaults(
  * nothing: UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (400) for a key sent that the sport never declares or this kind and
  * variant cannot set; CONFIG_INVALID (422, the engine's `issues`) when the division's config under the rules the stage
  * would store is one the sport refuses; POINTS_MAP_INCOMPLETE (422) when the rules sent move `bestOf` past what the
- * division's points table answers. The merged parse runs on the rules as STORED (preset and carry included), so a
+ * division's points table answers. The merged parse runs on the rules as STORED (the preset or the carry included), so a
  * preset the division cannot take is refused at the door rather than at the first whistle.
  */
 export function validatedStageConfig(

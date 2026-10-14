@@ -50,7 +50,7 @@ export function refuseUnsettableKeys(
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 /** The rules as the overlay reads them: a null or undefined value is "inherit" (`stage-cfg.ts`), never a value. */
-const withoutNulls = (o: Record<string, unknown>): Record<string, unknown> =>
+export const withoutNulls = (o: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
 
 /**

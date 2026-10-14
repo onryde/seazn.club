@@ -6,9 +6,10 @@
 // The ruling: preserve inside `replaceStages` itself, keyed on the stage SLOT,
 // so it holds for every caller rather than for whichever screen we remembered
 // to patch. Since W2c Task 12 a body MAY carry `config.rules` (validated as the
-// stage PUT validates a save, BEFORE the delete), laid over the carried rules,
-// which are laid over the slot's preset (stage-defaults.test.ts, Review Focus 5;
-// tennis, here, has no preset).
+// stage PUT validates a save, BEFORE the delete), laid over the carried rules;
+// a matched slot's carry takes the place of its preset, so a cleared key stays
+// cleared, and only a new slot starts from the preset (stage-defaults.test.ts,
+// Review Focus 5 and R-T12-4; tennis, here, has no preset).
 //
 // Note `replaceStages` refuses outright once any fixture exists
 // (FORMAT_LOCKED), so nothing here generates fixtures — and that same fact is

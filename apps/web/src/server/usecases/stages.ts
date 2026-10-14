@@ -365,8 +365,9 @@ interface StageRulesScope {
 }
 
 /** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
- *  laid over its kind's preset (`validatedStageConfig`), with `carried` (replaceStages, keyed `seq:kind`) between the
- *  two. In input order; throws before anything is written. */
+ *  laid over its kind's preset (`validatedStageConfig`) or, for a slot `replaceStages` matched (`carried`, keyed
+ *  `seq:kind`), over that slot's carried rules in the preset's place (R-T12-4). In input order; throws before anything
+ *  is written. */
 function stageConfigsAtCreate(
   division: StageRulesScope,
   inputs: readonly StageInput[],
@@ -556,8 +557,12 @@ export async function replaceStages(
     // to happen HERE, server-side, rather than by asking the client to re-issue
     // a PUT afterwards: it then holds for every caller of this function, not
     // just the one screen we happened to fix. W2c Task 12 (Review Focus 5): the
-    // carried rules are laid over the slot's PRESET and under the body's own
-    // rules, key by key (`withStageDefaults`), never stored alone.
+    // body's own rules are laid over the carry, key by key (`withStageDefaults`).
+    // Fix round 2 (R-T12-4): a matched slot's stored rules are its WHOLE format,
+    // so the carry REPLACES the slot's preset rather than sitting over it: a
+    // preset key the organiser removed stays removed, and a slot with no stored
+    // rules ("Same as division") is carried as `{}`, never re-seeded. Only a
+    // genuinely new slot (no entry here) starts from its preset.
     const rows = await tx<{ seq: number; kind: string; config: Record<string, unknown> }[]>`
       select seq, kind, config from stages where division_id = ${divisionId}`;
     const keep = new Map<string, Record<string, unknown>>();
@@ -572,8 +577,9 @@ export async function replaceStages(
       // which is a visible, correctable state; carrying it wrongly is not. Note
       // this is a JUDGEMENT, not a validity constraint: the allowlist is per
       // sport, kind and variant, and none of them changes for a matched slot.
-      if (rules !== null && typeof rules === "object" && !Array.isArray(rules))
-        keep.set(`${r.seq}:${r.kind}`, rules as Record<string, unknown>);
+      // No stored rules object is the organiser's clear: carried as `{}`.
+      const cleared = rules === null || rules === undefined || typeof rules !== "object" || Array.isArray(rules);
+      keep.set(`${r.seq}:${r.kind}`, cleared ? {} : (rules as Record<string, unknown>));
     }
     // Every rules fragment in the body, judged as the create will judge it, before anything is dropped.
     stageConfigsAtCreate(division, inputs, keep);
