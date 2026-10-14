@@ -37,6 +37,26 @@ function dbLeaks(job: string): string[] {
   return out;
 }
 
+// The engine boundary gate moved into the engine package (engine-split 1d-2). ci.yml runs the ROOT script, and nothing else resolved its target,
+// so a stale path would have shown only as a red CI step. Both entry points are held to the one file, which has to exist.
+describe("the engine boundary gate's entry points", () => {
+  const engineScripts = (JSON.parse(readFileSync(resolve(REPO, "packages/engine/package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
+  const GATE = "packages/engine/scripts/engine-boundary.ts";
+  const targetOf = (script: string | undefined) => (script ?? "").split(" ").at(-1) ?? "";
+
+  it("the root `engine:boundary` and the engine's `boundary` scripts run the same existing gate, and ci.yml runs the root one", () => {
+    expect(pkg.scripts["engine:boundary"]).toBe(`node --experimental-strip-types ${GATE}`);
+    expect(engineScripts.boundary).toBe("node --experimental-strip-types scripts/engine-boundary.ts");
+    // derived: both targets resolve to one file, from the directory each script runs in
+    const fromRoot = resolve(REPO, targetOf(pkg.scripts["engine:boundary"]));
+    const fromEngine = resolve(REPO, "packages/engine", targetOf(engineScripts.boundary));
+    expect(fromEngine).toBe(fromRoot);
+    expect(fromRoot).toBe(resolve(REPO, GATE));
+    expect(existsSync(fromRoot), `${GATE} exists`).toBe(true);
+    expect(ci.split("\n")).toContain("      - run: npm run engine:boundary");
+  });
+});
+
 // A synthetic vitest JSON report, shaped like vitest 4's (only the fields the
 // step's judge reads).
 function report(root: string, o: { total: number; passed: number; failedSuites?: number; files?: string[] }) {

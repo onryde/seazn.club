@@ -1,6 +1,10 @@
 // Is this module the script node was started with? Shared by the matrix CLIs
 // (gen-catalogue.ts, render.ts, run.ts, model.ts, single-sport.ts) and the
-// repo gates (engine-boundary.ts, reference-boundary.ts). It lives here, not
+// repo gate reference-boundary.ts. The engine's own gate (engine-boundary.ts,
+// which moved into packages/engine in engine-split 1d-2) imports a byte-identical
+// copy of this file, packages/engine/scripts/lib/main-module.ts, so it holds with
+// the engine at a repo root; scripts/__tests__/main-module.test.ts keeps the two
+// identical until 2b, so edit both together. It lives here, not
 // in the harness, because the gates are not harness code: CI runs them, the
 // Fly image's in-image typecheck reads them, and packages/reference's test
 // imports reference-boundary.ts — none of which may reach the dev-only

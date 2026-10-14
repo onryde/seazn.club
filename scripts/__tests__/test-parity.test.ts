@@ -189,7 +189,7 @@ describe("diffIds — what a ledger entry may account for", () => {
 });
 
 // Ids are a MULTISET: a test file may hold two tests with the same title (scripts/__tests__/mutate.test.ts and
-// z3-retirement-drift.test.ts do), and that must neither block a run nor let a deleted twin hide (engine-split 1d-0).
+// the retirement-drift test beside it do), and that must neither block a run nor let a deleted twin hide (engine-split 1d-0).
 describe("diffIds — duplicate ids are counted, not refused", () => {
   const entry = (id: string, fate: LedgerEntry["fate"], to?: string, reason = "why"): LedgerEntry => ({ id, fate, to, reason });
   const none = { entries: [] };

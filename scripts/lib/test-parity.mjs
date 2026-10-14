@@ -5,7 +5,7 @@
 // ALWAYS pass `--isolate`, on BOTH sides. The engine's vitest config has `isolate: false`, and a test file that imports another test file
 // (src/import/plan.property.test.ts imports ./plan.test.ts) then has that file's tests attributed to whichever worker reached it first: 19 ids
 // move between the two files depending on scheduling, so a default collection reports "unaccounted" ids that are not gone (batch 1b review m4).
-// Ids are a MULTISET: a test file may hold two tests with the same title (scripts/__tests__/mutate.test.ts and z3-retirement-drift.test.ts do).
+// Ids are a MULTISET: a test file may hold two tests with the same title (scripts/__tests__/mutate.test.ts and the retirement-drift test beside it do).
 // A duplicate that exists identically before and after is `both`, copy for copy; a change in the COUNT is before-only or after-only, one
 // copy each, and a ledger entry accounts exactly one copy. The same id arriving from two reports of one side is still refused: that is
 // an operator error (a report listed twice, or two roots whose relative paths collide), not a duplicate title.

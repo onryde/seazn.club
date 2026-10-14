@@ -55,9 +55,12 @@ function bannedImport(specifier: string): string | null {
 
 const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|^\s*import\s+)["']([^"']+)["']/gm;
 
-export function checkEngineBoundary(srcDir: string): Violation[] {
+/** The gate's findings and how many .ts files it looked at: a clean report over zero files proves nothing, so the CLI refuses it. */
+export function scanEngineBoundary(srcDir: string): { scanned: number; violations: Violation[] } {
   const violations: Violation[] = [];
+  let scanned = 0;
   for (const file of walk(srcDir)) {
+    scanned++;
     const rel = relative(srcDir, file).split(sep).join("/");
     const code = stripComments(readFileSync(file, "utf8"));
     const lineOf = (index: number) => code.slice(0, index).split("\n").length;
@@ -83,19 +86,37 @@ export function checkEngineBoundary(srcDir: string): Violation[] {
       }
     }
   }
-  return violations;
+  return { scanned, violations };
+}
+
+export function checkEngineBoundary(srcDir: string): Violation[] {
+  return scanEngineBoundary(srcDir).violations;
 }
 
 if (isMainModule(import.meta.url)) {
+  // The src/ beside this script's own directory: the engine at packages/engine, or the engine at a repo root. Files are named by their path
+  // from the working directory (`packages/engine/src/...` from the repo root, `src/...` from the package), never by a typed prefix.
   const srcDir = new URL("../src", import.meta.url).pathname;
-  const violations = checkEngineBoundary(srcDir);
+  const shown = (file: string) => relative(process.cwd(), join(srcDir, file)).split(sep).join("/");
+  let result: ReturnType<typeof scanEngineBoundary>;
+  try {
+    result = scanEngineBoundary(srcDir);
+  } catch (e) {
+    console.error(`FAIL  cannot scan ${relative(process.cwd(), srcDir) || "."}: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
+  const { scanned, violations } = result;
+  if (scanned === 0) {
+    console.error(`FAIL  scanned 0 files under ${relative(process.cwd(), srcDir) || "."}: a gate over nothing proves nothing`);
+    process.exit(1);
+  }
   for (const v of violations) {
-    console.error(`FAIL  packages/engine/src/${v.file}:${v.line}  ${v.rule}`);
+    console.error(`FAIL  ${shown(v.file)}:${v.line}  ${v.rule}`);
   }
   console.log(
     violations.length === 0
-      ? "PASS  engine boundary clean"
-      : `\n${violations.length} boundary violation(s)`,
+      ? `PASS  engine boundary clean (${scanned} files scanned)`
+      : `\n${violations.length} boundary violation(s) in ${scanned} files scanned`,
   );
   process.exit(violations.length === 0 ? 0 : 1);
 }
