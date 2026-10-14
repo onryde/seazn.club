@@ -5133,6 +5133,8 @@ Spec §10 MD-1. See "MD-1 mutation ownership" below.
 
 ### Task 23: Ship gates, PR, e2e dispatch, and the cross-programme P8 (orchestrator)
 
+> **Carried from the engine-split peer (2026-10-14).** (a) Before the PR: if engine-split batch 1a (`feat/engine-split-1a`) has merged, rebase W2c once; any W2c call site of `buildSchedule`/`repairDecomposedCpsat`, or a `vi.spyOn` on `placement-client`'s `solveBuild`, must pass `solve` + `log` from `@seazn/scheduler` (merge-tree found none on 2026-10-14). (b) RULES.md's W2c paragraph says delete `.claude/agents/implementer-sonnet.md` / `reviewer-sonnet.md` at W2c close; the engine split now uses them too. Peer recommendation, NOT a ruling: put it to the owner at close, and do not delete them without an answer.
+
 > **Carried from Task 10 review.** Merge-order dependency: W2c's migration is V443 because the chess branch (`feat/chess-lichess-external-play`) holds V439–V442 and deploys them to staging first; Flyway runs no out-of-order migrations, so chess must merge (and reach prod) before W2c, or W2c is renumbered above chess's final number. Confirm with the chess session before opening the PR.
 
 > **Carried (mutation session, 2026-10-13).** A post-W2b Stryker re-measure PR (stryker-measured.json, stryker-timeouts.json, possibly stryker.groups.mjs cut anchors) is expected to merge BEFORE W2c. Before the PR: rebase onto it, run the engine `stryker-sizing` and `stryker-cuts` tests, and re-measure (CI dispatch per leg) any leg W2c pushes past 10% drift — W2c adds mutants in core/errors.ts (core-2 leg), points.ts, sport/*, period kernel, boardgame and every module's `ruleKeys`. Edit groups/measured files only on top of that PR.
