@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -90,8 +90,11 @@ function layoutTestsReachingSrc(engineDir: string): { scanned: number; importers
 
 // spelled in two halves so THIS file's text holds no `from "eslint"` of its own (the scan reads every test file, this one included)
 const E = ["es", "lint"].join("");
-const scratch = mkdtempSync(join(tmpdir(), "sandbox-safe-"));
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+// created when the tests start, not at module load: a run that selects none of this file's tests (`-t`, `vitest related`, the parity
+// collect) must not leave a directory behind
+let scratch = "";
+beforeAll(() => { scratch = mkdtempSync(join(tmpdir(), "sandbox-safe-")); });
+afterAll(() => { rmSync(scratch, { recursive: true, force: true }); expect(existsSync(scratch), "the scratch directory is gone").toBe(false); });
 let n = 0;
 /** A scratch engine package: `files` maps a path under it to its text. */
 function tree(files: Record<string, string>): string {

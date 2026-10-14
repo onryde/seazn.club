@@ -36,10 +36,19 @@ function countInCode(text: string, re: RegExp): number {
 const WEEKDAY =
   /weekday\s*(?:===?|!==?(?![=\s]*(?:undefined|null)\b))|(?:(?<![!=])===?|(?<!\b(?:undefined|null)\s*)!==?)\s*[\w$.?[\]()]*\bweekday\b/g;
 
-/** Files under server/ and lib/ that compare a `weekday` and are NOT a court-hours rule, each with why. The allowlist is a guard of its own:
- *  an entry whose file no longer matches is stale and fails the scan, so it cannot outlive the line it excuses. Paths are relative to src/. */
-const WEEKDAY_ALLOWLIST: Readonly<Record<string, string>> = {
-  "lib/capacity-input.ts": "resolves a `fixture_on_weekday` HARD CONSTRAINT to the one bucket date it names; no court hours are read",
+/** Files under server/ and lib/ that compare a `weekday` and are NOT a court-hours rule: how many matches the excused expression is, and why.
+ *  An entry excuses EXACTLY that many matches, not the file: a second weekday comparison in the same file is an offender, and fewer than
+ *  listed (the excused line is gone or changed) is stale, so the entry cannot outlive the line it excuses nor hide a new rule beside it.
+ *  Paths are relative to src/. */
+interface Excuse {
+  readonly matches: number;
+  readonly why: string;
+}
+const WEEKDAY_ALLOWLIST: Readonly<Record<string, Excuse>> = {
+  "lib/capacity-input.ts": {
+    matches: 1,
+    why: "resolves a `fixture_on_weekday` HARD CONSTRAINT to the one bucket date it names (`weekdayOfYmd(ymd) === h.weekday`); no court hours are read",
+  },
 };
 /** The trees the weekday marker is scanned in (see the long comment on the second test below). */
 const ROOTS = ["server", "lib"];
@@ -55,10 +64,10 @@ function assertScanned(scanned: Record<string, number>): void {
  *  fabricate it, they do not implement it. */
 function weekdayScan(
   srcDir: URL,
-  allowlist: Readonly<Record<string, string>>,
+  allowlist: Readonly<Record<string, Excuse>>,
 ): { scanned: Record<string, number>; offenders: string[]; allowed: string[]; stale: string[] } {
   const base = fileURLToPath(srcDir);
-  const matched: string[] = [];
+  const matched = new Map<string, number>();
   const scanned: Record<string, number> = {};
   for (const root of ROOTS) {
     scanned[root] = 0;
@@ -70,16 +79,19 @@ function weekdayScan(
       const path = `${entry.parentPath}/${name}`;
       if (path.includes("__tests__")) continue;
       scanned[root]!++;
-      if (countInCode(readFileSync(path, "utf8"), WEEKDAY) > 0) matched.push(relative(base, path));
+      const n = countInCode(readFileSync(path, "utf8"), WEEKDAY);
+      if (n > 0) matched.set(relative(base, path), n);
     }
   }
-  const excused = Object.keys(allowlist);
-  return {
-    scanned,
-    offenders: matched.filter((f) => !excused.includes(f)),
-    allowed: matched.filter((f) => excused.includes(f)),
-    stale: excused.filter((f) => !matched.includes(f)),
-  };
+  const offenders: string[] = [];
+  const allowed: string[] = [];
+  const stale = Object.keys(allowlist).filter((f) => (matched.get(f) ?? 0) < allowlist[f]!.matches);
+  for (const [f, n] of matched) {
+    const excuse = allowlist[f];
+    if (excuse === undefined || n > excuse.matches) offenders.push(f); // not excused, or more matches than the excused expression
+    else if (n === excuse.matches) allowed.push(f);
+  }
+  return { scanned, offenders, allowed, stale };
 }
 
 describe("apps/web has no second window rule", () => {
@@ -133,6 +145,7 @@ describe("apps/web has no second window rule", () => {
     for (const line of notMarker) expect(countInCode(line, WEEKDAY), `not a marker: ${line}`).toBe(0);
     // the allowlist is a guard: every entry still matches, and the count is on the failure line
     const entries = Object.keys(WEEKDAY_ALLOWLIST).sort();
+    for (const f of entries) expect(WEEKDAY_ALLOWLIST[f]!.matches, `${f}: an entry excuses a counted expression, not a file`).toBeGreaterThan(0);
     expect(stale, `stale allowlist entries (${entries.length} on the allowlist)`).toEqual([]);
     expect(allowed.sort(), `allowlisted files that still match (${allowed.length} of ${entries.length})`).toEqual(entries);
     expect(entries.length, "allowlisted files").toBeGreaterThan(0);
@@ -163,8 +176,14 @@ describe("apps/web has no second window rule", () => {
         "export const a = (d: { weekday?: number }) => (d.weekday !== undefined ? { weekday: d.weekday } : {});\n" +
         "export const b = (d: { weekday?: number }) => d.weekday != null;\n" +
         "export const c = (d: { weekday?: number }) => undefined !== d.weekday;\n",
-      // an allowlisted file: excused while it still matches...
+      // an allowlisted file: excused while it still matches, exactly as often as listed...
       "lib/allowed.ts": "export const f = (ymd: string, h: { weekday: number }) => weekdayOfYmd(ymd) === h.weekday;\n",
+      // ...a second comparison beside the excused one is an offender (the entry excuses an expression, not the file)...
+      "lib/allowed-twice.ts":
+        "export const f = (ymd: string, h: { weekday: number }) => weekdayOfYmd(ymd) === h.weekday;\n" +
+        "export const g = (h: { weekday: number }, d: number) => h.weekday === d;\n",
+      // ...and fewer matches than listed is stale (one excused line was edited away, though the file still compares a weekday)
+      "lib/allowed-fewer.ts": "export const f = (ymd: string, h: { weekday: number }) => weekdayOfYmd(ymd) === h.weekday;\n",
       // ...and an allowlisted file that no longer matches is stale (so is one that is gone: server/gone.ts is never written)
       "lib/clean.ts": "export const clean = 1;\n",
       "server/ok.ts": "export const ok = 1;\n",
@@ -189,9 +208,17 @@ describe("apps/web has no second window rule", () => {
     });
 
     it("flags exactly the code that resolves weekday hours under server/ and lib/, nested files and .tsx included, and counts per root", () => {
-      const allowlist = { "lib/allowed.ts": "scratch: excused", "lib/clean.ts": "scratch: stale", "server/gone.ts": "scratch: stale, absent" };
+      const excuse = (matches: number): Excuse => ({ matches, why: "scratch" });
+      const allowlist = {
+        "lib/allowed.ts": excuse(1),
+        "lib/allowed-twice.ts": excuse(1),
+        "lib/allowed-fewer.ts": excuse(2),
+        "lib/clean.ts": excuse(1),
+        "server/gone.ts": excuse(1),
+      };
       const { scanned, offenders, allowed, stale } = weekdayScan(pathToFileURL(join(scratch, "src") + sep), allowlist);
       expect(offenders.sort()).toEqual([
+        "lib/allowed-twice.ts",
         "lib/bad.ts",
         "lib/not-equal-reversed.ts",
         "server/bad.ts",
@@ -201,10 +228,10 @@ describe("apps/web has no second window rule", () => {
         "server/reversed.ts",
       ]);
       expect(allowed).toEqual(["lib/allowed.ts"]);
-      expect(stale.sort()).toEqual(["lib/clean.ts", "server/gone.ts"]);
+      expect(stale.sort()).toEqual(["lib/allowed-fewer.ts", "lib/clean.ts", "server/gone.ts"]);
       // server: bad.ts, nested/deeper/bad.tsx, loose.ts, reversed.ts, not-equal.ts, ok.ts, prose.ts; lib: bad.ts, not-equal-reversed.ts,
-      // presence.ts, allowed.ts, clean.ts. Tests, __tests__, .md and components/ are not counted.
-      expect(scanned).toEqual({ server: 7, lib: 5 });
+      // presence.ts, allowed.ts, allowed-twice.ts, allowed-fewer.ts, clean.ts. Tests, __tests__, .md and components/ are not counted.
+      expect(scanned).toEqual({ server: 7, lib: 7 });
     });
   });
 });

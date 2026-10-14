@@ -911,7 +911,7 @@ describe("the comments that quote the sizing quote the measured figures (T20-FIX
     [/costModel/, "the cost model (deleted with the report-basis projections it timed)"],
   ];
 
-  it("no note still says a retired figure, across every file that speaks of the sizing", () => {
+  it(`no note still says a retired figure, across the ${NOTES.length} files in NOTES that speak of the sizing (the Stryker config, groups, matrix and cuts scripts, the workflow and the cuts test)`, () => {
     let checked = 0;
     for (const f of NOTES) {
       const text = read(f);

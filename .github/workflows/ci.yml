@@ -904,8 +904,10 @@ jobs:
       # nothing at all — just "Process completed with exit code 1" — so the log
       # could not say which test failed or why. That is what made the round trip
       # expensive rather than cheap.
+      # scripts/__tests__/rules-reference.test.ts has a step of its own in the gates job (own report, own judge), so it is excluded from
+      # this whole-directory run instead of running twice per pull request (pinned by that file's CI-wiring describe).
       - name: Repo-root scripts tests (real Postgres)
-        run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scripts.json --testTimeout=30000 scripts/__tests__
+        run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scripts.json --testTimeout=30000 --exclude '**/scripts/__tests__/rules-reference.test.ts' scripts/__tests__
 
       # src/lib is in scope alongside src/server. It used to be excluded, which
       # meant the two suites guarding the Event Pass invariant —

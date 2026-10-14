@@ -1,19 +1,32 @@
 // The gate itself must demonstrably fail on seeded violations (PROMPT-01
 // acceptance). Fixtures are written to a temp dir shaped like an engine src/.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, globSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, globSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { checkEngineBoundary, scanEngineBoundary } from "../scripts/engine-boundary.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
-let dir: string;
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+// Every scratch directory a test makes is tracked and removed after THAT test (a test may make several: the CLI "scanned nothing" test
+// makes three), and afterAll holds the line: none made by this file is still there.
+const made: string[] = [];
+const everMade: string[] = [];
+afterEach(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); });
+afterAll(() => {
+  expect(everMade.length, "scratch directories this file made").toBeGreaterThan(0);
+  expect(everMade.filter((d) => existsSync(d)), "scratch directories left behind").toEqual([]);
+});
+function scratchDir(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  made.push(d);
+  everMade.push(d);
+  return d;
+}
 
 function seed(files: Record<string, string>): string {
-  dir = mkdtempSync(join(tmpdir(), "engine-boundary-"));
+  const dir = scratchDir("engine-boundary-");
   for (const [rel, content] of Object.entries(files)) {
     mkdirSync(join(dir, rel, ".."), { recursive: true });
     writeFileSync(join(dir, rel), content);
@@ -23,7 +36,6 @@ function seed(files: Record<string, string>): string {
 
 describe("engine boundary gate", () => {
   it("passes on the real packages/engine/src", () => {
-    dir = mkdtempSync(join(tmpdir(), "engine-boundary-")); // for afterEach
     const real = new URL("../src", import.meta.url).pathname;
     expect(checkEngineBoundary(real)).toEqual([]);
     // anti-vacuity: the gate reports how many files it looked at, and that is every .ts file under src/, counted by glob rather than by the gate's own walk
@@ -92,10 +104,9 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
   const HELPER = fileURLToPath(new URL("../scripts/lib/main-module.ts", import.meta.url));
 
   /** A scratch engine checkout: `eng/scripts/{engine-boundary.ts,lib/main-module.ts}` and `eng/src/<files>` (no src/ at all when `src` is null),
-   *  plus `bin/gate.ts`, a symlink to the copy. `dir` is set so afterEach removes it. */
+   *  plus `bin/gate.ts`, a symlink to the copy. Every root it makes is tracked, so afterEach removes them all. */
   function checkout(src: Record<string, string> | null): { root: string; eng: string; via: string } {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "engine-boundary-cli-")));
-    dir = root;
+    const root = realpathSync(scratchDir("engine-boundary-cli-"));
     const eng = join(root, "eng");
     mkdirSync(join(eng, "scripts/lib"), { recursive: true });
     copyFileSync(GATE, join(eng, "scripts/engine-boundary.ts"));

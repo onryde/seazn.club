@@ -237,14 +237,14 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     return out;
   };
 
-  it("one step, in the gates job, named for the checker", () => {
+  it("the engine checker's step appears once, in the gates job, named for the checker", () => {
     expect(lines.filter((l) => l === HEAD)).toHaveLength(1);
     expect(at).toBeGreaterThan(0);
     const jobHead = lines.slice(0, at).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
     expect(jobHead).toBe("  gates:");
   });
 
-  it("nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block", () => {
+  it("nothing narrows the engine checker's step: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block", () => {
     const onAt = lines.indexOf("on:");
     const afterOn = lines.findIndex((l, i) => i > onAt && /^[a-z]/.test(l));
     expect(onAt).toBeGreaterThanOrEqual(0);
@@ -255,7 +255,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(stepLines().filter((l) => /^ {8}[a-z-]+:/.test(l)).map((l) => l.trim().replace(/:.*$/, ""))).toEqual(["run"]);
   });
 
-  it("the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)", () => {
+  it("the engine checker's step runs only packages/engine/test/rules-reference.test.ts with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)", () => {
     const script = stepLines().filter((l) => l.startsWith("          ")).map((l) => l.slice(10));
     expect(script.slice(0, 3)).toEqual([
       "set -euo pipefail",
@@ -315,7 +315,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
   /** A non-zero vitest exit, no report written, and a stale report left behind. */
   const STEP_RUNS = 3;
 
-  it("the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node", (ctx) => {
+  it(`the engine step's judge is green on a clean single-file pass and red, naming its reason, on each of ${REDS.length} faults, run through real bash and node`, (ctx) => {
     spawns = 0;
     const green = runStep({ json: report() });
     expect(green.status, green.stderr).toBe(0);
@@ -331,7 +331,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those runs, not a default").toBe(spawnBudget(spawns));
   }, spawnBudget(JUDGE_RUNS));
 
-  it("the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", (ctx) => {
+  it("the engine checker's step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", (ctx) => {
     spawns = 0;
     const failedExit = runStep({ json: report(), exit: 1 });
     expect(failedExit.status).not.toBe(0);
@@ -373,6 +373,19 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(scriptAt(at).filter((l) => l.includes(ROOT_FILE))).toEqual([]);
     expect(scriptAt(rootAt).filter((l) => l.includes(ENGINE_FILE))).toEqual([]);
     expect(scriptAt(at).filter((l) => l.includes(ENGINE_FILE))).toHaveLength(1);
+  });
+
+  it("the whole-directory scripts step leaves this file to its own step: it excludes it, so the file runs once per pull request", () => {
+    const dirStep = lines.findIndex((l) => l === "      - name: Repo-root scripts tests (real Postgres)");
+    expect(dirStep, "the Repo-root scripts tests step").toBeGreaterThan(0);
+    const run = lines.slice(dirStep + 1).find((l) => l.startsWith("        run: "));
+    expect(run, "its run line").toBeDefined();
+    expect(run).toContain("scripts/__tests__");
+    expect(run, "excludes the root rules checker").toContain(`--exclude '**/${ROOT_FILE}'`);
+    // the exclusion is exact: nothing else under scripts/__tests__ is left out of that run
+    expect(run!.match(/--exclude/g)).toHaveLength(1);
+    // ...and the file still has its own step (else it would run in neither)
+    expect(lines.filter((l) => l === ROOT_HEAD)).toHaveLength(1);
   });
 
   it("the root step is the engine step with its own file and report, name-and-run only, and the same judge byte for byte", () => {
