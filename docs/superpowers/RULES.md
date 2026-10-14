@@ -47,6 +47,13 @@ backwards-compatible one; don't contort a design to dodge a migration.
   set it per-dispatch). Writes code. Full access to all skills and tools.
 - **Reviewer — Opus at minimum, xHigh effort** (same changes, same dates, same
   place). "At minimum" means Opus or above; never Sonnet for any of the three.
+- **2026-10-14: engine-split exception (owner, D30 and D33 in
+  `docs/superpowers/specs/2026-10-13-engine-split-design.md`).** The
+  engine-split programme's plans run in batches: each task is implemented by
+  `implementer-sonnet` and reviewed by `reviewer-sonnet`, and each batch is
+  reviewed whole by the Opus `reviewer`. This extends the W2c-only Sonnet
+  exception, so the `*-sonnet` agents stay until the engine split's Phase 1
+  closes as well as W2c.
 - **2026-09-05: the owner's "write all wave implementation using fable
   subagent?" was a question about PLANNING, not a model ruling** — clarified
   minutes later: "only now use Fable Agent to write implementation plan for
