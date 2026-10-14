@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
-import { ARMAGEDDON_RESULTS, BoardgameMethod, TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
+import { ARMAGEDDON_RESULTS, BoardgameMethod, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
@@ -1156,19 +1156,26 @@ function boardgameModel(ctx: TapAdapterContext) {
     // a sheet of choices, rung then winner (then the score, which "none" skips), and its last choice writes the row.
     if (taps[0] === TILE(BOARDGAME_TIEBREAK_TILE)) {
       const rest = taps.slice(1);
-      const rung = CHOICE_ID.exec(rest[0] ?? "")?.[1];
+      // W2c design pass: the pad shows the rung pick only when the stage plays more than one rung; a one-rung stage opens
+      // on that rung's first step, so there is no pick tap to read and the rung is the stage's own.
+      const played = effectiveRungs({ tiebreakRungs: (ctx.cfg as { tiebreakRungs?: TiebreakRung[] }).tiebreakRungs });
+      const asked = played.length !== 1;
+      const rung: string | undefined = asked ? CHOICE_ID.exec(rest[0] ?? "")?.[1] : played[0];
+      // A rung the pad does not offer is a tap on nothing: no row.
+      if (rung === undefined || !(played as readonly string[]).includes(rung)) return [];
+      const after = asked ? rest.slice(1) : rest;
       if (rung === ARMAGEDDON) {
         // W2c BG-KO-2 (S5): Black, then the result, then the read-back's Confirm — the Confirm is what writes the row,
         // so a sheet abandoned on the result step records nothing.
-        const black = CHOICE_ID.exec(rest[1] ?? "")?.[1];
-        const result = CHOICE_ID.exec(rest[2] ?? "")?.[1];
+        const black = CHOICE_ID.exec(after[0] ?? "")?.[1];
+        const result = CHOICE_ID.exec(after[1] ?? "")?.[1];
         const side = black?.startsWith(BLACK_OPTION_PREFIX) ? black.slice(BLACK_OPTION_PREFIX.length) : undefined;
         const outcome = result?.startsWith(RESULT_OPTION_PREFIX) ? result.slice(RESULT_OPTION_PREFIX.length) : undefined;
-        const complete = rest.length === 4 && rest[3] === CONFIRM_SEL && (side === "home" || side === "away") && (ARMAGEDDON_RESULTS as readonly (string | undefined)[]).includes(outcome);
+        const complete = after.length === 3 && after[2] === CONFIRM_SEL && (side === "home" || side === "away") && (ARMAGEDDON_RESULTS as readonly (string | undefined)[]).includes(outcome);
         return complete ? [{ type: BOARDGAME_TIEBREAK, payload: { rung, black: ctx.entrants[side as "home" | "away"], result: outcome } }] : [];
       }
-      const [, side, score] = rest.map((t) => CHOICE_ID.exec(t)?.[1]);
-      const complete = rung !== undefined && (side === "home" || side === "away") && score === TIEBREAK_SCORE_NONE;
+      const [side, score] = after.map((t) => CHOICE_ID.exec(t)?.[1]);
+      const complete = after.length === 2 && (side === "home" || side === "away") && score === TIEBREAK_SCORE_NONE;
       return complete ? [{ type: BOARDGAME_TIEBREAK, payload: { rung, winner: ctx.entrants[side] } }] : [];
     }
     let held: Record<string, unknown> | null = null;
@@ -1309,6 +1316,42 @@ describe("boardgame", () => {
     expect(drawn, "a DRAWN Armageddon is in the sweep, for both Blacks").toBe(2);
     expect(TIEBREAK_RUNGS).toContain(ARMAGEDDON); // the one rung with no score step is one the engine declares
     expect(boardgamePad.emits).toContain(BOARDGAME_TIEBREAK);
+  });
+
+  it("W2c design pass: a stage that plays ONE rung shows no rung step, so the adapter taps none — every rung the engine declares, both sides, replayed on the fake ledger — and a rung the stage does not play is refused by name", async () => {
+    const base = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    /** The bracket's cfg with the stage's rung list set (BG-KO-3). */
+    const playing = (rungs: readonly string[]) => ({ ...(base as Record<string, unknown>), tiebreakRungs: rungs });
+    let driven = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      const cfg = playing([rung]);
+      for (const winner of ["home", "away"] as const) {
+        const outcome = { kind: "tiebreak", rung, winner, ...(rung === ARMAGEDDON ? { result: "black" } : {}) } as RequestedOutcome;
+        const label = `${rung}/${winner}`;
+        const r = bracketReq("boardgame", cfg, outcome);
+        const tb = generateStream(r).filter((e) => e.type === BOARDGAME_TIEBREAK);
+        expect(tb, label).toHaveLength(1);
+        const tail: TapStep[] =
+          rung === ARMAGEDDON
+            ? [{ kind: "choice", optionId: `black-${winner}` }, { kind: "choice", optionId: "result-black" }, { kind: "confirm" }]
+            : [{ kind: "choice", optionId: winner }, { kind: "choice", optionId: TIEBREAK_SCORE_NONE }];
+        // The pad never shows the pick for a one-rung stage, so a tap on `rapid` / `armageddon` would find no such option.
+        expect(boardgamePad.stepsFor(tb[0]!, ctxOf(r)), label).toEqual([{ kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }, ...tail]);
+        const { res, ledger } = await replayOnModel(boardgamePad, generateStream(r), ctxOf(r), boardgameModel(ctxOf(r)));
+        expect(res.findings, label).toEqual([]);
+        expect(res.rows.map((x) => x.verdict), label).toEqual(["equal", "equal", "equal"]);
+        expect(matchesRequest(r, foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome), label).toBe("match");
+        driven++;
+      }
+    }
+    expect(driven, "every rung the engine declares, both sides").toBe(TIEBREAK_RUNGS.length * 2);
+    // A rung the stage does not play is not on the pad: the adapter refuses rather than tap an option that is not there.
+    const only = bracketReq("boardgame", playing(["rapid"]), { kind: "tiebreak", rung: "rapid", winner: "home" });
+    expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung: "blitz", winner: HOME } }, ctxOf(only))).toThrow(/stage does not play the blitz rung/);
+    expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung: ARMAGEDDON, black: HOME, result: "draw" } }, ctxOf(only))).toThrow(/stage does not play the armageddon rung/);
+    // …and the several-rung stage still taps the pick (the positive pair of everything above).
+    const several = bracketReq("boardgame", playing(["rapid", "armageddon"]), { kind: "tiebreak", rung: "rapid", winner: "home" });
+    expect(boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung: "rapid", winner: HOME } }, ctxOf(several))[1]).toEqual({ kind: "choice", optionId: "rapid" });
   });
 
   it("route case (a value outside the generator's): the Armageddon White wins — Black, then `result-white`, then Confirm — is equal on the ledger and folds to the OTHER entrant (BG-KO-2)", async () => {

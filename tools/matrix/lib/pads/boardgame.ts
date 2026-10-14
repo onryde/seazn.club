@@ -25,7 +25,7 @@
 // on a read-back step whose one Confirm (`pad-sheet-confirm`, the bench driver's `confirm` TapStep) writes
 // `{rung, black, result}`. The ENGINE decides who advances: White won → the other entrant; Black won or drawn → Black.
 // So the generator's `winner` is Black here, and a drawn Armageddon is one more `result-draw` tap, never a winner tap.
-import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
+import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
@@ -61,6 +61,21 @@ function resultSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep
   return [hold, { kind: "chip", chipId: methodChipId(p.method) }];
 }
 
+/** W2c design pass: the rungs the stage plays (`effectiveRungs`: the list in its order, else every rung). The pad asks "which
+ *  tie-break?" only when there is more than one to choose from, so the rung tap is part of the route only then; a one-rung
+ *  stage opens straight on that rung's first step (boardgame.tsx `tiebreakSheet`'s `only`). */
+function playedRungs(ctx: TapAdapterContext): readonly TiebreakRung[] {
+  return effectiveRungs({ tiebreakRungs: (ctx.cfg as { tiebreakRungs?: TiebreakRung[] } | null)?.tiebreakRungs });
+}
+/** The tile, then the rung pick WHEN the pad shows one, and refuses a rung the stage does not play (the pad cannot author it). */
+function tiebreakOpening(rung: string, ctx: TapAdapterContext): readonly TapStep[] {
+  const played = playedRungs(ctx);
+  if (!(played as readonly string[]).includes(rung)) {
+    throw new Error(`boardgamePad: ${BOARDGAME_TIEBREAK} for the ${rung} rung, but the stage does not play the ${rung} rung (it plays ${played.length === 0 ? "none" : played.join(", ")}): the pad cannot author it`);
+  }
+  return played.length === 1 ? [{ kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }] : [{ kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }, { kind: "choice", optionId: rung }];
+}
+
 function tiebreakSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {
   const p = (payload ?? {}) as Record<string, unknown>;
   const keys = Object.keys(p).sort();
@@ -70,12 +85,7 @@ function tiebreakSteps(payload: unknown, ctx: TapAdapterContext): readonly TapSt
   if (payload === null || typeof payload !== "object" || keys.length !== 2 || keys[0] !== "rung" || keys[1] !== "winner" || rung === null || side === null) {
     throw new Error(`boardgamePad: ${BOARDGAME_TIEBREAK} payload ${JSON.stringify(payload)} is not {rung: one of ${TIEBREAK_RUNGS.join(", ")}, winner: an entrant of the fixture}`);
   }
-  return [
-    { kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE },
-    { kind: "choice", optionId: rung },
-    { kind: "choice", optionId: side },
-    { kind: "choice", optionId: TIEBREAK_SCORE_NONE },
-  ];
+  return [...tiebreakOpening(rung, ctx), { kind: "choice", optionId: side }, { kind: "choice", optionId: TIEBREAK_SCORE_NONE }];
 }
 
 /** BG-KO-2: `{rung: "armageddon", black: <an entrant>, result: <one of the engine's>}` and nothing else. The old
@@ -87,8 +97,7 @@ function armageddonSteps(payload: unknown, p: Record<string, unknown>, keys: rea
     throw new Error(`boardgamePad: ${BOARDGAME_TIEBREAK} payload ${JSON.stringify(payload)} is not {rung: ${ARMAGEDDON}, black: an entrant of the fixture, result: one of ${ARMAGEDDON_RESULTS.join(", ")}}`);
   }
   return [
-    { kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE },
-    { kind: "choice", optionId: ARMAGEDDON },
+    ...tiebreakOpening(ARMAGEDDON, ctx),
     { kind: "choice", optionId: `${BLACK_OPTION_PREFIX}${side}` },
     { kind: "choice", optionId: `${RESULT_OPTION_PREFIX}${result}` },
     { kind: "confirm" },
