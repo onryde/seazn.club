@@ -2,13 +2,26 @@ import path from "node:path";
 import { withSentryConfig } from "@sentry/nextjs";
 import { posthogIngestHosts } from "./src/lib/posthog-proxy.mjs";
 
+// Permissions-Policy. The camera is off everywhere but one document: the
+// player's match room, which joins its board's meeting with the player's own
+// camera (RealtimeKit's getUserMedia, called in the page itself — no iframe —
+// with `audio: false`: players have no audio). The arbiter panel only
+// receives, so it keeps camera=() too. The room's rule sits LAST in headers()
+// and uses the same key, so it REPLACES the catch-all's value (Next's
+// resolve-routes: `resHeaders[key] = value`) — never a second header beside
+// it, which a browser would combine into the stricter policy and still block.
+// A path the room rule does not match keeps camera=(): it fails closed.
+// T17B fix 1; permissions-policy-headers.test.ts and match-room.spec.ts pin it.
+const PERMISSIONS_POLICY = "Permissions-Policy";
+const MATCH_ROOM_SOURCE = "/shared/:orgSlug/:competitionSlug/:divisionSlug/fixtures/:fixtureId/play";
+
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   // X-Frame-Options lives in its own rule below — /embed/* must be frameable
   // by other sites (v3/10 #4), everything else stays SAMEORIGIN.
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
-    key: "Permissions-Policy",
+    key: PERMISSIONS_POLICY,
     value: "camera=(), microphone=(), geolocation=()",
   },
   {
@@ -112,6 +125,13 @@ const nextConfig = {
         source: "/embed/:path*",
         headers: [
           { key: "Content-Security-Policy", value: "frame-ancestors *" },
+        ],
+      },
+      {
+        // LAST: replaces the catch-all's Permissions-Policy (see above).
+        source: MATCH_ROOM_SOURCE,
+        headers: [
+          { key: PERMISSIONS_POLICY, value: "camera=(self), microphone=(), geolocation=()" },
         ],
       },
     ];
