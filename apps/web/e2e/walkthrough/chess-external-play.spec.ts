@@ -706,7 +706,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     }
   });
 
-  test("a live game nobody is watching is closed by the cron sweep — on the read AFTER the one that settles the flag", async ({ page }) => {
+  test("a live game nobody is watching is closed by the cron sweep — its own held read is the one Lichess flags it on (D11)", async ({ page }) => {
     test.setTimeout(budget(8));
     const boardB = round.boards[1]!;
     // Round 2 cannot pair while a round-1 board is unresolved: the organiser's
