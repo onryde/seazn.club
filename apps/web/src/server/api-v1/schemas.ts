@@ -1233,13 +1233,16 @@ export const StageCourtTags = z.object({
   available_round_roles: z.array(z.string()),
 });
 
-/** Per-stage match-format override (design 2026-09-17 §T3). A WHOLE-FRAGMENT
- *  replace: what you send is what the stage carries, and `rules: null` clears
- *  it back to the division's format. Values are unconstrained HERE for the
- *  openapi-gen reason on `StageConfig.rules` above; `usecases/stage-rules.ts`
- *  enforces the per-sport allowlist (400 UNKNOWN_RULE_KEY), the sets-based
- *  sport gate (400 SPORT_NOT_SUPPORTED), the merged-config parse (422
- *  CONFIG_INVALID) and the per-stage lock (409 STAGE_FORMAT_LOCKED). */
+/** Per-stage match-format override (design 2026-09-17 §T3; W2c Task 11). The
+ *  fragment MERGES into what the stage carries: an omitted key is kept, a key
+ *  sent as `null` is removed, and `rules: null` or `{}` clears the stage back to
+ *  the division's format. Values are unconstrained HERE for the openapi-gen
+ *  reason on `StageConfig.rules` above; `usecases/stage-rules.ts` enforces, for
+ *  every sport, the engine's declared stage keys for the stage's kind and
+ *  variant (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE), the merged-config parse
+ *  (422 CONFIG_INVALID), the per-stage lock (409 STAGE_FORMAT_LOCKED) and an
+ *  unstarted match's own format still fitting (409
+ *  FIXTURE_OWN_FORMAT_NO_LONGER_FITS). */
 export const PutStageRules = z.object({
   rules: z.record(z.string(), z.unknown()).nullable(),
 });
