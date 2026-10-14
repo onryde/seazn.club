@@ -7,7 +7,7 @@ import { HttpError } from "@/lib/errors";
 import { FORMAT_FIT_REASONS, RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { LOCKED_FIXTURE_STATUSES, hasFrozenCfg, resolveModule } from "@/server/engine-db";
-import { AwardFoldMismatch, awardedMatchState, ledgerOf, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
+import { awardFit, isScoredAward, ledgerOf, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import { bracketOrder } from "@/server/engine-db/fed-seats";
 import { liveCfg, mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
 import { foldFrom, loadFoldInputs } from "@/server/engine-db/fold";
@@ -49,7 +49,8 @@ import { invalidatePublicCache } from "./scoring";
  *     refold, so the fit is the award's own fold (`awardedMatchState`): under the corrected cfg the walkover must
  *     still decide the stored award and keep its credited score, or the correction is refused
  *     (`FORMAT_DOES_NOT_FIT_PLAY`). A bye credits no score and nothing records it, so fitting does not apply: a change
- *     is refused (`FIXTURE_FORMAT_LOCKED`). On a fit the award's score is re-written under the corrected cfg; a frozen
+ *     is refused (`FIXTURE_FORMAT_LOCKED`) — as is an award its current format cannot reproduce (`awarded-state.ts`
+ *     `awardFit`, the pure verdict). Re-sending the format it already plays is no change: nothing is fitted. On a fit the award's score is re-written under the corrected cfg; a frozen
  *     snapshot is re-frozen and bumped (`freezeCfg` — never `refreezeFixture`, whose refold of the empty ledger would
  *     write over the award), and an award with no snapshot has no frozen cfg to bump.
  *  8. One `competition_events` row per fixture (`fixture.rules_override`: before, after, started).
@@ -189,23 +190,17 @@ const notFit = (id: string, reason: string) =>
     fixture_id: id,
   });
 
-/** (7a) An award no event records: under `corrected` the walkover must still decide the stored award and keep its
- *  credited score. A bye (no loser) credits none and is no award the engine scores: refused as locked. */
+/** (7a) An award no event records: `awardFit`'s verdict (the award's own walkover fold under the format it plays now
+ *  and under `corrected`), as a named refusal. A bye is refused before its sides are read (it seats one side only). */
 async function assertAwardFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<void> {
-  const outcome = row.outcome!;
-  if (outcome.kind !== "award" || outcome.loser === null) throw lockedRefusal(row.id);
+  if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id);
   const award = await loadAward(tx, row.id);
-  const at = { fixtureId: row.id, recordedAt: new Date().toISOString() };
-  const was = awardedMatchState(award.module, award.cfg, award.lineups, award.outcome, at);
-  let now;
-  try {
-    now = awardedMatchState(award.module, corrected, award.lineups, award.outcome, at);
-  } catch (err) {
-    if (EngineError.is(err)) throw notFit(row.id, err.message);
-    if (err instanceof AwardFoldMismatch) throw notFit(row.id, FORMAT_FIT_REASONS.result);
-    throw err;
-  }
-  if (now.summary.headline !== was.summary.headline) throw notFit(row.id, FORMAT_FIT_REASONS.score);
+  const verdict = awardFit(award.module, award.cfg, corrected, award.lineups, award.outcome, {
+    fixtureId: row.id,
+    recordedAt: new Date().toISOString(),
+  });
+  if (verdict.ok) return;
+  throw verdict.code === "FIXTURE_FORMAT_LOCKED" ? lockedRefusal(row.id) : notFit(row.id, verdict.reason);
 }
 
 /** (7) X-SR-5: the recorded play, refolded under `corrected`, must fold, keep its outcome and keep its score. */

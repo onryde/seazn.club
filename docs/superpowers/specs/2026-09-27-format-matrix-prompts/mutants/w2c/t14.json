@@ -211,8 +211,8 @@
  {
   "id": "t14-award-bye",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "if (outcome.kind !== \"award\" || outcome.loser === null) throw lockedRefusal(row.id);",
-  "replace": "if (outcome.kind !== \"award\") throw lockedRefusal(row.id);",
+  "find": "if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id);",
+  "replace": "",
   "killers": [
    {
     "cwd": "apps/web",
@@ -224,10 +224,32 @@
   ]
  },
  {
+  "id": "t14-award-scored-pred",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "o !== null && o.kind === \"award\" && o.loser !== null;",
+  "replace": "o !== null && o.kind === \"award\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "credits no score and records nothing"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "every arm, each with the verdict"
+   }
+  ]
+ },
+ {
   "id": "t14-award-headline",
-  "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "if (now.summary.headline !== was.summary.headline) throw notFit(row.id, FORMAT_FIT_REASONS.score);",
-  "replace": "",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "if (now.summary.headline !== was.summary.headline)",
+  "replace": "if (false)",
   "killers": [
    {
     "cwd": "apps/web",
@@ -235,6 +257,154 @@
      "src/server/usecases/__tests__/fixture-rules.test.ts"
     ],
     "name": "a withdrawal's walkover over her dead seat"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "every arm, each with the verdict"
+   }
+  ]
+ },
+ {
+  "id": "t14-awardfit-now-engine",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "    if (EngineError.is(err)) return { ok: false, code: \"FORMAT_DOES_NOT_FIT_PLAY\", reason: err.message };",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "every arm, each with the verdict"
+   }
+  ]
+ },
+ {
+  "id": "t14-awardfit-now-mismatch",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "    if (err instanceof AwardFoldMismatch) return { ok: false, code: \"FORMAT_DOES_NOT_FIT_PLAY\", reason: FORMAT_FIT_REASONS.result };",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "every arm, each with the verdict"
+   }
+  ]
+ },
+ {
+  "id": "t14-awardfit-was",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "    if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: \"FIXTURE_FORMAT_LOCKED\" };",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "every arm, each with the verdict"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a stored award its own fold cannot reproduce"
+   }
+  ]
+ },
+ {
+  "id": "t14-awardfit-was-engine",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "    if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: \"FIXTURE_FORMAT_LOCKED\" };",
+  "replace": "    if (err instanceof AwardFoldMismatch) return { ok: false, code: \"FIXTURE_FORMAT_LOCKED\" };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "every arm, each with the verdict"
+   }
+  ]
+ },
+ {
+  "id": "t14-awardfit-was-mismatch",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "    if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: \"FIXTURE_FORMAT_LOCKED\" };",
+  "replace": "    if (EngineError.is(err)) return { ok: false, code: \"FIXTURE_FORMAT_LOCKED\" };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "every arm, each with the verdict"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a stored award its own fold cannot reproduce"
+   }
+  ]
+ },
+ {
+  "id": "t14-awardfit-bug-propagates",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "    throw err;\n  }\n  if (now.summary.headline",
+  "replace": "    return { ok: false, code: \"FIXTURE_FORMAT_LOCKED\" };\n  }\n  if (now.summary.headline",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-fit.test.ts"
+    ],
+    "name": "a module bug is not a verdict"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-noop",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "        if (canonicalJson(cfg) !== canonicalJson(current)) {",
+  "replace": "        if (true) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "credits no score and records nothing"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "the same award over a frozen snapshot"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-current-override",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "            ? mergeRulesOverride(stageResolved, row.rules_override)",
+  "replace": "            ? stageResolved",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an award that already carries its own format"
    }
   ]
  },

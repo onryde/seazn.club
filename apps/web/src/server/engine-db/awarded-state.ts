@@ -2,6 +2,7 @@ import "server-only";
 import type postgres from "postgres";
 import { isDeepStrictEqual } from "node:util";
 import {
+  EngineError,
   foldMatchWithStoppage,
   outcomeOf,
   summaryOf,
@@ -12,6 +13,7 @@ import {
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { FORMAT_FIT_REASONS } from "@/lib/rule-errors";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { resolveFixtureCfg } from "./fixture-cfg";
@@ -80,6 +82,58 @@ export function awardedMatchState(
   const decided = outcomeOf(module, folded);
   if (!isDeepStrictEqual(decided, outcome)) throw new AwardFoldMismatch(decided, outcome);
   return { state: folded.state, summary: summaryOf(module, folded) };
+}
+
+/** An award with a loser: the only decision without play that credits a score (a bye names no loser). */
+export const isScoredAward = (o: MatchOutcome | null): o is Extract<MatchOutcome, { kind: "award" }> & { loser: string } =>
+  o !== null && o.kind === "award" && o.loser !== null;
+
+/** `awardFit`'s verdict. `FIXTURE_FORMAT_LOCKED`: no fit applies to the stored award. `FORMAT_DOES_NOT_FIT_PLAY`: the
+ *  corrected format would not keep it, for `reason`. */
+export type AwardFitVerdict =
+  | { ok: true }
+  | { ok: false; code: "FIXTURE_FORMAT_LOCKED" }
+  | { ok: false; code: "FORMAT_DOES_NOT_FIT_PLAY"; reason: string };
+
+/**
+ * W2c Task 14 (fix rounds 1–2, X-SR-5 for a match decided WITHOUT play) — does a format correction keep an award no
+ * event records? Pure: the award's own walkover fold (`awardedMatchState`) under the format it plays now and under the
+ * corrected one, and nothing else (`fixture-rules.ts` (7a) is the one caller).
+ *
+ *  - A bye (no loser) or no award at all credits no score: no fit applies (`FIXTURE_FORMAT_LOCKED`).
+ *  - The CURRENT fold must reproduce the stored award, or there is nothing to fit against: the engine refusing the
+ *    forfeit, or the fold deciding another award, is `FIXTURE_FORMAT_LOCKED` too — a named refusal, never a 500.
+ *  - Under the corrected format: the engine refusing the forfeit is `FORMAT_DOES_NOT_FIT_PLAY` with its own message;
+ *    the fold deciding another award is the "result" reason; a different credited score is the "score" reason.
+ *  - Anything else thrown is a module bug, not a verdict, and propagates.
+ */
+export function awardFit(
+  module: AnySportModule,
+  currentCfg: unknown,
+  correctedCfg: unknown,
+  lineups: LineupPair,
+  outcome: MatchOutcome,
+  at: { fixtureId: string; recordedAt: string },
+): AwardFitVerdict {
+  if (!isScoredAward(outcome)) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
+  let was;
+  try {
+    was = awardedMatchState(module, currentCfg, lineups, outcome, at);
+  } catch (err) {
+    if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
+    throw err;
+  }
+  let now;
+  try {
+    now = awardedMatchState(module, correctedCfg, lineups, outcome, at);
+  } catch (err) {
+    if (EngineError.is(err)) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: err.message };
+    if (err instanceof AwardFoldMismatch) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: FORMAT_FIT_REASONS.result };
+    throw err;
+  }
+  if (now.summary.headline !== was.summary.headline)
+    return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: FORMAT_FIT_REASONS.score };
+  return { ok: true };
 }
 
 /**
