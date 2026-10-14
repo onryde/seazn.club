@@ -607,6 +607,20 @@ const hitsItself = (loc: Locator) =>
 const ARMAGEDDON_HINT = "In Armageddon a draw means Black advances.";
 const LOTS_HINT = "Decided by lot? Ask the organiser to settle the match.";
 const back = (page: Page) => pad(page).getByRole("button", { name: "Back", exact: true });
+/** W2c Task 21 design pass: the sheet's context lines AS THE SCORER READS THEM (whitespace collapsed) — the round, then, once Black
+ *  is known, who is White and who is Black. */
+const contextLines = (page: Page) =>
+  pad(page).getByTestId("pad-sheet-context-line").evaluateAll((els) => els.map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim()));
+const WHO = { white: ui("pad.boardgame.tiebreak.who.white"), black: ui("pad.boardgame.tiebreak.who.black") };
+const roundWord = (rung: string) => ui(`pad.boardgame.tiebreak.rung.${rung}`);
+/** A rows step: every option is the card's width (a row), never a pill hugging its label — a live-browser witness of `layout: "rows"`. */
+async function expectRows(page: Page, ids: readonly string[], what: string) {
+  const sheet = (await pad(page).locator('[data-role="v3-sheet"]').boundingBox())!;
+  for (const id of ids) {
+    const box = (await option(page, id).boundingBox())!;
+    expect(box.width, `${what} ${id}: a full-width row (${box.width}px in a ${sheet.width}px sheet)`).toBeGreaterThanOrEqual(sheet.width - 40);
+  }
+}
 
 /** A chess knockout game drawn into its tie-break (BG-KO-1): the drawn result moves the fold to phase "tiebreak". */
 async function drawnChessKnockout(r: APIRequestContext, d6?: { names: string[]; people: string[] }, divisionConfig?: Record<string, unknown>) {
@@ -799,6 +813,67 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     await confirmButton(page).click();
     await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "tiebreak_armageddon" });
   });
+
+  test("design pass: Back from Black returns to the rung pick, still answered; a different rung opens ITS first screen, and nothing is written", async ({ page, request }) => {
+    const ko = await drawnChessKnockout(request);
+    const { sf } = ko;
+    await page.goto(await fixturePath(request, sf.id));
+    await tile(page, "tiebreak").click();
+    await expect(back(page), "the rung pick is the first screen: no Back").toHaveCount(0);
+    await option(page, "armageddon").click();
+    await expect(option(page, blackId("home"))).toBeVisible();
+    expect(await contextLines(page)).toEqual([roundWord("armageddon")]);
+    await back(page).click();
+    await expect(option(page, "armageddon"), "Back from Black is the rung pick").toBeVisible();
+    await expect(option(page, blackId("home")), "…and Black is gone").toHaveCount(0);
+    expect(await contextLines(page), "the pick names no round").toEqual([]);
+    await option(page, "blitz").click();
+    await expect(option(page, "home"), "blitz opens its own first screen: the winner").toBeVisible();
+    expect(await contextLines(page), "…naming blitz, not the Armageddon it was backed out of").toEqual([roundWord("blitz")]);
+    expect(((await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!).map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
+  });
+
+  // Design pass (owner question (b)): a stage that plays exactly ONE rung has nothing to ask. One browser run per rung the
+  // engine declares; the opening is the same, the recorded facts are that rung's own.
+  {
+    let single = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      single++;
+      test(`design pass: a stage that plays only ${rung} opens on its first screen, names the round, has no Back, and records that rung's facts`, async ({ page, request }) => {
+        const ko = await drawnChessKnockout(request, undefined, { tiebreakRungs: [rung] });
+        const { sf } = ko;
+        expect(await stageRungs(request, ko.divisionId), "the product reads the one-rung list back").toEqual([rung]);
+        await page.goto(await fixturePath(request, sf.id));
+        await tile(page, "tiebreak").click();
+        // The positive first: the first real screen is up. Then the absences — no rung pick, no Back (it is the first screen).
+        const first = rung === "armageddon" ? [blackId("home"), blackId("away")] : ["home", "away"];
+        expect(await optionIds(page), `${rung}: the first screen is that rung's own`).toEqual(first);
+        for (const r of TIEBREAK_RUNGS) await expect(option(page, r), `${rung}: no pick for ${r}`).toHaveCount(0);
+        await expect(pad(page).getByText(LOTS_HINT), "the lots hint belongs to the pick").toHaveCount(0);
+        await expect(back(page), "the first screen has no Back; Cancel is the way out").toHaveCount(0);
+        expect(await contextLines(page), "the sheet names its round from the start").toEqual([roundWord(rung)]);
+        if (rung === "armageddon") {
+          // Black = home, and WHITE wins: the AWAY entrant advances — the rulebook's answer, not the tapped side's.
+          await option(page, blackId("home")).click();
+          await option(page, resultId("white")).click();
+          await expect(summary(page)).toHaveText(ui("pad.boardgame.tiebreak.confirm.won", { name: ko.nameOf.get(sf.away_entrant_id!)!, colour: ui("pad.boardgame.tiebreak.colour.white") }));
+          await confirmButton(page).click();
+          await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.away_entrant_id, method: "tiebreak_armageddon" });
+        } else {
+          await option(page, "away").click();
+          await expect(option(page, "none"), "the optional score").toBeVisible();
+          await expect(back(page), "from the second screen on, Back is there").toBeVisible();
+          await option(page, "none").click();
+          await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.away_entrant_id, method: `tiebreak_${rung}` });
+        }
+        const events = (await apiJson<{ type: string; payload: Record<string, unknown> }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
+        expect(events.filter((e) => e.type === "boardgame.tiebreak").map((e) => e.payload)).toEqual([
+          rung === "armageddon" ? { rung, black: sf.home_entrant_id, result: "white" } : { rung, winner: sf.away_entrant_id },
+        ]);
+      });
+    }
+    if (single !== TIEBREAK_RUNGS.length) throw new Error(`the one-rung loop built ${single} tests`);
+  }
 
   test("BG-KO-3 the pad offers only the rungs the stage plays, in the stage's order — and that order is not the engine's", async ({ page, request }) => {
     // ["armageddon", "rapid"] is NOT TIEBREAK_RUNGS order, so a pad that re-sorts to the canonical list fails here; blitz is
@@ -1197,22 +1272,27 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await page.setViewportSize({ width: w, height: 900 });
       await expect(tile(page, "tiebreak")).toBeVisible();
       await expectNoHorizontalScroll(page);
-      await crop(pad(page), "pad-tiebreak-tile", w);
+      await crop(pad(page), "s5-01-tile", w);
       await tile(page, "tiebreak").click();
       await expect(option(page, "rapid")).toBeVisible();
       await expectNoHorizontalScroll(page);
-      await crop(pad(page), "pad-tiebreak-rung", w);
+      await expectRows(page, [...TIEBREAK_RUNGS], `${w} rung`);
+      expect(await contextLines(page), "the rung pick names no round: nothing is chosen yet").toEqual([]);
+      await crop(pad(page), "s5-02-rung", w);
       await option(page, "rapid").click();
       await expect(option(page, "away")).toBeVisible();
       await expect(option(page, "away")).toHaveText(shownAs.get(sf.away_entrant_id!)!);
       await expectNoHorizontalScroll(page);
       await expectSheetHeadOneRow(page, w);
-      await crop(pad(page), "pad-tiebreak-winner", w);
+      await expectRows(page, ["home", "away"], `${w} rapid winner`);
+      expect(await contextLines(page), "after the pick the sheet names its round").toEqual([roundWord("rapid")]);
+      await crop(pad(page), "s5-03-rapid-winner", w);
       await option(page, "away").click();
       await expect(option(page, "none")).toBeVisible();
       await expectNoHorizontalScroll(page);
       await expectSheetHeadOneRow(page, w);
-      await crop(pad(page), "pad-tiebreak-score", w);
+      expect(await contextLines(page)).toEqual([roundWord("rapid")]);
+      await crop(pad(page), "s5-04-rapid-score", w);
       await back(page).click();
       await back(page).click();
       await option(page, "armageddon").click();
@@ -1231,19 +1311,28 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await expect(pad(page).getByText(ARMAGEDDON_HINT)).toHaveCount(0);
       await expectNoHorizontalScroll(page);
       await expectSheetHeadOneRow(page, w, { hyphenated: false });
-      await crop(pad(page), "pad-tiebreak-black", w);
+      await expectRows(page, [blackId("home"), blackId("away")], `${w} Black`);
+      expect(await contextLines(page), "the Black step names the round and nothing else: no colour is known yet").toEqual([roundWord("armageddon")]);
+      await expect(pad(page).locator("[data-disc]"), "no colour disc before a tap has said anything").toHaveCount(0);
+      await crop(pad(page), "s5-05-armageddon-black", w);
       for (const side of ["home", "away"] as const) await tapTarget(option(page, blackId(side)), `Black ${side}`);
       await option(page, blackId("away")).click();
       await expect(pad(page).getByText(ARMAGEDDON_HINT)).toBeVisible();
       await expectNoHorizontalScroll(page);
       await expectSheetHeadOneRow(page, w, { hyphenated: false });
-      await crop(pad(page), "pad-tiebreak-result", w);
+      await expectRows(page, ARMAGEDDON_RESULTS.map(resultId), `${w} result`);
+      // Black is the away entrant, so the HOME entrant is White — the legend the scorer reads before tapping "White won".
+      const legend = [roundWord("armageddon"), `${WHO.white} ${homeName}`, `${WHO.black} ${awayName}`];
+      expect(await contextLines(page), "the result step says who is White and who is Black").toEqual(legend);
+      expect(await pad(page).locator("[data-disc]").evaluateAll((els) => els.map((e) => e.getAttribute("data-disc"))), "the legend's two discs, then one per result").toEqual(["white", "black", ...ARMAGEDDON_RESULTS.map((r) => (r === "draw" ? "split" : r))]);
+      await crop(pad(page), "s5-06-armageddon-result", w);
       for (const result of ARMAGEDDON_RESULTS) await tapTarget(option(page, resultId(result)), `result ${result}`);
       await option(page, resultId("draw")).click();
       await expect(summary(page)).toHaveText(ui("pad.boardgame.tiebreak.confirm.drawn", { name: awayName }));
       await expectNoHorizontalScroll(page);
       await expectSheetHeadOneRow(page, w, { hyphenated: false, below: summary(page) });
-      await crop(pad(page), "pad-tiebreak-confirm", w);
+      expect(await contextLines(page), "the read-back keeps the same legend above it").toEqual(legend);
+      await crop(pad(page), "s5-07-armageddon-confirm", w);
       await tapTarget(confirmButton(page), "Confirm");
       await pad(page).getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(option(page, "rapid")).toHaveCount(0);
@@ -1253,6 +1342,34 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     // Nothing was written by any of it.
     const events = (await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
     expect(events.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
+  });
+
+  test("the single-rung stage's first screen at 1280, 768 and 320: Black, the round named, no Back, rows — no horizontal scroll", async ({ page, request }) => {
+    // The flagship case of the skip: a stage that goes straight to the Armageddon (the mockup's own example).
+    const { sf, shownAs } = await drawnChessKnockout(request, D6, { tiebreakRungs: ["armageddon"] });
+    await page.goto(await fixturePath(request, sf.id));
+    await dismissCookieBanner(page);
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(tile(page, "tiebreak")).toBeVisible();
+      await tile(page, "tiebreak").click();
+      await expect(option(page, blackId("home"))).toBeVisible();
+      await expect(option(page, blackId("home"))).toHaveText(shownAs.get(sf.home_entrant_id!)!);
+      await expectNoHorizontalScroll(page);
+      await expectRows(page, [blackId("home"), blackId("away")], `${w} single-rung Black`);
+      expect(await contextLines(page)).toEqual([roundWord("armageddon")]);
+      await expect(back(page)).toHaveCount(0);
+      const head = pad(page).locator("p.mk-eyebrow");
+      expect(((await head.boundingBox())!).height, `${w}: the title is a line or two, not a column`).toBeLessThan(80);
+      await crop(pad(page), "s5-08-single-rung-black", w);
+      // Cancel is the way out of a first screen, and it writes nothing.
+      await pad(page).getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(option(page, blackId("home"))).toHaveCount(0);
+      widths++;
+    }
+    expect(widths).toBe(3);
+    expect(((await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!).map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
   });
 
   test("the phone composition is a branch, not a shrink: the tie-break pad's control set at 320 equals 1280 — membership, order, repeats", async ({ page, request }) => {

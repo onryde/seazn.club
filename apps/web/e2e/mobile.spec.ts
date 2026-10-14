@@ -4902,13 +4902,15 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   let fixtureId: string | null = null;
+  let homeEntrantId = "";
   let awayEntrantId = "";
   for (const id of fixtureIds) {
     const f = await apiJson<{ home_entrant_id: string | null; away_entrant_id: string | null }>(request, `/api/v1/fixtures/${id}`);
-    if (f.data?.home_entrant_id && f.data.away_entrant_id) { fixtureId = id; awayEntrantId = f.data.away_entrant_id; break; }
+    if (f.data?.home_entrant_id && f.data.away_entrant_id) { fixtureId = id; homeEntrantId = f.data.home_entrant_id; awayEntrantId = f.data.away_entrant_id; break; }
   }
   expect(fixtureId, "a first-round game with both players").not.toBeNull();
   expect(nameOf.get(awayEntrantId), "the away entrant is one of the four named players").toBeTruthy();
+  expect(nameOf.get(homeEntrantId), "the home entrant is one of the four named players").toBeTruthy();
   for (const [type, payload] of [["core.start", {}], ["boardgame.result", { winner: null, method: "agreement" }]] as const) {
     const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
     const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: st.data!.last_seq, type, payload });
@@ -4932,6 +4934,18 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
     expect(o.clipped, `${screen}: nothing in the sheet is clipped at ${projectWidth}`).toEqual([]);
     await expectNoHorizontalScroll(page);
   };
+  /** W2c Task 21 design pass: the deciding steps are ROWS — each option spans the card (less its 16px gutters), a long name wraps
+   *  inside it — never a pill hugging its label. */
+  const expectRows = async (ids: readonly string[], screen: string) => {
+    const sheet = (await v3Sheet(page).boundingBox())!;
+    for (const id of ids) {
+      const box = (await option(id).boundingBox())!;
+      expect(box.width, `${screen} ${id}: a full-width row at ${projectWidth} (${box.width}px in a ${sheet.width}px sheet)`).toBeGreaterThanOrEqual(sheet.width - 40);
+    }
+  };
+  /** The sheet's context lines as the scorer reads them (whitespace collapsed). */
+  const contextLines = () =>
+    v3Sheet(page).getByTestId("pad-sheet-context-line").evaluateAll((els) => els.map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim()));
 
   await page.goto(await fixturePath(page.request, fixtureId!), { waitUntil: "load" });
   await dismissCookieBanner(page);
@@ -4943,14 +4957,18 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   // Step 1 — the rung. Exactly the engine's three, no lots.
   expect(await optionIds()).toEqual(["rapid", "blitz", "armageddon"]);
   for (const id of ["rapid", "blitz", "armageddon"]) await assertTapFloor(option(id), `rung ${id}`);
+  await expectRows(["rapid", "blitz", "armageddon"], "Rung step");
+  expect(await contextLines(), "the rung pick names no round").toEqual([]);
   await expectSheetNotClipped("Rung step");
   // Step 2 — the winner (rapid), then step 3 — the optional score.
   await option("rapid").click();
   expect(await optionIds()).toEqual(["home", "away"]);
   await assertTapFloor(option("away"), "rapid winner");
   await expect(option("away")).toHaveText(nameOf.get(awayEntrantId)!);
+  await expectRows(["home", "away"], "Rapid winner step");
+  expect(await contextLines(), "the rapid winner step names its round").toEqual([dlDict("en")["pad.boardgame.tiebreak.rung.rapid"]!]);
   await expectSheetNotClipped("Rapid winner step");
-  await shotSheet("t21-long-name-rapid-winner");
+  await shotSheet("s5-20-long-name-rapid-winner");
   await option("away").click();
   expect(await optionIds()).toEqual(["none", "2–0", "1½–½"]);
   await assertTapFloor(option("none"), "score none");
@@ -4987,8 +5005,10 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   await expect(hint, "the Black step carries no hint").toHaveCount(0);
   await expect(option("black-away")).toHaveText(nameOf.get(awayEntrantId)!);
   for (const id of ["black-home", "black-away"]) await assertTapFloor(option(id), `Black ${id}`);
+  await expectRows(["black-home", "black-away"], "Black step");
+  expect(await contextLines(), "the Black step names the round and nothing else").toEqual([dict["pad.boardgame.tiebreak.rung.armageddon"]!]);
   await expectSheetNotClipped("Black step");
-  await shotSheet("t21-long-name-black");
+  await shotSheet("s5-21-long-name-black");
   await option("black-away").click();
 
   // Screen 2 — Result? The engine's three, each labelled by the dictionary, the hint showing.
@@ -4999,7 +5019,12 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
     await expect(option(`result-${r}`)).toHaveText(dict[`pad.boardgame.armageddon.result.${r}`]!);
     await assertTapFloor(option(`result-${r}`), `result ${r}`);
   }
+  await expectRows(ARMAGEDDON_RESULTS.map((r) => `result-${r}`), "Result step");
+  // Black is the away entrant, so the home entrant is White. Both names are 43 characters: the legend wraps them, it never clips.
+  const legend = [dict["pad.boardgame.tiebreak.rung.armageddon"]!, `${dict["pad.boardgame.tiebreak.who.white"]!} ${nameOf.get(homeEntrantId)!}`, `${dict["pad.boardgame.tiebreak.who.black"]!} ${nameOf.get(awayEntrantId)!}`];
+  expect(await contextLines(), "the result step says who is White and who is Black").toEqual(legend);
   await expectSheetNotClipped("Result step");
+  await shotSheet("s5-22-long-name-result");
   await option("result-draw").click();
 
   // Screen 3 — the read-back: the sentence in full, then one Confirm that is a real tap target.
@@ -5010,7 +5035,9 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   expect(readBackIds.some((id) => id.startsWith("black-") || id.startsWith("result-")), "the read-back offers no choice to re-tap").toBe(false);
   await assertTapFloor(v3Sheet(page).getByTestId("pad-sheet-confirm"), "Confirm");
   await assertTapFloor(backButton(), "Back on the read-back");
+  expect(await contextLines(), "the read-back keeps the same legend above it").toEqual(legend);
   await expectSheetNotClipped("Read-back step");
+  await shotSheet("s5-23-long-name-confirm");
   // Nothing was written by walking the sheet.
   const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fixtureId}/events`);
   expect(events.data!.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
