@@ -1435,10 +1435,13 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — a board being re-pair
     expect((await readRoom({ kind: "session", userId: s.home.userId }, board2!.id, deps())).you.name, "their board now").toBe("Ada Okonkwo");
   });
 
-  it("a board gone or no longer online play is the 404 even mid re-pair: deleted, cancelled, online play off, not a board game, its division back in setup, or a round never opened", async () => {
+  it("a board gone or no longer online play is the 404 even mid re-pair: deleted, cancelled, finalized, online play off, not a board game, its division back in setup, a clock Lichess cannot play, or a round never opened — loadOnlinePlayFixture's whole rule, from its one home (m1)", async () => {
     const changes: [string, (s: SeedOnlineChessFixtureResult) => Promise<unknown>][] = [
       ["deleted", (s) => sql`delete from fixtures where id = ${s.fixtureId}`],
       ["cancelled", (s) => sql`update fixtures set status = 'cancelled' where id = ${s.fixtureId}`],
+      ["finalized", (s) => sql`update fixtures set status = 'finalized' where id = ${s.fixtureId}`],
+      // Pre-gate legacy data (external-play-guard.test.ts): the settings save refuses a delay clock since T6.
+      ["a delay clock", (s) => sql`update divisions set config = jsonb_set(config, '{clock}', '{"base":900,"increment":0,"delay":5}'::jsonb) where id = ${s.divisionId}`],
       ["online play off", (s) => sql`update divisions set config = config || '{"onlinePlay":"off"}'::jsonb where id = ${s.divisionId}`],
       ["not a board game", (s) => sql`update divisions set sport_key = 'badminton' where id = ${s.divisionId}`],
       ["division back in setup", (s) => sql`update divisions set status = 'setup' where id = ${s.divisionId}`],
@@ -1454,6 +1457,6 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — a board being re-pair
       await expect(readRoom(who, s.fixtureId, deps()), why).rejects.toMatchObject(GONE);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: endings").toBe(6);
+    expect(checked, "anti-vacuity: endings").toBe(8);
   });
 });
