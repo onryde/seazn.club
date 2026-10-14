@@ -1,6 +1,6 @@
 {
   "batch": "1b",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file. Task 1b-2 (compiled dist and the publish manifest) appends its own entries, built against the same base 604e66ace: engine root (test/publish-manifest.test.ts new, so all `added`; test/runtime-deps.test.ts as the retitled file, one `rewritten`), apps/web (src/__tests__/toolchain.test.ts, the zod pin: values changed, no title changed), and the repo root (scripts/__tests__/engine-bare-imports.test.ts new, `added`; main-module.test.ts the untouched control; engine-package-identity.test.ts collected on the after side so its 1b-1 entries stay used). Collection for 1b-2 per side: engine = test/publish-manifest.test.ts + test/runtime-deps.test.ts, apps/web = src/__tests__/toolchain.test.ts, root = the three scripts/__tests__ files above. Review fixes of 1b-2 (clean dist, inlined sources, derived prod-peer pin, README, wider bare-import matcher) added the engine tests for the clean-first build, the inlined sources and the README, and the apps/web test for the derived required-peer pin, all `added`; the bare-imports scan test was retitled before the batch merged, so its `added` id is the final title.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1b, task 1b-1 (rename to @onryde/seazn-engine behind a workspace alias), built against the batch base 604e66ace (main after 1a). Ids are relative to each collection's ROOT, so the run names four roots per side. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-web.json>=<base>/apps/web --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-web.json>=apps/web --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run -t __parity_collect_only__ --reporter=json --outputFile <f>` from its root: engine (test/stryker-sizing.test.ts only), apps/web (src/__tests__/toolchain.test.ts only), tools/matrix (__tests__/workspace-wiring.test.ts, ci-wiring.test.ts and matrix-workflow.test.ts), and the repo root (scripts/__tests__/main-module.test.ts as the untouched control plus the new scripts/__tests__/engine-package-identity.test.ts; the identity file is absent on the before side, so it only adds; every id in it is `added`, and the second commit of 1b-1 (review minors) re-derived the list when the scan grew its scratch-repo cases). No pre-existing test was retitled: the pins changed their asserted values and messages, not their titles. Later tasks of batch 1b append their own entries to this file. Task 1b-2 (compiled dist and the publish manifest) appends its own entries, built against the same base 604e66ace: engine root (test/publish-manifest.test.ts new, so all `added`; test/runtime-deps.test.ts as the retitled file, one `rewritten`), apps/web (src/__tests__/toolchain.test.ts, the zod pin: values changed, no title changed), and the repo root (scripts/__tests__/engine-bare-imports.test.ts new, `added`; main-module.test.ts the untouched control; engine-package-identity.test.ts collected on the after side so its 1b-1 entries stay used). Collection for 1b-2 per side: engine = test/publish-manifest.test.ts + test/runtime-deps.test.ts, apps/web = src/__tests__/toolchain.test.ts, root = the three scripts/__tests__ files above. Review fixes of 1b-2 (clean dist, inlined sources, derived prod-peer pin, README, wider bare-import matcher) added the engine tests for the clean-first build, the inlined sources and the README, and the apps/web test for the derived required-peer pin, all `added`; the bare-imports scan test was retitled before the batch merged, so its `added` id is the final title. Task 1b-3 (the packed-tarball proof) appends `added` entries only, built against the same base 604e66ace: engine root test/pack-proof.test.ts (new, all `added`; collected with publish-manifest.test.ts and runtime-deps.test.ts so the 1b-2 entries stay used) and the four `engine-pack CI wiring` tests appended to tools/matrix/__tests__/ci-wiring.test.ts (collected whole on both sides; the 45 earlier ids are unchanged on both). Collection for 1b-3 per side: engine = the three engine files above, apps/web = src/__tests__/toolchain.test.ts, tools/matrix = __tests__/ci-wiring.test.ts, repo root = main-module.test.ts, engine-package-identity.test.ts and engine-bare-imports.test.ts.",
   "entries": [
     {
       "id": "scripts/__tests__/engine-package-identity.test.ts › engine package identity › is published under the GitHub owner's scope",
@@ -126,6 +126,158 @@
     },
     {
       "id": "test/publish-manifest.test.ts › publish manifest › has a README that names every public subpath, the registry, the install alias and the peers",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › assertOutsideRepo: a scratch directory inside the repo proves nothing › accepts a sibling whose name merely starts with the repo's (a prefix is not containment), and the real tmpdir",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › assertOutsideRepo: a scratch directory inside the repo proves nothing › refuses the repo, a directory inside it, and a symlink from outside that points into it",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › accepts a .d.ts as a types target (the control for the .ts refusal above)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › passes the engine's own publishConfig.exports and counts every target (two conditions per declared export)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › refuses a `*` pattern that matches no file; a match is any non-empty string, slashes included (a Node subpath pattern)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › refuses a dangling target, naming it, and says where it looked",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › refuses a manifest whose export keys differ from the workspace's, either way",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › refuses a target outside dist/, no exports at all, and no expected keys to compare against",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › refuses an empty dist: every export dangles",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › refuses what `npm pack` ships: the workspace exports, pointing at ./src/*.ts",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › pickPnpm: the repo's pin, asked from where the fixtures run it › does not accept a near version (10.34.50, 10.34)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › pickPnpm: the repo's pin, asked from where the fixtures run it › skips a global pnpm of another version and takes the candidate that reports the pin",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › pickPnpm: the repo's pin, asked from where the fixtures run it › takes the first candidate when it already is the pin (CI's pnpm/action-setup), without asking the second",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › pickPnpm: the repo's pin, asked from where the fixtures run it › treats a candidate that throws as unavailable, and names every version it saw when none match",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › passes a positive integer through",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › refuses -1",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › refuses 0",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › refuses 1.5",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › refuses 3",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › refuses NaN",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › refuses null",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › requireChecked: zero checked is a failure › refuses undefined",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › run.mjs, as the command line sees it (no network: both refusals come before anything is built) › refuses a scratch directory inside the repo (TMPDIR pointed into it), before any pnpm runs, and leaves nothing behind",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › run.mjs, as the command line sees it (no network: both refusals come before anything is built) › refuses an unknown fixture and an unknown flag with exit 2 and the usage line",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › runFixtures: every fixture runs, and only a positive count passes › collects every failure instead of stopping at the first, logs only the passes, and rejects zero",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › runFixtures: every fixture runs, and only a positive count passes › hands each fixture the shared context",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the Metro dev bundle reader › counts the engine's modules under either spelling, and nothing else",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the Metro dev bundle reader › reads every module path, one per __d( definition",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the Metro dev bundle reader › refuses a bundle with no definitions, and one where a definition's path cannot be read (the pattern went stale)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the fixtures and wiring that make the run a proof › builds the Next fixture with no transpilePackages",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the fixtures and wiring that make the run a proof › has exactly the four fixtures, each a `type: module` package (R27)",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the fixtures and wiring that make the run a proof › is run by `pack:proof`, which is the engine package's own script",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the fixtures and wiring that make the run a proof › keeps the fixture sources out of the package's lint (they import the PACKED name from outside the program), but lints the runner",
+      "fate": "added"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the fixtures and wiring that make the run a proof › type-checks with skipLibCheck OFF under both resolutions, and the consumer carries a @ts-expect-error and a not-any assertion",
+      "fate": "added"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › gates the step on a paths-filter step that exists, with the engine's two globs (a typo'd id skips the step for ever, and a skipped step is a green job)",
+      "fate": "added"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › installs with the pinned pnpm and Node 26 before it runs, frozen",
+      "fate": "added"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › reads the jobs it asserts about (never an empty set), and the engine-pack job is one of them",
+      "fate": "added"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › runs the proof exactly once, as the command the engine's package script also runs, with nothing that could make it advisory",
       "fate": "added"
     }
   ]

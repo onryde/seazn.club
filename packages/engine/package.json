@@ -134,6 +134,7 @@
     "schema:snapshot": "node --experimental-strip-types scripts/schema-snapshot.ts",
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
     "build:dist": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript-native/bin/tsc -p tsconfig.build.json",
+    "pack:proof": "node pack-proof/run.mjs",
     "lint": "eslint",
     "sim:matrix": "node --experimental-strip-types scripts/sim-replay.ts --matrix",
     "mutation": "stryker run stryker.config.mjs",

@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
-import { indentOf, jobBlock, stepOf } from "./workflow-text.ts";
+import { indentOf, jobBlock, jobsOf, stepOf } from "./workflow-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WORKFLOWS = resolve(REPO, ".github/workflows");
@@ -545,3 +545,58 @@ describe("Stryker floor CI wiring (W1d Task 15, D14)", () => {
     expect(r.stdout).toMatch(/^stryker-floor: (no floors at HEAD: nothing to compare|compared \d+ floor\(s\) against HEAD: 0 lowered or removed)$/m);
   }, spawnBudget(1));
 });
+
+// Engine-split Task 1b-3 (D14): the packed-tarball proof. The job is only worth having if it runs, and the ways it quietly stops
+// running are all in this file's text: a step gated on a filter id that does not exist is skipped for ever (a skipped step is a
+// green job), a pnpm other than the pin packs a different tarball, a shifted cwd breaks the script path.
+describe("engine-pack CI wiring (engine-split Task 1b-3, D14)", () => {
+  const jobs = jobsOf(ci);
+  const job = jobs["engine-pack"] ?? "";
+  const jobLines = job.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  const code = jobLines.filter((l) => !isComment(l));
+  const RUN = "        run: node packages/engine/pack-proof/run.mjs";
+  const root = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { packageManager: string };
+  const pin = /^pnpm@(\d+\.\d+\.\d+)$/.exec(root.packageManager)?.[1];
+
+  it("reads the jobs it asserts about (never an empty set), and the engine-pack job is one of them", () => {
+    expect(Object.keys(jobs).length).toBeGreaterThan(3);
+    expect(Object.keys(jobs)).toContain("engine");
+    expect(job.length).toBeGreaterThan(0);
+    expect(pin).toBeDefined();
+  });
+
+  it("runs the proof exactly once, as the command the engine's package script also runs, with nothing that could make it advisory", () => {
+    expect(code.filter((l) => l.includes("pack-proof/run.mjs"))).toEqual([RUN]);
+    const at = jobLines.indexOf(RUN);
+    expect(at).toBeGreaterThan(0);
+    // the step's own keys: a name and an `if`, nothing else (no continue-on-error, no env/working-directory that would move or soften it)
+    const stepStart = jobLines.lastIndexOf("      - name: Pack the engine and consume the tarball (node, next, rn, types)", at);
+    expect(stepStart).toBeGreaterThan(0);
+    expect(jobLines.slice(stepStart + 1, at).filter((l) => !isComment(l))).toEqual(["        if: steps.engine-changes.outputs.engine == 'true'"]);
+    expect(jobLines[at + 1] ?? "").not.toMatch(/^ {8}\S/);
+    for (const l of code) expect(l, "a job-level softener or cwd shift").not.toMatch(/^ {4}(if|continue-on-error|defaults|working-directory):|^ {8}(continue-on-error|working-directory):/);
+    const engine = JSON.parse(readFileSync(resolve(REPO, "packages/engine/package.json"), "utf8")) as { scripts: Record<string, string> };
+    expect(engine.scripts["pack:proof"]).toBe("node pack-proof/run.mjs");
+    expect(existsSync(resolve(REPO, "packages/engine/pack-proof/run.mjs"))).toBe(true);
+  });
+
+  it("gates the step on a paths-filter step that exists, with the engine's two globs (a typo'd id skips the step for ever, and a skipped step is a green job)", () => {
+    const filterId = /- uses: dorny\/paths-filter@v3\n\s+id: (\S+)/.exec(job)?.[1];
+    expect(filterId).toBe("engine-changes");
+    expect(job).toContain(`steps.${filterId}.outputs.engine == 'true'`);
+    expect(job).toMatch(/engine:\n\s+- 'packages\/engine\/\*\*'\n\s+- 'pnpm-lock\.yaml'\n/);
+    // paths-filter reads the PR's files through the API: it needs the pull-requests grant the `engine` job carries
+    expect(job).toMatch(/permissions:\n\s+contents: read\n\s+pull-requests: read\n/);
+  });
+
+  it("installs with the pinned pnpm and Node 26 before it runs, frozen", () => {
+    expect(job).toMatch(new RegExp(`pnpm/action-setup@v4\\n\\s+with:\\n\\s+version: ${(pin ?? "").replace(/\./g, "\\.")}\\n`));
+    expect(job).toMatch(/actions\/setup-node@v5\n\s+with:\n\s+node-version: 26\n\s+cache: pnpm\n/);
+    const install = jobLines.indexOf("      - run: pnpm install --frozen-lockfile");
+    expect(install).toBeGreaterThan(0);
+    expect(install).toBeLessThan(jobLines.indexOf(RUN));
+    expect(job).toContain("runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}");
+  });
+});
+
