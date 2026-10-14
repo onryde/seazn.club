@@ -42,6 +42,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     canAct: true,
     otherAccount: null,
     onlineChessOff: false,
+    boardClosed: false,
     creation: null,
     game: null,
     held: false,
@@ -73,6 +74,31 @@ describe("roomScreen", () => {
     expect(roomScreen(st({ phase: "before" })).kind).toBe("notOpened");
     expect(roomScreen(st({ phase: "closed" })).kind).toBe("closed");
     expect(roomScreen(st({ held: true })).kind).toBe("closed");
+  });
+
+  // T17B fix 2, D10 (owner-reported live): the organiser closed the board before any game (a No result, then voided)
+  // — no game will ever come, so the room says the board is closed, never "setting up". Precedence from the ruling:
+  // a result or a game seen over still outranks it, and a re-pair in progress shows its own card.
+  it("D10: a board the organiser closed ⇒ its own closed card — over everything that would say 'wait' or 'check in' (counted); a result, a game seen over and a re-pair outrank it", () => {
+    const keeps: [string, RoomState][] = [
+      ["alone", st({ boardClosed: true })],
+      ["a stale 'being created' beside it", st({ boardClosed: true, creation: { state: "creating" } })],
+      ["both checked in", st({ boardClosed: true, you: { colour: "white", name: "A", checkedIn: true }, opponent: { colour: "black", name: "B", checkedIn: true } })],
+      ["the window closed", st({ boardClosed: true, phase: "closed" })],
+      ["a stale camera refusal", st({ boardClosed: true }, { seat: refused("camera_required") })],
+      ["a stale seat", st({ boardClosed: true }, { seat: { seated: true, participant: null } })],
+    ];
+    let checked = 0;
+    for (const [why, s] of keeps) {
+      expect(roomScreen(s), why).toEqual({ kind: "boardClosed" });
+      checked++;
+    }
+    expect(checked).toBe(keeps.length);
+    expect(roomScreen(st({ boardClosed: true, result: { outcome: "no_result", method: null, score: "" } })).kind).toBe("over");
+    expect(roomScreen(st({ boardClosed: true, game: { ...GAME, over: true } })).kind).toBe("over");
+    expect(roomScreen(st({ boardClosed: true }, { repairing: true })).kind).toBe("repairing");
+    // The pair: the same board not closed is "being created".
+    expect(roomScreen(st({ creation: { state: "creating" } })).kind).toBe("creating");
   });
 
   it("both in, no game yet ⇒ card 5; busy carries Lichess's retry time", () => {
@@ -297,8 +323,9 @@ describe("cameraEnds (T17B fix 2, D8a)", () => {
     { why: "not opened yet", state: st({ phase: "before" }), ends: false },
     { why: "your seat frozen mid-game", state: st({ game: GAME, frozen: "you", canAct: false }), ends: false },
     { why: "a board being re-paired", state: st({ game: GAME }, { repairing: true }), ends: false },
+    { why: "T17B fix 2 (D10): a board the organiser closed before any game", state: st({ boardClosed: true }), ends: true },
   ];
-  it("the result and the closed card end the camera; every other screen keeps it — counted", () => {
+  it("the result, the closed card and a board the organiser closed end the camera; every other screen keeps it — counted", () => {
     let checked = 0;
     for (const c of cases) {
       expect(cameraEnds(c.state), c.why).toBe(c.ends);

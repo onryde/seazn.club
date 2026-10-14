@@ -200,6 +200,25 @@ export function CreatingCard({ busyIn, t }: { busyIn: string | null; t: RoomT })
 }
 
 /** 6 · Check-in closed. */
+/** T17B fix 2 (D10): the organiser closed this board before any game (a No result, then voided). No game will be
+ *  set up here; a replay — a Swiss re-pair — opens it here again, and the room keeps reading so it picks that up. */
+export function BoardClosedCard({ fixtureHref, t }: { fixtureHref: string; t: RoomT }) {
+  return (
+    <StateCard
+      testId="room-state-board-closed"
+      icon="lock"
+      title={t("externalPlay.room.state.boardClosed.title")}
+      action={
+        <Link href={fixtureHref} className={OUTLINE} data-testid="room-back-to-fixture">
+          {t("externalPlay.room.backToFixture")}
+        </Link>
+      }
+    >
+      <Body>{t("externalPlay.room.state.boardClosed.body")}</Body>
+    </StateCard>
+  );
+}
+
 export function ClosedCard({ closedAt, fixtureHref, t }: { closedAt: string | null; fixtureHref: string; t: RoomT }) {
   return (
     <StateCard

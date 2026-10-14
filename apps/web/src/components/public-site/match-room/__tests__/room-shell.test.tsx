@@ -53,6 +53,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     canAct: true,
     otherAccount: null,
     onlineChessOff: false,
+    boardClosed: false,
     creation: null,
     game: null,
     held: false,

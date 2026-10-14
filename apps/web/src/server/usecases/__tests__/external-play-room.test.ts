@@ -27,6 +27,9 @@ import { fenAfter } from "@/server/external-play/fen";
 import { holdRefusedNoShow, writeResultFrom } from "../external-play/result";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { resolveExternalPlay } from "../external-play/resolve";
+import { closeBridgeIfUnplayable } from "../external-play/bridge-close";
+import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
+import { scoreEvent } from "../scoring";
 import type { GameSnapshot } from "@/server/external-play/types";
 import { CLOCK_ZERO_SPACING_MS } from "@/components/public-site/match-room/use-room";
 import {
@@ -1516,5 +1519,115 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — a board being re-pair
       checked += 1;
     }
     expect(checked, "anti-vacuity: endings").toBe(8);
+  });
+});
+
+// T17B fix 2, D10 (owner-reported live on stg, fixture 0a45d044): the organiser's "No result" on a board with no game
+// yet (resolve: core.abandon, the bridge closed `finished`), then its VOID on the board's match page. The fixture is
+// playable again, but create-game only ever claims a `pending` bridge, so no game will ever come — and both rooms said
+// "Setting up your game on Lichess" for good. A bridge our side closed, with no game on file and no result, is a board
+// the organiser closed: the room says so (`boardClosed`), never "setting up". A Swiss re-pair deletes that row (M-10),
+// and the re-paired board is invited afresh: the room must pick that up.
+describe.skipIf(!process.env.DATABASE_URL)("match room — a board the organiser closed before any game (T17B fix 2, D10)", () => {
+  async function bothIn(s: SeedOnlineChessFixtureResult) {
+    const d = deps();
+    await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    const second = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, d);
+    expect(second.snapshot.creation, "premise: both in, the room says the game is being set up").toEqual({ state: "creating" });
+    expect(second.snapshot.boardClosed, "the empty case: an open board is not closed").toBe(false);
+    // The board's bridge row, as the round's invite or T9's create mints it before its claim (the real writer).
+    await ensureBridgeRow((await loadOnlinePlayFixture(s.fixtureId))!);
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).boardClosed, "a pending row is not closed").toBe(false);
+    const [b] = await sql<{ status: string; challenge_id: string | null }[]>`
+      select status, challenge_id from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    expect(b, "premise: a bridge with no game").toEqual({ status: "pending", challenge_id: null });
+  }
+  const lastEvent = async (fixtureId: string) =>
+    (await sql<{ id: string; seq: number; type: string }[]>`
+      select id, seq, type from score_events where fixture_id = ${fixtureId} order by seq desc limit 1`)[0]!;
+  async function voidLast(s: SeedOnlineChessFixtureResult) {
+    const last = await lastEvent(s.fixtureId);
+    // The organiser's undo on the board's match page (fixture console / pad): the real scoring usecase.
+    await scoreEvent(await mintOrgOwnerAuth(s.orgId), s.fixtureId, { expected_seq: last.seq, type: "core.void", payload: { event_id: last.id } });
+  }
+  const closedSources: [string, (s: SeedOnlineChessFixtureResult) => Promise<void>][] = [
+    [
+      "the arbiter's No result (the measured case)",
+      async (s) => {
+        expect(await resolveExternalPlay(await mintOrgOwnerAuth(s.orgId), s.fixtureId, "no_result")).toEqual({ status: "finished" });
+      },
+    ],
+    [
+      "a result entered on the pad, the bridge closed by the sweep's first job",
+      async (s) => {
+        const auth = await mintOrgOwnerAuth(s.orgId);
+        await scoreEvent(auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+        await scoreEvent(auth, s.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: s.home.entrantId, method: "resign" } });
+        expect(await closeBridgeIfUnplayable(s.fixtureId, new Date()), "premise: job 1 closed the bridge").toBe(true);
+      },
+    ],
+  ];
+
+  it("closed before any game, then voided: both rooms say the board is closed — never 'setting up' — whatever closed it (counted)", async () => {
+    let checked = 0;
+    for (const [why, close] of closedSources) {
+      const s = await seed();
+      await bothIn(s);
+      await close(s);
+      const [b] = await sql<{ status: string; challenge_id: string | null }[]>`
+        select status, challenge_id from fixture_external_play where fixture_id = ${s.fixtureId}`;
+      expect(b, `${why}: premise — closed, no game`).toEqual({ status: "finished", challenge_id: null });
+      await voidLast(s);
+      const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${s.fixtureId}`;
+      expect(["scheduled", "in_play"], `${why}: premise — the void made the board playable again`).toContain(fx!.status);
+      for (const who of [s.home, s.away]) {
+        const snap = await readRoom({ kind: "session", userId: who.userId }, s.fixtureId, deps());
+        expect({ boardClosed: snap.boardClosed, creation: snap.creation, game: snap.game, result: snap.result }, `${why}: ${who.userId}`).toEqual({
+          boardClosed: true,
+          creation: null,
+          game: null,
+          result: null,
+        });
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: both players, every source").toBe(closedSources.length * 2);
+  });
+
+  it("before the void the board reads as its result (No result), not closed — the abandon outranks it", async () => {
+    const s = await seed();
+    await bothIn(s);
+    await closedSources[0]![1](s);
+    const snap = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect([snap.result?.outcome, snap.boardClosed, snap.creation]).toEqual(["no_result", false, null]);
+  });
+
+  it("the pair: a bridge closed WITH a game on file is never a closed board — the game is what the room shows (over, or its board)", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "finished", moves: ["e2e4", "e7e5"] });
+    const snap = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect([snap.boardClosed, snap.creation, snap.game?.gameId !== undefined]).toEqual([false, null, true]);
+  });
+
+  it("the re-open path: a Swiss re-pair deletes the closed row (M-10) — the re-paired board reads open again, and the next seat asks for its game", async () => {
+    const s = await seed();
+    await bothIn(s);
+    await closedSources[0]![1](s);
+    await voidLast(s);
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).boardClosed, "premise: closed").toBe(true);
+    // What Unpair then Pair leave (stages.ts clearSwissFixtureSeats deletes a finished, game-less row; the re-pair
+    // seats the board again) — as the fix-round-4b suite above stands for it.
+    await sql`delete from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    const snap = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect([snap.boardClosed, snap.creation], "open again: no closed card").toEqual([false, { state: "creating" }]);
+    const d = deps();
+    await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    expect(d.create, "the re-paired board is asked for its game").toHaveBeenCalledTimes(1);
+    // T9's create mints the fresh row before its claim (the real writer; the create itself is this suite's stub).
+    await ensureBridgeRow((await loadOnlinePlayFixture(s.fixtureId))!);
+    const [b] = await sql<{ status: string }[]>`select status from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    expect(b!.status, "a fresh bridge").toBe("pending");
+    const fresh = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect([fresh.boardClosed, fresh.creation], "the room follows the new bridge").toEqual([false, { state: "creating" }]);
   });
 });

@@ -6124,6 +6124,8 @@
   "externalPlay.room.state.busy": "Lichess is busy. Trying again in {time}.",
   "externalPlay.room.state.closed.title": "Check-in has closed",
   "externalPlay.room.state.closed.body": "Check-in closed at {time}. Your organiser will decide what happens to this game.",
+  "externalPlay.room.state.boardClosed.title": "This board was closed by your organiser",
+  "externalPlay.room.state.boardClosed.body": "If it's replayed, it opens here again.",
   "externalPlay.room.state.unavailable.title": "This board isn't available to you",
   "externalPlay.room.state.unavailable.body": "It may have finished, or it may belong to other players.",
   "externalPlay.room.state.cameraOff.title": "Your camera is off",

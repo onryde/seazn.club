@@ -93,6 +93,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     canAct: true,
     otherAccount: null,
     onlineChessOff: false,
+    boardClosed: false,
     creation: null,
     game: null,
     held: false,
@@ -320,6 +321,33 @@ describe("Seam B — online chess off: one calm card", () => {
     expect(text).toContain(CANVAS.back);
     expect(attrOf(html, "room-back-to-fixture", "href")).toBe(FIXTURE);
     expect(classOf(html, "room-off-for-club"), "a white card (canvas), not the state cards' cream").toContain("bg-white");
+  });
+});
+
+// T17B fix 2, D10: the organiser closed the board before any game (a No result, then voided). Copy from the real
+// dictionaries, every locale; the canvas has no card for it (a coordinator-ruled state, styled as card 6).
+describe("D10 — a board the organiser closed: its own card, every locale", () => {
+  it("the card's words and its one way back; NO board, clocks, camera, check-in or 'setting up' — counted over the locales", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const dict = LOCALES[locale] as Record<string, string>;
+      const s = initialRoomState(snap({ boardClosed: true, you: { colour: "white", name: "Ada", checkedIn: true } }), T0);
+      expect(roomScreen(s).kind).toBe("boardClosed");
+      const html = paint(s, { locale, camera: "live" });
+      const present = ids(html);
+      expect(present, locale).toContain("room-state-board-closed");
+      for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-tile-strip", "room-checkin-cta", "room-controls", "room-state-creating"]) {
+        expect(present, `${locale} ${id}`).not.toContain(id);
+      }
+      expect(html, locale).not.toMatch(RAW_KEY);
+      const text = textOf(html);
+      expect(text, locale).toContain(dict["externalPlay.room.state.boardClosed.title"]!);
+      expect(text, locale).toContain(dict["externalPlay.room.state.boardClosed.body"]!);
+      expect(attrOf(html, "room-back-to-fixture", "href"), locale).toBe(FIXTURE);
+      if (locale !== "en") expect(text, `${locale}: never English`).not.toContain((en as Record<string, string>)["externalPlay.room.state.boardClosed.title"]!);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: locales").toBe(4);
   });
 });
 

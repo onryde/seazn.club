@@ -310,7 +310,9 @@ export function ownMeetingRetired(s: RoomState): boolean {
     s.pending === null &&
     snap.result === null &&
     snap.game?.over !== true &&
-    !snap.onlineChessOff
+    !snap.onlineChessOff &&
+    // T17B fix 2 (D10): a board the organiser closed has no game coming and no camera to move.
+    !snap.boardClosed
   );
 }
 
