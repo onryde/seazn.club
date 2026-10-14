@@ -7200,8 +7200,9 @@ async function stageRulesFormatSmoke(): Promise<void> {
 
 /**
  * Format matrix W2c (spec 2026-10-13, stage-level rules) — the one smoke suite every W2c task appends its named
- * check to (plan Global Constraints, created by Task 10). Over real HTTP against a live server; own fresh owner, no
- * plan bump, keyless-safe.
+ * check to (plan Global Constraints, created by Task 10). Over real HTTP against a live server; own fresh owner,
+ * bumped to Pro by Task 11 (the every-sport check needs more divisions than the free plan allows; that needs
+ * DATABASE_URL, like every other suite that calls setPlan), keyless-safe.
  *
  * Task 10's own change (`fixtures.rules_override` through every resolver caller) has no HTTP writer until Task 14,
  * whose smoke check covers the override; its first check is Task 2's owed one. SMOKE_ONLY=w2cStageRules runs it
@@ -7287,18 +7288,28 @@ async function w2cStageRulesEverySportChecks(owner: Session): Promise<void> {
     q4.status === 200 && q4Rules?.abandonPolicy === "q4_stands",
   );
 
-  // Chess (the boardgame sport), a knockout: an explicit empty rung list is a value the merge stores, and a second save
-  // that leaves it out keeps it.
+  // Chess (the boardgame sport), a knockout: an explicit empty rung list is a value the merge stores, and a SECOND save
+  // that leaves it out keeps it (carry I2) - made over HTTP below, not assumed.
   const bg = builtinModules.find((m) => m.key === "boardgame") as AnySportModule;
   const bgVariant = Object.keys(bg.variants)[0]!;
   const chessStage = await stageFor(bg, bgVariant, "knockout", 101);
   const empty = await v1(owner, `/api/v1/stages/${chessStage.stageId}/rules`, "PUT", { rules: { tiebreakRungs: [] } });
   const emptyRules = (empty.json.data as { rules?: { tiebreakRungs?: unknown } } | undefined)?.rules;
   const emptyKept = JSON.stringify(emptyRules?.tiebreakRungs) === "[]";
+  // The second save names another key and omits the rung list: the merge keeps the list (an omitted key is kept) and
+  // adds the key. Under the old replace semantics the list would be gone.
+  const second = await v1(owner, `/api/v1/stages/${chessStage.stageId}/rules`, "PUT", { rules: { variant: "rapid" } });
+  const secondRules = (second.json.data as { rules?: Record<string, unknown> } | undefined)?.rules;
+  const survived = second.status === 200 && JSON.stringify(secondRules?.tiebreakRungs) === "[]" && secondRules?.variant === "rapid";
   check(
     "w2c: a chess knockout stage saves an empty rung list" +
       (empty.status === 200 && emptyKept ? "" : ` — got ${empty.status} ${JSON.stringify(empty.json.error ?? empty.json.data)}`),
     empty.status === 200 && emptyKept,
+  );
+  check(
+    "w2c: a second save of another key keeps the empty rung list (the merge)" +
+      (survived ? "" : ` — got ${second.status} ${JSON.stringify(second.json.error ?? second.json.data)}`),
+    survived,
   );
 }
 

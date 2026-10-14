@@ -33,6 +33,13 @@
      "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
     ],
     "name": "UNKNOWN_RULE_KEY for an undeclared key"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "chess has no `tiebreak` key"
    }
   ]
  },
@@ -599,6 +606,117 @@
      "src/server/usecases/__tests__/fixture-override-guards.test.ts"
     ],
     "name": "an own-format key the variant does not allow is refused"
+   }
+  ]
+ },
+ {
+  "id": "t11-stage-variant",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "stage.stage_kind, stage.variant_key, Object.keys(input.rules));",
+  "replace": "stage.stage_kind, null, Object.keys(input.rules));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "a cricket TEST stage refuses superOver and dls"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "every sport x EVERY variant x EVERY stage kind"
+   }
+  ]
+ },
+ {
+  "id": "t11-stage-kind",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "stage.stage_kind, stage.variant_key, Object.keys(input.rules));",
+  "replace": "\"league\", stage.variant_key, Object.keys(input.rules));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "RULE_NOT_SETTABLE for a key this kind cannot set"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "every sport x EVERY variant x EVERY stage kind"
+   }
+  ]
+ },
+ {
+  "id": "t11-stage-lock-first",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    await tx`select pg_advisory_xact_lock(hashtext(${\"division:\" + first.division_id}))`;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "a division CONFIG committed while the save waits"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "a division VARIANT committed while the save waits"
+   }
+  ]
+ },
+ {
+  "id": "t11-stored-null-merge",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "const out: Record<string, unknown> = isObj(stored) ? withoutNulls(stored) : {};",
+  "replace": "const out: Record<string, unknown> = isObj(stored) ? { ...stored } : {};",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-rules-every-sport.test.ts"
+    ],
+    "name": "a null already STORED"
+   }
+  ]
+ },
+ {
+  "id": "t11-stored-null-division",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "const rules = withoutNulls(s.rules);",
+  "replace": "const rules = s.rules;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-save-stage-rules.test.ts"
+    ],
+    "name": "a null STORED in a stage's rules is 'inherit'"
+   }
+  ]
+ },
+ {
+  "id": "t11-fit-field-path",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "field: check.path }",
+  "replace": "field: \"\" }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "shortening the stage under"
    }
   ]
  }

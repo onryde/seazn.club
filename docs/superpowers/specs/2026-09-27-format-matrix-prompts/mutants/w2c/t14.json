@@ -820,7 +820,7 @@
   "id": "b3-i1-stage-skip-fragment",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
   "find": "    await rewriteHeldAwards(tx, held);\n    return { rules: next,",
-  "replace": "    return { rules: next,",
+  "replace": "    if (next === null) await rewriteHeldAwards(tx, held);\n    return { rules: next,",
   "killers": [
    {
     "cwd": "apps/web",
