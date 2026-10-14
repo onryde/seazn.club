@@ -1,6 +1,6 @@
 {
   "batch": "1d",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1d, built against the batch base 0fa3b66fc (main after 1b). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --after <after-web.json>=apps/web --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` (--isolate on BOTH sides: batch 1b review m4), from the engine package for the engine report and from the repo root with the engine's vitest binary for the other two. Task 1d-0 (scripts/lib/test-parity.mjs compares ids as a multiset, commit 497849e76): scripts/__tests__/test-parity.test.ts, collected whole on both sides; the two tests that asserted a duplicate id is refused are retired (behaviour deliberately reversed) and the multiset tests are added. Task 1d-1 (Stryker tests and stryker-changed.mjs layout-agnostic): engine = the eleven test/stryker-*.test.ts files (outputs-ignored, sizing, changed-lines, matrix, cuts, floor, generator-exclusion, groups, runner, sandbox-safe, vitest-runner), tools/matrix = __tests__/matrix-workflow.test.ts. No moved test changed its title except the split fan-out test of stryker-sizing.test.ts (retitled 'the workflow quotes' for the engine half; the matrix-workflow.test.ts half is a new test in that file). The enginePrefix test is the only added engine test. Later tasks of batch 1d append their own entries to this file. Review fix of 1d-1 (commit 'fix(engine): 1d-1 review'): test/stryker-sandbox-safe.test.ts gains the four layout-importer tests (`added`); the anchor pin and the dropped equivalent guard in test-parity change assertions or code, no title. Task 1d-2 (engine-boundary moves into the engine): no id changes, so no entries. Collected additionally on both sides: engine test/boundary-gate.test.ts (14 cases, now importing ../scripts/engine-boundary.ts) and root scripts/__tests__/main-module.test.ts (4 cases; the symlinked-spawn test keeps its title, which names scripts/engine-boundary.ts package-relative). packages/engine/eslint.config.mjs line 19 still imports ../../scripts/lib/tools-import-guard.mjs; it stays until 2b (D32d), and the engine's own copy of main-module.ts (packages/engine/scripts/lib/) is a copy by design: the root copy stays for the other root scripts. Review fix of 1d-2 (commit 'fix(engine): 1d-2 review'): the five `added` ids above (three boundary-gate CLI tests, the ci-wiring entry-point pin, the main-module copy-identity test); ci-wiring.test.ts is collected whole on both sides (49 earlier ids unchanged); no existing id changed. Task 1d-3 (window-single-source): the two apps/web tests move to apps/web/src/server/usecases/__tests__/court-window-single-source.test.ts (collected from apps/web, after side only; the web file does not exist at the base) and the engine file keeps its four engine-only tests. Collected: engine src/scheduling/window-single-source.test.ts on both sides. The apps/web report is an AFTER-side report only and is collected from apps/web itself: `cd apps/web && DATABASE_URL= ./node_modules/.bin/vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <after-web.json> src/server/usecases/__tests__/court-window-single-source.test.ts` (the empty DATABASE_URL keeps apps/web's vitest config from refusing a dev URL it loaded from .env.local). Review fix of 1d-3: one more `added` id (the floor's own test); the other review changes are assertions and comments, no title.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1d, built against the batch base 0fa3b66fc (main after 1b). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --after <after-web.json>=apps/web --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` (--isolate on BOTH sides: batch 1b review m4), from the engine package for the engine report and from the repo root with the engine's vitest binary for the other two. Task 1d-0 (scripts/lib/test-parity.mjs compares ids as a multiset, commit 497849e76): scripts/__tests__/test-parity.test.ts, collected whole on both sides; the two tests that asserted a duplicate id is refused are retired (behaviour deliberately reversed) and the multiset tests are added. Task 1d-1 (Stryker tests and stryker-changed.mjs layout-agnostic): engine = the eleven test/stryker-*.test.ts files (outputs-ignored, sizing, changed-lines, matrix, cuts, floor, generator-exclusion, groups, runner, sandbox-safe, vitest-runner), tools/matrix = __tests__/matrix-workflow.test.ts. No moved test changed its title except the split fan-out test of stryker-sizing.test.ts (retitled 'the workflow quotes' for the engine half; the matrix-workflow.test.ts half is a new test in that file). The enginePrefix test is the only added engine test. Later tasks of batch 1d append their own entries to this file. Review fix of 1d-1 (commit 'fix(engine): 1d-1 review'): test/stryker-sandbox-safe.test.ts gains the four layout-importer tests (`added`); the anchor pin and the dropped equivalent guard in test-parity change assertions or code, no title. Task 1d-2 (engine-boundary moves into the engine): no id changes, so no entries. Collected additionally on both sides: engine test/boundary-gate.test.ts (14 cases, now importing ../scripts/engine-boundary.ts) and root scripts/__tests__/main-module.test.ts (4 cases; the symlinked-spawn test keeps its title, which names scripts/engine-boundary.ts package-relative). packages/engine/eslint.config.mjs line 19 still imports ../../scripts/lib/tools-import-guard.mjs; it stays until 2b (D32d), and the engine's own copy of main-module.ts (packages/engine/scripts/lib/) is a copy by design: the root copy stays for the other root scripts. Review fix of 1d-2 (commit 'fix(engine): 1d-2 review'): the five `added` ids above (three boundary-gate CLI tests, the ci-wiring entry-point pin, the main-module copy-identity test); ci-wiring.test.ts is collected whole on both sides (49 earlier ids unchanged); no existing id changed. Task 1d-3 (window-single-source): the two apps/web tests move to apps/web/src/server/usecases/__tests__/court-window-single-source.test.ts (collected from apps/web, after side only; the web file does not exist at the base) and the engine file keeps its four engine-only tests. Collected: engine src/scheduling/window-single-source.test.ts on both sides. The apps/web report is an AFTER-side report only and is collected from apps/web itself: `cd apps/web && DATABASE_URL= ./node_modules/.bin/vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <after-web.json> src/server/usecases/__tests__/court-window-single-source.test.ts` (the empty DATABASE_URL keeps apps/web's vitest config from refusing a dev URL it loaded from .env.local). Review fix of 1d-3: one more `added` id (the floor's own test); the other review changes are assertions and comments, no title. Task 1d-5 (rules-reference, split by where the proof lives): engine test/rules-reference.test.ts and root scripts/__tests__/rules-reference.test.ts are collected whole on the after side (engine file also on the before side). Nine tests rehome (the real-repo reader, three W2b spec-text tests, the five CI-wiring tests); the proof-path and enforced-at tests split by prefix (the engine half ' (engine paths)', the root half ' (app, tools and reference paths)'); the W2b describe keeps :528, :543, :610 and :628 in the engine. The shared W2b pins and the Appendix A reader sit in packages/engine/test/w2b-rows.ts, imported by both files. Four tests are added (two engine, two root).",
   "entries": [
     {
       "id": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
@@ -165,6 +165,104 @@
       "id": "src/server/usecases/__tests__/court-window-single-source.test.ts › apps/web has no second window rule › the scan's anti-vacuity floor refuses a root that read no file",
       "fate": "added",
       "reason": "1d-3 review: the per-root `>0` floor was unkilled (`>=0` survived); extracted as assertScanned() and given a test that feeds it a zero root, a missing root and a healthy pair"
+    },
+    {
+      "id": "test/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1), Appendix A amended in place (rulings 113, 115) or addition (PF-6, PF-7)",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1), Appendix A amended in place (rulings 113, 115) or addition (PF-6, PF-7)",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › the text pin sees a changed number, an amendment reverted, a stale amendment, a lost amend line, an added row edited or moved into Appendix A, a row in another file and an Appendix A row nobody owes (synthetic edits)",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › the text pin sees a changed number, an amendment reverted, a stale amendment, a lost amend line, an added row edited or moved into Appendix A, a row in another file and an Appendix A row nobody owes (synthetic edits)",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists",
+      "fate": "split",
+      "to": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists (engine paths)",
+      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory in either layout), retitled ' (engine paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists",
+      "fate": "split",
+      "to": "scripts/__tests__/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists (app, tools and reference paths)",
+      "reason": "1d-5: the root half checks every other path (apps/web, e2e, tools, packages/reference) from the monorepo root, reading the rows through the published @seazn/engine/testkit; retitled ' (app, tools and reference paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)",
+      "fate": "split",
+      "to": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (engine paths)",
+      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory in either layout), retitled ' (engine paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)",
+      "fate": "split",
+      "to": "scripts/__tests__/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (app, tools and reference paths)",
+      "reason": "1d-5: the root half checks every other path (apps/web, e2e, tools, packages/reference) from the monorepo root, reading the rows through the published @seazn/engine/testkit; retitled ' (app, tools and reference paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › one step, in the gates job, named for the checker",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › one step, in the gates job, named for the checker",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the checker's scope splits a row's proofs: the engine's reader resolves packages/engine/ paths in either layout and reads nothing else (synthetic signed rows)",
+      "fate": "added",
+      "reason": "1d-5: the split of the checker between the engine and the monorepo is new behaviour (proofProblems takes a scope, the engine reader resolves packages/engine/ paths in either layout); witnessed with synthetic rows and a spy reader, and only the sim run kills a reader resolved against the repo root"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference",
+      "fate": "added",
+      "reason": "1d-5: the rules parser joins the published testkit barrel, which was fs-free; this pins the barrel's disk-reading closure to exactly the rules reference and drives the barrel's own export (not the module)"
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the gates job runs scripts/__tests__/rules-reference.test.ts, in a step of its own after the engine checker's, which still runs only the engine file",
+      "fate": "added",
+      "reason": "1d-5 (R30): the root half runs in a gates step of its own, after the engine checker's step, which keeps running only the engine file; deleting the step reds this"
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the root step is the engine step with its own file and report, name-and-run only, and the same judge byte for byte",
+      "fate": "added",
+      "reason": "1d-5 (R30): the root step is the engine step with its own file and report name and the same judge byte for byte, derived from the engine step's text, so the judge the engine's spawn tests exercise is the judge the root step ships"
     }
   ]
 }
