@@ -387,9 +387,15 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   const startPending = !gameOnFile && facts.createSentAt === null;
   const onlineChessOff = startPending && !(await (deps.offered ?? onlineChessOffered)({ orgId: f.orgId, userId: player.userId }));
 
+  // T17B fix 2 (D10): a bridge our side closed with no game on file never gets one — T9 claims only a pending
+  // bridge — so nothing is "being created" on it. With no result standing (a No result, or a pad result swept
+  // closed, then voided) the board is closed; with one, the result is what the room shows.
+  const closedWithoutGame = bridge !== null && bridge.status === "finished" && !gameOnFile;
+  const boardClosed = closedWithoutGame && result === null;
+
   const bothIn = ci.home && ci.away;
   let creation: RoomSnapshot["creation"] = null;
-  if (!gameOnFile && phase === "open" && bothIn && !onlineChessOff && !held) {
+  if (!gameOnFile && phase === "open" && bothIn && !onlineChessOff && !held && !closedWithoutGame) {
     const throttled = facts.lastError?.startsWith("create:rate_limited") === true;
     creation = throttled
       ? { state: "busy", retryAt: throttledRetryAt(facts.lastError ?? "")?.toISOString() ?? null }
@@ -462,6 +468,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     canAct,
     otherAccount,
     onlineChessOff,
+    boardClosed,
     creation,
     game,
     held,

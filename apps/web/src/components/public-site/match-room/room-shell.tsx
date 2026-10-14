@@ -35,6 +35,7 @@ import {
   CameraReconnectingNotice,
   BackToFixture,
   ClosedCard,
+  BoardClosedCard,
   CreatingCard,
   MoveNoticeView,
   NotOpenedCard,
@@ -158,7 +159,7 @@ export function RoomShell({
   useEffect(() => {
     if (reentered.current) return;
     reentered.current = true;
-    if (cameraOn && snap.you.checkedIn && snap.result === null && snap.game?.over !== true && !snap.onlineChessOff) void room.claim();
+    if (cameraOn && snap.you.checkedIn && snap.result === null && snap.game?.over !== true && !snap.onlineChessOff && !snap.boardClosed) void room.claim();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
   }, []);
 
@@ -416,6 +417,8 @@ export function Screen({
       return <CreatingCard busyIn={screen.retryAt !== null ? countdownTo(screen.retryAt) : null} t={t} />;
     case "closed":
       return <ClosedCard closedAt={timeOf(snap.deadline)} fixtureHref={snap.links.fixture} t={t} />;
+    case "boardClosed":
+      return <BoardClosedCard fixtureHref={snap.links.fixture} t={t} />;
     case "checkin":
       return (
         <>

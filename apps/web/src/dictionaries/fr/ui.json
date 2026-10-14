@@ -6141,6 +6141,8 @@
   "externalPlay.room.state.busy": "Lichess est occupé. Nouvel essai dans {time}.",
   "externalPlay.room.state.closed.title": "L'enregistrement est fermé",
   "externalPlay.room.state.closed.body": "L'enregistrement a fermé à {time}. Votre organisateur décidera du sort de cette partie.",
+  "externalPlay.room.state.boardClosed.title": "Votre organisateur a fermé cet échiquier",
+  "externalPlay.room.state.boardClosed.body": "S'il est rejoué, il s'ouvrira de nouveau ici.",
   "externalPlay.room.state.unavailable.title": "Cet échiquier ne vous est pas accessible",
   "externalPlay.room.state.unavailable.body": "La partie est peut-être terminée, ou elle appartient à d'autres joueurs.",
   "externalPlay.room.state.cameraOff.title": "Votre caméra est éteinte",

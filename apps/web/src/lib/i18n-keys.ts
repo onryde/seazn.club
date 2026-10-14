@@ -2557,6 +2557,8 @@ export type DictionaryKey =
   | "externalPlay.room.seconds.one"
   | "externalPlay.room.seconds.other"
   | "externalPlay.room.standings"
+  | "externalPlay.room.state.boardClosed.body"
+  | "externalPlay.room.state.boardClosed.title"
   | "externalPlay.room.state.bothIn.body"
   | "externalPlay.room.state.bothIn.title"
   | "externalPlay.room.state.busy"

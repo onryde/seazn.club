@@ -140,8 +140,16 @@ export type RoomSnapshot = {
   /** No game on file and the club is not offered online chess (T20). The
    *  client renders a plain state and STOPS polling. */
   onlineChessOff: boolean;
+  /** T17B fix 2 (D10): our side closed this board's bridge (`finished`)
+   *  before any game was on file, and no result stands — the organiser's
+   *  "No result" then voided, say. No game will ever be created on it (T9
+   *  claims only a pending bridge), so the room says the board is closed,
+   *  never "setting up". A Swiss re-pair deletes the row (M-10) and the room
+   *  reads open again. */
+  boardClosed: boolean;
   /** Both in, no game yet: being created, or held back by Lichess's rate
-   *  limit until `retryAt`. null otherwise. */
+   *  limit until `retryAt`. null otherwise (and always null when
+   *  `boardClosed`). */
   creation: null | { state: "creating" } | { state: "busy"; retryAt: string | null };
   game: RoomGame | null;
   /** Held for the organiser (needs_organiser) with no result written. */

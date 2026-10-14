@@ -6141,6 +6141,8 @@
   "externalPlay.room.state.busy": "Lichess is druk. Opnieuw proberen over {time}.",
   "externalPlay.room.state.closed.title": "Inchecken is gesloten",
   "externalPlay.room.state.closed.body": "Inchecken sloot om {time}. Je organisator beslist wat er met deze partij gebeurt.",
+  "externalPlay.room.state.boardClosed.title": "Je organisator heeft dit bord gesloten",
+  "externalPlay.room.state.boardClosed.body": "Als het opnieuw gespeeld wordt, opent het hier weer.",
   "externalPlay.room.state.unavailable.title": "Dit bord is niet voor jou beschikbaar",
   "externalPlay.room.state.unavailable.body": "Misschien is de partij afgelopen, of is het bord van andere spelers.",
   "externalPlay.room.state.cameraOff.title": "Je camera staat uit",

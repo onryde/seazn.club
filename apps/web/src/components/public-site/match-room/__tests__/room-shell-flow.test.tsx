@@ -53,6 +53,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     canAct: true,
     otherAccount: null,
     onlineChessOff: false,
+    boardClosed: false,
     creation: null,
     game: null,
     held: false,
@@ -383,6 +384,20 @@ describe("camera required: check in → refused for camera → the camera joins 
     await settle(1_000);
     expect(screenOf(island)).toBe("over");
     expect(seatPosts(), "no seat claim for a finished game").toBe(0);
+    expect(join.fn).not.toHaveBeenCalled();
+    island.unmount();
+  });
+
+  it("T17B fix 2 (D10): re-entry on a board the organiser closed claims nothing and joins no camera — the closed card, polling on", async () => {
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, {
+      initial: snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true }, boardClosed: true }),
+      token: "tok",
+      selfPath: "/x",
+    });
+    await settle(1_000);
+    expect(screenOf(island)).toBe("boardClosed");
+    expect(seatPosts(), "no seat claim on a closed board").toBe(0);
     expect(join.fn).not.toHaveBeenCalled();
     island.unmount();
   });

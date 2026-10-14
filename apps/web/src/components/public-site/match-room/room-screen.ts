@@ -28,6 +28,7 @@ export type RoomScreen =
   | { kind: "videoDown" } // card 4
   | { kind: "creating"; retryAt: string | null } // card 5
   | { kind: "closed" } // card 6
+  | { kind: "boardClosed" } // T17B fix 2 (D10): the organiser closed the board before any game
   | { kind: "checkin" };
 
 /** A seat refusal's card. Total over SeatRefusal: a new reason fails
@@ -59,12 +60,12 @@ export type ScreenContext = {
   cameraSettling?: boolean;
 };
 
-/** T17B fix 2 (D8a, controller ruling): the screens on which the player's camera is over — the result, and the
- *  closed card. The room leaves its meeting there (room-shell → use-own-camera). Every other screen may still have a
+/** T17B fix 2 (D8a, controller ruling): the screens on which the player's camera is over — the result, the closed
+ *  card, and (D10) a board the organiser closed before any game. The room leaves its meeting there (room-shell → use-own-camera). Every other screen may still have a
  *  game, or a camera owed: a held board, a frozen seat, a board being re-paired keep it. */
 export function cameraEnds(s: RoomState): boolean {
   const kind = roomScreen(s).kind;
-  return kind === "over" || kind === "closed";
+  return kind === "over" || kind === "closed" || kind === "boardClosed";
 }
 
 export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
@@ -103,6 +104,10 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   // as it truly is — held, view-only — never live and movable (review I2).
   if (game !== null && !snap.canAct) return { kind: "held" };
   if (game !== null) return { kind: "live" };
+  // T17B fix 2 (D10): our side closed the bridge before any game and no result stands (a No result, then voided):
+  // no game will ever be created, so neither the window's cards nor "setting up" may show. A re-pair (above) and a
+  // result (over) still outrank it; a re-paired board's fresh bridge reads open again.
+  if (snap.boardClosed) return { kind: "boardClosed" };
   if (snap.phase === "not_opened" || snap.phase === "before") return { kind: "notOpened" };
   if (snap.phase === "closed" || snap.held) return { kind: "closed" };
   // The window is open and there is no game yet.

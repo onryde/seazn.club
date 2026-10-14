@@ -6141,6 +6141,8 @@
   "externalPlay.room.state.busy": "Lichess está ocupado. Reintentando en {time}.",
   "externalPlay.room.state.closed.title": "El registro ha cerrado",
   "externalPlay.room.state.closed.body": "El registro cerró a las {time}. Tu organizador decidirá qué pasa con esta partida.",
+  "externalPlay.room.state.boardClosed.title": "Tu organizador cerró este tablero",
+  "externalPlay.room.state.boardClosed.body": "Si se vuelve a jugar, se abrirá aquí de nuevo.",
   "externalPlay.room.state.unavailable.title": "Este tablero no está disponible para ti",
   "externalPlay.room.state.unavailable.body": "Puede que haya terminado o que sea de otros jugadores.",
   "externalPlay.room.state.cameraOff.title": "Tu cámara está apagada",

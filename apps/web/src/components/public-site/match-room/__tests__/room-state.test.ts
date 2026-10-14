@@ -74,6 +74,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     canAct: true,
     otherAccount: null,
     onlineChessOff: false,
+    boardClosed: false,
     creation: null,
     game: null,
     held: false,
@@ -706,6 +707,7 @@ describe("ownMeetingRetired (final re-review 3, R3-1): the server no longer hold
     { why: "a result is written", s: seated({ ownParticipantId: null, result: { outcome: "win", method: "resign", score: "1-0" } as never }), due: false },
     { why: "the game is over", s: seated({ ownParticipantId: null, game: game(4, true) }), due: false },
     { why: "online chess is not offered (the re-entry's own condition)", s: seated({ ownParticipantId: null, onlineChessOff: true }), due: false },
+    { why: "T17B fix 2 (D10): the organiser closed the board — no game will come, nothing to rejoin", s: seated({ ownParticipantId: null, boardClosed: true }), due: false },
   ];
   it("every row of the rule, counted", () => {
     let checked = 0;
