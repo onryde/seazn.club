@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import {
+  LICHESS_TOKEN_TEST_TIMEOUT_MS,
   PLAY_SCOPES,
   assertLichessConsentForPlay,
   getLichessAccessToken,
@@ -14,6 +15,7 @@ import {
 } from "../external-accounts";
 import { startLichessFixtureServer } from "../../../../e2e/lichess-fixture-server";
 import { backendPid, pollWaitersBehind } from "../external-play/__tests__/_lock-waiters";
+import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A Lichess id nobody else can hold. `(provider, external_user_id)` is
@@ -514,6 +516,53 @@ describe.skipIf(!HAS_DB)("external-accounts — Lichess's word on a stored grant
       checked += 1;
     }
     expect(checked).toBe(answers.length);
+  });
+
+  // Final re-review N-3: the room page waits on this check as it renders, so a Lichess that does not answer may hold
+  // it for 2 s at most (the ruling's cap), never the 10 s every other Lichess call is given. On the cap it reads
+  // false — the room renders as before P10, and the first act learns the truth.
+  it("N-3: a Lichess that goes silent — before the headers, or after them mid-body — is waited on for 2 s at most, then reads false, logged as a timeout", async () => {
+    expect(LICHESS_TOKEN_TEST_TIMEOUT_MS, "the ruling: a 2 s cap").toBe(2_000);
+    expect(LICHESS_TIMEOUT_MS, "premise: the cap is shorter than every other Lichess call's").toBeGreaterThan(LICHESS_TOKEN_TEST_TIMEOUT_MS);
+    const token = `lio_p10_silent_${randomUUID().slice(0, 6)}`;
+    const userId = await linked("p10-silent", token);
+    /** Rejects with the signal's reason when it aborts, and never settles otherwise. */
+    const onAbort = (signal: AbortSignal) => new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+    const silences: [string, (signal: AbortSignal) => Promise<Response>][] = [
+      ["no headers", (signal) => onAbort(signal)],
+      [
+        "headers, then a body that never ends",
+        async (signal) =>
+          new Response(
+            new ReadableStream({
+              start(c) {
+                c.enqueue(new TextEncoder().encode(`{"${token}":`));
+                signal.addEventListener("abort", () => c.error(signal.reason));
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ],
+    ];
+    let checked = 0;
+    for (const [label, silence] of silences) {
+      const signals: AbortSignal[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) => {
+        signals.push(init!.signal!);
+        return silence(init!.signal!);
+      }));
+      warnSpy.mockClear();
+      const t0 = performance.now();
+      expect(await lichessGrantDowngraded(userId), label).toBe(false);
+      const waited = performance.now() - t0;
+      expect(signals, `${label}: asked once`).toHaveLength(1);
+      expect([signals[0]!.aborted, (signals[0]!.reason as Error).name], `${label}: the cap fired`).toEqual([true, "TimeoutError"]);
+      expect(waited, `${label}: waited out the cap`).toBeGreaterThanOrEqual(LICHESS_TOKEN_TEST_TIMEOUT_MS - 5);
+      expect(waited, `${label}: never the 10 s of the other calls`).toBeLessThan(LICHESS_TIMEOUT_MS);
+      expect((warnSpy.mock.calls as unknown[][]).map((c) => c[0]), label).toEqual([{ userId, reason: "timeout" }]);
+      checked += 1;
+    }
+    expect(checked).toBe(silences.length);
   });
 
   it("a stored token we cannot open is not the player's grant: false, nothing asked", async () => {
