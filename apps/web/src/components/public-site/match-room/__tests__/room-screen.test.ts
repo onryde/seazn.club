@@ -149,10 +149,37 @@ describe("roomScreen", () => {
     expect(checked).toBe(2);
   });
 
-  it("a freeze: yours or both ⇒ A (revoked); the opponent's ⇒ your board plays on", () => {
+  it("a freeze: yours ⇒ A (revoked); the opponent's ⇒ your board plays on; R2-1 — one you did not cause ⇒ the neutral seat hold, never A: both seats, or the opponent's with no game to play on — counted", () => {
     expect(roomScreen(st({ game: GAME, frozen: "you", canAct: false })).kind).toBe("revoked");
-    expect(roomScreen(st({ game: GAME, frozen: "both", canAct: false })).kind).toBe("revoked");
+    expect(roomScreen(st({ game: null, frozen: "you", canAct: false, held: true })).kind, "mid-create: still yours").toBe("revoked");
     expect(roomScreen(st({ game: GAME, frozen: "opponent", canAct: true })).kind).toBe("live");
+    // Final re-review 2, R2-1. "both" cannot tell the player who changed from the one who did not (an unknown seat,
+    // two seats, or ruling N2's widening of one seat), so it blames nobody; nor does the opponent's freeze on a board
+    // with no game (a create in flight) — which, unhandled, fell to "Check-in has closed".
+    const NEUTRAL: [string, Partial<RoomSnapshot>][] = [
+      ["both, a game on file", { game: GAME, frozen: "both", canAct: false, held: false }],
+      ["both, no game", { game: null, frozen: "both", canAct: false, held: true }],
+      ["the opponent's, no game", { game: null, frozen: "opponent", canAct: false, held: true }],
+      ["the opponent's, no game, past the deadline", { game: null, frozen: "opponent", canAct: false, held: true, phase: "closed" }],
+    ];
+    let checked = 0;
+    for (const [label, over] of NEUTRAL) {
+      expect(roomScreen(st(over)).kind, label).toBe("seatHeld");
+      checked += 1;
+    }
+    expect(checked).toBe(NEUTRAL.length);
+  });
+
+  it("R2-1 precedence: over > your seat frozen > relink > a seat hold you did not cause > held / closed", () => {
+    const both = { game: GAME, frozen: "both", canAct: false } as const;
+    expect(roomScreen(st({ ...both, game: { ...GAME, over: true } })).kind, "a game seen over outranks it").toBe("over");
+    expect(roomScreen(st({ ...both, result: { outcome: "won", method: "time", score: "1–0" } })).kind).toBe("over");
+    // The viewer's OWN grant, refused (P10) or refused mid-act, is a fact about them: it outranks the neutral hold.
+    expect(roomScreen(st(both, { grantRefused: true })).kind).toBe("relink");
+    expect(roomScreen(st(both, { error: "relink" })).kind).toBe("relink");
+    // It outranks the held seam and the closed card it would otherwise fall to.
+    expect(roomScreen(st({ ...both, frozen: null })).kind, "the pair: no freeze ⇒ held").toBe("held");
+    expect(roomScreen(st({ game: null, frozen: null, canAct: false, held: true })).kind, "the pair: no freeze ⇒ closed").toBe("closed");
   });
 
   it("re-review 5 I-2: the game is on ANOTHER Lichess account ⇒ A (revoked) — after over, before relink and held; the pairs: the same board as recorded is live, held stays held", () => {

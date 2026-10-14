@@ -598,7 +598,7 @@ test("a held board (review I2): a game nobody may act on reads as held — the b
   await ctx.close();
 });
 
-test("Seam A, the Lichess link revoked: the frozen player's board dimmed and read-only, Seat on hold, Link Lichess again, Back to fixture — the opponent plays on; both frozen, each sees A — at every width", async ({
+test("Seam A, the Lichess link revoked: the frozen player's board dimmed and read-only, Seat on hold, Link Lichess again, Back to fixture — the opponent plays on; both frozen, each reads the neutral hold, never A (R2-1) — at every width", async ({
   page,
   browser,
 }) => {
@@ -667,12 +667,64 @@ test("Seam A, the Lichess link revoked: the frozen player's board dimmed and rea
   const b = await openRoom(bctx, room, room.black.token);
   expect(await screenOf(b), "the opponent's freeze leaves this board live").toBe("live");
   await expect(b.getByTestId("room-revoked-notice")).toHaveCount(0);
-  // Both frozen: each player sees A.
+  // Both frozen (final re-review 2, R2-1): nobody can tell from "both" who changed, so neither player is told
+  // their link was revoked — each reads the neutral hold, with no re-link.
   await freeze("both");
-  await expect.poll(() => screenOf(b), { timeout: 20_000, message: "Black's poll reads both frozen" }).toBe("revoked");
+  await expect.poll(() => screenOf(b), { timeout: 20_000, message: "Black's poll reads both frozen" }).toBe("seatHeld");
   await expect(b.getByTestId("room-clock-you")).toContainText(fill("externalPlay.room.colourSeatOnHold", { colour: uiEn["externalPlay.room.colour.black"]! }));
-  await p.waitForTimeout(3_500); // White's next poll
-  expect(await screenOf(p), "White still sees A").toBe("revoked");
+  await expectNeutralHold(b, { board: true });
+  await shoot(b, "a-seat-held");
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "White's poll reads both frozen" }).toBe("seatHeld");
+  await expectNeutralHold(p, { board: true });
+  await bctx.close();
+  await ctx.close();
+});
+
+/** R2-1's neutral hold, as a player sees it: the held seam's two lines in A's slot, no re-link and no amber notice,
+ *  the way back; the dimmed board exactly when a game is on file; the drawn column on a phone; no sideways scroll. */
+async function expectNeutralHold(page: Page, o: { board: boolean }): Promise<void> {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const notice = page.getByTestId("room-seat-held-notice");
+  await expect(notice).toContainText(uiEn["externalPlay.room.state.held.title"]!);
+  await expect(notice).toContainText(uiEn["externalPlay.room.state.held.body"]!);
+  for (const id of ["room-revoked-notice", "room-revoked-relink", "room-controls"]) await expect(page.getByTestId(id), id).toHaveCount(0);
+  await expect(page.getByTestId("room-back-to-fixture")).toBeVisible();
+  await expect(page.getByTestId("room-board")).toHaveCount(o.board ? 1 : 0);
+  if (o.board) await inAside(page, "room-seat-held-notice");
+  await page.setViewportSize({ width: 320, height: 800 });
+  const column = o.board ? ["room-clocks-strip", "room-seat-held-notice", "room-board", "room-back-to-fixture"] : ["room-seat-held-notice", "room-back-to-fixture"];
+  expect(await stackedTopDown(page, column), "anti-vacuity: pairs").toBe(column.length - 1);
+  expect(await noSidewaysScroll(page, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+}
+
+test("R2-1, mid-create: a player's change lands while the create is in flight — the changer reads A (no board), the other the neutral hold (no board, no re-link) — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, longName()] });
+  // The hold an unlink or a re-link raises on a board whose create was sent and whose game is not on file:
+  // account-changed.ts records the PAIRING's seat (White's, here) — staged as that row, the way this spec stages
+  // every hold; the producer itself is driven in external-play-account-changed.test.ts.
+  const staged = await withDb(
+    (sql) => sql`
+      update fixture_external_play
+         set status = 'needs_organiser', needs_reason = 'account_changed', revoked_seat = 'white',
+             create_sent_at = now(), last_error = 'lichess account changed: e2e', updated_at = now()
+       where fixture_id = ${room.fixtureId} and challenge_id is null
+      returning fixture_id`,
+  );
+  expect(staged, "premise: the board's bridge, no game on file").toHaveLength(1);
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "White reads the hold" }).toBe("revoked");
+  await expect(p.getByTestId("room-revoked-relink")).toBeVisible();
+  await expect(p.getByTestId("room-board")).toHaveCount(0);
+  const bctx = await cold(browser);
+  const b = await openRoom(bctx, room, room.black.token);
+  await expect.poll(() => screenOf(b), { timeout: 20_000, message: "Black reads the hold" }).toBe("seatHeld");
+  await expectNeutralHold(b, { board: false });
+  await shoot(b, "a-seat-held-mid-create");
   await bctx.close();
   await ctx.close();
 });

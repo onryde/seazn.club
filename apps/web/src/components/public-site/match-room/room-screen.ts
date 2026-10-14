@@ -15,6 +15,7 @@ export type RoomScreen =
   | { kind: "unavailable" } // card 7
   | { kind: "offForClub" } // seam B
   | { kind: "revoked" } // seam A
+  | { kind: "seatHeld" } // seam A's layout, a hold the viewer did not cause (R2-1)
   | { kind: "relink" } // card 8
   | { kind: "over" }
   | { kind: "held" } // seam: a game on file nobody may act on
@@ -63,14 +64,23 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   // A written result outranks every hold on the board (review I1): the
   // frozen player sees how the game ended, never A again.
   if (snap.result !== null || game?.over === true) return { kind: "over" };
-  // A token_revoked hold froze the VIEWER's seat: they cannot move until they
-  // re-link (A). The opponent's freeze is theirs to fix; this board plays on.
-  // The game on ANOTHER Lichess account than the viewer's linked one is A
-  // too: play.ts refuses every act, and re-linking that account is the
-  // remedy (T14 re-review 5, I-2).
-  if (snap.frozen === "you" || snap.frozen === "both" || snap.otherAccount !== null) return { kind: "revoked" };
+  // A seat hold froze the VIEWER's seat — their token was refused, or they
+  // unlinked or re-linked another account: they cannot move until they
+  // re-link (A). The game on ANOTHER Lichess account than the viewer's
+  // linked one is A too: play.ts refuses every act, and re-linking that
+  // account is the remedy (T14 re-review 5, I-2).
+  if (snap.frozen === "you" || snap.otherAccount !== null) return { kind: "revoked" };
   // Lichess refused the player's own grant mid-act or at the seat — or said so when the page loaded (P10).
   if (s.error === "relink" || s.grantRefused) return { kind: "relink" };
+  // Final re-review 2, R2-1: a seat hold the viewer did NOT cause is never A
+  // ("your link was revoked", and a re-link that lifts nothing). "both"
+  // cannot tell the player who changed from the one who did not (no seat
+  // recorded, two seats, or ruling N2's widening of one), so it blames
+  // nobody. The opponent's freeze on a board with no game (their change
+  // landed while the create was in flight) leaves nothing to play on: the
+  // board is with the organiser — never "check-in has closed".
+  if (snap.frozen === "both" || (snap.frozen === "opponent" && game === null)) return { kind: "seatHeld" };
+  // The opponent's freeze on a game on file: this board plays on.
   // A game on file the server will not take an act on (play.ts refuses it:
   // a provider_error hold, T13's deadline hold, a withdrawn board) is shown
   // as it truly is — held, view-only — never live and movable (review I2).
