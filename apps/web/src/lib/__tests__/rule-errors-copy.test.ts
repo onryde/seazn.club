@@ -10,9 +10,13 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { classifyActError, rebuildErrorText, undoRefusalMessage } from "@/components/v2/stages-panel";
+import { z } from "zod";
+import { pointsRuleExpressible } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
 import {
   FIXTURE_LOCK_KEYS,
   FORMAT_FIT_REASONS,
+  POINTS_SPLIT_LABEL_KEYS,
   FORMAT_FIT_REASON_KEYS,
   RULE_ERROR_KEYS,
   RULE_ERROR_STATUS,
@@ -52,6 +56,7 @@ describe("every W2c refusal code has a key, in all four locales", () => {
       ...Object.values(FORMAT_FIT_REASON_KEYS),
       ...Object.values(FIXTURE_LOCK_KEYS),
       ...Object.values(RULE_ERROR_SUPPORT_KEYS),
+      ...Object.values(POINTS_SPLIT_LABEL_KEYS),
     ]);
     let checked = 0;
     for (const key of keys)
@@ -91,6 +96,8 @@ describe("the server's English is the en dictionary", () => {
       ["RULE_NOT_SETTABLE", { field: "bestOf" }, say(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "bestOf" })],
       ["RULE_NOT_SETTABLE", { field: "bestOf", reason: "it is set per stage" }, say(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "bestOf", reason: "it is set per stage" })],
       ["POINTS_RULE_INEXPRESSIBLE", { reason: "x" }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: "x" })],
+      // W2c Task 13: the split keys are named by their labels, never by the raw config key.
+      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["otWin", "otLoss"] }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: say(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [say(POINTS_SPLIT_LABEL_KEYS.otWin), say(POINTS_SPLIT_LABEL_KEYS.otLoss)].join(", ") }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: "Match 3" })],
       ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: "Match 3" })],
     ];
@@ -124,6 +131,10 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       ["FORMAT_DOES_NOT_FIT_PLAY", { fixture_id: "f" }, null],
       ["RULE_NOT_SETTABLE", { fixture_id: "f", field: "bestOf" }, sayEs(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "bestOf" })],
       ["POINTS_RULE_INEXPRESSIBLE", {}, null],
+      // W2c Task 13: its emitter sends the split keys; a key with no label is one this app cannot say (null: the message).
+      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["shootoutWin", "shootoutLoss"] }, sayEs(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: sayEs(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [sayEs(POINTS_SPLIT_LABEL_KEYS.shootoutWin), sayEs(POINTS_SPLIT_LABEL_KEYS.shootoutLoss)].join(", ") }) })],
+      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["shootoutWin", "notAPointsKey"] }, null],
+      ["POINTS_RULE_INEXPRESSIBLE", { keys: [] }, null],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: 3 }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: null }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.thisMatch) })],
       ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { fixture_id: "f", fixture_no: 3, field: "extraTime" }, sayEs(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
@@ -175,5 +186,30 @@ describe("stages-panel reads the code, not the English (M1: undo, rebuild, and t
   it("a generate/complete/delete refusal (classifyActError) reads it too, and an unrecognised one keeps its message", () => {
     expect(classifyActError(own(), msgEs as never, "es")).toMatchObject({ text: want });
     expect(classifyActError(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg, "en").text).toBe("division is mid-solve");
+  });
+});
+
+describe("W2c Task 13 — every split key the engine refuses a stage rule over has a label, in all four locales", () => {
+  it("the label table is exactly the keys pointsRuleExpressible refuses, across every sport's declared points (counted)", () => {
+    // The candidates are each sport's OWN declaration (its config schema's `points` keys, and `pointsMap` where it declares
+    // one); which of them split is the engine's answer (`pointsRuleExpressible`), never a list typed here.
+    const split = new Set<string>();
+    let candidates = 0;
+    for (const m of builtinModules) {
+      const props = (z.toJSONSchema(m.configSchema as z.ZodType, { io: "input", unrepresentable: "any" }) as { properties?: Record<string, { properties?: Record<string, unknown> }> }).properties ?? {};
+      for (const k of Object.keys(props.points?.properties ?? {})) {
+        candidates++;
+        const got = pointsRuleExpressible({ points: { [k]: 1 } });
+        if (!got.ok) for (const key of got.keys) split.add(key);
+      }
+      if (props.pointsMap !== undefined) {
+        candidates++;
+        const got = pointsRuleExpressible({ pointsMap: { "2-0": [3, 0], "2-1": [2, 1] } });
+        if (!got.ok) for (const key of got.keys) split.add(key);
+      }
+    }
+    expect(candidates, "anti-vacuity: the sports declare points").toBeGreaterThan(0);
+    expect(split.size, "anti-vacuity: some declared key splits").toBeGreaterThan(0);
+    expect(Object.keys(POINTS_SPLIT_LABEL_KEYS).sort(), "a label for every split key, and none for a key that never splits").toEqual([...split].sort());
   });
 });

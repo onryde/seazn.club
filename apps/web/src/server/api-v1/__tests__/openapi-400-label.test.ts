@@ -31,4 +31,26 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
     expect(op.summary).toContain("absent, null or `{}` at create KEEPS the whole preset");
     for (const value of ["2x15", "5-kick", "(3 in the youth"]) expect(op.summary, value).not.toContain(value);
   });
+
+  it("PUT /divisions/{id}/stages documents R-T12-4's carry: a matched slot keeps its stored rules in place of its preset (Task 12 re-review N-2)", () => {
+    const op = (buildOpenApiDocument().paths as Record<string, Record<string, Op>>)["/api/v1/divisions/{id}/stages"]!.put!;
+    expect(op.summary).toContain("keeps the rules it already stored IN PLACE OF its preset");
+    expect(op.summary).toContain("a preset key the organiser removed stays removed");
+    expect(op.summary).toContain("a new slot, or one whose kind changed, starts from its own kind's preset");
+  });
+
+  it("PUT /stages/{id}/rules documents the points arm (W2c Task 13): its body, null, and every refusal by code", () => {
+    const op = (buildOpenApiDocument().paths as Record<string, Record<string, Op>>)["/api/v1/stages/{id}/rules"]!.put!;
+    for (const claim of [
+      "`points`",
+      "`points: null` removes",
+      "RULE_NOT_SETTABLE (`field` `points`)",
+      "`points.forfeit.awardScore`",
+      "422 POINTS_RULE_INEXPRESSIBLE (`keys`)",
+      "402 PAYMENT_REQUIRED",
+      "`standings.custom_points`",
+    ])
+      expect(op.summary, claim).toContain(claim);
+    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(["400", "402", "409", "422"]));
+  });
 });
