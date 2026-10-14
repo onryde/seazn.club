@@ -829,4 +829,128 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(lichess.game(game2)?.status, "round 2's game is live at Lichess").toBe("started");
     await expect(screen(p)).toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
   });
+
+  test("N-2: a re-paired board's newcomer checks in to a FRESH meeting — unpaired, the old room closed by the sweep, re-paired, re-opened", async ({ page, browser, request }) => {
+    test.setTimeout(budget(8));
+    // Its own Swiss round: round 1 above carries games, and Unpair refuses a round with a game on file.
+    const r = await seedOnlineRound(request, [`Ed Repair ${TAG}`, `Flo Repair ${TAG}`, `Gus Repair ${TAG}`, `Hal Repair ${TAG}`], {
+      camera: "required",
+      stage: "swiss",
+      clock: TC,
+    });
+    expect(r.boards, "four players pair into two boards").toHaveLength(2);
+    const people = new Map(r.boards.flatMap((b) => [b.home, b.away]).map((p) => [p.entrantId, p]));
+    const pairs = () =>
+      withDb((sql) => sql<{ id: string; home: string | null; away: string | null }[]>`
+        select id, home_entrant_id as home, away_entrant_id as away from fixtures
+         where stage_id = ${r.stageId} and round_no = 1 order by seq_in_round`);
+    const meetingsOf = (fixtureId: string) =>
+      withDb((sql) => sql<{ meeting_id: string; ended_at: Date | null }[]>`
+        select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`);
+    const participantsOf = async (fixtureId: string) =>
+      (await withDb((sql) => sql<{ person_id: string | null }[]>`
+        select person_id from fixture_video_participants where fixture_id = ${fixtureId} order by created_at, id`)).map((x) => x.person_id);
+
+    // The first pairing: one player per board arrives. Nobody is live, so the seat is refused — but the meeting is
+    // asked before the seat (board 1's seating test), so each board now has its meeting, with that player in it.
+    const old = new Map<string, string>();
+    for (const b of r.boards) {
+      expect((await claimByLink(page, b, b.home)).seat, `${b.home.name}: premise — the seat waits on the camera`).toMatchObject({
+        seated: false,
+        reason: "camera_required",
+      });
+      const [m] = await meetingsOf(b.fixtureId);
+      expect(m, `${b.fixtureId}: premise — the first pairing's meeting`).toBeDefined();
+      expect(await participantsOf(b.fixtureId), `${b.fixtureId}: premise — its first player is in it`).toEqual([b.home.personId]);
+      old.set(b.fixtureId, m!.meeting_id);
+    }
+
+    // The organiser unpairs the round from the run sheet.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.fixturesTab);
+    await page.getByTestId("stage-unpair").click();
+    await expect.poll(async () => (await pairs()).filter((f) => f.home !== null || f.away !== null).length, { timeout: 30_000 }).toBe(0);
+
+    // Nobody played, so the room closes at the round's deadline: the cron's pass ends each meeting (sweep.ts job 3,
+    // "nobody played"). A test cannot wait out DEADLINE_AFTER_MS, so the round's open is aged past it — the one SQL
+    // write here, as nobodyReadItForAnHour ages a read — and the REAL pass ends the meetings, at RealtimeKit too.
+    await withDb(async (sql) => {
+      const res = await sql`
+        update stage_round_opens set opened_at = opened_at - (${DEADLINE_AFTER_MS + 2 * 60_000} * interval '1 millisecond')
+         where stage_id = ${r.stageId} and round_no = 1`;
+      if (res.count !== 1) throw new Error(`no open on file to age for ${r.stageId}`);
+    });
+    await expect
+      .poll(
+        async () => {
+          await sweep(page);
+          let ended = 0;
+          for (const fixtureId of old.keys()) if ((await meetingsOf(fixtureId))[0]?.ended_at) ended++;
+          return ended;
+        },
+        { timeout: 60_000, message: "the sweep ended both old meetings" },
+      )
+      .toBe(old.size);
+    for (const meetingId of old.values()) expect(video.meetingStatus(meetingId), "ended at RealtimeKit, not only on file").toBe("INACTIVE");
+
+    // Re-paired as neighbours (the seed paired top against bottom), so board 1 gets a player new to it. The pairing
+    // menu's own presses are swiss-round-one-pairing.spec.ts's; this is the body its Pair next sends.
+    const repaired = await apiJson(page.request, `/api/v1/stages/${r.stageId}/generate`, "POST", { pairing: "rank_adjacent" });
+    expect(repaired.status, `re-pair round 1: ${JSON.stringify(repaired.error)}`).toBeLessThan(300);
+    const board1 = r.boards[0]!;
+    const now1 = (await pairs()).find((f) => f.id === board1.fixtureId)!;
+    const wasOn1 = new Set([board1.home.entrantId, board1.away.entrantId]);
+    const newcomerId = [now1.home, now1.away].find((e) => e !== null && !wasOn1.has(e));
+    expect(newcomerId, "premise — the re-pair put a player new to board 1 on it").toBeDefined();
+    const newcomer = people.get(newcomerId!)!;
+    const reBoard1: RoundBoard = { fixtureId: board1.fixtureId, home: people.get(now1.home!)!, away: people.get(now1.away!)! };
+    expect(await meetingsOf(board1.fixtureId), "premise — the old, ended meeting is still on file before the re-open").toHaveLength(1);
+
+    // The organiser re-opens round 1 from the same control: nobody is bound to its open any more, so it offers it again.
+    await page.goto(r.fixturesTab);
+    const control = page.getByTestId("open-round").filter({ has: page.getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) }) });
+    await expect(control).toHaveAttribute("data-press", "reopen", { timeout: 30_000 });
+    const stampBefore = await roundOpenedAtSql(r.stageId, 1);
+    const mark = video.calls.length;
+    await control.getByTestId("open-round-cta").click();
+    await page.getByTestId("open-round-confirm-confirm").click();
+    await expect(control.getByTestId("open-round-notice")).toBeVisible({ timeout: 20_000 });
+    expect((await roundOpenedAtSql(r.stageId, 1))!.getTime(), "the re-open stamped a new window").toBeGreaterThan(stampBefore!.getTime());
+    let gone = 0;
+    for (const [fixtureId, meetingId] of old) {
+      expect(await meetingsOf(fixtureId), `${fixtureId}: the old meeting's row went with the re-open`).toEqual([]);
+      expect(video.calls.slice(mark).filter((c) => c.path.includes(meetingId)), "an ended meeting is not asked again").toEqual([]);
+      gone++;
+    }
+    expect(gone).toBe(2);
+
+    // The newcomer follows their link and checks in: the room asks for a meeting, and gets a NEW one.
+    const ctx = await playerContext(browser);
+    const p = await openRoom(ctx, reBoard1, newcomer);
+    await expect(screen(p)).toHaveAttribute("data-screen", "checkin");
+    const [claim] = await Promise.all([
+      p.waitForResponse((res) => res.request().method() === "POST" && /\/external-play\/room$/.test(new URL(res.url()).pathname)),
+      p.getByTestId("room-checkin-cta").click(),
+    ]);
+    const claimBody = await claim.text();
+    expect(claim.status(), `the check-in is answered, not refused: ${claimBody.slice(0, 200)}`).toBe(200);
+    expect(claimBody, "never the old meeting's end").not.toContain("VIDEO_MEETING_ENDED");
+    await expect(screen(p), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    const fresh = await meetingsOf(board1.fixtureId);
+    expect(fresh, "one meeting on file").toHaveLength(1);
+    expect(fresh[0]!.meeting_id, "a fresh meeting, never the old one").not.toBe(old.get(board1.fixtureId));
+    expect(fresh[0]!.ended_at).toBeNull();
+    expect(video.meetingStatus(fresh[0]!.meeting_id), "live at RealtimeKit").toBe("ACTIVE");
+    const part = video.participantFor(newcomer.personId);
+    expect(part?.meetingId, "the newcomer's participant is in the new meeting").toBe(fresh[0]!.meeting_id);
+    expect(await participantsOf(board1.fixtureId), "only the newcomer — the old player went with the old meeting").toEqual([newcomer.personId]);
+
+    // The meeting reports them present; Try again seats them on its word.
+    video.setLivePublisher(part!.id, true);
+    await p.getByTestId("room-state-retry").click();
+    await expect(screen(p)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    await expect(p.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
+    expect(await checkedInAt(board1.fixtureId, newcomer.personId), "seated in the new meeting").not.toBeNull();
+    await ctx.close();
+  });
 });
