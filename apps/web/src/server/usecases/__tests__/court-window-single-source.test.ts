@@ -1,0 +1,117 @@
+// The app's half of the anti-fork guard for court windows (P9.5 / P10 §2; moved here from
+// packages/engine/src/scheduling/window-single-source.test.ts by engine-split 1d-3).
+//
+// The engine owns the window rule (`usableWindows`, calendar.ts) and its own half of the guard stays beside it: those tests read only
+// engine files. These two read apps/web, so they live with apps/web and keep working when the engine leaves the repo (2b).
+//
+// P10 §2: the guard used to read only files inside packages/engine, so a fourth window-rule copy in apps/web (`venues.ts`'s
+// `resolveCourtDay`) survived P9.5's de-forking invisibly. Scan this workspace too.
+//
+// Read via `import.meta.url`, never a cwd-relative path: the shell's working directory resets between tool calls in this repo.
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, describe, expect, it } from "vitest";
+
+const webSource = (file: string): string => readFileSync(new URL(`../../../${file}`, import.meta.url), "utf8");
+
+/** Occurrences of a regex, ignoring the file's comment lines — a rule quoted in prose is documentation, not a second implementation.
+ *
+ *  `?? 0`, never `!`: when a guarded pattern disappears ENTIRELY — a rename, which is precisely the regression this file exists to
+ *  catch — `.match` returns null, and a non-null assertion would kill the test with a TypeError instead of reporting
+ *  `expected 0 to be 1`. The guard has to fail legibly in the case it was written for. */
+function countInCode(text: string, re: RegExp): number {
+  return text
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n")
+    .match(re)?.length ?? 0;
+}
+
+const WEEKDAY = /weekday\s*===?/g;
+/** The trees the weekday marker is scanned in (see the long comment on the second test below). */
+const ROOTS = ["server", "lib"];
+
+/** Every non-test source file under `srcDir`'s ROOTS, how many there were per root, and those that resolve a weekday themselves (paths
+ *  relative to `srcDir`). Tests, `__tests__` helpers and comment lines are skipped: they quote the rule or fabricate it, they do not implement it. */
+function weekdayScan(srcDir: URL): { scanned: Record<string, number>; offenders: string[] } {
+  const base = fileURLToPath(srcDir);
+  const offenders: string[] = [];
+  const scanned: Record<string, number> = {};
+  for (const root of ROOTS) {
+    scanned[root] = 0;
+    for (const entry of readdirSync(new URL(`${root}/`, srcDir), { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const name = entry.name;
+      if (!name.endsWith(".ts") && !name.endsWith(".tsx")) continue;
+      if (name.includes(".test.")) continue;
+      const path = `${entry.parentPath}/${name}`;
+      if (path.includes("__tests__")) continue;
+      scanned[root]!++;
+      if (countInCode(readFileSync(path, "utf8"), WEEKDAY) > 0) offenders.push(relative(base, path));
+    }
+  }
+  return { scanned, offenders };
+}
+
+describe("apps/web has no second window rule", () => {
+  it("venues.ts resolves court days through the engine, not its own copy", () => {
+    const src = webSource("server/usecases/venues.ts");
+    expect(src.length, "venues.ts was read").toBeGreaterThan(0);
+    expect(src).not.toMatch(/function resolveCourtDay/);
+    expect(src).toMatch(/usableWindows/);
+  });
+
+  // The check above guards the NAME `resolveCourtDay`, which a rename or an
+  // arrow-function rewrite walks straight past (P10 review finding 1 — the
+  // commit that added it claimed "the next copy cannot hide", and that was an
+  // overclaim). This one guards the RULE, structurally, the way `countInCode`
+  // does for start windows in the engine's half.
+  //
+  // The marker is weekday-equality over court hours: resolving which of a
+  // court's weekly ranges apply to a given day is the first step of the window
+  // rule and has no other reason to exist server-side. Scoped to `server/` and
+  // `lib/` deliberately — `components/v2/venues-panel.tsx` filters by weekday
+  // too, and legitimately: P8's editor EDITS a court's hours, it never resolves
+  // them against a fixture. Editing is not the rule.
+  it("no server or lib file resolves a court's weekday hours itself", () => {
+    const { scanned, offenders } = weekdayScan(new URL("../../../", import.meta.url));
+    // anti-vacuity: a scan that found no file under a root has scanned nothing, and an empty list would read as a clean tree
+    for (const root of ROOTS) expect(scanned[root], `files scanned under ${root}/`).toBeGreaterThan(0);
+    // ... and the matcher can say yes: the same counter finds the marker in code and ignores it in a comment
+    expect(countInCode("const day = court.hours.filter((h) => h.weekday === d);", WEEKDAY)).toBe(1);
+    expect(countInCode("// h.weekday === d is the rule, quoted in prose\n * weekday == 1", WEEKDAY)).toBe(0);
+    expect(offenders.map((o) => `apps/web/src/${o}`)).toEqual([]);
+  });
+
+  // The positive pair of the scan above (a scan nothing can fail is not a guard): a scratch src/ in which every exclusion and every root is
+  // witnessed by its own file, so dropping one rule, or one root, or widening to another tree, fails here by name.
+  describe("the weekday scan itself, on a scratch src/", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "court-window-scan-"));
+    afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+    const OFFENDER = "export const f = (h: { weekday: number }, d: number) => h.weekday === d;\n";
+    const files: Record<string, string> = {
+      "server/bad.ts": OFFENDER,
+      "server/nested/deeper/bad.tsx": OFFENDER,
+      "lib/bad.ts": OFFENDER,
+      "server/ok.ts": "export const ok = 1;\n",
+      "server/prose.ts": "// h.weekday === d is the rule, quoted\nexport const p = 1;\n",
+      "server/bad.test.ts": OFFENDER,
+      "server/__tests__/helper.ts": OFFENDER,
+      "lib/notes.md": "weekday === d\n",
+      "components/editor.tsx": OFFENDER, // editing a court's hours is not resolving them: outside the roots
+    };
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(scratch, "src", rel)), { recursive: true });
+      writeFileSync(join(scratch, "src", rel), text);
+    }
+
+    it("flags exactly the code that resolves weekday hours under server/ and lib/, nested files and .tsx included, and counts per root", () => {
+      const { scanned, offenders } = weekdayScan(new URL(`file://${scratch}/src/`));
+      expect(offenders.sort()).toEqual(["lib/bad.ts", "server/bad.ts", "server/nested/deeper/bad.tsx"]);
+      // server: bad.ts, nested/deeper/bad.tsx, ok.ts, prose.ts; lib: bad.ts. Tests, __tests__, .md and components/ are not counted.
+      expect(scanned).toEqual({ server: 4, lib: 1 });
+    });
+  });
+});
