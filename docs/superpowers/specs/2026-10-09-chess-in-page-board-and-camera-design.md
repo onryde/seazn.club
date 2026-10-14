@@ -30,7 +30,7 @@ Owner decisions taken 2026-10-09, in order:
 | D4 | Two boards: Chess Quest keeps its own; live play uses **chessground**, GPL-3.0 accepted |
 | D5 | Camera policy is the **org's** choice per division/stage: `Off` / `Optional` / `Required` |
 | D6 | **One camera** per player is enough for ship 1; model it as N participants |
-| D7 | Players do **not** see each other. Each sees only their own tile |
+| D7 | Players do **not** see each other. Each sees only their own tile. Since 2026-10-14 this is enforced by **one meeting per player** (§5.6), not by the client |
 | D8 | Deterrent only — no mandatory observer; an arbiter **may** be assigned when available |
 | D9 | Policy changes after a round opens are **downgrade-only, with an audit row** |
 | D10 | Camera failure mid-game = **flag; the organiser decides**. The board never freezes |
@@ -285,7 +285,8 @@ forgeable and is on the do-not-copy list (§10).
 
 Consequence: the meeting is created when the **first** player arrives in the window, not
 after both check in, because preflight needs something to join. Torn down at the result,
-or at T+20 if nobody comes.
+or at T+20 if nobody comes. *(Amended 2026-10-14, §5.6: each player's OWN meeting is created
+when that player arrives; both are torn down together.)*
 
 **What RealtimeKit can and cannot prove (measured 2026-10-09 against Cloudflare's live
 OpenAPI spec).** There is **no synchronous per-participant publishing signal**: the
@@ -339,10 +340,11 @@ could forge it; this closes the honest-browser gap, not a determined forger.
 
 ### 5.3 What each person sees
 - **A player sees their own tile only** (D7). Local preview; no subscription to the
-  opponent.
+  opponent. Since 2026-10-14 the opponent is not in the player's meeting at all (§5.6).
 - A **presence pill** shows "opponent camera: live / off" — compliance without a face.
 - An **arbiter**, when assigned, joins receive-only and sees both players' tiles for a
-  chosen fixture, plus that fixture's flags.
+  chosen fixture, plus that fixture's flags. Since 2026-10-14 that is two meetings, one per
+  player (§5.6).
 - Mic muted by default. Chess needs no audio.
 
 Rationale for D7: chess events are full of under-18s, and showing a child's face to a
@@ -365,6 +367,85 @@ tournament.
 
 The audit row (`online_chess_audit`: who overrode, when, and their note) is a **staff record
 read by SQL only**; no screen shows it (ruling, final review M-8, 2026-10-14).
+
+### 5.6 One meeting per player (amended 2026-10-14, owner ruling "1 per-player", T17B fix 2 D16)
+
+**This replaces the shared meeting.** Each board now has TWO RealtimeKit meetings, one per
+player. A player's meeting holds that player and, when one is watching, the arbiters. Nobody
+else. The opponent is never a participant in it.
+
+**Why. D7 was enforced only by the client, and a client can be tampered with.**
+- The player preset carries no receive or subscribe permission at all. RealtimeKit presets
+  gate what a participant may PRODUCE (video ALLOWED, audio and screenshare NOT_ALLOWED on
+  the stg "player" preset), not what it may receive.
+- `max_video_streams` (0/0 on that preset) is documented by Cloudflare as the number of
+  streams "visible on a device", which makes it a UI limit, not a permission.
+- The SDK does not honour 0 either (measured on 2.0.2, 2026-10-12). Its active-peer
+  selection keeps one remote peer subscribed at cap 0, which is why the room needed MANUAL
+  view mode plus a watchdog that unsubscribes every kind (video, screenshare, audio).
+- That watchdog runs in the player's own browser. In a shared meeting, a player who disables
+  it, or calls `subscribe` from the console, very likely receives the opponent's camera.
+  Chess events are full of under-18s (§5.3's rationale), so "the honest client does not
+  look" is not a safeguarding guarantee.
+- In a per-player meeting there is no opponent stream to subscribe to. The guarantee then
+  holds on the vendor's side, whatever the client does. The client watchdog stays as
+  defence in depth: arbiters publish nothing, but it costs nothing.
+
+**What changes, each consumer once.**
+- **Schema** (a new delta after V445, numbered at the time). The meeting row is keyed per
+  player: `fixture_video_meetings` gains `side text not null check (side in ('home',
+  'away'))`, and its key becomes `(fixture_id, side)`.
+  - The side is the player's ENTRANT side (the fixture's seat), which is fixed for a
+    pairing. The colour is not fixed: it is read from the ledger (home unless a
+    `boardgame.pairing` card records Black on home, `whiteSideOf`), so an organiser's card
+    can swap it after a player has arrived.
+  - Every table that references a meeting by `fixture_id` (participants, guard faults)
+    references `(fixture_id, side)` instead.
+  - The pairing stamp (`home_entrant_id`/`away_entrant_id`, R2-2) stays on each row.
+  - Greenfield (RULES.md): the delta drops the existing shared-meeting rows, which cascade.
+    It does not try to split them, and nothing is backfilled.
+- **The seat claim** mints the player into THEIR side's meeting, creating it on first
+  arrival. The opponent's claim touches the other row only.
+  - The seat evidence (§5.2 amended: the current peer's `media_permission` and
+    `video_on`) is read from the player's own meeting. Nothing about the gate changes.
+- **The presence pill** ("opponent camera: live / off") is read on the server from the
+  OPPONENT's meeting. The player never joins it, and nothing about the opponent's meeting
+  is handed to the player's browser except that one answer.
+- **The arbiter** joins BOTH meetings receive-only, as two participants, one per meeting,
+  each minted and removed exactly as one is today. The panel shows two panes, labelled by
+  player.
+  - The per-open participant id (`${userId}:${uuid}`) and the `removed_at` record apply
+    per meeting.
+  - The RealtimeKit global limit (1,200 calls per 5 min) is now spent twice per watch.
+- **Teardown** ends both meetings everywhere a meeting is ended today: at the result (the
+  room's own end and the sweep's backstop), at T+20 if nobody came, on a re-pair (openRound's
+  fresh window deletes both rows of a game-less board), and on ensureMeeting's replace of
+  another pairing's meeting.
+  - A board's camera room is over only when both are ended.
+- **Camera evidence and flags** run per meeting.
+  - Each meeting's peer reports belong to one player, so `camera_lost` is that player's.
+  - The multiple-devices flag (`concurrentConnections`) is computed per meeting, i.e. per
+    player, which is what it always meant.
+  - The guard-fault intervals are per meeting.
+  - `camera_evidence_at` is stamped per meeting, and the board's evidence is settled when
+    both are.
+- **The organiser's video override** (D11) covers the board: both meetings, or neither.
+
+**Copy.** The privacy line may now state the guarantee: **"Your opponent can't see your
+camera."**
+- It replaces the hedged first sentence ruled for D5 ("Your opponent's room isn't set up to
+  show your camera."). The second sentence, "Your organiser can watch it live; it isn't
+  recorded.", stays.
+- The check-in copy test's ABSOLUTES guard keeps refusing "can't" everywhere else. This one
+  line is excepted, citing this section.
+- The arbiter's watch-only line and the privacy page say the same thing.
+
+**Tests owed** (with the build):
+- The two players' participants are in DIFFERENT meeting ids. Drive the real seat claim
+  twice, against the RealtimeKit fixture server.
+- A player's meeting never contains the opponent, whichever player arrives first.
+- The arbiter receives both.
+- A mutant that collapses the two meetings back into one must go red.
 
 ---
 
