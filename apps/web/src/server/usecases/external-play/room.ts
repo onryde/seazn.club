@@ -59,6 +59,8 @@ import {
   effectiveBridge,
   loadOnlinePlayFixture,
   loadSides,
+  onlinePlayBoardWhere,
+  onlinePlayClock,
   resetStaleBridge,
   whiteSideOf,
   type OnlinePlayFixture,
@@ -164,7 +166,8 @@ async function resolveRoom(identity: RoomIdentity, fixtureId: string, opts: { te
  * lasts minutes, and the open room polls through it: the room's 404 would stop it for good, stranding the player who
  * stays on the board until a reload.
  *
- * The board: an online-chess board (loadOnlinePlayFixture's division and fixture tests, its seats aside) in a round
+ * The board: an online-chess board (loadOnlinePlayFixture's rule from its one home, guard.ts onlinePlayBoardWhere and
+ * onlinePlayClock — its seats aside) in a round
  * with an open, of which NO board is seated — its own two seats included — Unpair clears the whole round at once
  * (stages.ts clearSwissFixtureSeats) and Generate seats it at once, so a board left empty once its round is seated
  * again was not re-paired for this caller (their board is elsewhere, or they sit the round out): the 404.
@@ -175,21 +178,18 @@ async function resolveRoom(identity: RoomIdentity, fixtureId: string, opts: { te
  * division. Anyone else gets the room's one 404, exactly as before.
  */
 async function boardBeingRepaired(identity: RoomIdentity, fixtureId: string): Promise<boolean> {
-  const [board] = await sql<{ divisionId: string }[]>`
-    select f.division_id as "divisionId"
+  const [board] = await sql<{ divisionId: string; divisionConfig: unknown }[]>`
+    select f.division_id as "divisionId", d.config as "divisionConfig"
       from fixtures f
       join divisions d on d.id = f.division_id
      where f.id = ${fixtureId}
-       and d.sport_key = 'boardgame'
-       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
-       and d.status not in ('setup', 'scheduled')
-       and f.status not in ('finalized', 'cancelled')
+       and ${onlinePlayBoardWhere()}
        -- The board's own seats are in its round: none seated, this one included.
        and not exists (
          select 1 from fixtures g
           where g.stage_id = f.stage_id and g.round_no = f.round_no
             and (g.home_entrant_id is not null or g.away_entrant_id is not null))`;
-  if (!board) return false;
+  if (!board || !onlinePlayClock(board.divisionConfig).ok) return false;
   const open = await roundOpenFor(sql, fixtureId);
   if (open === null) return false;
   if (identity.kind === "token") {

@@ -161,6 +161,26 @@ type LoadedRow = Omit<OnlinePlayFixture, "clock" | "bridge"> & {
 };
 
 /**
+ * THE online-play board rule, its seats aside — one home (final re-review 4, m1): a fixture of a boardgame division
+ * with `onlinePlay: 'lichess'`, the division past setup/scheduled (a fixture is not scoreable before then), and the
+ * fixture neither finalized nor cancelled. `f` is the fixtures row and `d` its division, in the caller's query. Read
+ * by loadOnlinePlayFixture below (which adds the two seats) and by room.ts boardBeingRepaired (a board whose round is
+ * being re-paired seats nobody); the rule's last test, the clock, is onlinePlayClock beside it.
+ */
+export function onlinePlayBoardWhere() {
+  return sql`d.sport_key = 'boardgame'
+       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
+       and d.status not in ('setup', 'scheduled')
+       and f.status not in ('finalized', 'cancelled')`;
+}
+
+/** The online-play rule's last test, in code: the division's clock maps onto a Lichess clock (see below). */
+export function onlinePlayClock(divisionConfig: unknown) {
+  const cfg = divisionConfig as { clock?: BoardgameClockInput } | null;
+  return mapBoardgameClockToLichess(cfg?.clock);
+}
+
+/**
  * THE guard. Every online-play entry point (lobby, resolve, resend, cron
  * sync/sweep, webhook, match room) loads through this — spec §6. Returns
  * `null` unless every predicate holds: boardgame sport, `onlinePlay:
@@ -186,15 +206,11 @@ export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePl
       join organizations o on o.id = c.org_id
       left join fixture_external_play ep on ep.fixture_id = f.id
      where f.id = ${fixtureId}
-       and d.sport_key = 'boardgame'
-       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
-       and d.status not in ('setup', 'scheduled')
+       and ${onlinePlayBoardWhere()}
        and f.home_entrant_id is not null
-       and f.away_entrant_id is not null
-       and f.status not in ('finalized', 'cancelled')`;
+       and f.away_entrant_id is not null`;
   if (!row) return null;
-  const cfg = row.divisionConfig as { clock?: BoardgameClockInput } | null;
-  const clockMap = mapBoardgameClockToLichess(cfg?.clock);
+  const clockMap = onlinePlayClock(row.divisionConfig);
   if (!clockMap.ok) return null; // settings save refuses this (Task 11); a legacy row is simply not online
   return {
     fixtureId: row.fixtureId,
