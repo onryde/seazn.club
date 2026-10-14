@@ -17,6 +17,7 @@ import { configIssuesOf } from "@/lib/config-issue-copy";
 import { refusedFieldsOf } from "@/lib/rule-errors";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
+import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { runRequestContext } from "@/server/request-context";
 import { rateLimitHeaders, runV1Context } from "./context";
@@ -176,6 +177,12 @@ async function v1Inner<T>(
     return NextResponse.json({ ok: true, data: result, requestId }, { headers: rate });
   } catch (err: unknown) {
     if (err instanceof ZodError) {
+      // W2c Task 13 (Task 12 re-review M-6): a top-level stage decider is refused by name, saying where it goes — zod's
+      // own "Invalid input" left the useful sentence in `issues[].message` (behind a union, for POST /stages).
+      const moved = stageDeciderMovedOf(err.issues);
+      if (moved !== null) {
+        return errorResponse(requestId, 400, "VALIDATION", moved.message, { field: moved.field, issues: err.issues });
+      }
       return errorResponse(requestId, 400, "VALIDATION", "Invalid input", {
         issues: err.issues,
       });
@@ -333,6 +340,34 @@ async function v1Inner<T>(
     log.error({ err }, "v1: unhandled error");
     return errorResponse(requestId, 500, "INTERNAL", message);
   }
+}
+
+type IssueLike = { readonly path: readonly PropertyKey[]; readonly message: string; readonly errors?: readonly (readonly IssueLike[])[] };
+
+/** A body path as a reader writes it: `config.shootout`, `[0].config.shootout`, `shootout`. */
+const pathText = (path: readonly PropertyKey[]): string =>
+  path.map((p, i) => (typeof p === "number" ? `[${p}]` : i === 0 ? String(p) : `.${String(p)}`)).join("");
+
+/**
+ * The first top-level stage decider (`shootout` / `extraTime` refused `STAGE_DECIDER_MOVED`, schemas.ts) in a refusal,
+ * walked through union arms (POST /stages takes one stage or a list): the field as sent and a sentence naming it and the
+ * place it goes — `config.rules.<key>` on a stage, `rules.<key>` in the stage PUT's body. Null for any other refusal.
+ */
+export function stageDeciderMovedOf(issues: readonly IssueLike[], prefix: readonly PropertyKey[] = []): { field: string; message: string } | null {
+  for (const issue of issues) {
+    const path = [...prefix, ...issue.path];
+    if (issue.message === STAGE_DECIDER_MOVED && path.length > 0) {
+      const key = String(path[path.length - 1]);
+      const field = pathText(path);
+      const target = pathText([...path.slice(0, -1), "rules", key]);
+      return { field, message: `${field}: a stage's deciders are its match rules — set it under the stage's rules, as ${target}` };
+    }
+    for (const arm of issue.errors ?? []) {
+      const found = stageDeciderMovedOf(arm, path);
+      if (found !== null) return found;
+    }
+  }
+  return null;
 }
 
 /** Parse + Zod-validate a JSON request body (malformed JSON → 400). */

@@ -4,8 +4,14 @@
 // differential runs here instead, against the code the harness calls.
 //
 // For every sport x variant x stage kind, `postedStageCfg` must equal what the PRODUCT folds the same stage's fixtures
-// under, reached through its own code: `validatedStageConfig` stores the stage as the create does, and `liveCfg` reads
-// it as the resolver does, with no snapshot and no override.
+// under, reached through its own entry points: `validatedStageConfig` stores the stage as the create does, and `liveCfg`
+// reads it as the resolver does, with no snapshot and no override.
+//
+// What this pins is the GLUE only (Task 12 re-review N-1). Both sides bottom out in the same two functions —
+// `storedStageRules` (the base and the merge) and `liveStageCfg` (the overlay) — so a defect INSIDE either moves both
+// sides together and stays green here. What it catches is a door or a harness that composes them differently: a
+// different base, a skipped merge, a different overlay order, a create door that stores something else. The internals
+// are pinned by the DB tests that drive the real doors and folds (stage-defaults.test.ts, stage-cfg.test.ts).
 //
 // Two arms, the ones the matrix posts:
 // - presets ON (no rules);
@@ -29,8 +35,8 @@ function productCfg(m: AnySportModule, variant: string, kind: StageKind, divisio
   return liveCfg(division, { kind, config: stored }, m);
 }
 
-describe("M-3 the cfg a posted stage folds under (postedStageCfg, the matrix harness's stageCfg) is the product's own", () => {
-  it("every sport x variant x kind, both arms the matrix posts: postedStageCfg == the product's create door read by its resolver (counted; the knockout preset pairs pinned)", () => {
+describe("M-3 the matrix harness's stageCfg (postedStageCfg) composes the stage cfg the way the product's doors do (the glue, not the internals)", () => {
+  it("every sport x variant x kind, both arms the matrix posts: postedStageCfg == the create door's stored stage read through the resolver's live path (counted; the knockout preset pairs pinned)", () => {
     let compared = 0;
     let heldCompared = 0;
     const presetPairs = new Set<string>();

@@ -298,7 +298,7 @@ describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match'
 
     it(`${c.sport}: positive pair, a stage value the match still fits goes through`, async () => {
       const { b } = await seed();
-      await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.fits } })).resolves.toEqual({ rules: { [c.key]: c.fits } });
+      await expect(putStageRules(b.auth, b.stageId, { rules: { [c.key]: c.fits } })).resolves.toEqual({ rules: { [c.key]: c.fits }, points: null });
       expect(await storedRules(b.stageId)).toEqual({ [c.key]: c.fits });
     });
   }
@@ -318,7 +318,7 @@ describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match'
     expect(await storedRules(b.stageId), "the clear rolled back").toEqual({ [c.key]: c.wide });
     // …and with the match's format set back, the same clear goes through.
     await writeFixtureRulesOverride(b.auth, [id], null);
-    await expect(putStageRules(b.auth, b.stageId, { rules: null })).resolves.toEqual({ rules: null });
+    await expect(putStageRules(b.auth, b.stageId, { rules: null })).resolves.toEqual({ rules: null, points: null });
     expect(await storedRules(b.stageId)).toBeNull();
   });
 

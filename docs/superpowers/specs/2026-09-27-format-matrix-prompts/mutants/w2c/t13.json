@@ -1,0 +1,516 @@
+[
+ {
+  "id": "t13-gate-put",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "if (points !== undefined && points !== null) await assertCustomPointsAllowed(auth, points);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Review Focus 3: bonuses and forfeit points need"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Review Focus 3: 402 PAYMENT_REQUIRED names"
+   }
+  ]
+ },
+ {
+  "id": "t13-gate-forfeit-arm",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature",
+  "replace": "if (rule.bonuses.length > 0) await requireFeature",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Review Focus 3: bonuses and forfeit points need"
+   }
+  ]
+ },
+ {
+  "id": "t13-gate-bonus-arm",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature",
+  "replace": "if (rule.forfeit !== undefined) await requireFeature",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Review Focus 3: bonuses and forfeit points need"
+   }
+  ]
+ },
+ {
+  "id": "t13-gate-base-free",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature",
+  "replace": "if (true) await requireFeature",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Review Focus 3: bonuses and forfeit points need"
+   }
+  ]
+ },
+ {
+  "id": "t13-gate-create",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "if (cfg?.points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(cfg.points));",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/custom-points.test.ts"
+    ],
+    "name": "bonuses are gated at stage create"
+   }
+  ]
+ },
+ {
+  "id": "t13-put-asks",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "if (points !== undefined && points !== null) refuseStagePoints(module_, stage.stage_kind, stage.division_config, points);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a bracket stage refuses points"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Q1 an inexpressible division refuses by name"
+   }
+  ]
+ },
+ {
+  "id": "t13-kind",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (!DRAW_KINDS.has(kind)) throw notSettable(\"points\", \"a bracket stage has no table to rank\");",
+  "replace": "if (false) throw notSettable(\"points\", \"a bracket stage has no table to rank\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a bracket stage refuses points"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "createStages refuses an inexpressible division"
+   }
+  ]
+ },
+ {
+  "id": "t13-kind-table-takes",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (!DRAW_KINDS.has(kind)) throw notSettable(\"points\", \"a bracket stage has no table to rank\");",
+  "replace": "if (kind !== \"league\") throw notSettable(\"points\", \"a bracket stage has no table to rank\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a bracket stage refuses points"
+   }
+  ]
+ },
+ {
+  "id": "t13-expressible",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (!expressible.ok) throw inexpressibleRefusal(expressible.keys);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Q1 an inexpressible division refuses by name"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Q1 every sport x every variant"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Q1: 422 POINTS_RULE_INEXPRESSIBLE carries the split keys"
+   }
+  ]
+ },
+ {
+  "id": "t13-expressible-parsed-cfg",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "return parsed.success ? parsed.data : divisionConfig;",
+  "replace": "return divisionConfig;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Q1 asks the division cfg AS THE ENGINE PARSES IT"
+   }
+  ]
+ },
+ {
+  "id": "t13-reach",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (rule.forfeit?.awardScore !== undefined && !pointsRuleAwardReachesTable(module))",
+  "replace": "if (false)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "batch-3 I3: a walkover score is refused"
+   }
+  ]
+ },
+ {
+  "id": "t13-reach-inverted",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (rule.forfeit?.awardScore !== undefined && !pointsRuleAwardReachesTable(module))",
+  "replace": "if (rule.forfeit?.awardScore !== undefined && pointsRuleAwardReachesTable(module))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "batch-3 I3: a walkover score is refused"
+   }
+  ]
+ },
+ {
+  "id": "t13-reach-forfeit-row-alone",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "if (rule.forfeit?.awardScore !== undefined && !pointsRuleAwardReachesTable(module))",
+  "replace": "if (rule.forfeit !== undefined && !pointsRuleAwardReachesTable(module))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "batch-3 I3: a walkover score is refused"
+   }
+  ]
+ },
+ {
+  "id": "t13-validate",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "  validatePointsRule(rule, module.metrics);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "another sport: a generic league takes points"
+   }
+  ]
+ },
+ {
+  "id": "t13-create-door",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "if (config.points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(config.points));",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "createStages refuses an inexpressible division"
+   }
+  ]
+ },
+ {
+  "id": "t13-division-recheck",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "await refuseInexpressibleStagePoints(tx, id, nextConfig, sportModule);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a variant change to a split the stage"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a config save adding a split is refused the same way"
+   }
+  ]
+ },
+ {
+  "id": "t13-recheck-expressible-asks-nothing",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "  if (expressible.ok) return;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a config save adding a split is refused the same way"
+   }
+  ]
+ },
+ {
+  "id": "t13-recheck-only-stages-with-points",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": " and jsonb_typeof(config -> 'points') = 'object' order by seq",
+  "replace": " order by seq",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a variant change to a split the stage"
+   }
+  ]
+ },
+ {
+  "id": "t13-recheck-started-not-asked",
+  "file": "apps/web/src/server/usecases/stage-rules-merge.ts",
+  "find": "const first = stages.find((s) => !started.has(s.id));",
+  "replace": "const first = stages[0];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a config save adding a split is refused the same way"
+   }
+  ]
+ },
+ {
+  "id": "t13-refold",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "if (out.refold) await recomputeStandings(auth.orgId, stageId);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a Swiss bye already on the table is re-paid"
+   }
+  ]
+ },
+ {
+  "id": "t13-points-null-removes",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "if (points === null) await tx`update stages set config = config - 'points' where id = ${stageId}`;",
+  "replace": "if (points === null) {}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a table stage stores its points; a second save replaces; null clears"
+   }
+  ]
+ },
+ {
+  "id": "t13-rules-arm-omitted-kept",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    if (input.rules !== undefined) {\n      const rules = input.rules;",
+  "replace": "    if (true) {\n      const rules = input.rules ?? null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "each arm leaves the other"
+   }
+  ]
+ },
+ {
+  "id": "t13-http-moved",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "      if (moved !== null) {",
+  "replace": "      if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a top-level decider is refused NAMING the key"
+   }
+  ]
+ },
+ {
+  "id": "t13-http-union-arms",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "for (const arm of issue.errors ?? []) {",
+  "replace": "for (const arm of [] as (readonly IssueLike[])[]) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a top-level decider is refused NAMING the key"
+   }
+  ]
+ },
+ {
+  "id": "t13-body-closed",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "  .strictObject({\n    rules: z.record(z.string(), z.unknown()).nullable().optional(),\n    points: PointsRule.nullable().optional(),",
+  "replace": "  .object({\n    rules: z.record(z.string(), z.unknown()).nullable().optional(),\n    points: PointsRule.nullable().optional(),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "an unknown key is refused"
+   }
+  ]
+ },
+ {
+  "id": "t13-body-one-arm-sent",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": ".refine((b) => b.rules !== undefined || b.points !== undefined, \"send `rules`, `points` or both\");",
+  "replace": ".refine((b) => true || b.rules !== undefined || b.points !== undefined, \"send `rules`, `points` or both\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "an unknown key is refused"
+   }
+  ]
+ },
+ {
+  "id": "t13-copy-labels",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "(isSplitKey(k) ? m(POINTS_SPLIT_LABEL_KEYS[k]) : k)",
+  "replace": "k",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "ruleErrorMessage reads each code"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "Q1: 422 POINTS_RULE_INEXPRESSIBLE carries the split keys"
+   }
+  ]
+ },
+ {
+  "id": "t13-copy-keys-arm",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "const reason = p.keys !== undefined",
+  "replace": "const reason = false",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "ruleErrorMessage reads each code"
+   }
+  ]
+ },
+ {
+  "id": "t13-refusal-text-empty",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "return keys.length > 0 && keys.every(isSplitKey) ? sentence(code, { keys }, m) : null;",
+  "replace": "return keys.every(isSplitKey) ? sentence(code, { keys }, m) : null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "each code, with the extra its emitter sends"
+   }
+  ]
+ },
+ {
+  "id": "t13-refusal-text-unknown-key",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "return keys.length > 0 && keys.every(isSplitKey) ? sentence(code, { keys }, m) : null;",
+  "replace": "return keys.length > 0 ? sentence(code, { keys }, m) : null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "each code, with the extra its emitter sends"
+   }
+  ]
+ },
+ {
+  "id": "t13-put-decider-named",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "    points: PointsRule.nullable().optional(),\n    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),",
+  "replace": "    points: PointsRule.nullable().optional(),\n    shootout: z.unknown().optional(),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "a top-level decider is refused NAMING the key"
+   }
+  ]
+ }
+]

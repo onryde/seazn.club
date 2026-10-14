@@ -223,6 +223,27 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     expect((await stageConfig(s2)).points).toMatchObject(base);
   });
 
+  it("Q1 asks the division cfg AS THE ENGINE PARSES IT: a stored config with no points (a legacy or raw-seeded row) still refuses where the schema's defaults split", async () => {
+    // The engine reads a division's cfg through its configSchema (defaults applied), so a stored row that names no
+    // points plays the schema's default points. Reading the raw row would find no split key and accept a rule the
+    // division's own fold then contradicts.
+    const auth = await seedOrg("pro");
+    const ih = mod("icehockey");
+    const want = pointsRuleExpressible(ih.configSchema.parse({}));
+    expect(want.ok, "premise: ice hockey's schema defaults split the points").toBe(false);
+    expect(pointsRuleExpressible({}).ok, "premise: the raw empty row reads as expressible").toBe(true);
+    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const updated = await sql`update divisions set config = '{}'::jsonb where id = ${divisionId}`;
+    expect(updated.count, "premise: the division row now stores no points").toBe(1);
+    await expect(putStageRules(auth, s, { points: base })).rejects.toMatchObject({
+      status: 422,
+      code: "POINTS_RULE_INEXPRESSIBLE",
+      extra: { keys: want.ok ? [] : want.keys },
+    });
+    expect(Object.hasOwn(await stageConfig(s), "points")).toBe(false);
+  });
+
   it("Q1 every sport x every variant: refused exactly where the engine says a rule cannot express the division's points (counted)", async () => {
     const auth = await seedOrg("pro");
     let refused = 0;
@@ -438,6 +459,12 @@ describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted
     const { divisionId } = await seedDivision(auth, "hockey", PLAIN);
     const s = await seedStage(auth, divisionId, 1, "league");
     await putStageRules(auth, s, { points: base });
+    // The positive pair first: a config save that splits nothing lands over the same stage's points, which stay stored.
+    const plainer = { ...plain, points: { ...plain.points, win: plain.points.win! + 1 } };
+    expect(pointsRuleExpressible(plainer).ok, "premise: the edit splits nothing").toBe(true);
+    const landed = await patchDivision(auth, divisionId, { config: plainer });
+    expect((landed.config as { points: Record<string, number> }).points.win).toBe(plain.points.win! + 1);
+    expect((await stageConfig(s)).points).toMatchObject(base);
     await expect(patchDivision(auth, divisionId, { config: split })).rejects.toMatchObject({ code: "POINTS_RULE_INEXPRESSIBLE", extra: { stage_id: s } });
     // Started: the stage's own rule replaces the division's points (STAGE_POINTS_REPLACES) and can no longer be cleared.
     const started = await seedDivision(auth, "hockey", PLAIN, 2);

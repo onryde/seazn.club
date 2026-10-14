@@ -11,12 +11,13 @@ import "server-only";
 // `{division ⊕ the rules the stage will store}`. Every door that creates a stage calls `validatedStageConfig`:
 // `createStages` (and through it `replaceStages`, which also asks it BEFORE its delete) and template instantiation.
 import type { StageKind } from "@seazn/engine/core";
+import { PointsRule } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { HttpError } from "@/lib/errors";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { STAGE_DECIDER_KEYS } from "@/server/engine-db/stage-cfg";
 import { storedStageRules } from "@/lib/stage-decider-off";
-import { refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
+import { refuseStagePoints, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -53,6 +54,10 @@ export function withStageDefaults(
  * would store is one the sport refuses; POINTS_MAP_INCOMPLETE (422) when the rules sent move `bestOf` past what the
  * division's points table answers. The merged parse runs on the rules as STORED (the preset or the carry included), so a
  * preset the division cannot take is refused at the door rather than at the first whistle.
+ *
+ * W2c Task 13 (ST-G8): `config.points` is asked the stage PUT's points questions too (`refuseStagePoints`): RULE_NOT_SETTABLE
+ * on a bracket kind or for a walkover score the sport's table never reads, 422 POINTS_RULE_INEXPRESSIBLE where the
+ * division's points split, CONFIG_INVALID for metrics the sport does not emit. Stored as sent, as before.
  */
 export function validatedStageConfig(
   module: AnySportModule,
@@ -77,5 +82,6 @@ export function validatedStageConfig(
     const problem = stageRulesProblem(module, divisionConfig, out.rules, setsBestOf(sent));
     if (problem !== null) throw stageSaveRefusal(problem, sportKey);
   }
+  if (config.points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(config.points));
   return out;
 }

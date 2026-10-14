@@ -378,7 +378,14 @@ describe.skipIf(!HAS_DB)("X-PT-1 stage points read a forfeit's played fact from 
   const RULE = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [21, 0] } };
   /** A two-entrant badminton league (with or without the stage rule): `script` runs before the away side withdraws. */
   async function withdrawal(rule: boolean, script: (auth: AuthCtx, id: string, home: string) => Promise<void>) {
-    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "league", entrants: 2, ...(rule ? { stageConfig: { points: RULE } } : {}) });
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "league", entrants: 2 });
+    // Raw SQL on purpose: since W2c Task 13 no door stores a walkover `awardScore` on a set sport (batch-3 I3: badminton's
+    // table never reads it, `pointsRuleAwardReachesTable`), but the fold must still read a stored one as it did — the keys
+    // it lands on are exactly how this rig tells the rule's award from the sport's credit. Read at the fold, never frozen.
+    if (rule) {
+      const n = await sql`update stages set config = config || ${sql.json({ points: RULE } as never)} where id = ${s.stageId}`;
+      expect(n.count, "rig: the stage rule was written").toBe(1);
+    }
     const id = s.fixtureIds[0]!;
     const f = await fixtureRow(id);
     await post(s.auth, id, "core.start");

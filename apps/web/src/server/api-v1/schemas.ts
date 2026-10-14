@@ -13,6 +13,9 @@ import { AWARD_REASONS } from "@seazn/engine/core";
 // Type-only (erased under strip-types, so openapi-gen.ts still loads this
 // file bare): the TakeRuleSchema tie below compares against it.
 import type { TakeRule } from "@seazn/engine/competition";
+// W2c Task 13: a stage's own points ARE the engine's PointsRule (the owner of the shape), reused rather than restated —
+// `@seazn/engine/competition` loads bare under strip-types, as `@seazn/engine/core` does above.
+import { PointsRule } from "@seazn/engine/competition";
 // RS007 review fix L1 — the SAME every-year-safe days-per-month predicate
 // ageBandEligibilityIssues (registration-rules.ts) uses to fail loudly on
 // the read side; pure and DB-free, so it is safe to reuse here. RELATIVE,
@@ -1262,14 +1265,28 @@ export const StageCourtTags = z.object({
  *  variant (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE), the merged-config parse
  *  (422 CONFIG_INVALID), the per-stage lock (409 STAGE_FORMAT_LOCKED) and an
  *  unstarted match's own format still fitting (409
- *  FIXTURE_OWN_FORMAT_NO_LONGER_FITS). */
-export const PutStageRules = z.object({
-  rules: z.record(z.string(), z.unknown()).nullable(),
-});
+ *  FIXTURE_OWN_FORMAT_NO_LONGER_FITS).
+ *
+ *  W2c Task 13 (ST-G8): two arms, `rules` and `points`, each left as stored when
+ *  omitted, at least one sent. `points` is the stage's own PointsRule (the
+ *  engine's shape), written whole; `null` removes it. The key set is CLOSED: a
+ *  misspelled arm was silently stripped before (and answered 200 having saved
+ *  nothing), and a top-level decider is refused saying where it goes, as on
+ *  `StageConfig`. */
+export const PutStageRules = z
+  .strictObject({
+    rules: z.record(z.string(), z.unknown()).nullable().optional(),
+    points: PointsRule.nullable().optional(),
+    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
+    extraTime: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
+  })
+  .refine((b) => b.rules !== undefined || b.points !== undefined, "send `rules`, `points` or both");
 export type PutStageRules = z.infer<typeof PutStageRules>;
 
 export const StageRules = z.object({
   rules: z.record(z.string(), z.unknown()).nullable(),
+  /** The stage's own points rule as stored, or null when it plays the division's points (W2c Task 13). */
+  points: PointsRule.nullable(),
 });
 
 /** W2c (X-SR-2, X-SR-5) — one match's own format over its stage's. Values unconstrained HERE for the same openapi-gen

@@ -8,10 +8,14 @@ import "server-only";
 //     UNKNOWN_RULE_KEY; a declared key this stage's kind or variant cannot set, or a points key, is RULE_NOT_SETTABLE;
 //  2. how a save lands on the stored rules (carry I2): it MERGES;
 //  3. the MERGED PARSE `{division ⊕ stage.rules}` and the points-map answer a `bestOf` needs (batch-1 I-A): the same
-//     question when the stage's rules change and when the division under them does.
-import { EngineError, type StageKind } from "@seazn/engine/core";
+//     question when the stage's rules change and when the division under them does;
+//  4. (W2c Task 13, ST-G8) the one validation of a stage's own POINTS (`config.points`, the engine's PointsRule), for every
+//     door that writes them, and the division save's re-ask of Q1 over the stages that carry them.
+import { DRAW_KINDS, EngineError, type StageKind } from "@seazn/engine/core";
+import { pointsRuleAwardReachesTable, pointsRuleExpressible, validatePointsRule, type PointsRule } from "@seazn/engine/competition";
 import { sportTopKeys, stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import type { Tx } from "@/lib/db";
+import { lockedStageIdsAmong } from "./rule-locks";
 import { stageScopedCfg } from "@/server/engine-db/stage-cfg";
 import { withoutNulls } from "@/lib/stage-decider-off";
 import { configIssuesOf } from "@/lib/config-issue-copy";
@@ -208,4 +212,86 @@ function refuseKeysForStage(
     if (!(e instanceof HttpError)) throw e;
     throw new HttpError(e.status, `${stage.name}: ${e.message}`, e.code, { ...e.extra, stage_id: stage.id, stage_name: stage.name });
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W2c Task 13 (ST-G8, spec item 10, Q1) — a stage's own points.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The field a walkover score is refused under (batch-3 I3): the path in the PUT's body. */
+export const AWARD_SCORE_FIELD = "points.forfeit.awardScore";
+
+/** The division config Q1 is asked against: the sport's own parse (defaults applied, so a sparse stored config still
+ *  splits by its schema's defaults), else the config as stored. */
+function parsedDivisionCfg(module: AnySportModule, divisionConfig: unknown): unknown {
+  const parsed = module.configSchema.safeParse(isObj(divisionConfig) ? divisionConfig : {});
+  return parsed.success ? parsed.data : divisionConfig;
+}
+
+/** Q1's refusal: 422 POINTS_RULE_INEXPRESSIBLE, the split keys in `extra.keys` (the engine's, never English), the
+ *  sentence naming them by their labels (`lib/rule-errors.ts`). */
+function inexpressibleRefusal(keys: readonly string[], stage?: { id: string; name: string }): HttpError {
+  const sentence = ruleErrorMessage("POINTS_RULE_INEXPRESSIBLE", { keys });
+  return new HttpError(
+    RULE_ERROR_STATUS.POINTS_RULE_INEXPRESSIBLE,
+    stage === undefined ? sentence : `${stage.name}: ${sentence}`,
+    "POINTS_RULE_INEXPRESSIBLE",
+    { keys: [...keys], ...(stage === undefined ? {} : { stage_id: stage.id, stage_name: stage.name }) },
+  );
+}
+
+const notSettable = (field: string, reason: string): HttpError =>
+  new HttpError(RULE_ERROR_STATUS.RULE_NOT_SETTABLE, ruleErrorMessage("RULE_NOT_SETTABLE", { field, reason }), "RULE_NOT_SETTABLE", { field });
+
+/**
+ * W2c Task 13 (ST-G8) — the one validation of a stage's own points (`config.points`, the engine's PointsRule), for every
+ * door that writes them: the stage PUT (`stage-rules.ts`), and `createStages` / `replaceStages` / template instantiation
+ * through `validatedStageConfig`. In order, each refused by name:
+ *  1. a stage with no table (a bracket kind) has nothing its points would rank: RULE_NOT_SETTABLE, field `points`;
+ *  2. Q1 (owner "A"): a division whose points a rule cannot say without dropping some (`pointsRuleExpressible`: ice
+ *     hockey's OT split, a shoot-out split, cricket's tie and no result, a set-score map paying more than one pair) is
+ *     422 POINTS_RULE_INEXPRESSIBLE, its split keys in `extra.keys` — refused, never silently dropped;
+ *  3. batch-3 I3: a walkover score (`forfeit.awardScore`) where it does not reach the sport's table
+ *     (`pointsRuleAwardReachesTable`: the set sports, carrom, the board games) is a number that changes nothing:
+ *     RULE_NOT_SETTABLE, field `points.forfeit.awardScore`;
+ *  4. a rule that reads metrics the sport does not emit (a margin bonus on a sport with no score): the engine's
+ *     CONFIG_INVALID (`validatePointsRule`).
+ * The entitlement half (bonuses and a forfeit row need `standings.custom_points`) is `assertCustomPointsAllowed`
+ * (`stages.ts`): a pooled read, asked before the caller's transaction opens. Pure; the caller's transaction is untouched.
+ */
+export function refuseStagePoints(module: AnySportModule, kind: StageKind, divisionConfig: unknown, rule: PointsRule): void {
+  if (!DRAW_KINDS.has(kind)) throw notSettable("points", "a bracket stage has no table to rank");
+  const expressible = pointsRuleExpressible(parsedDivisionCfg(module, divisionConfig));
+  if (!expressible.ok) throw inexpressibleRefusal(expressible.keys);
+  if (rule.forfeit?.awardScore !== undefined && !pointsRuleAwardReachesTable(module))
+    throw notSettable(AWARD_SCORE_FIELD, "a walkover's score does not reach this sport's table");
+  validatePointsRule(rule, module.metrics);
+}
+
+/**
+ * W2c Task 13 — the division save re-asks Q1 (`refuseStagePoints` step 2) for every stage that carries its own points and
+ * has NOT started, under the config about to be written: a variant change (to hockey's fih-shootout) or a config edit (a
+ * shoot-out split added to `points`) would otherwise leave such a stage paying a rule that drops the division's split,
+ * which the stage PUT refuses. Refused naming the first such stage in board order; the organiser clears its points first.
+ *
+ * A STARTED stage is not asked: its points are locked (STAGE_FORMAT_LOCKED), so a refusal could never be cleared and would
+ * block every other stage's change for good; and the division's `points` never reach it (its own rule REPLACES them,
+ * `STAGE_POINTS_REPLACES`, which is why the lock lets the change through for it). The empty case first: a config whose
+ * points a rule can express asks nothing and costs no query.
+ */
+export async function refuseInexpressibleStagePoints(
+  tx: Tx,
+  divisionId: string,
+  nextDivisionConfig: unknown,
+  module: AnySportModule,
+): Promise<void> {
+  const expressible = pointsRuleExpressible(parsedDivisionCfg(module, nextDivisionConfig));
+  if (expressible.ok) return;
+  const stages = await tx<{ id: string; name: string }[]>`
+    select id, name from stages
+     where division_id = ${divisionId} and jsonb_typeof(config -> 'points') = 'object' order by seq`;
+  if (stages.length === 0) return;
+  const started = await lockedStageIdsAmong(tx, stages.map((s) => s.id));
+  const first = stages.find((s) => !started.has(s.id));
+  if (first !== undefined) throw inexpressibleRefusal(expressible.keys, first);
 }

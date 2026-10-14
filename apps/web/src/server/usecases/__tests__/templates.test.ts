@@ -197,7 +197,9 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
   it("a stage's PointsRule is written into stages.config.points verbatim", async () => {
     await seedTemplateSportCatalog();
     const { auth } = await seedOrg("pro");
+    // A TABLE stage: since W2c Task 13 a bracket stage's points are refused at every door (it ranks no table).
     const template = SLAM_STAGE_TEMPLATE({
+      kind: "league",
       points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] },
     });
     const result = await instantiateTemplate(auth, template, {

@@ -66,7 +66,30 @@ export const RULE_ERROR_SUPPORT_KEYS = {
   match: "rules.err.match",
   thisMatch: "rules.err.thisMatch",
   matchSays: "rules.err.matchSays",
+  /** POINTS_RULE_INEXPRESSIBLE's reason: "this division scores {fields} separately". */
+  pointsSplit: "rules.err.pointsSplit",
 } as const satisfies Record<string, MessageKey>;
+
+/**
+ * W2c Task 13 — the division points a stage PointsRule cannot express, by their config key (the engine's
+ * `pointsRuleExpressible` names them: ice hockey's OT split, hockey's and football's shoot-out split, cricket's tie and no
+ * result, a set sport's `pointsMap` that pays more than one pair), each with its label. POINTS_RULE_INEXPRESSIBLE carries
+ * the KEYS (`extra.keys`), never English, and every reader names them through this table: the server in en, a client in
+ * the reader's language. Swept against every sport's declared points in rule-errors-copy.test.ts: a key the engine can
+ * refuse over with no label here is a red, and so is a label for a key it never refuses over.
+ */
+export const POINTS_SPLIT_LABEL_KEYS = {
+  otWin: "rules.err.pointsSplit.otWin",
+  otLoss: "rules.err.pointsSplit.otLoss",
+  shootoutWin: "rules.err.pointsSplit.shootoutWin",
+  shootoutLoss: "rules.err.pointsSplit.shootoutLoss",
+  tie: "rules.err.pointsSplit.tie",
+  noResult: "rules.err.pointsSplit.noResult",
+  pointsMap: "rules.err.pointsSplit.pointsMap",
+} as const satisfies Record<string, MessageKey>;
+
+const isSplitKey = (k: unknown): k is keyof typeof POINTS_SPLIT_LABEL_KEYS =>
+  typeof k === "string" && Object.hasOwn(POINTS_SPLIT_LABEL_KEYS, k);
 
 /** One field a division save did not apply, and the first started stage that depends on it. Lives here, not beside
  *  `divisionRefusals` (server-only): the 409 body and the 200 body's `refused` list both carry it to a client. */
@@ -118,6 +141,8 @@ export interface RuleErrorParams {
   match?: string;
   /** FIXTURE_FORMAT_LOCKED: why (default finished). */
   lock?: FixtureLockReason;
+  /** POINTS_RULE_INEXPRESSIBLE: the division's split keys (`pointsRuleExpressible`), named by their labels. */
+  keys?: readonly string[];
 }
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -133,8 +158,13 @@ function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
       return p.reason
         ? m(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: p.field ?? "", reason: p.reason })
         : m(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: p.field ?? "" });
-    case "POINTS_RULE_INEXPRESSIBLE":
-      return m(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: p.reason ?? "" });
+    case "POINTS_RULE_INEXPRESSIBLE": {
+      // The keys by their labels; a key with no label (none today: swept) by its config key rather than dropped.
+      const reason = p.keys !== undefined
+        ? m(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: p.keys.map((k) => (isSplitKey(k) ? m(POINTS_SPLIT_LABEL_KEYS[k]) : k)).join(", ") })
+        : p.reason ?? "";
+      return m(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason });
+    }
     case "FIXTURE_HAS_OWN_FORMAT":
     case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":
       return m(RULE_ERROR_KEYS[code], { match: p.match ?? m(RULE_ERROR_SUPPORT_KEYS.thisMatch) });
@@ -153,7 +183,7 @@ const isCode = (code: string): code is RuleErrorCode => Object.hasOwn(RULE_ERROR
 /**
  * A rule-lock refusal in the reader's language, read off its code and the facts its emitter puts in `extra`:
  * `refused[0].stageName` (the division save), `stage_name` (the stage save), `fixture_no` (the match's number on the board), `reason` (why a match is
- * locked), `fit_reason` (which fit reason), `field`. Null when it is not a rule-lock code, or when the sentence needs a
+ * locked), `fit_reason` (which fit reason), `field`, `keys` (the points a stage rule cannot express). Null when it is not a rule-lock code, or when the sentence needs a
  * fact the refusal does not carry — and for an engine's own reason (no `fit_reason`), which this app cannot say better:
  * the caller then keeps its own copy.
  */
@@ -179,8 +209,12 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
     }
     case "RULE_NOT_SETTABLE":
       return typeof x.field === "string" ? sentence(code, { field: x.field }, m) : null;
-    case "POINTS_RULE_INEXPRESSIBLE":
-      return null; // no emitter yet, and its reason is English: the caller keeps the message
+    case "POINTS_RULE_INEXPRESSIBLE": {
+      // W2c Task 13: the stage PUT, the create door and the division save send the split keys. Only keys this app can
+      // name: anything else is the server's to say (null: the caller keeps the message).
+      const keys = Array.isArray(x.keys) ? (x.keys as unknown[]) : [];
+      return keys.length > 0 && keys.every(isSplitKey) ? sentence(code, { keys }, m) : null;
+    }
     case "FIXTURE_HAS_OWN_FORMAT":
     case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":
       return sentence(code, { match }, m);

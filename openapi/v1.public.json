@@ -18903,7 +18903,7 @@
     },
     "/api/v1/stages/{id}/rules": {
       "put": {
-        "summary": "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A `bestOf` in the body is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact \"W-L\" score (else \"*\", else it throws) and is NOT itself overridable per stage; the refusal names the missing scores. A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided",
+        "summary": "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A `bestOf` in the body is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact \"W-L\" score (else \"*\", else it throws) and is NOT itself overridable per stage; the refusal names the missing scores. A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). The stage's own POINTS ride the same PUT (W2c ST-G8): the body is `{rules?, points?}`, at least one sent, each arm left as stored when omitted, any other key 400. `points` is the engine's PointsRule (`base` win/draw/loss, `bonuses`, a `forfeit` row with an optional walkover `awardScore`) written WHOLE to the stage's `config.points` — a second save replaces it — and `points: null` removes it, back to the division's points. Refused by name: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a division whose own points a stage rule cannot express (an overtime or shoot-out split, a tie or no-result, a set-score table paying more than one pair) 422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys); a walkover `awardScore` on a sport whose table never reads it (the set sports, carrom, the board games) 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; bonuses or a forfeit row without `standings.custom_points` 402 PAYMENT_REQUIRED (the base sentence is free). A top-level `shootout` / `extraTime` is 400, naming where it goes (`rules`). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided. The answer is the stage's `rules` and `points` as stored",
         "tags": [
           "stages"
         ],
@@ -18939,15 +18939,137 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "points": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "base": {
+                            "type": "object",
+                            "properties": {
+                              "win": {
+                                "type": "number"
+                              },
+                              "draw": {
+                                "type": "number"
+                              },
+                              "loss": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "win",
+                              "draw",
+                              "loss"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "bonuses": {
+                            "default": [],
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "when": {
+                                  "type": "string",
+                                  "enum": [
+                                    "loss_margin_lte",
+                                    "win_margin_gte",
+                                    "score_ratio_gte",
+                                    "draw",
+                                    "forfeit_win",
+                                    "forfeit_loss",
+                                    "no_result"
+                                  ]
+                                },
+                                "param": {
+                                  "type": "number"
+                                },
+                                "points": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "when",
+                                "points"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "forfeit": {
+                            "type": "object",
+                            "properties": {
+                              "winnerPoints": {
+                                "type": "number"
+                              },
+                              "loserPoints": {
+                                "type": "number"
+                              },
+                              "awardScore": {
+                                "type": "array",
+                                "prefixItems": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "number"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "winnerPoints",
+                              "loserPoints"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "base",
+                          "bonuses"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "shootout": {
+                    "not": {}
+                  },
+                  "extraTime": {
+                    "not": {}
                   }
                 },
-                "required": [
-                  "rules"
-                ],
                 "additionalProperties": false
               },
               "example": {
-                "rules": {}
+                "rules": {},
+                "points": {
+                  "base": {
+                    "win": 1,
+                    "draw": 1,
+                    "loss": 1
+                  },
+                  "bonuses": [
+                    {
+                      "when": "loss_margin_lte",
+                      "param": 1,
+                      "points": 1
+                    }
+                  ],
+                  "forfeit": {
+                    "winnerPoints": 1,
+                    "loserPoints": 1,
+                    "awardScore": [
+                      null
+                    ]
+                  }
+                },
+                "shootout": null,
+                "extraTime": null
               }
             }
           }
@@ -18984,10 +19106,107 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "points": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "base": {
+                                  "type": "object",
+                                  "properties": {
+                                    "win": {
+                                      "type": "number"
+                                    },
+                                    "draw": {
+                                      "type": "number"
+                                    },
+                                    "loss": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "win",
+                                    "draw",
+                                    "loss"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "bonuses": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "when": {
+                                        "type": "string",
+                                        "enum": [
+                                          "loss_margin_lte",
+                                          "win_margin_gte",
+                                          "score_ratio_gte",
+                                          "draw",
+                                          "forfeit_win",
+                                          "forfeit_loss",
+                                          "no_result"
+                                        ]
+                                      },
+                                      "param": {
+                                        "type": "number"
+                                      },
+                                      "points": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "when",
+                                      "points"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "forfeit": {
+                                  "type": "object",
+                                  "properties": {
+                                    "winnerPoints": {
+                                      "type": "number"
+                                    },
+                                    "loserPoints": {
+                                      "type": "number"
+                                    },
+                                    "awardScore": {
+                                      "type": "array",
+                                      "prefixItems": [
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "number"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "winnerPoints",
+                                    "loserPoints"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "base",
+                                "bonuses"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
-                        "rules"
+                        "rules",
+                        "points"
                       ],
                       "additionalProperties": false
                     },
@@ -19000,7 +19219,28 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "rules": {}
+                    "rules": {},
+                    "points": {
+                      "base": {
+                        "win": 1,
+                        "draw": 1,
+                        "loss": 1
+                      },
+                      "bonuses": [
+                        {
+                          "when": "loss_margin_lte",
+                          "param": 1,
+                          "points": 1
+                        }
+                      ],
+                      "forfeit": {
+                        "winnerPoints": 1,
+                        "loserPoints": 1,
+                        "awardScore": [
+                          null
+                        ]
+                      }
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

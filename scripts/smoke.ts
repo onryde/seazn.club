@@ -7239,6 +7239,71 @@ async function w2cStageRulesSuite(): Promise<void> {
   await w2cStageRulesEverySportChecks(owner);
   await w2cStagePresetChecks(owner);
   await w2cStageOffAndReseedChecks(owner);
+  await w2cStagePointsWalkoverChecks(owner);
+}
+
+/**
+ * W2c Task 13 (ST-G8) — over real HTTP: a badminton `short` league stage takes its own points through
+ * `PUT /stages/{id}/rules` (`{points}`), with a forfeit row; the stage is generated and the division started; the away
+ * side's walkover is recorded with `core.forfeit`; and the stage's table pays the FORFEIT ROW, not the division's own.
+ * The forfeit row is derived from the division's own walkover pay (badminton's `pointsMap["*"]`, the engine's
+ * declaration) plus one each, so a table that ignored the stage rule could not pass: the brief's `{2, 0}` IS badminton's
+ * own pay and would have been green with the rule never read.
+ */
+async function w2cStagePointsWalkoverChecks(owner: Session): Promise<void> {
+  const own = (badminton.configSchema.parse(badminton.variants.short) as { pointsMap?: Record<string, [number, number]> }).pointsMap?.["*"];
+  const forfeit = { winnerPoints: (own?.[0] ?? 0) + 1, loserPoints: (own?.[1] ?? 0) + 1 };
+  const comp = v1data<{ id: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Stage Points ${tag}` }),
+  );
+  const divId = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "W2c Points", sport_key: "badminton", variant_key: "short" }),
+  )?.id;
+  const entrants = v1data<{ id: string }[] | undefined>(
+    await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+      ["Dee", "Eli"].map((n, i) => ({ kind: "individual", display_name: `${n} ${tag}`, seed: i + 1 }))),
+  ) ?? [];
+  const stageId = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "Points Pool" }),
+  )?.id;
+  const points = { base: { win: own?.[0] ?? 0, draw: 0, loss: own?.[1] ?? 0 }, forfeit };
+  const put = await v1(owner, `/api/v1/stages/${stageId}/rules`, "PUT", { points });
+  const stored = (put.json.data as { points?: { forfeit?: unknown } | null } | undefined)?.points?.forfeit;
+  check(
+    "w2c: a league stage saves its own points with a forfeit row through the stage rules endpoint" +
+      (put.status === 200 && isDeepStrictEqual(stored, forfeit) ? "" : ` — got ${put.status} ${JSON.stringify(put.json.error ?? put.json.data)}`),
+    own !== undefined && put.status === 200 && isDeepStrictEqual(stored, forfeit),
+  );
+  const generated = v1data<{ fixtures: { id: string }[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST"))?.fixtures ?? [];
+  const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+  const fixtureId = generated[0]?.id ?? "";
+  const fx = v1data<{ home_entrant_id: string | null; away_entrant_id: string | null } | undefined>(await v1(owner, `/api/v1/fixtures/${fixtureId}`));
+  const walkover = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: 0,
+    type: "core.forfeit",
+    payload: { by: fx?.away_entrant_id, reason: "walkover" },
+  });
+  type Row = { entrantId: string; points: number };
+  const rowsNow = async () => v1data<{ rows?: Row[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/standings`))?.rows ?? [];
+  const paid = (rows: readonly Row[]) =>
+    rows.find((r) => r.entrantId === fx?.home_entrant_id)?.points === forfeit.winnerPoints &&
+    rows.find((r) => r.entrantId === fx?.away_entrant_id)?.points === forfeit.loserPoints;
+  // The table is a snapshot the append refreshes; a bounded poll, its reads counted, never a fixed sleep.
+  let rows = await rowsNow();
+  let reads = 1;
+  for (; reads < 20 && !paid(rows); reads++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    rows = await rowsNow();
+  }
+  const ok =
+    entrants.length === 2 && generated.length === 1 && started.status < 300 && walkover.status === 201 && rows.length === 2 && paid(rows);
+  check(
+    `w2c: stage points walkover pays the forfeit row (${forfeit.winnerPoints}-${forfeit.loserPoints}; the division's own walkover pays ${JSON.stringify(own)})` +
+      (ok
+        ? ""
+        : ` — got ${entrants.length} entrant(s), ${generated.length} fixture(s), start ${started.status}, forfeit ${walkover.status} ${JSON.stringify(walkover.json.error ?? null)}, ${rows.length} row(s) ${JSON.stringify(rows.map((r) => [r.entrantId === fx?.home_entrant_id ? "home" : "away", r.points]))} after ${reads} read(s)`),
+    ok,
+  );
 }
 
 /**

@@ -42,7 +42,6 @@ import {
   placementTable,
   progressionSize,
   resolveProgression,
-  validatePointsRule,
   withdrawBracketEntrant,
   type BracketFixture,
   type PoolTable,
@@ -387,6 +386,16 @@ function stageConfigsAtCreate(
   );
 }
 
+/**
+ * Jul3/05 §7 — the ONE entitlement gate on a stage's own points (W2c Task 13: `createStages` and the stage PUT both call
+ * it): base win/draw/loss points are free on every plan; bonuses or a forfeit row need `standings.custom_points` (402).
+ * A pooled read (`requireFeature`): call it BEFORE `withTenant` opens, never inside one (lib/db.ts, the pool
+ * self-deadlock).
+ */
+export async function assertCustomPointsAllowed(auth: AuthCtx, rule: PointsRule): Promise<void> {
+  if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature(auth.orgId, "standings.custom_points");
+}
+
 /** Define (part of) the stage graph for a division. Each stage is written with its kind's preset match rules
  *  (`stage-defaults.ts`, X-SR-6) under any `config.rules` sent with it, validated as `PUT /stages/{id}/rules` validates
  *  a save (SC-P8). `carried` is replaceStages' own: the rules a slot kept across its delete-and-recreate. */
@@ -433,12 +442,7 @@ export async function createStages(
   // + circular-H2H + carry-over are the Pro layer.
   for (const s of inputs) {
     const cfg = s.config as { points?: unknown; h2h_scope?: string } | undefined;
-    if (cfg?.points !== undefined) {
-      const rule = PointsRule.parse(cfg.points);
-      if (rule.bonuses.length > 0 || rule.forfeit !== undefined) {
-        await requireFeature(auth.orgId, "standings.custom_points");
-      }
-    }
+    if (cfg?.points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(cfg.points));
     if (cfg?.h2h_scope === "overall") {
       await requireFeature(auth.orgId, "tiebreakers.custom");
     }
@@ -464,16 +468,9 @@ export async function createStages(
       select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
+    // The same door asks each stage's points the stage PUT's questions (W2c Task 13, `refuseStagePoints`), the old
+    // fail-closed metrics check (Jul3/05 §8: a rule needing metrics the sport doesn't emit never reaches play) among them.
     const configs = stageConfigsAtCreate(division, inputs, carried);
-    // fail closed (Jul3/05 §8): a points rule needing metrics the sport
-    // doesn't emit never reaches play
-    for (const s of inputs) {
-      const cfg = s.config as { points?: unknown } | undefined;
-      if (cfg?.points !== undefined) {
-        const sportModule = resolveModule(division.sport_key, division.module_version);
-        validatePointsRule(PointsRule.parse(cfg.points), sportModule.metrics);
-      }
-    }
     assertNotFrozen(frozen, division.competition_id);
 
     // Doc 10 §1: `stages.per_division.max` (2/4/∞) — the batch must fit,

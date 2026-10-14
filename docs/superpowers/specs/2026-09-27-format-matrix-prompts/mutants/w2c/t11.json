@@ -46,8 +46,8 @@
  {
   "id": "t11-allowlist-before-strip",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "stage.stage_kind, stage.variant_key, Object.keys(input.rules));",
-  "replace": "stage.stage_kind, stage.variant_key, Object.keys(input.rules).filter((key) => input.rules![key] !== null));",
+  "find": "stage.stage_kind, stage.variant_key, Object.keys(rules));",
+  "replace": "stage.stage_kind, stage.variant_key, Object.keys(rules).filter((key) => rules[key] !== null));",
   "killers": [
    {
     "cwd": "apps/web",
@@ -61,7 +61,7 @@
  {
   "id": "t11-allowlist-skipped",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "if (input.rules !== null) refuseUnsettableKeys(",
+  "find": "if (rules !== null) refuseUnsettableKeys(",
   "replace": "if (false) refuseUnsettableKeys(",
   "killers": [
    {
@@ -224,7 +224,7 @@
  {
   "id": "t11-points-map-gate",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "const moved = input.rules !== null && setsBestOf(input.rules);",
+  "find": "const moved = rules !== null && setsBestOf(rules);",
   "replace": "const moved = false;",
   "killers": [
    {
@@ -582,8 +582,8 @@
  {
   "id": "t11-stage-rewrite",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "    await rewriteHeldAwards(tx, held);\n    return { rules: next, divisionId",
-  "replace": "    return { rules: next, divisionId",
+  "find": "      await rewriteHeldAwards(tx, held);\n    }",
+  "replace": "    }",
   "killers": [
    {
     "cwd": "apps/web",
@@ -612,8 +612,8 @@
  {
   "id": "t11-stage-variant",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "stage.stage_kind, stage.variant_key, Object.keys(input.rules));",
-  "replace": "stage.stage_kind, null, Object.keys(input.rules));",
+  "find": "stage.stage_kind, stage.variant_key, Object.keys(rules));",
+  "replace": "stage.stage_kind, null, Object.keys(rules));",
   "killers": [
    {
     "cwd": "apps/web",
@@ -634,8 +634,8 @@
  {
   "id": "t11-stage-kind",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "stage.stage_kind, stage.variant_key, Object.keys(input.rules));",
-  "replace": "\"league\", stage.variant_key, Object.keys(input.rules));",
+  "find": "stage.stage_kind, stage.variant_key, Object.keys(rules));",
+  "replace": "\"league\", stage.variant_key, Object.keys(rules));",
   "killers": [
    {
     "cwd": "apps/web",

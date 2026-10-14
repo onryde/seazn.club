@@ -26,7 +26,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { divisionRefusals } from "./rule-locks";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
-import { refuseInvalidatedStageRules } from "./stage-rules-merge";
+import { refuseInexpressibleStagePoints, refuseInvalidatedStageRules } from "./stage-rules-merge";
 import { reseedStagePresets } from "./stage-preset-reseed";
 import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
@@ -1197,6 +1197,9 @@ export async function patchDivision(
         }
         if (configApplied || variantApplied) {
           await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key, variantApplied ? (effective.variant_key as string) : null);
+          // W2c Task 13 (Q1): no unstarted stage may be left with its own points over a division whose points they cannot
+          // express (a variant or `points` edit that splits them) — the question the stage PUT asked when they were saved.
+          await refuseInexpressibleStagePoints(tx, id, nextConfig, sportModule);
         }
         // W2c Task 14 (I-A one layer up): no unstarted match's own format may be left invalid by this config.
         await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);

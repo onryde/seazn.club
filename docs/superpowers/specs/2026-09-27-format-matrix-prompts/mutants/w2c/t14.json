@@ -819,8 +819,8 @@
  {
   "id": "b3-i1-stage-skip-fragment",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "    await rewriteHeldAwards(tx, held);\n    return { rules: next,",
-  "replace": "    if (next === null) await rewriteHeldAwards(tx, held);\n    return { rules: next,",
+  "find": "      await rewriteHeldAwards(tx, held);\n    }",
+  "replace": "      if (next === null) await rewriteHeldAwards(tx, held);\n    }",
   "killers": [
    {
     "cwd": "apps/web",
@@ -834,8 +834,8 @@
  {
   "id": "b3-i1-stage-skip-clear",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "    await rewriteHeldAwards(tx, held);\n    return { rules: next,",
-  "replace": "    if (next !== null) await rewriteHeldAwards(tx, held);\n    return { rules: next,",
+  "find": "      await rewriteHeldAwards(tx, held);\n    }",
+  "replace": "      if (next !== null) await rewriteHeldAwards(tx, held);\n    }",
   "killers": [
    {
     "cwd": "apps/web",

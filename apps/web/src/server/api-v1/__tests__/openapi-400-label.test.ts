@@ -46,7 +46,7 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
       "`points: null` removes",
       "RULE_NOT_SETTABLE (`field` `points`)",
       "`points.forfeit.awardScore`",
-      "422 POINTS_RULE_INEXPRESSIBLE (`keys`)",
+      "422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys)",
       "402 PAYMENT_REQUIRED",
       "`standings.custom_points`",
     ])

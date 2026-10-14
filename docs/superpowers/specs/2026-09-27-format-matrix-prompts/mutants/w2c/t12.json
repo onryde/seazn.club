@@ -292,8 +292,8 @@
  {
   "id": "t12-schema-never",
   "file": "apps/web/src/server/api-v1/schemas.ts",
-  "find": "    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),",
-  "replace": "    shootout: z.unknown().optional(),",
+  "find": "than as an unrecognised key a client would read as a typo.\n    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),",
+  "replace": "than as an unrecognised key a client would read as a typo.\n    shootout: z.unknown().optional(),",
   "killers": [
    {
     "cwd": "apps/web",
