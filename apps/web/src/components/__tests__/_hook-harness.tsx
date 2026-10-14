@@ -99,6 +99,10 @@ interface HookDispatcher {
     getSnapshot: () => Cell,
     getServerSnapshot?: () => Cell,
   ) => Cell;
+  /** A stable per-call-site id for the island's lifetime, React-shaped
+   *  (`«h0»`, `«h1»`, …) — unique within one island, which is all an
+   *  `aria-controls` / `id` pairing needs. */
+  useId: () => string;
 }
 
 export type Props = Record<string, unknown>;
@@ -288,8 +292,12 @@ export function renderIsland<P>(
     dispatch: (action?: Cell) => void;
   }[] = [];
   let reducerCursor = 0;
+  let idCursor = 0;
 
   const dispatcher: HookDispatcher = {
+    useId() {
+      return `«h${idCursor++}»`;
+    },
     useState(initial) {
       const index = cursor++;
       if (index >= cells.length) {
@@ -429,6 +437,7 @@ export function renderIsland<P>(
       callbackCursor = 0;
       refCursor = 0;
       reducerCursor = 0;
+      idCursor = 0;
       storeCursor = 0;
       pending = [];
       pendingLayout = [];
@@ -621,6 +630,9 @@ export function expandWithHooks<P>(Component: (props: P) => ReactNode, props: P)
     },
     useSyncExternalStore() {
       throw new Error("expandWithHooks: useSyncExternalStore is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+    useId() {
+      throw new Error("expandWithHooks: useId is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
     },
   };
   slot.H = readOnly;

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useReducer,
@@ -821,5 +822,24 @@ describe("_hook-harness useSyncExternalStore hydrate mode (L3 set-state-in-effec
     expect(island.text()).toBe("changed");
     island.unmount();
     expect(store.listeners.size, "a leaked subscription would re-render an unmounted island").toBe(0);
+  });
+});
+
+describe("_hook-harness useId (ESLint L3 — PhoneDisclosure's aria-controls)", () => {
+  function TwoIds({ n }: { n: number }) {
+    const a = useId();
+    const b = useId();
+    return <i data-a={a} data-b={b} data-n={n} />;
+  }
+  it("each call site gets its own id, and it is stable across re-renders", () => {
+    const island = renderIsland(TwoIds, { n: 1 });
+    const read = () => propsOf(island.tree().find((e) => e.type === "i")!);
+    const first = read();
+    expect(first["data-a"]).toMatch(/\S/);
+    expect(first["data-a"]).not.toBe(first["data-b"]);
+    island.rerender({ n: 2 });
+    expect(read()["data-n"], "the re-render happened").toBe(2);
+    expect(read()["data-a"]).toBe(first["data-a"]);
+    expect(read()["data-b"]).toBe(first["data-b"]);
   });
 });

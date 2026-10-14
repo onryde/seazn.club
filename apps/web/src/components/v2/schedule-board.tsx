@@ -18,6 +18,7 @@ import { apiV1 } from "@/lib/client-v1";
 import { StagePicker } from "./board/stage-picker";
 import { settingsErrorText } from "@/lib/schedule-error";
 import { track, EVENTS } from "@/lib/analytics";
+import { useLocalStorageItem, useMediaQuery, writeLocalStorageItem } from "@/lib/use-client-snapshot";
 import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, daySlots, type FeedLabelPair } from "@/lib/schedule-board";
@@ -915,20 +916,27 @@ export function ScheduleBoard({
   );
 
   // ------------------------------------------------------- density modes
-  const [density, setDensity] = useState<Density>("board");
+  // Derived, not copied out of storage by an effect (ESLint L3): the pick made
+  // here, else the saved one, else the default — Agenda on a phone and for
+  // ≥8 divisions (v3/04 §2), the Board otherwise. Storage and the viewport are
+  // read through `useSyncExternalStore`, whose SERVER snapshots ("nothing
+  // saved", "not narrow") make the server and hydration renders agree on the
+  // Board; the saved / phone density lands on the render after hydration.
+  const savedDensity = useLocalStorageItem(DENSITY_STORAGE_KEY);
+  const narrow = useMediaQuery("(max-width: 640px)");
+  const [pickedDensity, setPickedDensity] = useState<Density | null>(null);
+  const density: Density =
+    pickedDensity ??
+    (savedDensity === "board" || savedDensity === "agenda" || savedDensity === "lanes"
+      ? savedDensity
+      : narrow || divisions.length >= 8
+        ? "agenda"
+        : "board");
   const [view, setView] = useState<"day" | "week">("day");
-  useEffect(() => {
-    const saved = window.localStorage.getItem(DENSITY_STORAGE_KEY) as Density | null;
-    if (saved === "board" || saved === "agenda" || saved === "lanes") {
-      setDensity(saved);
-    } else if (window.matchMedia("(max-width: 640px)").matches || divisions.length >= 8) {
-      // Agenda is the mobile default and the ≥8-division fallback (v3/04 §2).
-      setDensity("agenda");
-    }
-  }, [divisions.length]);
   const pickDensity = useCallback((d: Density) => {
-    setDensity(d);
-    window.localStorage.setItem(DENSITY_STORAGE_KEY, d);
+    setPickedDensity(d);
+    // A density that cannot be REMEMBERED (Safari private mode) still switches.
+    writeLocalStorageItem(DENSITY_STORAGE_KEY, d);
   }, []);
 
   // ------------------------------------------------------------ day tabs
@@ -1043,9 +1051,9 @@ export function ScheduleBoard({
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [announce, setAnnounce] = useState("");
   const pickedFixture = pickedId !== null ? (board.find((f) => f.id === pickedId) ?? null) : null;
-  useEffect(() => {
-    if (pickedId && !pickedFixture) setPickedId(null); // filtered away / refreshed
-  }, [pickedId, pickedFixture]);
+  // Filtered away / refreshed: drop the pick in the same render that notices
+  // (React's "adjust state during render"), not one effect later.
+  if (pickedId && !pickedFixture) setPickedId(null);
 
   const pick = useCallback(
     (fixtureId: string) => {

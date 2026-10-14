@@ -1,5 +1,6 @@
 "use client";
-import { useId, useLayoutEffect, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
+import { useHydrated, useMediaQuery } from "@/lib/use-client-snapshot";
 
 export interface PhoneDisclosureProps {
   /** The card's own title, verbatim — what the row reads as on a phone. */
@@ -83,39 +84,46 @@ export function PhoneDisclosure({
   startOpen = true,
   desktopCollapsible = false,
 }: PhoneDisclosureProps) {
-  // Always starts closed, on the server AND the first client paint — matches
+  // Always starts closed on the server AND the hydration render — matches
   // spec 2026-09-02-scorepad-v3-phone-composition §3.10's phone-narrow
   // default exactly, with no SSR/hydration mismatch. `desktopCollapsible`
-  // widths (>= Tailwind's `md`, 768px) then flip to `startOpen` a layout
-  // effect later, BEFORE the browser paints, so there is no visible flash —
-  // this can't be done in the initial `useState` because the two widths
-  // need DIFFERENT defaults from the SAME `open` state (review fix, PR #782:
-  // a shared `useState(startOpen)` opened the lineup editor pre-match on
+  // widths (>= Tailwind's `md`, 768px) then open to `startOpen` on the render
+  // after hydration (on a client-side mount, the very first render). This
+  // can't be done in the initial `useState` because the two widths need
+  // DIFFERENT defaults from the SAME `open` state (review fix, PR #782: a
+  // shared `useState(startOpen)` opened the lineup editor pre-match on
   // phone-narrow widths too, silently dropping the documented "closed until
-  // tapped" phone default and reddening
-  // `mobile.spec.ts`'s "lineup editor role/pair-order selects hold at phone
-  // width" at every width, narrow AND tablet, the moment `mobile.spec.ts`'s
-  // fixture was pre-match).
+  // tapped" phone default and reddening `mobile.spec.ts`'s "lineup editor
+  // role/pair-order selects hold at phone width" at every width, narrow AND
+  // tablet, the moment `mobile.spec.ts`'s fixture was pre-match).
+  //
+  // ESLint L3: this was a `useLayoutEffect` setting `open`. It is now React's
+  // "adjust state during render" on a SEED — (desktopCollapsible, startOpen,
+  // hydrated) — so the rule below runs exactly when one of those changes, and
+  // never on a plain re-render (a scorer's own tap is not overridden). The
+  // width is read once per seed through `useMediaQuery`, not tracked live:
+  // resizing the window does not fold or unfold a section by itself.
+  const hydrated = useHydrated();
+  const wide = useMediaQuery("(min-width: 768px)");
   const [open, setOpen] = useState(false);
-  useLayoutEffect(() => {
-    if (!desktopCollapsible) return;
+  const seed = `${desktopCollapsible}|${startOpen}|${hydrated}`;
+  const [seededFor, setSeededFor] = useState(() => `${desktopCollapsible}|${startOpen}|false`);
+  if (seededFor !== seed) {
+    setSeededFor(seed);
     // `startOpen` isn't just the mount-time default for `desktopCollapsible`
     // callers — `fixture-console.tsx` passes `!started`, which flips to
     // `false` live the moment the pad's own client state updates after
     // `core.start` (no page reload: `send()` resyncs `live` in place, see
-    // its own doc). Before this fix the effect only ever OPENED — a false
-    // `startOpen` hit the early return above and left `open` however it
-    // was, so a lineup opened pre-match (desktop's default) stayed open
-    // forever, "closed" only by a full remount (a hard reload), never by
-    // starting the match in the same session. Close it explicitly here so
-    // starting the match folds it live, same tab, same effect that opens it.
-    if (!startOpen) {
-      setOpen(false);
-      return;
+    // its own doc). An earlier version only ever OPENED — a false
+    // `startOpen` left `open` however it was, so a lineup opened pre-match
+    // (desktop's default) stayed open forever, "closed" only by a full
+    // remount (a hard reload), never by starting the match in the same
+    // session. Close it explicitly so starting the match folds it live.
+    if (desktopCollapsible) {
+      if (!startOpen) setOpen(false);
+      else if (hydrated && wide) setOpen(true);
     }
-    if (typeof window === "undefined") return;
-    if (window.matchMedia("(min-width: 768px)").matches) setOpen(true);
-  }, [desktopCollapsible, startOpen]);
+  }
   // Review fix: the activity toggle already carries `aria-controls`; this
   // one did not. `PhoneDisclosure` is mounted several times on one page
   // (once per lineup/availability side in `fixture-console.tsx`), so the
