@@ -32,10 +32,10 @@ import {
   RESERVED_ENTITY_SLUGS,
 } from "./slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
-import { log } from "@/server/logger";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import {
   dropNamedPublicDocuments,
+  expireCompetitionShell,
   fireOrgRevalidate,
   fireScoreRevalidate,
 } from "@/server/public-site/revalidate";
@@ -202,35 +202,6 @@ export async function fireDivisionCreated(
     orgId: auth.orgId,
     properties: { sport_key: sportKey, competition_id: competitionId },
   });
-}
-
-/**
- * Every public division and fixture page finds its division by slug in the
- * competition shell (`getPublicCompetition`, data.ts `pub-comp`), which is
- * cached under the ORG tag alone. A write that adds a division to the shell
- * (create, restore), takes one out (delete, archive) or moves one to a new
- * slug (rename) must expire that tag, or the new page answers "This link is no
- * longer valid" (cached in turn) until the entry ages out: ~32 minutes on stg,
- * 2026-10-14, where a suspended machine's cache clock does not run.
- * `{ expire: 0 }` (`fireOrgRevalidate`): the organiser's next look at the
- * public page is the read that must be fresh.
- *
- * AWAIT it after the commit, before the use-case resolves: Next flushes a
- * request's revalidations once, when the handler resolves, and drops any that
- * arrive later. Never rejects: the write has committed, so a failed slug read
- * is logged rather than turned into a 500 that invites a retry (and a retried
- * create is a second division).
- */
-async function expireCompetitionShell(orgId: string, context: Record<string, unknown>): Promise<void> {
-  try {
-    const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${orgId}`;
-    if (org) fireOrgRevalidate(org.slug);
-  } catch (err) {
-    log.error(
-      { err, orgId, ...context },
-      "divisions: the public competition shell could not be expired (the write stands)",
-    );
-  }
 }
 
 export async function createDivision(

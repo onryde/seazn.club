@@ -9,6 +9,12 @@
 // before the write until the entry ages out — measured on stg at ~32 minutes,
 // where a suspended machine's cache clock does not run.
 //
+// The competition writes owe the same: a delete, a create (a slug someone
+// probed is cached as MISSING and must heal), and any move between public,
+// unlisted, private and draft — the shell reads `public_competitions_v`
+// (public | unlisted), so making an unlisted competition private must take its
+// public pages down now, not when the entry ages out.
+//
 // Proven through Next's real per-request flush and tag manifest, the harness of
 // `person-writes-public-page-revalidate.test.ts`: the real async-local storages,
 // the real `revalidateTag`, the real `executeRevalidates` flush the instant the
@@ -18,8 +24,9 @@
 // arguments and treats an entry as Next does: one whose own tags have EXPIRED is
 // a miss, one whose tags are STALE is served once and refreshed.
 //
-// One sport (`generic`) throughout: the shell's division list, and every write
-// under test, are sport-blind — none of them branches on the sport key.
+// One sport (`generic`) throughout, and one template: the shell's division list,
+// and every write under test, are sport-blind — none of them branches on the
+// sport key.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
@@ -125,14 +132,14 @@ import { areTagsExpired } from "next/dist/server/lib/incremental-cache/tags-mani
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getPublicCompetition, getPublicFixture, orgTag } from "@/server/public-site/data";
-import { createCompetition, deleteCompetition } from "../competitions";
+import { createCompetition, deleteCompetition, patchCompetition } from "../competitions";
 import { archiveDivision, createDivision, deleteDivision, patchDivision, restoreDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const SLUG_READ_FAILED = "divisions: the public competition shell could not be expired (the write stands)";
+const SLUG_READ_FAILED = "public pages: the org's competition shell could not be expired (the write stands)";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -454,5 +461,102 @@ describe.skipIf(!HAS_DB)("deleteCompetition expires the org tag in its own reque
     ).toEqual([{ expire: 0 }]);
     expect(expired(entry), "the shell cached before the delete").toBe(true);
     expect(await getPublicCompetition(orgSlug, comp.slug), "a deleted competition's shell").toBeNull();
+  });
+});
+
+/** The shell's stored data entry for one competition URL, by its declared key parts. */
+const shellEntryOf = (orgSlug: string, compSlug: string) =>
+  probe.entries.get(JSON.stringify([["pub-comp", orgSlug, compSlug], []]));
+
+const orgSlugOf = async (auth: AuthCtx) =>
+  (await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`)[0]!.slug;
+
+// The four ways a competition faces the public, as the patch that puts it
+// there. Private has no shell at all; a public DRAFT is readable by link and
+// not listed (`competitionIsListed`).
+const EXPOSURES = {
+  P: { visibility: "public", status: "published" },
+  U: { visibility: "unlisted", status: "published" },
+  X: { visibility: "private", status: "published" },
+  D: { visibility: "public", status: "draft" },
+} as const;
+type Exposure = keyof typeof EXPOSURES;
+// Every ordered pair of the four exactly once (an Euler circuit of the complete
+// directed graph on them), from a new competition's own state, a public draft,
+// back to it.
+const EXPOSURE_WALK: Exposure[] = ["D", "P", "U", "X", "D", "X", "U", "D", "U", "P", "X", "P", "D"];
+
+describe.skipIf(!HAS_DB)("patchCompetition: any move between public, unlisted, private and draft expires the org tag in its own request", () => {
+  it("all 12 transitions: the org tag EXPIRES here and on the other machines, and the next public read serves the new state (private: refused)", async () => {
+    const { auth } = await seedOrg("pro");
+    const orgSlug = await orgSlugOf(auth);
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Exposure Walk Cup",
+      visibility: "public",
+      branding: {},
+    });
+    expect({ visibility: comp.visibility, status: comp.status }, "premise: a new competition is a public draft").toEqual(
+      EXPOSURES.D,
+    );
+    const served = (e: Exposure) =>
+      e === "X" ? "refused" : `${EXPOSURES[e].visibility}/${EXPOSURES[e].status}`;
+
+    const walked: Array<{ step: string; org: unknown[]; peers: string[]; shellExpired: boolean; served: string }> = [];
+    for (let i = 1; i < EXPOSURE_WALK.length; i++) {
+      const to = EXPOSURE_WALK[i]!;
+      await getPublicCompetition(orgSlug, comp.slug);
+      const entry = shellEntryOf(orgSlug, comp.slug);
+      expect(entry, "premise: the shell (or its refusal) is cached").toBeDefined();
+      const { calls } = await inRequest(() => patchCompetition(auth, comp.id, { ...EXPOSURES[to] }));
+      const after = await getPublicCompetition(orgSlug, comp.slug);
+      walked.push({
+        step: `${EXPOSURE_WALK[i - 1]}→${to}`,
+        org: calls.filter((c) => c.tags.includes(orgTag(orgSlug))).map((c) => c.durations),
+        peers: probe.broadcasts.filter((b) => b.tags.includes(orgTag(orgSlug))).map((b) => b.mode),
+        shellExpired: expired(entry!),
+        served: after === null ? "refused" : `${after.competition.visibility}/${after.competition.status}`,
+      });
+    }
+
+    const everyPair = (Object.keys(EXPOSURES) as Exposure[]).flatMap((a) =>
+      (Object.keys(EXPOSURES) as Exposure[]).filter((b) => b !== a).map((b) => `${a}→${b}`),
+    );
+    expect(walked.length, "transitions walked (zero is a failure)").toBe(12);
+    expect(walked.map((w) => w.step).sort(), "every ordered pair, once").toEqual(everyPair.sort());
+    const owed = walked.map((w) => ({
+      step: w.step,
+      org: [{ expire: 0 }],
+      peers: ["expire"],
+      shellExpired: true,
+      served: served(w.step.split("→")[1] as Exposure),
+    }));
+    expect(
+      walked.filter((w, i) => JSON.stringify(w) !== JSON.stringify(owed[i])).map((w) => `${w.step} served ${w.served}`),
+      "transitions that left the shell stale",
+    ).toEqual([]);
+    expect(walked).toEqual(owed);
+  });
+
+  it("a patch that moves neither visibility nor draft fires no org expiry: published → live, a description edit, a re-sent visibility", async () => {
+    const { auth } = await seedOrg("pro");
+    const orgSlug = await orgSlugOf(auth);
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Steady Exposure Cup",
+      visibility: "public",
+      branding: {},
+    });
+    await patchCompetition(auth, comp.id, { status: "published" });
+    const patches = [{ status: "live" as const }, { description: "Now with a description" }, { visibility: "public" as const }];
+    const fired: unknown[][] = [];
+    for (const patch of patches) {
+      const { calls } = await inRequest(() => patchCompetition(auth, comp.id, patch));
+      fired.push([
+        ...calls.filter((c) => c.tags.includes(orgTag(orgSlug))),
+        ...probe.broadcasts.filter((b) => b.tags.includes(orgTag(orgSlug))),
+      ]);
+    }
+    expect(fired, "per patch: org expiries flushed and broadcast").toEqual(patches.map(() => []));
   });
 });

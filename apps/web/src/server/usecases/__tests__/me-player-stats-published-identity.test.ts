@@ -47,6 +47,7 @@ vi.mock("@/server/public-site/revalidate", () => ({
   firePersonRevalidate: vi.fn(async () => {}),
   fireScoreRevalidate: vi.fn(async () => {}),
   dropNamedPublicDocuments: vi.fn(),
+  expireCompetitionShell: vi.fn(async () => {}),
 }));
 
 /** While `route.tx` is set, the pool `sql` runs its statements on that

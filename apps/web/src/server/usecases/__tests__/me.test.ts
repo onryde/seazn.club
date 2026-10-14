@@ -29,6 +29,7 @@ vi.mock("@/server/public-site/revalidate", () => ({
   firePersonRevalidate: vi.fn(async () => {}),
   fireScoreRevalidate: vi.fn(async () => {}),
   dropNamedPublicDocuments: vi.fn(),
+  expireCompetitionShell: vi.fn(async () => {}),
 }));
 import { firePersonRevalidate } from "@/server/public-site/revalidate";
 

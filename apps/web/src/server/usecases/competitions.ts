@@ -14,13 +14,14 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import { CompetitionStatus, ENDS_BEFORE_STARTS, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
 import {
+  expireCompetitionShell,
   fireDiscoveryRevalidate,
   fireOrgRevalidate,
   invalidateDiscoveryCache,
 } from "@/server/public-site/revalidate";
 import { orgLiveCacheKey } from "@/server/public-site/org-live-cache-key";
 import { cacheDel } from "@/lib/cache";
-import { competitionIsListed } from "@/lib/competition-listing";
+import { competitionIsListed, UNLISTED_STATUS } from "@/lib/competition-listing";
 import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { dropPublicCompetitionRefs } from "@/server/public-site/public-ref-cache";
@@ -536,7 +537,7 @@ export async function patchCompetition(
   // ORG's slug and the competition's. Read in the same statement as `before`.
   let refOrgSlug: string | null = null;
   let refSlugBefore: string | null = null;
-  const { row, discoveryTouched, listingChanged } = await withTenant(auth.orgId, async (tx) => {
+  const { row, discoveryTouched, listingChanged, exposureChanged } = await withTenant(auth.orgId, async (tx) => {
     if (patch.slug) {
       if (RESERVED_ENTITY_SLUGS.has(patch.slug)) {
         throw new HttpError(422, `slug '${patch.slug}' is reserved`);
@@ -683,7 +684,15 @@ export async function patchCompetition(
     // rule is `competitionIsListed` (owner decision 2026-09-27: a draft is
     // unlisted until published).
     const listingChanged = competitionIsListed(before) !== competitionIsListed(row);
-    return { row, discoveryTouched, listingChanged };
+    // Did the competition SHELL change what it answers? It reads
+    // `public_competitions_v` (public | unlisted), so any visibility move adds
+    // or drops it, and a move into or out of draft turns it link-only or back.
+    // Wider than `listingChanged`, which it contains: unlisted -> private is no
+    // listing change, and it must still take the public pages down at once.
+    const exposureChanged =
+      before.visibility !== row.visibility ||
+      (before.status === UNLISTED_STATUS) !== (row.status === UNLISTED_STATUS);
+    return { row, discoveryTouched, listingChanged, exposureChanged };
   });
   // v17 #287: ANY competition write can move status/ends_on, which the Event
   // Pass lock (isPassLocked) reads live off this row on every resolve — so
@@ -728,21 +737,17 @@ export async function patchCompetition(
   // (2026-09-28): the page itself turns noindex (back to draft — still
   // readable by link, `lib/competition-listing.ts`) or 404s (made private) at
   // once, and only the slug lingers in the sitemap until the window turns.
+  // The org tag fires on EVERY exposure change, not just a listing change: the
+  // competition shell under it serves unlisted competitions and drafts too
+  // (`exposureChanged`, `expireCompetitionShell`). The poll document lists
+  // listed competitions only, so it is dropped on a listing change alone.
   // Discovery is covered above
   // (`discoveryTouched` includes a status change of a discoverable
   // competition). Outside the tx — invalidation never rolls back a write — and
   // best-effort like the grants below: the write has committed, so a failed
   // slug read is logged, never a 500 for a publish that succeeded.
-  if (listingChanged) {
-    await cacheDel(orgLiveCacheKey(auth.orgId));
-    try {
-      const [org] = await sql<{ slug: string }[]>`
-        select slug from organizations where id = ${auth.orgId}`;
-      if (org) fireOrgRevalidate(org.slug);
-    } catch (err) {
-      log.error({ err, orgId: auth.orgId }, "competitions: org home revalidation failed");
-    }
-  }
+  if (listingChanged) await cacheDel(orgLiveCacheKey(auth.orgId));
+  if (exposureChanged) await expireCompetitionShell(auth.orgId, { competitionId: id });
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, same reasoning as the discovery invalidation above.
   if (previousSlug) await invalidateSlugCache("competition", auth.orgId, previousSlug, row.slug);
@@ -867,7 +872,7 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
     // Its public pages are found through the competition shell (`pub-comp`),
     // cached under the org tag alone: expired here, in the request, or they keep
     // serving the deleted competition until the entry ages out
-    // (`expireCompetitionShell`, divisions.ts). Never throws.
+    // (`expireCompetitionShell`). Never throws.
     fireOrgRevalidate(gone.org_slug);
   }
 }

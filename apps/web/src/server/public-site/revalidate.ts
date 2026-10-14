@@ -293,6 +293,38 @@ export function fireOrgRevalidate(orgSlug: string): void {
   void purgeCdn();
 }
 
+/**
+ * Every public competition, division and fixture page is found through the
+ * competition shell (`getPublicCompetition`, data.ts `pub-comp`), cached under
+ * the ORG tag alone — a missing competition's refusal included. So a write that
+ * changes which competitions or divisions the shell can answer for must expire
+ * that tag: a division created, restored, archived, deleted or renamed (a new
+ * slug); a competition created publicly readable, deleted, or moved between
+ * public, unlisted, private and draft. Otherwise the page answers from before
+ * the write — "This link is no longer valid" for a new division, or a
+ * competition just made private still served — until the entry ages out:
+ * ~32 minutes on stg, 2026-10-14, where a suspended machine's cache clock does
+ * not run. `fireOrgRevalidate`, so `{ expire: 0 }`: the organiser's next look
+ * at the public page is the read that must be fresh.
+ *
+ * AWAIT it after the commit, before the use-case resolves: Next flushes a
+ * request's revalidations once, when the handler resolves, and drops any that
+ * arrive later. Never rejects: the write has committed, so a failed org-slug
+ * read is logged rather than turned into a 500 that invites a retry (and a
+ * retried create is a second division or competition).
+ */
+export async function expireCompetitionShell(orgId: string, context: Record<string, unknown>): Promise<void> {
+  try {
+    const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${orgId}`;
+    if (org) fireOrgRevalidate(org.slug);
+  } catch (err) {
+    log.error(
+      { err, orgId, ...context },
+      "public pages: the org's competition shell could not be expired (the write stands)",
+    );
+  }
+}
+
 /** Fire the shared discovery ISR tag (doc 15, PROMPT-19): home strips,
  *  /discover and the per-sport pages — on opt-in/out, staff curation and
  *  fixture-decided writes of discoverable competitions. */
