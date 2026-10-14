@@ -24,6 +24,8 @@ import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
+import { validatedStageConfig } from "../stage-defaults";
+import { STAGE_DECIDER_KEYS } from "@/server/engine-db/stage-cfg";
 import { putStageRules } from "../stage-rules";
 import { decidersOffRules } from "../../../../e2e/stage-deciders";
 
@@ -243,6 +245,39 @@ describe("the API takes config.rules and refuses a top-level stage decider (gree
     const ok = CreateStage.safeParse({ seq: 1, kind: "knockout", name: "KO", config: { rules: { shootout: false } }, progression: null });
     expect(ok.success).toBe(true);
     expect(ok.data?.config.rules).toEqual({ shootout: false });
+  });
+
+  // Fix round 2 (review gap hunt): zod guards the API only. An INTERNAL caller (a usecase, a script, a template) reaches
+  // `validatedStageConfig` with no schema in front of it, so the door itself refuses a top-level decider by name.
+  it("gap hunt: the create door itself refuses a top-level stage decider from any caller, by name; inside `rules` it lands", () => {
+    let checked = 0;
+    const division = football.configSchema.parse(football.variants["11-a-side"]);
+    for (const key of STAGE_DECIDER_KEYS) {
+      expect(() => validatedStageConfig(football, "football", "knockout", "11-a-side", division, { [key]: false }), key).toThrow(
+        expect.objectContaining({ status: 400, code: "VALIDATION", extra: { field: `config.${key}` } }),
+      );
+      expect(() => validatedStageConfig(football, "football", "knockout", "11-a-side", division, { [key]: false }), key).toThrow(/config\.rules/);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(STAGE_DECIDER_KEYS.length);
+    expect(checked).toBeGreaterThan(0);
+    const ok = validatedStageConfig(football, "football", "knockout", "11-a-side", division, { rules: { shootout: false } });
+    expect((ok.rules as Record<string, unknown>).shootout, "the positive pair: the same decider inside rules").toBe(false);
+  });
+});
+
+describe.skipIf(!HAS_DB)("gap hunt: createStages and replaceStages refuse a top-level decider from an internal caller, writing nothing", () => {
+  it("createStages refuses config.shootout (no stage written); replaceStages refuses it BEFORE the delete (the graph stands)", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
+    // An internal caller passes the config the API schema would have refused (no zod in front of a usecase).
+    const smuggled = { seq: 1, kind: "knockout" as const, name: "KO", config: { shootout: true } as Record<string, unknown>, progression: null };
+    await expect(createStages(auth, divisionId, smuggled as never)).rejects.toMatchObject({ status: 400, code: "VALIDATION" });
+    expect(await stageCount(divisionId), "nothing written").toBe(0);
+    const [st] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null });
+    await expect(replaceStages(auth, divisionId, smuggled as never)).rejects.toMatchObject({ status: 400, code: "VALIDATION" });
+    const [still] = await sql<{ id: string }[]>`select id from stages where division_id = ${divisionId}`;
+    expect(still?.id, "the existing graph stands").toBe(st!.id);
   });
 });
 
