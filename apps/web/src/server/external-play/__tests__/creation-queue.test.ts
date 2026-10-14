@@ -70,16 +70,6 @@ function lilaRateLimit(credits: number, durationMs: number) {
   };
 }
 
-/** lila's apiCreate order: the IP limiter, then the composite user limiter,
- *  whose fold stops charging at its first refusal. */
-function lilaCreateLimits() {
-  const ip = lilaRateLimit(LILA_IP_CREDITS, LILA_IP_WINDOW_MS);
-  const fast = lilaRateLimit(LILA_USER_FAST_CREDITS, LILA_USER_FAST_WINDOW_MS);
-  const slow = lilaRateLimit(LILA_USER_SLOW_CREDITS, LILA_USER_SLOW_WINDOW_MS);
-  return (now: number) =>
-    ip(now, LILA_IP_COST) && fast(now, LILA_USER_COST) && slow(now, LILA_USER_COST);
-}
-
 /** A virtual clock: nothing in the module sleeps, so time moves only when a
  *  test moves it. */
 let t = 0;
@@ -265,87 +255,193 @@ describe("per challenger — lila's challenge.create.user", () => {
     expect(checked).toBe(2);
     expect(sent.length).toBe(0);
   });
+});
 
-  // The module's central claim, against lila's own rules rather than against
-  // its own constants: whatever the timing, latency and outcomes, nothing it
-  // sends is a create lila's limiter would refuse.
-  it("never sends a create lila's limiter would refuse (fast-check against RateLimit.scala)", async () => {
-    let totalSent = 0;
-    let totalRefusedHere = 0;
-    let totalWindowRefusals = 0;
+// The module's central claim, against lila's own rules rather than against its own constants: whatever the timing,
+// latency, outcomes and challengers, nothing it sends is a create lila's limiter would refuse.
+//
+// Final review M-6 (parked 1): one property over one challenger could not reach its claim — fast-check's default size
+// keeps an array to ~12 steps, so lila's day and IP limits were never met. Now three properties, each a fixed number
+// of runs: long random runs over several challengers (size "max"), and two that open with a PREFIX ending on the
+// limit they are named for — a challenger's 41st create in a day, the IP's 501st create in ten minutes — then wander
+// on. Each counts what it reached, per run.
+type Step = { challenger: string; gapMs: number; latencyMs: number; chargeAt: number; outcome: "ok" | "error" | "429" };
+type Tally = { runs: number; sent: number; minute: number; day: number; ip: number; held: number; otherWentOn: number };
+const tally = (): Tally => ({ runs: 0, sent: 0, minute: 0, day: 0, ip: 0, held: 0, otherWentOn: 0 });
+
+/** lila's apiCreate, every challenger at once: the IP limiter, then that challenger's composite user limiter (keyed
+ *  lowercased, userId.scala), whose fold stops charging at its first refusal. */
+function lilaLimitsByChallenger() {
+  const ip = lilaRateLimit(LILA_IP_CREDITS, LILA_IP_WINDOW_MS);
+  const users = new Map<string, { fast: ReturnType<typeof lilaRateLimit>; slow: ReturnType<typeof lilaRateLimit> }>();
+  return (now: number, challenger: string) => {
+    const id = challenger.toLowerCase();
+    let u = users.get(id);
+    if (!u) {
+      u = { fast: lilaRateLimit(LILA_USER_FAST_CREDITS, LILA_USER_FAST_WINDOW_MS), slow: lilaRateLimit(LILA_USER_SLOW_CREDITS, LILA_USER_SLOW_WINDOW_MS) };
+      users.set(id, u);
+    }
+    return ip(now, LILA_IP_COST) && u.fast(now, LILA_USER_COST) && u.slow(now, LILA_USER_COST);
+  };
+}
+
+/** Plays `steps` through the queue from a fresh state: the creates it sent that lila would refuse, and what became of
+ *  each step — sent, or refused here. */
+async function playAgainstLila(steps: readonly Step[], into: Tally): Promise<{ violations: number; outcomes: ("sent" | "refused")[] }> {
+  const outcomes: ("sent" | "refused")[] = [];
+  __resetCreationQueue();
+  t = 0;
+  __setCreationQueueDeps({ now: () => t });
+  const lila = lilaLimitsByChallenger();
+  let violations = 0;
+  /** Lowercased challengers refused here since the last send, so a send by ANOTHER counts as "went on". */
+  const refused = new Set<string>();
+  /** When each challenger's creates were answered (lowercased): which of its two windows refused it. */
+  const answeredAt = new Map<string, number[]>();
+  into.runs += 1;
+  for (const step of steps) {
+    t += step.gapMs;
+    let ran = false;
+    try {
+      await enqueueCreation({ key: `p${seq++}`, challenger: step.challenger }, async () => {
+        ran = true;
+        const sendAt = t;
+        if (!lila(sendAt + Math.floor(step.chargeAt * step.latencyMs), step.challenger)) violations++;
+        into.sent++;
+        if ([...refused].some((c) => c !== step.challenger.toLowerCase())) into.otherWentOn++;
+        t = sendAt + step.latencyMs;
+        answeredAt.set(step.challenger.toLowerCase(), [...(answeredAt.get(step.challenger.toLowerCase()) ?? []), t]);
+        // A 429 here models one this process could not see coming (another machine, the player on lichess.org).
+        if (step.outcome === "429") throw new CreationRateLimited({ message: "429" });
+        if (step.outcome === "error") throw new Error("refused");
+        return true;
+      });
+    } catch (err) {
+      if (!ran && err instanceof CreationRateLimited) {
+        outcomes.push("refused");
+        refused.add(step.challenger.toLowerCase());
+        if (err.reason === "ip") into.ip++;
+        else if (err.reason === "lichess_429") into.held++;
+        // The challenger's two windows, told apart by its own answers: a full minute is the minute's refusal.
+        else if ((answeredAt.get(step.challenger.toLowerCase()) ?? []).filter((at) => at >= t - LILA_USER_FAST_WINDOW_MS).length >= PER_CHALLENGER_PER_MINUTE) into.minute++;
+        else into.day++;
+        continue;
+      }
+    }
+    outcomes.push(ran ? "sent" : "refused");
+  }
+  return { violations, outcomes };
+}
+
+const ok = (challenger: string, gapMs: number): Step => ({ challenger, gapMs, latencyMs: 0, chargeAt: 0, outcome: "ok" });
+
+/** A challenger's day, spent: 40 creates a minute and a second apart (never the minute's limit) from t = 0, then the
+ *  41st inside the day — refused on the DAY window — then one AT the day's end (lila's edge is inclusive: still
+ *  refused) and one a millisecond past it (sent). */
+const DAY_41ST_AT_MS = (PER_CHALLENGER_PER_DAY - 1) * 61_000 + 1_000;
+const DAY_PREFIX: readonly Step[] = [
+  ...Array.from({ length: PER_CHALLENGER_PER_DAY }, (_, i) => ok("day-w", i === 0 ? 0 : 61_000)),
+  ok("day-w", 1_000),
+  ok("day-w", LILA_USER_SLOW_WINDOW_MS - DAY_41ST_AT_MS),
+  ok("day-w", 1),
+];
+/** The IP's ten minutes, spent at t = 0: 500 creates by 100 challengers, five each (never a challenger's limit), then
+ *  a fresh challenger's create — refused on the IP window — then one AT the window's end (refused) and one a
+ *  millisecond past it (sent). */
+const IP_PREFIX: readonly Step[] = [
+  ...Array.from({ length: PER_IP }, (_, i) => ok(`ip-w${i % (PER_IP / PER_CHALLENGER_PER_MINUTE)}`, 0)),
+  ok("ip-fresh", 0),
+  ok("ip-fresh", LILA_IP_WINDOW_MS),
+  ok("ip-fresh", 1),
+];
+
+/** One step of a wander: bursts, ordinary gaps, the minute's own edges — a uniform gap almost never lands a create on
+ *  the edge that matters — and the IP's and the day's windows, which clear what came before. */
+const stepArb = (challengers: readonly string[]): fc.Arbitrary<Step> =>
+  fc.record({
+    challenger: fc.constantFrom(...challengers),
+    gapMs: fc.oneof(
+      { arbitrary: fc.constantFrom(0, 50_000, 59_999, 60_000, 60_001), weight: 3 },
+      { arbitrary: fc.integer({ min: 0, max: 2_000 }), weight: 3 },
+      { arbitrary: fc.integer({ min: 0, max: 70_000 }), weight: 2 },
+      { arbitrary: fc.constantFrom(LILA_IP_WINDOW_MS, LILA_IP_WINDOW_MS + 1), weight: 1 },
+      { arbitrary: fc.constantFrom(LILA_USER_SLOW_WINDOW_MS, LILA_USER_SLOW_WINDOW_MS + 1), weight: 1 },
+    ),
+    // The round trip, inside LICHESS_TIMEOUT_MS; lila charges somewhere inside it, and this module stamps at its
+    // end. The extremes are where an early stamp opens a window early.
+    latencyMs: fc.oneof(
+      { arbitrary: fc.constantFrom(0, 10_000), weight: 2 },
+      { arbitrary: fc.integer({ min: 0, max: 10_000 }), weight: 1 },
+    ),
+    chargeAt: fc.oneof(
+      { arbitrary: fc.constantFrom(0, 1), weight: 2 },
+      { arbitrary: fc.double({ min: 0, max: 1, noNaN: true }), weight: 1 },
+    ),
+    // Mostly accepted: a 429 holds the challenger a minute, and a run full of holds never reaches a window.
+    outcome: fc.oneof(
+      { arbitrary: fc.constant("ok" as const), weight: 8 },
+      { arbitrary: fc.constant("error" as const), weight: 1 },
+      { arbitrary: fc.constant("429" as const), weight: 1 },
+    ),
+  });
+
+describe("property: never sends a create lila's limiter would refuse (fast-check against RateLimit.scala)", () => {
+  // `w1` and `W1` are one challenger as lila keys it.
+  const POOL = ["w0", "w1", "W1", "w2"];
+  const RANDOM_RUNS = 400;
+  const PREFIX_RUNS = 40;
+
+  it(`random runs over ${POOL.length} challenger names, up to 120 steps each: every window but the day's and the IP's is met, and one challenger's refusal holds up nobody else`, async () => {
+    const seen = tally();
     await fc.assert(
-      fc.asyncProperty(
-        fc.array(
-          fc.record({
-            // Bursts, ordinary gaps, and the minute's own edges — a uniform
-            // gap almost never lands a sixth create on the edge that matters.
-            gapMs: fc.oneof(
-              { arbitrary: fc.constantFrom(0, 50_000, 59_999, 60_000, 60_001), weight: 3 },
-              { arbitrary: fc.integer({ min: 0, max: 2_000 }), weight: 3 },
-              { arbitrary: fc.integer({ min: 0, max: 70_000 }), weight: 2 },
-            ),
-            // The round trip, inside LICHESS_TIMEOUT_MS; lila charges somewhere
-            // inside it, and this module stamps at its end. The extremes are
-            // where an early stamp opens a window early.
-            latencyMs: fc.oneof(
-              { arbitrary: fc.constantFrom(0, 10_000), weight: 2 },
-              { arbitrary: fc.integer({ min: 0, max: 10_000 }), weight: 1 },
-            ),
-            chargeAt: fc.oneof(
-              { arbitrary: fc.constantFrom(0, 1), weight: 2 },
-              { arbitrary: fc.double({ min: 0, max: 1, noNaN: true }), weight: 1 },
-            ),
-            // Mostly accepted: a 429 holds the challenger a minute, and a run
-            // full of holds never reaches the window it is meant to probe.
-            outcome: fc.oneof(
-              { arbitrary: fc.constant("ok" as const), weight: 8 },
-              { arbitrary: fc.constant("error" as const), weight: 1 },
-              { arbitrary: fc.constant("429" as const), weight: 1 },
-            ),
-          }),
-          { minLength: 1, maxLength: 80 },
-        ),
-        async (steps) => {
-          __resetCreationQueue();
-          t = 0;
-          __setCreationQueueDeps({ now: () => t });
-          const lila = lilaCreateLimits();
-          // Per run, so a shrink replays from zero.
-          let violations = 0;
-          for (const step of steps) {
-            t += step.gapMs;
-            let ran = false;
-            try {
-              await enqueueCreation({ key: `p${seq++}`, challenger: "solo" }, async () => {
-                ran = true;
-                const sendAt = t;
-                if (!lila(sendAt + Math.floor(step.chargeAt * step.latencyMs))) violations++;
-                totalSent++;
-                t = sendAt + step.latencyMs;
-                // A 429 here models one this process could not see coming
-                // (another machine, the player on lichess.org).
-                if (step.outcome === "429") throw new CreationRateLimited({ message: "429" });
-                if (step.outcome === "error") throw new Error("refused");
-                return true;
-              });
-            } catch (err) {
-              if (!ran) {
-                totalRefusedHere++;
-                if (err instanceof CreationRateLimited && err.reason === "challenger") totalWindowRefusals++;
-              }
-            }
-          }
-          expect(violations).toBe(0);
-        },
-      ),
-      { numRuns: 1000, seed: 20261009 },
+      fc.asyncProperty(fc.array(stepArb(POOL), { minLength: 1, maxLength: 120, size: "max" }), async (steps) => {
+        expect((await playAgainstLila(steps, seen)).violations).toBe(0);
+      }),
+      { numRuns: RANDOM_RUNS, seed: 20261009 },
     );
-    // Anti-vacuity: the property must have SENT creates, REFUSED some, and
-    // refused some on the WINDOW (not only on a 429 hold), or it proved
-    // nothing about the limit it is named for.
-    expect(totalSent).toBeGreaterThan(0);
-    expect(totalRefusedHere).toBeGreaterThan(0);
-    expect(totalWindowRefusals).toBeGreaterThan(0);
+    // Anti-vacuity: the runs SENT creates, were REFUSED on the minute's window (not only on a 429 hold), held after
+    // a 429, and let ANOTHER challenger go on after a refusal.
+    expect(seen.runs, "fast-check ran every run").toBe(RANDOM_RUNS);
+    expect(seen.sent).toBeGreaterThan(0);
+    expect(seen.minute, "the minute's window refused").toBeGreaterThan(0);
+    expect(seen.held, "a 429 held its challenger").toBeGreaterThan(0);
+    expect(seen.otherWentOn, "another challenger sent after one was refused").toBeGreaterThan(0);
+  });
+
+  it(`a challenger's DAY spent, then a wander: the 41st create of the day, and the day's last millisecond, are refused in every run (${PREFIX_RUNS} runs)`, async () => {
+    const seen = tally();
+    await fc.assert(
+      fc.asyncProperty(fc.array(stepArb([...POOL, "day-w"]), { minLength: 1, maxLength: 60, size: "max" }), async (tail) => {
+        const day = seen.day;
+        const played = await playAgainstLila([...DAY_PREFIX, ...tail], seen);
+        expect(played.violations).toBe(0);
+        expect(played.outcomes.slice(0, DAY_PREFIX.length), "the day's 40 sent, the 41st and the end refused, one past sent").toEqual([
+          ...Array<"sent">(PER_CHALLENGER_PER_DAY).fill("sent"), "refused", "refused", "sent",
+        ]);
+        expect(seen.day - day, "both refusals were the day's").toBeGreaterThanOrEqual(2);
+      }),
+      { numRuns: PREFIX_RUNS, seed: 20261014 },
+    );
+    expect(seen.runs).toBe(PREFIX_RUNS);
+    expect(seen.day, "two day refusals per run, at least").toBeGreaterThanOrEqual(2 * PREFIX_RUNS);
+  });
+
+  it(`the IP's ten minutes spent by 100 challengers, then a wander: the 501st create, and the window's last millisecond, are refused in every run (${PREFIX_RUNS} runs)`, async () => {
+    const seen = tally();
+    await fc.assert(
+      fc.asyncProperty(fc.array(stepArb([...POOL, "ip-w0", "ip-fresh"]), { minLength: 1, maxLength: 60, size: "max" }), async (tail) => {
+        const ip = seen.ip;
+        const played = await playAgainstLila([...IP_PREFIX, ...tail], seen);
+        expect(played.violations).toBe(0);
+        expect(played.outcomes.slice(0, IP_PREFIX.length), "the 500 sent, the 501st and the end refused, one past sent").toEqual([
+          ...Array<"sent">(PER_IP).fill("sent"), "refused", "refused", "sent",
+        ]);
+        expect(seen.ip - ip, "both refusals were the IP's").toBeGreaterThanOrEqual(2);
+      }),
+      { numRuns: PREFIX_RUNS, seed: 20261015 },
+    );
+    expect(seen.runs).toBe(PREFIX_RUNS);
+    expect(seen.ip, "two IP refusals per run, at least").toBeGreaterThanOrEqual(2 * PREFIX_RUNS);
   });
 });
 
