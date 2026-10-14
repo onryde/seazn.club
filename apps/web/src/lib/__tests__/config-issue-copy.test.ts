@@ -41,6 +41,18 @@ describe("the share-on-abandon refusals are localized in all four locales (not t
     expect(checked).toBe(8);
   });
 
+  it("each sentence maps to ITS key: the English copy opens with the engine's own sentence, so the pairing cannot be swapped", () => {
+    let checked = 0;
+    for (const [sentence, key] of LOCALIZED_CONFIG_ISSUES) {
+      // The engine's sentence ends in a full stop; the dictionary copy may carry the setting to change after it.
+      expect((en as Record<string, string>)[key]!.startsWith(sentence.replace(/\.$/, "")), `${key} opens with its engine sentence`).toBe(true);
+      checked++;
+    }
+    expect(checked, "both refusals were checked").toBe(2);
+    // The two engine sentences are different, so a swapped pairing cannot satisfy both rows above.
+    expect(SHARE_NEEDS_DRAWN_GAME).not.toBe(SHARE_NEEDS_DRAWS);
+  });
+
   it("the English carrom copy IS the owner's sentence (ruling), and both sentences name the setting to change", () => {
     expect(en["rules.err.shareNeedsDrawnGame"]).toBe(SHARE_NEEDS_DRAWN_GAME);
     expect(en["rules.err.shareNeedsDrawnGame"]).toContain("'Game tied at max boards'");

@@ -329,9 +329,9 @@ export async function withdrawEntrantCascade(
         // W2c X-AB-5 (fix round 1): a board of theirs ABANDONED with no result is neither played nor pending, so the
         // policy above never touches it - and it holds the next round (Swiss) until the organiser settles it. Left as
         // it is (the settle may not name the departed entrant, C17: the opponent can still be chosen), and NAMED here so
-        // the report says which board is still owed a decision. `rowAwaitsSettle` is the one reading of "owed a settle".
+        // the report says which board is still owed a decision. `rowAwaitsSettle` is the one reading of "owed a settle" -
+        // its own status test is the only one (a prefilter here would be an equivalent twin no test can kill).
         for (const f of mine) {
-          if (f.status !== "abandoned") continue;
           const active = activeAbandons(await listEvents(auth, f.id, 0));
           const owed = rowAwaitsSettle(stage.kind, {
             status: f.status,
