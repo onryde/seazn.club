@@ -51,7 +51,7 @@
     "seed:showcase": "node --env-file=apps/web/.env.local --experimental-strip-types scripts/seed-showcase.ts",
     "sim": "npm run sim --workspace packages/engine",
     "sim:replay": "npm run sim:replay --workspace packages/engine --",
-    "engine:boundary": "node --experimental-strip-types scripts/engine-boundary.ts",
+    "engine:boundary": "node --experimental-strip-types packages/engine/scripts/engine-boundary.ts",
     "reference:boundary": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/reference-boundary.ts",
     "mutate": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/mutate.ts",
     "db:apply": "bash scripts/flyway.sh migrate",

@@ -1,234 +1,15 @@
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
-import { ID, REPO, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, hasToken, isMatrixCase, parseRuleRows, proofProblems, readRepoFile, ruleFiles, testTitles, type ReadRepoFile, type RuleRow } from "./rules-reference.ts";
-
-/** Signed rows whose proving test lands in a later W2a task. A task that adds
- *  the proof deletes its id here in the same commit; Task 16 Step 5 requires
- *  this map to be EMPTY. A row not named here must already be proved. */
-const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);
+import { AWAITING_PROOF, ENGINE, ID, ROW_HEADER, RULES_DIR, STATUS, allRows, engineFileExists, hasToken, inEngine, isMatrixCase, parseRuleRows, proofProblems, readEngineFile, ruleFiles, testTitles, type ReadRepoFile, type RuleRow } from "./rules-reference.ts";
+import { OPEN, W2B_PER_FILE, W2B_ROWS, X_BR_1, readAppendixA, signed, w2bIds, w2bProblems } from "./w2b-rows.ts";
 
 /** The ten ids W2a seeds, typed from spec §6 (2026-10-08-format-matrix-w2a-design.md, "W2a seeds only"). */
 const SEEDED = ["X-BR-1", "X-BR-2", "X-ST-1", "X-ST-2", "X-DR-1", "BG-KO-1", "BG-KO-2", "CA-KO-1", "GN-KO-1", "CK-KO-1"];
 
-const W2B_DATE = "2026-10-08";
-const signed = (ruling: number, date = W2B_DATE) => `signed ${ruling} ${date}`;
-const deviation = (ruling: number) => `deviation ${ruling} ${W2B_DATE}`;
-/** Orchestrator pre-flight rulings are no owner signature (AGENTS.md class 17): their rows stay open until the owner signs. */
-const OPEN = "⬜ open";
-/** The rows W2b adds, by rules file, each with the status it must carry. Typed from spec
- *  2026-10-08-format-matrix-w2b-design.md §6 and Appendix A — the spec is the source here, never the parsed files — as the
- *  W2b ledger's rulings amend it (plan PF-13: "53 new ids + CK-WO-2 + X-WD-6, plus the X-BR-1 amendment"):
- *  - Appendix A's 53 new ids, with Appendix A's status (`signed <ruling>` from _INDEX rulings 83–99; BD-WO-2 and BD-RT-1
- *    are recorded deviations);
- *  - CK-WO-2 (plan PF-6): an orchestrator ruling the ledger reported to the owner, OPEN until ruling 125; X-WD-6 (plan PF-7) was the same
- *    until owner ruling 113 (2026-10-11) settled its wording ("Amends X-RS-1, X-RT-1 and X-WD-6"), so it carries 113;
- *  - X-WO-1 and VB-RT-1 carry owner ruling 108 (2026-10-11), which changed their text: a credited result pays the table
- *    points of its credited score (a volleyball side at fault at two sets all takes the 3-2 loss's point);
- *  - X-RS-1 carries owner ruling 113 (2026-10-11), which changed its text after ruling 112 (a walkover stays
- *    recordable after the start until something is played): nothing played means not started, for every reason, and a
- *    retirement waits for play; ruling 114 keeps 112's "played" (any sport event, scoring or not). X-RT-1 carried 113 too;
- *  - X-RT-1, X-PS-1 and X-PS-2 carry owner ruling 115 (2026-10-12), which changed their text ("Amends X-PS-1, X-PS-2
- *    and X-RT-1"): a disqualification with nothing played is treated like a walkover — its credit, and no match in
- *    players' stats. Appendix A carries the same text, so none of the three is in AMENDED_TEXT;
- *  - HK-AB-1 and IH-AB-1 carry owner ruling 117 (2026-10-12), which confirmed R16-3 and qualifies them: where the cfg
- *    refuses a draw, a level abandon is accepted with no result (X-AB-1). Appendix A carries the same text. FB-AB-1 keeps
- *    its text: football takes a draw in every draw kind (football.ts `supportsDraws`), so no football cfg reaches it;
- *  - X-PS-2 and X-AB-1 carry owner ruling 120 (2026-10-12), which amends them ("X-PS-2 and X-AB-1, the stats clause
- *    only"): an abandon counts as a match in players' stats only if something was played before it. Appendix A carries
- *    the same text, so neither is in AMENDED_TEXT;
- *  - GN-RT-1 carries owner ruling 124 (2026-10-13, amends 87): football's FB-RT-1 rule — the walkover credit unless the
- *    recorded score is worse for the offender. Appendix A carries the same text, so it is not in AMENDED_TEXT;
- *  - CK-WO-2 carries owner ruling 125 (2026-10-13), which signed PF-6's row as built (its text unchanged);
- *  - X-PS-1 carries owner ruling 127 (2026-10-13), which amends it after 115: a withdrawal counts as a match in players'
- *    stats if and only if play was recorded before it, still with no personal W/L. Appendix A carries the same text, so
- *    it is not in AMENDED_TEXT. */
-const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  "cross-sport.md": {
-    "X-RS-1": signed(118, "2026-10-12"), "X-RS-2": signed(83), "X-RS-3": signed(83),
-    "X-DW-1": signed(84), "X-DW-2": signed(84), "X-DW-3": signed(84), "X-DW-4": signed(85),
-    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(118, "2026-10-12"),
-    "X-AB-1": signed(120, "2026-10-12"), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
-    "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
-    "X-PS-1": signed(127, "2026-10-13"), "X-PS-2": signed(120, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
-    "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": signed(113, "2026-10-11"),
-  },
-  "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },
-  "hockey.md": { "HK-WO-1": signed(86), "HK-RT-1": signed(87), "HK-AB-1": signed(117, "2026-10-12") },
-  "icehockey.md": { "IH-WO-1": signed(86), "IH-RT-1": signed(87), "IH-AB-1": signed(117, "2026-10-12") },
-  "volleyball.md": { "VB-WO-1": signed(86), "VB-RT-1": signed(108, "2026-10-11") },
-  "tabletennis.md": { "TT-WO-1": signed(86), "TT-RT-1": signed(87) },
-  "tennis.md": { "TN-WO-1": signed(86), "TN-RT-1": signed(87) },
-  "badminton.md": { "BD-WO-1": signed(86), "BD-WO-2": deviation(86), "BD-RT-1": deviation(87) },
-  "cricket.md": { "CK-WO-1": signed(86), "CK-AB-1": signed(88), "CK-AB-2": signed(88), "CK-WO-2": signed(125, "2026-10-13") },
-  "boardgame.md": { "BG-WO-1": signed(86), "BG-DW-1": signed(84), "BG-WO-2": signed(90), "BG-WO-3": signed(99, "2026-10-09") },
-  "carrom.md": { "CA-WO-1": signed(86), "CA-RT-1": signed(87), "CA-AB-1": signed(88) },
-  "generic.md": { "GN-WO-1": signed(86), "GN-RT-1": signed(124, "2026-10-13"), "GN-AB-1": signed(88) },
-};
-/** Appendix A's own per-file count ("54 rows: cross-sport.md 23, football.md 3, …"), less the X-BR-1 amendment it counts
- *  in cross-sport, plus PF-7's X-WD-6 (cross-sport) and PF-6's CK-WO-2 (cricket). Pins W2B_ROWS against a dropped entry. */
-const W2B_PER_FILE: Readonly<Record<string, number>> = {
-  "cross-sport.md": 23 - 1 + 1, "football.md": 3, "hockey.md": 3, "icehockey.md": 3, "volleyball.md": 2, "tabletennis.md": 2,
-  "tennis.md": 2, "badminton.md": 3, "cricket.md": 3 + 1, "boardgame.md": 4, "carrom.md": 3, "generic.md": 3,
-};
-/** X-BR-1, amended by owner ruling 84 (W2b-R2): "decided only by a win" → "decided only by a win or a double walkover".
- *  W2b's proof of the amended text sits beside W2a's (plan, Task 7: "added to X-BR-1's proved by"). */
-const X_BR_1 = {
-  says: "decided only by a win or a double walkover",
-  saidBefore: "decided only by a win (",
-  status: signed(84),
-  proof: "apps/web/src/server/engine-db/__tests__/double-walkover-seating.test.ts",
-} as const;
-const w2bIds = (): string[] => Object.values(W2B_ROWS).flatMap((ids) => Object.keys(ids));
-
 /** A row's test paths (matrix cases excluded). */
 const testPaths = (r: RuleRow): number => r.provedBy.filter((p) => !isMatrixCase(p)).length;
-
-/** Everything the parsed rows owe W2b, as data: each pinned id present, in its file, with its status; X-BR-1 amended. */
-function w2bProblems(rows: readonly RuleRow[]): string[] {
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const out: string[] = [];
-  for (const [file, ids] of Object.entries(W2B_ROWS)) {
-    for (const [id, status] of Object.entries(ids)) {
-      const r = byId.get(id);
-      if (r === undefined) { out.push(`${id}: missing (owed in ${file})`); continue; }
-      if (r.file !== file) out.push(`${id}: in ${r.file}, not ${file}`);
-      if (r.status !== status) out.push(`${id}: status "${r.status}", not "${status}"`);
-    }
-  }
-  const br = byId.get("X-BR-1");
-  if (br === undefined) return [...out, "X-BR-1: missing"];
-  if (!br.rule.includes(X_BR_1.says) || br.rule.includes(X_BR_1.saidBefore)) out.push(`X-BR-1: the rule does not say "${X_BR_1.says}": ${br.rule}`);
-  if (br.status !== X_BR_1.status) out.push(`X-BR-1: status "${br.status}", not "${X_BR_1.status}"`);
-  if (!br.provedBy.includes(X_BR_1.proof)) out.push(`X-BR-1: proved by does not name ${X_BR_1.proof}`);
-  return out;
-}
-
-/** The approved W2b spec. Its Appendix A is the W2b rows' written source, read at test time (review M-2), so a row whose
- *  text drifts from the spec — "3-0" becoming "5-0" — is a failure, and a spec amendment moves the pin with it. */
-const W2B_SPEC = join(REPO, "docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md");
-/** "### `cricket.md`", or "### `football.md (new)`" for a file W2b creates. */
-const APPENDIX_SECTION = /^### `([a-z-]+\.md)(?: \(new\))?`/;
-interface AppendixA {
-  /** Each row's id, rule text and the rules file its `### \`<file>.md\`` subsection names. */
-  readonly rows: readonly { id: string; rule: string; file: string }[];
-  /** Row-shaped lines whose id cell is not an id: "X-BR-1 (amend)". */
-  readonly amendments: readonly string[];
-  /** The total the appendix states of itself ("54 rows: …"). */
-  readonly stated: number;
-}
-/** Appendix A of the W2b spec, from its heading to the next `## ` heading. A row outside a file subsection, a row that is
- *  not 6 cells, a missing stated total and an appendix with no row are refusals, never an empty answer. */
-function readAppendixA(text: string): AppendixA {
-  const at = text.indexOf("\n## Appendix A");
-  if (at < 0) throw new Error('W2b spec: no "## Appendix A" section');
-  const lines = text.slice(at + 1).split("\n");
-  const end = lines.findIndex((l, i) => i > 0 && l.startsWith("## "));
-  const body = end < 0 ? lines : lines.slice(0, end);
-  const stated = /^(\d+) rows: /m.exec(body.join("\n"));
-  if (stated?.[1] === undefined) throw new Error('W2b spec: Appendix A no longer states its own total ("N rows: …")');
-  let file: string | undefined;
-  const rows: { id: string; rule: string; file: string }[] = [];
-  const amendments: string[] = [];
-  for (const line of body) {
-    const h = APPENDIX_SECTION.exec(line);
-    if (h?.[1] !== undefined) { file = h[1]; continue; }
-    if (!line.startsWith("| ")) continue; // prose, and the |---| separator
-    const cells = line.slice(2, -2).split(" | ").map((c) => c.trim());
-    if (cells[0] === "id") continue; // the header
-    if (cells.length !== 6) throw new Error(`W2b spec: an Appendix A row has ${cells.length} cells, not 6: ${line.slice(0, 48)}`);
-    const [id, rule] = cells as [string, string];
-    if (!ID.test(id)) { amendments.push(id); continue; }
-    if (file === undefined) throw new Error(`W2b spec: Appendix A row ${id} sits before any \`<file>.md\` subsection`);
-    rows.push({ id, rule, file });
-  }
-  if (rows.length === 0) throw new Error("W2b spec: no row parsed from Appendix A");
-  return { rows, amendments, stated: Number(stated[1]) };
-}
-/** The W2b rows whose text is NOT Appendix A's, each with its whole expected text and what changed it. Every entry must
- *  differ from Appendix A (or, for X-BR-1, have Appendix A's amend line): a stale entry is a failure. Every other W2b id
- *  carries Appendix A's text exactly. */
-const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
-  "X-BR-1": {
-    says: "In a bracket kind, a fixture is decided only by a win or a double walkover (from play, a decider, a forfeit or settle); `draw`, `tie` and `no_result` are never a decided result.",
-    by: "Appendix A's own amend line (ruling 84): \"a win\" became \"a win or a double walkover\"",
-  },
-  "X-RS-1": {
-    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text, and nothing played means not started for every reason (rulings 112, 113): played is an active sport (module-owned) event after `core.start`, scoring or not (ruling 114), kernel admin events and voided events not counting; a walkover and a double walkover are recordable until something is played (chess keeps its wider walkover phases, FIDE 6.7.1), a disqualification from the Start, a retirement only once something is played, and a withdrawal in any phase until the match has a result, or over a held level result (PF-1). Amended by ruling 118 (2026-10-12): in chess the Start itself is play (Seazn records no moves), so a chess retirement is recordable from the Start.",
-    by: "owner rulings 112, 113 and 114 (2026-10-11): nothing played means not started, for every reason; played is any sport event after the Start; ruling 118 (2026-10-12): in chess the Start itself is play",
-  },
-  "X-WO-1": {
-    says: "Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view; a credited result pays the table points of its credited score, the offender's side included (a bye keeps the clean-sweep pair).",
-    by: "owner ruling 108 (2026-10-11): a credited result pays the table points of its credited score",
-  },
-  "VB-RT-1": {
-    says: "Volleyball retirement (incomplete team) = winner given the sets and points it needed; the retiring side keeps what it won, and both sides take the table points of that credited set score (retiring at two sets all is a 3-2 loss).",
-    by: "owner ruling 108 (2026-10-11): retiring at two sets all is the 3-2 loss's point",
-  },
-  "X-WD-1": {
-    says: "When a side withdraws from a held (needs_decision) bracket fixture, the fixture is walked over to the remaining side, reason \"withdrew\", with the sport's retirement credit.",
-    by: "W2b ledger I-1 and Task 15 review M-6: the sport's own retirement credit",
-  },
-  "BD-RT-1": {
-    says: "Badminton retirement = points played stand, the current game completed for the winner to its legal end (21, or two clear up to the 30 cap), remaining games 21-0 (until W5's 16.2.5).",
-    by: "Task 15 review M-6, owner Q2: the current game runs to its legal end, not a flat 21",
-  },
-  "FB-AB-1": {
-    says: "Football abandon under abandonPolicy award: leader wins with the real score; level = draw with the real score in draw kinds; in brackets a level abandon stays abandoned for the desk to settle, never needs_decision.",
-    by: "Task 14 fix round 1 M-1: spec §5.4 rule 2, a level abandon in a bracket stays abandoned (HK-AB-1 and IH-AB-1 say \"Same as FB-AB-1\", so they take it by reference and keep Appendix A's text)",
-  },
-};
-/** The two W2b rows Appendix A does not hold (orchestrator rulings PF-6, PF-7; X-WD-6 worded by ruling 113), pinned here
- *  by their whole text. */
-const NOT_IN_APPENDIX_A: Readonly<Record<string, { says: string; by: string }>> = {
-  "CK-WO-2": {
-    says: "Unlimited-overs (Test, first-class) cricket walkover credits the result and its table points only: no runs or overs are credited, and the match is out of NRR (with no quota, NRR is undefined).",
-    by: "plan PF-6",
-  },
-  "X-WD-6": {
-    says: "A withdrawal (reason \"withdrew\") takes the sport's walkover credit while nothing is played (no Start, or a Start with nothing played, ruling 113) and the sport's retirement credit once something is played (a held level result included, X-WD-1).",
-    by: "plan PF-7 and ruling 113",
-  },
-};
-interface TextCheck { problems: string[]; fromAppendix: number; amended: number; added: number }
-/** Each W2b row's text against Appendix A, its recorded amendment or its recorded addition, and every Appendix A row
- *  owed as a W2b id. A missing row is w2bProblems' to report; this counts what it compared, so zero compared shows. */
-function w2bTextProblems(rows: readonly RuleRow[], appendix: AppendixA): TextCheck {
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const inAppendix = new Map(appendix.rows.map((a) => [a.id, a]));
-  const owed = [...w2bIds(), "X-BR-1"];
-  const check: TextCheck = { problems: [], fromAppendix: 0, amended: 0, added: 0 };
-  const p = check.problems;
-  for (const id of owed) {
-    const r = byId.get(id);
-    if (r === undefined) continue;
-    const a = inAppendix.get(id);
-    if (a !== undefined && a.file !== r.file) p.push(`${id}: Appendix A files it in ${a.file}, the rows in ${r.file}`);
-    const amended = AMENDED_TEXT[id];
-    const added = NOT_IN_APPENDIX_A[id];
-    if (amended !== undefined) {
-      if (r.rule !== amended.says) p.push(`${id}: the text is not its amendment (${amended.by}): ${r.rule}`);
-      if (a === undefined && !appendix.amendments.includes(`${id} (amend)`)) p.push(`${id}: recorded as amended, but Appendix A has no amend line for it`);
-      if (a !== undefined && a.rule === amended.says) p.push(`${id}: recorded as amended, but Appendix A already says it`);
-      check.amended++;
-    } else if (added !== undefined) {
-      if (a !== undefined) p.push(`${id}: Appendix A holds it now (${added.by}); pin it from there`);
-      if (r.rule !== added.says) p.push(`${id}: the text is not ${added.by}'s: ${r.rule}`);
-      check.added++;
-    } else if (a === undefined) {
-      p.push(`${id}: not in Appendix A, and recorded as neither amended nor added`);
-    } else {
-      if (r.rule !== a.rule) p.push(`${id}: the text is not Appendix A's: "${r.rule}" (Appendix A: "${a.rule}")`);
-      check.fromAppendix++;
-    }
-  }
-  const owedSet = new Set(owed);
-  for (const a of appendix.rows) if (!owedSet.has(a.id)) p.push(`${a.id}: in Appendix A but owed by no W2b pin`);
-  return check;
-}
 
 /** In-memory files for synthetic rows: no synthetic row borrows a real file as its proof. Every path is repo-relative. */
 const PROVES_TS = "apps/web/src/server/__tests__/proves.test.ts";
@@ -248,6 +29,7 @@ const REFUSED_LOCATIONS: Array<[string, string]> = [
   ["docs/proves.test.ts", "is under packages/engine/rules/ or docs/, which cannot prove a rule"],
   ["packages/engine/test/rules-reference.test.ts", "is the checker itself, which holds every id as data"],
   ["packages/engine/test/rules-reference.ts", "is the checker itself, which holds every id as data"],
+  ["scripts/__tests__/rules-reference.test.ts", "is the checker itself, which holds every id as data"],
   ["apps/web/src/server/helper.ts", "is not a test file (*.test.ts, *.test.tsx or *.spec.ts)"],
   ["apps/web/src/server/notes.md", "is not a test file (*.test.ts, *.test.tsx or *.spec.ts)"],
   ["./apps/web/src/server/__tests__/proves.test.ts", "is not a normalised repo-relative path"],
@@ -316,19 +98,29 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(refused).toBe(7);
   });
 
-  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)", () => {
-    let checked = 0;
+  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (engine paths)", () => {
+    const reads: string[] = [];
+    const read: ReadRepoFile = (p) => { reads.push(p); return readEngineFile(p); };
+    let rows = 0;
+    let paths = 0;
     for (const r of allRows()) {
       if (r.status.startsWith("⬜")) continue;
       if (AWAITING_PROOF.has(r.id)) {
         expect(r.provedBy, `${r.id} awaits ${AWAITING_PROOF.get(r.id)} and must not claim proof yet`).toEqual([]);
-        checked++;
+        rows++;
         continue;
       }
-      expect(proofProblems(r), r.id).toEqual([]);
-      checked++;
+      // The row-level refusals (a row naming no test) plus every proof under packages/engine/; the monorepo's checker reads the rest.
+      expect(proofProblems(r, read, inEngine), r.id).toEqual([]);
+      const mine = r.provedBy.filter((p) => !isMatrixCase(p) && inEngine(p)).length;
+      paths += mine;
+      if (mine > 0) rows++;
     }
-    expect(checked).toBeGreaterThan(0);
+    expect(rows, "signed rows with a proof path under packages/engine/").toBeGreaterThan(0);
+    expect(paths, "proof paths under packages/engine/, each read and its titles checked").toBeGreaterThan(0);
+    // the split is observed, not assumed: every path this half read is the engine's (a literal, not the predicate under test)
+    expect(reads.filter((p) => !p.startsWith("packages/engine/")), "paths outside the engine this half read").toEqual([]);
+    expect(reads.length, "paths this half read").toBe(paths);
   });
 
   it("the proof checks catch a row with no test, a missing file and a file that does not name the id (synthetic signed rows)", () => {
@@ -336,16 +128,6 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(proofProblems(row(["apps/web/src/server/__tests__/no-such.test.ts"]), read)).toEqual(["X-ZZ-1: apps/web/src/server/__tests__/no-such.test.ts does not exist"]);
     expect(proofProblems(row([BODY_STRING]), read)).toEqual([noTitle(BODY_STRING)]);
     expect(proofProblems(row([PROVES_TS]), read)).toEqual([]); // the positive pair: an in-memory file whose title names the id
-  });
-
-  it("the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected", () => {
-    expect(readRepoFile("packages/engine/rules/carrom.md")).toContain("CA-KO-1");
-    expect(readRepoFile("packages/engine/rules/no-such.md")).toBeUndefined();
-    expect(() => readRepoFile("packages/engine/rules")).toThrow(/EISDIR/);
-    expect(proofProblems(row(["apps/web/src/no-such-file.test.ts"]))).toEqual(["X-ZZ-1: apps/web/src/no-such-file.test.ts does not exist"]);
-    // A REAL test file, read through the default reader: it exists, and none of its titles names the synthetic id.
-    const real = "packages/engine/test/source-bytes.test.ts";
-    expect(proofProblems(row([real]))).toEqual([noTitle(real)]);
   });
 
   it("a matrix: entry is additional evidence only: skipped beside a real proving test, and a matrix-only row names no proving test (synthetic signed rows)", () => {
@@ -362,7 +144,7 @@ describe("rules reference (ruling 75, spec §6)", () => {
       expect(proofProblems(row([p]), read), p).toEqual([`X-ZZ-1: ${p} ${why}`]);
       checked++;
     }
-    expect(checked).toBe(10);
+    expect(checked).toBe(11);
     // The positive pairs: a test file, a spec file and a .tsx test file elsewhere in the repo are all accepted.
     for (const ok of [PROVES_TS, PROVES_SPEC, PROVES_TSX]) expect(proofProblems(row([ok]), read), ok).toEqual([]);
   });
@@ -509,22 +291,77 @@ describe("rules reference (ruling 75, spec §6)", () => {
     for (const id of AWAITING_PROOF.keys()) expect(signed.has(id), id).toBe(true);
   });
 
-  it("every enforced-at path exists", () => {
-    let checked = 0;
-    for (const r of allRows()) for (const p of r.enforcedAt) { expect(fileExists(p), `${r.id}: ${p}`).toBe(true); checked++; }
-    expect(checked).toBeGreaterThan(0);
+  it("every enforced-at path exists (engine paths)", () => {
+    const checked: string[] = [];
+    for (const r of allRows()) for (const p of r.enforcedAt) {
+      if (!inEngine(p)) continue; // not the engine's: checked by scripts/__tests__/rules-reference.test.ts
+      expect(engineFileExists(p), `${r.id}: ${p}`).toBe(true);
+      checked.push(p);
+    }
+    expect(checked.length, "enforced-at paths under packages/engine/").toBeGreaterThan(0);
+    expect(checked.filter((p) => !p.startsWith("packages/engine/")), "paths outside the engine this half checked").toEqual([]);
+  });
+
+  // ---- Added by engine-split 1d-5 (the split of the checker between the engine and the monorepo, and the testkit export).
+
+  it("the checker's scope splits a row's proofs: the engine's reader resolves packages/engine/ paths against the engine directory (the standalone-repo layout is proven by the 1d-6 sim run, not here) and reads nothing else (synthetic signed rows)", () => {
+    const seen: string[] = [];
+    const spy: ReadRepoFile = (p) => { seen.push(p); return FIXTURES.get(p); };
+    const mine = "packages/engine/src/no-such.test.ts";
+    // a row proved by an app test and an engine test: the engine half reads only the engine's path, and names it when it is missing
+    expect(proofProblems(row([PROVES_TS, mine]), spy, inEngine)).toEqual([`X-ZZ-1: ${mine} does not exist`]);
+    expect(seen).toEqual([mine]);
+    // the other half sees the complement: the app test only
+    seen.length = 0;
+    expect(proofProblems(row([PROVES_TS, mine]), spy, (p) => !inEngine(p))).toEqual([]);
+    expect(seen).toEqual([PROVES_TS]);
+    // a row none of whose proofs are in scope has nothing to read here; the row-level refusal is the same under any scope
+    expect(proofProblems(row([PROVES_TS]), spy, inEngine)).toEqual([]);
+    for (const none of [[], ["matrix:SC-O1"]]) expect(proofProblems(row(none), spy, inEngine)).toEqual(["X-ZZ-1 names no proving test"]);
+    // the reader: an engine path resolves under the engine directory, whether it sits at packages/engine/ or at a repo root
+    expect(readEngineFile("packages/engine/rules/carrom.md")).toContain("CA-KO-1");
+    expect(readEngineFile("packages/engine/rules/no-such.md")).toBeUndefined();
+    expect(readEngineFile("apps/web/package.json")).toBeUndefined(); // not the engine's, though the monorepo holds it
+    expect(engineFileExists("packages/engine/rules/carrom.md")).toBe(true);
+    expect(engineFileExists("packages/engine/no-such-file")).toBe(false);
+    expect(engineFileExists("apps/web/package.json")).toBe(false);
+    // a path outside the prefix whose tail names a real engine file is still not the engine's (the prefix is checked, not just sliced off)
+    expect(engineFileExists("x".repeat("packages/engine/".length) + "rules/carrom.md")).toBe(false);
+    expect(readEngineFile("x".repeat("packages/engine/".length) + "rules/carrom.md")).toBeUndefined();
+    expect(inEngine("packages/engine/x")).toBe(true);
+    expect(inEngine("packages/engineer/x")).toBe(false); // a prefix is a directory, not a string prefix of a sibling
+    expect(inEngine("apps/packages/engine/x")).toBe(false);
+  });
+
+  it("the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference", async () => {
+    const testkit = join(ENGINE, "src/testkit");
+    const seen = new Set<string>();
+    const readers: string[] = [];
+    const queue = [join(testkit, "index.ts")];
+    while (queue.length > 0) {
+      const file = queue.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      // the compiler's own import scan, so a comment that happens to hold `/*` or `//` can never hide an import
+      for (const { fileName: spec } of ts.preProcessFile(readFileSync(file, "utf8"), true, true).importedFiles) {
+        if (spec.startsWith(".")) queue.push(join(file, "..", spec));
+        else if (/^(?:node:)?fs(?:\/|$)/.test(spec) && !readers.includes(file)) readers.push(file);
+      }
+    }
+    expect(seen.size, "files in the testkit barrel's closure").toBeGreaterThan(10);
+    // node:fs must not creep into the barrel again: the one exception is the module whose input ships with the package
+    expect(readers.map((f) => f.slice(ENGINE.length + 1))).toEqual(["src/testkit/rules-reference.ts"]);
+    // the seam, not just the module: the barrel itself hands a consumer the parser, and what it parses is the package's rules
+    const barrel = await import("../src/testkit/index.ts");
+    expect(typeof barrel.allRows).toBe("function");
+    expect(typeof barrel.parseRuleRows).toBe("function");
+    expect(barrel.ruleFiles()).toEqual(ruleFiles());
+    expect(barrel.allRows().length).toBe(allRows().length);
+    expect(barrel.allRows().length).toBeGreaterThan(0);
   });
 });
 
 describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118)", () => {
-  it("empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing", () => {
-    const problems = w2bProblems([]);
-    expect(problems).toHaveLength(56);
-    expect(problems.filter((p) => !/: missing/.test(p))).toEqual([]);
-    // The text pin compares nothing and says so (its counts are zero), and never mistakes a missing row for a match.
-    expect(w2bTextProblems([], readAppendixA(readFileSync(W2B_SPEC, "utf8")))).toEqual({ problems: [], fromAppendix: 0, amended: 0, added: 0 });
-  });
-
   it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108, 113, 115, 118 or 124 where that ruling changed the text; 125 signed PF-6's CK-WO-2), and X-BR-1's text says 'a win or a double walkover'", () => {
     const ids = w2bIds();
     expect(ids).toHaveLength(55);
@@ -551,60 +388,6 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     const old = (br?.rule ?? "").replace(X_BR_1.says, "decided only by a win");
     expect(w2bProblems(edit("X-BR-1", { rule: old }))).toHaveLength(1);
     expect(w2bProblems(edit("X-BR-1", { provedBy: ["apps/web/src/server/engine-db/__tests__/settle-seating.test.ts"] }))).toHaveLength(1);
-  });
-
-  it("W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1), Appendix A amended in place (rulings 113, 115) or addition (PF-6, PF-7)", () => {
-    const appendix = readAppendixA(readFileSync(W2B_SPEC, "utf8"));
-    expect(appendix.rows.length + appendix.amendments.length, "Appendix A parses to the total it states").toBe(appendix.stated);
-    expect(appendix.amendments).toEqual(["X-BR-1 (amend)"]);
-    const check = w2bTextProblems(allRows(), appendix);
-    expect(check.problems).toEqual([]);
-    // Anti-vacuity: every W2b id and X-BR-1 was compared, each through exactly one of the three branches.
-    const amendedInAppendix = Object.keys(AMENDED_TEXT).filter((id) => appendix.rows.some((a) => a.id === id)).length;
-    expect(check).toEqual({
-      problems: [],
-      fromAppendix: appendix.rows.length - amendedInAppendix,
-      amended: Object.keys(AMENDED_TEXT).length,
-      added: Object.keys(NOT_IN_APPENDIX_A).length,
-    });
-    expect(check.fromAppendix + check.amended + check.added).toBe(w2bIds().length + 1);
-    expect(check.fromAppendix).toBeGreaterThan(0);
-  });
-
-  it("the text pin sees a changed number, an amendment reverted, a stale amendment, a lost amend line, an added row edited or moved into Appendix A, a row in another file and an Appendix A row nobody owes (synthetic edits)", () => {
-    const appendix = readAppendixA(readFileSync(W2B_SPEC, "utf8"));
-    const rows = allRows();
-    const edit = (id: string, patch: Partial<RuleRow>) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r));
-    const problems = (rs: readonly RuleRow[], app: AppendixA = appendix) => w2bTextProblems(rs, app).problems;
-    const fb = rows.find((r) => r.id === "FB-WO-1");
-    expect(fb?.rule).toContain("3-0");
-    const seen: string[][] = [];
-    seen.push(problems(edit("FB-WO-1", { rule: (fb?.rule ?? "").replace("3-0", "5-0") })));
-    const wasAppendix = appendix.rows.find((a) => a.id === "X-WO-1")?.rule;
-    expect(wasAppendix).toBeDefined();
-    seen.push(problems(edit("X-WO-1", { rule: wasAppendix ?? "" })));
-    const caughtUp = appendix.rows.map((a) => (a.id === "FB-AB-1" ? { ...a, rule: AMENDED_TEXT["FB-AB-1"]?.says ?? "" } : a));
-    seen.push(problems(rows, { ...appendix, rows: caughtUp }));
-    seen.push(problems(rows, { ...appendix, amendments: [] }));
-    seen.push(problems(edit("CK-WO-2", { rule: "Unlimited-overs cricket walkover = 1-0." })));
-    seen.push(problems(rows, { ...appendix, rows: [...appendix.rows, { id: "X-WD-6", rule: NOT_IN_APPENDIX_A["X-WD-6"]?.says ?? "", file: "cross-sport.md" }] }));
-    seen.push(problems(edit("FB-WO-1", { file: "hockey.md" })));
-    seen.push(problems(rows, { ...appendix, rows: [...appendix.rows, { id: "X-ZZ-9", rule: "r", file: "cross-sport.md" }] }));
-    const want = [
-      /^FB-WO-1: the text is not Appendix A's: ".*5-0/,
-      /^X-WO-1: the text is not its amendment \(owner ruling 108/,
-      /^FB-AB-1: recorded as amended, but Appendix A already says it$/,
-      /^X-BR-1: recorded as amended, but Appendix A has no amend line for it$/,
-      /^CK-WO-2: the text is not plan PF-6's: /,
-      /^X-WD-6: Appendix A holds it now \(plan PF-7 and ruling 113\)/,
-      /^FB-WO-1: Appendix A files it in football\.md, the rows in hockey\.md$/,
-      /^X-ZZ-9: in Appendix A but owed by no W2b pin$/,
-    ];
-    expect(seen).toHaveLength(want.length);
-    for (const [i, got] of seen.entries()) {
-      expect(got, String(want[i])).toHaveLength(1);
-      expect(got[0], String(want[i])).toMatch(want[i]!);
-    }
   });
 
   it("Appendix A's reader refuses no section, no stated total, a row before any file subsection, a 5-cell row and a table with no row; a new file's \"(new)\" heading counts and the next ## heading ends it (synthetic spec text)", () => {
@@ -644,131 +427,4 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     // Ruling 125 signed the one open row (CK-WO-2): no W2b row is open, so no open row owes a proof here.
     expect(openProved).toBe(0);
   });
-});
-
-// Review I-3: the proofs live in apps/web, e2e and tools, so a PR that touches none of packages/engine/** must still
-// run this checker. The engine job in ci.yml is path-filtered; the `gates` job is not.
-describe("the checker runs on every pull request: CI wiring (review I-3)", () => {
-  const lines = readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8").split("\n");
-  const code = (l: string) => l.trim() !== "" && !l.trimStart().startsWith("#");
-  const HEAD = "      - name: Engine rules reference checker (DB-free)";
-  const REPORT = "vitest-results-rules.json";
-  const at = lines.indexOf(HEAD);
-  /** The step's own lines: everything after its `- name:` line indented 8 or more (its keys and its block scalar). */
-  const stepLines = (): string[] => {
-    const out: string[] = [];
-    for (const l of lines.slice(at + 1)) {
-      if (l.trim() !== "" && !l.startsWith("        ")) break;
-      out.push(l);
-    }
-    return out;
-  };
-
-  it("one step, in the gates job, named for the checker", () => {
-    expect(lines.filter((l) => l === HEAD)).toHaveLength(1);
-    expect(at).toBeGreaterThan(0);
-    const jobHead = lines.slice(0, at).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
-    expect(jobHead).toBe("  gates:");
-  });
-
-  it("nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block", () => {
-    const onAt = lines.indexOf("on:");
-    const afterOn = lines.findIndex((l, i) => i > onAt && /^[a-z]/.test(l));
-    expect(onAt).toBeGreaterThanOrEqual(0);
-    expect(lines.slice(onAt + 1, afterOn).filter(code)).toEqual(["  pull_request:"]); // no paths:, paths-ignore: or branches: under it
-    const gates = lines.indexOf("  gates:");
-    const steps = lines.indexOf("    steps:", gates);
-    expect(lines.slice(gates + 1, steps).filter(code)).toEqual(["    name: Typecheck + lint + drift gates", "    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}"]);
-    expect(stepLines().filter((l) => /^ {8}[a-z-]+:/.test(l)).map((l) => l.trim().replace(/:.*$/, ""))).toEqual(["run"]);
-  });
-
-  it("the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)", () => {
-    const script = stepLines().filter((l) => l.startsWith("          ")).map((l) => l.slice(10));
-    expect(script.slice(0, 3)).toEqual([
-      "set -euo pipefail",
-      `rm -f ${REPORT}`,
-      `./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=${REPORT} --testTimeout=30000 packages/engine/test/rules-reference.test.ts`,
-    ]);
-    // The judge is the rest: one `node -e '…'` block, nothing after its closing quote, no single quote inside it.
-    expect(script[3]).toBe("node -e '");
-    expect(script.at(-1)).toBe("'");
-    const body = script.slice(4, -1);
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.filter((l) => l.includes("'"))).toEqual([]);
-    expect(script.join("\n")).not.toMatch(/\bjq\b/);
-  });
-
-  /** Every `runStep` is one bash spawn (which itself runs a stand-in vitest and a node judge). AGENTS.md class 20: a flat
-   *  timeout beside a derived cost is a latent red. Vitest's 5 s default fired at 17 s and 6 s under a CPU burner (24 burners on
-   *  12 cores: about 2 s a run), so each test below states its budget from the runs it makes, at the same cap the spawn carries
-   *  (`SPAWN_MS`, via `spawnBudget`), and asserts that the runs it made are the runs the budget was derived from. */
-  let spawns = 0;
-
-  /** Runs the step's REAL run block in a scratch checkout whose vitest is a stand-in: it writes FAKE_JSON to the
-   *  `--outputFile=` the step passed it, then exits FAKE_EXIT. Plain `bash`: the block's own `set -e` carries the fail-fast. */
-  const runStep = (o: { json: object | null; exit?: number; stale?: object }) => {
-    spawns++;
-    const root = realpathSync(mkdtempSync(join(tmpdir(), `w2a-rules-ci-${process.pid}-`)));
-    try {
-      const bin = join(root, "packages/engine/node_modules/.bin");
-      mkdirSync(bin, { recursive: true });
-      writeFileSync(join(bin, "vitest"), ["#!/bin/sh", 'out=""', 'for a in "$@"; do case "$a" in --outputFile=*) out="${a#--outputFile=}";; esac; done', 'if [ -n "$FAKE_JSON" ]; then cp "$FAKE_JSON" "$out"; fi', 'exit "$FAKE_EXIT"', ""].join("\n"));
-      chmodSync(join(bin, "vitest"), 0o755);
-      let fake = "";
-      if (o.json !== null) { fake = join(root, "fake-report.json"); writeFileSync(fake, JSON.stringify(o.json)); }
-      if (o.stale !== undefined) writeFileSync(join(root, REPORT), JSON.stringify(o.stale)); // a report left by an earlier run
-      writeFileSync(join(root, "step.sh"), stepLines().filter((l) => l.startsWith("          ")).map((l) => l.slice(10)).join("\n") + "\n");
-      const r = spawnSync("bash", ["step.sh"], { cwd: root, env: { PATH: process.env.PATH ?? "", FAKE_JSON: fake, FAKE_EXIT: String(o.exit ?? 0) }, encoding: "utf8", timeout: SPAWN_MS });
-      return { status: r.status, stdout: r.stdout, stderr: r.stderr };
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  };
-  const report = (o: Record<string, unknown> = {}) => ({ numTotalTests: 11, numPassedTests: 11, numFailedTests: 0, numFailedTestSuites: 0, numPendingTests: 0, numTodoTests: 0, testResults: [{ name: "a.test.ts" }], ...o });
-
-  // Each red changes exactly one field, so no condition is covered by another: a file that collected zero tests
-  // still has its one testResults entry, and a stray second file leaves every count clean.
-  const REDS: Array<[string, object, string]> = [
-    ["zero tests in the one file", report({ numTotalTests: 0, numPassedTests: 0 }), "ZERO tests"],
-    ["no file matched at all", report({ numTotalTests: 0, numPassedTests: 0, testResults: [] }), "ZERO tests"],
-    ["a failed test", report({ numFailedTests: 1 }), "failed test(s)"],
-    ["a failed suite", report({ numFailedTestSuites: 1 }), "failed suite(s)"],
-    ["a skipped test", report({ numPendingTests: 1 }), "skipped"],
-    ["a todo test", report({ numTodoTests: 1 }), "todo"],
-    ["a stray file", report({ testResults: [{ name: "a.test.ts" }, { name: "b.test.ts" }] }), "ran 2 files, not exactly 1"],
-  ];
-  /** One green run, then one run per red. */
-  const JUDGE_RUNS = 1 + REDS.length;
-  /** A non-zero vitest exit, no report written, and a stale report left behind. */
-  const STEP_RUNS = 3;
-
-  it("the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node", (ctx) => {
-    spawns = 0;
-    const green = runStep({ json: report() });
-    expect(green.status, green.stderr).toBe(0);
-    expect(green.stdout).toContain("rules reference: 11/11 tests passed");
-    for (const [what, json, why] of REDS) {
-      const r = runStep({ json });
-      expect(r.status, `${what}: ${r.stdout}`).toBe(1);
-      expect(r.stderr, what).toContain(`::error::`);
-      expect(r.stderr, what).toContain(why);
-    }
-    expect(REDS).toHaveLength(7);
-    expect(spawns, "the runs the budget was derived from are the runs made").toBe(JUDGE_RUNS);
-    expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those runs, not a default").toBe(spawnBudget(spawns));
-  }, spawnBudget(JUDGE_RUNS));
-
-  it("the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", (ctx) => {
-    spawns = 0;
-    const failedExit = runStep({ json: report(), exit: 1 });
-    expect(failedExit.status).not.toBe(0);
-    expect(failedExit.stdout).not.toContain("rules reference:"); // set -e stopped it before the judge
-    const noReport = runStep({ json: null });
-    expect(noReport.status).not.toBe(0);
-    const stale = runStep({ json: null, stale: report() }); // rm -f clears the clean stale report, so the judge finds none
-    expect(stale.status).not.toBe(0);
-    expect(stale.stdout).not.toContain("rules reference:");
-    expect(spawns, "the runs the budget was derived from are the runs made").toBe(STEP_RUNS);
-    expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those runs, not a default").toBe(spawnBudget(spawns));
-  }, spawnBudget(STEP_RUNS));
 });

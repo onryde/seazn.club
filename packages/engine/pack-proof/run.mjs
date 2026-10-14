@@ -240,19 +240,25 @@ async function nodeFixture(ctx) {
   const expectedSports = (await import(pathToFileURL(path.join(ENGINE, "src", "sports", "index.ts")).href)).builtinModules.map((m) => m.key);
   assertSameSet("node: sports folded from the tarball vs the workspace's builtinModules", sports, expectedSports);
   if (!(folds >= sports.length)) throw new Error(`node: ${folds} folds for ${sports.length} sports`);
-  const total = imported.length + 1;
-  info(`node: ${total} specifiers imported (${total - ctx.tarball.sportDirs.length} export keys + ${ctx.tarball.sportDirs.length} sport directories), ${sports.length} sports folded over ${folds} declared configs`);
+  const specifiers = imported.length + 1;
+  info(`node: ${specifiers} specifiers imported (${specifiers - ctx.tarball.sportDirs.length} export keys + ${ctx.tarball.sportDirs.length} sport directories), ${sports.length} sports folded over ${folds} declared configs`);
+  const specifiersAndSports = specifiers + sports.length;
 
-  // rules.mjs: skipped, loudly, until Task 1d-5 gives it a parser to call
+  // rules.mjs (Task 1d-5, R12): the testkit's rules parser, run from the INSTALLED tarball, reads the same rows per file as the workspace's
+  // own parse of the same tables. A parse that found nothing, or found different rows, fails; so does a leg that skips itself.
   const rules = await run("node: rules.mjs", process.execPath, ["rules.mjs"], { cwd: kit, timeoutMs: 120_000 });
-  const skipped = /^SKIPPED: (.+)$/m.exec(rules);
-  if (skipped !== null) {
-    info(`node: rules.mjs skipped - ${skipped[1]}`);
-    return total + sports.length;
-  }
-  const r = /^rules: (\d+)$/m.exec(rules);
-  if (r === null) throw new Error(`node: rules.mjs neither skipped nor reported a rules count:\n${rules}`);
-  return total + sports.length + requireChecked("node: rules.mjs", Number(r[1]));
+  if (/^SKIPPED: /m.test(rules)) throw new Error(`node: rules.mjs skipped itself - the parser it calls shipped in 1d-5, so a skip is a failure:\n${rules}`);
+  const total = Number(/^rules: (\d+)$/m.exec(rules)?.[1]);
+  const byFile = JSON.parse(/^RULES_BY_FILE (\{.*\})$/m.exec(rules)?.[1] ?? "null");
+  if (byFile === null) throw new Error(`node: rules.mjs printed no RULES_BY_FILE line:\n${rules}`);
+  // the rows to expect come from the WORKSPACE source's parse of rules/; what was parsed came from the tarball
+  const workspace = await import(pathToFileURL(path.join(ENGINE, "src", "testkit", "rules-reference.ts")).href);
+  const wsRows = workspace.allRows();
+  const wsByFile = workspace.ruleFiles().map((f) => `${f}:${wsRows.filter((r) => r.file === f).length}`);
+  assertSameSet("node: rules rows per file parsed from the tarball vs the workspace", Object.entries(byFile).map(([f, n]) => `${f}:${n}`), wsByFile);
+  if (total !== wsRows.length) throw new Error(`node: rules.mjs parsed ${total} rows from the tarball, the workspace parses ${wsRows.length}`);
+  info(`node: ${total} rules rows parsed from the installed testkit over ${wsByFile.length} rules files`);
+  return specifiersAndSports + requireChecked("node: rules.mjs", total);
 }
 
 async function nextFixture(ctx) {

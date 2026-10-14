@@ -1,12 +1,9 @@
-// The signed rule rows (packages/engine/rules/*.md, ruling 75), read as TEXT. They are the reference families' only
-// input besides the spec (R8), so a family's tests take their expected scope from here, never from the family.
-// Test-side only: src may not touch node:fs (scripts/reference-boundary.ts), and this file is outside src.
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-export const RULES_DIR = fileURLToPath(new URL("../../engine/rules/", import.meta.url));
-const ROW_ID = /^[A-Z]+-[A-Z]+-\d+$/;
+// The signed rule rows (packages/engine/rules/*.md, ruling 75). They are the reference families' only input besides the spec
+// (R8), so a family's tests take their expected scope from here, never from the family. Read through the engine's PUBLISHED
+// testkit (`allRows`, engine-split 1d review M1): the tables ship in the package, so this works from the installed package at 2b
+// as it does from the workspace, and no test here names an engine path. Test-side only: src may not touch node:fs
+// (scripts/reference-boundary.ts), and this file is outside src.
+import { allRows } from "@seazn/engine/testkit";
 
 export interface RuleRow {
   readonly id: string;
@@ -16,23 +13,10 @@ export interface RuleRow {
   readonly file: string;
 }
 
-/** Every row of every rules file. Zero files or zero rows is a refusal, never an empty answer. */
-export function readRuleRows(dir: string = RULES_DIR): RuleRow[] {
-  const files = readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "README.md").sort();
-  if (files.length === 0) throw new Error(`rule-rows: no rules file in ${dir}`);
-  const rows: RuleRow[] = [];
-  for (const f of files) {
-    for (const line of readFileSync(join(dir, f), "utf8").split("\n")) {
-      if (!line.startsWith("|")) continue;
-      const cells = line.split("|").map((c) => c.trim());
-      const id = cells[1] ?? "";
-      if (!ROW_ID.test(id)) continue; // the header and the separator line
-      // | id | rule | citation | status | enforced at | proved by |  →  8 cells after the split (two empty ends).
-      if (cells.length !== 8) throw new Error(`rule-rows: ${f}: row ${id} has ${cells.length - 2} cells, expected 6 (a "|" inside a cell?)`);
-      rows.push({ id, rule: cells[2] ?? "", status: cells[4] ?? "", file: f.slice(0, -".md".length) });
-    }
-  }
-  if (rows.length === 0) throw new Error(`rule-rows: ${files.length} rules file(s) in ${dir} and not one row parsed`);
+/** Every row of every rules file. Zero rows is a refusal, never an empty answer. `read` is the testkit's reader; a test hands it a stub. */
+export function readRuleRows(read: () => readonly { id: string; rule: string; status: string; file: string }[] = allRows): RuleRow[] {
+  const rows = read().map((r) => ({ id: r.id, rule: r.rule, status: r.status, file: r.file.slice(0, -".md".length) }));
+  if (rows.length === 0) throw new Error("rule-rows: the engine's testkit read no rule row");
   return rows;
 }
 

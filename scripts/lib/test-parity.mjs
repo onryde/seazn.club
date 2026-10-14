@@ -5,6 +5,10 @@
 // ALWAYS pass `--isolate`, on BOTH sides. The engine's vitest config has `isolate: false`, and a test file that imports another test file
 // (src/import/plan.property.test.ts imports ./plan.test.ts) then has that file's tests attributed to whichever worker reached it first: 19 ids
 // move between the two files depending on scheduling, so a default collection reports "unaccounted" ids that are not gone (batch 1b review m4).
+// Ids are a MULTISET: a test file may hold two tests with the same title (scripts/__tests__/mutate.test.ts and the retirement-drift test beside it do).
+// A duplicate that exists identically before and after is `both`, copy for copy; a change in the COUNT is before-only or after-only, one
+// copy each, and a ledger entry accounts exactly one copy. The same id arriving from two reports of one side is still refused: that is
+// an operator error (a report listed twice, or two roots whose relative paths collide), not a duplicate title.
 // Exit codes: 0 everything accounted, 1 ids unaccounted, 2 invalid or vacuous input.
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -14,12 +18,11 @@ const SEP = " › ";
 const NEEDS_TARGET = new Set(["moved", "rehomed", "split", "rewritten"]);
 const FATES = new Set([...NEEDS_TARGET, "added", "retired"]);
 
-// Ids that occur more than once. A duplicate would collapse into one entry in a Set, so a deleted twin would pass.
-function duplicates(ids) {
-  const seen = new Set();
-  const dup = new Set();
-  for (const id of ids) (seen.has(id) ? dup : seen).add(id);
-  return [...dup];
+// How many copies of each id. A Set would collapse a duplicate into one entry, so a deleted twin would pass.
+function counts(ids) {
+  const n = new Map();
+  for (const id of ids) n.set(id, (n.get(id) ?? 0) + 1);
+  return n;
 }
 
 export function testIds(report, root) {
@@ -36,8 +39,6 @@ export function testIds(report, root) {
     for (const a of file.assertionResults ?? []) ids.push([rel, ...(a.ancestorTitles ?? []), a.title].join(SEP));
   }
   if (ids.length === 0) throw new Error(`zero tests in report under ${root}: a parity check over nothing is vacuous`);
-  const dup = duplicates(ids);
-  if (dup.length > 0) throw new Error(`duplicate test id in report under ${root}: ${dup.join("; ")}`);
   return ids.sort();
 }
 
@@ -54,32 +55,56 @@ function checkLedger(ledger) {
 
 export function diffIds(before, after, ledger) {
   checkLedger(ledger);
-  for (const [side, ids] of [["before", before], ["after", after]]) {
-    const dup = duplicates(ids);
-    if (dup.length > 0) throw new Error(`duplicate test id in ${side}: ${dup.join("; ")}`);
-  }
-  const a = new Set(before);
-  const b = new Set(after);
-  const onlyBefore = before.filter((id) => !b.has(id));
-  const onlyAfter = after.filter((id) => !a.has(id));
-  const both = before.filter((id) => b.has(id));
-  const isOnlyBefore = new Set(onlyBefore);
-  const isOnlyAfter = new Set(onlyAfter);
-  // onlyBefore and onlyAfter are disjoint, so one set holds what the ledger has accounted on either side.
-  const accounted = new Set();
+  const nBefore = counts(before);
+  const nAfter = counts(after);
+  // The k-th copy of an id is shared while k fits under the other side's count; the rest is that side's surplus.
+  const split = (ids, other) => {
+    const seen = new Map();
+    const shared = [];
+    const surplus = [];
+    for (const id of ids) {
+      const k = (seen.get(id) ?? 0) + 1;
+      seen.set(id, k);
+      (k <= (other.get(id) ?? 0) ? shared : surplus).push(id);
+    }
+    return { shared, surplus };
+  };
+  const { shared: both, surplus: onlyBefore } = split(before, nAfter);
+  const { surplus: onlyAfter } = split(after, nBefore);
+  const surplusBefore = counts(onlyBefore);
+  const surplusAfter = counts(onlyAfter);
+  // An id's surplus is on one side only (its counts differ one way), so the two maps never share a key. `claimed*` holds the copies a
+  // ledger entry has accounted; an entry accounts ONE copy, so `claimedX(id) < surplusX(id)` says an unclaimed copy is left.
+  const claimedBefore = new Map();
+  const claimedAfter = new Map();
+  const open = (claimed, surplus, id) => (claimed.get(id) ?? 0) < (surplus.get(id) ?? 0);
+  const claim = (claimed, id) => claimed.set(id, (claimed.get(id) ?? 0) + 1);
   const problems = [];
   for (const e of ledger.entries) {
     if (NEEDS_TARGET.has(e.fate)) {
       // The id must really have gone and the target must really be new, else a deleted test passes as a move.
-      // A target may be claimed once; a `split` is several entries with one id and different targets.
-      if (!e.to || !b.has(e.to)) problems.push(`LEDGER-TARGET-MISSING ${e.to ?? "(none)"}`);
-      else if (!isOnlyBefore.has(e.id) || !isOnlyAfter.has(e.to) || accounted.has(e.to)) problems.push(`LEDGER-INVALID ${e.id} -> ${e.to}`);
-      else { accounted.add(e.id); accounted.add(e.to); }
-    } else if (e.fate === "added" && isOnlyAfter.has(e.id) && !accounted.has(e.id)) accounted.add(e.id);
-    else if (e.fate === "retired" && isOnlyBefore.has(e.id) && !accounted.has(e.id) && e.reason) accounted.add(e.id);
+      // A target copy may be claimed once; a `split` is several entries with one id and different targets, so a source
+      // copy that is already claimed is shared rather than refused.
+      if (!e.to || !nAfter.has(e.to)) problems.push(`LEDGER-TARGET-MISSING ${e.to ?? "(none)"}`);
+      else if (!surplusBefore.has(e.id) || !open(claimedAfter, surplusAfter, e.to)) problems.push(`LEDGER-INVALID ${e.id} -> ${e.to}`);
+      else {
+        claim(claimedBefore, e.id);
+        claim(claimedAfter, e.to);
+      }
+    } else if (e.fate === "added" && open(claimedAfter, surplusAfter, e.id)) claim(claimedAfter, e.id);
+    else if (e.fate === "retired" && open(claimedBefore, surplusBefore, e.id) && e.reason) claim(claimedBefore, e.id);
     else problems.push(`LEDGER-UNUSED ${e.id}`); // a stale or malformed entry accounts nothing
   }
-  const unaccounted = [...onlyBefore, ...onlyAfter].filter((id) => !accounted.has(id));
+  // Walk the surplus copies and spend each claim on one of them; what is left over is unaccounted.
+  const left = (ids, claimed) => {
+    const spent = new Map(claimed);
+    return ids.filter((id) => {
+      const n = spent.get(id) ?? 0;
+      if (n > 0) spent.set(id, n - 1);
+      return n === 0;
+    });
+  };
+  const unaccounted = [...left(onlyBefore, claimedBefore), ...left(onlyAfter, claimedAfter)];
   return { onlyBefore, onlyAfter, both, unaccounted: [...unaccounted, ...problems] };
 }
 
@@ -103,7 +128,19 @@ function pairs(flag) {
   if (out.length === 0) throw new Error(`missing ${flag} <report.json>=<root>`);
   return out;
 }
-const ids = (flag) => pairs(flag).flatMap(({ file, root }) => testIds(JSON.parse(readFileSync(file, "utf8")), root));
+// One side is the reports it was given, summed. A duplicate title inside one report is a multiset entry, but an id that arrives from
+// two reports is the same file listed twice or two roots whose relative paths collide: refuse it rather than count it as a twin.
+const ids = (flag) => {
+  const from = new Map();
+  return pairs(flag).flatMap(({ file, root }) => {
+    const got = testIds(JSON.parse(readFileSync(file, "utf8")), root);
+    for (const id of new Set(got)) {
+      if (from.has(id)) throw new Error(`duplicate test id across the reports of ${flag}: ${id} (in ${from.get(id)} and ${file})`);
+      from.set(id, file);
+    }
+    return got;
+  });
+};
 
 if (isMainModule(import.meta.url)) {
   try {

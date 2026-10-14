@@ -4,16 +4,22 @@
 // measured with, for every group. No test here reads git history: CI's engine job is a shallow clone with no origin/main,
 // and after the merge the merge base would be HEAD itself, comparing the file with itself (preflight C4).
 import { spawnSync } from "node:child_process";
-import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join, matchesGlob, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseMutateRanges, rangesFromDiff, rangesFromUntracked, rangesWithoutMutants, reportScopeProblems, snapshotForm, verdictsFromReport } from "../scripts/stryker-changed.mjs";
+import { enginePrefix, parseMutateRanges, rangesFromDiff, rangesFromUntracked, rangesWithoutMutants, reportScopeProblems, snapshotForm, verdictsFromReport } from "../scripts/stryker-changed.mjs";
 import { resolveGroup } from "../scripts/stryker-cuts.mjs";
 import { STRYKER_EXCLUDED, STRYKER_GROUPS, STRYKER_PLACEMENT_OUT_OF_SCOPE, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
+import { ENGINE_PREFIX } from "./layout.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(import.meta.dirname, "..");
+// Where a diff names the engine depends on the checkout: `git diff` prints paths from the repo root, so "packages/engine/src/x.ts" in the
+// monorepo and "src/x.ts" in the engine's own repo (2b). The synthetic diffs below are spelled in the layout this run is in (ENGINE_PREFIX,
+// which rangesFromDiff finds for itself), and in both layouts a checkout can have, handed to it explicitly: the monorepo run alone then
+// proves the matcher is built from the prefix and not fixed to either spelling.
+const LAYOUTS = [...new Set([ENGINE_PREFIX, "packages/engine/", ""])];
 // The group configs as they were BEFORE Task 0b's edit, written once by `node scripts/stryker-changed.mjs --snapshot` from the
 // unedited config and committed. It is regenerated only as a reviewed, deliberate config change, and the commit says so.
 const SNAPSHOT = JSON.parse(readFileSync(resolve(import.meta.dirname, "stryker-config-groups.snap.json"), "utf8")) as Record<string, string>;
@@ -140,49 +146,81 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
   });
 
   it("rangesFromDiff: added and changed lines of non-test src files only; a deletion-only hunk adds nothing", () => {
-    const diff = [
-      "diff --git a/packages/engine/src/core/events.ts b/packages/engine/src/core/events.ts",
-      "+++ b/packages/engine/src/core/events.ts",
+    const diffIn = (p: string) => [
+      `diff --git a/${p}src/core/events.ts b/${p}src/core/events.ts`,
+      `+++ b/${p}src/core/events.ts`,
       "@@ -10,0 +11,3 @@",
       "@@ -40,2 +44 @@",
       "@@ -60,4 +63,0 @@",
-      "diff --git a/packages/engine/src/core/events.test.ts b/packages/engine/src/core/events.test.ts",
-      "+++ b/packages/engine/src/core/events.test.ts",
+      `diff --git a/${p}src/core/events.test.ts b/${p}src/core/events.test.ts`,
+      `+++ b/${p}src/core/events.test.ts`,
       "@@ -1,0 +2,9 @@",
-      "diff --git a/packages/engine/src/core/gone.ts b/packages/engine/src/core/gone.ts",
+      `diff --git a/${p}src/core/gone.ts b/${p}src/core/gone.ts`,
       "+++ /dev/null",
       "@@ -1,7 +0,0 @@",
     ].join("\n");
-    expect(rangesFromDiff(diff)).toEqual(["src/core/events.ts:11-13", "src/core/events.ts:44-44"]);
-    // a file outside packages/engine/src after an engine one: its hunks are not the engine file's
-    expect(rangesFromDiff(["+++ b/packages/engine/src/core/events.ts", "@@ -1,0 +2 @@", "+++ b/apps/web/src/a.ts", "@@ -1,0 +1,2 @@"].join("\n"))).toEqual(["src/core/events.ts:2-2"]);
+    const outsideIn = (p: string) => [`+++ b/${p}src/core/events.ts`, "@@ -1,0 +2 @@", "+++ b/apps/web/src/a.ts", "@@ -1,0 +1,2 @@"].join("\n");
+    // the layout this run is in, found by rangesFromDiff itself (no prefix handed over)
+    expect(rangesFromDiff(diffIn(ENGINE_PREFIX))).toEqual(["src/core/events.ts:11-13", "src/core/events.ts:44-44"]);
+    for (const p of LAYOUTS) {
+      expect(rangesFromDiff(diffIn(p), undefined, p), `layout "${p}"`).toEqual(["src/core/events.ts:11-13", "src/core/events.ts:44-44"]);
+      // a file outside the engine's src after an engine one: its hunks are not the engine file's
+      expect(rangesFromDiff(outsideIn(p), undefined, p), `layout "${p}"`).toEqual(["src/core/events.ts:2-2"]);
+      // the other layouts' spelling of the same file is not this layout's engine: the prefix is required, and it is anchored
+      for (const other of LAYOUTS.filter((q) => q !== p)) expect(rangesFromDiff(diffIn(other), undefined, p), `a "${other}" diff read as layout "${p}"`).toEqual([]);
+    }
+    expect(LAYOUTS.length, "at least the monorepo's layout and the engine repo's").toBeGreaterThanOrEqual(2);
     expect(rangesFromDiff("")).toEqual([]);
+    // the prefix is literal text, never a pattern: a "." in it matches a "." only
+    expect(rangesFromDiff(["+++ b/e.g/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, "e.g/")).toEqual(["src/core/events.ts:2-2"]);
+    expect(rangesFromDiff(["+++ b/exg/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, "e.g/")).toEqual([]);
+    // the start of the line is anchored: a `+++ b/...` that is only the TAIL of a line names no file, and its hunks are nobody's
+    expect(rangesFromDiff(["+x +++ b/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, "")).toEqual([]);
+    expect(rangesFromDiff(["+++ b/src/core/events.ts", "@@ -1,0 +2 @@"].join("\n"), undefined, ""), "the anchored form of the same line is a file").toEqual(["src/core/events.ts:2-2"]);
   });
 
   it("rangesFromDiff and rangesFromUntracked keep only mutable, measured source, and name every file they skip (review I-1)", () => {
-    const skippedOnly = [
-      "+++ b/packages/engine/src/sports/setbased/badminton.golden.json", "@@ -1,0 +1,4 @@",
-      "+++ b/packages/engine/src/sports/hockey/DOMAIN.md", "@@ -3,0 +4,2 @@",
-      "+++ b/packages/engine/src/testkit/golden.ts", "@@ -1,0 +1,9 @@",
-      "+++ b/packages/engine/src/sports/cricket/__tests__/scorecard-ledger.ts", "@@ -5,0 +6 @@",
-      "+++ b/packages/engine/src/scheduling/build.ts", "@@ -5,0 +6 @@",
-      "+++ b/packages/engine/src/core/events.d.ts", "@@ -1,0 +1 @@",
-    ];
     const SKIPPED = ["src/sports/setbased/badminton.golden.json", "src/sports/hockey/DOMAIN.md", "src/testkit/golden.ts", "src/sports/cricket/__tests__/scorecard-ledger.ts", "src/scheduling/build.ts", "src/core/events.d.ts"];
-    // empty case first: a diff of only such files yields no range at all
-    expect(rangesFromDiff(skippedOnly.join("\n"))).toEqual([]);
-    // beside kept neighbours, before and after them, only the neighbours' lines survive
-    const skipped: string[] = [];
-    const diff = ["+++ b/packages/engine/src/core/events.ts", "@@ -10,0 +11,2 @@", ...skippedOnly, "+++ b/packages/engine/src/core/types.ts", "@@ -90,0 +91 @@"].join("\n");
-    expect(rangesFromDiff(diff, (file, why) => skipped.push(`${file} | ${why}`))).toEqual(["src/core/events.ts:11-12", "src/core/types.ts:91-91"]);
-    expect(skipped.map((s) => s.split(" | ")[0])).toEqual(SKIPPED);
-    expect(skipped.every((s) => s.split(" | ")[1]!.length > 0), "each skip says why").toBe(true);
+    const skippedOnlyIn = (p: string) => [
+      `+++ b/${p}src/sports/setbased/badminton.golden.json`, "@@ -1,0 +1,4 @@",
+      `+++ b/${p}src/sports/hockey/DOMAIN.md`, "@@ -3,0 +4,2 @@",
+      `+++ b/${p}src/testkit/golden.ts`, "@@ -1,0 +1,9 @@",
+      `+++ b/${p}src/sports/cricket/__tests__/scorecard-ledger.ts`, "@@ -5,0 +6 @@",
+      `+++ b/${p}src/scheduling/build.ts`, "@@ -5,0 +6 @@",
+      `+++ b/${p}src/core/events.d.ts`, "@@ -1,0 +1 @@",
+    ];
+    const withNeighbours = (p: string) => [`+++ b/${p}src/core/events.ts`, "@@ -10,0 +11,2 @@", ...skippedOnlyIn(p), `+++ b/${p}src/core/types.ts`, "@@ -90,0 +91 @@"].join("\n");
+    for (const p of [undefined, ...LAYOUTS]) {
+      const layout = p ?? ENGINE_PREFIX; // undefined: the prefix is not handed over, rangesFromDiff finds the checkout's own
+      // empty case first: a diff of only such files yields no range at all
+      expect(rangesFromDiff(skippedOnlyIn(layout).join("\n"), undefined, p), `layout "${layout}"`).toEqual([]);
+      // beside kept neighbours, before and after them, only the neighbours' lines survive
+      const skipped: string[] = [];
+      expect(rangesFromDiff(withNeighbours(layout), (file, why) => skipped.push(`${file} | ${why}`), p), `layout "${layout}"`).toEqual(["src/core/events.ts:11-12", "src/core/types.ts:91-91"]);
+      expect(skipped.map((s) => s.split(" | ")[0])).toEqual(SKIPPED);
+      expect(skipped.every((s) => s.split(" | ")[1]!.length > 0), "each skip says why").toBe(true);
+    }
     // the same filter for a new untracked file
     const untrackedSkipped: string[] = [];
     expect(rangesFromUntracked([{ path: "src/testkit/new-sweep.ts", lines: 5 }, { path: "src/sports/setbased/new.golden.json", lines: 3 }, { path: "src/core/level.ts", lines: 12 }], (file) => untrackedSkipped.push(file)))
       .toEqual(["src/core/level.ts:1-12"]);
     expect(untrackedSkipped).toEqual(["src/testkit/new-sweep.ts", "src/sports/setbased/new.golden.json"]);
   });
+
+  it("enginePrefix: the engine directory's path below its git checkout's root, empty when the engine is the root", () => {
+    // the real checkout: the prefix layout.ts reports, found here by the script's own call
+    expect(enginePrefix()).toBe(ENGINE_PREFIX);
+    // both shapes a checkout can have, in scratch repos (git rev-parse --show-prefix needs a repository, not a commit)
+    const dir = mkdtempSync(join(tmpdir(), "stryker-prefix-"));
+    try {
+      const init = (at: string) => { mkdirSync(at, { recursive: true }); expect(spawnSync("git", ["init", "-q"], { cwd: at, timeout: SPAWN_MS }).status).toBe(0); };
+      init(join(dir, "engine-repo"));
+      init(join(dir, "monorepo"));
+      mkdirSync(join(dir, "monorepo", "packages", "engine"), { recursive: true });
+      expect(enginePrefix(join(dir, "engine-repo"))).toBe("");
+      expect(enginePrefix(join(dir, "monorepo", "packages", "engine"))).toBe("packages/engine/");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, spawnBudget(3));
 
   it("verdictsFromReport names the killers, and counts Survived and NoCoverage as failures", () => {
     const report = {

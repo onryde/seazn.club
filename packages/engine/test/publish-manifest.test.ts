@@ -37,8 +37,8 @@ describe("publish manifest", () => {
     expect(pkg.files).toEqual(["dist", "rules"]);
     expect(pkg.publishConfig.registry).toBe("https://npm.pkg.github.com");
     // the entry in `files` is only a promise: the directory has to be where the entry says (anti-vacuity for the line above).
-    // NOTE (1b-2 finding): nothing under src/ reads rules/ at runtime. Its one reader, test/rules-reference.ts, is not emitted to dist,
-    // so the directory ships on the plan's say-so (D32f), not because a shipped module needs it.
+    // NOTE: rules/ is read at runtime by one shipped module, src/testkit/rules-reference.ts (engine-split 1d-5; before it, only the
+    // test-side checker read it and the directory shipped on the plan's say-so, D32f). pack-proof/node/rules.mjs parses it from the tarball.
     expect(existsSync(join(ENGINE, "rules")), "packages/engine/rules/ exists beside src/").toBe(true);
   });
 

@@ -1,62 +1,56 @@
-// The rules reference (W2a ruling 75, spec §6). One row per line of a
-// markdown table whose header is exactly ROW_HEADER. Cells are split on " | ";
-// `enforced at` and `proved by` hold backticked paths separated by "<br>".
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+// The rules reference CHECKER (W2a ruling 75, spec §6). The PARSER (reading `rules/*.md`, row parsing, `enforced at` / `proved by`
+// extraction) lives in src/testkit/rules-reference.ts since engine-split 1d-5 and ships in the package; what stays here reads the
+// REPO: does a proving test exist, does its title name the rule. The old names are re-exported so the checker's tests read as before.
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  RULES_DIR as TESTKIT_RULES_DIR,
+  RULE_ID,
+  RULE_ROW_HEADER,
+  RULE_ROW_SHAPED,
+  RULE_STATUS,
+  allRows,
+  parseRuleRows,
+  ruleFiles,
+  type RuleRow,
+} from "../src/testkit/rules-reference.ts";
+
+export { allRows, parseRuleRows, ruleFiles, type RuleRow };
+export const RULES_DIR = TESTKIT_RULES_DIR;
+export const ROW_HEADER = RULE_ROW_HEADER;
+export const STATUS = RULE_STATUS;
+export const ID = RULE_ID;
+export const ROW_SHAPED = RULE_ROW_SHAPED;
 
 export const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+/** The MONOREPO root. Only the checks that read paths outside the engine use it (the root half, scripts/__tests__/rules-reference.test.ts). */
 export const REPO = resolve(ENGINE, "..", "..");
-export const RULES_DIR = join(ENGINE, "rules");
-export const ROW_HEADER = "| id | rule | citation | status | enforced at | proved by |";
-export const STATUS = /^(signed \d+ \d{4}-\d{2}-\d{2}|deviation \d+ \d{4}-\d{2}-\d{2}|⬜ open)$/;
-export const ID = /^[A-Z]{1,3}-[A-Z]{2}-\d+$/;
-/** A line that looks like a rule row. The parser reads one table; a row-shaped line it did not read is a failure. */
-export const ROW_SHAPED = /^\| [A-Z]{1,3}-[A-Z]{2}-\d+ \|/;
 /** A file that can prove a rule: a test or spec file, never a rules table, a doc, or the checker. */
 export const TEST_FILE = /\.(?:test\.tsx?|spec\.ts)$/;
-/** The checker's own two files (repo-relative): they hold ids as data, so they can never prove one. */
-export const CHECKER_FILES: readonly string[] = ["packages/engine/test/rules-reference.ts", "packages/engine/test/rules-reference.test.ts"];
+/** The checker's own files (repo-relative): they hold ids as data, so they can never prove one. */
+export const CHECKER_FILES: readonly string[] = [
+  "packages/engine/test/rules-reference.ts",
+  "packages/engine/test/rules-reference.test.ts",
+  "scripts/__tests__/rules-reference.test.ts",
+];
 
-export interface RuleRow {
-  id: string; rule: string; citation: string; status: string;
-  enforcedAt: string[]; provedBy: string[]; file: string;
-}
+/** Signed rows whose proving test lands in a later W2a task. A task that adds
+ *  the proof deletes its id here in the same commit; Task 16 Step 5 requires
+ *  this map to be EMPTY. A row not named here must already be proved. */
+export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);
 
-const paths = (cell: string): string[] =>
-  cell.trim() === "—" ? [] : cell.split("<br>").map((p) => p.trim().replace(/^`|`$/g, "")).filter((p) => p !== "");
-
-export function parseRuleRows(text: string, file: string): RuleRow[] {
-  const lines = text.split("\n");
-  const start = lines.findIndex((l) => l.trim() === ROW_HEADER);
-  const rows: RuleRow[] = [];
-  const read = new Set<number>();
-  if (start !== -1) {
-    for (const [i, line] of lines.entries()) {
-      if (i < start + 2) continue;
-      if (!line.startsWith("| ")) break;
-      const cells = line.slice(2, -2).split(" | ");
-      if (cells.length !== 6) throw new Error(`${file}: a rule row has ${cells.length} cells, not 6: ${line}`);
-      const [id, rule, citation, status, enforced, proved] = cells.map((c) => c.trim()) as [string, string, string, string, string, string];
-      rows.push({ id, rule, citation, status, enforcedAt: paths(enforced), provedBy: paths(proved), file });
-      read.add(i);
-    }
-  }
-  // Spec §6: a row the parser skips is a failure, not a row nobody checks. The table ends at the first non-row line,
-  // so a row after prose, a second table, or a file with no header at all would otherwise be silently unchecked.
-  const skipped = lines.flatMap((l, i) => (ROW_SHAPED.test(l) && !read.has(i) ? [`line ${i + 1}: ${l.slice(0, 48)}`] : []));
-  if (skipped.length > 0) throw new Error(`${file}: ${skipped.length} row-shaped line(s) not read as rows (a row after prose, a second table, or no table header): ${skipped.join("; ")}`);
-  return rows;
-}
-
-export function ruleFiles(): string[] {
-  return readdirSync(RULES_DIR).filter((f) => f.endsWith(".md") && f !== "README.md").sort();
-}
-
-export function allRows(): RuleRow[] {
-  return ruleFiles().flatMap((f) => parseRuleRows(readFileSync(join(RULES_DIR, f), "utf8"), f));
-}
+/** Rule rows write every engine path as `packages/engine/...`, in the monorepo and in the engine's own repo alike: the prefix is
+ *  part of the row's text, not of the checkout. Rows whose path starts with it are the ENGINE's to check (test/rules-reference.test.ts);
+ *  every other path (apps/web, e2e, tools, packages/reference, ...) is the monorepo's (scripts/__tests__/rules-reference.test.ts). */
+export const ENGINE_ROW_PREFIX = "packages/engine/";
+export const inEngine = (p: string): boolean => p.startsWith(ENGINE_ROW_PREFIX);
+/** A row's engine path on disk: resolved against ENGINE, never REPO, so it also holds where the engine sits at a repo root. No CI job runs
+ *  that layout yet; the simulated engine repo run of engine-split 1d-6 is its witness (a REPO-relative resolution passes in the monorepo). */
+const enginePath = (p: string): string => join(ENGINE, p.slice(ENGINE_ROW_PREFIX.length));
+/** Whether a row's engine path exists. A path that is not the engine's does not (it is not this checker's to find). */
+export const engineFileExists = (p: string): boolean => inEngine(p) && existsSync(enginePath(p));
 
 /** A `proved by` entry is a repo-relative test path, or a matrix case id prefixed `matrix:`. A matrix case is
  *  additional evidence only: a row that names nothing else names no proving test (spec §6). */
@@ -66,14 +60,17 @@ export const fileExists = (p: string): boolean => existsSync(join(REPO, p));
 /** Reads a repo-relative file; undefined when it does not exist. Injectable into `proofProblems`, so a synthetic row
  *  proves against in-memory fixtures instead of borrowing a real file (the old positive pair was the checker itself). */
 export type ReadRepoFile = (repoPath: string) => string | undefined;
-export const readRepoFile: ReadRepoFile = (p) => {
+const readOrUndefined = (file: string): string | undefined => {
   try {
-    return readFileSync(join(REPO, p), "utf8");
+    return readFileSync(file, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw e;
   }
 };
+export const readRepoFile: ReadRepoFile = (p) => readOrUndefined(join(REPO, p));
+/** The reader of the engine half: a `packages/engine/...` path read from the engine directory; any other path is undefined. */
+export const readEngineFile: ReadRepoFile = (p) => (inEngine(p) ? readOrUndefined(enginePath(p)) : undefined);
 
 /** Test frameworks' entry points. Every title-bearing call starts at one of these. */
 const TEST_ROOTS = ["it", "test", "describe"];
@@ -169,11 +166,13 @@ function pathProblem(p: string): string | null {
  *  still awaits proof (preflight C5: at Task 2 no real row reaches these branches). A row needs at least one test
  *  path (matrix cases do not count), and EVERY test path it lists must prove the id: be a test file that exists and
  *  carry the id as a whole token in the first string argument of an `it(`, `test(` or `describe(` call. */
-export function proofProblems(r: RuleRow, read: ReadRepoFile = readRepoFile): string[] {
+export function proofProblems(r: RuleRow, read: ReadRepoFile = readRepoFile, scope: (path: string) => boolean = () => true): string[] {
   const tests = r.provedBy.filter((p) => !isMatrixCase(p));
   if (tests.length === 0) return [`${r.id} names no proving test`];
   const out: string[] = [];
-  for (const p of tests) {
+  // `scope` splits a row's proofs between the engine's checker and the monorepo's: each checks the paths it can read. The row-level
+  // refusal above is about the row's text and is the same in both.
+  for (const p of tests.filter(scope)) {
     const bad = pathProblem(p);
     if (bad !== null) { out.push(`${r.id}: ${p} ${bad}`); continue; }
     const source = read(p);

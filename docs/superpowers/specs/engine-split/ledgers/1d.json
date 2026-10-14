@@ -1,0 +1,450 @@
+{
+  "batch": "1d",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1d, built against the batch base 0fa3b66fc (main after 1b). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --after <after-web.json>=apps/web --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f> <files>` (--isolate on BOTH sides: batch 1b review m4), from the engine package for the engine report and from the repo root with the engine's vitest binary for the other two. Task 1d-0 (scripts/lib/test-parity.mjs compares ids as a multiset, commit 497849e76): scripts/__tests__/test-parity.test.ts, collected whole on both sides; the two tests that asserted a duplicate id is refused are retired (behaviour deliberately reversed) and the multiset tests are added. Task 1d-1 (Stryker tests and stryker-changed.mjs layout-agnostic): engine = the eleven test/stryker-*.test.ts files (outputs-ignored, sizing, changed-lines, matrix, cuts, floor, generator-exclusion, groups, runner, sandbox-safe, vitest-runner), tools/matrix = __tests__/matrix-workflow.test.ts. No moved test changed its title except the split fan-out test of stryker-sizing.test.ts (retitled 'the workflow quotes' for the engine half; the matrix-workflow.test.ts half is a new test in that file). The enginePrefix test is the only added engine test. Later tasks of batch 1d append their own entries to this file. Review fix of 1d-1 (commit 'fix(engine): 1d-1 review'): test/stryker-sandbox-safe.test.ts gains the four layout-importer tests (`added`); the anchor pin and the dropped equivalent guard in test-parity change assertions or code, no title. Task 1d-2 (engine-boundary moves into the engine): no id changes, so no entries. Collected additionally on both sides: engine test/boundary-gate.test.ts (14 cases, now importing ../scripts/engine-boundary.ts) and root scripts/__tests__/main-module.test.ts (4 cases; the symlinked-spawn test keeps its title, which names scripts/engine-boundary.ts package-relative). packages/engine/eslint.config.mjs line 19 still imports ../../scripts/lib/tools-import-guard.mjs; it stays until 2b (D32d), and the engine's own copy of main-module.ts (packages/engine/scripts/lib/) is a copy by design: the root copy stays for the other root scripts. Review fix of 1d-2 (commit 'fix(engine): 1d-2 review'): the five `added` ids above (three boundary-gate CLI tests, the ci-wiring entry-point pin, the main-module copy-identity test); ci-wiring.test.ts is collected whole on both sides (49 earlier ids unchanged); no existing id changed. Task 1d-3 (window-single-source): the two apps/web tests move to apps/web/src/server/usecases/__tests__/court-window-single-source.test.ts (collected from apps/web, after side only; the web file does not exist at the base) and the engine file keeps its four engine-only tests. Collected: engine src/scheduling/window-single-source.test.ts on both sides. The apps/web report is an AFTER-side report only and is collected from apps/web itself: `cd apps/web && DATABASE_URL= ./node_modules/.bin/vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <after-web.json> src/server/usecases/__tests__/court-window-single-source.test.ts` (the empty DATABASE_URL keeps apps/web's vitest config from refusing a dev URL it loaded from .env.local). Review fix of 1d-3: one more `added` id (the floor's own test); the other review changes are assertions and comments, no title. Task 1d-5 (rules-reference, split by where the proof lives): engine test/rules-reference.test.ts and root scripts/__tests__/rules-reference.test.ts are collected whole on the after side (engine file also on the before side). Nine tests rehome (the real-repo reader, three W2b spec-text tests, the five CI-wiring tests); the proof-path and enforced-at tests split by prefix (the engine half ' (engine paths)', the root half ' (app, tools and reference paths)'); the W2b describe keeps :528, :543, :610 and :628 in the engine. The shared W2b pins and the Appendix A reader sit in packages/engine/test/w2b-rows.ts, imported by both files. Four tests are added (two engine, two root). Task 1d-4 (superseded by owner ruling 2026-10-14): both z3 guard tests are DELETED, not moved - 33 `retired` entries, 10 from the engine's z3-dependency-retired.test.ts and 23 from the root z3-retirement-drift.test.ts (the ledger fate for a deleted test is `retired`; three titles of the drift test occur more than once, so their entries repeat, one per copy). The parked move (held-1d-4) is discarded. Task 1d-6 (whole-batch check): the run line above was applied to the WHOLE engine package, all of scripts/__tests__ and all of tools/matrix/__tests__ (passing --exclude '**/strip-types-loadable.test.ts' for the matrix collection: its test titles embed the checkout's absolute path, so a base worktree and a head worktree can never agree; the file is unchanged and holds 183 tests on both sides) plus apps/web's court-window-single-source.test.ts: before-only 50, after-only 48, both 10925, unaccounted 0. No stale entry (every non-added id is present before, every added id and every `to` is present after). The reverse inventory for the 2b plan is docs/superpowers/specs/engine-split/reverse-inventory.md. 1d review fixes (Opus review of batch 1d, commit 'fix(engine-split): batch 1d review'): five CI-wiring tests of scripts/__tests__/rules-reference.test.ts were retitled to name the engine checker's step (entries 40-44 are now `rewritten`, same old ids); the stryker-sizing 'across every file' test is retitled (one new `rewritten` entry); one test is added (the whole-directory scripts step excludes the root rules checker); the two court-window rehomed reasons are reworded (the matcher is stronger, not the same). packages/reference/test/rule-rows.test.ts is new but packages/reference is not a parity root, so it has no entry. Whole-batch parity re-run after these fixes (same collection as task 1d-6): before-only 51, after-only 50, both 10924, unaccounted 0.",
+  "entries": [
+    {
+      "id": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "fate": "split",
+      "to": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "reason": "1d-1 (spec 5.4, R20): the engine half keeps the mutation.yml quote assertions (retitled: the test no longer reads matrix-workflow.test.ts); same legs/hours/wall derivation and the same three workflow phrases"
+    },
+    {
+      "id": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "fate": "split",
+      "to": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the fan-out figures this file quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "reason": "1d-1 (spec 5.4, R20): the matrix-workflow.test.ts half, which asserted that file quotes the same figures, moves into that file because it sits outside the engine package; it derives the legs, hours each and the FIFO walls at 20/12/8 slots from packages/engine/stryker-measured.json (a reverse read, inventoried in 1d-6) and refuses a part on a pace, which the engine's sizing test already forbids at merge"
+    },
+    {
+      "id": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › no note still says a retired figure, across every file that speaks of the sizing",
+      "fate": "rewritten",
+      "to": "test/stryker-sizing.test.ts › the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2) › no note still says a retired figure, across the 6 files in NOTES that speak of the sizing (the Stryker config, groups, matrix and cuts scripts, the workflow and the cuts test)",
+      "reason": "1d review (m4): the title said 'every file' but the test scans the six files in NOTES (it no longer scans tools/matrix/__tests__/matrix-workflow.test.ts, which left the package in 1d-1); the title now says which, with the count derived from NOTES.length; assertions unchanged"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — what a ledger entry may account for › refuses a duplicate id within one side, naming it",
+      "fate": "retired",
+      "reason": "1d-0 (test-parity multiset): ids are counted, so a duplicate title within one side is no longer refused; the opposite behaviour is asserted by the new 'duplicate ids are counted' tests (all added below)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › testIds — a collection that did not collect is not a collection › throws on a duplicate id within one report, naming it",
+      "fate": "retired",
+      "reason": "1d-0 (test-parity multiset): ids are counted, so a duplicate title within one side is no longer refused; the opposite behaviour is asserted by the new 'duplicate ids are counted' tests (all added below)"
+    },
+    {
+      "id": "test/stryker-changed-lines.test.ts › changed-lines Stryker (W2a Task 0b) › enginePrefix: the engine directory's path below its git checkout's root, empty when the engine is the root",
+      "fate": "added",
+      "reason": "1d-1: enginePrefix() is new (the diff matcher is built from the checkout prefix); it is read in a scratch repo at the root and in a monorepo-shaped one, and against the real checkout's prefix"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a `moved` entry moves ONE copy of a duplicated id: the copy that stayed is `both`, the one that left is accounted",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a `split` of a duplicated id still fans one copy out to several targets",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a duplicate added is after-only 1, and stays unaccounted without a ledger",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a duplicate that exists identically before and after is `both`, copy for copy, and nothing is unaccounted",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › a target with a surplus of one cannot be claimed twice, even when its id also exists as an unchanged duplicate",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › accounts exactly one added copy per `added` entry",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › accounts exactly one copy per ledger entry: a surplus of two needs two `retired` entries, and a third accounts nothing",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › both copies of a duplicate moving needs two entries; one entry leaves the other copy and its twin target unaccounted",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › one of two copies removed is before-only 1 (the id itself, not a suffixed twin), and stays unaccounted without a ledger",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › diffIds — duplicate ids are counted, not refused › refuses `added`/`retired` for a duplicate whose count did not change (the id is `both`, nothing was added or retired)",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › test-parity CLI (spawned) › exit 0, counting every copy, when a duplicate title exists identically before and after",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › test-parity CLI (spawned) › exit 1 when a duplicate title was added",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › test-parity CLI (spawned) › exit 1, naming the id, when one copy of a duplicate title vanished; `--ledger` retired accounts that one copy",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "scripts/__tests__/test-parity.test.ts › testIds — a collection that did not collect is not a collection › keeps both copies of a duplicate id within one report: the report is a multiset, not a set",
+      "fate": "added",
+      "reason": "1d-0: test-parity counts duplicate ids as a multiset (library and spawned CLI)"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › catches a layout importer that reaches src/ directly, through a helper, through an index, and by a dynamic import",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › holds on the real package, and the scan saw both the tests and a layout importer",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › is not fooled by a cycle through the layout, and counts a layout importer under src/ itself as reaching src/",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
+    },
+    {
+      "id": "test/stryker-sandbox-safe.test.ts › no engine test that reads the checkout layout reaches src/ (test/layout.ts is wrong inside a Stryker sandbox) › passes a layout importer that never reaches src/, and a src-importing test that never reaches the layout",
+      "fate": "added",
+      "reason": "1d-1 review: a test that reaches test/layout.ts must not reach src/ (git rev-parse --show-prefix is wrong inside a Stryker sandbox); the rule is new, with scratch-tree cases and the real-tree scan"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 0 with a PASS line that counts every file it scanned, nested ones included, when src/ is clean",
+      "fate": "added",
+      "reason": "1d-2 review: the gate's CLI, run from a copy in a scratch checkout through a symlink, was unpinned (six mutants survived); these pin exit codes, the nested FAIL line, the scanned count and the zero-file refusal"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 and names a violation in a NESTED file, by its path from the working directory, and counts the files it scanned",
+      "fate": "added",
+      "reason": "1d-2 review: the gate's CLI, run from a copy in a scratch checkout through a symlink, was unpinned (six mutants survived); these pin exit codes, the nested FAIL line, the scanned count and the zero-file refusal"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 when it scanned nothing: an empty src/, a src/ with no .ts file, and no src/ at all are not a clean engine",
+      "fate": "added",
+      "reason": "1d-2 review: the gate's CLI, run from a copy in a scratch checkout through a symlink, was unpinned (six mutants survived); these pin exit codes, the nested FAIL line, the scanned count and the zero-file refusal"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › the engine boundary gate's entry points › the root `engine:boundary` and the engine's `boundary` scripts run the same existing gate, and ci.yml runs the root one",
+      "fate": "added",
+      "reason": "1d-2 review: pins the root engine:boundary and engine boundary script strings and that their one target exists"
+    },
+    {
+      "id": "scripts/__tests__/main-module.test.ts › the engine's copy of main-module.ts › is byte-identical to the root's: a copy by design, so a fix to one must reach the other (remove at 2b)",
+      "fate": "added",
+      "reason": "1d-2 review: holds the engine's copy of main-module.ts byte-identical to the root's until 2b"
+    },
+    {
+      "id": "src/scheduling/window-single-source.test.ts › apps/web has no second window rule › venues.ts resolves court days through the engine, not its own copy",
+      "fate": "rehomed",
+      "to": "src/server/usecases/__tests__/court-window-single-source.test.ts › apps/web has no second window rule › venues.ts resolves court days through the engine, not its own copy",
+      "reason": "1d-3 (spec 5.4): the test reads apps/web, so it moves to apps/web beside the code it guards; same title; its two assertions are unchanged and a read-length guard is added (an empty read can no longer pass the not.toMatch)"
+    },
+    {
+      "id": "src/scheduling/window-single-source.test.ts › apps/web has no second window rule › no server or lib file resolves a court's weekday hours itself",
+      "fate": "rehomed",
+      "to": "src/server/usecases/__tests__/court-window-single-source.test.ts › apps/web has no second window rule › no server or lib file resolves a court's weekday hours itself",
+      "reason": "1d-3 (spec 5.4): the test reads apps/web, so it moves to apps/web beside the code it guards; same title, STRONGER assertions, not the same: the weekday matcher also flags `!=`/`!==` and the reversed operand order (the original only saw `weekday ==`/`===`), which makes lib/capacity-input.ts a match, excused by an allowlist entry that is scoped to exactly ONE counted expression (a second comparison in that file is an offender, fewer is stale); plus a per-root scanned-count floor and a positive control for the matcher (1d review m5)"
+    },
+    {
+      "id": "src/server/usecases/__tests__/court-window-single-source.test.ts › apps/web has no second window rule › the weekday scan itself, on a scratch src/ › flags exactly the code that resolves weekday hours under server/ and lib/, nested files and .tsx included, and counts per root",
+      "fate": "added",
+      "reason": "1d-3: the moved scan's exclusions (tests, __tests__, comments, non-ts, components/) and both roots were unwitnessed (two mutants survived the verbatim move); a scratch src/ witnesses each by name"
+    },
+    {
+      "id": "src/server/usecases/__tests__/court-window-single-source.test.ts › apps/web has no second window rule › the scan's anti-vacuity floor refuses a root that read no file",
+      "fate": "added",
+      "reason": "1d-3 review: the per-root `>0` floor was unkilled (`>=0` survived); extracted as assertScanned() and given a test that feeds it a zero root, a missing root and a healthy pair"
+    },
+    {
+      "id": "test/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1), Appendix A amended in place (rulings 113, 115) or addition (PF-6, PF-7)",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1), Appendix A amended in place (rulings 113, 115) or addition (PF-6, PF-7)",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › the text pin sees a changed number, an amendment reverted, a stale amendment, a lost amend line, an added row edited or moved into Appendix A, a row in another file and an Appendix A row nobody owes (synthetic edits)",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118) › the text pin sees a changed number, an amendment reverted, a stale amendment, a lost amend line, an added row edited or moved into Appendix A, a row in another file and an Appendix A row nobody owes (synthetic edits)",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists",
+      "fate": "split",
+      "to": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists (engine paths)",
+      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory), retitled ' (engine paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists",
+      "fate": "split",
+      "to": "scripts/__tests__/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists (app, tools and reference paths)",
+      "reason": "1d-5: the root half checks every other path (apps/web, e2e, tools, packages/reference) from the monorepo root, reading the rows through the published @seazn/engine/testkit; retitled ' (app, tools and reference paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)",
+      "fate": "split",
+      "to": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (engine paths)",
+      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory), retitled ' (engine paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)",
+      "fate": "split",
+      "to": "scripts/__tests__/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (app, tools and reference paths)",
+      "reason": "1d-5: the root half checks every other path (apps/web, e2e, tools, packages/reference) from the monorepo root, reading the rows through the published @seazn/engine/testkit; retitled ' (app, tools and reference paths)'"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected",
+      "fate": "rehomed",
+      "to": "scripts/__tests__/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › nothing narrows the engine checker's step: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (ci.yml), so it moved to scripts/__tests__/rules-reference.test.ts; retitled by the 1d review (m4), title only, assertions unchanged: the title now says it pins the ENGINE checker's step (the root checker has a step of its own, pinned by the tests below)"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › one step, in the gates job, named for the checker",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine checker's step appears once, in the gates job, named for the checker",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (ci.yml), so it moved to scripts/__tests__/rules-reference.test.ts; retitled by the 1d review (m4), title only, assertions unchanged: the title now says it counts the ENGINE checker's step (there are two checker steps: one name each, pinned separately)"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine step's judge is green on a clean single-file pass and red, naming its reason, on each of 7 faults, run through real bash and node",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (ci.yml), so it moved to scripts/__tests__/rules-reference.test.ts; retitled by the 1d review (m4), title only, assertions unchanged: the title named 'six faults' while the file has 7 REDS; the count is derived from REDS.length (7) and the title says it is the engine step's judge"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine checker's step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (ci.yml), so it moved to scripts/__tests__/rules-reference.test.ts; retitled by the 1d review (m4), title only, assertions unchanged: the title now says it is the engine checker's step that goes red on the three step-level faults"
+    },
+    {
+      "id": "test/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine checker's step runs only packages/engine/test/rules-reference.test.ts with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)",
+      "reason": "1d-5 (spec 5.4): the test reads the monorepo (ci.yml), so it moved to scripts/__tests__/rules-reference.test.ts; retitled by the 1d review (m4), title only, assertions unchanged: the title now names the ENGINE file the step runs (it pins packages/engine/test/rules-reference.test.ts, not this file)"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the checker's scope splits a row's proofs: the engine's reader resolves packages/engine/ paths against the engine directory (the standalone-repo layout is proven by the 1d-6 sim run, not here) and reads nothing else (synthetic signed rows)",
+      "fate": "added",
+      "reason": "1d-5: the split of the checker between the engine and the monorepo is new behaviour (proofProblems takes a scope, the engine reader resolves packages/engine/ paths against the engine directory); witnessed with synthetic rows and a spy reader, and only the sim run kills a reader resolved against the repo root"
+    },
+    {
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference",
+      "fate": "added",
+      "reason": "1d-5: the rules parser joins the published testkit barrel, which was fs-free; this pins the barrel's disk-reading closure to exactly the rules reference and drives the barrel's own export (not the module)"
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the gates job runs scripts/__tests__/rules-reference.test.ts, in a step of its own after the engine checker's, which still runs only the engine file",
+      "fate": "added",
+      "reason": "1d-5 (R30): the root half runs in a gates step of its own, after the engine checker's step, which keeps running only the engine file; deleting the step reds this"
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the root step is the engine step with its own file and report, name-and-run only, and the same judge byte for byte",
+      "fate": "added",
+      "reason": "1d-5 (R30): the root step is the engine step with its own file and report name and the same judge byte for byte, derived from the engine step's text, so the judge the engine's spawn tests exercise is the judge the root step ships"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › C9's component graph survives, and the z3 driver above it does not",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › every tools/* workspace has files in the scan — a harness moved out of scripts/ cannot drop out unseen",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › neither workspace manifest declares the dependency",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › next.config carries no z3 WASM plumbing",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › no file imports the WASM loader module",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › no file imports the z3 repair encoder",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › no file imports the z3-solver package",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › scans a tree that actually holds the code",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › the scan reads into the bench and the matrix: each has more than 10 files importing the engine",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/scheduling/z3-dependency-retired.test.ts › the z3 dependency is unreferenced › the scan reads into the scheduler package: the placement client the engine used to hold is inside it",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/e2e/auto-schedule.spec.ts' no longer claims /'(the three z3 solver actions|the z3 W…'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'(The z3 path|onto z3|z3/WASM warm-up|…'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'The z3 solver now runs'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'The z3[[:space:]]*$'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'The z3[[:space:]]*$'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'The z3[[:space:]]*$'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'solve phase is the LOCAL z3'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'the z3 solver now'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'apps/web/src/server/usecases/__tests_…' no longer claims /'the z3 solver now'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'packages/engine/src/scheduling/build.…' no longer claims /'row still reports .*z3'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'packages/engine/src/scheduling/index.…' no longer claims /'Same story: it imports'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'packages/scheduler/src/generated/sche…' no longer claims /'board z3 proves INFEASIBLE'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'proto/scheduler.proto' no longer claims /'board z3 proves INFEASIBLE'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'scripts/smoke.ts' no longer claims /'(z3 repair solver now|The z3 solver n…'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › 'services/placement/fly.toml' no longer claims /'MAX_SOLVER_QUEUE.*z3-WASM'/",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › detects a claim when there is one — the matcher is not answering constantly",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › every tools/* workspace has files in the scan — a harness moved out of scripts/ cannot drop out unseen",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › no binary asset reaches the scan — and there are binary assets to exclude",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › no file is claimed by two stages at once",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › scans a tree that actually holds the code — the gate is aimed at something",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › the bench and the matrix are each in the scan — both drive the scheduler and report its engine",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › the remaining z3 files are exactly the ones C7 and C8 inherit",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › the scheduler package is in the scan — the placement client moved out of packages/engine/src and cannot drop out unseen",
+      "fate": "retired",
+      "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/testkit/dossiers.test.ts › every builtin sport module ships a domain dossier › keeps node:fs out of the published testkit barrel",
+      "fate": "rewritten",
+      "to": "src/testkit/dossiers.test.ts › every builtin sport module ships a domain dossier › keeps the dossier and golden readers out of the published testkit barrel",
+      "reason": "1d-5 review: the testkit barrel now exports one disk reader (rules-reference.ts), so a title saying node:fs is kept out of it was false; the assertions are unchanged (no dossiers, no golden in the barrel) and the title now says what they pin; the barrel's one disk reader is pinned in test/rules-reference.test.ts"
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the whole-directory scripts step leaves this file to its own step: it excludes it, so the file runs once per pull request",
+      "fate": "added",
+      "reason": "1d review (n1): the whole-directory root-scripts run in ci.yml also ran this file, so it ran twice per pull request; that step now excludes it, and this test pins the exclusion (and that the file still has its own step)"
+    }
+  ]
+}

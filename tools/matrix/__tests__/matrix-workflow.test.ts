@@ -1084,6 +1084,58 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
     for (const n of ["plan", "floors"]) expect(MJOBS[n], `${n} has no matrix to cap`).not.toContain("max-parallel");
     expect(Object.keys(MJOBS).length, "all three jobs were read").toBe(3);
   });
+  // Split out of packages/engine/test/stryker-sizing.test.ts (engine-split 1d-1, spec §5.4 / R20): the engine's test keeps the half that reads
+  // mutation.yml; this half reads THIS file, which sits outside the package. The figures are about the org's shared hosted slots, not about runner sharing.
+  it("the fan-out figures this file quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)", () => {
+    interface Measured { run: { maxParallel: number }; measured: Record<string, { wallSeconds: number }>; split: Record<string, { parts: Record<string, { basis: string; wallSeconds?: number }> }> }
+    const measured = JSON.parse(readFileSync(join(REPO, "packages/engine/stryker-measured.json"), "utf8")) as Measured;
+    /** The org's concurrent hosted jobs, account-wide (GitHub Free; ruling T20-FIX1): what an uncapped dispatch can hold. */
+    const ORG_SLOTS = 20;
+    /** A leg's wall in minutes, as its own job measured it: a part cut after the first run was RUN since (`basis: measured`), any other leg is the first run's.
+     *  A leg timed from a projection, or one the data does not hold, has no wall to quote: refused by name, never read as zero. */
+    const wallMinutesIn = (data: Measured, leg: string): number => {
+      for (const split of Object.values(data.split)) {
+        const part = split.parts[leg];
+        if (part === undefined) continue;
+        if (part.basis !== "measured" || part.wallSeconds === undefined) throw new Error(`${leg} is timed from a projection, not a measured wall: run it and record it in stryker-measured.json`);
+        return part.wallSeconds / 60;
+      }
+      const m = data.measured[leg];
+      if (m === undefined) throw new Error(`${leg} is neither measured nor a part of a leg that was`);
+      return m.wallSeconds / 60;
+    };
+    // the refusals are reached, each by its own fixture row: a part on a pace (even one that carries a wall), a measured part with no wall, and a leg the data does not hold
+    const fixture: Measured = {
+      run: { maxParallel: 1 }, measured: { whole: { wallSeconds: 120 } },
+      split: { cut: { parts: { "cut-1": { basis: "measured", wallSeconds: 60 }, "cut-2": { basis: "rate", wallSeconds: 999 }, "cut-3": { basis: "measured" } } } },
+    };
+    expect([wallMinutesIn(fixture, "whole"), wallMinutesIn(fixture, "cut-1")]).toEqual([2, 1]);
+    expect(() => wallMinutesIn(fixture, "cut-2")).toThrow(/cut-2 is timed from a projection/);
+    expect(() => wallMinutesIn(fixture, "cut-3")).toThrow(/cut-3 is timed from a projection/);
+    expect(() => wallMinutesIn(fixture, "nowhere")).toThrow(/nowhere is neither measured/);
+    const order = Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe");
+    const walls = order.map((g) => wallMinutesIn(measured, g));
+    /** The wall of a queue served first come first served by `slots` runners, in hours (a job takes the slot that frees first). */
+    const fifoHours = (minutes: readonly number[], slots: number): number => {
+      const free = new Array<number>(slots).fill(0);
+      for (const m of minutes) {
+        const at = free.indexOf(Math.min(...free));
+        free[at] = (free[at] as number) + m;
+      }
+      return Math.max(...free) / 60;
+    };
+    const hours = (h: number): string => String(Math.round(h * 10) / 10);
+    const jobHours = walls.reduce((n, m) => n + m, 0) / 60;
+    const figure = { legs: order.length, each: hours(jobHours / order.length), all: hours(fifoHours(walls, ORG_SLOTS)), at12: hours(fifoHours(walls, measured.run.maxParallel)), at8: hours(fifoHours(walls, 8)) };
+    expect(figure.legs, "legs in a dispatch of `all`").toBe(81);
+    // the figures differ from one another, so a note that quoted one for another would be wrong
+    expect(new Set([figure.all, figure.at12, figure.at8]).size, "three different walls").toBe(3);
+    // This file's own text. Its expected phrases below are built from the derived figures, so none of them is a literal in this file that the read could find in itself.
+    const own = readFileSync(fileURLToPath(import.meta.url), "utf8");
+    for (const phrase of [`${figure.legs} legs, about ${figure.each} hours each`, `for about ${figure.all} hours`, `takes about ${figure.at12} hours instead of about ${figure.at8} at 8`]) {
+      expect(own, `matrix-workflow.test.ts quotes "${phrase}"`).toContain(phrase);
+    }
+  });
   it("the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys, in declaration order (m2)", () => {
     // a trailing `# comment` on an option line is stripped (review 6, m4)
     const opts = /group:[\s\S]*?options:\n((?:\s+- .+\n)+)/.exec(MUT)![1]!.split("\n").map((l) => l.replace(/\s+#.*$/, "").replace(/^\s+- /, "").trim()).filter(Boolean);
