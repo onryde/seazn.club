@@ -36,7 +36,7 @@ import {
   type SlotConfig,
 } from "@seazn/engine/scheduling";
 import { placementSolver, schedulerLog } from "../index.ts";
-import { assertNoSilentGreedy } from "./live-seam-guard.ts";
+import { assertLiveSeam, recordSolver, type SolverCall } from "./live-seam-guard.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -57,10 +57,14 @@ const fx = (id: string, home: string, away: string): SchedulableFixture => ({
 
 /** Every board built in the current test, so `afterEach` can tell a live solve from a silent greedy fallback. */
 const built: BuildResult[] = [];
-/** `buildSchedule` over the live seam. Records the result for the `solver_unavailable` guard below. */
+/** Every question the engine put to the real adapter in the current test, and how each was answered (`recordSolver`). */
+const asked: SolverCall[] = [];
+/** `buildSchedule` over the live seam. Records the board AND the adapter's calls for the guards in `afterEach` below. */
 const buildLive = async (problem: BuildProblem): Promise<BuildResult> => {
-  const result = await buildSchedule({ ...problem, solve: placementSolver, log: schedulerLog });
+  const recorded = recordSolver(placementSolver);
+  const result = await buildSchedule({ ...problem, solve: recorded.solve, log: schedulerLog });
   built.push(result);
+  asked.push(...recorded.calls);
   return result;
 };
 
@@ -234,10 +238,13 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
   afterEach(() => {
     vi.unstubAllEnvs();
     const results = built.splice(0);
+    const calls = asked.splice(0);
     const deliberate = expectUnavailable;
     expectUnavailable = false;
-    // Anti-vacuity and the no-silent-greedy guard (plan Review Focus 2), in a helper so a unit test can kill it without a service.
-    assertNoSilentGreedy(results, deliberate);
+    // Anti-vacuity and the no-silent-greedy guards (plan Review Focus 2), in a helper so a unit test can kill them without a
+    // service: a non-deliberate board must END on a real answer (`ok` / `already_optimal`), and the real adapter must have been
+    // asked and answered every time. The first review's gap: a SOLVER_BUSY or verifier-rejected board used to pass here.
+    assertLiveSeam(results, calls, deliberate);
   });
 
   it("reaches Placement on a multi-court board whose greedy seed is off the grid — the shape that regressed", async () => {
