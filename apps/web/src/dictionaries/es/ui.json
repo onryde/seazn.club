@@ -6062,6 +6062,7 @@
   "externalPlay.room.header.meta": "{division} · Ronda {round}",
   "externalPlay.room.header.board": "Tablero {board} · {clock}",
   "externalPlay.room.backAria": "Volver al partido",
+  "externalPlay.room.sound.label": "Sonidos de las jugadas",
   "externalPlay.room.backToFixture": "Volver al partido",
   "externalPlay.room.standings": "Clasificación",
   "externalPlay.room.you": "Tú",

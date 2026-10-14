@@ -22,6 +22,7 @@ import { Chess } from "chess.js";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
+import { SOUND_SIGNATURE } from "../src/components/public-site/match-room/room-sound-synth";
 import { apiJson, loginUi, withDb } from "./helpers";
 import {
   bridgeRow,
@@ -1765,5 +1766,228 @@ test("round not opened: the player, signed in, is told so — no check-in", asyn
   await expect(p.getByRole("heading", { name: uiEn["externalPlay.room.state.notOpened.title"]! })).toBeVisible();
   await expect(p.getByTestId("room-checkin-cta")).toHaveCount(0);
   await shoot(p, "not-opened");
+  await ctx.close();
+});
+
+// ------------------------------------------------------- D19: move sounds
+//
+// The sounds are heard at the browser's own AudioContext — the real WebAudio path, no test hook in the room: an init
+// script counts the contexts made and records the first frequency each oscillator is given. Every sound's first tone
+// is its signature (room-sound-synth.ts SOUND_SIGNATURE, a frequency no other sound starts with), so a group of
+// oscillators made together reads back as one named sound. What each ply SHOULD sound like is typed from the rules
+// (a capture, a check), never read from the room's code.
+
+const SOUND_SPY = () => {
+  const w = window as unknown as {
+    __ctxs: AudioContext[];
+    __tones: { t: number; hz: number }[];
+    AudioContext: typeof AudioContext;
+  };
+  w.__ctxs = [];
+  w.__tones = [];
+  const Real = w.AudioContext;
+  if (!Real) return;
+  const proto = Real.prototype;
+  const create = proto.createOscillator;
+  proto.createOscillator = function (this: AudioContext) {
+    const osc = create.call(this);
+    const set = osc.frequency.setValueAtTime.bind(osc.frequency);
+    let first = true;
+    osc.frequency.setValueAtTime = (v: number, t: number) => {
+      if (first) w.__tones.push({ t: performance.now(), hz: v });
+      first = false;
+      return set(v, t);
+    };
+    return osc;
+  };
+  const Counted = function (this: unknown, ...a: ConstructorParameters<typeof AudioContext>) {
+    const c = new Real(...a);
+    w.__ctxs.push(c);
+    return c;
+  } as unknown as typeof AudioContext;
+  Counted.prototype = proto;
+  w.AudioContext = Counted;
+};
+
+/** The sounds the room has played, by name: oscillators made within a few ms of each other are one sound. */
+async function soundsPlayed(page: Page): Promise<string[]> {
+  const tones = await page.evaluate(() => (window as unknown as { __tones: { t: number; hz: number }[] }).__tones);
+  const byHz = new Map(Object.entries(SOUND_SIGNATURE).map(([s, hz]) => [hz, s]));
+  const out: string[] = [];
+  let lastT = -Infinity;
+  for (const { t, hz } of tones) {
+    if (t - lastT > 5) out.push(byHz.get(hz) ?? `unknown ${hz}`);
+    lastT = t;
+  }
+  return out;
+}
+const contexts = (page: Page) => page.evaluate(() => (window as unknown as { __ctxs: AudioContext[] }).__ctxs.map((c) => c.state));
+
+/** The next position on the bridge row, as Lichess reports it: the SAME game (its id kept), the move list grown. */
+async function playOn(room: SeededRoom, moves: string[], o: { whiteMs?: number; drawOfferBy?: "white" | "black" | null; finished?: boolean } = {}) {
+  await withDb(async (sql) => {
+    const res = await sql`
+      update fixture_external_play
+         set moves_uci = ${sql.json(moves)},
+             move_count = ${moves.length},
+             last_move_at = now(),
+             white_ms = coalesce(${o.whiteMs ?? null}::int, white_ms),
+             draw_offer_by = ${o.drawOfferBy ?? null},
+             status = ${o.finished ? "finished" : "live"},
+             game_over_at = ${o.finished ? sql`now()` : null},
+             finished_at = ${o.finished ? sql`now()` : null},
+             updated_at = now()
+       where fixture_id = ${room.fixtureId}`;
+    if (res.count !== 1) throw new Error(`playOn: no bridge row for ${room.fixtureId}`);
+  });
+}
+/** The position after `moves`, by the rules. */
+function fenOf(moves: string[]): string {
+  const c = new Chess();
+  for (const m of moves) c.move({ from: m.slice(0, 2), to: m.slice(2, 4), ...(m.length > 4 ? { promotion: m[4] } : {}) });
+  return c.fen();
+}
+const atPly = (page: Page, ply: number) => expect(page.getByTestId("room-board")).toHaveAttribute("data-ply", String(ply));
+
+test("T17B fix 2, D19: move sounds — none before a tap or on load; each new ply its own sound; the own drop at once; a jump silent; the switch remembered", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const line = ["e2e4"];
+  await seedGameSql(room, { moves: line });
+  const ctx = await cold(browser);
+  await ctx.addInitScript(SOUND_SPY);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  const toggle = p.getByTestId("room-sound");
+  await expect(toggle, "a player's room: sounds on by default").toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-label", uiEn["externalPlay.room.sound.label"]!);
+
+  // Before any tap: a new ply makes no sound, and no AudioContext is even made.
+  line.push("d7d5");
+  await playOn(room, line);
+  await atPly(p, 2);
+  await p.waitForTimeout(300);
+  expect(await contexts(p), "nothing before a gesture").toEqual([]);
+  expect(await soundsPlayed(p)).toEqual([]);
+
+  // A tap anywhere is the gesture.
+  await p.getByTestId("room-clocks-strip").click();
+  await expect.poll(() => contexts(p)).toEqual(["running"]);
+
+  // Each new ply, live, with the sound the rules say it is (the player is White).
+  const heard: string[] = [];
+  const steps: [string, string][] = [
+    ["e4d5", "capture"], // White takes, from another device: the player's own capture
+    ["d8d5", "capture"], // Black recaptures
+    ["b1c3", "move"], // White, quiet
+    ["d5e5", "check"], // Black's queen checks
+  ];
+  for (const [uci, sound] of steps) {
+    line.push(uci);
+    await playOn(room, line);
+    await atPly(p, line.length);
+    heard.push(sound);
+    await expect.poll(() => soundsPlayed(p), { message: `${uci} sounds as a ${sound}` }).toEqual(heard);
+  }
+  expect(heard.length, "anti-vacuity: plies heard").toBe(steps.length);
+
+  // Two plies in one read (a reconnect, a missed broadcast): replayed silently.
+  line.push("f1e2", "a7a6");
+  await playOn(room, line);
+  await atPly(p, line.length);
+  await p.waitForTimeout(500);
+  expect(await soundsPlayed(p), "a jump of two plies is silent").toEqual(heard);
+
+  // The opponent offers a draw: once.
+  await playOn(room, line, { drawOfferBy: "black" });
+  await expect(p.getByTestId("room-draw-offer")).toBeVisible();
+  heard.push("offer");
+  await expect.poll(() => soundsPlayed(p)).toEqual(heard);
+  await playOn(room, line);
+  await expect(p.getByTestId("room-draw-offer")).toHaveCount(0);
+
+  // The player's own move sounds at the DROP — while it is still in flight — and the refusal adds nothing.
+  const acts = await catchActs(p, { hold: true });
+  await tap(p, "g1", "white");
+  await tap(p, "f3", "white");
+  await expect.poll(() => acts.bodies.length).toBe(1);
+  heard.push("move");
+  await expect.poll(() => soundsPlayed(p), { message: "heard before any answer" }).toEqual(heard);
+  acts.release();
+  await expect.poll(() => piecesOnBoard(p)).toEqual(piecesOf(fenOf(line)));
+  await p.waitForTimeout(500);
+  expect(await soundsPlayed(p), "the refusal and its re-read are silent").toEqual(heard);
+
+  // Switched off: a new ply is silent — and the choice survives a reload.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  line.push("g1f3");
+  await playOn(room, line);
+  await atPly(p, line.length);
+  await p.waitForTimeout(500);
+  expect(await soundsPlayed(p), "off is off").toEqual(heard);
+  if (SHOTS) await shoot(p, "sound-off");
+  await p.reload();
+  await boardReady(p);
+  await expect(p.getByTestId("room-sound"), "remembered on this device").toHaveAttribute("aria-pressed", "false");
+
+  // On again: the press plays a short preview (it is itself the gesture), then the end of the game sounds.
+  await p.getByTestId("room-sound").click();
+  await expect(p.getByTestId("room-sound")).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => soundsPlayed(p), { message: "the preview" }).toEqual(["move"]);
+  if (SHOTS) await shoot(p, "sound-on");
+  line.push("e7e6");
+  await playOn(room, line, { finished: true });
+  await expect(p.getByTestId("match-room"), "the game is over: the room leaves the live board").not.toHaveAttribute("data-screen", "live");
+  await expect.poll(() => soundsPlayed(p), { message: "the last ply ended the game: one sound, the end" }).toEqual(["move", "end"]);
+  expect(await noSidewaysScroll(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+  await ctx.close();
+});
+
+test("T17B fix 2, D19: low time — once, when the player's OWN running clock crosses 10 s", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4"] });
+  const ctx = await cold(browser);
+  await ctx.addInitScript(SOUND_SPY);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  await p.getByTestId("room-clocks-strip").click();
+  await expect.poll(() => contexts(p)).toEqual(["running"]);
+  // Black replies; White's clock now runs from 14 s.
+  await playOn(room, ["e2e4", "e7e5"], { whiteMs: 14_000 });
+  await atPly(p, 2);
+  await expect.poll(() => soundsPlayed(p), { message: "the reply, then the crossing" }).toEqual(["opponentMove", "lowTime"]);
+  await p.waitForTimeout(2_000);
+  expect(await soundsPlayed(p), "once").toEqual(["opponentMove", "lowTime"]);
+  await ctx.close();
+});
+
+test("T17B fix 2, D19: storage blocked — the switch still works on the page, and nothing throws", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4"] });
+  const ctx = await cold(browser);
+  await ctx.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("The operation is insecure.", "SecurityError");
+      },
+    });
+  });
+  await ctx.addInitScript(SOUND_SPY);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  const toggle = p.getByTestId("room-sound");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => soundsPlayed(p), { message: "turned back on: the preview plays" }).toEqual(["move"]);
   await ctx.close();
 });

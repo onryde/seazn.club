@@ -6062,6 +6062,7 @@
   "externalPlay.room.header.meta": "{division} · Round {round}",
   "externalPlay.room.header.board": "Board {board} · {clock}",
   "externalPlay.room.backAria": "Back to the fixture",
+  "externalPlay.room.sound.label": "Move sounds",
   "externalPlay.room.backToFixture": "Back to fixture",
   "externalPlay.room.standings": "Standings",
   "externalPlay.room.you": "You",

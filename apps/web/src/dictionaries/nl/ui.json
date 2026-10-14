@@ -6062,6 +6062,7 @@
   "externalPlay.room.header.meta": "{division} · Ronde {round}",
   "externalPlay.room.header.board": "Bord {board} · {clock}",
   "externalPlay.room.backAria": "Terug naar de wedstrijd",
+  "externalPlay.room.sound.label": "Zetgeluiden",
   "externalPlay.room.backToFixture": "Terug naar wedstrijd",
   "externalPlay.room.standings": "Stand",
   "externalPlay.room.you": "Jij",
