@@ -319,7 +319,8 @@ function meetingReplaced(fixtureId: string): HttpError {
 // The privileged client or one of its transactions (the round-open.ts shape).
 type AnySql = postgres.TransactionSql | postgres.Sql;
 
-async function storedPlayerParticipant(
+/** The ONE rule for which participant is a person's on a board (R2-2's lock check and R3-1's snapshot read it). */
+export async function storedPlayerParticipant(
   db: AnySql,
   a: { fixtureId: string; personId: string },
 ): Promise<string | null> {

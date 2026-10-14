@@ -46,7 +46,7 @@ import {
 } from "./room-cards";
 import { HeldSeam } from "./room-seams";
 import { roomScreen } from "./room-screen";
-import { canMove, moveNotice, plyOf, type RoomState } from "./room-state";
+import { canMove, moveNotice, ownMeetingRetired, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
@@ -143,7 +143,8 @@ export function RoomShell({
       participantId === null ? Promise.resolve() : deliverCameraFault(fixtureId, token, { state: s, participantId }),
     [participantId, fixtureId, token],
   );
-  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp);
+  // The participant id rides along (R3-1): a token for ANOTHER participant is another meeting, and the camera moves.
+  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId);
   // The pill reads this client's own meeting join (review I8): no server call.
   const presence = useOpponentPresence(camera, cameraOn ? snap.opponentPresence : null);
 
@@ -160,7 +161,10 @@ export function RoomShell({
 
   // Camera required: the seat was refused for want of a camera, the camera
   // has come up — take the seat again, a few times while presence catches up.
-  const [retries, setRetries] = useState(0);
+  // The budget is per participant (R3-1): the camera's join into a NEW meeting
+  // (a re-pair's retire moved the seat) gets its own SEAT_RETRIES.
+  const [retry, setRetry] = useState<{ for: string | null; n: number }>({ for: null, n: 0 });
+  const retries = retry.for === participantId ? retry.n : 0;
   const refusedForCamera =
     state.seat !== null && !state.seat.seated && (state.seat.reason === "camera_required" || state.seat.reason === "camera_lost");
   const { claim } = room;
@@ -168,11 +172,23 @@ export function RoomShell({
     if (!refusedForCamera || camera.status !== "live" || state.pending !== null) return;
     if (retries >= SEAT_RETRIES) return;
     const id = setTimeout(() => {
-      setRetries((n) => n + 1);
+      setRetry({ for: participantId, n: retries + 1 });
       void claim();
     }, SEAT_RETRY_MS);
     return () => clearTimeout(id);
-  }, [refusedForCamera, camera.status, state.pending, retries, claim]);
+  }, [refusedForCamera, camera.status, state.pending, retries, participantId, claim]);
+
+  // Final re-review 3, R3-1: the meeting this room's camera joined was retired under the player — a re-pair's
+  // newcomer ended it, and its participants went with its row (ownMeetingRetired reads the server's word). Re-claim
+  // the seat ONCE per change, quietly, as the re-entry does: the answer's token moves the camera to the new meeting.
+  // A refused re-claim leaves the server's answer as it was, so nothing is asked again until that answer changes.
+  const retiredKey = ownMeetingRetired(state) ? `${state.seat?.participant?.participantId ?? ""}>${snap.ownParticipantId ?? ""}` : null;
+  const reclaimedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (retiredKey === null || reclaimedFor.current === retiredKey) return;
+    reclaimedFor.current = retiredKey;
+    void claim();
+  }, [retiredKey, claim]);
   // While the camera is coming up and the seat is still being retried, the
   // player stays on the check-in; card 2/3 is for a camera that will not come.
   // Recovering is OUR guard re-joining (I-1), and a give-up is ours too (fix
@@ -185,9 +201,9 @@ export function RoomShell({
   const screen = roomScreen(state, { cameraSettling });
 
   const tryAgain = useCallback(() => {
-    setRetries(0);
+    setRetry({ for: participantId, n: 0 });
     void claim();
-  }, [claim]);
+  }, [participantId, claim]);
 
   const relinkHref = lichessLinkStartHref(snap.orgSlug, selfPath);
   const busy = state.pending !== null;

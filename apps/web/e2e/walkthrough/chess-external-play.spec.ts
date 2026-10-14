@@ -1045,4 +1045,142 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(await checkedInAt(board1.fixtureId, newcomer.personId), "seated in the new meeting").not.toBeNull();
     await ctx.close();
   });
+  test("R3-1: the player who STAYED keeps their room open through the re-pair — when the newcomer's arrival retires their meeting, their page re-claims the seat on its own (no tap, no reload), lands in the NEW meeting, and the game is made under `required`", async ({ page, browser, request }) => {
+    test.setTimeout(budget(10));
+    // Its own Swiss round, for the same reason as N-2's; playable, so the game can really be made at the fixture.
+    const names = [`Mo Stay ${TAG}`, `Ned Stay ${TAG}`, `Ola Stay ${TAG}`, `Pia Stay ${TAG}`];
+    const r = await seedOnlineRound(request, names, { camera: "required", stage: "swiss", clock: TC, playable: true });
+    expect(r.boards, "four players pair into two boards").toHaveLength(2);
+    for (const b of r.boards) for (const pl of [b.home, b.away]) lichess.registerToken(pl.lichessToken!, pl.lichessId);
+    const people = new Map(r.boards.flatMap((b) => [b.home, b.away]).map((p) => [p.entrantId, p]));
+    const pairs = () =>
+      withDb((sql) => sql<{ id: string; home: string | null; away: string | null }[]>`
+        select id, home_entrant_id as home, away_entrant_id as away from fixtures
+         where stage_id = ${r.stageId} and round_no = 1 order by seq_in_round`);
+    const meetingsOf = (fixtureId: string) =>
+      withDb((sql) => sql<{ meeting_id: string; ended_at: Date | null }[]>`
+        select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`);
+    const participantsOf = async (fixtureId: string) =>
+      (await withDb((sql) => sql<{ person_id: string | null }[]>`
+        select person_id from fixture_video_participants where fixture_id = ${fixtureId} order by created_at, id`)).map((x) => x.person_id);
+    const isRoom = (u: string) => /\/external-play\/room$/.test(new URL(u).pathname);
+
+    // The top seed sits on the same board under both pairings (fold, then rank_adjacent): the one who stays.
+    const board1 = r.boards.find((b) => [b.home, b.away].some((pl) => pl.name === names[0]))!;
+    expect(board1, "premise — the top seed is paired in round 1").toBeDefined();
+    const stayer = [board1.home, board1.away].find((pl) => pl.name === names[0])!;
+
+    // ── the stayer checks in ALONE under the first pairing, and keeps the room open ──
+    // Alone: with both in, the game would be made, and a board with a game is never re-paired (M-10).
+    const sctx = await playerContext(browser);
+    const sp = await openRoom(sctx, board1, stayer);
+    await expect(screen(sp)).toHaveAttribute("data-screen", "checkin");
+    await sp.getByTestId("room-checkin-cta").click();
+    await expect(screen(sp), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    const first = video.participantFor(stayer.personId)!;
+    video.setLivePublisher(first.id, true);
+    await sp.getByTestId("room-state-retry").click();
+    await expect(screen(sp)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    await expect(sp.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
+    expect(await checkedInAt(board1.fixtureId, stayer.personId), "premise — seated in the first pairing's meeting").not.toBeNull();
+    const [old] = await meetingsOf(board1.fixtureId);
+    expect(old?.meeting_id, "premise — the stayer's participant is in the first pairing's meeting").toBe(first.meetingId);
+    // From here on the stayer's page is never touched: no tap, no reload.
+    await sp.evaluate(() => {
+      (window as unknown as { __r31Stayed?: boolean }).__r31Stayed = true;
+    });
+    const stayerClaims: string[] = [];
+    sp.on("request", (req) => {
+      if (req.method() === "POST" && isRoom(req.url())) stayerClaims.push(req.url());
+    });
+
+    // ── the organiser unpairs and re-pairs, with NO re-open ──
+    // The page's reads are held across the unpair → re-pair gap and let through once the board is paired again: the
+    // organiser who re-pairs between two of the page's polls. (A read INSIDE the gap answers 404 — the board names
+    // nobody — and the room stops polling: a reload's way back, a different path from this one.)
+    let release!: () => void;
+    const gapOver = new Promise<void>((res) => (release = res));
+    let held = 0;
+    await sp.route(
+      (u) => isRoom(u.toString()),
+      async (route) => {
+        if (route.request().method() === "GET") {
+          held += 1;
+          await gapOver;
+        }
+        await route.continue();
+      },
+    );
+    const stamp = await roundOpenedAtSql(r.stageId, 1);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.fixturesTab);
+    await page.getByTestId("stage-unpair").click();
+    await expect.poll(async () => (await pairs()).filter((f) => f.home !== null || f.away !== null).length, { timeout: 30_000 }).toBe(0);
+    const repaired = await apiJson(page.request, `/api/v1/stages/${r.stageId}/generate`, "POST", { pairing: "rank_adjacent" });
+    expect(repaired.status, `re-pair round 1: ${JSON.stringify(repaired.error)}`).toBeLessThan(300);
+    expect((await roundOpenedAtSql(r.stageId, 1))!.getTime(), "premise — no re-open: the same window").toBe(stamp!.getTime());
+    const now1 = (await pairs()).find((f) => f.id === board1.fixtureId)!;
+    expect([now1.home, now1.away], "premise — the top seed stayed on the board").toContain(stayer.entrantId);
+    const newcomer = people.get([now1.home, now1.away].find((e) => e !== null && e !== stayer.entrantId)!)!;
+    expect([board1.home.entrantId, board1.away.entrantId], "premise — the other player on the board is new to it").not.toContain(newcomer.entrantId);
+    // The board is paired again: the page reads it.
+    const readBack = sp.waitForResponse((res) => res.request().method() === "GET" && isRoom(res.url()), { timeout: IDLE_POLL_MS + 10_000 });
+    release();
+    expect((await readBack).status(), "the stayer's room reads the re-paired board").toBe(200);
+    expect(held, "premise — a read was held across the gap").toBeGreaterThan(0);
+    await expect(screen(sp), "still checked in, nothing to do").toHaveAttribute("data-screen", "checkin");
+    expect(stayerClaims, "premise — nothing re-claimed yet: the first pairing's room is still live").toEqual([]);
+    expect(video.meetingStatus(old!.meeting_id), "premise — the stayer's room is live until someone new comes in").toBe("ACTIVE");
+
+    // ── the newcomer arrives by the lobby; their seat retires the stayer's meeting ──
+    const nctx = await playerContext(browser);
+    const np = await nctx.newPage();
+    const fixturePage = publicFixturePath(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId);
+    await loginUi(np, newcomer.email, fixturePage);
+    await np.waitForURL((u) => u.pathname === fixturePage);
+    const card = np.getByTestId("your-board");
+    await expect(card, "the lobby offers the check-in").toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
+    await card.getByTestId("your-board-link").click();
+    await np.waitForURL((u) => u.pathname === routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board1.fixtureId));
+    await expect(screen(np)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    // The stayer's own re-claim, if it comes, comes by itself: watched from before the retire.
+    const reclaim = sp.waitForResponse((res) => res.request().method() === "POST" && isRoom(res.url()), { timeout: IDLE_POLL_MS + 20_000 });
+    await np.getByTestId("room-checkin-cta").click();
+    await expect(screen(np), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    const fresh = await meetingsOf(board1.fixtureId);
+    expect(fresh, "one meeting on file").toHaveLength(1);
+    expect(fresh[0]!.meeting_id, "premise — a fresh meeting").not.toBe(old!.meeting_id);
+    expect(video.meetingStatus(old!.meeting_id), "premise — the stayer's room was ended under them").toBe("INACTIVE");
+
+    // ── R3-1: the stayer's page re-claims by itself, into the NEW meeting ──
+    const answer = await reclaim;
+    expect(answer.status(), "the stayer's quiet re-claim is answered").toBe(200);
+    const seat = ((await answer.json()) as { data: { seat: { participant: { participantId: string } | null } | null } }).data.seat;
+    const second = video.participantFor(stayer.personId)!;
+    expect(second.meetingId, "the stayer's new participant is in the NEW meeting").toBe(fresh[0]!.meeting_id);
+    expect(seat?.participant?.participantId, "and its token is the one the page was handed").toBe(second.id);
+    expect(new Set(await participantsOf(board1.fixtureId)), "both players of the new pairing are in the new meeting").toEqual(
+      new Set([stayer.personId, newcomer.personId]),
+    );
+    expect(stayerClaims, "one quiet re-claim, not a loop").toHaveLength(1);
+
+    // Each browser joins the meeting with the token it was handed (the fixture is told; it never trusts a page).
+    video.setLivePublisher(second.id, true);
+    video.setLivePublisher(video.participantFor(newcomer.personId)!.id, true);
+    await np.getByTestId("room-state-retry").click();
+
+    // ── both seated on the meeting's word: the game is made under `required` ──
+    await expectLichessReached(() => lichessCallsFor([stayer, newcomer]).length, board1.fixtureId, 30_000);
+    await expect.poll(async () => (await bridgeRow(board1.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
+    await expect(screen(sp), "the stayer's page goes live with no tap and no reload").toHaveAttribute("data-screen", "live", {
+      timeout: IDLE_POLL_MS + 10_000,
+    });
+    expect(
+      await sp.evaluate(() => (window as unknown as { __r31Stayed?: boolean }).__r31Stayed === true),
+      "the stayer's page was never reloaded",
+    ).toBe(true);
+    expect(stayerClaims, "still one re-claim").toHaveLength(1);
+    await nctx.close();
+    await sctx.close();
+  });
 });

@@ -66,7 +66,7 @@ import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
 import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } from "./play";
 import { fenAfter } from "@/server/external-play/fen";
-import { isPlayableFixtureStatus, seatPlayer, type SeatResult } from "./preflight";
+import { isPlayableFixtureStatus, seatPlayer, storedPlayerParticipant, type SeatResult } from "./preflight";
 import { lichessGrantDowngraded } from "../external-accounts";
 import { RECONCILED_WHILE_HELD, reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
@@ -364,6 +364,9 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     (await hasOpenGuardFault(sql, { fixtureId: f.fixtureId, personId: opponent.personId }))
       ? null
       : { participantId: await opponentParticipant(f.fixtureId, opponent.personId) };
+  // R3-1: who the server holds the viewer as in the meeting — what the room re-claims on when it is not the one its
+  // camera joined (a re-pair's retire took it). A DB read: a room read never calls the vendor.
+  const ownParticipantId = await storedPlayerParticipant(sql, { fixtureId: f.fixtureId, personId: player.personId });
 
   let realtime: RoomSnapshot["realtime"] = null;
   try {
@@ -403,6 +406,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     opponent: { colour: theirs, name: opponent.displayName, checkedIn: theyIn },
     cameraPolicy,
     opponentPresence,
+    ownParticipantId,
     frozen,
     canAct,
     otherAccount,

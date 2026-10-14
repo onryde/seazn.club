@@ -12,7 +12,13 @@ import { opponentPresenceView, PRESENCE_TICK_MS, type OpponentPresenceWire } fro
 /** Tells the server our guard's gap on this seat started or ended (I-1). */
 export type CameraFaultStamp = (state: "start" | "end") => Promise<unknown>;
 
-export function useOwnCamera(authToken: string | null, join: JoinOwnCamera = joinOwnCamera, stamp: CameraFaultStamp | null = null) {
+export function useOwnCamera(
+  authToken: string | null,
+  join: JoinOwnCamera = joinOwnCamera,
+  stamp: CameraFaultStamp | null = null,
+  /** R3-1: whose token it is — another participant is another meeting, and the camera moves to it. */
+  participantId: string | null = null,
+) {
   const [view, setView] = useState<CameraView>({ status: "idle", track: null });
   const session = useRef<ReturnType<typeof cameraSession> | null>(null);
   const joinRef = useRef(join);
@@ -32,8 +38,8 @@ export function useOwnCamera(authToken: string | null, join: JoinOwnCamera = joi
   }, []);
 
   useEffect(() => {
-    if (authToken) void session.current?.start(authToken);
-  }, [authToken]);
+    if (authToken) void session.current?.start(authToken, participantId);
+  }, [authToken, participantId]);
 
   const stream = useMemo(() => (view.track ? new MediaStream([view.track]) : null), [view.track]);
   // Stable: the presence hook's effect depends on them.

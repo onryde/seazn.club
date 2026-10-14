@@ -380,6 +380,88 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — taking the seat", () 
   });
 });
 
+describe.skipIf(!process.env.DATABASE_URL)("match room — R3-1: the viewer's OWN participant on file (the room re-claims when it is not the one its camera joined)", () => {
+  /** The board's meeting as preflight leaves it, made for the pairing the board has: both players and an arbiter. */
+  async function meetingWithBoth(s: SeedOnlineChessFixtureResult) {
+    const meetingId = `mtg-${randomUUID()}`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${s.fixtureId}, ${s.orgId}, ${meetingId}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+    const part = { home: `pt-h-${randomUUID().slice(0, 8)}`, away: `pt-a-${randomUUID().slice(0, 8)}`, arbiter: `arb-${randomUUID().slice(0, 8)}` };
+    await sql`
+      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+      values (${s.fixtureId}, ${s.home.personId}, 'player', ${part.home}),
+             (${s.fixtureId}, ${s.away.personId}, 'player', ${part.away}),
+             (${s.fixtureId}, null, 'arbiter', ${part.arbiter})`;
+    return { meetingId, part };
+  }
+  const own = async (s: SeedOnlineChessFixtureResult, side: "home" | "away") =>
+    (await readRoom({ kind: "session", userId: s[side].userId }, s.fixtureId, deps())).ownParticipantId;
+
+  it("the empty case: no meeting on file ⇒ null for both seats; cameras off ⇒ null", async () => {
+    const none = await seed({ cameraPolicy: "required" });
+    expect(await own(none, "home")).toBeNull();
+    expect(await own(none, "away")).toBeNull();
+    const off = await seed({ cameraPolicy: "off" });
+    expect(await own(off, "home")).toBeNull();
+  });
+
+  it("each seat reads ITS OWN player participant — never the opponent's, never the arbiter's — before the game and on a live one, counted", async () => {
+    let checked = 0;
+    for (const bridge of [null, { status: "live", moves: ["e2e4", "e7e5"] }] as const) {
+      const s = await seed({ cameraPolicy: "required" });
+      if (bridge) await gameOnFile(s, bridge as never);
+      const { part } = await meetingWithBoth(s);
+      for (const side of ["home", "away"] as const) {
+        expect(await own(s, side), `${bridge ? "live" : "no game"} / ${side}`).toBe(part[side]);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: board × seat").toBe(4);
+  });
+
+  it("the states a seated room lives through, in sequence: the sweep ENDS the meeting (its row stays) ⇒ unchanged; an arbiter's removal ⇒ unchanged; the R2-2 retire (the row deleted, its participants with it) ⇒ null for both; the new pairing's meeting mints ⇒ the NEW id", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const { part } = await meetingWithBoth(s);
+    expect(await own(s, "home"), "seated").toBe(part.home);
+
+    // An arbiter is removed at its TTL (sweep arbiterRevoke): the player's own participant is untouched.
+    await sql`update fixture_video_participants set removed_at = now() where fixture_id = ${s.fixtureId} and preset = 'arbiter'`;
+    expect(await own(s, "home"), "an arbiter's removal is not the player's").toBe(part.home);
+
+    // The sweep ends the meeting at the window's close (endMeeting): the row and its participants stay.
+    await sql`update fixture_video_meetings set ended_at = now() where fixture_id = ${s.fixtureId}`;
+    expect(await own(s, "home"), "an ENDED meeting keeps the participant — nothing to re-claim").toBe(part.home);
+    expect(await own(s, "away")).toBe(part.away);
+
+    // The R2-2 retire: one statement deletes the stale row; the participants cascade.
+    await sql`delete from fixture_video_meetings where fixture_id = ${s.fixtureId}`;
+    expect(await own(s, "home"), "retired ⇒ none on file").toBeNull();
+    expect(await own(s, "away")).toBeNull();
+
+    // The new pairing's meeting; this player's seat mints them into it.
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${s.fixtureId}, ${s.orgId}, ${`mtg-${randomUUID()}`}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+    const fresh = `pt-new-${randomUUID().slice(0, 8)}`;
+    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values (${s.fixtureId}, ${s.home.personId}, 'player', ${fresh})`;
+    expect(await own(s, "home"), "the new meeting's participant").toBe(fresh);
+    expect(await own(s, "away"), "the opponent has not re-claimed yet").toBeNull();
+  });
+
+  it("a claim's own answer names the participant its seat holds — composed AFTER the seat, so a fresh seat never reads as moved", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const meetingId = `mtg-${randomUUID()}`;
+    const participant = { participantId: `pt-${randomUUID().slice(0, 8)}`, authToken: "jwt-home" };
+    // Stands for seatPlayer: the meeting made, the participant stored, the camera refused (nobody live yet).
+    const seat = vi.fn(async () => {
+      await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${s.fixtureId}, ${s.orgId}, ${meetingId}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+      await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values (${s.fixtureId}, ${s.home.personId}, 'player', ${participant.participantId})`;
+      return { seated: false as const, reason: "camera_required" as const, participant };
+    });
+    expect(await own(s, "home"), "premise — nothing on file before the claim").toBeNull();
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ seat: seat as never }));
+    expect(c.seat).toEqual({ seated: false, reason: "camera_required", participant });
+    expect(c.snapshot.ownParticipantId).toBe(participant.participantId);
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room shows it", () => {
   it("board, last move, turn and clocks come from T10's ledger; the colour from the RECORDED white_side, never the pairing", async () => {
     const s = await seed();

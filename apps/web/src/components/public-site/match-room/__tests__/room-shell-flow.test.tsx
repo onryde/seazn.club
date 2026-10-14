@@ -25,6 +25,7 @@ import type { RoomSnapshot } from "../room-snapshot";
 import type { MeetingLink, OwnCamera } from "../camera-loader";
 import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
 import { useOpponentPresence } from "../use-own-camera";
+import { IDLE_POLL_MS } from "../use-room";
 
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
 let tick = 0;
@@ -45,6 +46,9 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true },
     cameraPolicy: "required",
     opponentPresence: null,
+    // The participant every seat answer here hands back is the one the server holds: a claim's snapshot is composed
+    // AFTER its seat (external-play-room.test.ts, R3-1). The R3-1 cases below move it.
+    ownParticipantId: "p-own",
     frozen: null,
     canAct: true,
     otherAccount: null,
@@ -86,7 +90,14 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ method: String(init.method), url });
-      if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) return ok(seatAnswers.shift()?.());
+      if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) {
+        // A thunk may answer with a whole Response (a refusal by status, R3-1). A seat call nobody scripted is never
+        // answered (it is still counted): a runaway re-claim stops at its first extra call instead of spinning.
+        const thunk = seatAnswers.shift();
+        if (thunk === undefined) return new Promise<Response>(() => {});
+        const answer = thunk();
+        return answer instanceof Response ? answer : ok(answer);
+      }
       if (init.method === "GET") return ok(getAnswer());
       return new Response("{}", { status: 500 });
     }),
@@ -659,5 +670,146 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     (propsOf(buttons[0]!).onClick as () => void)();
     expect(onReload).toHaveBeenCalledTimes(1);
     card.unmount();
+  });
+});
+
+// Final re-review 3, R3-1: a re-pair's newcomer retires the meeting the player who STAYED is seated in (R2-2), and
+// its participants go with it. Their room — open, untouched — must re-claim the seat by itself, once, and move the
+// camera to the new meeting. The trigger is the SERVER's word (the snapshot's ownParticipantId), never a guess from
+// the camera's own link: a drop or a kick the server did not retire leaves the participant on file.
+describe("R3-1: the meeting is retired under a seated player — one quiet re-claim, the camera moves, never a loop", () => {
+  const NEW = { participantId: "p-new", authToken: "new-rtk-token" };
+  const seatedSnap = (own: string | null, over: Partial<RoomSnapshot> = {}) =>
+    snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, ownParticipantId: own, ...over });
+  /** A live camera that counts its leaves and can drop its own meeting link (a roomLeft). */
+  function trackedCamera() {
+    const left = { n: 0 };
+    const m = meetingCamera();
+    const cam: OwnCamera = { ...m.cam, leave: async () => void (left.n += 1) };
+    return { cam, left, drop: () => m.set(null) };
+  }
+  /** Mount a seated player (the re-entry claim seats them on the meeting `p-own`). */
+  async function seatedRoom(first: OwnCamera, ...later: OwnCamera[]) {
+    seatAnswers = [() => ({ snapshot: seatedSnap("p-own"), seat: { seated: true, participant: PARTICIPANT } })];
+    join.fn.mockReset();
+    join.fn.mockResolvedValueOnce(first);
+    for (const c of later) join.fn.mockResolvedValueOnce(c);
+    getAnswer = () => seatedSnap("p-own");
+    const island = renderIsland(RoomShell, { initial: seatedSnap("p-own"), token: "tok", selfPath: "/x" });
+    await settle();
+    expect(join.fn.mock.calls, "premise — seated, the camera in the first meeting").toEqual([["own-rtk-token"]]);
+    expect(seatPosts(), "premise — the re-entry claim only").toBe(1);
+    return island;
+  }
+
+  it("retired ⇒ ONE quiet re-claim on the next read; its token moves the camera to the new meeting (old one left); seated again on the camera-up retry — never card 2, and nothing more after", async () => {
+    const old = trackedCamera();
+    const fresh = trackedCamera();
+    const island = await seatedRoom(old.cam, fresh.cam);
+    await settle(IDLE_POLL_MS);
+    expect(seatPosts(), "a read that finds the participant in place asks nothing").toBe(1);
+
+    seatAnswers = [
+      () => ({ snapshot: seatedSnap("p-new"), seat: { seated: false, reason: "camera_required", participant: NEW } }),
+      () => ({ snapshot: seatedSnap("p-new"), seat: { seated: true, participant: NEW } }),
+    ];
+    getAnswer = () => seatedSnap(null); // the newcomer's seat retired the meeting
+    await settle(IDLE_POLL_MS);
+    await settle();
+    expect(seatPosts(), "one quiet re-claim").toBe(2);
+    expect(join.fn.mock.calls, "the camera joined the NEW meeting with the re-claim's token").toEqual([["own-rtk-token"], ["new-rtk-token"]]);
+    expect(old.left.n, "the retired meeting is left").toBe(1);
+    expect(screenOf(island), "the camera settling: the check-in, never card 2").toBe("checkin");
+
+    getAnswer = () => seatedSnap("p-new");
+    await settle(1_500);
+    expect(seatPosts(), "the camera-up retry takes the seat").toBe(3);
+    expect(screenOf(island)).toBe("checkin");
+    for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+    expect(seatPosts(), "in place again: nothing more").toBe(3);
+    expect(join.fn).toHaveBeenCalledTimes(2);
+    island.unmount();
+  });
+
+  it("a drop or a kick the server did not retire — the camera's own link gone, the participant still on file — never re-claims; nor does the sweep's end of the meeting (same participant)", async () => {
+    const cam = trackedCamera();
+    const island = await seatedRoom(cam.cam);
+    cam.drop(); // roomLeft: a socket drop, a media-node drop, an arbiter's kick — the client cannot tell them apart
+    for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+    getAnswer = () => seatedSnap("p-own", { phase: "closed" }); // the sweep ended the meeting: its row and participant stay
+    for (let i = 0; i < 2; i += 1) await settle(IDLE_POLL_MS);
+    expect(seatPosts(), "no re-claim").toBe(1);
+    expect(join.fn, "no re-join").toHaveBeenCalledTimes(1);
+    expect(cam.left.n).toBe(0);
+    island.unmount();
+  });
+
+  it("a refused re-claim is never a loop: a 409 (VIDEO_MEETING_PAIRING_CHANGED) leaves the server's answer as it was and nothing is asked again; a CHANGED answer (the new meeting minted) asks once more; a refusal with no token stops for good", async () => {
+    const cam = trackedCamera();
+    const island = await seatedRoom(cam.cam);
+    const refused = () =>
+      new Response(JSON.stringify({ ok: false, error: { code: "VIDEO_MEETING_PAIRING_CHANGED", message: "x" }, requestId: "r" }), { status: 409 });
+    seatAnswers = [refused];
+    getAnswer = () => seatedSnap(null);
+    for (let i = 0; i < 4; i += 1) await settle(IDLE_POLL_MS);
+    expect(seatPosts(), "one re-claim, refused — then nothing, read after read").toBe(2);
+    expect(join.fn).toHaveBeenCalledTimes(1);
+
+    // The server's answer changes (the new meeting minted a participant): one more re-claim — and this one is refused
+    // with no token (the video service is down): the existing card, and the room stops asking.
+    seatAnswers = [() => ({ snapshot: seatedSnap("p-new"), seat: { seated: false, reason: "video_unavailable", participant: null } })];
+    getAnswer = () => seatedSnap("p-new");
+    await settle(IDLE_POLL_MS);
+    await settle();
+    expect(seatPosts(), "a changed answer asks once more").toBe(3);
+    expect(screenOf(island), "the existing state copy").toBe("videoDown");
+    for (let i = 0; i < 4; i += 1) await settle(IDLE_POLL_MS);
+    expect(seatPosts(), "and stops").toBe(3);
+    expect(join.fn).toHaveBeenCalledTimes(1);
+    island.unmount();
+  });
+
+  it("the retry budget is per participant: a seat that took all three camera-up retries still gets three in the new meeting", async () => {
+    const old = trackedCamera();
+    const fresh = trackedCamera();
+    join.fn.mockReset();
+    join.fn.mockResolvedValueOnce(old.cam).mockResolvedValueOnce(fresh.cam);
+    const refusal = (p: typeof PARTICIPANT, own: string) => () => ({
+      snapshot: seatedSnap(own),
+      seat: { seated: false, reason: "camera_required", participant: p },
+    });
+    // Check in, then three retries — seated on the last.
+    seatAnswers = [
+      refusal(PARTICIPANT, "p-own"),
+      refusal(PARTICIPANT, "p-own"),
+      refusal(PARTICIPANT, "p-own"),
+      () => ({ snapshot: seatedSnap("p-own"), seat: { seated: true, participant: PARTICIPANT } }),
+    ];
+    getAnswer = () => seatedSnap("p-own");
+    const island = renderIsland(RoomShell, { initial: snap({ ownParticipantId: null }), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle();
+    for (let i = 0; i < 3; i += 1) await settle(1_500);
+    expect(seatPosts(), "premise — check-in + all three retries").toBe(4);
+    expect(screenOf(island), "premise — seated").toBe("checkin");
+
+    // What the server holds, as its answers would say it: retired (none), then the re-claim mints the new one.
+    let onFile: string | null = null;
+    getAnswer = () => seatedSnap(onFile);
+    seatAnswers = [
+      () => {
+        onFile = "p-new";
+        return refusal(NEW, "p-new")();
+      },
+      () => ({ snapshot: seatedSnap("p-new"), seat: { seated: true, participant: NEW } }),
+    ];
+    await settle(IDLE_POLL_MS);
+    await settle(1_500);
+    expect(join.fn.mock.calls, "the camera moved to the new meeting").toEqual([["own-rtk-token"], ["new-rtk-token"]]);
+    expect(seatPosts(), "the quiet re-claim, then the new meeting's own camera-up retry").toBe(6);
+    expect(screenOf(island), "seated again, never card 2").toBe("checkin");
+    for (let i = 0; i < 2; i += 1) await settle(IDLE_POLL_MS);
+    expect(seatPosts(), "and nothing more").toBe(6);
+    island.unmount();
   });
 });

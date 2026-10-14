@@ -814,3 +814,124 @@ describe("cameraSession over the real loader: the heal (I-1, rulings 2 and 5)", 
     for (const p of players) await p.session.stop();
   });
 });
+
+// Final re-review 3, R3-1: a re-pair's retire ends the meeting the camera joined and deletes its participants; the
+// room's quiet re-claim hands back a token for ANOTHER participant, in the new meeting. The session moves the camera
+// there (leave, then join with the new token). The same participant's refreshed token — every re-claim's answer —
+// moves nothing. The switch is never our guard's fault: nothing is stamped.
+describe("cameraSession — the seat moved to another meeting (R3-1)", () => {
+  function scripted(...cams: OwnCamera[]) {
+    const tokens: string[] = [];
+    let pending: ((c: OwnCamera) => void) | null = null;
+    return {
+      tokens,
+      /** Joins hand out `cams` in order; `hold` makes the next one wait for `land()`. */
+      hold: false,
+      land: () => pending?.(cams.shift()!),
+      join(this: { hold: boolean }, t: string): Promise<OwnCamera> {
+        tokens.push(t);
+        if (this.hold) return new Promise<OwnCamera>((res) => (pending = res));
+        return Promise.resolve(cams.shift()!);
+      },
+    };
+  }
+  const flush = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((res) => setTimeout(res, 0));
+  };
+
+  it("the same participant's refreshed token moves nothing; ANOTHER participant's leaves the old meeting and joins the new one — live again, nothing stamped", async () => {
+    const r = record();
+    const first = fakeCamera(TRACK);
+    const second = fakeCamera(TRACK);
+    const j = scripted(first.cam, second.cam);
+    const stamped: string[] = [];
+    const s = cameraSession(j.join.bind(j), r.emit, { stamp: async (st) => void stamped.push(st) });
+    await s.start("tok-1", "p-own");
+    await s.start("tok-1b", "p-own"); // a re-claim's refresh of the same participant
+    expect(j.tokens, "a refreshed token of the SAME participant joins nothing").toEqual(["tok-1"]);
+    expect(first.calls.leave).toBe(0);
+
+    await s.start("tok-2", "p-new"); // the quiet re-claim after the retire
+    await flush();
+    expect(j.tokens, "another participant: the new meeting is joined with ITS token").toEqual(["tok-1", "tok-2"]);
+    expect(first.calls.leave, "the retired meeting is left").toBe(1);
+    expect([first.calls.unsubscribed, first.calls.faultUnsubscribed], "and its listeners released").toEqual([1, 1]);
+    expect(r.statuses()).toEqual(["joining", "live", "joining", "live"]);
+    expect(stamped, "a switch is never our guard's fault").toEqual([]);
+    first.fire(false, null); // the old camera's late event is never heard
+    expect(r.statuses().at(-1)).toBe("live");
+
+    await s.start("tok-2b", "p-new");
+    expect(j.tokens, "and the new one's refresh moves nothing either").toEqual(["tok-1", "tok-2"]);
+    await s.stop();
+    expect(second.calls.leave).toBe(1);
+  });
+
+  it("a new participant arriving WHILE the first join is in flight: the first lands, is left, and the new meeting is joined", async () => {
+    const r = record();
+    const first = fakeCamera(TRACK);
+    const second = fakeCamera(TRACK);
+    const j = scripted(first.cam, second.cam);
+    j.hold = true;
+    const s = cameraSession(j.join.bind(j), r.emit);
+    const starting = s.start("tok-1", "p-own");
+    await s.start("tok-2", "p-new"); // mid-join
+    j.hold = false;
+    j.land();
+    await starting;
+    await flush();
+    expect(j.tokens).toEqual(["tok-1", "tok-2"]);
+    expect(first.calls.leave, "the meeting the first join landed in is left").toBe(1);
+    expect(r.statuses().at(-1)).toBe("live");
+  });
+
+  it("a seat that moves while OUR guard's re-join is in flight: the re-join lands, is left, and the new meeting is joined", async () => {
+    const r = record();
+    const first = fakeCamera(TRACK);
+    const rejoined = fakeCamera(TRACK);
+    const moved = fakeCamera(TRACK);
+    const j = scripted(first.cam, rejoined.cam, moved.cam);
+    const s = cameraSession(j.join.bind(j), r.emit, { sleep: () => new Promise<void>((res) => setTimeout(res, 0)) });
+    await s.start("tok-1", "p-own");
+    j.hold = true;
+    first.fault(); // recovering: the re-join (still p-own's token) is in flight
+    await flush();
+    expect(j.tokens, "premise — the re-join is under way with the seat's token").toEqual(["tok-1", "tok-1"]);
+    await s.start("tok-2", "p-new"); // the quiet re-claim's answer lands mid-re-join
+    j.hold = false;
+    j.land();
+    await flush();
+    expect(j.tokens, "then the new meeting, with its own token").toEqual(["tok-1", "tok-1", "tok-2"]);
+    expect(rejoined.calls.leave, "the re-join's meeting is left").toBe(1);
+    expect(r.statuses().at(-1)).toBe("live");
+  });
+
+  it("the empty case and the stop: no participant key behaves as before (one join); a stop during the switch joins nothing after it", async () => {
+    const r = record();
+    const first = fakeCamera(TRACK);
+    const j = scripted(first.cam);
+    const s = cameraSession(j.join.bind(j), r.emit);
+    await s.start("t");
+    await s.start("t2");
+    expect(j.tokens, "keyless starts never switch").toEqual(["t"]);
+
+    const r2 = record();
+    const a = fakeCamera(TRACK);
+    // Every leave waits for the test to let it finish, so the stop lands mid-switch.
+    const gates: (() => void)[] = [];
+    a.cam.leave = () => new Promise<void>((res) => gates.push(res));
+    const j2 = scripted(a.cam, fakeCamera(TRACK).cam);
+    const s2 = cameraSession(j2.join.bind(j2), r2.emit);
+    await s2.start("tok-1", "p-own");
+    const switching = s2.start("tok-2", "p-new");
+    await flush();
+    expect(gates.length, "premise — the switch is leaving the retired meeting").toBe(1);
+    const before = r2.statuses();
+    const stopping = s2.stop();
+    for (const g of gates.splice(0)) g();
+    await Promise.all([switching, stopping]);
+    await flush();
+    expect(j2.tokens, "nothing joins after stop").toEqual(["tok-1"]);
+    expect(r2.statuses(), "and nothing is emitted after the stop — no 'joining', no new 'live'").toEqual(before);
+  });
+});
