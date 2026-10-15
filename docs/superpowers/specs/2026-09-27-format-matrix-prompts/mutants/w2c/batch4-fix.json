@@ -1,0 +1,359 @@
+[
+ {
+  "id": "b4-i1-create-lock-removed",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  await tx`select pg_advisory_xact_lock(hashtext(${\"division:\" + divisionId}))`;\n  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`",
+  "replace": "  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "batch 4 I1: createStages reads the division UNDER the division lock"
+   }
+  ]
+ },
+ {
+  "id": "b4-m1-knockout-only-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "a knockout-only decider on a table stage",
+  "replace": "a decider on a table stage",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-400-label.test.ts"
+    ],
+    "name": "PUT /stages/{id}/rules: only a KNOCKOUT-ONLY decider"
+   }
+  ]
+ },
+ {
+  "id": "b4-m2-post-stages-402-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "response: z.union([S.Stage, z.array(S.Stage)]), status: 201, errors: [400, 402, 409, 422] },",
+  "replace": "response: z.union([S.Stage, z.array(S.Stage)]), status: 201, errors: [400, 409, 422] },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-400-label.test.ts"
+    ],
+    "name": "POST /divisions/{id}/stages documents the points refusals and the 402"
+   }
+  ]
+ },
+ {
+  "id": "b4-m3-keys-envelope-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "    keys: {\n      type: \"array\",\n      description: \"On POINTS_RULE_INEXPRESSIBLE (422)",
+  "replace": "    keysX: {\n      type: \"array\",\n      description: \"On POINTS_RULE_INEXPRESSIBLE (422)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-400-label.test.ts"
+    ],
+    "name": "PATCH /divisions/{id} documents POINTS_RULE_INEXPRESSIBLE"
+   }
+  ]
+ },
+ {
+  "id": "b4-m4-set-sport-declares-decider",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "  cap: { scope: \"match\" },\n  winBy: { scope: \"match\" },",
+  "replace": "  cap: { scope: \"match\" },\n  winBy: { scope: \"match\", decider: true },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/stage-format-lines.test.ts"
+    ],
+    "name": "no sport the format line describes declares a decider key"
+   }
+  ]
+ },
+ {
+  "id": "b4-m5-reseed-keeps-nulls",
+  "file": "apps/web/src/server/usecases/stage-preset-reseed.ts",
+  "find": "isObj(stored) ? withoutNulls(stored) : {}",
+  "replace": "isObj(stored) ? { ...stored } : {}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "the organiser's own keys are kept"
+   }
+  ]
+ },
+ {
+  "id": "b4-m6-gate-parses-null",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "const points = sentPoints(cfg);",
+  "replace": "const points = cfg?.points;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "M6 config.points: null at create and replace means no points for this slot"
+   }
+  ]
+ },
+ {
+  "id": "b4-m6-null-stored",
+  "file": "apps/web/src/server/usecases/stage-defaults.ts",
+  "find": "const config = withoutNullPoints(sentConfig);",
+  "replace": "const config = sentConfig;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "M6 config.points: null at create and replace means no points for this slot"
+   }
+  ]
+ },
+ {
+  "id": "b4-m6-null-takes-carry",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "carry?.points !== undefined && sent.points === undefined ?",
+  "replace": "carry?.points !== undefined && (sent.points ?? undefined) === undefined ?",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "M6 config.points: null at create and replace means no points for this slot"
+   }
+  ]
+ },
+ {
+  "id": "b4-m7-flat-timeout",
+  "file": "packages/engine/test/rules-reference.test.ts",
+  "find": "}, proofBudget(PROOF_PAIRS));",
+  "replace": "});",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "packages/engine/test/rules-reference.test.ts"
+    ],
+    "name": "every signed or deviation row names a proving test that exists"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-email-format-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "  if (s.format === \"email\") return \"user@example.com\";\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every published request example parses against its own schema"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "exampleOf honours what the JSON Schema says of a value formats"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-uri-format-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "  if (s.format === \"uri\" || s.format === \"url\") return \"https://example.com/example\";\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every published request example parses against its own schema"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "exampleOf honours what the JSON Schema says of a value formats"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-minlength-pad-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "const padded = word.length >= min ? word : word.repeat(Math.ceil(min / word.length)).slice(0, min);",
+  "replace": "const padded = word;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every published request example parses against its own schema"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "exampleOf honours what the JSON Schema says of a value length bounds"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-maxlength-cut-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "return padded.length > max ? padded.slice(0, max) : padded;",
+  "replace": "return padded;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "exampleOf honours what the JSON Schema says of a value length bounds"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-default-ignored",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "if ((typeof s.pattern === \"string\" || exactLength) && typeof s.default === \"string\") return s.default;",
+  "replace": "if (false) return s.default;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every published request example parses against its own schema"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "exampleOf honours what the JSON Schema says of a value a pattern or an exact length"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-minitems-ignored",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "isScalarSchema(s.items) && typeof s.minItems === \"number\" && s.minItems > 1 ? s.minItems : 1",
+  "replace": "1",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every published request example parses against its own schema"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "exampleOf honours what the JSON Schema says of a value minItems"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-uuid-ordinal-ignored",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "ordinal === 0 ? \"3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b\" : `3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2${(ordinal % 16).toString(16)}`",
+  "replace": "\"3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "an array the schema asks several items of is several distinct items"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "exampleOf honours what the JSON Schema says of a value minItems"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-patch-tz-dropped",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "  \"PUT /divisions/{id}/schedule-settings\": { tz: \"Europe/London\" },\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every published request example parses against its own schema"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-patch-delete-kept",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "if (value === undefined) delete out[key];",
+  "replace": "if (value === undefined) out[key] = undefined;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every published request example parses against its own schema"
+   }
+  ]
+ },
+ {
+  "id": "b4-ex-patch-stale-entry",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "  \"PUT /fixtures/{id}/stream\": { streamUrl: STREAM_EXAMPLE_URL },\n",
+  "replace": "  \"PUT /fixtures/{id}/stream\": { streamUrl: STREAM_EXAMPLE_URL },\n  \"POST /persons/{id}/claim-invites\": { email: \"someone@example.com\" },\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every patch names a route with a body, and each is load-bearing"
+   }
+  ]
+ },
+ {
+  "id": "b4-pin-top-level-deciders-import",
+  "file": "apps/web/src/lib/top-level-stage-deciders.ts",
+  "find": "import { builtinModules } from \"@seazn/engine/sports\";",
+  "replace": "import { builtinModules } from \"@seazn/engine/sports\";\nimport { HttpError } from \"@/lib/errors\";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/boundary.test.ts"
+    ],
+    "name": "the product's top-level decider set is a file plain node can load"
+   }
+  ]
+ }
+]
