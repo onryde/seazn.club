@@ -63,6 +63,7 @@ const BADMINTON = builtinModules.find((m) => m.key === "badminton")!;
 const badminton = resolveModuleClient("badminton", BADMINTON.version);
 const CFG3 = badminton.configSchema.parse(BADMINTON.variants.short) as { bestOf: number };
 const CFG5 = badminton.configSchema.parse({ ...BADMINTON.variants.short, bestOf: 5 }) as { bestOf: number };
+const CFG1 = badminton.configSchema.parse({ ...BADMINTON.variants.short, bestOf: 1 }) as { bestOf: number };
 const lineups = defaultLineupPair(resolvePositions(badminton, CFG3));
 const START: EventEnvelope = {
   id: "e-1",
@@ -340,6 +341,52 @@ describe("X-SR-7 the pad follows a correction", () => {
     await settle();
     expect(t.rulesCalls.length).toBe(1);
     expect(foldedBestOf(pad.current)).toBe(CFG5.bestOf);
+  });
+
+  // Batch-5 m-3 (class 13 in miniature): a refusal naming a NEWER version than the reload in flight can carry used to be
+  // answered by that reload, so two corrections inside one GET round trip left the pad one version behind and its next
+  // tap was refused again. After the in-flight read lands, a pad still behind what the refusal named reads once more.
+  it("m-3: a refusal naming a newer version while a reload is in flight triggers a second read, and the pad ends on the latest", async () => {
+    let release!: (r: FixtureRulesResult) => void;
+    const first = new Promise<FixtureRulesResult>((r) => (release = r));
+    let reads = 0;
+    const t = scripted({
+      appends: [{ kind: "network-error", message: "down" }, rulesChangedRefusal(1), rulesChangedRefusal(2), ok(3, 2)],
+      // The first read was issued before the second correction: it returns version 1. The second returns version 2.
+      rules: () => (reads++ === 0 ? first : Promise.resolve({ cfg: CFG1, rules_version: 2, format_line: "Best of 1" })),
+    });
+    const pad = mount(params({ rulesVersion: 0, transport: t.transport }));
+    await pad.current.submit("badminton.game.summary", GAME); // stays queued (offline)
+    await settle();
+    await pad.current.submit("badminton.game.summary", { home: 11, away: 7 }); // drains both: refused at 1, then at 2
+    await settle();
+    expect(t.rulesCalls.length, "premise: the first read is still in flight, and the second refusal has arrived").toBe(1);
+    release({ cfg: CFG5, rules_version: 1, format_line: "Best of 5" });
+    await settle();
+    expect(t.rulesCalls.length, "the pad asked again, because it was behind the version the second refusal named").toBe(2);
+    expect(foldedBestOf(pad.current), "it folds the latest rules, not the first read's").toBe(CFG1.bestOf);
+    expect(pad.current.rulesChanged).toEqual({ formatLine: "Best of 1", rulesVersion: 2 });
+    await pad.current.submit("badminton.game.summary", { home: 11, away: 6 });
+    await settle();
+    expect(t.appendCalls[t.appendCalls.length - 1]!.rules_version, "its next tap carries the latest version").toBe(2);
+  });
+
+  it("m-3, the negative pair: the in-flight read already returns the newer version, and the second refusal costs no second read", async () => {
+    let release!: (r: FixtureRulesResult) => void;
+    const first = new Promise<FixtureRulesResult>((r) => (release = r));
+    const t = scripted({
+      appends: [{ kind: "network-error", message: "down" }, rulesChangedRefusal(1), rulesChangedRefusal(2)],
+      rules: () => first,
+    });
+    const pad = mount(params({ rulesVersion: 0, transport: t.transport }));
+    await pad.current.submit("badminton.game.summary", GAME);
+    await settle();
+    await pad.current.submit("badminton.game.summary", { home: 11, away: 7 });
+    await settle();
+    release({ cfg: CFG1, rules_version: 2, format_line: "Best of 1" });
+    await settle();
+    expect(t.rulesCalls.length, "one read answered both refusals").toBe(1);
+    expect(foldedBestOf(pad.current)).toBe(CFG1.bestOf);
   });
 
   it("the page's own reload wins: once the parent hands down the corrected rules, the pad folds the props again", async () => {

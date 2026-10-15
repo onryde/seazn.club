@@ -1251,33 +1251,43 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // or ack named — already known, there is nothing to reload. A pad loaded with no version never reloads (it sends
   // none, so nothing it sends is ever refused for the rules). A failed read keeps the rules the pad has: its taps are
   // still refused, never applied under rules it did not fold, and the next refusal asks again.
+  //
+  // Batch-5 m-3: waiting on the in-flight read answers a refusal naming the SAME version, not a newer one - that read was
+  // issued before the second correction and may carry the first. So a caller that named a version waits for it and then
+  // asks again: the check above ends it at once when the read already got there, and reads once more when it did not.
+  // Once only (`waited`): a server that keeps failing the read costs each caller one wait and one more read at most,
+  // never a chain of them.
   const reloadRules = useCallback(
     (atLeast: number | undefined): Promise<void> => {
       const getRules = transport.getRules;
-      if (getRules === undefined || knownRulesVersionRef.current === undefined) return Promise.resolve();
-      if (atLeast !== undefined && knownRulesVersionRef.current >= atLeast) return Promise.resolve();
-      if (rulesReloadRef.current !== null) return rulesReloadRef.current;
-      const run = (async () => {
-        try {
-          const read = await getRules.call(transport, fixtureId);
-          const version = rulesVersionOf(read.rules_version);
-          if (version === undefined || version <= (knownRulesVersionRef.current ?? -1)) return;
-          knownRulesVersionRef.current = version;
-          setReloadedRules({
-            cfg: read.cfg,
-            rulesVersion: version,
-            formatLine: typeof read.format_line === "string" && read.format_line.length > 0 ? read.format_line : null,
-          });
-          // A server-wins override was a fold under the OLD rules: the next reconciliation decides afresh.
-          setServerOverride(undefined);
-        } catch {
-          // Best-effort, like `reconcileAfterAck`'s read: never crashes the pad over one flaky read.
-        }
-      })().finally(() => {
-        rulesReloadRef.current = null;
-      });
-      rulesReloadRef.current = run;
-      return run;
+      const attempt = (waited: boolean): Promise<void> => {
+        if (getRules === undefined || knownRulesVersionRef.current === undefined) return Promise.resolve();
+        if (atLeast !== undefined && knownRulesVersionRef.current >= atLeast) return Promise.resolve();
+        const inFlight = rulesReloadRef.current;
+        if (inFlight !== null) return atLeast === undefined || waited ? inFlight : inFlight.then(() => attempt(true));
+        const run = (async () => {
+          try {
+            const read = await getRules.call(transport, fixtureId);
+            const version = rulesVersionOf(read.rules_version);
+            if (version === undefined || version <= (knownRulesVersionRef.current ?? -1)) return;
+            knownRulesVersionRef.current = version;
+            setReloadedRules({
+              cfg: read.cfg,
+              rulesVersion: version,
+              formatLine: typeof read.format_line === "string" && read.format_line.length > 0 ? read.format_line : null,
+            });
+            // A server-wins override was a fold under the OLD rules: the next reconciliation decides afresh.
+            setServerOverride(undefined);
+          } catch {
+            // Best-effort, like `reconcileAfterAck`'s read: never crashes the pad over one flaky read.
+          }
+        })().finally(() => {
+          rulesReloadRef.current = null;
+        });
+        rulesReloadRef.current = run;
+        return run;
+      };
+      return attempt(false);
     },
     [transport, fixtureId],
   );
