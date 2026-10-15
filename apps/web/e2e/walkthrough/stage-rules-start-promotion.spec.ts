@@ -703,7 +703,8 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
       heldRefreshes.push(req.url());
       await refreshGate;
     }
-    await route.continue();
+    // A held refresh the page itself gave up on (Next aborts a superseded one) is already handled: nothing to continue.
+    await route.continue().catch(() => undefined);
   });
   await finals.getByTestId("stage-format-save").click();
   await expect(finals.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
