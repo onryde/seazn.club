@@ -15,6 +15,7 @@
       "src/core/types.ts",
       "src/sport/catalog.ts",
       "src/sport/entrant-model.ts",
+      "src/sport/fold-epoch.ts",
       "src/sport/forfeit-credit.ts",
       "src/sport/index.ts",
       "src/sport/module.ts",
