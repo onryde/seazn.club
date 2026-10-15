@@ -309,6 +309,9 @@ describe("the undo stream strikes the KERNEL events that decide or end a match, 
     forEachSport(({ key }) => {
       const corpus = readCorpus(key);
       for (const stream of corpus.streams) {
+        // (a settled abandon is the settle story's: the match it ended has an outcome by the organiser's word, and a forfeit is
+        // refused for that reason, not this one)
+        if (stream.events.some((e) => e.type === "core.settle" || (e.type === "core.abandon" && (e.payload as { expunge?: boolean }).expunge === true))) continue;
         const i = stream.events.findIndex((e, k) => e.type === "core.abandon" && !stream.events.some((x) => x.voids === `e-${k}`));
         if (i < 0) continue;
         expect(setup(key, stream).abandonInForce(stream.events, stream.events.length), `${key} ${stream.config}#${stream.seed}`).toBe(true);

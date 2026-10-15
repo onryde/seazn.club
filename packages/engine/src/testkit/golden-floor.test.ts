@@ -523,16 +523,34 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
     expect(settleProbe(first, corpusOf(first.key))).toEqual(settleProbe(first, corpusOf(first.key), kernelRecorder));
   });
 
+  /** The corpus as it stood when the row was written: no stream recorded `core.settle` (the row's first clause), so only the probe's
+   *  clause is in question. */
+  const beforeSettle = (key: string): GoldenCorpus => ({ ...corpusOf(key), streams: corpusOf(key).streams.filter((s) => !s.events.some((e) => e.type === "core.settle")) });
+
   it("had the row stayed, the production staleness check would have gone red under the real recorder in every sport and stayed quiet under the module-only one", () => {
     let stale = 0;
     forEachSport(({ module, key }) => {
-      expect(staleFloorExemptions(module, corpusOf(key), moduleRecorder, [RETIRED_SETTLE_ROW]), `${key}: held before GF-2`).toEqual([]);
-      const messages = staleFloorExemptions(module, corpusOf(key), kernelRecorder, [RETIRED_SETTLE_ROW]);
+      const before = beforeSettle(key);
+      expect(before.streams.length, `${key}: the corpus before the settle stream is still a corpus`).toBeGreaterThan(0);
+      expect(before.streams.length, `${key}: and the settle stream was removed`).toBeLessThan(corpusOf(key).streams.length);
+      expect(staleFloorExemptions(module, before, moduleRecorder, [RETIRED_SETTLE_ROW]), `${key}: held before GF-2`).toEqual([]);
+      const messages = staleFloorExemptions(module, before, kernelRecorder, [RETIRED_SETTLE_ROW]);
       expect(messages, key).toHaveLength(1);
       expect(messages[0], key).toMatch(new RegExp(`^${key} event:core\\.settle: the harness now records the effective outcome`));
       stale++;
     });
     expect(stale).toBe(builtinModules.length);
+  });
+
+  it("and the row's first clause fires on today's corpora in every sport, whichever recorder: the corpus records core.settle, so the exemption would be deleted", () => {
+    let fired = 0;
+    forEachSport(({ module, key }) => {
+      for (const record of [moduleRecorder, kernelRecorder]) {
+        expect(staleFloorExemptions(module, corpusOf(key), record, [RETIRED_SETTLE_ROW]), key).toEqual([`${key} event:core.settle: the corpus records core.settle: delete the exemption`]);
+        fired++;
+      }
+    });
+    expect(fired).toBe(builtinModules.length * 2);
   });
 
   it("the mechanism still works for the next exemption: an injected row is exempt (not required), applies only to its sports, and says why it went stale", () => {
@@ -561,7 +579,7 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
     };
     expect(settleProbe(module, corpusOf(module.key), broken)).toBe("recorder exploded");
     expect(settleProbe(module, { ...corpusOf(module.key), configs: {} })).toBe("the corpus records no config");
-    const messages = staleFloorExemptions(module, corpusOf(module.key), broken, [RETIRED_SETTLE_ROW]);
+    const messages = staleFloorExemptions(module, beforeSettle(module.key), broken, [RETIRED_SETTLE_ROW]);
     expect(messages.join("\n")).toMatch(/probe that proves the harness cannot record a settle could not run: recorder exploded/);
   });
 

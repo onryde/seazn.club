@@ -517,28 +517,37 @@ export const OVERLAY_CONTROLS: readonly FloorToken[] = ["core.finalize", "core.a
 
 export interface Ablation {
   readonly kept: GoldenEvent[];
+  /** Where each kept event stood in the ledger that was ablated (`origin[i]` is the original index of `kept[i]`). */
+  readonly origin: number[];
 }
 
-/** The ledger without every event whose type is in `remove`, the `voids` ids renumbered to the survivors' new places; null
- *  when a void targets a removed event (its target is gone, so there is nothing sound to compare). */
-export function ablateEvents(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ablation | null {
+/** The ledger without every event whose type is in `remove`, AND without every void that struck one of them (a void of an event
+ *  that is not there strikes nothing, and what it struck is exactly what is being asked about), the surviving `voids` ids renumbered
+ *  to where their targets now sit. GF-1 refused such a ledger; the settle story (GF-2 T3) strikes the only settle a sport's
+ *  corpus records before saying it again, so refusing would leave `core.settle` unprobeable, and a verdict of "unrecorded" over a
+ *  recorded event is the blind spot this probe exists to close. */
+export function ablateEvents(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ablation {
+  const gone = new Set<number>();
+  events.forEach((event, i) => {
+    if (remove.has(event.type)) gone.add(i);
+  });
+  // a void sits after its target, so one forward pass settles a void of a void as well
+  events.forEach((event, i) => {
+    if (event.voids !== undefined && gone.has(Number(event.voids.slice(2)))) gone.add(i);
+  });
   const place = new Map<number, number>();
   let next = 0;
-  events.forEach((event, i) => {
-    if (!remove.has(event.type)) place.set(i, next++);
+  events.forEach((_, i) => {
+    if (!gone.has(i)) place.set(i, next++);
   });
   const kept: GoldenEvent[] = [];
-  for (const event of events) {
-    if (remove.has(event.type)) continue;
-    if (event.voids === undefined) {
-      kept.push(event);
-      continue;
-    }
-    const target = place.get(Number(event.voids.slice(2)));
-    if (target === undefined) return null;
-    kept.push({ ...event, voids: `e-${target}` });
-  }
-  return { kept };
+  const origin: number[] = [];
+  events.forEach((event, i) => {
+    if (gone.has(i)) return;
+    origin.push(i);
+    kept.push(event.voids === undefined ? event : { ...event, voids: `e-${place.get(Number(event.voids.slice(2)))}` });
+  });
+  return { kept, origin };
 }
 
 /** The recorded form of the state before any event: what the first event folds from. */
@@ -589,7 +598,6 @@ function ablationProbe(
     if (!stream.events.some((e) => extra.has(e.type))) continue;
     const near = ablateEvents(stream.events, small);
     const far = ablateEvents(stream.events, big);
-    if (near === null || far === null) continue;
     const raw = corpus.configs[stream.config];
     streams++;
     // The recorded ledger itself must fold: a recorder that cannot is the probe's failure, not evidence.
@@ -601,33 +609,38 @@ function ablationProbe(
       refused++;
       continue;
     }
-    const gone = near.kept.map((e, i) => (extra.has(e.type) ? i : -1)).filter((i) => i >= 0);
-    const retained = near.kept.map((_, i) => i).filter((i) => !gone.includes(i));
-    const sameSteps = JSON.stringify(retained.map((i) => a.states[i])) === JSON.stringify(b.states);
+    // Where each event sits in each ledger: the pairs both keep, and the near steps that exist only because of what is ablated
+    // (the events themselves, and the voids that struck them, which go with them).
+    const farAt = new Map(far.origin.map((original, position) => [original, position] as const));
+    const pairs = near.origin.flatMap((original, nearIndex) => (farAt.has(original) ? [[nearIndex, farAt.get(original)!] as const] : []));
+    const gone = near.origin.map((original, nearIndex) => (farAt.has(original) ? -1 : nearIndex)).filter((i) => i >= 0);
+    const ablated = gone.filter((i) => extra.has(near.kept[i]!.type));
+    const sameSteps = JSON.stringify(pairs.map(([n]) => a.states[n])) === JSON.stringify(pairs.map(([, f]) => b.states[f]));
     // An ablated event's OWN step must leave the recorded state as it found it (the state before the first event is the
     // module's init). Without this a module that folds the event into state would read as inert whenever a later event
-    // happened to overwrite what it wrote, or whenever nothing follows it.
-    const initial = gone.includes(0) ? initialState(module, raw, stream.lineups) : null;
-    const ownStepsNeutral = gone.every((i) => a.states[i] === (i === 0 ? initial : a.states[i - 1]));
+    // happened to overwrite what it wrote, or whenever nothing follows it. (A void that went with its target is not an
+    // ablated event: its step re-folds the ledger without the target, which is the change under test.)
+    const initial = ablated.includes(0) ? initialState(module, raw, stream.lineups) : null;
+    const ownStepsNeutral = ablated.every((i) => a.states[i] === (i === 0 ? initial : a.states[i - 1]));
     let kernelSame = true;
     if (a.dense !== undefined && b.dense !== undefined) {
-      const place = new Map(retained.map((nearIndex, farIndex) => [nearIndex, farIndex] as const));
+      const place = new Map(pairs);
       const denseA = a.dense;
       const denseB = b.dense;
       kernelSame = OVERLAY_COLUMNS.every((column) => {
         // (the far ledger's ids are its own, so the near ledger's are mapped onto them; at an own step nothing is renumbered)
-        const atRetained = retained.every((nearIndex, farIndex) => renumberEventIds(denseA.steps[column][nearIndex]!, place) === denseB.steps[column][farIndex]);
-        const atOwn = gone.every((i) => denseA.steps[column][i] === (i === 0 ? denseA.initial[column] : denseA.steps[column][i - 1]));
+        const atRetained = pairs.every(([n, f]) => renumberEventIds(denseA.steps[column][n]!, place) === denseB.steps[column][f]);
+        const atOwn = ablated.every((i) => denseA.steps[column][i] === (i === 0 ? denseA.initial[column] : denseA.steps[column][i - 1]));
         return atRetained && atOwn;
       });
       if (a.summaries !== undefined && b.summaries !== undefined) {
         const summariesA = a.summaries;
         const summariesB = b.summaries;
-        const initialSummaryDigest = gone.includes(0) ? initialSummary(module, raw, stream.lineups) : null;
+        const initialSummaryDigest = ablated.includes(0) ? initialSummary(module, raw, stream.lineups) : null;
         kernelSame =
           kernelSame &&
-          retained.every((nearIndex, farIndex) => summariesA[nearIndex] === summariesB[farIndex]) &&
-          gone.every((i) => summariesA[i] === (i === 0 ? initialSummaryDigest : summariesA[i - 1]));
+          pairs.every(([n, f]) => summariesA[n] === summariesB[f]) &&
+          ablated.every((i) => summariesA[i] === (i === 0 ? initialSummaryDigest : summariesA[i - 1]));
       }
     }
     if (!(sameSteps && ownStepsNeutral && kernelSame && a.outcome === b.outcome && a.summary === b.summary && a.deltas === b.deltas)) moved++;

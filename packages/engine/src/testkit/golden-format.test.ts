@@ -47,6 +47,18 @@ const bytesOf = (corpus: GoldenCorpus): string => `${JSON.stringify(corpus, null
  *  day the corpora are reformatted. */
 const formatOneOf = (key: string): GoldenCorpus => asFormatOne(readCorpus(key));
 
+/** The streams a FORMAT-1 recording reproduces. Format 1 records the module's own outcome, and a settle is laid over it by the kernel
+ *  (the effective outcome is a win, the module's is a draw or nothing): since GF-2 T3 the committed corpora hold such a stream in every
+ *  sport, and `formatOneOf` keeps its effective outcome, which no format-1 recorder would write. A rebaseline of "a format-1 corpus"
+ *  is about the corpora a format-1 recorder could have written, so the streams it could not are set aside, by what they are (the
+ *  recorder disagrees with the stored outcome), never by a seed or a name. */
+const formatOneRecordable = (key: string): { corpus: GoldenCorpus; setAside: GoldenStream[] } => {
+  const module = sport(key);
+  const one = formatOneOf(key);
+  const reproduces = (s: GoldenStream): boolean => recomputeStream(module, one.configs[s.config], s.events, s.lineups, 1).outcome === s.outcome;
+  return { corpus: { ...one, streams: one.streams.filter(reproduces) }, setAside: one.streams.filter((s) => !reproduces(s)) };
+};
+
 // ------------------------------------------------------------------------------------------------ the format marker
 
 describe("corpusFormat", () => {
@@ -432,9 +444,21 @@ describe("buildCorpus (UPDATE_GOLDEN, a corpus from nothing) writes the current 
 // ----------------------------------------------------- the other writers keep the corpus's format (rebaseline, extend)
 
 describe("rebaselineCorpus keeps the corpus's format", () => {
+  it("the streams a format-1 recording cannot reproduce are exactly the settle stories, in every sport (the kernel lays the settlement over the module's outcome)", () => {
+    let aside = 0;
+    forEachSport(({ key }) => {
+      const { corpus, setAside } = formatOneRecordable(key);
+      expect(corpus.streams.length, `${key}: the rest of the corpus is a format-1 corpus`).toBeGreaterThan(0);
+      expect(setAside.length, `${key}: one stream the module alone cannot record`).toBe(1);
+      expect(setAside[0]!.events.some((e) => e.type === "core.settle"), `${key}: and it is the settle story`).toBe(true);
+      aside += setAside.length;
+    });
+    expect(aside).toBe(builtinModules.length);
+  }, 30_000);
+
   it("format 1 stays format 1 (no field appears), format 2 stays format 2 and re-records both fields", () => {
     const module = sport("generic");
-    const one = formatOneOf("generic");
+    const one = formatOneRecordable("generic").corpus;
     const rebased1 = rebaselineCorpus(module, one);
     expect(bytesOf(rebased1)).toBe(bytesOf(one));
     expect("format" in rebased1).toBe(false);

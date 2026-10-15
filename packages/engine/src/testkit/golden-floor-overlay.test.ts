@@ -205,6 +205,20 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(unpinned).toBe(builtinModules.length * 2);
   }, 120_000);
 
+  it("core.settle is recorded and PINNED in every sport: it is the one event whose every recorded instance is struck once, so the probe must ablate the void with it", () => {
+    let probed = 0;
+    forEachSport(({ module, key }) => {
+      const verdict = overlayVerdicts(module, corpusOf(key), kernelRecorder, [], "all").get(eventToken("core.settle"));
+      expect(verdict?.streams, `${key}: a stream records a settle`).toBeGreaterThan(0);
+      expect(verdict?.verdict, `${key}: core.settle moves a recorded golden`).toBe("pinned");
+      // the settle stream strikes its first settle, so a probe that refused a struck target would have answered "unrecorded"
+      const struck = corpusOf(key).streams.filter((s) => s.events.some((e, i) => e.type === "core.settle" && s.events.some((x) => x.voids === `e-${i}`)));
+      expect(struck.length, `${key}: a recorded settle is struck by a void`).toBeGreaterThan(0);
+      probed++;
+    });
+    expect(probed).toBe(builtinModules.length);
+  }, 30_000);
+
   it("the sweep has teeth: a claim table that forgets a class names it in every sport", () => {
     const withoutNote = OVERLAY_CLAIMS.filter((c) => c.id !== "note");
     let named = 0;
@@ -386,23 +400,37 @@ describe("ablateEvents — the ledger without a set of types, voids renumbered t
     // 0 start, 1 note, 2 goal, 3 note, 4 goal, 5 void->e-4 (the second goal)
     const ledger = [e("core.start"), e("core.note"), e("x.goal"), e("core.note"), e("x.goal"), e("core.void", "e-4")];
     const out = ablateEvents(ledger, new Set(["core.note"]));
-    expect(out?.kept.map((k) => k.type)).toEqual(["core.start", "x.goal", "x.goal", "core.void"]);
+    expect(out.kept.map((k) => k.type)).toEqual(["core.start", "x.goal", "x.goal", "core.void"]);
+    expect(out.origin).toEqual([0, 2, 4, 5]);
     // the second goal moved from index 4 to index 2
-    expect(out?.kept[3]?.voids).toBe("e-2");
+    expect(out.kept[3]?.voids).toBe("e-2");
     // and a void whose target is not shifted keeps its id
     const early = ablateEvents([e("core.start"), e("x.goal"), e("core.void", "e-1"), e("core.note")], new Set(["core.note"]));
-    expect(early?.kept[2]?.voids).toBe("e-1");
+    expect(early.kept[2]?.voids).toBe("e-1");
   });
 
-  it("a void whose target is removed leaves nothing sound to compare: null, not a guess", () => {
-    const ledger = [e("core.start"), e("x.goal"), e("core.void", "e-1")];
-    expect(ablateEvents(ledger, new Set(["x.goal"]))).toBeNull();
+  it("a void whose target is removed goes with it (it struck nothing that is left), and the survivors' ids and origins follow", () => {
+    const ledger = [e("core.start"), e("x.goal"), e("core.void", "e-1"), e("x.point"), e("x.goal"), e("core.void", "e-3")];
+    const out = ablateEvents(ledger, new Set(["x.goal"]));
+    expect(out.kept.map((k) => k.type)).toEqual(["core.start", "x.point", "core.void"]);
+    expect(out.origin).toEqual([0, 3, 5]);
+    // the surviving void struck the point, which moved from index 3 to index 1
+    expect(out.kept[2]?.voids).toBe("e-1");
+  });
+
+  it("a void of a void whose target is removed goes too (the chain is followed), and a void of something that stays is kept", () => {
+    const ledger = [e("core.start"), e("x.goal"), e("core.void", "e-1"), e("core.void", "e-2"), e("x.point"), e("core.void", "e-4")];
+    const out = ablateEvents(ledger, new Set(["x.goal"]));
+    expect(out.kept.map((k) => k.type)).toEqual(["core.start", "x.point", "core.void"]);
+    expect(out.origin).toEqual([0, 4, 5]);
+    expect(out.kept[2]?.voids).toBe("e-1");
   });
 
   it("an empty removal set returns the ledger unchanged, and the input is never mutated", () => {
     const ledger = [e("core.start"), e("x.goal"), e("core.void", "e-1")];
     const before = JSON.stringify(ledger);
-    expect(ablateEvents(ledger, new Set())?.kept).toEqual(ledger);
+    expect(ablateEvents(ledger, new Set()).kept).toEqual(ledger);
+    expect(ablateEvents(ledger, new Set()).origin).toEqual([0, 1, 2]);
     expect(JSON.stringify(ledger)).toBe(before);
   });
 });
