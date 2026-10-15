@@ -1084,7 +1084,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
   };
   const LIVE_RUNNER_ENV = { FLY_API_TOKEN: "fly-tok", FLY_RELAY_APP: "seazn-relay-stg", ENV_NAME: "stg" };
 
-  it("n1 (a): a LIVE deployment that cannot name its environment (no ENV_NAME) refuses the create before the port is called — made nothing: the session fails with the domain's made-nothing reason at once; no create call, no force_destroy, no retry", async () => {
+  it("n1 (a): a LIVE deployment that cannot name its environment (no ENV_NAME) refuses the create before the port is called — made nothing: the session fails with the domain's made-nothing reason at once; no create call, no force_destroy, no retry (I1: ENV_NAME goes AFTER admission; the entry gate refuses it up front)", async () => {
     const r = await rig({ credits: 1 });
     const keep = {
       RELAY_DRIVERS: process.env.RELAY_DRIVERS, ENV_NAME: process.env.ENV_NAME, FLY_API_TOKEN: process.env.FLY_API_TOKEN,
