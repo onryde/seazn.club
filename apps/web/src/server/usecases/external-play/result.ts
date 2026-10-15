@@ -277,6 +277,12 @@ async function hold(
             update fixture_external_play
                set revoked_seat = ${widened}, last_error = coalesce(${detail}, last_error), updated_at = now()
              where fixture_id = ${fixtureId}`;
+        } else if (stored === "provider_error" && reason === "clock_flag_unsettled" && detail !== null) {
+          // D20 re-review 2, n3: a read that WAS made and found the game still `started` past the bound is better evidence
+          // than the sentence a provider_error was held on (typically "could not ask Lichess"). The reason, the first
+          // diagnosis, stands; only its words are brought up to date — the one place a held row's last_error is refreshed
+          // by a different reason (a seat hold's evidence, and a provider_error's over a provider_error, are not: N1/N2).
+          await tx`update fixture_external_play set last_error = ${detail}, updated_at = now() where fixture_id = ${fixtureId}`;
         }
         return { held: true, reason: stored };
       }

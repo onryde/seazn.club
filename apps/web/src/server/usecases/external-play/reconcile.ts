@@ -743,7 +743,11 @@ async function applyStream(
     }
     // D20 re-review n1: tried and could not be made, for long enough — the organiser hears of it (and the read that
     // finally gets through, or the game's end, replaces the hold: RECONCILED_WHILE_HELD). `skipped` waits for the next pass.
-    const unasked = settling === "unasked" ? unaskedFlagEvidence(g, lichess, adopted, t.at) : null;
+    // Re-review 2, n2: only a row that is not held yet. A held row is already the organiser's, and result.ts answers a
+    // provider_error on a SEAT hold by freezing both seats and overwriting its last_error (review N2 — right for a ledger
+    // called untrustworthy, wrong for a read that could not be made): Black's valid seat frozen, the refusal's evidence lost.
+    const unasked =
+      settling === "unasked" && g.bridge.status !== "needs_organiser" ? unaskedFlagEvidence(g, lichess, adopted, t.at) : null;
     const heldUnasked = unasked === null ? null : await holdForOrganiser({ fixtureId, reason: "provider_error", detail: unasked });
     return out({ result: heldUnasked, adopted: applied });
   }

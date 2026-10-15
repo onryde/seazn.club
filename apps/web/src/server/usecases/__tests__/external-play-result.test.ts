@@ -1225,6 +1225,25 @@ describe.runIf(HAS_DB)("I1 — a game's final outcome replaces a mid-game hold, 
     expect((await bridgeOf(g.fixtureId))!.last_error).toContain("laterStatus");
   });
 
+  // D20 re-review 2, n3: the one refresh a held row's words get from a DIFFERENT mid-game reason.
+  it("D20 n3: a provider_error row's last_error is brought up to date by a clock_flag_unsettled hold WITH a detail, keeps its reason — and a bare one (no detail) erases nothing", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "could not ask Lichess (test)" });
+    expect(
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: "clock_flag_unsettled" }),
+      "bare: the stored reason answers",
+    ).toEqual({ wrote: "needs_organiser", reason: "provider_error" });
+    expect((await bridgeOf(g.fixtureId))!.last_error, "a bare hold has no words to bring: the row's stand").toBe("could not ask Lichess (test)");
+    expect(
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: "clock_flag_unsettled", detail: "Lichess still reported started (test)" }),
+    ).toEqual({ wrote: "needs_organiser", reason: "provider_error" });
+    expect(await bridgeOf(g.fixtureId), "reason kept, words refreshed").toMatchObject({
+      status: "needs_organiser",
+      needs_reason: "provider_error",
+      last_error: "Lichess still reported started (test)",
+    });
+  });
+
   it("a mid-game hold never rewrites a mid-game hold either: the first detail stands", async () => {
     const g = await liveGame();
     await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", detail: "401 on move 7" });

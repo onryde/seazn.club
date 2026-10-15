@@ -1047,6 +1047,92 @@ describe.runIf(HAS_DB)("reconcile — D11 (b, c): a flag Lichess has not settled
     expect(await fixtureStatus(g.fixtureId)).toBe("decided");
   });
 
+  // D20 re-review 2, n2: the unasked hold is placed through holdForOrganiser("provider_error"), and on a row already held
+  // for a SEAT reason result.ts's review-N2 branch answers that with "freeze both seats and overwrite last_error" — right
+  // for a ledger reconcile has just called untrustworthy, wrong for "a read could not be made": Black's valid seat was
+  // frozen and the evidence of the refusal (last_error) lost. A row already held is the organiser's; nothing new is said.
+  it("D20 (re-review 2, n2): a board already held for a SEAT reason (token_revoked, account_changed) is untouched by an unaskable read 15 min after the flag — reason, seat, last_error all as they were — counted", async () => {
+    const REASONS = ["token_revoked", "account_changed"] as const;
+    const SEATS = ["white", "black", "both"] as const;
+    let checked = 0;
+    for (const reason of REASONS) {
+      for (const seat of SEATS) {
+        for (const trigger of ["sweep", "clock_zero"] as const) {
+          const label = `${reason} (${seat}) on ${trigger}`;
+          lichess.reset();
+          const { g, flagAt } = await caughtUp();
+          await holdForOrganiser({ fixtureId: g.fixtureId, reason, seat, detail: `test: the ${seat} seat was refused` });
+          const before = await bridge(g.fixtureId);
+          const seatBefore = (await rowOf(g.fixtureId)).revoked_seat;
+          expect([before.status, before.needs_reason, seatBefore], `${label}: premise — held for the seat`).toEqual(["needs_organiser", reason, seat]);
+          let n = 0;
+          lichess.onStream = () => (n++ === 0 ? ok(gameFull(g, EXPIRED_1, { moves: [...LINE] })) : status(503));
+          const out = await reconcile(g.fixtureId, trigger, observed(new Date(flagAt + FLAG_UNASKED_HOLD_MS + 60_000)).deps);
+          expect(n, `${label}: premise — the first line answered and the settling read was tried and failed`).toBeGreaterThan(1);
+          expect(out, `${label}: nothing new is held`).toMatchObject({ result: null, finished: false });
+          const after = await bridge(g.fixtureId);
+          expect([after.status, after.needs_reason, (await rowOf(g.fixtureId)).revoked_seat], `${label}: reason and seat stand`).toEqual([
+            "needs_organiser",
+            reason,
+            seat,
+          ]);
+          expect(after.last_error, `${label}: the seat's own evidence stands`).toBe(before.last_error);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: reason x seat x trigger").toBe(REASONS.length * SEATS.length * 2);
+  });
+
+  it("D20 (re-review 2, n2), the pair: the same unaskable read on a row that is NOT held still places the provider_error hold — the guard is the held status alone", async () => {
+    const { g, flagAt } = await caughtUp();
+    let n = 0;
+    lichess.onStream = () => (n++ === 0 ? ok(gameFull(g, EXPIRED_1, { moves: [...LINE] })) : status(503));
+    const out = await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + FLAG_UNASKED_HOLD_MS + 60_000)).deps);
+    expect(out).toMatchObject({ result: { wrote: "needs_organiser", reason: "provider_error" } });
+    expect((await bridge(g.fixtureId)).last_error).toMatch(/could not ask Lichess/i);
+  });
+
+  // D20 re-review 2, n3: the hold's words are the organiser's page. A row held "could not ask Lichess" whose later read
+  // DID get through and found the game still `started` past the bound has better evidence than the stale sentence; the
+  // reason (the first diagnosis) stands, the words are brought up to date.
+  it("D20 (re-review 2, n3): a later read that gets through and finds Lichess still `started` refreshes last_error to the clock-unsettled evidence and keeps the reason; one the bound has not yet reached leaves the words as they were", async () => {
+    const { g, flagAt } = await caughtUp();
+    let n = 0;
+    lichess.onStream = () => (n++ === 0 ? ok(gameFull(g, EXPIRED_1, { moves: [...LINE] })) : status(503));
+    await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + FLAG_UNASKED_HOLD_MS)).deps);
+    const first = await bridge(g.fixtureId);
+    expect([first.status, first.needs_reason], "premise: held, unasked").toEqual(["needs_organiser", "provider_error"]);
+    expect(first.last_error, "premise: the unasked words").toMatch(/could not ask Lichess/i);
+    // Pair first: a read that was made but is short of the unsettled bound (a raised bound) is no new evidence.
+    unsettled(g);
+    const quiet = await reconcile(
+      g.fixtureId,
+      "sweep",
+      observed(new Date(flagAt + FLAG_UNASKED_HOLD_MS + 60_000), { flagUnsettledAfterMs: Number.POSITIVE_INFINITY }).deps,
+    );
+    expect(quiet, "the stored reason answers").toMatchObject({ result: null });
+    expect((await bridge(g.fixtureId)).last_error, "no evidence at this bound: the words stand").toBe(first.last_error);
+    // Then past the bound.
+    const asked = await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + FLAG_UNASKED_HOLD_MS + 120_000)).deps);
+    expect(asked, "the stored reason is answered").toMatchObject({ result: { wrote: "needs_organiser", reason: "provider_error" } });
+    const now = await bridge(g.fixtureId);
+    expect([now.status, now.needs_reason], "the first diagnosis stands").toEqual(["needs_organiser", "provider_error"]);
+    expect(now.last_error, "the evidence is the read that WAS made").toMatch(/still reported "started"/);
+    expect(now.last_error, "no longer says Lichess could not be asked").not.toMatch(/could not ask Lichess/i);
+    expect(now.last_error, "names the game").toContain(g.gameId);
+  });
+
+  it("D20 (re-review 2, n3), the pair: a SEAT hold's last_error is never refreshed by the flag evidence — only provider_error's words are stale-able", async () => {
+    const { g, flagAt } = await caughtUp();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: "white", detail: "test: white's seat was refused" });
+    unsettled(g);
+    const out = await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + 2 * FLAG_UNSETTLED_HOLD_MS)).deps);
+    expect(out).toMatchObject({ result: { wrote: "needs_organiser", reason: "token_revoked" } });
+    const r = await bridge(g.fixtureId);
+    expect([r.needs_reason, r.last_error]).toEqual(["token_revoked", "test: white's seat was refused"]);
+  });
+
   it("D20 (b): `settle` is asked ONLY for a mover at zero — time on the clock, the zero on the waiting side, a flag already settled never spend a slot (counted)", async () => {
     const cases: [string, (g: Game) => string][] = [
       ["mid-game (the mid recording)", (g) => gameFull(g, MID)],
