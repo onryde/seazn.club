@@ -41,7 +41,18 @@
 // shell maps a network error or a 5xx to a rejection; a final 4xx resolves)
 // is sent again after each wait of STAMP_RETRY_MS, then dropped. Every stamp
 // goes through ONE serial queue, so a start's retry never lands after its end.
+//
+// Reporting the camera (D16, §5.6.3): each player is in a meeting of their own, so the opponent's browser cannot see this
+// camera - the OPPONENT's pill is this session's own word, relayed by the server. The session reports its camera's current
+// state on every change, and again every CAMERA_REPORT_HEARTBEAT_MS in BOTH states (a camera that stays off stays fresh
+// exactly as one that stays live does). `live` is live; `off`, `failed` and `gave_up` are off; `joining`, `recovering` and
+// `idle` send nothing - they are transitions, and `recovering` is OUR guard's re-join, never the player's "off". One serial
+// queue, one request at a time, of the stamp queue's shape. A report is a CHANGE until the server has acknowledged that
+// state and a heartbeat after, judged when it is SENT: a change the server did not take is sent again as a change after a wait
+// and then dropped (the next beat is still a change, since nothing was acknowledged); a lost heartbeat is simply dropped. A
+// queued report whose state has moved on by the time its turn comes is not sent: what it said is no longer true.
 import { D7GuardError, type JoinOwnCamera, type MeetingLink, type OwnCamera } from "./camera-loader";
+import { CAMERA_REPORT_HEARTBEAT_MS } from "./room-snapshot";
 
 export type CameraStatus = "idle" | "joining" | "live" | "off" | "failed" | "recovering" | "gave_up";
 export type CameraView = { status: CameraStatus; track: MediaStreamTrack | null };
@@ -58,17 +69,48 @@ export const RECOVER_MAX_ATTEMPTS = 12;
  *  1 + its length attempts in all, about 7.5 s of waiting. */
 export const STAMP_RETRY_MS = [500, 1_000, 2_000, 4_000] as const;
 
+/** Waits before the re-send of a CHANGE the server did not take (D16): once, then dropped. A heartbeat is never re-sent. */
+export const CAMERA_REPORT_RETRY_MS = [2_000] as const;
+
+/** A report's wire state: the camera is on, or it is not. */
+export type CameraReportState = "live" | "off";
+
+/** What each CameraStatus tells the opponent's pill (D16, §5.6.3); `null` sends nothing. */
+export function cameraReportOf(status: CameraStatus): CameraReportState | null {
+  switch (status) {
+    case "live":
+      return "live";
+    case "off":
+    case "failed":
+    case "gave_up":
+      return "off";
+    case "joining":
+    case "recovering":
+    case "idle":
+      return null;
+  }
+}
+
 export type CameraSessionOptions = {
   /** Tells the server our guard's gap started / ended (room camera-fault).
    *  A rejection (or a throw) is a request to re-send; a resolve is final. */
   stamp?: (state: "start" | "end") => Promise<unknown> | void;
-  /** Test seam: the back-off's wait — the re-join's and the stamp's. */
+  /** Tells the server this camera's current state for the opponent's pill (room camera-report). `heartbeat` is a repeat of a
+   *  state the server already acknowledged. A rejection (or a throw) means the server may not have taken it; a resolve is final. */
+  report?: (state: CameraReportState, heartbeat: boolean) => Promise<unknown> | void;
+  /** Test seam: the back-off's wait — the re-join's, the stamp's and the report's. */
   sleep?: (ms: number) => Promise<void>;
+  /** Test seam: the heartbeat's timer. Returns what stops it. */
+  heartbeatEvery?: (cb: () => void, ms: number) => () => void;
 };
 
 const realSleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+const realEvery = (cb: () => void, ms: number) => {
+  const id = setInterval(cb, ms);
+  return () => clearInterval(id);
+};
 
-export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void, opts: CameraSessionOptions = {}) {
+export function cameraSession(join: JoinOwnCamera, emitView: (v: CameraView) => void, opts: CameraSessionOptions = {}) {
   const sleep = opts.sleep ?? realSleep;
   let cam: OwnCamera | null = null;
   let release: (() => void) | null = null;
@@ -78,6 +120,48 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
   const linkChanged = () => {
     for (const cb of [...linkListeners]) cb();
   };
+  // The camera report (D16): see the header. `current` is the state a heartbeat repeats (null between states), `acked` the
+  // last state the server took.
+  let current: CameraReportState | null = null;
+  let acked: CameraReportState | null = null;
+  let stopBeat: (() => void) | null = null;
+  let reportQueue: Promise<void> = Promise.resolve();
+  let reportsQueued = 0;
+  const deliverReport = async (state: CameraReportState) => {
+    for (let attempt = 0; ; attempt += 1) {
+      // What this report said may no longer be true by its turn (a newer one is behind it, or the camera is between states).
+      if (stopped || current !== state) return;
+      const heartbeat = acked === state;
+      try {
+        await opts.report?.(state, heartbeat);
+        acked = state;
+        return;
+      } catch {
+        if (heartbeat || attempt >= CAMERA_REPORT_RETRY_MS.length) return;
+        await sleep(CAMERA_REPORT_RETRY_MS[attempt]!);
+      }
+    }
+  };
+  const enqueueReport = (state: CameraReportState) => {
+    if (opts.report === undefined || stopped) return;
+    const send = () => deliverReport(state).finally(() => void (reportsQueued -= 1));
+    reportsQueued += 1;
+    reportQueue = reportsQueued === 1 ? send() : reportQueue.then(send);
+  };
+  /** Every status the session emits passes here: it moves `current` and reports a change. */
+  const emit = (v: CameraView) => {
+    emitView(v);
+    const state = cameraReportOf(v.status);
+    current = state;
+    if (state === null) return;
+    if (opts.report !== undefined && stopBeat === null && !stopped) {
+      stopBeat = (opts.heartbeatEvery ?? realEvery)(() => {
+        if (current !== null) enqueueReport(current);
+      }, CAMERA_REPORT_HEARTBEAT_MS);
+    }
+    enqueueReport(state);
+  };
+
   let token: string | null = null;
   /** The participant the latest seat's token is for (R3-1), and the one the attached camera joined with. */
   let key: string | null = null;
@@ -230,6 +314,8 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
+      stopBeat?.();
+      stopBeat = null;
       const c = detach();
       // The page is gone: our interval, if one is open, ends with it — unless
       // we gave up, when the re-seat after the reload is its closer (I-2).

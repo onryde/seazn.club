@@ -66,7 +66,7 @@ function snap(g: RoomGame | null, o: { at?: number; incrementSeconds?: number; y
     you: { colour: you, name: "Bo Lind", checkedIn: true },
     opponent: { colour: you === "white" ? "black" : "white", name: "Ada Okonkwo", checkedIn: true },
     cameraPolicy: "off",
-    opponentPresence: null,
+    opponentCamera: null,
     ownParticipantId: null,
     frozen: null,
     canAct: true,

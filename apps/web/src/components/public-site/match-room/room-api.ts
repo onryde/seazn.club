@@ -24,6 +24,8 @@ export type ParticipantWire = { participantId: string; authToken: string };
 /** The room usecase's `CameraFaultReport` / the route's `RoomCameraFault`
  *  (I-1): our guard's gap on this player's OWN seat started or ended. */
 export type CameraFaultBody = { state: "start" | "end"; participantId: string };
+/** D16 (§5.6.3): the room/camera-report body. */
+export type CameraReportBody = { state: "live" | "off"; heartbeat: boolean };
 
 export type SeatAnswer =
   /** `cameraRetry` (D21-fix-3, owner decision): present, and true, ONLY when an optional camera was seated with no token
@@ -60,7 +62,7 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; 
 
 export type Fetcher = typeof fetch;
 
-export function roomApiPath(fixtureId: string, tail: "" | "/act" | "/clock-zero" | "/camera-fault" | "/camera", token: string | null): string {
+export function roomApiPath(fixtureId: string, tail: "" | "/act" | "/clock-zero" | "/camera-fault" | "/camera-report" | "/camera", token: string | null): string {
   const q = token ? `?t=${encodeURIComponent(token)}` : "";
   return `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/room${tail}${q}`;
 }
@@ -124,6 +126,28 @@ export function sendClockZero(fixtureId: string, token: string | null, f: Fetche
 export async function deliverCameraFault(fixtureId: string, token: string | null, body: CameraFaultBody, f: Fetcher = fetch): Promise<void> {
   const r = await sendCameraFault(fixtureId, token, body, f);
   if (!r.ok && (r.status === 0 || r.status >= 500)) throw new Error(`camera-fault not delivered (${r.status})`);
+}
+
+/** D16 (§5.6.3): the camera's report, for the camera session's queue. REJECTS when the server may not have taken it - the
+ *  network down (status 0), a 5xx, or the 429 of its rate limit - so the session sends a CHANGE again after a wait (and drops
+ *  a heartbeat); resolves on a 2xx or any other 4xx (a 404: no seat in a meeting, which another send would only repeat). */
+export async function deliverCameraReport(
+  fixtureId: string,
+  token: string | null,
+  body: CameraReportBody,
+  f: Fetcher = fetch,
+): Promise<void> {
+  const r = await sendCameraReport(fixtureId, token, body, f);
+  if (!r.ok && (r.status === 0 || r.status === 429 || r.status >= 500)) throw new Error(`camera-report not delivered (${r.status})`);
+}
+
+export function sendCameraReport(fixtureId: string, token: string | null, body: CameraReportBody, f: Fetcher = fetch) {
+  return call<{ outcome: "written" | "refreshed" | "ignored" }>(f, roomApiPath(fixtureId, "/camera-report", token), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    keepalive: true,
+  });
 }
 
 export function sendCameraFault(fixtureId: string, token: string | null, body: CameraFaultBody, f: Fetcher = fetch) {

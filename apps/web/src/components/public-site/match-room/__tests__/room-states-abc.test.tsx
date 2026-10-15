@@ -21,6 +21,7 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { CAMERA_POLICIES } from "@/lib/camera-policy";
 import { Screen } from "../room-shell";
+import type { PresenceState } from "../presence-pill";
 import { initialRoomState, roomReducer, type RoomState } from "../room-state";
 import { roomScreen } from "../room-screen";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
@@ -87,7 +88,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     you: { colour: "white", name: "Bo Lind", checkedIn: true },
     opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true },
     cameraPolicy: "off",
-    opponentPresence: null,
+    opponentCamera: null,
     ownParticipantId: null,
     frozen: null,
     canAct: true,
@@ -104,7 +105,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
   };
 }
 type CameraStatus = "idle" | "joining" | "live" | "off" | "failed" | "recovering" | "gave_up";
-function Painted({ state, cameraStatus, presence }: { state: RoomState; cameraStatus: CameraStatus; presence: boolean | null }) {
+function Painted({ state, cameraStatus, presence }: { state: RoomState; cameraStatus: CameraStatus; presence: PresenceState | null }) {
   const t = useT();
   const plural = usePlural();
   const noop = async () => null;
@@ -113,7 +114,7 @@ function Painted({ state, cameraStatus, presence }: { state: RoomState; cameraSt
       screen={roomScreen(state)}
       state={state}
       room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
-      camera={{ status: cameraStatus, stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} }}
+      camera={{ status: cameraStatus, stream: null, enable: () => {} }}
       presence={presence}
       busy={false}
       tryAgain={() => {}}
@@ -125,7 +126,7 @@ function Painted({ state, cameraStatus, presence }: { state: RoomState; cameraSt
     />
   );
 }
-function paint(state: RoomState, o: { locale?: Locale; camera?: CameraStatus; presence?: boolean | null } = {}) {
+function paint(state: RoomState, o: { locale?: Locale; camera?: CameraStatus; presence?: PresenceState | null } = {}) {
   const locale = o.locale ?? "en";
   return renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
@@ -225,8 +226,8 @@ describe("Seam A — the Lichess link revoked: the frozen player's own room", ()
     let checked = 0;
     for (const policy of CAMERA_POLICIES) {
       const duty = policy === "required";
-      const s = revokedState({ cameraPolicy: policy, opponentPresence: policy === "off" ? null : { participantId: "rtk-opp" } });
-      const html = paint(s, { presence: policy === "off" ? null : true });
+      const s = revokedState({ cameraPolicy: policy, opponentCamera: policy === "off" ? null : "live" });
+      const html = paint(s, { presence: policy === "off" ? null : "live" });
       expect(ids(html).includes("room-tile-strip"), `${policy}: tile`).toBe(policy !== "off");
       expect(ids(html).includes("room-presence-pill"), `${policy}: pill`).toBe(policy !== "off");
       expect(textOf(html).includes(CANVAS.holdCamera), `${policy}: the hold's camera line`).toBe(duty);
@@ -446,7 +447,7 @@ describe("Seam C — the live room's move notices, reached through the reducer",
 describe("A, B and C in every locale: no raw key, never English outside en", () => {
   it("each state paints in its own language", () => {
     const states: [string, () => RoomState][] = [
-      ["A", () => revokedState({ cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } })],
+      ["A", () => revokedState({ cameraPolicy: "required", opponentCamera: "live" })],
       ["A, another account", () => revokedState({ frozen: null, otherAccount: RECORDED })],
       ["B", () => initialRoomState(snap({ onlineChessOff: true }), T0)],
       ["C1", () => roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "fetch_failed", status: 0 })],

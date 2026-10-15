@@ -2559,6 +2559,7 @@ export type DictionaryKey =
   | "externalPlay.room.pieceCredit"
   | "externalPlay.room.presence.live"
   | "externalPlay.room.presence.off"
+  | "externalPlay.room.presence.unknown"
   | "externalPlay.room.promote.b"
   | "externalPlay.room.promote.cancel"
   | "externalPlay.room.promote.n"

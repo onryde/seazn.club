@@ -13,6 +13,7 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { CAMERA_POLICIES } from "@/lib/camera-policy";
 import { RoomShell, Screen } from "../room-shell";
+import type { PresenceState } from "../presence-pill";
 import { initialRoomState, roomReducer, type RoomState } from "../room-state";
 import { roomScreen } from "../room-screen";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
@@ -47,7 +48,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     you: { colour: "white", name: "Bo Lind", checkedIn: false },
     opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true },
     cameraPolicy: "off",
-    opponentPresence: null,
+    opponentCamera: null,
     ownParticipantId: null,
     frozen: null,
     canAct: true,
@@ -71,9 +72,9 @@ function paint(s: RoomSnapshot, locale: keyof typeof LOCALES = "en") {
   );
 }
 /** The screen a snapshot routes to, painted with the opponent pill's value
- *  and the camera's status as the hooks would hand them over (a first paint
- *  never runs them: the pill comes from the player's own meeting join). */
-function ScreenAs({ s, presence, cameraStatus, from }: { s: RoomSnapshot; presence: boolean | null; cameraStatus: "idle" | "live"; from?: RoomState }) {
+ *  and the camera's status as the hooks would hand them over (D16: the pill is the
+ *  snapshot's `opponentCamera`, the opponent's own report relayed by the server). */
+function ScreenAs({ s, presence, cameraStatus, from }: { s: RoomSnapshot; presence: PresenceState | null; cameraStatus: "idle" | "live"; from?: RoomState }) {
   const t = useT();
   const plural = usePlural();
   const state = from ?? initialRoomState(s, T0);
@@ -83,7 +84,7 @@ function ScreenAs({ s, presence, cameraStatus, from }: { s: RoomSnapshot; presen
       screen={roomScreen(state)}
       state={state}
       room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
-      camera={{ status: cameraStatus, stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} }}
+      camera={{ status: cameraStatus, stream: null, enable: () => {} }}
       presence={presence}
       busy={false}
       tryAgain={() => {}}
@@ -94,7 +95,7 @@ function ScreenAs({ s, presence, cameraStatus, from }: { s: RoomSnapshot; presen
     />
   );
 }
-function paintScreen(s: RoomSnapshot, presence: boolean | null, locale: keyof typeof LOCALES = "en", from?: RoomState) {
+function paintScreen(s: RoomSnapshot, presence: PresenceState | null, locale: keyof typeof LOCALES = "en", from?: RoomState) {
   return renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
       <ScreenAs s={s} presence={presence} cameraStatus="live" from={from} />
@@ -231,7 +232,7 @@ describe("the room's first paint", () => {
   });
 
   it("live, cameras on: the tile strip and the camera notice join, after the board and after the controls", () => {
-    const html = paintScreen(snap({ game: GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } }), true);
+    const html = paintScreen(snap({ game: GAME, cameraPolicy: "required", opponentCamera: "live" }), "live");
     const order = ids(html).filter((i) => ["room-clock-opponent", "room-board", "room-clock-you", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"].includes(i));
     expect(order).toEqual(["room-clock-opponent", "room-board", "room-clock-you", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"]);
     expect(html).toContain("Ada · on camera");
@@ -341,7 +342,7 @@ describe("the room's first paint", () => {
   it("no untranslated key reaches the page, in any of the four locales, on any screen", () => {
     const states: Partial<RoomSnapshot>[] = [
       {},
-      { game: GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } },
+      { game: GAME, cameraPolicy: "required", opponentCamera: "live" },
       { game: { ...GAME, over: true }, result: { outcome: "draw", method: "agreement", score: "½–½" } },
       { game: { ...GAME, over: true } },
       { game: { ...GAME, over: true }, result: { outcome: "no_result", method: "double_forfeit", score: "0–0" } },
@@ -362,14 +363,14 @@ describe("the room's first paint", () => {
     }
     // The pill's two answers, painted as the hook hands them over.
     for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
-      for (const presence of [true, false]) {
-        const html = paintScreen(snap({ game: GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } }), presence, locale);
+      for (const presence of ["live", "off", "unknown"] as const) {
+        const html = paintScreen(snap({ game: GAME, cameraPolicy: "required", opponentCamera: "live" }), presence, locale);
         expect(ids(html), `${locale} pill ${presence}`).toContain("room-presence-pill");
         expect(html, `${locale} pill ${presence}`).not.toMatch(/externalPlay\.room\.|onlineChess\.camera\.|settings\.account\.|method\./);
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: locale × screen, + locale × pill").toBe(44 + 8);
+    expect(checked, "anti-vacuity: locale × screen, + locale × pill").toBe(44 + 12);
     expect(paint(snap(), "nl"), "nl is not English").not.toContain("Your board is open");
   });
 });
@@ -387,7 +388,7 @@ describe("I3/I4: the camera duty is the REQUIRED policy's; an unknown presence a
           screen={{ kind: "live" }}
           state={state}
           room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
-          camera={{ status: cameraStatus, stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} }}
+          camera={{ status: cameraStatus, stream: null, enable: () => {} }}
           busy={false}
           tryAgain={() => {}}
           relinkHref="/x"
@@ -406,7 +407,7 @@ describe("I3/I4: the camera duty is the REQUIRED policy's; an unknown presence a
     let checked = 0;
     for (const policy of CAMERA_POLICIES) {
       const duty = policy === "required";
-      const live = paint(snap({ game: GAME, you, cameraPolicy: policy, opponentPresence: policy === "off" ? null : { participantId: "rtk-opp" } }));
+      const live = paint(snap({ game: GAME, you, cameraPolicy: policy, opponentCamera: policy === "off" ? null : "live" }));
       expect(live.includes(notice), `${policy}: live notice`).toBe(duty);
       expect(ids(live).includes("room-tile-strip"), `${policy}: tile strip`).toBe(policy !== "off");
       const checkin = paint(snap({ cameraPolicy: policy }));
@@ -423,24 +424,29 @@ describe("I3/I4: the camera duty is the REQUIRED policy's; an unknown presence a
     expect(checked, "anti-vacuity: policies").toBe(3);
   });
 
-  it("presence: live ⇒ on camera, false ⇒ camera off, null (not joined, not settled, connection down) ⇒ NO pill at all; and a first paint has no pill, whatever the snapshot", () => {
+  it("presence: live ⇒ on camera, off ⇒ camera off, unknown ⇒ its own state (never 'off'), null (policy off, no opponent, a fault, an override) ⇒ NO pill at all - and the FIRST paint already paints the server's word", () => {
     const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
-    const cases: [boolean | null, string | null][] = [
-      [true, "live"],
-      [false, "off"],
+    const cases: [PresenceState | null, string | null][] = [
+      ["live", "live"],
+      ["off", "off"],
+      ["unknown", "unknown"],
       [null, null],
     ];
-    const s = snap({ game: GAME, you, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
-    expect(ids(paint(s)), "first paint: the camera has not joined, so nothing is known").not.toContain("room-presence-pill");
     let checked = 0;
-    for (const [live, state] of cases) {
-      const html = paintScreen(s, live);
+    for (const [word, state] of cases) {
+      const s = snap({ game: GAME, you, cameraPolicy: "required", opponentCamera: word });
+      const html = paintScreen(s, word);
       const pill = /data-testid="room-presence-pill" data-state="([^"]+)"/.exec(html)?.[1] ?? null;
-      expect(pill, String(live)).toBe(state);
-      if (live === null) expect(html, "no accusation on an unknown answer").not.toContain("camera off");
+      expect(pill, String(word)).toBe(state);
+      if (word === null) expect(html, "no accusation on an unknown answer").not.toContain("camera off");
+      // D16: no meeting to join first - the shell's own first paint is the snapshot's word, not "nothing known yet".
+      const first = /data-testid="room-presence-pill" data-state="([^"]+)"/.exec(paint(s))?.[1] ?? null;
+      expect(first, `first paint, ${String(word)}`).toBe(state);
       checked += 1;
     }
-    expect(checked).toBe(3);
+    expect(checked, "anti-vacuity: every wire value").toBe(4);
+    // Cameras off: whatever a stale snapshot carries, no pill.
+    expect(ids(paint(snap({ game: GAME, you, cameraPolicy: "off", opponentCamera: "live" }))), "policy off").not.toContain("room-presence-pill");
   });
 });
 
@@ -461,7 +467,7 @@ describe("I-1: our guard re-joining is ours — the reconnecting notice, never t
           screen={{ kind: "live" }}
           state={state}
           room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
-          camera={{ status: cameraStatus, stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} }}
+          camera={{ status: cameraStatus, stream: null, enable: () => {} }}
           busy={false}
           tryAgain={() => {}}
           relinkHref="/x"
@@ -486,7 +492,7 @@ describe("I-1: our guard re-joining is ours — the reconnecting notice, never t
     let checked = 0;
     for (const policy of ["optional", "required"] as const) {
       for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
-        const s = snap({ game: GAME, you, cameraPolicy: policy, opponentPresence: { participantId: "rtk-opp" } });
+        const s = snap({ game: GAME, you, cameraPolicy: policy, opponentCamera: "live" });
         const html = paintLiveIn(s, "recovering", locale);
         const copy = (LOCALES[locale] as unknown as Record<string, string>)["externalPlay.room.state.cameraReconnecting"]!;
         expect(ids(html), `${policy}/${locale}`).toContain("room-camera-reconnecting");
@@ -522,7 +528,7 @@ describe("fix round 5: the give-up — reload, never blamed", () => {
           screen={{ kind } as never}
           state={state}
           room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
-          camera={{ status: cameraStatus, stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} }}
+          camera={{ status: cameraStatus, stream: null, enable: () => {} }}
           busy={false}
           tryAgain={() => {}}
           relinkHref="/x"
@@ -551,7 +557,7 @@ describe("fix round 5: the give-up — reload, never blamed", () => {
     for (const kind of ["live", "checkin"] as const) {
       for (const policy of ["optional", "required"] as const) {
         for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
-          const s = snap({ ...(kind === "live" ? { game: GAME, you } : {}), cameraPolicy: policy, opponentPresence: { participantId: "rtk-opp" } });
+          const s = snap({ ...(kind === "live" ? { game: GAME, you } : {}), cameraPolicy: policy, opponentCamera: "live" });
           const html = paintIn(s, kind, "gave_up", locale);
           const d = LOCALES[locale] as unknown as Record<string, string>;
           const tag = `${kind}/${policy}/${locale}`;

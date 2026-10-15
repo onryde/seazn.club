@@ -43,6 +43,16 @@ export type SeatRefusal =
  *  when the report itself could not be read, `video_unavailable`. */
 export const CAMERA_EVIDENCE_DEADLINE_MS = 15_000;
 
+/** D16 (§5.6.3): how often a tab repeats its camera's CURRENT state to the server, in BOTH states, so a camera that stays off
+ *  stays fresh exactly as one that stays live does. The opponent's pill is the only reader. */
+export const CAMERA_REPORT_HEARTBEAT_MS = 30_000;
+
+/** D16 (§5.6.3): how long a camera report stands. Two and a half heartbeats, so one lost beat never reads as unknown. Past it
+ *  the pill reads `unknown` (never `off`, which would claim a fact we do not have), and a heartbeat that DISAGREES with the
+ *  stored state is applied as a change - ONE definition of "no longer fresh" for the pill and for that rule. A report is fresh
+ *  while it is YOUNGER than this: at exactly this age it is stale. */
+export const CAMERA_REPORT_STALE_MS = 75_000;
+
 /** D21 (T17B fix 2, review I2): the re-ask SCHEDULE, which is also the server's minimum interval between vendor reads of
  *  one participant. Every read of a starting camera costs the vendor four calls (a token refresh, the live session, its
  *  participants, the peer report) against an account limit of 1,200 per five minutes, past which EVERY call is refused
@@ -141,14 +151,14 @@ export type RoomSnapshot = {
   you: { colour: Colour; name: string; checkedIn: boolean };
   opponent: { colour: Colour; name: string; checkedIn: boolean };
   cameraPolicy: CameraPolicyWire;
-  /** Where the opponent's presence pill may show, and who the opponent is in
-   *  the meeting: their RealtimeKit participant id, or null when they hold no
-   *  seat in it (absent by construction). The pill's answer is the viewer's
-   *  OWN client's (review I8: opponent-presence.ts) — the server never asks
-   *  the vendor for it. null ⇒ no pill (policy off, an override, a board
-   *  nobody may play on). */
-  opponentPresence: { participantId: string | null } | null;
-  /** Final re-review 3, R3-1: the VIEWER's own player participant in the board's meeting, as the server holds it
+  /** The opponent's camera, as THEIR OWN browser last reported it to our server (D16, §5.6.3): each player is in a meeting of
+   *  their own now, so the viewer's browser cannot see the opponent at all. `live` / `off` when the report is fresh
+   *  (CAMERA_REPORT_STALE_MS), `unknown` when there is none, a stale one, or no participant on file for the opponent -
+   *  never hidden and never `off` for a fact we do not have. null ⇒ no pill (policy off, an override, the game over, the
+   *  viewer cannot act, no opponent on file, or OUR guard holds the opponent's camera out). The opponent's browser's word
+   *  and nothing else's; the server never asks the vendor (review I8). */
+  opponentCamera: "live" | "off" | "unknown" | null;
+  /** Final re-review 3, R3-1: the VIEWER's own player participant in THEIR meeting (D16: one per player), as the server holds it
    *  (preflight's one rule, ended meeting or not), or null with none on file. Never a token. The room compares it
    *  with the participant its camera joined with: the R2-2 retire deletes a re-paired board's meeting with its
    *  participants, so the player who stayed reads null (then the new meeting's id) and re-claims the seat. A drop,

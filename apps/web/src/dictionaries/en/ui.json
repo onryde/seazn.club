@@ -6075,6 +6075,7 @@
   "externalPlay.room.micMuted": "You · mic off",
   "externalPlay.room.presence.live": "{name} · on camera",
   "externalPlay.room.presence.off": "{name} · camera off",
+  "externalPlay.room.presence.unknown": "{name} · camera status unknown",
   "externalPlay.room.offerDraw": "Offer draw",
   "externalPlay.room.resign": "Resign",
   "externalPlay.room.drawAfterMoveOne": "Draw after move 1",

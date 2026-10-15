@@ -69,7 +69,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     you: { colour: "white", name: "Ada Okonkwo", checkedIn: true },
     opponent: { colour: "black", name: "Bo Lind", checkedIn: true },
     cameraPolicy: "off",
-    opponentPresence: null,
+    opponentCamera: null,
     ownParticipantId: null,
     frozen: null,
     canAct: true,

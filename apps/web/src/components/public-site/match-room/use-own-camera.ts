@@ -2,15 +2,19 @@
 // The hook over camera-session: join with the caller's OWN participant token
 // (from the seat answer — never from the snapshot), expose the local preview
 // stream and the status, leave on unmount. Our guard's faults are stamped on
-// the server through `stamp` (I-1). And the opponent's presence pill,
-// read from that same join (review I8) on a local timer — no network.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cameraSession, type CameraView } from "./camera-session";
-import { joinOwnCamera, type JoinOwnCamera, type MeetingLink } from "./camera-loader";
-import { opponentPresenceView, PRESENCE_TICK_MS, type OpponentPresenceWire } from "./opponent-presence";
+// the server through `stamp` (I-1), and the camera's own state is reported to
+// the server through `report` (D16, §5.6.3) - the OPPONENT's pill is that report,
+// relayed: each player is in a meeting of their own, so nothing of the opponent
+// is visible from here.
+import { useEffect, useMemo, useRef, useState } from "react";
+import { cameraSession, type CameraReportState, type CameraView } from "./camera-session";
+import { joinOwnCamera, type JoinOwnCamera } from "./camera-loader";
 
 /** Tells the server our guard's gap on this seat started or ended (I-1). */
 export type CameraFaultStamp = (state: "start" | "end") => Promise<unknown>;
+
+/** Tells the server what this camera is doing, for the opponent's pill (D16). A rejection is a request to re-send a change. */
+export type CameraReport = (state: CameraReportState, heartbeat: boolean) => Promise<unknown>;
 
 export function useOwnCamera(
   authToken: string | null,
@@ -22,28 +26,28 @@ export function useOwnCamera(
    *  nothing while it stays so. A board that comes back from its closed card (a hold lifted) gets a fresh session.
    *  Neither screen shows the camera, so the ended session's last view is never painted. */
   ended = false,
+  /** D16: the camera's report for the opponent's pill; null sends none (no seat to report from). */
+  report: CameraReport | null = null,
 ) {
   const [view, setView] = useState<CameraView>({ status: "idle", track: null });
   const session = useRef<ReturnType<typeof cameraSession> | null>(null);
   const joinRef = useRef(join);
-  // A session lives until the room ends (or the page goes); the stamp names the latest seat.
+  // A session lives until the room ends (or the page goes); the stamp and the report name the latest seat.
   const stampRef = useRef(stamp);
+  const reportRef = useRef(report);
   useEffect(() => {
     stampRef.current = stamp;
+    reportRef.current = report;
   });
-  // The presence hook subscribes ONCE; each session relays its link changes to whoever is subscribed now.
-  const linkListeners = useRef(new Set<() => void>());
 
   useEffect(() => {
     if (ended) return;
-    const listeners = linkListeners.current; // one Set for the hook's life
-    const s = cameraSession(joinRef.current, setView, { stamp: (state) => stampRef.current?.(state) });
-    session.current = s;
-    const unrelay = s.onLinkChange(() => {
-      for (const cb of [...listeners]) cb();
+    const s = cameraSession(joinRef.current, setView, {
+      stamp: (state) => stampRef.current?.(state),
+      report: (state, heartbeat) => reportRef.current?.(state, heartbeat),
     });
+    session.current = s;
     return () => {
-      unrelay();
       session.current = null;
       void s.stop();
     };
@@ -56,44 +60,9 @@ export function useOwnCamera(
   }, [authToken, participantId, ended]);
 
   const stream = useMemo(() => (view.track ? new MediaStream([view.track]) : null), [view.track]);
-  // Stable: the presence hook's effect depends on them.
-  const link = useCallback((): MeetingLink | null => session.current?.link() ?? null, []);
-  const onLinkChange = useCallback((cb: () => void) => {
-    linkListeners.current.add(cb);
-    return () => {
-      linkListeners.current.delete(cb);
-    };
-  }, []);
   return {
     status: view.status,
     stream,
     enable: () => void session.current?.enable(),
-    link,
-    onLinkChange,
   };
-}
-
-/** The opponent's pill: true on camera, false camera off (a fact), null no
- *  pill. Re-read on every meeting change and on a local tick (producer
- *  changes emit nothing in the SDK). */
-export function useOpponentPresence(
-  camera: { link: () => MeetingLink | null; onLinkChange: (cb: () => void) => () => void },
-  opponent: OpponentPresenceWire,
-): boolean | null {
-  const [view, setView] = useState<boolean | null>(null);
-  // The snapshot is a fresh object every read: key the effect by its value.
-  const key = opponent === null ? null : (opponent.participantId ?? "");
-  const { link, onLinkChange } = camera;
-  useEffect(() => {
-    const wire: OpponentPresenceWire = key === null ? null : { participantId: key === "" ? null : key };
-    const read = () => setView(opponentPresenceView(link(), wire, Date.now()));
-    read();
-    const off = onLinkChange(read);
-    const timer = setInterval(read, PRESENCE_TICK_MS);
-    return () => {
-      off();
-      clearInterval(timer);
-    };
-  }, [key, link, onLinkChange]);
-  return key === null ? null : view;
 }

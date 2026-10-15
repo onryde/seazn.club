@@ -146,7 +146,7 @@ describe("match-room page", () => {
       you: { colour: "white", name: "Ada", checkedIn: false },
       opponent: { colour: "black", name: "Bo", checkedIn: false },
       cameraPolicy: "off",
-      opponentPresence: null,
+      opponentCamera: null,
       ownParticipantId: null,
       frozen: null,
       canAct: false,

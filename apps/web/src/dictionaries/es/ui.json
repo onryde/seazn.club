@@ -6075,6 +6075,7 @@
   "externalPlay.room.micMuted": "Tú · micro apagado",
   "externalPlay.room.presence.live": "{name} · cámara encendida",
   "externalPlay.room.presence.off": "{name} · cámara apagada",
+  "externalPlay.room.presence.unknown": "{name} · estado de la cámara desconocido",
   "externalPlay.room.offerDraw": "Ofrecer tablas",
   "externalPlay.room.resign": "Abandonar",
   "externalPlay.room.drawAfterMoveOne": "Tablas tras la jugada 1",

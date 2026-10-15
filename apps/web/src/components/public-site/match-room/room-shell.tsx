@@ -24,7 +24,7 @@ import { SoundToggle, type SoundSwitch } from "./sound-toggle";
 import { useClockFaces } from "./use-clock-faces";
 import { RoomControls } from "./controls";
 import { OwnTile } from "./own-tile";
-import { PresencePill } from "./presence-pill";
+import { PresencePill, type PresenceState } from "./presence-pill";
 import { CameraNotice } from "./camera-notice";
 import { Checkin } from "./checkin";
 import { GameOver } from "./game-over";
@@ -57,8 +57,8 @@ import { canMove, cameraRetryDue, moveNotice, ownMeetingRetired, plyOf, type Roo
 import { formatCountdown, formatTimeOfDay, useFlagFallen, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
-import { deliverCameraFault } from "./room-api";
-import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
+import { deliverCameraFault, deliverCameraReport } from "./room-api";
+import { useOwnCamera } from "./use-own-camera";
 import { HANDED } from "./camera-test";
 import { useCameraTest } from "./use-camera-test";
 import { isHandoverActive } from "./camera-handover";
@@ -193,9 +193,15 @@ export function RoomShell({
   );
   // The participant id rides along (R3-1): a token for ANOTHER participant is another meeting, and the camera moves.
   // T17B fix 2 (D8a): at the result or the closed card the camera leaves its meeting, and the camera light goes off.
-  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId, cameraEnds(state));
-  // The pill reads this client's own meeting join (review I8): no server call.
-  const presence = useOpponentPresence(camera, cameraOn ? snap.opponentPresence : null);
+  // D16 (§5.6.3): the camera also reports its own state, for the OPPONENT's pill; a seat in no meeting reports nothing.
+  const report = useCallback(
+    (s: "live" | "off", heartbeat: boolean) =>
+      participantId === null ? Promise.resolve() : deliverCameraReport(fixtureId, token, { state: s, heartbeat }),
+    [participantId, fixtureId, token],
+  );
+  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId, cameraEnds(state), report);
+  // D16: the pill is the opponent's OWN report, relayed by the server: a field of the snapshot, no meeting to read.
+  const presence = cameraOn ? snap.opponentCamera : null;
   // T17B fix 2 (D19): move sounds, and their switch (D24: drawn in the player's own clock bar).
   const sound = useSoundSwitch();
   useRoomSounds(state, sound.on);
@@ -321,7 +327,7 @@ function TileStrip({
 }: {
   snap: RoomSnapshot;
   camera: ReturnType<typeof useOwnCamera>;
-  presence: boolean | null;
+  presence: PresenceState | null;
   /** D23: a quick check-in can reach the board before the SDK's video does — the cover follows the tile. */
   handover: ReturnType<typeof useCameraHandover>;
   /** D21-fix-3: an optional camera seated with no token because the platform's call budget was spent, and the room is
@@ -344,7 +350,7 @@ function TileStrip({
       />
       {/* null is "unknown" — not joined, not settled, connection down: no
           pill rather than a "camera off" (review I4). */}
-      {presence !== null ? <PresencePill name={snap.opponent.name} cameraLive={presence} t={t} /> : null}
+      {presence !== null ? <PresencePill name={snap.opponent.name} state={presence} t={t} /> : null}
     </div>
   );
 }
@@ -382,7 +388,7 @@ export function Screen({
   room: ReturnType<typeof useRoom>;
   camera: ReturnType<typeof useOwnCamera>;
   /** The opponent pill: true on camera, false camera off, null no pill. */
-  presence?: boolean | null;
+  presence?: PresenceState | null;
   busy: boolean;
   tryAgain: () => void;
   /** T17B fix 2 (D2): the room is re-asking a seat answered `camera_starting`. */

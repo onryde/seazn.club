@@ -28,7 +28,7 @@ function snap(): RoomSnapshot {
     you: { colour: "white", name: "Bo Lind", checkedIn: false },
     opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: false },
     cameraPolicy: "required",
-    opponentPresence: null,
+    opponentCamera: null,
     ownParticipantId: null,
     frozen: null,
     canAct: false,

@@ -6075,6 +6075,7 @@
   "externalPlay.room.micMuted": "Vous · micro coupé",
   "externalPlay.room.presence.live": "{name} · caméra allumée",
   "externalPlay.room.presence.off": "{name} · caméra éteinte",
+  "externalPlay.room.presence.unknown": "{name} · état de la caméra inconnu",
   "externalPlay.room.offerDraw": "Proposer nulle",
   "externalPlay.room.resign": "Abandonner",
   "externalPlay.room.drawAfterMoveOne": "Nulle après le coup 1",

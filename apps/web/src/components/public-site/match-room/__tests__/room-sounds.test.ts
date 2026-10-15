@@ -288,7 +288,7 @@ describe("through the REAL reducer: the room's own events in, sounds out", () =>
       you: { colour: "white", name: "Bo Lind", checkedIn: true },
       opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true },
       cameraPolicy: "off",
-      opponentPresence: null,
+      opponentCamera: null,
       ownParticipantId: null,
       frozen: null,
       canAct: true,

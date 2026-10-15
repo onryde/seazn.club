@@ -21,10 +21,8 @@ import { RoomShell, Screen } from "../room-shell";
 import { CameraBlockedCard, CameraGaveUpNotice } from "../room-cards";
 import { initialRoomState } from "../room-state";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, STAMP_RETRY_MS } from "../camera-session";
-import { CAMERA_EVIDENCE_MAX_POLLS, cameraEvidenceDelayMs, type RoomSnapshot } from "../room-snapshot";
+import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_REPORT_HEARTBEAT_MS, cameraEvidenceDelayMs, type RoomSnapshot } from "../room-snapshot";
 import type { MeetingLink, OwnCamera } from "../camera-loader";
-import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
-import { useOpponentPresence } from "../use-own-camera";
 import { IDLE_POLL_MS, SETTLED_POLL_MS } from "../use-room";
 
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
@@ -45,7 +43,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     you: { colour: "white", name: "Bo Lind", checkedIn: false },
     opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true },
     cameraPolicy: "required",
-    opponentPresence: null,
+    opponentCamera: null,
     // The participant every seat answer here hands back is the one the server holds: a claim's snapshot is composed
     // AFTER its seat (external-play-room.test.ts, R3-1). The R3-1 cases below move it.
     ownParticipantId: "p-own",
@@ -67,7 +65,7 @@ const ok = (data: unknown) => new Response(JSON.stringify({ ok: true, data, requ
 const PARTICIPANT = { participantId: "p-own", authToken: "own-rtk-token" };
 const TRACK = { id: "cam" } as unknown as MediaStreamTrack;
 
-type Call = { method: string; url: string; at: number };
+type Call = { method: string; url: string; at: number; body: string | null };
 let calls: Call[] = [];
 // Thunks: each answer is composed when the server would compose it, so its
 // serverNow is later than every earlier read (the reducer drops stale ones).
@@ -91,7 +89,9 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
-      calls.push({ method: String(init.method), url, at: Date.now() });
+      calls.push({ method: String(init.method), url, at: Date.now(), body: init.body === undefined ? null : String(init.body) });
+      // D16: the camera's report for the opponent's pill (room camera-report) - taken, as the server would.
+      if (init.method === "POST" && url.includes("/external-play/room/camera-report?")) return ok({ outcome: "written" });
       if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) {
         // A thunk may answer with a whole Response (a refusal by status, R3-1). A seat call nobody scripted is never
         // answered (it is still counted): a runaway re-claim stops at its first extra call instead of spinning.
@@ -403,7 +403,7 @@ describe("camera required: check in → refused for camera → the camera joins 
       screen: { kind: "cameraBlocked" },
       state,
       room: { state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never,
-      camera: { status: "live", stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} },
+      camera: { status: "live", stream: null, enable: () => {} },
       busy: false,
       tryAgain: () => {},
       relinkHref: "/x",
@@ -501,7 +501,7 @@ describe("I2: a refused act never stops the room — it re-reads, backing off wh
       drawOfferBy: null,
       over: false,
     };
-    const base = { cameraPolicy: "off" as const, opponentPresence: null, you: { colour: "white" as const, name: "Bo Lind", checkedIn: true }, game: live };
+    const base = { cameraPolicy: "off" as const, opponentCamera: null, you: { colour: "white" as const, name: "Bo Lind", checkedIn: true }, game: live };
     const actAnswers: (() => Response)[] = [
       () => new Response(JSON.stringify({ ok: false, error: { code: "not_found" } }), { status: 404 }),
       () => ok({ ok: false, reconcile: true, reason: "rejected" }),
@@ -511,7 +511,9 @@ describe("I2: a refused act never stops the room — it re-reads, backing off wh
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
-        calls.push({ method: String(init.method), url, at: Date.now() });
+        calls.push({ method: String(init.method), url, at: Date.now(), body: init.body === undefined ? null : String(init.body) });
+        // D16: the camera's report for the opponent's pill (room camera-report) - taken, as the server would.
+        if (init.method === "POST" && url.includes("/external-play/room/camera-report?")) return ok({ outcome: "written" });
         if (init.method === "POST" && url.includes("/external-play/room/act?")) return actAnswers.shift()!();
         if (init.method === "GET") return ok(snap(base));
         return new Response("{}", { status: 500 });
@@ -570,92 +572,101 @@ describe("I8: the opponent pill comes from the player's own meeting join — nev
     snap({
       you: { colour: "white", name: "Bo Lind", checkedIn: true },
       game: LIVE_GAME,
-      opponentPresence: { participantId: "rtk-opp" },
+      opponentCamera: "live",
       ...over,
     });
   const presenceOf = (island: Island) => {
     const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
-    return propsOf(screen!).presence as boolean | null;
+    return propsOf(screen!).presence as "live" | "off" | "unknown" | null;
   };
   const roomApiOnly = () => calls.every((c) => c.url.startsWith("/api/v1/fixtures/f1/external-play/room"));
+  const reports = () =>
+    calls
+      .filter((c) => c.method === "POST" && c.url.includes("/external-play/room/camera-report?"))
+      .map((c) => JSON.parse(c.body!) as { state: string; heartbeat: boolean });
 
-  it("no pill until joined AND settled; live, off when the camera stops, off when the opponent leaves, none with the socket down — and every call the page made is our own room API", async () => {
+  it("D16: the pill is the snapshot's opponentCamera, on every render - live, off, unknown, none - and every call the page made is our own room API", async () => {
+    let checked = 0;
+    for (const want of ["live", "off", "unknown", null] as const) {
+      getAnswer = () => inPlay({ opponentCamera: want });
+      seatAnswers = [() => ({ snapshot: inPlay({ opponentCamera: want }), seat: { seated: true, participant: PARTICIPANT }, create: null })];
+      join.fn.mockReset();
+      join.fn.mockResolvedValue(liveCamera());
+      calls = [];
+      const island = renderIsland(RoomShell, { initial: inPlay({ opponentCamera: want }), token: "tok", selfPath: "/x" });
+      await settle();
+      expect(screenOf(island), String(want)).toBe("live");
+      expect(presenceOf(island), `the server said ${String(want)}`).toBe(want);
+      expect(calls.length, "anti-vacuity: the room did talk to the server").toBeGreaterThan(0);
+      expect(roomApiOnly(), `${String(want)}: no call left our own room API`).toBe(true);
+      island.unmount();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every wire value").toBe(4);
+  });
+
+  it("the server changing the pill reaches the page on the next read, and dropping it (the game ends) hides it on that very read - never a stale frame", async () => {
+    getAnswer = () => inPlay({ opponentCamera: "live" });
+    seatAnswers = [() => ({ snapshot: inPlay({ opponentCamera: "live" }), seat: { seated: true, participant: PARTICIPANT }, create: null })];
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, { initial: inPlay({ opponentCamera: "live" }), token: "tok", selfPath: "/x" });
+    await settle();
+    expect(presenceOf(island), "premise: the pill is up").toBe("live");
+    getAnswer = () => inPlay({ opponentCamera: "unknown" });
+    await settle(IDLE_POLL_MS);
+    expect(presenceOf(island), "stale report: unknown").toBe("unknown");
+    getAnswer = () => inPlay({ opponentCamera: null });
+    await settle(IDLE_POLL_MS);
+    expect(presenceOf(island), "dropped").toBeNull();
+    island.unmount();
+  });
+
+  it("cameras off: no pill whatever the snapshot carries (a stale server value never draws one)", async () => {
+    getAnswer = () => inPlay({ cameraPolicy: "off", opponentCamera: "live" });
+    seatAnswers = [() => ({ snapshot: inPlay({ cameraPolicy: "off", opponentCamera: "live" }), seat: { seated: true, participant: null }, create: null })];
+    const island = renderIsland(RoomShell, { initial: inPlay({ cameraPolicy: "off", opponentCamera: "live" }), token: "tok", selfPath: "/x" });
+    await settle();
+    expect(presenceOf(island)).toBeNull();
+    island.unmount();
+  });
+
+  it("D16 through the REAL shell, hook, session and request: the camera joins and reports live as a change; a heartbeat every CAMERA_REPORT_HEARTBEAT_MS repeats it; the camera going off reports off", async () => {
     getAnswer = () => inPlay();
     seatAnswers = [() => ({ snapshot: inPlay(), seat: { seated: true, participant: PARTICIPANT }, create: null })];
-    const meet = meetingCamera();
-    join.fn.mockResolvedValue(meet.cam);
+    let onChange: ((enabled: boolean, track: MediaStreamTrack | null) => void) | null = null;
+    join.fn.mockResolvedValue({
+      ...liveCamera(),
+      onChange(cb: (enabled: boolean, track: MediaStreamTrack | null) => void) {
+        onChange = cb;
+        return () => void (onChange = null);
+      },
+    } satisfies OwnCamera);
     const island = renderIsland(RoomShell, { initial: inPlay(), token: "tok", selfPath: "/x" });
     await settle();
-    expect(screenOf(island)).toBe("live");
-    expect(join.fn, "the camera joined").toHaveBeenCalledTimes(1);
-    expect(presenceOf(island), "the camera is not in the meeting yet").toBeNull();
-
-    meet.set({ joinedAt: Date.now(), peers: [{ userId: "rtk-opp", videoLive: true }] });
+    expect(reports(), "joined: one change").toEqual([{ state: "live", heartbeat: false }]);
+    await settle(CAMERA_REPORT_HEARTBEAT_MS);
+    expect(reports().at(-1), "30 s on: a heartbeat of the same state").toEqual({ state: "live", heartbeat: true });
+    const n = reports().length;
+    onChange!(false, null);
     await settle();
-    expect(presenceOf(island), "joined, not settled: no pill rather than a guess").toBeNull();
-    await settle(PRESENCE_SETTLE_MS);
-    expect(presenceOf(island), "settled, the opponent on camera").toBe(true);
-
-    // Producer changes emit nothing in the SDK: the local tick reads them.
-    meet.setSilently({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: false }] });
-    expect(presenceOf(island), "premise: nothing re-read yet").toBe(true);
-    await settle(PRESENCE_TICK_MS);
-    expect(presenceOf(island), "in the meeting, camera off").toBe(false);
-    meet.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-arbiter", videoLive: true }] });
-    await settle(PRESENCE_TICK_MS);
-    expect(presenceOf(island), "the opponent left; someone else's camera never counts").toBe(false);
-    meet.set(null);
-    await settle();
-    expect(presenceOf(island), "socket down: no pill").toBeNull();
-
-    expect(calls.length, "anti-vacuity: the room did talk to the server").toBeGreaterThan(1);
-    expect(roomApiOnly(), "no call left our own room API").toBe(true);
+    expect(reports().slice(n), "the camera went off: a change, not a heartbeat").toEqual([{ state: "off", heartbeat: false }]);
+    await settle(CAMERA_REPORT_HEARTBEAT_MS);
+    expect(reports().at(-1), "and off stays fresh by heartbeat too").toEqual({ state: "off", heartbeat: true });
+    expect(
+      calls.filter((c) => c.url.includes("/camera-report?")).every((c) => c.url.includes("t=tok") || c.url.includes("tok")),
+      "each report names the caller's link token like every room call",
+    ).toBe(true);
     island.unmount();
   });
 
-  it("the server dropping the pill (the game ends) hides it on that very render — never one stale frame of the old answer", async () => {
-    const live: MeetingLink = { joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: true }] };
-    const camera = { link: () => live, onLinkChange: () => () => {} };
-    const seen: (boolean | null)[] = [];
-    function Probe({ opponent }: { opponent: RoomSnapshot["opponentPresence"] }) {
-      seen.push(useOpponentPresence(camera, opponent));
-      return null;
-    }
-    const island = renderIsland<{ opponent: RoomSnapshot["opponentPresence"] }>(Probe, { opponent: { participantId: "rtk-opp" } });
-    await settle();
-    expect(seen.at(-1), "premise: the pill is up").toBe(true);
-    const from = seen.length;
-    island.rerender({ opponent: null });
-    await settle();
-    const after = seen.slice(from);
-    expect(after.length, "anti-vacuity: renders after the drop").toBeGreaterThan(0);
-    expect(after, "every render after the drop").toEqual(after.map(() => null));
-    island.unmount();
-  });
-
-  it("unknown shows no pill: the server says no pill (null), or the camera never joined — whatever the meeting holds", async () => {
-    // Server: no pill here (e.g. an override) — even a live opponent shows nothing.
-    getAnswer = () => inPlay({ opponentPresence: null });
-    seatAnswers = [() => ({ snapshot: inPlay({ opponentPresence: null }), seat: { seated: true, participant: PARTICIPANT }, create: null })];
-    const meet = meetingCamera();
-    join.fn.mockResolvedValue(meet.cam);
-    const a = renderIsland(RoomShell, { initial: inPlay({ opponentPresence: null }), token: "tok", selfPath: "/x" });
-    await settle();
-    meet.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: true }] });
-    await settle(PRESENCE_TICK_MS);
-    expect(presenceOf(a)).toBeNull();
-    a.unmount();
-
-    // The join failed (camera denied, vendor down): no link, no pill.
+  it("a seat in no meeting reports nothing: the pill of someone who never joined is the unknown the server says, not a claim from here", async () => {
     getAnswer = () => inPlay();
-    seatAnswers = [() => ({ snapshot: inPlay(), seat: { seated: true, participant: PARTICIPANT }, create: null })];
-    join.fn.mockReset();
-    join.fn.mockRejectedValue(new Error("vendor down"));
-    const b = renderIsland(RoomShell, { initial: inPlay(), token: "tok", selfPath: "/x" });
-    await settle(PRESENCE_SETTLE_MS + PRESENCE_TICK_MS);
-    expect(join.fn).toHaveBeenCalledTimes(1);
-    expect(presenceOf(b)).toBeNull();
-    b.unmount();
+    seatAnswers = [() => ({ snapshot: inPlay(), seat: { seated: true, participant: null }, create: null })];
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, { initial: inPlay(), token: "tok", selfPath: "/x" });
+    await settle(CAMERA_REPORT_HEARTBEAT_MS * 2);
+    expect(reports()).toEqual([]);
+    island.unmount();
   });
 });
 
@@ -687,7 +698,9 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
-        calls.push({ method: String(init.method), url, at: Date.now() });
+        calls.push({ method: String(init.method), url, at: Date.now(), body: init.body === undefined ? null : String(init.body) });
+        // D16: the camera's report for the opponent's pill (room camera-report) - taken, as the server would.
+        if (init.method === "POST" && url.includes("/external-play/room/camera-report?")) return ok({ outcome: "written" });
         if (init.method === "POST" && url.includes("/external-play/room/camera-fault?")) {
           const body = JSON.parse(String(init.body)) as { state: string };
           stamps.push({ url, body });
@@ -714,8 +727,8 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
 
   it("live game: recovering (the notice, never the camera-off banner) → the stamp opens on OUR seat → a fresh join with our token → live, the stamp closes", async () => {
     stubFetch();
-    const live = snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
-    getAnswer = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    const live = snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentCamera: "live" });
+    getAnswer = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentCamera: "live" });
     seatAnswers = [() => ({ snapshot: getAnswer(), seat: { seated: true, participant: PARTICIPANT } })];
     const first = faultingCamera();
     join.fn.mockResolvedValueOnce(first.cam).mockResolvedValueOnce(liveCamera());
@@ -744,7 +757,7 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
   // stamp the server did not take is sent again on the ladder; a final 4xx
   // (the cap's 429) is not.
   it("a stamp the server did not take (a 503, then the network down) is re-sent on the ladder until it lands, and the end waits behind it; the cap's 429 is final — sent once", async () => {
-    const live = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    const live = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentCamera: "live" });
     let checked = 0;
     for (const c of [
       { failures: [{ status: 503 }, { status: 0 }], states: ["start", "start", "start", "end"] },
@@ -802,8 +815,8 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
   // stamp stays open through the give-up; the reload's re-seat closes it.
   it("re-joins that keep failing GIVE UP: the stamp opens and STAYS open (fix round 6, I-2), the status is gave_up (never off or failed), nothing joins after", async () => {
     stubFetch();
-    const live = snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
-    getAnswer = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    const live = snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentCamera: "live" });
+    getAnswer = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentCamera: "live" });
     seatAnswers = [() => ({ snapshot: getAnswer(), seat: { seated: true, participant: PARTICIPANT } })];
     const first = faultingCamera();
     join.fn.mockResolvedValueOnce(first.cam).mockRejectedValue(new Error("network: join timed out"));
@@ -854,7 +867,7 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
       screen: { kind: "live" },
       state,
       room: { state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never,
-      camera: { status: "gave_up", stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} },
+      camera: { status: "gave_up", stream: null, enable: () => {} },
       busy: false,
       tryAgain: () => {},
       relinkHref: "/x",
@@ -1111,7 +1124,7 @@ describe("the game ends: the camera leaves at once (T17B fix 2, D8a)", () => {
   };
   const RESULT = { outcome: "won" as const, method: "mate" as const, score: "1–0" };
   const inPlay = (over: Partial<RoomSnapshot> = {}) =>
-    snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, game: GAME_ON, opponentPresence: { participantId: "rtk-opp" }, ...over });
+    snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, game: GAME_ON, opponentCamera: "live", ...over });
   const counted = () => {
     const left = { n: 0 };
     return { left, cam: { ...liveCamera(), leave: async () => void (left.n += 1) } satisfies OwnCamera };
@@ -1159,8 +1172,8 @@ describe("the game ends: the camera leaves at once (T17B fix 2, D8a)", () => {
 
   // A board seen over stays over on this page (room-state mergeSnapshot keeps the game on file), so a result's way
   // back is a reload — a fresh mount, a fresh camera. The way back that IS reachable in-page: a hold with no game.
-  it("the other direction: a hold with no game (card 6) leaves; when it lifts, the check-in gets a fresh camera — and the pill hears it", async () => {
-    const open = () => snap({ you: { colour: "white", name: "Bo Lind", checkedIn: false }, opponentPresence: { participantId: "rtk-opp" } });
+  it("the other direction: a hold with no game (card 6) leaves; when it lifts, the check-in gets a fresh camera", async () => {
+    const open = () => snap({ you: { colour: "white", name: "Bo Lind", checkedIn: false }, opponentCamera: "live" });
     getAnswer = () => open();
     seatAnswers = [() => ({ snapshot: open(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } })];
     const first = counted();
@@ -1171,7 +1184,7 @@ describe("the game ends: the camera leaves at once (T17B fix 2, D8a)", () => {
     await settle();
     expect(join.fn, "premise: joined for the check-in").toHaveBeenCalledTimes(1);
 
-    getAnswer = () => snap({ held: true, canAct: false, opponentPresence: { participantId: "rtk-opp" } });
+    getAnswer = () => snap({ held: true, canAct: false, opponentCamera: "live" });
     await settle(IDLE_POLL_MS);
     expect([screenOf(island), first.left.n], "held with no game: card 6, and left").toEqual(["closed", 1]);
 
@@ -1180,12 +1193,10 @@ describe("the game ends: the camera leaves at once (T17B fix 2, D8a)", () => {
     expect(screenOf(island), "the hold lifted").toBe("checkin");
     // Back where it was before the hold: the camera re-joins with the seat's own token, at once.
     expect(join.fn.mock.calls, "a fresh join").toEqual([["own-rtk-token"], ["own-rtk-token"]]);
-    // The opponent pill follows the NEW camera's meeting, not the one left at the hold — heard at once (its link
-    // change, relayed), not on the next local tick.
-    second.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: true }] });
-    await settle();
+    // D16: the pill is the server's word on the opponent's own report, so it follows the snapshot, not a meeting.
     const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
-    expect(propsOf(screen!).presence, "the pill reads the fresh meeting").toBe(true);
+    expect(propsOf(screen!).presence, "the pill reads the snapshot").toBe("live");
+    void second;
     island.unmount();
   });
 });

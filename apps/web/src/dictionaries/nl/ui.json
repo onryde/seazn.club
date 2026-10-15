@@ -6075,6 +6075,7 @@
   "externalPlay.room.micMuted": "Jij · microfoon uit",
   "externalPlay.room.presence.live": "{name} · camera aan",
   "externalPlay.room.presence.off": "{name} · camera uit",
+  "externalPlay.room.presence.unknown": "{name} · camerastatus onbekend",
   "externalPlay.room.offerDraw": "Remise aanbieden",
   "externalPlay.room.resign": "Opgeven",
   "externalPlay.room.drawAfterMoveOne": "Remise na zet 1",
