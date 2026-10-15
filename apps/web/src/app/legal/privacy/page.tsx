@@ -14,7 +14,7 @@ export default function PrivacyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Privacy Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 14 October 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 15 October 2026</p>
         <div className="prose prose-slate max-w-none space-y-6 text-sm text-slate-700">
 
           <section>
@@ -66,7 +66,7 @@ export default function PrivacyPage() {
             <p>When a competition is played online, each player links a Lichess account and plays from a match room on seazn.club with their camera on.</p>
             <ul className="mt-2 list-disc space-y-1 pl-5">
               <li><strong>Your Lichess account:</strong> we store your Lichess username and the OAuth token you grant us, encrypted at rest. We use the token only to play your online games at Lichess: creating them, sending your moves and reading their state. Unlinking the account deletes the token and asks Lichess to revoke it. The game itself is played at Lichess under your own account, and Lichess&rsquo;s privacy policy applies to it.</li>
-              <li><strong>Your camera:</strong> during a match your camera video is carried by Cloudflare RealtimeKit (see the <Link href="/legal/sub-processors" className="text-purple-600 underline">sub-processors list</Link>). We configure each player&rsquo;s match room to show only their own camera, so your opponent&rsquo;s room is not set up to show your video. The competition&rsquo;s organisers, acting as arbiters, can watch both players&rsquo; cameras live. We do not record the video.</li>
+              <li><strong>Your camera:</strong> during a match your camera video is carried by Cloudflare RealtimeKit (see the <Link href="/legal/sub-processors" className="text-purple-600 underline">sub-processors list</Link>). Your opponent can&rsquo;t see your camera. The competition&rsquo;s organisers, acting as arbiters, can watch both players&rsquo; cameras live. We do not record the video.</li>
               <li><strong>Camera on or off:</strong> after the match, Cloudflare tells us when each player&rsquo;s camera was on. We use it only to flag long gaps to the organiser, who decides what, if anything, follows. The flags are kept with the competition&#x27;s records.</li>
             </ul>
           </section>

@@ -2193,7 +2193,7 @@ test("T17B fix 2 (D5): under a camera policy the check-in's privacy line says wh
   const line = p.getByTestId("room-checkin-privacy");
   await expect(line).toHaveText(uiEn["externalPlay.room.checkin.privacy"]!);
   // Typed from the controller's ruling, never read back from the dictionary alone.
-  await expect(line).toHaveText("Your opponent's room isn't set up to show your camera. Your organiser can watch it live; it isn't recorded.");
+  await expect(line).toHaveText("Your opponent can't see your camera. Your organiser can watch it live; it isn't recorded.");
   const text = (await line.textContent()) ?? "";
   for (const name of [room.black.name, room.white.name, "Ada", "Bo"]) expect(text, `names nobody: ${name}`).not.toContain(name);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);

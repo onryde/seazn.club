@@ -315,12 +315,12 @@ describe("the panel's first board (the container, first render)", () => {
 });
 
 describe("the header and the boards (canvas)", () => {
-  it("back link, round line, title and the watch-only sentence (the owner's canvas line, hedged by T17B fix 2's ruling: what the rooms are set up to do, never a promise)", () => {
+  it("back link, round line, title and the watch-only sentence (the owner's canvas line; D16 §5.6.7 lets it state the guarantee now that each player has a meeting of their own)", () => {
     const t = text(html(props()));
     expect(t).toContain("Back to run sheet");
     expect(t).toContain("Open Swiss · Round 3");
     expect(t).toContain("Arbiter");
-    expect(t).toContain("You're watching. The players' rooms aren't set up to let them see or hear you, or to show each other.");
+    expect(t).toContain("You're watching one player's camera at a time. Players can't see or hear you, and can't see each other.");
   });
 
   it("the desktop list: one button per board, labelled as the canvas labels them, the one on screen pressed", () => {
