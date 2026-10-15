@@ -1,0 +1,186 @@
+{
+  "batch": "golden-floor",
+  "note": "Test-id ledger for GF-1 (golden floor for the core events and outcome kinds; owner ruling 2026-10-15), built against base 115b7b573 (main after the engine-split 1e merge, #960). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection). GF-1 adds 36 tests and changes no existing test id: 28 in the new src/testkit/golden-floor.test.ts, 7 in the new src/testkit/golden-floor-streams.test.ts, and 1 in src/testkit/golden-forfeit-migration.test.ts. Existing tests whose BODY changed under their unchanged title: golden-slim.test.ts (extendCorpus appends in the canonical slim form: drops the last generator stream, not the last stream). apps/web tests that read the corpora (timeline.test.ts, outcome-readers.test.ts) are outside this ledger's roots. Whole-run parity: before-only 0, after-only 36, both 11437 (engine 5987 + matrix 5222 + scripts 228 before; engine 6023 + matrix 5222 + scripts 228 after), unaccounted 0.",
+  "entries": [
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts \u203a extendFloor \u2014 the golden floor's append path \u203a a retirement story needs recorded play before it: with nothing in the corpus to borrow an event from and a generator that only decides, boardgame builds none; with its corpus it does",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts \u203a extendFloor \u2014 the golden floor's append path \u203a empty case first: a corpus whose floor is met gets nothing appended, and a second call is the same",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts \u203a extendFloor \u2014 the golden floor's append path \u203a every committed floor stream, taken in order, closes a hole the streams before it left open (no noise kept)",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts \u203a extendFloor \u2014 the golden floor's append path \u203a floor seeds are unique per config inside a corpus (the epoch guard keys a stream by config#seed) and clear of the generator's",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts \u203a extendFloor \u2014 the golden floor's append path \u203a keeps a scenario's stream only when it closes a hole: a scenario that serves a hole but builds a stream recording nothing new is dropped, the next still runs",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts \u203a extendFloor \u2014 the golden floor's append path \u203a refuses by name when a floor stream's identity is already taken by another stream",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts \u203a extendFloor \u2014 the golden floor's append path \u203a reproduces the committed floor streams byte for byte from a corpus that lacks them, in order, touching nothing else",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 a recorded void is a real void \u203a every core.void in every corpus targets an earlier, non-void event of ITS OWN stream, and only core.void carries `voids`",
+      "fate": "added",
+      "reason": "GF-1: golden floor test (derived from the engine's declarations, anti-vacuity counted)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a NATURAL_OUTCOMES goes stale when a row names a sport that is not registered or a token nothing records",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a NATURAL_OUTCOMES is not stale: every row names a registered sport and a token its corpus records",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a a bounded sweep of every sport's own generator reaches no outcome the floor does not require",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a an exemption goes STALE the moment its token is recorded",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a every exemption row carries a reason, a real token, and covers at least one sport",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a no exemption is stale against the shipped corpora (swept over every sport, counted)",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a the settle exemption goes STALE the day the harness records the effective outcome (a harness that does, injected)",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a the settle exemption goes STALE when its probe cannot run (a recorder that throws), never silently holds",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a the settle exemption holds for a reason a probe proves: the harness records the bare outcome, the kernel reads another",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 exemptions and the reasoned list cannot go stale \u203a the sweep DOES see a token the floor lacks (a requirement without `draw` for football)",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a recorder that throws)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 lineup planning asks the real reducer \u203a a squad of ONE takes all five types in turn when the policy declares an exemption",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 lineup planning asks the real reducer \u203a a sub cap of 0 refuses the substitution BY NAME, and no declared exemption refuses the replacement by name",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 lineup planning asks the real reducer \u203a every lineup offer of every sport is a real plan: starters unchanged from the default pair",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 lineup planning asks the real reducer \u203a with no bench, nothing can come on: substitution and entry find no candidate",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the empty case and the teeth, first \u203a an EMPTY corpus fails the floor: every required token is a hole",
+      "fate": "added",
+      "reason": "GF-1: the empty corpus and dropped-stream teeth, then the shipped corpora meeting the floor"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the empty case and the teeth, first \u203a dropping every stream that holds a token makes exactly that token a hole, naming the sport",
+      "fate": "added",
+      "reason": "GF-1: the empty corpus and dropped-stream teeth, then the shipped corpora meeting the floor"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the empty case and the teeth, first \u203a the shipped corpus holds EVERY token a sport's floor requires (the floor itself)",
+      "fate": "added",
+      "reason": "GF-1: the empty corpus and dropped-stream teeth, then the shipped corpora meeting the floor"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the requirement is derived from the engine, per sport \u203a `draw` is required exactly where supportsDraws says a draw-kind stage can draw (at least one sport yes, one no)",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeitAdmission, supportsDraws, the lineup reducer), swept over the registry and counted"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the requirement is derived from the engine, per sport \u203a `tie` and `no_result` are required only for the sports NATURAL_OUTCOMES names",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeitAdmission, supportsDraws, the lineup reducer), swept over the registry and counted"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the requirement is derived from the engine, per sport \u203a a lineup type is required exactly when the REAL reducer accepts it under a recorded config's policy, impossible (with the reducer's own refusal) otherwise",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeitAdmission, supportsDraws, the lineup reducer), swept over the registry and counted"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the requirement is derived from the engine, per sport \u203a every core type is accounted for exactly once: required, exempt, or impossible-by-policy",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeitAdmission, supportsDraws, the lineup reducer), swept over the registry and counted"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the requirement is derived from the engine, per sport \u203a is non-empty for every sport, and states what it examined",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeitAdmission, supportsDraws, the lineup reducer), swept over the registry and counted"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the requirement is derived from the engine, per sport \u203a the forfeit outcomes are the kernel's FORFEIT_REASONS, admitted by forfeitAdmission in a state the generator reaches",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeitAdmission, supportsDraws, the lineup reducer), swept over the registry and counted"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the token vocabulary \u203a CORE_TYPES is the kernel's own schema map, every key of it",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recordedTokens), empty case first"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the token vocabulary \u203a outcomeTokenOf refuses an outcome it cannot key (a legacy award without a reason, a kindless value)",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recordedTokens), empty case first"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the token vocabulary \u203a outcomeTokenOf: empty case first (null), then each kind, an award keyed by its reason",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recordedTokens), empty case first"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts \u203a golden floor \u2014 the token vocabulary \u203a recordedTokens: an empty corpus holds nothing; a stream contributes its core types and its outcome",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recordedTokens), empty case first"
+    },
+    {
+      "id": "src/testkit/golden-forfeit-migration.test.ts \u203a golden forfeit migration (ruling 102 Q1, PF-3; ruling 113) \u203a GF-1: a closed-vocabulary reason the ruling never yields (disqualified, withdrew) is a deliberate record, not pre-W2b free text \u2014 kept after play and after a bare start alike; free text beside it is still rewritten",
+      "fate": "added",
+      "reason": "GF-1: the one-off forfeit migration leaves a closed-vocabulary reason it never yields (disqualified, withdrew) alone; free text beside it is still rewritten"
+    }
+  ]
+}
