@@ -461,8 +461,8 @@
  {
   "id": "t14-award-freeze",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;",
-  "replace": "",
+  "find": "version = snapshotted ? (await freezeCfg(tx, id, cfg)).rules_version : await bumpRulesVersion(tx, id);",
+  "replace": "version = snapshotted ? version : await bumpRulesVersion(tx, id);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -476,8 +476,8 @@
  {
   "id": "t14-award-not-refold",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;",
-  "replace": "if (snapshotted) version = (await refreezeFixture(tx, id, cfg)).rules_version;",
+  "find": "version = snapshotted ? (await freezeCfg(tx, id, cfg)).rules_version : await bumpRulesVersion(tx, id);",
+  "replace": "version = snapshotted ? (await refreezeFixture(tx, id, cfg)).rules_version : await bumpRulesVersion(tx, id);",
   "killers": [
    {
     "cwd": "apps/web",
