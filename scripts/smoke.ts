@@ -7366,8 +7366,8 @@ async function w2cPublicStageFormatChecks(owner: Session, orgId: string): Promis
     chips === 1 &&
     page.body.includes(sentence) &&
     hubLines.length === 1 &&
-    hubLines[0]!.stageName === "Cup" &&
-    hubLines[0]!.line.map((c) => c.key).join() === "format.rules.period.quarters,format.rules.decider.shootout";
+    hubLines[0].stageName === "Cup" &&
+    hubLines[0].line.map((c) => c.key).join() === "format.rules.period.quarters,format.rules.decider.shootout";
   check(
     "w2c: the public division page states a hockey stage's format" +
       (ok ? "" : ` - start ${started.status}, page ${page.status}, ${chips} chip(s), "${sentence}" ${page.body.includes(sentence) ? "present" : "absent"}, hub ${JSON.stringify(hubLines)}`),
