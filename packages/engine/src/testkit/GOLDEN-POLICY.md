@@ -106,15 +106,38 @@ Prose in a comment enforced none of this, so the harness now does.
    A re-baseline that moves an event is a re-record wearing a re-baseline's
    name.
 
-## A re-baseline that changes a fold must raise that sport's FOLD_EPOCH
+## A re-baseline that changes a fold must raise that sport's version
 
-A corpus change that alters what an existing stream folds to (any state, the
-outcome, the summary or the deltas), or that removes or re-records a stream,
-must raise that sport's entry in `src/sport/fold-epoch.ts` (`FOLD_EPOCH`) **in
-the same PR**. Native clients send their epoch, and the server (batch 1f)
-refuses one lower than its own, so an outdated phone is stopped instead of
-folding differently from the server. Appended streams (`EXTEND_GOLDEN`) need no
-bump; an epoch never goes down.
+A sport's version is a **pair** in `src/sport/fold-epoch.ts`: the **major**
+(`FOLD_EPOCH`, read with `foldEpochOf`) and the **minor** (`FOLD_MINOR`, read
+with `foldMinorOf`). A corpus change owes one of them, in the **same PR**,
+depending on who computes what moved:
+
+| What moved (the stream's events, lineups and raw config object are unchanged) | Owes |
+|---|---|
+| a state, the outcome or the summary: a phone computes and renders these | **major** |
+| a stream was removed, or re-recorded (its events, lineups or raw config object changed) | **major** |
+| only the standings `deltas` (states, outcome and summary byte for byte the same): the server computes these | **minor** |
+| both kinds in one sport | **major** (the strongest class owed decides) |
+| streams only appended (`EXTEND_GOLDEN`) | nothing |
+
+The **major is the one the server gates on** (batch 1f): native clients send
+theirs, and the server refuses one below its own for the fixture's sport, so a
+major bump **locks out every older phone of that sport** until the app updates.
+The **minor is informational**: nothing refuses a phone for it and no app
+update is needed; it records that output only the server computes moved (for
+example a module's default `pointsMap`, which changes the standings points and
+not one state, outcome or summary). Anything ambiguous is a major. Use it
+accordingly: a deltas-only change must not be paid with a major bump.
+
+The pair only goes up, lexicographically. A major that rose may leave the minor
+anywhere (resetting it to 0 is the usual thing); a major that fell, or a minor
+that fell while the major held, is red; and **a minor bump never settles a
+change owed as a major** (a stream's states moved and only the minor was raised:
+red, "major owed"). A baseline that has no `FOLD_MINOR` (the PR that introduced
+it) is a minor of 0 for every sport. A change outside the corpora's reach that
+alters what a phone computes (see "What the guard cannot see") owes a major by
+hand.
 
 `scripts/fold-epoch-guard.ts` enforces it in CI (the `gates` job). It compares
 the PR **as a whole** with the branch it merges into: CI runs it with
@@ -126,27 +149,38 @@ commit's own parent it is red, which is the point of the second commit.
 
 A stream's **input** is its raw config object (the one it names in the corpus's
 `configs`), its events and its lineups, and changing any of the three counts as
-re-recording the stream. The config is in that set on purpose: after a module's
-default changes (a `cap` of 30 becoming 31), `REBASELINE_GOLDEN=1` stays red,
-because it splices the recorded config back in, and the way to a green suite is
-to write the old value (`cap: 30`) into every recorded config that lacked it.
-Every replay then folds to the same result and not one event or output moves,
-but a phone that still holds the old default plays a different rule. The guard
-sees the edited config and demands the bump.
+re-recording the stream, which owes a **major**. The config is in that set on
+purpose: after a module's default changes (a `cap` of 30 becoming 31),
+`REBASELINE_GOLDEN=1` cannot take it (the replay refuses, the recorded set
+scores no longer exist), and the way to a green suite is to write the old value
+(`cap: 30`) into every recorded config that lacked it. Every replay then folds
+to the same result and not one event or output moves, but a phone that still
+holds the old default plays a different rule. The guard sees the edited config
+and demands the **major**; a minor bump does not launder it.
+
+The opposite case is a rule change only the server sees. A module's default
+`pointsMap` changing (badminton's `2/0` becoming `3/0`) leaves every recorded
+config alone, `REBASELINE_GOLDEN=1` rewrites only the `deltas` of the streams
+that decided a match, every state, outcome and summary comes out byte for byte
+the same, and the guard asks for a **minor**.
 
 To check before pushing (from any directory; it also reads uncommitted work, so
 re-baseline into a clean tree, bump, and run it):
 
     pnpm --filter @onryde/seazn-engine fold-epoch:check --against origin/main
 
-It prints one line per sport (epoch before -> after; streams matched, changed,
-removed, added) and `N sports checked, M streams compared`. Exit codes: `0` every
-sport is in order (or the base has no `fold-epoch.ts` yet: the PR that
-introduces it); `1` a sport's results moved without its epoch rising, an epoch
-fell, or a corpus and an epoch entry do not pair up; `2` refused, nothing judged
-(the ref is not a commit, which is what a shallow clone or a root commit gives;
-git could not list or read the base; a table or corpus that does not load; a
-run that compared no stream); `3` the guard itself crashed.
+It prints one line per sport (major and minor before -> after; streams matched,
+changed, deltas-only, removed, added) and `N sports checked, M streams
+compared`; a violation line says `major owed` or `minor owed` and names the
+exact entry to raise, for example `raise FOLD_MINOR.badminton to 1` or
+`raise FOLD_EPOCH.badminton to 2`. Exit codes: `0` every sport is in order (or
+the base has no `fold-epoch.ts` yet: the PR that introduces it); `1` a sport's
+results moved without the half that is owed rising, the pair fell, or a corpus
+and an epoch entry do not pair up; `2` refused, nothing judged (the ref is not
+a commit, which is what a shallow clone or a root commit gives; git could not
+list or read the base; a table or corpus that does not load, including a tree
+whose `FOLD_MINOR` is missing or names other sports than `FOLD_EPOCH`; a run
+that compared no stream); `3` the guard itself crashed.
 
 ## What the guard cannot see
 
