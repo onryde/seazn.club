@@ -35,8 +35,11 @@ import {
 import {
   FOLD_OVERLAY_KEYS,
   OVERLAY_COLUMNS,
+  STATIC_COLUMN_DEFAULTS,
   compactOverlay,
   expandOverlay,
+  overlayDefaults,
+  overlayTransitions,
   type DenseOverlay,
   type OverlayColumn,
 } from "./golden-overlay.ts";
@@ -136,6 +139,82 @@ describe("compactOverlay / expandOverlay — change points, losslessly (pure)", 
     expect(() => expandOverlay(`{"outcome":[["1",null]]}`, 3, initial)).toThrow(/step 1/);
     expect(() => expandOverlay(`{"outcome":[[1.5,null]]}`, 3, initial)).toThrow(/step 1\.5/);
   });
+});
+
+describe("overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these)", () => {
+  const WIN = `{"kind":"win"}`;
+  const STOP = `{"eventId":"e-1"}`;
+  const SQ = `"#bbbbbbbbbbbbbbbb"`;
+
+  it("empty case first: the empty overlay sets and clears nothing", () => {
+    expect(overlayTransitions("{}").size).toBe(0);
+  });
+
+  it("a column left at its default says nothing; one that leaves it SETS; one that returns CLEARS; one that leaves twice and returns once does both", () => {
+    const only = (overlay: string, column: OverlayColumn) => overlayTransitions(overlay).get(column);
+    expect(only(`{"stoppage":[[1,${STOP}]]}`, "stoppage")).toEqual({ set: true, cleared: false });
+    expect(only(`{"stoppage":[[1,${STOP}],[3,null]]}`, "stoppage")).toEqual({ set: true, cleared: true });
+    expect(only(`{"expunged":[[1,true],[2,false]]}`, "expunged")).toEqual({ set: true, cleared: true });
+    expect(only(`{"settlement":[[2,{"winner":"H"}],[3,null],[4,{"winner":"A"}]]}`, "settlement")).toEqual({ set: true, cleared: true });
+    expect(only(`{"levelWithdrawal":[[2,{"winner":"H"}]]}`, "levelWithdrawal")).toEqual({ set: true, cleared: false });
+    // the outcome column is a column like the rest: a decided match set it, a void reopening it cleared it
+    expect(only(`{"outcome":[[2,${WIN}],[3,null]]}`, "outcome")).toEqual({ set: true, cleared: true });
+    // a column the overlay does not hold has no entry (no phantom 'cleared')
+    expect(overlayTransitions(`{"stoppage":[[1,${STOP}]]}`).has("expunged")).toBe(false);
+  });
+
+  it("a point at the default BEFORE the column ever left it is not a clear (the recorder never writes one; a hand-edited overlay must not read as one)", () => {
+    expect(overlayTransitions(`{"stoppage":[[1,null]]}`).get("stoppage")).toEqual({ set: false, cleared: false });
+  });
+
+  it("squads: any change point is a SET; a clear cannot be read from the stream alone (its default is the digest of the team sheets), so it is never claimed", () => {
+    expect(overlayTransitions(`{"squads":[[2,${SQ}]]}`).get("squads")).toEqual({ set: true, cleared: false });
+    // even a point that goes back to a digest the stream saw earlier stays a SET-only column
+    expect(overlayTransitions(`{"squads":[[2,${SQ}],[5,"#aaaaaaaaaaaaaaaa"]]}`).get("squads")).toEqual({ set: true, cleared: false });
+  });
+
+  it("refuses a malformed overlay by name rather than reading it as 'nothing happened'", () => {
+    expect(() => overlayTransitions("[1]")).toThrow(/object/);
+    expect(() => overlayTransitions(`{"bogus":[[1,null]]}`)).toThrow(/unknown column "bogus"/);
+    expect(() => overlayTransitions(`{"stoppage":{"1":null}}`)).toThrow(/array/);
+    expect(() => overlayTransitions(`{"stoppage":[[1]]}`)).toThrow(/malformed pair/);
+  });
+
+  it("the static defaults are the kernel defaults overlayDefaults writes (one authority), for every column but the squads", () => {
+    const dflt = overlayDefaults(linesOf(builtinModules[0]!, rawOf(builtinModules[0]!)), textDigest);
+    const statics = Object.entries(STATIC_COLUMN_DEFAULTS);
+    expect(statics.map(([c]) => c).sort(), "every column but squads has a static default").toEqual(OVERLAY_COLUMNS.filter((c) => c !== "squads").sort());
+    for (const [column, value] of statics) expect(dflt[column as OverlayColumn], column).toBe(value);
+  });
+
+  it("over the committed corpora: every column a stream records is read (swept, counted), and the transitions agree with expandOverlay's dense form", () => {
+    let streams = 0;
+    let columns = 0;
+    let withClear = 0;
+    forEachSport(({ module, key }) => {
+      for (const stream of readCorpus(key).streams) {
+        streams++;
+        const cfg = module.configSchema.parse(readCorpus(key).configs[stream.config]);
+        const initial = overlayDefaults(stream.lineups ?? defaultLineupPair(resolvePositions(module, cfg)), textDigest);
+        const dense = expandOverlay(stream.overlay!, stream.events.length, initial);
+        const seen = overlayTransitions(stream.overlay!);
+        for (const column of OVERLAY_COLUMNS) {
+          const moved = dense[column].some((v) => v !== initial[column]);
+          expect(seen.get(column)?.set ?? false, `${key} ${stream.config}#${stream.seed} ${column} set`).toBe(moved);
+          if (column === "squads") continue;
+          // cleared: the column left its default and was back at it at a LATER step
+          const first = dense[column].findIndex((v) => v !== initial[column]);
+          const back = first >= 0 && dense[column].slice(first).some((v) => v === initial[column]);
+          expect(seen.get(column)?.cleared ?? false, `${key} ${stream.config}#${stream.seed} ${column} cleared`).toBe(back);
+          if (back) withClear++;
+          if (seen.has(column)) columns++;
+        }
+      }
+    });
+    expect(streams).toBeGreaterThan(300);
+    expect(columns).toBeGreaterThan(300);
+    expect(withClear, "streams that return a column to its default: an undo, a resume").toBeGreaterThan(10);
+  }, 30_000);
 });
 
 describe("the fold result's keys are all recorded (an inert-seam guard: a new kernel fact must be recorded or named)", () => {

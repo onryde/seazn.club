@@ -66,18 +66,22 @@ export function effectiveFacts(module: AnySportModule, folded: KernelFold): { ou
   return { outcome: outcomeOf(module, folded), summary: summaryOf(module, folded) };
 }
 
-/** The kernel default of every column at step -1: no outcome, no stoppage, no settlement, not expunged, no level withdrawal,
- *  no decider owed, and the squads as the team sheets declared them. */
+/** The kernel default of every column whose default does NOT depend on the team sheets, as the recorded JSON text: no outcome,
+ *  no stoppage, no settlement, not expunged, no level withdrawal, no decider owed. The one authority: `overlayDefaults` spreads
+ *  it, and a reader that holds only a stream's `overlay` (the golden floor) judges a change point against it. `squads` is the
+ *  one column left out, because its default is the digest of the team sheets (`initSquads(lineups)`). */
+export const STATIC_COLUMN_DEFAULTS = {
+  outcome: "null",
+  stoppage: "null",
+  settlement: "null",
+  expunged: "false",
+  levelWithdrawal: "null",
+  decider: "false",
+} as const satisfies Partial<Record<OverlayColumn, string>>;
+
+/** The kernel default of every column at step -1: `STATIC_COLUMN_DEFAULTS`, and the squads as the team sheets declared them. */
 export function overlayDefaults(lineups: LineupPair, digest: Digest): Record<OverlayColumn, string> {
-  return {
-    outcome: "null",
-    stoppage: "null",
-    settlement: "null",
-    expunged: "false",
-    levelWithdrawal: "null",
-    decider: "false",
-    squads: json(digest(json(initSquads(lineups)))),
-  };
+  return { ...STATIC_COLUMN_DEFAULTS, squads: json(digest(json(initSquads(lineups)))) };
 }
 
 /** The dense overlay of a ledger's prefix folds. */
@@ -164,6 +168,54 @@ export function expandOverlay(overlay: string, steps: number, initial: Readonly<
     }
     for (; next < steps; next++) values.push(current);
     out[column] = values;
+  }
+  return out;
+}
+
+/** What a recorded overlay says one column DID: it left its kernel default at some point (`set`) and was back at it at a later
+ *  point (`cleared`). */
+export interface ColumnTransitions {
+  readonly set: boolean;
+  readonly cleared: boolean;
+}
+
+/** The transitions of every column a recorded overlay holds (a column with no change point has no entry), read from the change
+ *  points alone, with no fold and no digest function: the golden floor reads a corpus it cannot fold.
+ *
+ *  `set`: some change point is not the column's default. `cleared`: a change point is the default AFTER the column left it, so a
+ *  point at the default before the column ever left it (which the recorder never writes) is not a clear. `squads` is the one
+ *  column whose default is not static (the digest of the team sheets): any change point is a `set`, and a `cleared` is never
+ *  claimed, because it cannot be read from the stream alone. A malformed overlay is refused by name, never read as "no change". */
+export function overlayTransitions(overlay: string): Map<OverlayColumn, ColumnTransitions> {
+  const parsed: unknown = JSON.parse(overlay);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`overlay must be a JSON object of columns, got ${overlay.slice(0, 40)}`);
+  }
+  const record = parsed as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!(OVERLAY_COLUMNS as readonly string[]).includes(key)) throw new Error(`overlay names unknown column "${key}"`);
+  }
+  const out = new Map<OverlayColumn, ColumnTransitions>();
+  for (const column of OVERLAY_COLUMNS) {
+    const pairs = record[column];
+    if (pairs === undefined) continue;
+    if (!Array.isArray(pairs)) throw new Error(`overlay column "${column}" must be an array of [step, value] pairs`);
+    const dflt: string | undefined = column === "squads" ? undefined : STATIC_COLUMN_DEFAULTS[column];
+    let set = false;
+    let cleared = false;
+    let away = false;
+    for (const pair of pairs as unknown[]) {
+      if (!Array.isArray(pair) || pair.length !== 2) throw new Error(`overlay column "${column}" holds a malformed pair: ${JSON.stringify(pair)}`);
+      const atDefault = dflt !== undefined && json((pair as [unknown, unknown])[1]) === dflt;
+      if (!atDefault) {
+        set = true;
+        away = true;
+      } else if (away) {
+        cleared = true;
+        away = false;
+      }
+    }
+    out.set(column, { set, cleared });
   }
   return out;
 }
