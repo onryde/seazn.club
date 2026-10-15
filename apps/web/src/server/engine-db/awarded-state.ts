@@ -57,10 +57,14 @@ export class AwardFoldMismatch extends Error {
  * `displayedSets`, …), and the state is the walkover's in every detail (its phase, its method). The fold's decision
  * must BE the stored award, or the score would describe a different result: that is refused, not written.
  *
- * `forfeitAward` (W2c Task 16b): the award the fixture's stage points rule offers (`stageForfeitAward`). An award no event
- * records sits in a bracket stage, which holds no points rule (RULE_NOT_SETTABLE `points`), so no door writes one with an
- * award today - the input is carried so that the row is still the fold the table's rule would credit if one ever did
- * (`__tests__/forfeit-award-callers.test.ts` reaches it with a rule written by raw SQL).
+ * `forfeitAward` (W2c Task 16b) - a DOCUMENTED GUARD, not a live path. It is the award the fixture's stage points rule offers
+ * (`stageForfeitAward`). An award no event records sits in a bracket stage, which holds no points rule (RULE_NOT_SETTABLE
+ * `points`, `refuseStagePoints`), so no door writes one with an award today: the only way to reach this argument is a rule
+ * written with raw SQL (`__tests__/forfeit-award-callers.test.ts` does exactly that, and nothing else does). It is carried
+ * anyway because every OTHER fold of a ledger offers the award, and a fold that does not is the defect X-WO-1 B closes: this
+ * row's stored score would then differ from the number the table's rule credits (`applyPointsRule`) the day a door lets one
+ * stage hold both an event-less award and a rule. Delete it only together with a refusal that proves no stage can hold both,
+ * and the test that reaches it (`loadAward` reads it, `writeAwardedMatchState` passes it on).
  */
 export function awardedMatchState(
   module: AnySportModule,

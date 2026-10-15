@@ -172,7 +172,10 @@ export async function putStageRules(
     // W2c Task 15 fix round 1 (I-1): what every unstarted match of the stage resolves to before this save - read under the
     // `division-config:` EXCLUSIVE lock above, so no first event freezes between it and the bump after both arms. W2c Task 16b:
     // the points arm joins it, because a stage points rule's walkover award is part of what a match resolves to
-    // (`resolvedNow`): a pad open on an unstarted match must not keep a walkover credit the table no longer pays.
+    // (`resolvedNow`), and the version is meant to be an honest reading of that. It protects no forfeit: the pad never sends
+    // `core.forfeit` and the console's forfeit POST carries no `rulesVersion`, so neither door is refused by this bump. What
+    // it does is keep the PAD's own version true after a pre-kickoff award edit - a pad open on an unstarted match is asked
+    // to reload (409 FIXTURE_RULES_CHANGED) rather than hold a version that no longer describes the match.
     const rulesBefore = input.rules !== undefined || points !== undefined ? await unfrozenRules(tx, { stageId }) : null;
 
     if (input.rules !== undefined) {
