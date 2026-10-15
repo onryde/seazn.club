@@ -125,10 +125,10 @@ The **major is the one the server gates on** (batch 1f): native clients send
 theirs, and the server refuses one below its own for the fixture's sport, so a
 major bump **locks out every older phone of that sport** until the app updates.
 The **minor is informational**: nothing refuses a phone for it and no app
-update is needed; it records that output only the server computes moved (for
-example a module's default `pointsMap`, which changes the standings points and
-not one state, outcome or summary). Anything ambiguous is a major. Use it
-accordingly: a deltas-only change must not be paid with a major bump.
+update is needed; it records that output only the server computes moved (the
+shapes that really are deltas-only are listed below). Anything ambiguous is a
+major. A deltas-only change need not be paid with a major bump, unless the same
+PR owes a manual major.
 
 The pair only goes up, lexicographically. A major that rose may leave the minor
 anywhere (resetting it to 0 is the usual thing); a major that fell, or a minor
@@ -150,19 +150,35 @@ commit's own parent it is red, which is the point of the second commit.
 A stream's **input** is its raw config object (the one it names in the corpus's
 `configs`), its events and its lineups, and changing any of the three counts as
 re-recording the stream, which owes a **major**. The config is in that set on
-purpose: after a module's default changes (a `cap` of 30 becoming 31),
-`REBASELINE_GOLDEN=1` cannot take it (the replay refuses, the recorded set
-scores no longer exist), and the way to a green suite is to write the old value
-(`cap: 30`) into every recorded config that lacked it. Every replay then folds
-to the same result and not one event or output moves, but a phone that still
-holds the old default plays a different rule. The guard sees the edited config
-and demands the **major**; a minor bump does not launder it.
+purpose, because **every module embeds its config in its state**: changing an
+existing default VALUE (a `cap` of 30 becoming 31, a `pointsMap` of `2/0`
+becoming `3/0`) moves states, and so is a **major**, never a minor.
+`REBASELINE_GOLDEN=1` cannot land it: it splices the recorded config back in, and
+the golden replay reds on the recorded config (`cfg.pointsMap.*[0]: recorded 2,
+replayed 3`; for a `cap`, the recorded set scores no longer exist). The way to a
+green suite is to write the old value (`cap: 30`) into every recorded config that
+lacked it. Every replay then folds to the same result and not one event or output
+moves, but a phone that still holds the old default plays a different rule. The
+guard sees the edited config and demands the **major**; a minor bump does not
+launder it.
 
-The opposite case is a rule change only the server sees. A module's default
-`pointsMap` changing (badminton's `2/0` becoming `3/0`) leaves every recorded
-config alone, `REBASELINE_GOLDEN=1` rewrites only the `deltas` of the streams
-that decided a match, every state, outcome and summary comes out byte for byte
-the same, and the guard asks for a **minor**.
+What really is deltas-only, each shape walked through the real tooling
+(re-baseline, then the plain golden replay green, then the guard):
+
+- **Code of `standingsDelta` or `supportsDraws`**, which only the server calls
+  (a phone must not compute or render them: `src/sport/fold-epoch.ts` says so,
+  and if one ever does, D34 is to be revisited).
+- **Credit on a metric that is not displayed**, for example the set kernels'
+  `points_won` credited by a forfeit (`kernel.ts`, forfeit credit): the standings
+  deltas move, no state, outcome or summary does. A credit the summary reads
+  (football's `goalCredit` reaches an award's summary) is a **major**.
+- **A default that only ADDS a key**, for example a new `"2-1"` entry in a
+  `pointsMap` default: the recorded config is a subset of the replayed one, so
+  the replay stays green, and only the `deltas` of the streams that score a
+  `2-1` result change.
+
+A division's own config, set by an organiser, is input and never owes a version
+change; only a module's code and its defaults do.
 
 To check before pushing (from any directory; it also reads uncommitted work, so
 re-baseline into a clean tree, bump, and run it):
@@ -240,6 +256,13 @@ hand in the same PR; no tool will tell you):
 - **Unexercised branches** of a module: a field no stream writes is invisible to
   a byte-exact comparison (see below), so a rule that fires only there moves
   nothing.
+- **Mid-match summaries.** The corpus records `module.summary(finalState)` only
+  (`golden.ts` `recomputeStream`), but the pad recomputes the summary live after
+  every event. A change to what a summary shows before the match is decided moves
+  no golden, and a phone renders it: a manual **major**.
+- **Player-statistics folds** (`src/stats/stats.ts`, in the phone closure). No
+  corpus records them, and whether a phone renders them is unverified: a change
+  to how they fold owes a manual **major**.
 
 Which `core.*` events and outcome kinds each corpus holds is no longer a gap to
 read off a table: it is a floor a test enforces (next section). Holding an event

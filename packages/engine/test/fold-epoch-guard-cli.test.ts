@@ -161,7 +161,9 @@ function withoutMinor(text: string): string {
   if (from < 0 || end < 0) throw new Error("the table declares no FOLD_MINOR to remove");
   return text.slice(0, from) + text.slice(end + 3);
 }
-/** What a re-rank of the standings does to one sport: the first stream's recorded standings deltas are different, every state, outcome and summary the same. */
+/** A deltas-only change written by hand into a scratch corpus: the first stream's recorded standings deltas are different, every state, outcome
+ *  and summary the same. It stands in for the shapes that really are deltas-only (GOLDEN-POLICY: `standingsDelta` code, credit on a metric that
+ *  is not displayed, a default that only adds a key); a changed default VALUE is NOT one of them, it moves states and is a major. */
 const moveDeltas = (repo: Repo, sport: string): void => editCorpus(repo, sport, (c) => { c.streams[0]!.deltas = `${String(c.streams[0]!.deltas)} `; });
 function editTable(repo: Repo, fn: (text: string) => string): void {
   const file = join(repo.eng, EPOCH_FILE);

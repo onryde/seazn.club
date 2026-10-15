@@ -7,6 +7,9 @@
 //     (batch 1f, D31). This is the number the server's gate compares.
 //   MINOR (FOLD_MINOR, foldMinorOf): only what the SERVER computes moved (a stream's standings deltas, with its states, outcome and summary
 //     byte for byte the same). Informational: no app update is required, and nothing refuses a phone for it.
+//     This is a CONTRACT, not something the code enforces: a phone must not compute or render `standingsDelta`, `supportsDraws` or any credit
+//     on a metric the summary does not show (`standingsDelta` is in the `./sport` closure, so no type stops it). If a phone ever does, a
+//     minor no longer means "no app update"; D34 (docs/superpowers/specs/2026-10-13-engine-split-design.md) must be revisited first.
 //
 // The pair only goes up, lexicographically: a major that rose may reset the minor to 0. Anything ambiguous is a major.
 //
