@@ -76,6 +76,13 @@ export const CAMERA_EVIDENCE_MAX_POLLS = (() => {
   return polls;
 })();
 
+/** Re-claims after the camera comes up, before the server's own presence check sees it publishing (RealtimeKit's presence
+ *  lags the join): a seat refused for want of a camera is claimed again SEAT_RETRIES times, SEAT_RETRY_MS apart. Declared
+ *  here, beside the other bounds of the check-in screen's asking, because the server's per-seat ask limit
+ *  (seat-ask-limit.ts) must sit above what this screen legitimately sends, and a test derives it from these. */
+export const SEAT_RETRY_MS = 1_500;
+export const SEAT_RETRIES = 3;
+
 export type RoomGame = {
   gameId: string;
   /** The ledger: every move Lichess accepted, UCI. */

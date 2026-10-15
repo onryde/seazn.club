@@ -27,6 +27,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { CAMERA_FAULT_PING_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { takeSeatAsk } from "@/server/external-play/seat-ask-limit";
 import { log } from "@/server/logger";
 import { routes } from "@/lib/routes";
 import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlayLobby } from "@/lib/realtime";
@@ -536,6 +537,9 @@ export async function claimRoomSeat(
 ): Promise<RoomClaim> {
   const now = deps.now ?? new Date();
   let r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
+  // D21-fix-4 (review I2): this player's ask, counted - AFTER identity (a stranger is the 404 and leaves no row) and BEFORE
+  // anything that can reach the vendor or write. Past the limit: 429, and nothing below runs.
+  await takeSeatAsk({ fixtureId, personId: r.player.personId, route: "seat" }, { at: deps.now });
   await resetStaleBridge(r.f);
   // Every read of the board in the seat call tells a re-pair (m2): an Unpair can land between any two of them.
   r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
@@ -583,6 +587,9 @@ export type CameraWire = CameraToken;
  */
 export async function requestRoomCamera(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<CameraWire> {
   const r = await resolveRoom(identity, fixtureId);
+  // D21-fix-4 (review I2): every ask can cost the platform's call budget (a token refresh, a mint), so each is counted per
+  // seat before it is made. A deferred optional camera asks on a 2/4/8/16/30 s back-off, well inside the limit.
+  await takeSeatAsk({ fixtureId, personId: r.player.personId, route: "camera" }, { at: deps.now });
   return (deps.cameraToken ?? cameraTokenForSeat)({ fixtureId, personId: r.player.personId }, { now: deps.now });
 }
 

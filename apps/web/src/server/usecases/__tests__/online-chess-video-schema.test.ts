@@ -260,6 +260,30 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     })).toMatchObject({ accepted: false, code: "23505" });
   });
 
+  it("V447: a seat's ask count is one row per (fixture, person, door); an ask count below 1 and a third door are refused; the pair is accepted", async () => {
+    const insert = (route: string, asks: number, at = personId) => (tx: typeof sql) => tx`
+      insert into fixture_seat_asks (fixture_id, person_id, route, window_started_at, asks)
+      values (${fixtureId}, ${at}, ${route}, now(), ${asks})`;
+    expect(await rolledBack(insert("seat", 1)), "the positive pair: a first ask on each door").toEqual({ accepted: true });
+    expect(await rolledBack(insert("camera", 1))).toEqual({ accepted: true });
+    expect(await rolledBack(insert("seat", 0)), "an ask count below 1 is no row").toMatchObject({ accepted: false, code: CHECK_VIOLATION });
+    expect(await rolledBack(insert("arbiter", 1)), "the doors are a closed set: a third is a migration too").toMatchObject({
+      accepted: false,
+      code: CHECK_VIOLATION,
+    });
+    expect(
+      await rolledBack(async (tx) => {
+        await insert("seat", 1)(tx);
+        await insert("seat", 2)(tx);
+      }),
+      "one row per seat per door",
+    ).toMatchObject({ accepted: false, code: "23505" });
+    expect(await rolledBack(insert("seat", 1, randomUUID())), "and the person is a person on file").toMatchObject({
+      accepted: false,
+      code: FK_VIOLATION,
+    });
+  });
+
   it("a participant cannot exist without a meeting", async () => {
     // Anti-vacuity: the fixture this case uses is REAL and is not the one that
     // has a meeting — otherwise the rejection below would prove nothing.
@@ -380,11 +404,11 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
   // scripts/rls-exempt.ts. That name is a claim that no app_user connection can reach the table. These cases make the
   // claim the DATABASE's: a sealed table has no policy AND no grant, so an app_user query on it is refused (42501),
   // never silently empty.
-  describe("sealed tables (V439, V442): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
+  describe("sealed tables (V439, V442, V446, V447): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
     /** Typed from the migrations' own words (V439: "Sealed like V410's tables … no app_user policy"; stage_round_opens
      *  and V442's guard faults enable + force with no policy), never read from the catalogue. */
     const SEALED = [
-      "fixture_play_flags", "fixture_video_guard_faults", "fixture_video_meetings",
+      "fixture_play_flags", "fixture_seat_asks", "fixture_video_guard_faults", "fixture_video_meetings",
       "fixture_video_participants", "online_chess_audit", "realtimekit_call_budget", "stage_round_opens",
     ];
     /** The four with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). */

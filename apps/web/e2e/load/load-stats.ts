@@ -18,9 +18,17 @@ export const LOAD_LIMITS = {
   dbConnectionBudget: 60,
 } as const;
 
-/** The check-in screen's bounds as the load test models a player (room-snapshot.ts CAMERA_EVIDENCE_MAX_POLLS; room-shell.tsx
- *  SEAT_RETRIES is not exported, so only the first is pinned - load-stats.test.ts). */
-export const CLIENT_SEAT = { maxPolls: 5, seatRetries: 3 } as const;
+/** The check-in screen's cadence as the load test models a player, every number COPIED from the room because a Playwright
+ *  file cannot import it (a client module, `server-only` neighbours) and PINNED to it, one by one, in load-stats.test.ts:
+ *  maxPolls = room-snapshot.ts CAMERA_EVIDENCE_MAX_POLLS; seatRetries / seatRetryMs = SEAT_RETRIES / SEAT_RETRY_MS (a seat
+ *  refused for want of a camera is re-claimed that many times, that far apart, once the camera is up); backoffMs =
+ *  CAMERA_EVIDENCE_BACKOFF_MS (the wait between re-asks of a `camera_starting` answer, held at its last step). A copy
+ *  nothing pins would let the room's cadence move and the load test keep measuring yesterday's player (D21-fix-4, m4). */
+export const CLIENT_SEAT = { maxPolls: 5, seatRetries: 3, seatRetryMs: 1_500, backoffMs: [1_000, 2_000, 4_000, 8_000] } as const;
+
+/** How often the load test's player reads the room: use-room.ts LIVE_POLL_MS while a game is live with no realtime push
+ *  (the polling fallback, the worst case for reads) and IDLE_POLL_MS otherwise. Copied, pinned in load-stats.test.ts. */
+export const CLIENT_POLL = { liveMs: 3_000, idleMs: 15_000 } as const;
 
 /** D21-fix-3: how an optional camera seated with no token (the budget was spent) asks again - use-room.ts
  *  CAMERA_RETRY_BASE_MS / CAMERA_RETRY_MAX_MS, the owner's "2/4/8/16 s, capped at about 30 s". The same copy-and-pin. */

@@ -63,15 +63,11 @@ import { HANDED } from "./camera-test";
 import { useCameraTest } from "./use-camera-test";
 import { isHandoverActive } from "./camera-handover";
 import { useCameraHandover } from "./use-camera-handover";
-import { CAMERA_EVIDENCE_MAX_POLLS, cameraEvidenceDelayMs, type RoomGame, type RoomSnapshot } from "./room-snapshot";
+import { CAMERA_EVIDENCE_MAX_POLLS, SEAT_RETRIES, SEAT_RETRY_MS, cameraEvidenceDelayMs, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
 const Board = dynamic(() => import("./board"), { ssr: false });
 
-/** Re-claims after the camera comes up, before the server's own presence
- *  check sees it publishing (RealtimeKit's presence lags the join). */
-const SEAT_RETRY_MS = 1_500;
-const SEAT_RETRIES = 3;
 
 /** The pair, side by side above the board: the result state (D24 keeps it as it was). */
 function Clocks({

@@ -5,9 +5,15 @@
 // half-open window as closed, or a percentile that rounded the wrong way, would put a wrong number in a report that
 // decides whether the platform's vendor budget holds.
 import { describe, expect, it } from "vitest";
-import { CLIENT_CAMERA_RETRY, CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitMs, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "../../../../e2e/load/load-stats";
-import { CAMERA_EVIDENCE_MAX_POLLS } from "../../../components/public-site/match-room/room-snapshot";
-import { CAMERA_RETRY_BASE_MS, CAMERA_RETRY_MAX_MS, cameraRetryDelayMs } from "../../../components/public-site/match-room/use-room";
+import { CLIENT_CAMERA_RETRY, CLIENT_POLL, CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitMs, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "../../../../e2e/load/load-stats";
+import {
+  CAMERA_EVIDENCE_BACKOFF_MS,
+  CAMERA_EVIDENCE_MAX_POLLS,
+  SEAT_RETRIES,
+  SEAT_RETRY_MS,
+  cameraEvidenceDelayMs,
+} from "../../../components/public-site/match-room/room-snapshot";
+import { CAMERA_RETRY_BASE_MS, CAMERA_RETRY_MAX_MS, IDLE_POLL_MS, LIVE_POLL_MS, cameraRetryDelayMs } from "../../../components/public-site/match-room/use-room";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S, RTK_BUDGET_WINDOW_MS, RTK_CALLS_PER_WINDOW, RTK_VENDOR_LIMIT_PER_WINDOW } from "../video/budget";
 
 describe("percentile (nearest-rank)", () => {
@@ -159,6 +165,25 @@ describe("CLIENT_SEAT: the player the load test models stops polling where the r
   it("the poll bound is the room's own CAMERA_EVIDENCE_MAX_POLLS (a runner cannot import it into a Playwright file, so the copy is pinned here)", () => {
     expect(CLIENT_SEAT.maxPolls).toBe(CAMERA_EVIDENCE_MAX_POLLS);
     expect(CLIENT_SEAT.maxPolls, "anti-vacuity: a real bound").toBeGreaterThan(0);
+  });
+  it("D21-fix-4 (m4): the re-claim count and spacing, and the back-off the player waits on, are the room's (room-snapshot.ts) - every copy the load test makes of the room's cadence", () => {
+    expect(CLIENT_SEAT.seatRetries).toBe(SEAT_RETRIES);
+    expect(CLIENT_SEAT.seatRetryMs).toBe(SEAT_RETRY_MS);
+    expect(CLIENT_SEAT.backoffMs, "the schedule, step for step").toEqual([...CAMERA_EVIDENCE_BACKOFF_MS]);
+    // And the wait the player actually takes before the n-th re-ask (the load test indexes the array; the room asks the function).
+    let checked = 0;
+    for (let reads = 1; reads <= CLIENT_SEAT.backoffMs.length + 3; reads += 1) {
+      expect(CLIENT_SEAT.backoffMs[Math.min(reads, CLIENT_SEAT.backoffMs.length) - 1], `after read ${reads}`).toBe(cameraEvidenceDelayMs(reads));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: past the end of the table too (the held last step)").toBe(CLIENT_SEAT.backoffMs.length + 3);
+  });
+});
+
+describe("CLIENT_POLL: the load test's player reads the room at the room's own cadence (D21-fix-4, m4)", () => {
+  it("live and idle poll intervals are use-room.ts's LIVE_POLL_MS / IDLE_POLL_MS", () => {
+    expect(CLIENT_POLL).toEqual({ liveMs: LIVE_POLL_MS, idleMs: IDLE_POLL_MS });
+    expect(CLIENT_POLL.liveMs, "premise: the two cadences differ (else swapping them is invisible)").toBeLessThan(CLIENT_POLL.idleMs);
   });
 });
 

@@ -1913,6 +1913,56 @@ test("T17B fix 2, D23-fix: a camera that FAILS ends the cover at once — the wo
   }
 });
 
+test("T17B fix 2, D21-fix-4 (I1): what the REAL browser puts on the wire - the first seat POST holds nothing and sends no body; the next names the participant the first answer handed over", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, {
+    names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
+    cameraPolicy: "required",
+  });
+  const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+  try {
+    const ctx = await cold(camBrowser);
+    await ctx.grantPermissions(["camera"]);
+    const p = await openRoom(ctx, room, room.white.token);
+    const cta = p.getByTestId("room-checkin-cta");
+    await p.getByTestId("room-checkin-test-cta").click();
+    await expect(cta, "the preview painted a frame: Check in opens").toBeEnabled({ timeout: 10_000 });
+    // Every seat answer is composed here as camera_starting WITH a token (no browser can make a RealtimeKit peer), so the
+    // room keeps asking on the schedule's first step (1 s). The bodies are read off the request the browser really made:
+    // the e2e's other composed answers never looked at what was SENT, which is how this hop went unpinned (review I1).
+    const sent: (string | null)[] = [];
+    await p.route(
+      (u) => /\/external-play\/room$/.test(u.pathname),
+      async (route: Route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        sent.push(route.request().postData());
+        const read = await route.fetch({ method: "GET" });
+        const snapshot = ((await read.json()) as { data: unknown }).data;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: { participantId: "e2e-part", authToken: "e2e-rtk" } }, create: null },
+            requestId: "e2e",
+          }),
+        });
+      },
+    );
+    await cta.click();
+    await expect.poll(() => sent.length, { message: "the room re-asks on its own back-off", timeout: 20_000 }).toBeGreaterThanOrEqual(2);
+    expect(sent[0], "the first claim: the room held nothing, so no body at all").toBeNull();
+    expect(JSON.parse(sent[1]!), "the re-ask names the participant the first answer handed over").toEqual({ heldParticipantId: "e2e-part" });
+    // Drop the route first: closing the context under a handler's route.fetch in flight ends it with "Response has been disposed".
+    await p.unrouteAll({ behavior: "ignoreErrors" });
+    await ctx.close();
+    // The SDK refuses the opaque token composed above: expected here, and only here.
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
+  } finally {
+    await camBrowser.close();
+  }
+});
+
 test("T17B fix 2, D23-fix-2: a seat claim that FAILS ends the cover at once — the words are not left standing for a minute with the button enabled", async ({ page, browser }) => {
   test.setTimeout(120_000);
   const room = await seedMatchRoom(page.request, {
@@ -2687,9 +2737,12 @@ test("T17B fix 2, D21-fix-3 (owner decision): an optional camera seated with NO 
     },
   );
   const p = await openRoom(ctx, room, room.white.token);
+  // A RELOAD is a `load`. Not `framenavigated`: the app router's own first-mount `history.replaceState` (same URL) is a
+  // same-document navigation that lands after `openRoom` returns on a loaded machine - 8 ms after this listener, before
+  // any click or ask - and counted as a reload here (D21-fix-4: the whole-file run was red on exactly that, 3 of 3).
   let navigations = 0;
-  p.on("framenavigated", (f) => {
-    if (f === p.mainFrame()) navigations += 1;
+  p.on("load", () => {
+    navigations += 1;
   });
   const connecting = p.getByTestId("room-own-tile-connecting");
   await expect(connecting, "premise: before the seat, nothing says 'connecting'").toHaveCount(0);

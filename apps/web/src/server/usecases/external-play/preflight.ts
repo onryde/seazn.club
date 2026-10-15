@@ -422,11 +422,13 @@ async function judgeSeat(a: SeatAsk, mine: SeatRead, meetingId: string, now: Dat
        where fixture_id = ${mine.fixtureId} and participant_id = ${mine.participantId}`;
     return { seated: true };
   }
-  // `last_publisher_seen_at` is EVIDENCE — when this participant was last
-  // verified live — and never a pass: nothing seats on it (every claim above
-  // re-asks the meeting) and nothing clears it. Clearing it on a loss (the
-  // brief's design) made a repeat claim with the camera still off answer
-  // camera_required, telling a player who HAD passed that they never had.
+  // `last_publisher_seen_at` is EVIDENCE — when this participant was last verified live — and a player's own claim never
+  // seats on it: every such claim re-asks the meeting (or the cache of the last read, which keeps only the two not-yet
+  // verdicts, never a pass). The ONE reader that seats on it is T9's re-verify (`recheck`, top of this function): inside
+  // SEAT_RECHECK_TRUST_MS of the stamp, and with no later read outstanding (`seat_reads = 0`), it stands without a vendor
+  // call (D21-fix-3, F2; the cost is stated at SEAT_RECHECK_TRUST_MS). Nothing clears it. Clearing it on a loss (the
+  // brief's design) made a repeat claim with the camera still off answer camera_required, telling a player who HAD passed
+  // that they never had.
   const hadPassed = prior?.last_publisher_seen_at != null;
   return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required" };
 }

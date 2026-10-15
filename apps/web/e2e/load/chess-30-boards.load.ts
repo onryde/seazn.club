@@ -10,7 +10,7 @@
  *
  * WHAT IT DRIVES. The real server (a production build, started as docs/runbooks/e2e-local.md says) over HTTP, as the
  * players' browsers would: each player claims the seat on their personal link, joins the (fixture) meeting when told
- * to, re-asks on the room's own back-off (1, 2, 4, 8 s - typed here from the ruling, not read from the code), polls
+ * to, re-asks on the room's own back-off (1, 2, 4, 8 s), polls
  * the room every 3 s while the game is live (use-room.ts LIVE_POLL_MS - the polling fallback, i.e. no realtime push:
  * the worst case for reads), and moves when it is their turn after a think. Both vendors are the repo's own fixture
  * servers (Lichess :4321, RealtimeKit :4322), started here, which record every call with its time. Players are Node
@@ -58,6 +58,19 @@
  * a game and a result, every player a seat, no 5xx, no wrong refusal, calls under the ceiling when metered, connections
  * under the budget, every meeting ended and its evidence settled); the latency bounds are generous smoke guards for a stall
  * a player would see, not service-level objectives. The database connection peak counts the runner's own connections too.
+ *
+ * THE DEFAULT RUN (30 Required boards, a 60 s arrival, metered) IS EXPECTED RED AT HEAD, and the red is the finding, not a
+ * fault of the run or of the server. The platform's call budget (burst 300 + 2 a second) carries about 24 boards a minute
+ * clean (D21-fix-3 report, runs B, C and E); 60 players asking inside a minute are more than it holds, so seats are deferred
+ * (`camera_starting`), players re-ask and re-press, and every board DOES get its game - but 195-290 s after both players were
+ * seated (seat p95 223-274 s against the 30 s target), past this run's own wait (GAME_WAIT_MS). So "every board got a game"
+ * fails (3 boards in run B, 6 in run E), and with a long wait the replay assertion can fail by the ONE sub-token refusal at
+ * the instant the bucket first empties (run C: a granularity artefact of the replay, 1 call of 1,237). The capacity answer is
+ * the owner's (the reserved create lane, the all-or-nothing read and the client re-claim net, all proposals in the
+ * D21-fix-3 report); do not "fix" this run by loosening an assertion or tuning the config. The runs that ARE expected green
+ * are LOAD_BOARDS=20 (run A: 486 calls in the busiest five minutes, 0 deferrals, seat p95 7.9 s, 0 stranded) and the mixed
+ * LOAD_POLICY_MIX=required:10,optional:10,off:10 (run D: 311 calls, 0 deferrals) - re-run those after a change to the seat
+ * path, the budget, the sweep or the room's cadence, and compare with these numbers.
  */
 import { test, expect } from "@playwright/test";
 import { Chess } from "chess.js";
@@ -68,7 +81,7 @@ import { matchRoomPathBySql, resultEventCountSql, forfeitEventCountSql } from ".
 import { seedOnlineRound, type RoundBoard, type RoundPlayer } from "../match-room-kit";
 import { startLichessFixtureServer, type LichessFixtureServer } from "../lichess-fixture-server";
 import { startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "../realtimekit-fixture-server";
-import { CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitMs, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "./load-stats";
+import { CLIENT_POLL, CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitMs, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "./load-stats";
 
 const num = (name: string, fallback: number): number => {
   const raw = process.env[name];
@@ -105,18 +118,19 @@ const EVIDENCE_SWEEP_EVERY_S = num("LOAD_EVIDENCE_SWEEP_EVERY_S", 20);
 const REPORTS_FINAL = num("LOAD_REPORTS_FINAL", 1) === 1;
 const REPORT = process.env.LOAD_REPORT ?? "test-results/load/chess-30-boards.json";
 
-/** The room's own cadence, typed from the code's declarations of it (use-room.ts LIVE_POLL_MS / IDLE_POLL_MS;
- *  room-shell.tsx SEAT_RETRY_MS) and the D21 ruling's back-off. */
-const LIVE_POLL_MS = 3_000;
-const IDLE_POLL_MS = 15_000;
-const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000] as const;
-/** The check-in screen's own limits (room-shell.tsx / room-snapshot.ts), typed here: a seat refused for want of a camera
- *  is re-claimed SEAT_RETRIES times, SEAT_RETRY_MS apart, once the camera is up; a `camera_starting` answer is re-asked
- *  on BACKOFF_MS at most MAX_POLLS times. Past either the screen stops and offers the check-in button, which a player
- *  presses again after PRESS_MS (the time to read a card and tap) - and that press is what `represses` counts.
- *  load-stats.test.ts pins MAX_POLLS to the code's CAMERA_EVIDENCE_MAX_POLLS. */
-const SEAT_RETRY_MS = 1_500;
-const SEAT_RETRIES = 3;
+/** The room's own cadence (use-room.ts LIVE_POLL_MS / IDLE_POLL_MS; room-snapshot.ts SEAT_RETRY_MS and the D21 ruling's
+ *  back-off), as load-stats.ts copies it and load-stats.test.ts PINS it to the room - a copy typed here would be a number
+ *  nothing checks. */
+const LIVE_POLL_MS = CLIENT_POLL.liveMs;
+const IDLE_POLL_MS = CLIENT_POLL.idleMs;
+const BACKOFF_MS = CLIENT_SEAT.backoffMs;
+/** The check-in screen's own limits (room-snapshot.ts), copied in load-stats.ts and pinned there to the room's: a seat
+ *  refused for want of a camera is re-claimed SEAT_RETRIES times, SEAT_RETRY_MS apart, once the camera is up; a
+ *  `camera_starting` answer is re-asked on BACKOFF_MS at most MAX_POLLS times. Past either the screen stops and offers the
+ *  check-in button, which a player presses again after PRESS_MS (the time to read a card and tap) - and that press is
+ *  what `represses` counts. */
+const SEAT_RETRY_MS = CLIENT_SEAT.seatRetryMs;
+const SEAT_RETRIES = CLIENT_SEAT.seatRetries;
 const MAX_POLLS = CLIENT_SEAT.maxPolls;
 const PRESS_MS: [number, number] = [3_000, 6_000];
 /** Metered: the server runs with REALTIMEKIT_METER_ANY_BASE=1, so the call budget acts on the fixture host (a deferral
