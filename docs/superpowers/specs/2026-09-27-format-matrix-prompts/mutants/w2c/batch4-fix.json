@@ -377,5 +377,20 @@
     "name": "on a COMPLETED division, racing a patch that names a masking field and a format field: both finish, no 40P01"
    }
   ]
+ },
+ {
+  "id": "b4-ex-patch-stale-property",
+  "file": "apps/web/src/server/api-v1/openapi.ts",
+  "find": "\"POST /competitions/{id}/exports/scorer-sheets\": { dateFrom: undefined, dateTo: undefined },",
+  "replace": "\"POST /competitions/{id}/exports/scorer-sheets\": { date: undefined, dateFrom: undefined, dateTo: undefined },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every property of a patch is load-bearing on its own"
+   }
+  ]
  }
 ]
