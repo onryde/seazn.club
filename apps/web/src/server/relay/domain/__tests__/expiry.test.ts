@@ -7,12 +7,12 @@ import { describe, expect, it } from "vitest";
 import { ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES } from "../../config";
 import { ACTIVE_STATES } from "../session";
 import { DEFAULT_LIMITS, deadlineOf, evaluate, runnerDeadlineOf, type Expiry } from "../expiry";
-import { RUNNER_NONE, RUNNER_STATES, type Runner, type RunnerState } from "../runner";
+import { CRASHES_NONE, RUNNER_NONE, RUNNER_STATES, type Runner, type RunnerState } from "../runner";
 import { decide, type Session } from "../session";
 
 const T0 = new Date("2026-09-14T10:00:00Z");
 const at = (s: number) => new Date(T0.getTime() + s * 1000);
-const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
 /** R2003 (owner ruling 2026-10-15, option A), typed as the oracle: the runner states that have NOT yet played in their
  *  attempt — the create in flight and the boot — keep the STALE_HEARTBEAT_SECONDS boot allowance. */
 const NOT_YET_PLAYED: readonly RunnerState[] = ["creating", "booting"];

@@ -3,7 +3,7 @@
 // mutant killers are recorded per edge in the PR table.
 import { describe, expect, it } from "vitest";
 import {
-  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
+  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
 } from "../../config";
 import { evaluate, type Expiry } from "../expiry";
 import {
@@ -12,7 +12,7 @@ import {
 } from "../session";
 import { DB_END_REASONS } from "../end-reason";
 import {
-  InvalidRunnerTransition, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TABLE, RUNNER_TRIGGER_TYPES, type Runner, type RunnerState, type RunnerTrigger,
+  CRASHES_NONE, InvalidRunnerTransition, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TABLE, RUNNER_TRIGGER_TYPES, type Runner, type RunnerState, type RunnerTrigger,
 } from "../runner";
 
 const T0 = new Date("2026-09-14T10:00:00Z");
@@ -270,7 +270,7 @@ describe("decide — legal edges", () => {
   // reason the command admits (the four DB reasons that are not the wall clock's) × the three stop shapes: passthrough
   // ending, composed with no Machine (completes now), composed with a playing Machine (the runner's ending signal).
   it("§5.3: stop with EACH reason sets endReason to it — passthrough, composed with no Machine, composed through the runner", () => {
-    const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+    const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
     const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration");
     expect(reasons).toEqual(["stopped", "operator_stopped", "auto_stopped", "phone_lost"]);
     const shapes: [string, Session, SessionState][] = [
@@ -297,7 +297,7 @@ describe("decide — legal edges", () => {
   it("§5.3 through the RUNNER: every runner state whose session_stop cell signals the session carries EACH stop reason into endReason — the states derived from RUNNER_TABLE", () => {
     const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration");
     const runnerAt = (state: RunnerState): Runner =>
-      ({ state, attempt: 1, name: "relay-s1-r1", machineId: state === "creating" ? null : "m1", stopRequestedAt: null, lastExit: null });
+      ({ state, attempt: 1, name: "relay-s1-r1", machineId: state === "creating" ? null : "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE });
     const signalling = RUNNER_STATES.filter((rs) => {
       const cell = RUNNER_TABLE[rs].session_stop;
       if (cell === null) return false;
@@ -324,7 +324,7 @@ describe("decide — legal edges", () => {
     expect(checked).toBe(16);
   });
   it("§5.3: a SECOND stop while ending keeps the FIRST reason (identity), passthrough and composed alike — and the runner's completion keeps it too", () => {
-    const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+    const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
     let checked = 0;
     for (const s of [S({ state: "live", startedAt: T0 }), S({ state: "live", mode: "composed", startedAt: T0, runner: PLAYING })]) {
       const first = decide(s, { type: "stop", reason: "operator_stopped" }, T0);
@@ -462,7 +462,7 @@ describe("decide — relay_disabled (M10, Task 14b review): a deployment with no
   });
 
   it("asks NO provider for anything but the passthrough output's release — a composed runner is left as it stands, for the cleanup a provider can do later", () => {
-    const playing: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+    const playing: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
     const composed = decide(S({ mode: "composed", state: "live", startedAt: T0, runner: playing }), { type: "relay_disabled" }, T0);
     expect(composed.effects, "a runner effect would be a call to a provider that does not exist").toEqual([]);
     expect(composed.next.runner, "the runner is not faked into a state nobody observed").toEqual(playing);
@@ -525,10 +525,30 @@ describe("eventRowsOf — parity with the session table (every state × every pa
 });
 
 describe("decide — a composed session's Machine events go through the runner table (Task 2C)", () => {
-  const BOOTING: Runner = { state: "booting", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+  const BOOTING: Runner = { state: "booting", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
   const C = (over: Partial<Session> = {}): Session => S({ mode: "composed", state: "warming", runner: BOOTING, ...over });
   const STOP_EFFECT = { type: "runner", effect: { type: "stop_machine", signal: "SIGINT", timeoutSeconds: RUNNER_STOP_GRACE_SECONDS } };
   const FORCE = { type: "runner", effect: { type: "force_destroy" } };
+
+  // R2003b: the ledger's witness of each counted crash — `crashCount` on the runner_transition of the step that MOVED it,
+  // and on no other row (a re-read of the same crash, a beat that counts nothing). The expected counts are the distinct
+  // crashes the sequence makes; the CAP-th one also carries the session's failure on its transition row.
+  it("R2003b: crashCount rides the runner_transition whose step moved the count — never a step that did not — and the crash at RUNNER_CRASH_CAP fails the session machine_crash in the same decision", () => {
+    let s = C({ state: "live", startedAt: T0, runner: { ...BOOTING, state: "playing" } });
+    const seen: (number | undefined)[] = [];
+    const crash = { type: "runner", trigger: { type: "callback_crashed" } } as const;
+    const reread = { type: "runner", trigger: { type: "observed", state: "pending", exit: { exitCode: 70, oomKilled: false, requestedStop: false }, restarting: true, restartingSince: T0, exitAt: T0, restartCount: 1 } } as const;
+    for (const c of [crash, reread, reread, crash, { type: "runner", trigger: { type: "callback_playing" } } as const, crash] satisfies Command[]) {
+      const d = decide(s, c, T0);
+      const rows = eventRowsOf(s, d, c).filter((r) => r.kind === "runner_transition");
+      expect(rows, JSON.stringify(c)).toHaveLength(1);
+      seen.push(rows[0]!.payload.crashCount as number | undefined);
+      s = d.next;
+    }
+    // crash 1 (its beat); its exit read twice (the same crash: no row carries a count); crash 2; a playing beat; crash 3
+    expect(seen).toEqual([1, undefined, undefined, 2, undefined, RUNNER_CRASH_CAP]);
+    expect(s).toMatchObject({ state: "failed", failReason: "machine_crash" });
+  });
 
   it("a composed stop routes through the runner: stop_machine SIGINT, ending(stopped), no complete_now", () => {
     const d = decide(C({ state: "live", startedAt: T0, runner: { ...BOOTING, state: "playing" } }), { type: "stop", reason: "stopped" }, T0);
@@ -1294,7 +1314,7 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
   // R2003 (owner ruling 2026-10-15, option A): lost / destroyed have no boot in flight — they re-fire on the composed window
   const W = STALE_HEARTBEAT_SECONDS_COMPOSED;
   const FORCE = { type: "runner", effect: { type: "force_destroy" } };
-  const R1: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+  const R1: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
   const live = (runner: Runner, over: Partial<Session> = {}): Session => S({ mode: "composed", state: "live", startedAt: T0, heartbeatAt: T0, runner, ...over });
   const read = (s: Session, now: Date) => decide(s, { type: "expire", expiry: evaluate(s, now) }, now);
 

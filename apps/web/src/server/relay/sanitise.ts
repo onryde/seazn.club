@@ -26,6 +26,8 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "egressBytes", "measuredLatencyMs",
   "programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps",
   "rung", "scoreStale",
+  // R2003b: a runner_transition's crash count (domain/session.ts eventRowsOf) — a number.
+  "crashCount",
   // …and its final beat's why (owner 2026-10-15): an enum word and compositor-redacted text (cut at `?` like any string).
   "exitReason", "exitDetail",
   // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from — an enum word.

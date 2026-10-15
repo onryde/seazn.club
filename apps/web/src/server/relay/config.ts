@@ -164,6 +164,19 @@ export const RUNNER_INPLACE_RESTARTS = 2;
  *  (stopped ~110 ms, then starting ~1.3 s). A Machine still restarting this long after its restarting exit is not coming
  *  back: the domain reads it as lost (domain/runner.ts `observedFrom`). Coordinator ruling, 2026-10-15: 10 s. */
 export const RUNNER_RESTART_STUCK_SECONDS = 10;
+/** R2003b (owner approval 2026-10-16): a session whose runner has crashed this many times FAILS `machine_crash` — the
+ *  crash that reaches it is not restarted in place (the Machine is force-destroyed) and spends NO retry. Why a cap is
+ *  owed at all (compositor `_FINDINGS.md` F-007): Fly's RUNNER_INPLACE_RESTARTS is counted per 5-minute window and
+ *  refills after ~330 s of healthy run, so a compositor crashing more slowly than that was restarted forever (~120 times
+ *  in a 300-minute match). Per SESSION: the count spans the ONE retry — a replacement of a crash-looping image starts
+ *  from the crashes already seen. A fatal crash is a run Fly would restart in place: a final beat saying `fatal`, or a
+ *  recorded exit that is non-zero/OOM and not requested — never `signalled` (exit 0, a stop someone else asked for, which
+ *  Fly does not restart) and never the refusal (RELAY_EXIT_REFUSED, which has its own path). domain/runner.ts
+ *  `CrashTally` counts it. A consequence, pinned in config.test.ts: with RUNNER_INPLACE_RESTARTS = 2, the crash Fly itself
+ *  declines to restart inside one window is a 3rd crash, so a fast burst whose three crashes are SEEN (their final beats)
+ *  reaches this cap too and fails rather than spending the retry on a cold start of the same image. A burst seen only by
+ *  Fly's final exit counts its restart count (2) and keeps the retry — the tally never guesses a crash it cannot see. */
+export const RUNNER_CRASH_CAP = 3;
 /** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. OUR stop — the organiser's or the
  *  deadline's — and since R2004 PR 0 (coordinator decision I4, 2026-10-15) the R2 compositor reads it as "hold the Final
  *  scene, then drain". Always sent EXPLICITLY: Fly falls back to the Machine's `stop_config.signal` (below) for a stop that
