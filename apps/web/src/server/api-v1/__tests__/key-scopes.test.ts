@@ -122,6 +122,15 @@ describe("matchKeyRoute", () => {
     expect(matchKeyRoute("POST", "/api/v1/stages/s1/generate")?.scope).toBe("manage");
   });
 
+  it("GET /fixtures/:id/rules is a read pinned to its fixture - the same match as GET /fixtures/:id/state (and its PUT stays a manage)", () => {
+    const id = "3f2b1c9e-0d4a-4b7e-9a51-6c8d2e7f1a30";
+    const rules = matchKeyRoute("GET", `/api/v1/fixtures/${id}/rules`);
+    expect(rules).toEqual({ scope: "read", pin: "fixture", resourceId: id });
+    expect(rules, "the same door as the scoreboard's state read").toEqual(matchKeyRoute("GET", `/api/v1/fixtures/${id}/state`));
+    // The write at the same path keeps its own scope: the read row did not widen it.
+    expect(matchKeyRoute("PUT", `/api/v1/fixtures/${id}/rules`)).toEqual({ scope: "manage", pin: "fixture", resourceId: id });
+  });
+
   it("accepts full URLs and bare paths", () => {
     expect(v1Path("https://seazn.club/api/v1/teams")).toBe("/teams");
     expect(matchKeyRoute("GET", "https://seazn.club/api/v1/teams")?.scope).toBe("read");

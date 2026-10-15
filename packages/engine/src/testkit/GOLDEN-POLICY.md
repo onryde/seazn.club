@@ -486,11 +486,14 @@ hand in the same PR; no tool will tell you):
   The server offers it to the fold and stores the result in module state
   (`state.forfeitAward`); no corpus carries one, and `recomputeStream`
   (`golden.ts`) takes no fold options, so a change to how an offered input folds
-  moves no golden (the P-3 mutant left the corpus green). It owes a manual
-  **MAJOR**, because the summary code that reads `state.forfeitAward` ships to
-  phones. Task 16b raised the epoch by hand for it. A per-stream
-  `foldOptions` corpus field is the real fix and is recommended to GF-2 - it is
-  not built here.
+  moves no golden (the P-3 mutant left the corpus green). A change to how an
+  offered input folds owes a manual **MAJOR**, because the summary code that
+  reads `state.forfeitAward` ships to phones. Task 16b's own award owes none
+  yet: commit `3abddb9c4` bumped football, hockey, carrom and generic for W2c's
+  opt-in cfg keys only, and ice hockey, which carries none, stayed at epoch 1. A
+  per-stream `foldOptions` corpus field is the real fix: the engine owner ruled
+  it a follow-up, GF-3 ("per-stream foldOptions"), after W2c merges. It is not
+  built here.
 
 Which `core.*` events and outcome kinds each corpus holds is no longer a gap to
 read off a table: it is a floor a test enforces (next section). Holding an event
