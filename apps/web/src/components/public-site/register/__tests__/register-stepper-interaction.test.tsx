@@ -108,7 +108,7 @@ function deepExpand(node: ReactNode): ReactElement[] {
 }
 
 /** In-memory Storage, same shape storage.ts's own tests use. Assigned to
- *  globalThis.sessionStorage per-test so RegisterStepper's hydration effect
+ *  globalThis.sessionStorage per-test so RegisterStepper's post-hydration restore
  *  (which calls loadRegisterState with no storage arg, resolving the real
  *  global) has something deterministic — and so one test's saved snapshot
  *  can never leak into the next. */
@@ -520,17 +520,19 @@ describe("RS006 — a registrant may self-link more than one cart entry", () => 
 
   // Found by manual browser verification, not by any test: a restored
   // sessionStorage snapshot with TWO self-linked entries lost BOTH links on
-  // mount. Root cause is a hydration race in register-stepper.tsx's
-  // autoLinkObviousSelf/clearSelfLinkWhenNotPlaying effect (deps
-  // `[imPlaying, cart.entries.length]`): on the FIRST render (before the
-  // hydration effect's setImPlaying/setCart calls are applied) this effect
-  // already fires once, with imPlaying's STALE pre-hydration value (false).
-  // Its `setCart(prev => ...)` functional updater still chains onto the
-  // hydration effect's newly-queued cart (React applies same-tick updates to
-  // a state variable in call order), so `clearSelfLinkWhenNotPlaying` sees
-  // "imPlaying is false" and a cart with self-linked entries, and clears
-  // every one of them. A SECOND invocation follows once the real (post-
-  // hydration) imPlaying/cart values commit — for exactly ONE cart entry,
+  // mount. Root cause was a hydration race between the post-hydration
+  // restore and register-stepper.tsx's autoLinkObviousSelf /
+  // clearSelfLinkWhenNotPlaying self-link pass (re-run when `imPlaying` or
+  // `cart.entries.length` changes). Both used to be effects: on the FIRST
+  // render (before the restore's setImPlaying/setCart calls were applied)
+  // the self-link effect already fired once, with imPlaying's STALE
+  // pre-restore value (false). Its `setCart(prev => ...)` functional updater
+  // still chained onto the restore's newly-queued cart (React applies
+  // same-tick updates to a state variable in call order), so
+  // `clearSelfLinkWhenNotPlaying` saw "imPlaying is false" and a cart with
+  // self-linked entries, and cleared every one of them. A SECOND invocation
+  // followed once the real (post-restore) imPlaying/cart values committed —
+  // for exactly ONE cart entry,
   // `autoLinkObviousSelf` silently re-links it (its own "exactly one,
   // unambiguous" rule), which is why this was never visible under the OLD
   // cart-wide single-self-link model: there could never be more than one
@@ -758,14 +760,14 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
 // than reusing a Next.js router-cached instance. This test therefore locks
 // in the CORRECT behavior (green without any further fix) and the
 // defensive explicit `setWhoAttempted(false)`/`setEntriesAttempted(false)`
-// added to the hydration effect is verified by a manual mutation check
+// added to the post-hydration restore is verified by a manual mutation check
 // (temporarily seeding a bad initial value with the reset removed, see the
 // fix wave report) rather than by a test that can go red against this
 // codebase's current, reachable behavior.
 // A restored snapshot carrying an EMPTY cart, on a competition whose entries
 // step is collapsed, had no surface anywhere to add an entry.
 //
-// The hydration effect reads `if (saved) { restore } else if (collapseEntries)
+// The post-hydration restore reads `if (saved) { restore } else if (collapseEntries)
 // { seed }`, so a restored snapshot skips the auto-seed — and when entries is
 // collapsed there is no step on which to add one by hand. The visitor walks
 // WHO -> DETAILS -> CONSENT -> REVIEW with an empty cart, sees the "free"
@@ -990,7 +992,7 @@ describe("review finding #2 — step transitions move focus to the new step's he
 // FIX 2 (RS006 fix wave, 2026-08-27) — the cart's useState lazy initializer
 // used to call crypto.randomUUID() directly (single-open-division auto-
 // seed), producing a DIFFERENT entry id on the server pass vs the client's
-// first render — the hydration effect's own comment claimed the initial
+// first render — the post-hydration restore's own comment claimed the initial
 // state was "deterministic (same on server and first client render)",
 // which was false for this one case. No jsdom in this workspace (same
 // reason as the focus-transition block above) — pinned at the source
