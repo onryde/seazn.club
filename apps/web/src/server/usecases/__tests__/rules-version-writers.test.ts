@@ -5,15 +5,17 @@
 // must never refuse them. Each case corrects a started match first (`writeFixtureRulesOverride`, the version is then 1)
 // and then runs the writer through its own usecase.
 //
-// The importer is NOT a case (finding 38): `importEvents` refuses any fixture that already holds a `score_events` row or
-// is not `scheduled` (`event-import.ts`), and a correction bumps nothing on an unstarted match — "import after a
-// correction" cannot happen. It stays classified as a non-sender.
+// The importer (finding 38) only writes into a fixture that holds no `score_events` row and is still `scheduled`
+// (`event-import.ts`). Until fix round 1 a correction bumped nothing on such a match, so "import after a correction"
+// could not happen; since I-1 a correction made BEFORE kickoff bumps it, so the importer is a case now: it sends no
+// version, and an import into a match corrected before kickoff is taken under the corrected format.
 //
 // Real Postgres; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, post, tip } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { importEvents } from "../event-import";
 import { writeFixtureRulesOverride } from "../fixture-rules";
 import { loadFixturePadCfg } from "../fixtures";
 import { finalizeFixture } from "../scoring";
@@ -92,7 +94,24 @@ describe.skipIf(!HAS_DB)("X-SR-7 C2: the server's own writers are never blocked 
     ran.push("settle");
   });
 
-  it("counted: exactly the three writers ran", () => {
-    expect(ran).toEqual(["withdrawal", "finalize", "settle"]);
+  it("import (fix round 1): a stream imported into a match corrected before kickoff is taken under the corrected format", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const id = b.fixtureIds[0]!;
+    await writeFixtureRulesOverride(b.auth, [id], { bestOf: 5 }); // unstarted: a pre-kickoff correction
+    expect((await loadFixturePadCfg(b.auth, id)).rulesVersion, "premise: the pre-kickoff correction bumped the version").toBe(1);
+    // Best of five: three games decide it; under the old best of three the third would land on a decided match.
+    const game = { type: "badminton.game.summary", payload: { home: 11, away: 5 } };
+    const report = await importEvents(b.auth, b.divisionId, {
+      import_id: `imp-t15-${id}`,
+      streams: [{ fixture: { id }, events: [{ type: "core.start", payload: {} }, game, game, game] }],
+    });
+    expect(report.results[0], JSON.stringify(report.results[0])).toMatchObject({ status: "imported" });
+    const [{ s }] = await sql<{ s: { bestOf: number } }[]>`select config_snapshot s from fixtures where id = ${id}`;
+    expect(s.bestOf, "the import froze the corrected format").toBe(5);
+    ran.push("import");
+  });
+
+  it("counted: exactly the four writers ran", () => {
+    expect(ran).toEqual(["withdrawal", "finalize", "settle", "import"]);
   });
 });

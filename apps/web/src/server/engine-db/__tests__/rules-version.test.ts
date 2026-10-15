@@ -1,7 +1,8 @@
 // W2c Task 15 (X-SR-7, owner P-1 "A", D14) — a tap sent under old rules is never applied under new ones.
 //
-// `fixtures.rules_version` counts the corrections of a started match's format (`refreezeFixture`, the only bump). A
-// scoring pad sends the version it loaded with every append; the append path refuses a sent version that differs from
+// `fixtures.rules_version` counts the corrections of a match's format: a started match's re-freeze (`refreezeFixture`),
+// and since fix round 1 (I-1) any write that moves what an unstarted match resolves to (`rules-version-prekickoff.test.ts`
+// drives those). A scoring pad sends the version it loaded with every append; the append path refuses a sent version that differs from
 // the row's (≠, not <) with 409 FIXTURE_RULES_CHANGED BEFORE any insert, and every accepted answer carries the row's
 // version. An append WITHOUT the field is never checked (the console chrome, the server's own writers: P-1).
 //
@@ -140,6 +141,28 @@ describe.skipIf(!HAS_DB)("X-SR-7 a tap sent under old rules is never applied und
     expect(retry.seq).toBe(first.seq);
     expect(retry.rules_version, "the answer tells the pad the rules moved").toBe(1);
     expect(await count(id)).toBe(before);
+  });
+
+  it("fix round 1 (M-6): a retry of a tap the correction REFUSED — its key never recorded — is refused again and writes nothing", async () => {
+    // The other half of the replay above: the refusal's catch looks the key up (`scoring.ts`), and a key the ledger does
+    // not hold must never be answered as if it did.
+    const { b, id } = await liveBadminton();
+    await writeFixtureRulesOverride(b.auth, [id], { bestOf: 5 });
+    const key = `t15-unrecorded-${id}`;
+    const game = { type: "badminton.game.summary", payload: { home: 11, away: 5 } };
+    const before = await count(id);
+    let attempts = 0;
+    for (const attempt of ["first", "retry"]) {
+      await expect(scoreEvent(b.auth, id, { expected_seq: 1, ...game, rules_version: 0, idempotency_key: key }), attempt).rejects.toMatchObject({
+        code: "FIXTURE_RULES_CHANGED",
+        extra: { rules_version: 1 },
+      });
+      attempts++;
+    }
+    expect(attempts).toBe(2);
+    expect(await count(id)).toBe(before);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int n from score_events where idempotency_key = ${key}`;
+    expect(n, "the key was never recorded").toBe(0);
   });
 
   it("after a correction: an append WITHOUT the field is never checked (P-1)", async () => {

@@ -144,10 +144,13 @@ const SITES: readonly { file: string; count: number; case: string }[] = [
   { file: "apps/web/src/server/engine-db/awarded-state.ts", count: 1, case: "awarded-state.ts writeAwardedMatchState" },
   // W2c Task 14 (I-A one layer up): a division save re-resolves every unstarted match's own format.
   { file: "apps/web/src/server/usecases/fixture-override-guards.ts", count: 1, case: "fixture-override-guards.ts refuseInvalidatedOverrides" },
+  // W2c Task 15 fix round 1 (I-1): a format save re-resolves every unfrozen match before and after it writes, and bumps
+  // the version of each whose format moved — so a pad open before kickoff is refused rather than frozen under.
+  { file: "apps/web/src/server/engine-db/rules-version.ts", count: 1, case: "rules-version.ts unfrozenRules" },
 ];
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 14 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 15 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -166,7 +169,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(14);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(15);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -206,7 +209,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     const id = s.fixtureIds[0]!;
     await seedOverride({ fixtureId: id });
     await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
-    // A correction's bump (`refreezeFixture` is the one writer; the version is what this case needs).
+    // A correction's bump (a started match's is `refreezeFixture`'s; the version is all this case needs).
     await sql`update fixtures set rules_version = rules_version + 1 where id = ${id}`;
     spy.mockClear();
     await expect(
@@ -421,11 +424,26 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expectOverrideArg();
   });
 
-  // M3 (review): the ledger above pins the 14 sites in the SOURCE; this pins that the cases DROVE all 14 with the
+  it.skipIf(!HAS_DB)("rules-version.ts unfrozenRules: a format save re-resolves every unfrozen match, before and after, to bump the ones it moved", async () => {
+    // W2c Task 15 fix round 1 (I-1). Raw seeding (boardgame: see the header); the save moves the time control, a key
+    // the boardgame schema reads, so the match's resolved format moves and its version with it.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    await seedOverride({ fixtureId: id });
+    spy.mockClear();
+    await patchDivision(s.auth, s.divisionId, { config: { variant: "rapid" } });
+    expectOverlay("knockout");
+    expectOverrideOut("knockout");
+    expectOverrideArg();
+    const [r] = await sql<{ v: number }[]>`select rules_version v from fixtures where id = ${id}`;
+    expect(r!.v, "the save moved the match's format: its version moved").toBe(1);
+  });
+
+  // M3 (review): the ledger above pins the 15 sites in the SOURCE; this pins that the cases DROVE all 15 with the
   // override. Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 14 call sites was driven with the override, per the spy's caller frames", () => {
+  it.skipIf(!HAS_DB)("every one of the 15 call sites was driven with the override, per the spy's caller frames", () => {
     const byFile = new Map<string, number>();
     for (const site of DRIVEN) {
       const file = site.replace(/:\d+:\d+$/, "");
@@ -436,7 +454,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     );
     expect(missing, `NOT DRIVEN: ${missing.join("; ")} (driven: ${JSON.stringify([...DRIVEN].sort())})`).toEqual([]);
     expect([...byFile.keys()].sort(), "and nothing outside the ledger").toEqual(SITES.map((s) => s.file).sort());
-    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(14);
+    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(15);
   });
 });
 

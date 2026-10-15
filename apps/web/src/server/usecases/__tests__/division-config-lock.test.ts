@@ -3,12 +3,20 @@
 // either PARKED behind it (`pg_blocking_pids`, the replace-stages-gates.test.ts witness) or finishes on its own — the
 // second is the defect, and each test reports it as one rather than as a timeout.
 //
-// The lock: a format save (`patchDivision` with a format or tiebreakers change, `putStageRules`) takes it EXCLUSIVE,
-// right after the division lock and before its refusal read; the first event of a match with no frozen cfg
-// (`appendEventInTx`) and a decision that may award a walkover by scoring (`onDecided`, a line that feeds a seat) take
-// it SHARED, after their fixture lock and before they read the division's config. Global order:
+// The lock: a format save (`patchDivision` with a variant or config change, `putStageRules`) takes it EXCLUSIVE, right
+// after the division lock and before its refusal read. A tiebreakers-only save takes no X (fix round 1, M-2): tiebreakers
+// are a column of their own that no first event reads — the freeze resolves the division's `config`, the stage's and the
+// match's own — so there is nothing for it to serialise. The first event of a match with no frozen cfg
+// (`appendEventInTx`), a decision that may award a walkover by scoring (`onDecided`, a line that feeds a seat), a
+// withdrawal's no-event seat write (`writeDepartedSeat`) and a take-back that releases or revives a seat it fed
+// (`releaseFedSeats` / `reviveDeadSeats`, fix round 1 M-1) take it SHARED, after their fixture locks. Global order:
 //   division: → stage-seats → fixture: → division-config: → row locks.
 // An exclusive holder takes no stage-seats or fixture lock after it; a shared holder takes no division lock after it.
+//
+// Fix round 1 (I-1): a format save also BUMPS the version of every unfrozen match whose format it moves, in the same
+// transaction, under its X lock — and the per-match override writer bumps under the fixture lock every append takes. The
+// override takes no `division-config:` at all, so it shares exactly one key with an append (`fixture:`) and cannot form
+// a cycle with it; the case below parks one behind the other and finishes both.
 //
 // The races it closes:
 //  - I-1: the first event froze the OLD division config while a division save that read "no started stage" committed
@@ -27,11 +35,13 @@ import { appendEventInTx } from "@/server/engine-db/append-event";
 import { awardedMatchState } from "@/server/engine-db/awarded-state";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import { fixtureRow, post, rowsOf, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { fixtureRow, post, rowsOf, tip, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { patchDivision } from "../divisions";
+import { writeFixtureRulesOverride } from "../fixture-rules";
 import { loadFixturePadCfg } from "../fixtures";
 import { putStageRules } from "../stage-rules";
 import { scoreEvent } from "../scoring";
+import { writeDepartedSeat } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -161,6 +171,29 @@ describe.skipIf(!HAS_DB)("division-config: the first event and a division format
     const declared = (moduleOf("badminton").configSchema.parse(moduleOf("badminton").variants.short) as { bestOf: number }).bestOf;
     expect(declared, "premise: the save would have moved it").not.toBe(5);
     expect(await snapshotBestOf(f1!), "the started match keeps the format it froze").toBe(declared);
+    // Fix round 1 (I-1): the refused save rolled back whole — its bump with it, on the unstarted siblings too.
+    const vs = await sql<{ v: number }[]>`select rules_version v from fixtures where stage_id = ${b.stageId}`;
+    expect(vs.map((r) => r.v), "a refused save bumps nothing").toEqual(b.fixtureIds.map(() => 0));
+  });
+
+  it("fix round 1 (I-1): the override's bump and a first event in flight serialise on the fixture lock alone, and neither deadlocks", async () => {
+    const b = await league();
+    const [f1] = b.fixtureIds;
+    const declared = (moduleOf("badminton").configSchema.parse(moduleOf("badminton").variants.short) as { bestOf: number }).bestOf;
+    const target = declared === 5 ? 3 : 5;
+    let parked!: Awaited<ReturnType<typeof launchBehind>>;
+    await withTenant(b.auth.orgId, async (holder) => {
+      // The first event in flight holds `fixture:` and `division-config:` SHARED (the append's own body).
+      await appendEventInTx(holder, b.auth.orgId, f1!, 0, { type: "core.start", payload: {} });
+      parked = await launchBehind(holder, "the override parks behind the first event", () =>
+        writeFixtureRulesOverride(b.auth, [f1!], { bestOf: target }),
+      );
+    });
+    expect(parked.settled, "the override waited for the first event").toBe(false);
+    expect(parked.waiters, "on one lock: the fixture's").toBe(1);
+    // The event committed first, so the override met a STARTED match: re-frozen and bumped once — not a 40P01.
+    await expect(parked.p).resolves.toEqual({ fixtures: [{ id: f1!, started: true, rules_version: 1 }] });
+    expect(await snapshotBestOf(f1!)).toBe(target);
   });
 
   it("batch-1, the stage save (EXCLUSIVE): a stage-rules save waits for a first event in flight, then refuses: the stage has started", async () => {
@@ -250,5 +283,95 @@ describe.skipIf(!HAS_DB)("batch-3 carry: a walkover awarded by scoring waits for
       select summary, state from match_states where fixture_id = ${parentId}`;
     expect(stored!.summary, "the stored walkover score is the saved format's").toEqual(want.summary);
     expect(stored!.state.cfg?.bestOf).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (review M-1): the other bracket writers that read seats a format save can reshape. Each one is launched
+// behind a holder of the EXCLUSIVE lock (what a format save holds) and must be parked INSIDE its own transaction — the
+// write it guards not yet visible — never finish and only then wait somewhere later (an `onDecided` after a take-back
+// also takes the lock, so "it waited" alone would not tell the two apart).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** A badminton bwf knockout of eight, line `a` played to a 2-0 decision: its winner sits in `parentId`. */
+async function decidedLine() {
+  // single-sport: badminton bwf, the batch-3 rig — the locks are in the bracket writers every sport shares.
+  const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 8 });
+  const { a, b, parentId } = siblingsInto(await rowsOf(s.stageId));
+  await post(s.auth, a.id, "core.start");
+  await post(s.auth, a.id, "badminton.game.summary", { home: 21, away: 10 });
+  const last = await post(s.auth, a.id, "badminton.game.summary", { home: 21, away: 10 });
+  const winner = (await fixtureRow(a.id)).home_entrant_id!;
+  const parent = await fixtureRow(parentId);
+  expect([parent.home_entrant_id, parent.away_entrant_id], "premise: the winner sits in the next match").toContain(winner);
+  return { s, a, b, parentId, winner, lastId: last.event_id };
+}
+
+const seated = async (fixtureId: string, entrantId: string) => {
+  const r = await fixtureRow(fixtureId);
+  return r.home_entrant_id === entrantId || r.away_entrant_id === entrantId;
+};
+
+describe.skipIf(!HAS_DB)("fix round 1 (M-1): the bracket writers that read seats wait for a format save", () => {
+  it("a withdrawal's no-event seat write (writeDepartedSeat) parks behind the save before it writes, then stamps the seat", async () => {
+    const { s, parentId, winner } = await decidedLine(); // the next match's other seat is still to be decided: TBD
+    let parked!: Awaited<ReturnType<typeof launchBehind>>;
+    await withTenant(s.auth.orgId, async (holder) => {
+      await holder`select pg_advisory_xact_lock(hashtext(${KEY(s.divisionId)}))`;
+      parked = await launchBehind(holder, "the departed seat write parks behind the save", () =>
+        withTenant(s.auth.orgId, (tx) => writeDepartedSeat(tx, parentId, winner, "tbd")),
+      );
+      expect(await seated(parentId, winner), "parked before its write: she still sits there").toBe(true);
+    });
+    expect(parked.settled, "the seat write waited for the save").toBe(false);
+    expect(parked.waiters).toBe(1);
+    await expect(parked.p).resolves.toContain(parentId);
+    expect(await seated(parentId, winner), "then it stamped her seat dead").toBe(false);
+  });
+
+  it("a take-back that RELEASES a seat it fed (releaseFedSeats) parks inside its append, before the void is recorded", async () => {
+    const { s, a, parentId, winner, lastId } = await decidedLine();
+    const before = await tip(a.id);
+    let parked!: Awaited<ReturnType<typeof launchBehind>>;
+    await withTenant(s.auth.orgId, async (holder) => {
+      await holder`select pg_advisory_xact_lock(hashtext(${KEY(s.divisionId)}))`;
+      parked = await launchBehind(holder, "the void parks behind the save", () =>
+        post(s.auth, a.id, "core.void", { event_id: lastId }),
+      );
+      expect(await tip(a.id), "parked inside the append: the void is not recorded yet").toBe(before);
+      expect(await seated(parentId, winner), "and the seat it releases still holds her").toBe(true);
+    });
+    expect(parked.settled, "the void waited for the save").toBe(false);
+    expect(parked.waiters).toBe(1);
+    await parked.p;
+    expect(await tip(a.id)).toBe(before + 1);
+    expect(await seated(parentId, winner), "then the take-back released her seat").toBe(false);
+  });
+
+  it("a take-back that REVIVES what a double walkover killed (reviveDeadSeats) parks inside its append, before the void is recorded", async () => {
+    // single-sport: badminton bwf (above). Line `b` decides first, so its winner waits in the next match; a double
+    // walkover on `a` then kills the other seat and the cascade walks `b`'s winner over it (a bye award).
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 8 });
+    const { a, b, parentId } = siblingsInto(await rowsOf(s.stageId));
+    await post(s.auth, b.id, "core.start");
+    for (let g = 0; g < 2; g++) await post(s.auth, b.id, "badminton.game.summary", { home: 21, away: 10 });
+    const dw = await post(s.auth, a.id, "core.forfeit", { by: "both", reason: "walkover" });
+    expect((await fixtureRow(a.id)).outcome?.kind, "premise: a double walkover").toBe("double_walkover");
+    expect((await fixtureRow(parentId)).status, "premise: the cascade walked b's winner over the dead seat").toBe("forfeited");
+    const before = await tip(a.id);
+    let parked!: Awaited<ReturnType<typeof launchBehind>>;
+    await withTenant(s.auth.orgId, async (holder) => {
+      await holder`select pg_advisory_xact_lock(hashtext(${KEY(s.divisionId)}))`;
+      parked = await launchBehind(holder, "the void of the double walkover parks behind the save", () =>
+        post(s.auth, a.id, "core.void", { event_id: dw.event_id }),
+      );
+      expect(await tip(a.id), "parked inside the append: the void is not recorded yet").toBe(before);
+      expect((await fixtureRow(parentId)).status, "and the walkover it revives still stands").toBe("forfeited");
+    });
+    expect(parked.settled, "the void waited for the save").toBe(false);
+    expect(parked.waiters).toBe(1);
+    await parked.p;
+    expect(await tip(a.id)).toBe(before + 1);
+    expect((await fixtureRow(parentId)).status, "then the revive took the walkover back").toBe("scheduled");
   });
 });

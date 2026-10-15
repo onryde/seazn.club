@@ -164,7 +164,11 @@ describe.skipIf(!HAS_DB)("X-SR-2 writeFixtureRulesOverride — unstarted", () =>
     const a = await audit(id);
     expect(a.map((r) => r.payload.after)).toEqual([{ bestOf: 1 }, { setTo: shorter, finalSetTo: shorter }, null, { bestOf: 1 }, null]);
     expect(a.map((r) => r.payload.before)).toEqual([null, { bestOf: 1 }, { setTo: shorter, finalSetTo: shorter }, null, { bestOf: 1 }]);
-    expect((await row(id)).rules_version, "an unstarted write never bumps").toBe(0);
+    // Fix round 1 (I-1): every one of the five writes moved what the unstarted match resolves to (each `after` above
+    // differs from its `before`, and none restates the stage), so each bumped once — a pad open on the match must not
+    // freeze a format it is not folding.
+    expect(a.filter((r) => JSON.stringify(r.payload.after) !== JSON.stringify(r.payload.before)), "premise: five moves").toHaveLength(5);
+    expect((await row(id)).rules_version, "an unstarted write that moves the format bumps").toBe(5);
   });
 
   it("M2: a null VALUE is inherit — never stored, and the key reads the stage's value; a null for an undeclared key is still UNKNOWN_RULE_KEY", async () => {
@@ -632,9 +636,10 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
       const r = await row(id);
       expect(r.rules_override).toEqual({ bestOf: 1 });
       // Either order must leave the frozen snapshot at best of 1: if the writer ran first, the start froze the
-      // override; if the start ran first, the writer saw a frozen snapshot and refolded (then rules_version is 1).
+      // override; if the start ran first, the writer saw a frozen snapshot and refolded. Either way the version moved
+      // exactly once (fix round 1, I-1: the unstarted branch bumps too, so a pad open before either is refused).
       expect((r.config_snapshot as { bestOf: number } | null)?.bestOf).toBe(1);
-      expect(r.rules_version).toBeLessThanOrEqual(1);
+      expect(r.rules_version).toBe(1);
       runs++;
     }
     expect(runs).toBe(5);
