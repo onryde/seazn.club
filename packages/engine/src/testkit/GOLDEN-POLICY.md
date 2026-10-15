@@ -447,7 +447,12 @@ hand in the same PR; no tool will tell you):
   any other path the corpora do not show.
 - **Unexercised branches** of a module: a field no stream writes is invisible to
   a byte-exact comparison (see below), so a rule that fires only there moves
-  nothing.
+  nothing. An opt-in cfg key is the standing case: an older phone strips or
+  refuses it, so a match that sets it folds differently there, while every
+  recorded stream (none sets it) folds the same. W2c's were raised by hand
+  (owner 2026-10-15, manual MAJOR for opt-in cfg keys the guard cannot see):
+  football `shootoutAttempts`, hockey fih-shootout `abandonPolicy:"q4_stands"`,
+  carrom and generic `abandonPolicy:"share"`.
 - **Player-statistics folds outside the recorded final rows** (`src/stats/stats.ts`).
   Format 3 records the FINAL rows of each stream, so a change to how a recorded stat
   folds is a **minor** the guard asks for (the server computes it; a phone must not).
