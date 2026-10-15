@@ -42,18 +42,35 @@ describe("W2b PF-1 (loop D carry-in): every summary reader in apps/web goes thro
   // (`levelWithdrawal`), so a bare `<module>.summary(state)` keeps showing the draw the table no longer credits.
   // apps/web only — the engine's own summaryOf is the one place that may call it.
   const BARE_SUMMARY = /\b[A-Za-z_$][\w$]*\.summary\(/g;
+  // Batch-5 Q4: the scanner matches by SHAPE, so a call that is not a module's summary at all is listed with how many it
+  // holds and why - the same discipline as the outcome allow-list above, so a SECOND bare call in the file still reds.
+  const ALLOWED_SUMMARY: Readonly<Record<string, { calls: number; reason: string }>> = {
+    "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx": {
+      calls: 1,
+      reason:
+        "scanner false positive: `step.summary(answers)` is a guided-sheet CONFIRM step's own formatter (`SheetConfirmStep.summary`, types.ts) - a skin function that words the answers typed so far. It reads no module state and no ledger, so there is no settle or withdrawal for summaryOf to apply",
+    },
+  };
   it("no bare <module>.summary( in apps/web/src, and summaryOf's web readers are exactly these", () => {
     const files = walk(join(REPO, "apps/web/src"), []);
     expect(files.length).toBeGreaterThan(100);
     const bare: string[] = [];
     const readers: string[] = [];
+    const allowedSeen: Record<string, number> = {};
+    let scanned = 0;
     for (const f of files) {
       const rel = relative(REPO, f);
       const text = stripComments(readFileSync(f, "utf8"));
-      for (const m of text.matchAll(BARE_SUMMARY)) bare.push(`${rel}: ${text.slice(m.index, text.indexOf(")", m.index) + 1)}`);
+      const calls = [...text.matchAll(BARE_SUMMARY)].map((m) => text.slice(m.index, text.indexOf(")", m.index) + 1));
+      scanned += calls.length;
+      if (ALLOWED_SUMMARY[rel] !== undefined) allowedSeen[rel] = calls.length;
+      else for (const c of calls) bare.push(`${rel}: ${c}`);
       if (/\bsummaryOf\(/.test(text)) readers.push(rel);
     }
-    expect(bare, `${files.length} files scanned`).toEqual([]);
+    expect(bare, `${files.length} files scanned, ${scanned} bare .summary( calls`).toEqual([]);
+    // Each allowed file holds exactly the calls it declares - a second one there is a new reader, and must be argued.
+    expect(allowedSeen).toEqual(Object.fromEntries(Object.entries(ALLOWED_SUMMARY).map(([rel, { calls }]) => [rel, calls])));
+    expect(scanned, "anti-vacuity: the scan saw the allowed call it exists to list").toBeGreaterThan(0);
     expect(readers.sort()).toEqual([
       // Chess T10 (rebase onto W2b, I-1): the match room's game-over card folds Start + the deciding event.
       "apps/web/src/components/public-site/match-room/room-snapshot.ts",
@@ -67,6 +84,18 @@ describe("W2b PF-1 (loop D carry-in): every summary reader in apps/web goes thro
       "apps/web/src/server/public-site/public-player-matches.ts",
       "apps/web/src/server/public-site/timeline.ts",
     ]);
+  });
+});
+
+describe("Q4: the summary allow-list is a guard, not a comment", () => {
+  it("every allowed summary file still exists and still holds a bare call (a stale entry is a failure), and the call is the step formatter", () => {
+    const BARE_SUMMARY = /\b[A-Za-z_$][\w$]*\.summary\(/g;
+    const entries = ["apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx"];
+    for (const rel of entries) {
+      const text = stripComments(readFileSync(join(REPO, rel), "utf8"));
+      expect([...text.matchAll(BARE_SUMMARY)].map((m) => m[0]), rel).toEqual(["step.summary("]);
+    }
+    expect(entries.length).toBe(1);
   });
 });
 
