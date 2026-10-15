@@ -615,7 +615,8 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
 
 // ─── Job 3: meeting teardown ───────────────────────────────────────────────
 //
-// A fixture has one meeting for life (fixture_video_meetings, PK fixture_id);
+// A player has one meeting for life (fixture_video_meetings, PK (fixture_id, side) -
+// D16: a board has one per player, and each row is its own candidate, retried on its own);
 // T7's endMeeting kicks everyone, deactivates it, and only then stamps
 // `ended_at` — so a failed deactivate leaves the row for the next pass, and
 // an ended row is never a candidate again. A meeting is torn down when:
@@ -630,6 +631,7 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
 
 type TeardownCandidate = BridgeFacts & {
   fixtureId: string;
+  side: "home" | "away";
   meetingId: string;
   fixtureStatus: string;
   openedAt: Date | null;
@@ -637,7 +639,7 @@ type TeardownCandidate = BridgeFacts & {
 
 async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
   return sql<TeardownCandidate[]>`
-    select m.fixture_id as "fixtureId", m.meeting_id as "meetingId", f.status as "fixtureStatus",
+    select m.fixture_id as "fixtureId", m.side, m.meeting_id as "meetingId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
            ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt"
       from fixture_video_meetings m
@@ -646,7 +648,7 @@ async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
       left join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
      where m.ended_at is null
        ${orgScope(pass)}
-     order by m.created_at, m.fixture_id`;
+     order by m.created_at, m.fixture_id, m.side`;
 }
 
 function meetingIsDone(pass: Pass, c: TeardownCandidate): boolean {
@@ -945,6 +947,8 @@ export const CAMERA_EVIDENCE_GIVE_UP_MS = 24 * 60 * 60_000;
 
 type CameraCandidate = {
   fixtureId: string;
+  /** D16: the candidate is ONE player's meeting; only that player's camera is judged from it (§5.6.6). */
+  side: "home" | "away";
   orgId: string;
   homeEntrantId: string;
   awayEntrantId: string;
@@ -963,7 +967,7 @@ type CameraCandidate = {
 async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
   const readable = new Date(pass.now.getTime() - CAMERA_EVIDENCE_AFTER_MS);
   return sql<CameraCandidate[]>`
-    select m.fixture_id as "fixtureId", m.org_id as "orgId", m.meeting_id as "meetingId",
+    select m.fixture_id as "fixtureId", m.side, m.org_id as "orgId", m.meeting_id as "meetingId",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            m.ended_at as "endedAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
            ep.game_over_at as "gameOverAt", ep.last_move_at as "lastMoveAt", ep.move_count as "moveCount",
@@ -976,13 +980,13 @@ async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
        and m.camera_evidence_at is null
        and m.ended_at <= ${readable}
        ${orgScope(pass)}
-     order by m.ended_at, m.fixture_id`;
+     order by m.ended_at, m.fixture_id, m.side`;
 }
 
 type CameraFlag = { kind: "camera_lost" | "camera_connection_problems" | "multiple_devices"; personId: string; note: string };
 
-/** Every player's camera over the window, or `not_ready` while any session
- *  is live or any report is not final. A RealtimeKit failure THROWS. */
+/** The camera of the player whose meeting this is (D16: one player per meeting), over the window, or `not_ready` while
+ *  any session is live or any report is not final. A RealtimeKit failure THROWS. */
 async function readCameraEvidence(
   c: CameraCandidate,
   window: { from: Date; to: Date },
@@ -995,16 +999,18 @@ async function readCameraEvidence(
   // for nobody: evidence about the wrong person is worse than none. Their
   // cameras are the player participants T8 added; a player with none had no
   // camera in the match.
+  // D16 (§5.6.6): this meeting holds ONE player - its side's - so only that player is judged from it. Judging both sides'
+  // players over one meeting is the shared-room reading; over a per-player room the other side's player has no
+  // participant here and would read as "no camera all match".
   const sides = await loadSides(c);
   const players = new Map<string, string[]>();
-  for (const side of [sides.home, sides.away]) {
-    if (side.personId === null) {
-      log.warn({ fixtureId: c.fixtureId, side: side.side }, "external-play sweep: no single player on a side; its camera is not judged");
-      continue;
-    }
+  const side = c.side === "home" ? sides.home : sides.away;
+  if (side.personId === null) {
+    log.warn({ fixtureId: c.fixtureId, side: side.side }, "external-play sweep: no single player on a side; its camera is not judged");
+  } else {
     const parts = await sql<{ participantId: string }[]>`
       select participant_id as "participantId" from fixture_video_participants
-       where fixture_id = ${c.fixtureId} and person_id = ${side.personId} and preset = 'player'
+       where fixture_id = ${c.fixtureId} and side = ${c.side} and person_id = ${side.personId} and preset = 'player'
        order by participant_id`;
     players.set(side.personId, parts.map((r) => r.participantId));
   }
@@ -1048,7 +1054,7 @@ async function readCameraEvidence(
     // are TOLD to the organiser — a neutral flag, never camera_lost. Its note
     // leads with the stamped total in whole seconds (T16's {duration}). The
     // arbiter panel shows the same total from the same function (I1).
-    const { faults, stamped } = await matchGuardFaults(sql, { fixtureId: c.fixtureId, personId, window });
+    const { faults, stamped } = await matchGuardFaults(sql, { fixtureId: c.fixtureId, side: c.side, personId, window });
     if (stamped.flag) {
       flags.push({
         kind: "camera_connection_problems",
@@ -1093,7 +1099,7 @@ async function settleCamera(pass: Pass, c: CameraCandidate, flags: readonly Came
   const written = await sql.begin(async (tx) => {
     const claimed = await tx`
       update fixture_video_meetings set camera_evidence_at = ${pass.now}
-       where fixture_id = ${c.fixtureId} and camera_evidence_at is null
+       where fixture_id = ${c.fixtureId} and side = ${c.side} and camera_evidence_at is null
        returning fixture_id`;
     if (claimed.length === 0) return null; // another pass settled it first
     for (const f of flags) {
@@ -1233,7 +1239,7 @@ async function arbiterCandidates(pass: Pass): Promise<ArbiterCandidate[]> {
                       and om.role in ${sql(EDITOR_ROLES as unknown as string[])}) as organiser
       from fixture_video_participants vp
       join fixtures f on f.id = vp.fixture_id
-      join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+      join fixture_video_meetings m on m.fixture_id = vp.fixture_id and m.side = vp.side
      where vp.preset = 'arbiter' and vp.removed_at is null
        ${orgScope(pass)}
      order by vp.created_at, vp.id`;

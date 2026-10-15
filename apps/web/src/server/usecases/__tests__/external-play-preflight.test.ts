@@ -180,9 +180,9 @@ function fakeRealtimeKit() {
   const fetch = doFetch as unknown as typeof globalThis.fetch;
 
   const video: NonNullable<PreflightDeps["video"]> = {
-    ensureMeeting: (fixtureId) => {
+    ensureMeeting: (fixtureId, side) => {
       adapter.push("ensureMeeting");
-      return ensureMeeting(fixtureId, { fetch });
+      return ensureMeeting(fixtureId, side, { fetch });
     },
     addParticipant: (a) => {
       adapter.push(`addParticipant:${a.preset}`);
@@ -660,7 +660,7 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer under each camera policy"
     expect(!got.seated && got.reason).toBe("camera_required");
   });
 
-  it("both players: one meeting, two participants, and each token is its OWN player's", async () => {
+  it("both players: a meeting EACH (D16), two participants, and each token is minted in its OWN player's meeting", async () => {
     const s = await seed({ cameraPolicy: "required" });
     const rtk = fakeRealtimeKit();
     const h = await claim(s, "home", rtk);
@@ -668,7 +668,16 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer under each camera policy"
     const hp = await expectOwnToken(s, "home", h);
     const wp = await expectOwnToken(s, "away", w);
     expect(hp, "two DISTINCT participants").not.toBe(wp);
-    expect(await meetingRows(s.fixtureId), "one meeting for the board, not one per player").toBe(1);
+    expect(await meetingRows(s.fixtureId), "one meeting per player, not one for the board").toBe(2);
+    const meetings = await sql<{ side: string; meeting_id: string }[]>`
+      select side, meeting_id from fixture_video_meetings where fixture_id = ${s.fixtureId} order by side`;
+    expect(meetings.map((m) => m.side)).toEqual(["away", "home"]);
+    expect(new Set(meetings.map((m) => m.meeting_id)).size, "two different vendor meetings").toBe(2);
+    const bySide = new Map(meetings.map((m) => [m.side, m.meeting_id]));
+    // The vendor's own record: the participant each token names was added to its player's meeting, and to no other.
+    expect(rtk.participants.get(hp)?.meetingId, "home's token is in home's meeting").toBe(bySide.get("home"));
+    expect(rtk.participants.get(wp)?.meetingId, "away's token is in away's meeting").toBe(bySide.get("away"));
+    expect(rtk.http.filter((r) => r === "POST /meetings").length, "two meetings created at the vendor").toBe(2);
     // The opponent seating does not disturb the first player.
     rtk.join(h);
     expect((await claim(s, "home", rtk)).seated).toBe(true);
@@ -775,8 +784,8 @@ describe.skipIf(!process.env.DATABASE_URL)("a RealtimeKit outage is video_unavai
     for (const policy of ["required", "optional"] as const) {
       const s = await seed({ cameraPolicy: policy });
       await sql`
-        insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
-        values (${s.fixtureId}, ${s.orgId}, ${`mtg-ended-${randomUUID()}`}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+        insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
+        values (${s.fixtureId}, 'home', ${s.orgId}, ${`mtg-ended-${randomUUID()}`}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
       const rtk = fakeRealtimeKit();
       await expect(claim(s, "home", rtk), policy).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_ENDED" });
       expect(rtk.http, `${policy}: refused before any request`).toEqual([]);
@@ -896,11 +905,11 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
     // still be minted a PLAYER participant for their seat.
     const s = await seed({ cameraPolicy: "required" });
     const rtk = fakeRealtimeKit();
-    const { meetingId } = await rtk.video.ensureMeeting(s.fixtureId);
+    const { meetingId } = await rtk.video.ensureMeeting(s.fixtureId, "home");
     const arbiterId = `p-arbiter-${randomUUID().slice(0, 8)}`;
     await sql`
-      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-      values (${s.fixtureId}, ${s.home.personId}, 'arbiter', ${arbiterId})`;
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+      values (${s.fixtureId}, 'home', ${s.home.personId}, 'arbiter', ${arbiterId})`;
     const got = await claim(s, "home", rtk);
     expect(!got.seated && got.reason, "premise: refused on the camera, not on video").toBe("camera_required");
     const token = "participant" in got ? got.participant : null;

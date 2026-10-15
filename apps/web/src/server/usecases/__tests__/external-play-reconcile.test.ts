@@ -3023,7 +3023,7 @@ describe.runIf(HAS_DB)("the result ends the camera room — after the answer, ne
 
   it("the game's end at Lichess ends the room AFTER the answer: kicked, INACTIVE, ended_at stamped — once", async () => {
     const g = await liveGame();
-    const { meetingId } = await ensureMeeting(g.fixtureId);
+    const { meetingId } = await ensureMeeting(g.fixtureId, "home");
     serveStream(gameFull(g, EXPIRED_2));
     const tail = heldTail();
     const out = await reconcile(g.fixtureId, "game_end", { ...observed().deps, room: { defer: tail.defer } });
@@ -3044,7 +3044,7 @@ describe.runIf(HAS_DB)("the result ends the camera room — after the answer, ne
 
   it("a vendor outage never fails the result: the result is written, the tail settles quietly, and the room is left for the sweep (ended_at still null)", async () => {
     const g = await liveGame();
-    const { meetingId } = await ensureMeeting(g.fixtureId);
+    const { meetingId } = await ensureMeeting(g.fixtureId, "home");
     serveStream(gameFull(g, EXPIRED_2));
     fx.setUnavailable(true);
     const warn = vi.spyOn(log, "warn");
@@ -3060,7 +3060,7 @@ describe.runIf(HAS_DB)("the result ends the camera room — after the answer, ne
 
   it("D21: the call budget spent never fails the result either: the teardown is deferred, no request is made, the room is left unended for the sweep", async () => {
     const g = await liveGame();
-    const { meetingId } = await ensureMeeting(g.fixtureId);
+    const { meetingId } = await ensureMeeting(g.fixtureId, "home");
     const asked = fx.calls.length;
     const tail = heldTail();
     endRoomAtResult(g.fixtureId, { defer: tail.defer, endMeeting: async () => { throw new RealtimeKitDeferred("test: budget spent"); } });
@@ -3073,7 +3073,7 @@ describe.runIf(HAS_DB)("the result ends the camera room — after the answer, ne
 
   it("the guard: a room whose game is still on (bridge live, fixture playable) is never ended — and the positive pair, a finished bridge, is", async () => {
     const g = await liveGame();
-    const { meetingId } = await ensureMeeting(g.fixtureId);
+    const { meetingId } = await ensureMeeting(g.fixtureId, "home");
     const tail = heldTail();
     endRoomAtResult(g.fixtureId, { defer: tail.defer });
     await tail.run();
@@ -3093,7 +3093,7 @@ describe.runIf(HAS_DB)("the result ends the camera room — after the answer, ne
 
   it("the organiser's settle ends the room too — after the answer", async () => {
     const g = await liveGame();
-    const { meetingId } = await ensureMeeting(g.fixtureId);
+    const { meetingId } = await ensureMeeting(g.fixtureId, "home");
     await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "test: held for the organiser" });
     const tail = heldTail();
     expect(await resolveExternalPlay(organiserOf(g), g.fixtureId, "home_wins", { room: { defer: tail.defer }, defer: () => {} })).toEqual({ status: "finished" });

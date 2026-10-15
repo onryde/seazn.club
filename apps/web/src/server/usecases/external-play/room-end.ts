@@ -24,25 +24,31 @@ export type RoomEndDeps = {
   endMeeting?: (meetingId: string) => Promise<void>;
 };
 
-/** End `fixtureId`'s camera room, after the answer, if its game is over for us. Never throws, never blocks. */
+/** End `fixtureId`'s camera rooms, after the answer, if its game is over for us. Never throws, never blocks.
+ *
+ *  D16: a board has a room PER PLAYER, and the game's end ends both - every unended row of the fixture, each in its own
+ *  try, so one room the vendor will not end does not leave the other joinable (the sweep retries the one that failed). A
+ *  both-sides statement on purpose (the source guard lists it). */
 export function endRoomAtResult(fixtureId: string, deps: RoomEndDeps = {}): void {
   (deps.defer ?? deferred)(async () => {
-    const [room] = await sql<{ meetingId: string }[]>`
-      select m.meeting_id as "meetingId"
+    const rooms = await sql<{ meetingId: string; side: string }[]>`
+      select m.meeting_id as "meetingId", m.side
         from fixture_video_meetings m
         join fixtures f on f.id = m.fixture_id
         left join fixture_external_play ep on ep.fixture_id = m.fixture_id
        where m.fixture_id = ${fixtureId}
          and m.ended_at is null
-         and (ep.status = 'finished' or f.status not in ${sql(PLAYABLE_FIXTURE_STATUSES as string[])})`;
-    if (!room) return;
-    try {
-      await (deps.endMeeting ?? endMeeting)(room.meetingId);
-    } catch (err) {
-      log.warn(
-        { fixtureId, meetingId: room.meetingId, err: err instanceof Error ? err.message : String(err) },
-        "camera room: ending it at the result failed — the sweep's teardown ends it",
-      );
+         and (ep.status = 'finished' or f.status not in ${sql(PLAYABLE_FIXTURE_STATUSES as string[])})
+       order by m.side`;
+    for (const room of rooms) {
+      try {
+        await (deps.endMeeting ?? endMeeting)(room.meetingId);
+      } catch (err) {
+        log.warn(
+          { fixtureId, side: room.side, meetingId: room.meetingId, err: err instanceof Error ? err.message : String(err) },
+          "camera room: ending it at the result failed — the sweep's teardown ends it",
+        );
+      }
     }
   });
 }

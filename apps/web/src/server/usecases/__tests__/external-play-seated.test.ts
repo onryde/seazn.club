@@ -25,8 +25,8 @@ afterAll(async () => {
 });
 
 async function meeting(fixtureId: string, orgId: string): Promise<void> {
-  await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
-            values (${fixtureId}, ${orgId}, ${`m-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`;
+  await sql`insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+            values (${fixtureId}, 'home', ${orgId}, ${`m-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`;
 }
 
 /** The roster edit a re-seat is: the entrant's member person replaced. */
@@ -71,8 +71,8 @@ describe.runIf(HAS_DB)("the seated predicate — every way a user maps to a seat
     const b = r.boards[0]!;
     await meeting(b.fixtureId, r.orgId);
     // T8's seat claim (preflight seatPlayer) writes this row.
-    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-              values (${b.fixtureId}, ${b.home.personId}, 'player', ${`pp-${randomUUID().slice(0, 8)}`})`;
+    await sql`insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+              values (${b.fixtureId}, 'home', ${b.home.personId}, 'player', ${`pp-${randomUUID().slice(0, 8)}`})`;
     await replaceMember(b.home.entrantId, r.orgId);
     expect(await isSeatedOn(b.home.userId, b.fixtureId)).toBe(true);
     // The positive pair: with no participant row, the roster edit WOULD free them.

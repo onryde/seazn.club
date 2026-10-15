@@ -94,7 +94,7 @@ async function joinWith(s: Seeded, camera: FixtureCamera): Promise<{ pid: string
 
 function metered(budget: () => Promise<boolean>): Video {
   return {
-    ensureMeeting: (id) => ensureMeeting(id, { budget }),
+    ensureMeeting: (id, side) => ensureMeeting(id, side, { budget }),
     addParticipant: (a) => addParticipant(a, { budget }),
     seatCameraEvidence: (a) => seatCameraEvidence(a, { budget }),
     refreshParticipantToken: (a) => refreshParticipantToken(a, { budget }),
@@ -117,7 +117,8 @@ describe.skipIf(!DB)("F1 - the first claim, and the claim the cache answers (D21
     const before = fx.calls.length;
     const away = await seatPlayer({ fixtureId: s.fixtureId, personId: s.away.personId }, { now: new Date() });
     expect(reasonOf(away)).toBe("camera_required");
-    expect(fx.calls.slice(before).map((c) => c.route), "the second player: one participant added, nothing read").toEqual(["POST /meetings/:id/participants"]);
+    // D16: the second player has a meeting of their own, made on their own first arrival - and still reads nothing.
+    expect(fx.calls.slice(before).map((c) => c.route), "the second player: their own meeting, one participant added, nothing read").toEqual(["POST /meetings", "POST /meetings/:id/participants"]);
   });
 
   it("the first claim leaves the cache EMPTY, so the claim after the join is allowed to read at once (nothing was counted against it)", async () => {
@@ -344,7 +345,7 @@ describe.skipIf(!DB)("F2 - the re-verify before a game is created hands no token
 
   it("a re-verify of a player who NEVER joined mints nothing and reads nothing: camera_required, no participant row, no vendor call", async () => {
     const s = await seed();
-    // The OTHER player checked in, so the meeting exists; this player never claimed.
+    // The OTHER player checked in, so THEIR meeting exists; this player never claimed - and has no meeting to be re-verified in.
     await seatPlayer({ fixtureId: s.fixtureId, personId: s.away.personId }, { now: new Date() });
     const seen = fx.calls.length;
     const got = await recheck(s, new Date(), "home");
@@ -352,6 +353,8 @@ describe.skipIf(!DB)("F2 - the re-verify before a game is created hands no token
     expect(tokenOf(got)).toBeNull();
     expect(fx.calls.length - seen, "nothing asked of the vendor").toBe(0);
     expect(await sql`select 1 from fixture_video_participants where fixture_id = ${s.fixtureId} and person_id = ${s.home.personId}`, "and nobody minted for them").toHaveLength(0);
+    // D16: and no meeting was made for them either - a re-verify of a player who is not there must not spend a create.
+    expect(await sql`select 1 from fixture_video_meetings where fixture_id = ${s.fixtureId} and side = 'home'`, "and no meeting made for the absent player").toHaveLength(0);
   });
 
   it("the other player is a different participant: a trusted pass is THEIRS - the neighbour's pass never seats this one", async () => {

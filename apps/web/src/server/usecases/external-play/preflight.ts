@@ -39,6 +39,7 @@ import {
   loadOnlinePlayFixture,
   loadSides,
   type OnlinePlayFixture,
+  type Side,
   type SidePlayer,
 } from "./guard";
 
@@ -220,8 +221,8 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
     // whose answer is ignored is how a later refactor turns `optional` into
     // `required`.
     try {
-      const meeting = await video.ensureMeeting(a.fixtureId);
-      return { seated: true, participant: await issuePlayerToken(a, meeting.meetingId, video) };
+      const meeting = await video.ensureMeeting(a.fixtureId, player.side);
+      return { seated: true, participant: await issuePlayerToken(a, player.side, meeting.meetingId, video) };
     } catch (err) {
       if (!(err instanceof RealtimeKitError)) throw err;
       // D21: a deferral (the call budget is spent) is not an outage, and is not reported as one.
@@ -239,7 +240,7 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
   }
 
   try {
-    return await verifyRequiredSeat(a, now, video);
+    return await verifyRequiredSeat(a, player.side, now, video);
   } catch (err) {
     // An outage (or an answer the adapter cannot read — T7 THROWS on those)
     // is the vendor's failure, never the player's camera: it is its own
@@ -313,7 +314,7 @@ function isReentry(f: OnlinePlayFixture, player: SidePlayer): boolean {
   return seatedAccount === player.lichess.id; // (a)
 }
 
-/** `required`: seated only when the meeting reports this participant joined to
+/** `required`: seated only when the player's own meeting (D16: one per player) reports this participant joined to
  *  a live session and not left AND its current peer's own report shows the
  *  camera granted and on (T17B fix 2, D2: `seatCameraEvidence`; the preset
  *  enforces nothing — measured). Re-asked on EVERY claim, which is what makes
@@ -329,11 +330,17 @@ function isReentry(f: OnlinePlayFixture, player: SidePlayer): boolean {
  *  schedule (readSlot), not on every claim: a claim between reads is answered from what the last read found, judged
  *  against THIS claim's clock, so the answer never flaps either side of a read. And a request the platform's call budget
  *  refuses is `camera_starting` too — "we could not look", never "no camera" and never an outage. */
-async function verifyRequiredSeat(a: SeatAsk, now: Date, video: Video): Promise<SeatResult> {
+async function verifyRequiredSeat(a: SeatAsk, side: Side, now: Date, video: Video): Promise<SeatResult> {
   try {
-    const meeting = await video.ensureMeeting(a.fixtureId);
-    const have = await playerParticipant(a, meeting.meetingId, video, !a.recheck);
-    // T9's re-verify of a player who never joined: nothing was ever read for them and nobody will join with a token.
+    // T9's re-verify of a player who never joined: nothing was ever read for them and nobody will join with a token. D16:
+    // their meeting is made on their own first arrival, so a re-verify must not make one - it would spend a vendor call, and
+    // a row, on a player who is not there. Judged BEFORE `ensureMeeting`.
+    if (a.recheck && (await storedPlayerParticipant(sql, { fixtureId: a.fixtureId, side, personId: a.personId })) === null) {
+      return { seated: false, reason: "camera_required", participant: null };
+    }
+    const meeting = await video.ensureMeeting(a.fixtureId, side);
+    const have = await playerParticipant(a, side, meeting.meetingId, video, !a.recheck);
+    // A participant that vanished between the check above and this read (its meeting was retired): the same answer.
     if (have === null) return { seated: false, reason: "camera_required", participant: null };
     const { participantId, minted } = have;
 
@@ -526,10 +533,10 @@ async function cachedEvidence(r: SeatRead, now: Date): Promise<SeatCamera> {
  *  `mint: false` (T9's re-verify): a player with no participant is `null` - nothing is minted, because nobody would
  *  join with the token. */
 type HaveParticipant = { participantId: string; minted: ParticipantToken | null };
-async function playerParticipant(a: SeatAsk, meetingId: string, video: Video, mint: true): Promise<HaveParticipant>;
-async function playerParticipant(a: SeatAsk, meetingId: string, video: Video, mint: boolean): Promise<HaveParticipant | null>;
-async function playerParticipant(a: SeatAsk, meetingId: string, video: Video, mint: boolean): Promise<HaveParticipant | null> {
-  const stored = await storedPlayerParticipant(sql, a);
+async function playerParticipant(a: SeatAsk, side: Side, meetingId: string, video: Video, mint: true): Promise<HaveParticipant>;
+async function playerParticipant(a: SeatAsk, side: Side, meetingId: string, video: Video, mint: boolean): Promise<HaveParticipant | null>;
+async function playerParticipant(a: SeatAsk, side: Side, meetingId: string, video: Video, mint: boolean): Promise<HaveParticipant | null> {
+  const stored = await storedPlayerParticipant(sql, { fixtureId: a.fixtureId, side, personId: a.personId });
   if (stored) return { participantId: stored, minted: null };
   if (!mint) return null;
 
@@ -539,28 +546,35 @@ async function playerParticipant(a: SeatAsk, meetingId: string, video: Video, mi
     // while it did. A participant is stored only on the meeting it was minted on, made for the pairing the board
     // has NOW, for a person still in that pairing — never an earlier pairing's player in a new pairing's room, and
     // never a participant id of a retired meeting under its successor's row.
+    //
+    // D16 (§5.6.5, the review's I3): the person is pinned to THIS row's side entrant. The `in (home, away)` this replaces
+    // accepted either side, and a person moved to the OTHER entrant by a roster edit - the pairing untouched, so `samePair`
+    // still holds - would have been stored in the side they had left. The two guards refuse different races and neither
+    // covers the other: `samePair` is the only one that refuses a re-pair which keeps the claimant on their own side and
+    // changes the other side's entrant; the pin is the only one that refuses the roster edit.
     const [m] = await tx<{ meeting_id: string; samePair: boolean; onBoard: boolean }[]>`
       select m.meeting_id,
              (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair",
              exists (select 1 from entrant_members em
-                      where em.person_id = ${a.personId} and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)) as "onBoard"
+                      where em.person_id = ${a.personId}
+                        and em.entrant_id = case m.side when 'home' then f.home_entrant_id else f.away_entrant_id end) as "onBoard"
         from fixture_video_meetings m join fixtures f on f.id = m.fixture_id
-       where m.fixture_id = ${a.fixtureId}
+       where m.fixture_id = ${a.fixtureId} and m.side = ${side}
          for update of m`;
     if (!m || m.meeting_id !== meetingId || !m.samePair || !m.onBoard) throw meetingReplaced(a.fixtureId);
-    const winner = await storedPlayerParticipant(tx, a);
+    const winner = await storedPlayerParticipant(tx, { fixtureId: a.fixtureId, side, personId: a.personId });
     if (winner) return winner;
     await tx`
-      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-      values (${a.fixtureId}, ${a.personId}, 'player', ${minted.participantId})`;
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+      values (${a.fixtureId}, ${side}, ${a.personId}, 'player', ${minted.participantId})`;
     return minted.participantId;
   });
   return { participantId: kept, minted: kept === minted.participantId ? minted : null };
 }
 
 /** The caller's token for their participant: the one a first claim minted, else a regenerated one. */
-async function issuePlayerToken(a: SeatAsk, meetingId: string, video: Video): Promise<ParticipantToken> {
-  const have = await playerParticipant(a, meetingId, video, true);
+async function issuePlayerToken(a: SeatAsk, side: Side, meetingId: string, video: Video): Promise<ParticipantToken> {
+  const have = await playerParticipant(a, side, meetingId, video, true);
   return have.minted ?? video.refreshParticipantToken({ meetingId, participantId: have.participantId });
 }
 
@@ -573,14 +587,16 @@ function meetingReplaced(fixtureId: string): HttpError {
 // The privileged client or one of its transactions (the round-open.ts shape).
 type AnySql = postgres.TransactionSql | postgres.Sql;
 
-/** The ONE rule for which participant is a person's on a board (R2-2's lock check and R3-1's snapshot read it). */
+/** The ONE rule for which participant is a person's on a board (R2-2's lock check and R3-1's snapshot read it). D16: a
+ *  person's participant is in THEIR side's meeting, so it is found by `(fixture, side)` and person - never by person alone,
+ *  which would name the opponent's meeting's participant for a person who somehow had one on each. */
 export async function storedPlayerParticipant(
   db: AnySql,
-  a: { fixtureId: string; personId: string },
+  a: { fixtureId: string; side: Side; personId: string },
 ): Promise<string | null> {
   const [row] = await db<{ participant_id: string }[]>`
     select participant_id from fixture_video_participants
-     where fixture_id = ${a.fixtureId} and person_id = ${a.personId} and preset = 'player'
+     where fixture_id = ${a.fixtureId} and side = ${a.side} and person_id = ${a.personId} and preset = 'player'
      order by created_at, id
      limit 1`;
   return row?.participant_id ?? null;

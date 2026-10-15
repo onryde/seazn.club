@@ -68,9 +68,9 @@ export function cameraMatchWindow(t: MatchTimes): MatchWindow {
  *  told-or-not total inside the window (stampedInMatch). */
 export async function matchGuardFaults(
   db: AnySql,
-  a: { fixtureId: string; personId: string; window: { from: Date; to: Date } },
+  a: { fixtureId: string; side: "home" | "away"; personId: string; window: { from: Date; to: Date } },
 ): Promise<{ faults: { from: Date; to: Date }[]; stamped: StampedInMatch }> {
-  const faults = (await guardFaultSpans(db, { fixtureId: a.fixtureId, personId: a.personId })).map((f) => ({
+  const faults = (await guardFaultSpans(db, { fixtureId: a.fixtureId, side: a.side, personId: a.personId })).map((f) => ({
     from: f.from,
     to: f.to ?? new Date(Math.max(f.from.getTime(), a.window.to.getTime())),
   }));

@@ -74,7 +74,8 @@ describe("privacy — the online-chess camera and the Lichess account link (I-4)
   it("the claim 'we do not record the video' is held by the code: the meeting is created with a title alone, and no recording API is called", () => {
     // An assumption is a guard: if a recording is ever started, this fails beside the sentence it falsifies.
     const src = readFileSync(join(__dirname, "../../../server/external-play/video/realtimekit.ts"), "utf8");
-    expect(src).toContain('{ method: "POST", body: { title: `seazn-fixture-${fixtureId}` } }');
+    // D16: a meeting per player, so the title carries the side - the one literal that names the meeting.
+    expect(src).toContain('{ method: "POST", body: { title: `seazn-fixture-${fixtureId}-${side}` } }');
     expect(src).not.toMatch(/record_on_start|\/recordings/);
   });
 });

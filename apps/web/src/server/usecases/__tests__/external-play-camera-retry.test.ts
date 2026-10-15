@@ -91,7 +91,7 @@ const claim = (s: Seeded, video?: Video, now = new Date()) => seatPlayer(ask(s),
 /** The video seam over the REAL adapter, spending from `budget` (one per request). */
 function metered(budget: () => Promise<boolean>): Video {
   return {
-    ensureMeeting: (id) => ensureMeeting(id, { budget }),
+    ensureMeeting: (id, side) => ensureMeeting(id, side, { budget }),
     addParticipant: (a) => addParticipant(a, { budget }),
     seatCameraEvidence: (a) => seatCameraEvidence(a, { budget }),
     refreshParticipantToken: (a) => refreshParticipantToken(a, { budget }),

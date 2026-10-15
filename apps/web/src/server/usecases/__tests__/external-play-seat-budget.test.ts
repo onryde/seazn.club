@@ -394,7 +394,7 @@ type Video = NonNullable<PreflightDeps["video"]>;
 /** The real adapter, every request of which asks `budget` first. */
 function metered(budget: () => Promise<boolean>): Video {
   return {
-    ensureMeeting: (id) => ensureMeeting(id, { budget }),
+    ensureMeeting: (id, side) => ensureMeeting(id, side, { budget }),
     addParticipant: (a) => addParticipant(a, { budget }),
     seatCameraEvidence: (a) => seatCameraEvidence(a, { budget }),
     refreshParticipantToken: (a) => refreshParticipantToken(a, { budget }),
@@ -535,7 +535,7 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
 
   it("the deferral is the adapter's RealtimeKitDeferred — the seat turns it into an answer; nothing else escapes", async () => {
     const s = await seed();
-    await expect(ensureMeeting(s.fixtureId, { budget: async () => false })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+    await expect(ensureMeeting(s.fixtureId, "home", { budget: async () => false })).rejects.toBeInstanceOf(RealtimeKitDeferred);
     await expect(claim(s, new Date(), "home", metered(async () => false))).resolves.toMatchObject({ seated: false, reason: "camera_starting" });
   });
 });

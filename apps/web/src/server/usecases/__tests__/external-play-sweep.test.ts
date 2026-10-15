@@ -44,7 +44,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
-import { RealtimeKitDeferred, addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, RealtimeKitError, addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
@@ -96,6 +96,7 @@ import {
   seedOnlineChessFixture,
   seedOnlineChessRound,
   seedPlayer,
+  putVideoParticipant,
   type SeedOnlineChessFixtureResult,
   type SeedOnlineChessRoundResult,
 } from "./_external-play-seed";
@@ -1250,7 +1251,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
 
   it("a create SENT and never recorded, its claim stale past T+20: held create_outcome_unknown — never a no-show — and its room comes down; once", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
-    await ensureMeeting(b.fixtureId, RTK);
+    await ensureMeeting(b.fixtureId, "home", RTK);
     await crashedCreate(b, b.at(19));
     // The reviewer's probe P3: T9 itself cannot recover it past T+20.
     expect(await createGameIfReady(b.fixtureId, { now: b.at(21), publish: async () => {} }), "premise: T9 refuses past T+20")
@@ -1267,7 +1268,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
 
   it("BEFORE T+20 a sent marker under a stale claim is T9's to recover: nothing held, the room stays", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
-    await ensureMeeting(b.fixtureId, RTK);
+    await ensureMeeting(b.fixtureId, "home", RTK);
     await crashedCreate(b, b.at(15));
     const r = await sweep(b, { now: b.at(19), endMeeting: (id) => endMeeting(id, RTK) });
     expect([r.heldForOrganiser, r.meetingsEnded, r.noShows]).toEqual([0, 0, 0]);
@@ -1277,7 +1278,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
 
   it("M1 (probe P5): a claim taken a second before T+20, no marker yet — job 1 waits AND job 3 keeps the room; once stale, both rule", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
-    await ensureMeeting(b.fixtureId, RTK);
+    await ensureMeeting(b.fixtureId, "home", RTK);
     const { deadline } = playableWindow(b.opened);
     // Stands for T9's claim (taken before its marker), live at T+20.
     await sql`update fixture_external_play set mint_claimed_at = ${new Date(deadline.getTime() - 1_000)} where fixture_id = ${b.fixtureId}`;
@@ -1292,7 +1293,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
 
   it("…and a sent marker under a LIVE claim past T+20 (T9 still in flight) is not held until the claim goes stale", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
-    await ensureMeeting(b.fixtureId, RTK);
+    await ensureMeeting(b.fixtureId, "home", RTK);
     const { deadline } = playableWindow(b.opened);
     // Stands for T9 mid-call: its marker and its renewed claim, a second before T+20.
     const sent = new Date(deadline.getTime() - 1_000);
@@ -1802,7 +1803,7 @@ const serveStream = (body: string) => {
 describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+20 when nobody played", () => {
   /** T7's REAL ensureMeeting (fake fetch): the room a first arrival opens. */
   async function meetingFor(b: Board): Promise<string> {
-    const { meetingId } = await ensureMeeting(b.fixtureId, RTK);
+    const { meetingId } = await ensureMeeting(b.fixtureId, "home", RTK);
     rtk.calls = [];
     return meetingId;
   }
@@ -2116,7 +2117,7 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
 
   it("a FINISHED game is never read again — and its meeting comes down in the SAME pass that finished it", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
-    const { meetingId } = await ensureMeeting(b.fixtureId, RTK);
+    const { meetingId } = await ensureMeeting(b.fixtureId, "home", RTK);
     const gameId = await liveGame(b);
     serveStream(gameFull(b, gameId, ENDED));
     const ended: string[] = [];
@@ -2586,7 +2587,7 @@ describe.runIf(HAS_DB)("I-1 — the report's numeric failure counters and the pa
     for (const [clock, runs] of [[B - 1, true], [B, false]] as const) {
       // A room nobody used, its round opened 30 minutes ago: past T+20, so the teardown is due.
       const idle = await openedBoard({ checkedIn: ["home"], openedMinutesAgo: 30 });
-      const { meetingId } = await ensureMeeting(idle.fixtureId, RTK);
+      const { meetingId } = await ensureMeeting(idle.fixtureId, "home", RTK);
       const ended: string[] = [];
       const r = await sweep(idle, {
         now: new Date(),
@@ -2708,7 +2709,7 @@ describe.runIf(HAS_DB)("D20 — flag-due boards cannot starve the pass (review I
    *  past T+20) and a throttled create. Recorders stand in for the vendor calls; the candidates are the real rows. */
   async function laterJobs(now: (b: Board) => Date) {
     const idle = await openedBoard({ checkedIn: ["home"], openedMinutesAgo: 30 });
-    const { meetingId } = await ensureMeeting(idle.fixtureId, RTK);
+    const { meetingId } = await ensureMeeting(idle.fixtureId, "home", RTK);
     const throttled = await openedBoard({ checkedIn: ["home", "away"] });
     const retryAt = await throttledCreate(throttled, 3);
     const at = now(throttled);
@@ -3497,7 +3498,8 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
 describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () => {
   type Match = {
     b: Board;
-    meetingId: string;
+    /** D16: a meeting per PLAYER - each player's own vendor meeting id. */
+    meetings: Record<Side, string>;
     part: Record<Side, string>;
     /** The match window as the DB holds it: the first move, and the GAME's
      *  end (ruling I1) — the bridge's close, else the first read that saw the
@@ -3505,10 +3507,12 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
      *  computes on). */
     startedAt: number;
     overAt: number;
-    /** The ROOM's end, minutes after the game's: every ending here is torn
-     *  down at a later sweep, as production does. */
+    /** The ROOMS' end, minutes after the game's: every ending here is torn
+     *  down at a later sweep, as production does. The two rooms come down in
+     *  one pass, a few milliseconds apart; playedMatch gives both the later
+     *  instant so the clock tests below ask one boundary, not two. */
     endedAt: number;
-    /** The room's end rounded UP to the millisecond: `ended_at` is stamped
+    /** The rooms' end rounded UP to the millisecond: `ended_at` is stamped
      *  by the DB's now(), which carries microseconds a JS Date drops, so a
      *  clock of `endedAt + 2 min` would sit a few microseconds BEFORE the
      *  rule's boundary. */
@@ -3516,6 +3520,8 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   };
   const iso = (ms: number) => new Date(ms).toISOString();
   const SAMPLE_MS = 7_000; // the spike's measured cadence
+  /** D16: a played match has a room per player (§5.6), so a pass that settles a match's cameras settles TWO rows. */
+  const ROOMS = 2;
 
   /** How a match ENDS, each through the producers production uses — and in
    *  every one the room comes down at a LATER sweep than the game's end:
@@ -3623,10 +3629,12 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     }
     // On the real clock, so the room this pass ends is not yet 2 minutes old.
     const torn = await sweep(b, { now: new Date(), endMeeting: (id) => endMeeting(id, RTK) });
-    expect(torn.meetingsEnded, `premise: ${ending} — the sweep tore the room down`).toBe(1);
-    const [m] = await sql<{ meeting_id: string }[]>`
-      select meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId}`;
-    expect(m, "premise: T8's seat opened the room").toBeDefined();
+    expect(torn.meetingsEnded, `premise: ${ending} — the sweep tore BOTH players' rooms down`).toBe(ROOMS);
+    const rooms = await sql<{ side: Side; meeting_id: string }[]>`
+      select side, meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId} order by side`;
+    expect(rooms.map((x) => x.side), "premise: T8's seat opened a room for each player").toEqual(["away", "home"]);
+    // The rooms came down milliseconds apart; give both the later instant (see Match.endedAt).
+    await sql`update fixture_video_meetings set ended_at = (select max(ended_at) from fixture_video_meetings where fixture_id = ${b.fixtureId}) where fixture_id = ${b.fixtureId}`;
     const parts = await sql<{ person_id: string; participant_id: string }[]>`
       select person_id, participant_id from fixture_video_participants
        where fixture_id = ${b.fixtureId} and preset = 'player'`;
@@ -3638,7 +3646,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
              ceil(extract(epoch from vm.ended_at) * 1000)::float8 as ended_ceil
         from fixture_video_meetings vm
         join fixture_external_play ep on ep.fixture_id = vm.fixture_id
-       where vm.fixture_id = ${b.fixtureId}`;
+       where vm.fixture_id = ${b.fixtureId} and vm.side = 'home'`;
     expect(t!.ended_at, "premise: T7 ended the room").not.toBeNull();
     if (o.start !== false) {
       expect(t!.started_at, "premise: T10 started the game").toEqual(b.at(6));
@@ -3651,7 +3659,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     rtk.calls = [];
     return {
       b,
-      meetingId: m!.meeting_id,
+      meetings: { home: rooms.find((x) => x.side === "home")!.meeting_id, away: rooms.find((x) => x.side === "away")!.meeting_id },
       part: part as Record<Side, string>,
       startedAt: t!.started_at?.getTime() ?? Number.NaN,
       overAt: t!.over_at?.getTime() ?? Number.NaN,
@@ -3660,14 +3668,19 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     };
   }
 
-  /** A session of the match's meeting, `from`/`to` in ms. */
-  function session(m: Match, from: number, to: number | null, status: "LIVE" | "ENDED" = "ENDED"): FakeSession {
-    const x: FakeSession = {
-      id: `sess-${randomUUID().slice(0, 8)}`, meetingId: m.meetingId, status,
-      started_at: iso(from), ended_at: to === null ? null : iso(to), rows: [],
+  /** A session of each player's room, `from`/`to` in ms: D16 gives a player a meeting of their own, so "the match's
+   *  session" is a pair - the home room's and the away room's - and `connect` puts a player into their own. */
+  type SessionPair = Record<Side, FakeSession>;
+  function session(m: Match, from: number, to: number | null, status: "LIVE" | "ENDED" = "ENDED"): SessionPair {
+    const one = (side: Side): FakeSession => {
+      const x: FakeSession = {
+        id: `sess-${randomUUID().slice(0, 8)}`, meetingId: m.meetings[side], status,
+        started_at: iso(from), ended_at: to === null ? null : iso(to), rows: [],
+      };
+      rtk.sessions.push(x);
+      return x;
     };
-    rtk.sessions.push(x);
-    return x;
+    return { home: one("home"), away: one("away") };
   }
 
   /** One camera connection (a PEER) of `side` in `x`, on from `joined` to
@@ -3675,7 +3688,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
    *  read at every fetch: false is a report not final yet (left_at null,
    *  duration 0 — the measured frozen snapshot). Returns its samples. */
   function connect(
-    m: Match, x: FakeSession, side: Side,
+    m: Match, pair: SessionPair, side: Side,
     o: { joined: number; left: number; gaps?: [number, number][]; events?: [string, number][]; ready?: { now: boolean } },
   ): number[] {
     const peer = `peer-${randomUUID().slice(0, 8)}`;
@@ -3683,6 +3696,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     for (let t = o.joined; t <= o.left; t += SAMPLE_MS) {
       if (!(o.gaps ?? []).some(([a, b]) => t > a && t < b)) samples.push(t);
     }
+    const x = pair[side];
     let row = x.rows.find((r) => r.user_id === m.part[side]);
     if (!row) {
       row = { id: `row-${randomUUID().slice(0, 8)}`, user_id: m.part[side], left_at: iso(o.left), peer_events: [] };
@@ -3713,10 +3727,15 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   const flagsOf = (fixtureId: string) =>
     sql<{ kind: string; person_id: string | null; note: string | null; closed_at: Date | null }[]>`
       select kind, person_id, note, closed_at from fixture_play_flags where fixture_id = ${fixtureId} order by opened_at, id`;
-  const settledAt = async (fixtureId: string) =>
-    (await sql<{ camera_evidence_at: Date | null }[]>`
-      select camera_evidence_at from fixture_video_meetings where fixture_id = ${fixtureId}`)[0]!.camera_evidence_at;
+  /** The sides whose room has its camera-evidence stamp (D16: each room settles on its own). */
+  const settledSides = async (fixtureId: string): Promise<Side[]> =>
+    (await sql<{ side: Side }[]>`
+      select side from fixture_video_meetings where fixture_id = ${fixtureId} and camera_evidence_at is not null order by side`).map((r) => r.side);
+  const NONE_SETTLED: Side[] = [];
+  const BOTH_SETTLED: Side[] = ["away", "home"];
   const cameraFailures = (r: SweepReport) => r.failures.filter((f) => f.job === "camera_evidence");
+  /** The same failure once per room: the job runs per meeting, so a board whose two rooms both fail reports it twice. */
+  const perRoom = <T,>(one: T): T[] => Array.from({ length: ROOMS }, () => one);
   const rtkReads = () => rtk.calls.filter((c) => c.method === "GET" && c.path.startsWith("/sessions"));
   /** `ms` after the room ended — the sweep's clock. */
   const after = (m: Match, ms: number) => new Date(m.endedCeil + ms);
@@ -3737,7 +3756,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       for (const side of ["home", "away"] as const) connect(m, x, side, { joined: m.startedAt - 90_000, left: m.overAt + 30_000 });
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r), ending).toEqual([]);
-      expect([r.cameraSettled, r.cameraFlags], ending).toEqual([1, 0]);
+      expect([r.cameraSettled, r.cameraFlags], ending).toEqual([ROOMS, 0]);
       expect((await flagsOf(m.b.fixtureId)).filter((f) => f.kind === "camera_lost"), ending).toEqual([]);
       expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, `${ending}: both cameras read`).toBe(2);
       checked++;
@@ -3789,7 +3808,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     bothOnThroughout(m);
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(cameraFailures(r)).toEqual([]);
-    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([ROOMS, 0]);
     expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, "both cameras read").toBe(2);
   });
 
@@ -3801,10 +3820,10 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect([r.cameraSettled, cameraFailures(r)]).toEqual([0, []]);
     expect(rtkReads(), "no window, no read").toEqual([]);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
     const late = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
-    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
-    expect(late.cameraSettled).toBe(1);
+    expect(cameraFailures(late)).toEqual(perRoom({ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }));
+    expect(late.cameraSettled).toBe(ROOMS);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
@@ -3813,14 +3832,14 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     bothOnThroughout(m);
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(cameraFailures(r)).toEqual([]);
-    expect(r.cameraSettled).toBe(1);
+    expect(r.cameraSettled).toBe(ROOMS);
     expect(r.cameraFlags).toBe(0);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
-    expect(await settledAt(m.b.fixtureId)).not.toBeNull();
-    // Anti-vacuity: the session list, one participant list per player, one report per peer.
-    expect(rtkReads().map((c) => c.path.replace(/sess-[0-9a-f]{8}/, "*").replace(/peer-[0-9a-f]{8}/, "*"))).toEqual([
-      "/sessions", "/sessions/*/participants", "/sessions/peer-report/*", "/sessions/*/participants", "/sessions/peer-report/*",
-    ]);
+    expect(await settledSides(m.b.fixtureId)).toEqual(BOTH_SETTLED);
+    // Anti-vacuity: per room, the session list, ONE participant list (its own player's) and one report per peer.
+    expect(rtkReads().map((c) => c.path.replace(/sess-[0-9a-f]{8}/, "*").replace(/peer-[0-9a-f]{8}/, "*"))).toEqual(
+      Array.from({ length: ROOMS }, () => ["/sessions", "/sessions/*/participants", "/sessions/peer-report/*"]).flat(),
+    );
   });
 
   it("the camera OFF mid-match: one camera_lost flag for THAT player, the interval in its note; never a sanction", async () => {
@@ -3915,10 +3934,10 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     connect(m, x, "home", { joined: m.startedAt - 90_000, left: mid });
     connect(m, x, "home", { joined: mid + 5_000, left: m.endedAt });
     connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
-    expect(x.rows.find((r) => r.user_id === m.part.home)!.peer_events.length, "premise: two peers").toBe(4);
+    expect(x.home.rows.find((r) => r.user_id === m.part.home)!.peer_events.length, "premise: two peers").toBe(4);
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(cameraFailures(r)).toEqual([]);
-    expect(r.cameraSettled).toBe(1);
+    expect(r.cameraSettled).toBe(ROOMS);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, "every peer read").toBe(3);
   });
@@ -3955,7 +3974,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       bothOnThroughout(m);
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r)).toEqual([]);
-      expect([r.cameraSettled, r.cameraFlags, r.deviceFlags]).toEqual([1, 0, 0]);
+      expect([r.cameraSettled, r.cameraFlags, r.deviceFlags]).toEqual([ROOMS, 0, 0]);
       expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     });
 
@@ -3966,10 +3985,10 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       connect(m, x, "home", { joined: m.startedAt - 90_000, left: mid });
       connect(m, x, "home", { joined: mid + 5_000, left: m.endedAt });
       connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
-      expect(x.rows.find((r) => r.user_id === m.part.home)!.peer_events.length, "premise: two peers").toBe(4);
+      expect(x.home.rows.find((r) => r.user_id === m.part.home)!.peer_events.length, "premise: two peers").toBe(4);
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r)).toEqual([]);
-      expect([r.cameraSettled, r.deviceFlags]).toEqual([1, 0]);
+      expect([r.cameraSettled, r.deviceFlags]).toEqual([ROOMS, 0]);
       expect(await devicesFlags(m.b.fixtureId)).toEqual([]);
     });
 
@@ -3982,7 +4001,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r)).toEqual([]);
-      expect([r.cameraSettled, r.cameraFlags, r.connectionFlags, r.deviceFlags]).toEqual([1, 0, 0, 1]);
+      expect([r.cameraSettled, r.cameraFlags, r.connectionFlags, r.deviceFlags]).toEqual([ROOMS, 0, 0, 1]);
       const flags = await flagsOf(m.b.fixtureId);
       expect(flags.map((f) => [f.kind, f.person_id, f.closed_at]), "home's alone, and nothing else").toEqual([
         ["multiple_devices", m.b.home.personId, null],
@@ -4011,7 +4030,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       connect(lobby, x, "away", { joined: lobby.startedAt - 90_000, left: lobby.endedAt });
       const r = await pass(lobby, after(lobby, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r)).toEqual([]);
-      expect([r.cameraSettled, r.deviceFlags]).toEqual([1, 0]);
+      expect([r.cameraSettled, r.deviceFlags]).toEqual([ROOMS, 0]);
       expect(await flagsOf(lobby.b.fixtureId)).toEqual([]);
 
       const across = await playedMatch();
@@ -4083,13 +4102,13 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
       return { m, leave, back };
     }
-    const seat = (m: Match, side: Side) => ({ fixtureId: m.b.fixtureId, personId: m.b[side].personId });
+    const seat = (m: Match, side: Side) => ({ fixtureId: m.b.fixtureId, side, personId: m.b[side].personId });
 
     it("the positive pair: a 60 s gap with NO stamp is a camera_lost flag; the same gap stamped as our fault is none", async () => {
       expect(60_000, "premise: the gap is past the 15 s threshold").toBeGreaterThan(15_000);
       const plain = await gapMatch(60_000);
       const r0 = await pass(plain.m, after(plain.m, CAMERA_EVIDENCE_AFTER_MS));
-      expect([r0.cameraSettled, r0.cameraFlags], "no stamp: the player's").toEqual([1, 1]);
+      expect([r0.cameraSettled, r0.cameraFlags], "no stamp: the player's").toEqual([ROOMS, 1]);
       const [f] = await flagsOf(plain.m.b.fixtureId);
       expect([f!.kind, f!.person_id]).toEqual(["camera_lost", plain.m.b.home.personId]);
       expect(f!.note).toContain(`${iso(plain.leave)} to ${iso(plain.back)}`);
@@ -4099,7 +4118,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(await closeGuardFault(sql, { ...seat(ours.m, "home"), at: new Date(ours.back) }), "premise: closed").toBe(true);
       const r1 = await pass(ours.m, after(ours.m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r1)).toEqual([]);
-      expect([r1.cameraSettled, r1.cameraFlags], "stamped: ours").toEqual([1, 0]);
+      expect([r1.cameraSettled, r1.cameraFlags], "stamped: ours").toEqual([ROOMS, 0]);
       expect(await flagsOf(ours.m.b.fixtureId)).toEqual([]);
     });
 
@@ -4157,7 +4176,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         expect(open.m.overAt - open.leave, "premise: the open stamp runs past the told threshold").toBeGreaterThan(GUARD_FAULT_FLAG_SECONDS * 1000);
         const r = await pass(open.m, after(open.m, CAMERA_EVIDENCE_AFTER_MS));
         expect(cameraFailures(r)).toEqual([]);
-        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 1]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([ROOMS, 0, 1]);
         expect((await flagsOf(open.m.b.fixtureId)).map((f) => [f.kind, f.person_id])).toEqual([["camera_connection_problems", open.m.b.home.personId]]);
 
         const closed = await gaveUp(true);
@@ -4190,7 +4209,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         expect((open.reseat - open.leave) / 1000, "premise: the stamped total is past the told threshold").toBeGreaterThan(GUARD_FAULT_FLAG_SECONDS);
         const r = await pass(open.m, after(open.m, CAMERA_EVIDENCE_AFTER_MS));
         expect(cameraFailures(r)).toEqual([]);
-        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags], "ours: excused, and told").toEqual([1, 0, 1]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags], "ours: excused, and told").toEqual([ROOMS, 0, 1]);
 
         const closed = await reloaded(true);
         const r0 = await pass(closed.m, after(closed.m, CAMERA_EVIDENCE_AFTER_MS));
@@ -4234,7 +4253,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         const ours = await gapsMatch(gaps, true);
         const r = await pass(ours, after(ours, CAMERA_EVIDENCE_AFTER_MS));
         expect(cameraFailures(r)).toEqual([]);
-        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 0]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([ROOMS, 0, 0]);
         expect(await kinds(ours)).toEqual([]);
 
         const plain = await gapsMatch(gaps, false);
@@ -4248,7 +4267,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         const m = await gapsMatch([[120_000, len]], true);
         const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
         expect(cameraFailures(r)).toEqual([]);
-        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 1]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([ROOMS, 0, 1]);
         const flags = await flagsOf(m.b.fixtureId);
         expect(flags.map((f) => [f.kind, f.person_id, f.closed_at])).toEqual([["camera_connection_problems", m.b.home.personId, null]]);
         expect(flags[0]!.note, "the stamped total leads the note (T16 renders it as {duration})").toMatch(
@@ -4316,7 +4335,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
           await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(at0 + 2_000) });
         }
         const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 0]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([ROOMS, 0, 0]);
       });
     });
 
@@ -4327,7 +4346,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       await openGuardFault(sql, { ...seat(m, "home"), at: new Date(m.overAt + 30_000) });
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r)).toEqual([]);
-      expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+      expect([r.cameraSettled, r.cameraFlags]).toEqual([ROOMS, 0]);
     });
 
     // T15 fix round 1, I1: the arbiter panel shows the connection time from
@@ -4349,7 +4368,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect((await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) })).outcome, "premise: opened, never closed").toBe("opened");
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r)).toEqual([]);
-      expect([r.cameraSettled, r.cameraFlags, r.connectionFlags], "ours: excused, and told").toEqual([1, 0, 1]);
+      expect([r.cameraSettled, r.cameraFlags, r.connectionFlags], "ours: excused, and told").toEqual([ROOMS, 0, 1]);
       // Expected from the scenario: the open stamp runs from the leave to the
       // clock's bound — never to the room's later end.
       const seconds = Math.round((clockEnd - leave) / 1000);
@@ -4369,13 +4388,15 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
     const first = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(cameraFailures(first)).toEqual([]);
-    expect(first.cameraSettled).toBe(0);
-    expect(await settledAt(m.b.fixtureId), "not settled: the report is not final").toBeNull();
+    // D16: each room settles on its own - away's report is final and settles, home's is not and waits.
+    expect(first.cameraSettled).toBe(1);
+    expect(await settledSides(m.b.fixtureId), "home's report is not final: only away's room is settled").toEqual(["away"]);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     expect(rtkReads().some((c) => c.path.startsWith("/sessions/peer-report/")), "premise: the report WAS read").toBe(true);
     ready.now = true;
     const second = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
-    expect(second.cameraSettled).toBe(1);
+    expect(second.cameraSettled, "the other room, now final").toBe(1);
+    expect(await settledSides(m.b.fixtureId)).toEqual(BOTH_SETTLED);
     expect((await flagsOf(m.b.fixtureId)).map((f) => f.person_id)).toEqual([m.b.home.personId]);
   });
 
@@ -4385,7 +4406,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     for (const side of ["home", "away"] as const) connect(m, x, side, { joined: m.startedAt - 90_000, left: m.endedAt });
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(r.cameraSettled).toBe(0);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
   });
 
   it("a re-run writes NO second flag and reads nothing", async () => {
@@ -4445,7 +4466,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       await holder;
       const [ra, rb] = await Promise.all([a, b]);
       expect([...cameraFailures(ra), ...cameraFailures(rb)]).toEqual([]);
-      expect(ra.cameraSettled + rb.cameraSettled, "exactly one pass settled").toBe(1);
+      expect(ra.cameraSettled + rb.cameraSettled, "exactly one pass settled").toBe(ROOMS);
       expect((await flagsOf(m.b.fixtureId)).length, "one flag").toBe(1);
       checked++;
     }
@@ -4458,9 +4479,9 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const early = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS - 1));
     expect(early.cameraSettled).toBe(0);
     expect(rtkReads()).toEqual([]);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
     const at = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect(at.cameraSettled).toBe(1);
+    expect(at.cameraSettled).toBe(ROOMS);
   });
 
   // Review M4: the policy IN FORCE for the match — never the current one. D9
@@ -4501,7 +4522,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(r.cameraFlags, relaxTo).toBe(0);
       expect(await flagsOf(m.b.fixtureId), relaxTo).toEqual([]);
       expect(rtkReads(), `${relaxTo}: no read`).toEqual([]);
-      expect(await settledAt(m.b.fixtureId), `${relaxTo}: settled, so never re-read`).not.toBeNull();
+      expect(await settledSides(m.b.fixtureId), `${relaxTo}: settled, so never re-read`).toEqual(BOTH_SETTLED);
       checked++;
     }
     // …and a board that was OPTIONAL all along (T8 seats it with a camera too).
@@ -4522,7 +4543,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       await relax(m, relaxTo);
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r), relaxTo).toEqual([]);
-      expect([r.cameraSettled, r.cameraFlags], relaxTo).toEqual([1, 1]);
+      expect([r.cameraSettled, r.cameraFlags], relaxTo).toEqual([ROOMS, 1]);
       expect((await flagsOf(m.b.fixtureId)).map((f) => [f.kind, f.person_id]), relaxTo).toEqual([["camera_lost", m.b.home.personId]]);
       checked++;
     }
@@ -4540,7 +4561,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     // pin the order on the sort key itself — the later change an hour later.
     await sql`update competition_events set created_at = created_at + interval '1 hour' where id = ${changes[1]!.id}`;
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 1]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([ROOMS, 1]);
   });
 
   it("M4: a stage's OWN policy wins over any division change (the stage has no writer: set as data)", async () => {
@@ -4550,7 +4571,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     await sql`update stages set camera_policy = 'optional' where id = ${m.b.stageId}`;
     await relax(m, "off"); // a division change after the match: beside the point
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([ROOMS, 0]);
     expect(rtkReads(), "the stage says optional: nothing to read").toEqual([]);
   });
 
@@ -4570,9 +4591,9 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     homeGap(m);
     await corruptAudit(m);
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect(cameraFailures(r).map((f) => f.code)).toEqual(["CAMERA_POLICY_AUDIT_UNREADABLE"]);
+    expect(cameraFailures(r).map((f) => f.code)).toEqual(perRoom("CAMERA_POLICY_AUDIT_UNREADABLE"));
     expect(r.cameraSettled).toBe(0);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
@@ -4591,18 +4612,18 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         now: new Date(bad.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + ms), endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK,
       });
     const atDay = await day(0);
-    expect(cameraFailures(atDay), "AT the day: still a failure, read again").toEqual([
-      { job: "camera_evidence", fixtureId: bad.b.fixtureId, code: "CAMERA_POLICY_AUDIT_UNREADABLE" },
-    ]);
-    expect(await settledAt(bad.b.fixtureId)).toBeNull();
-    expect([atDay.cameraSettled, atDay.cameraFlags], "the other match settles, flagged, in the same pass").toEqual([1, 1]);
-    expect(await settledAt(good.b.fixtureId), "premise: it was the good match that settled").not.toBeNull();
+    expect(cameraFailures(atDay), "AT the day: still a failure, read again").toEqual(
+      perRoom({ job: "camera_evidence", fixtureId: bad.b.fixtureId, code: "CAMERA_POLICY_AUDIT_UNREADABLE" }),
+    );
+    expect(await settledSides(bad.b.fixtureId)).toEqual(NONE_SETTLED);
+    expect([atDay.cameraSettled, atDay.cameraFlags], "the other match settles, flagged, in the same pass").toEqual([ROOMS, 1]);
+    expect(await settledSides(good.b.fixtureId), "premise: it was the good match that settled").toEqual(BOTH_SETTLED);
     expect((await flagsOf(good.b.fixtureId)).filter((f) => f.kind === "camera_lost")).toHaveLength(1);
 
     const late = await day(1);
-    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: bad.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
-    expect([late.cameraSettled, late.cameraFlags]).toEqual([1, 0]);
-    expect(await settledAt(bad.b.fixtureId)).not.toBeNull();
+    expect(cameraFailures(late)).toEqual(perRoom({ job: "camera_evidence", fixtureId: bad.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }));
+    expect([late.cameraSettled, late.cameraFlags]).toEqual([ROOMS, 0]);
+    expect(await settledSides(bad.b.fixtureId)).toEqual(BOTH_SETTLED);
     expect(await flagsOf(bad.b.fixtureId), "never a flag on a policy nobody can read").toEqual([]);
 
     const again = await day(SWEEP_CADENCE_MS);
@@ -4629,7 +4650,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     bothOnThroughout(m);
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(cameraFailures(r)).toEqual([]);
-    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([ROOMS, 0]);
     expect((await flagsOf(m.b.fixtureId)).filter((f) => f.person_id === extra)).toEqual([]);
   });
 
@@ -4663,7 +4684,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[press + 100_000, press + 200_000]] });
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(cameraFailures(r)).toEqual([]);
-    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 1]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([ROOMS, 1]);
     const flags = await flagsOf(m.b.fixtureId);
     expect(flags.map((f) => [f.kind, f.person_id]), "home's gap was before the press; away's after it").toEqual([["camera_lost", m.b.home.personId]]);
     expect(flags[0]!.note).toContain(`of ${Math.round((press - m.startedAt) / 1000)} s in the match`);
@@ -4678,14 +4699,14 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(rtkReads()).toEqual([]);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
-    expect(r.cameraSettled).toBe(1);
+    expect(r.cameraSettled).toBe(ROOMS);
   });
 
   it("a game that never STARTED has no match to evidence: settled, nothing read", async () => {
     const m = await playedMatch({ start: false });
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(rtkReads()).toEqual([]);
-    expect(r.cameraSettled).toBe(1);
+    expect(r.cameraSettled).toBe(ROOMS);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
@@ -4695,7 +4716,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     connect(m, x, "home", { joined: m.startedAt - 280_000, left: m.endedAt, gaps: [[m.startedAt - 250_000, m.startedAt - 10_000]] });
     connect(m, x, "away", { joined: m.startedAt - 280_000, left: m.endedAt });
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect(r.cameraSettled).toBe(1);
+    expect(r.cameraSettled).toBe(ROOMS);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
@@ -4705,12 +4726,12 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   it("an EMPTY session list is NOT 'camera off': nothing stored, retried; a day on, settled with NO flag and SAID so", async () => {
     const m = await playedMatch();
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect(rtkReads().map((c) => c.path), "premise: the list was read, and was empty").toEqual(["/sessions"]);
+    expect(rtkReads().map((c) => c.path), "premise: each room's list was read, and was empty").toEqual(perRoom("/sessions"));
     expect([r.cameraSettled, r.cameraFlags, cameraFailures(r)]).toEqual([0, 0, []]);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
     const late = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
-    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
-    expect(late.cameraSettled).toBe(1);
+    expect(cameraFailures(late)).toEqual(perRoom({ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }));
+    expect(late.cameraSettled).toBe(ROOMS);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
@@ -4738,13 +4759,15 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const x = session(m, m.startedAt - 120_000, m.endedAt);
     connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt });
     const first = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect([first.cameraSettled, first.cameraFlags, cameraFailures(first)]).toEqual([0, 0, []]);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    // D16: home's room is listed and settles; AWAY's shows nobody for a player seated in it, so that room is not ready.
+    expect([first.cameraSettled, first.cameraFlags, cameraFailures(first)]).toEqual([1, 0, []]);
+    expect(await settledSides(m.b.fixtureId)).toEqual(["home"]);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     // The list catches up: away's camera, on all match.
     connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
     const next = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
     expect([next.cameraSettled, next.cameraFlags]).toEqual([1, 0]);
+    expect(await settledSides(m.b.fixtureId)).toEqual(BOTH_SETTLED);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
@@ -4770,9 +4793,11 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     // …and the match's own session.
     const x = bothOnThroughout(m, session(m, m.startedAt - 120_000, m.endedAt));
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect(r.cameraSettled, "a stale report outside the match never holds the evidence up").toBe(1);
-    expect(rtkReads().some((c) => c.path.includes(pre.id)), "the pre-match session is not read").toBe(false);
-    expect(rtkReads().some((c) => c.path.includes(x.id)), "premise: the match's session is").toBe(true);
+    expect(r.cameraSettled, "a stale report outside the match never holds the evidence up").toBe(ROOMS);
+    for (const side of ["home", "away"] as const) {
+      expect(rtkReads().some((c) => c.path.includes(pre[side].id)), `${side}: the pre-match session is not read`).toBe(false);
+      expect(rtkReads().some((c) => c.path.includes(x[side].id)), `${side}: premise: the match's session is`).toBe(true);
+    }
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
@@ -4800,8 +4825,11 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const PATH_NAMES = Object.keys(PATHS) as PathName[];
     const K = 3;
     const claims = Object.fromEntries(PATH_NAMES.map((p) => [p, 0])) as Record<PathName, number>;
-    const counters = { passes: 0, early: 0, not_ready: 0, flagged: 0, outage_failed: 0, unread: 0, settled_skip: 0, readies: 0 };
-    type Facts = { reads: boolean; settledNow: 0 | 1; flags: number; failure: string | null };
+    const counters = { passes: 0, early: 0, not_ready: 0, flagged: 0, outage_failed: 0, unread: 0, settled_skip: 0, readies: 0, half_settled: 0 };
+    // D16: each player's room settles on its OWN (V442, per row): the model is the two rooms, side by side - a room is read
+    // while it is unsettled, settles when its report is final (or on the day's give-up), and nothing the other room does
+    // moves it.
+    type Facts = { reads: boolean; settledNow: number; flags: number; failures: string[] };
     let run = 0;
     await fc.assert(
       fc.asyncProperty(fc.array(actArb, { minLength: 0, maxLength: 6 }), async (suffix) => {
@@ -4816,7 +4844,8 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         // The truth: home's camera was off 200 s mid-match; away's never.
         connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]], ready: ready.home });
         connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt, ready: ready.away });
-        const jm = { t: 0, settled: null as null | "flag" | "unread", outage: false };
+        const jm = { t: 0, outage: false, settled: { home: null, away: null } as Record<Side, null | "flag" | "unread"> };
+        const settledSidesOf = () => (["away", "home"] as const).filter((sd) => jm.settled[sd] !== null);
         let last: Facts | null = null;
         const acts = [...PATHS[path], ...suffix];
         for (let i = 0; i < acts.length; i++) {
@@ -4832,44 +4861,53 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
             jm.t += a.dtMs;
             counters.passes++;
             const givenUp = m.endedCeil + jm.t - m.endedAt > CAMERA_EVIDENCE_GIVE_UP_MS;
-            const f: Facts = { reads: false, settledNow: 0, flags: 0, failure: null };
-            if (jm.settled !== null) counters.settled_skip++;
+            const f: Facts = { reads: false, settledNow: 0, flags: 0, failures: [] };
+            if (settledSidesOf().length === 2) counters.settled_skip++;
             else if (jm.t < CAMERA_EVIDENCE_AFTER_MS) counters.early++;
             else {
-              f.reads = true;
-              if (jm.outage) {
-                jm.outage = false;
-                if (givenUp) {
-                  jm.settled = "unread"; f.settledNow = 1; f.failure = "CAMERA_EVIDENCE_UNREAD"; counters.unread++;
-                } else {
-                  f.failure = "unavailable"; counters.outage_failed++;
-                }
-              } else if (ready.home.now && ready.away.now) {
-                jm.settled = "flag"; f.settledNow = 1; f.flags = 1; counters.flagged++;
-              } else if (givenUp) {
-                jm.settled = "unread"; f.settledNow = 1; f.failure = "CAMERA_EVIDENCE_UNREAD"; counters.unread++;
-              } else counters.not_ready++;
+              // The job reads rooms by room end, then side: the rooms ended together, so AWAY's is read first ('away' < 'home'),
+              // and a vendor outage is the first read's.
+              for (const side of ["away", "home"] as const) {
+                if (jm.settled[side] !== null) continue;
+                f.reads = true;
+                if (jm.outage) {
+                  jm.outage = false;
+                  if (givenUp) {
+                    jm.settled[side] = "unread"; f.settledNow++; f.failures.push("CAMERA_EVIDENCE_UNREAD"); counters.unread++;
+                  } else {
+                    f.failures.push("unavailable"); counters.outage_failed++;
+                  }
+                } else if (ready[side].now) {
+                  jm.settled[side] = "flag"; f.settledNow++; counters.flagged++;
+                  if (side === "home") f.flags++; // only home's camera was ever off
+                } else if (givenUp) {
+                  jm.settled[side] = "unread"; f.settledNow++; f.failures.push("CAMERA_EVIDENCE_UNREAD"); counters.unread++;
+                } else counters.not_ready++;
+              }
             }
             rtk.calls = [];
             const report = await pass(m, new Date(m.endedCeil + jm.t));
             expect(rtkReads().length > 0, `${label}: read RealtimeKit`).toBe(f.reads);
             expect({ settled: report.cameraSettled, flags: report.cameraFlags }, `${label}: report`).toEqual({ settled: f.settledNow, flags: f.flags });
-            expect(cameraFailures(report).map((x) => x.code), `${label}: failures`).toEqual(f.failure === null ? [] : [f.failure]);
-            expect((await settledAt(m.b.fixtureId)) !== null, `${label}: settled`).toBe(jm.settled !== null);
+            expect(cameraFailures(report).map((x) => x.code), `${label}: failures`).toEqual(f.failures);
+            expect(await settledSides(m.b.fixtureId), `${label}: settled rooms`).toEqual(settledSidesOf());
+            if (settledSidesOf().length === 1) counters.half_settled++;
             expect((await flagsOf(m.b.fixtureId)).map((x) => [x.kind, x.person_id]), `${label}: flags`).toEqual(
-              jm.settled === "flag" ? [["camera_lost", m.b.home.personId]] : [],
+              jm.settled.home === "flag" ? [["camera_lost", m.b.home.personId]] : [],
             );
             last = f;
           }
           if (i === PATHS[path].length - 1) {
             const ok = (() => {
               switch (path) {
-                case "early_nothing_read": return last !== null && !last.reads && jm.settled === null;
-                case "not_ready_waits": return last?.reads === true && last.settledNow === 0 && last.failure === null && jm.settled === null;
-                case "ready_flags_the_off_player": return last?.settledNow === 1 && jm.settled === "flag";
-                case "outage_retried": return last?.failure === "unavailable" && jm.settled === null;
-                case "given_up_unread": return last?.failure === "CAMERA_EVIDENCE_UNREAD" && jm.settled === "unread";
-                case "settled_never_reread": return last?.reads === false && jm.settled === "flag";
+                case "early_nothing_read": return last !== null && !last.reads && settledSidesOf().length === 0;
+                // Away's report is final and home's is not: away's room settles alone, home's waits.
+                case "not_ready_waits": return last?.reads === true && last.settledNow === 1 && last.failures.length === 0 && jm.settled.away === "flag" && jm.settled.home === null;
+                case "ready_flags_the_off_player": return last?.settledNow === 2 && jm.settled.home === "flag" && jm.settled.away === "flag";
+                // The outage hits the first room read (away's): home settles, away is read again next pass.
+                case "outage_retried": return last?.failures.join() === "unavailable" && jm.settled.away === null && jm.settled.home === "flag";
+                case "given_up_unread": return last?.failures.join() === "CAMERA_EVIDENCE_UNREAD,CAMERA_EVIDENCE_UNREAD" && jm.settled.home === "unread" && jm.settled.away === "unread";
+                case "settled_never_reread": return last?.reads === false && jm.settled.home === "flag" && jm.settled.away === "flag";
               }
             })();
             expect(ok, `${label}: the path's claim`).toBe(true);
@@ -4884,16 +4922,73 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     writeSync(1, `camera property: ${JSON.stringify({ runs: run, claims, counters })}\n`);
   });
 
+  // D16 (§5.6.6): each room is a candidate of its own, ready when ITS end is two minutes old.
+  it("D16: two rooms ended at different times settle one after the other - each at its own end plus 2 minutes, reading only its own room", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    const EARLIER_MS = 100_000;
+    expect(m.endedAt - EARLIER_MS - m.overAt, "premise: home's room still outlives the game").toBeGreaterThan(60_000);
+    await sql`update fixture_video_meetings set ended_at = ended_at - (${EARLIER_MS}::int * interval '1 millisecond')
+               where fixture_id = ${m.b.fixtureId} and side = 'home'`;
+    const [h] = await sql<{ ceil: number }[]>`
+      select ceil(extract(epoch from ended_at) * 1000)::float8 as ceil from fixture_video_meetings where fixture_id = ${m.b.fixtureId} and side = 'home'`;
+    const homeReady = new Date(Number(h!.ceil) + CAMERA_EVIDENCE_AFTER_MS);
+    expect(homeReady.getTime(), "premise: away's room is not yet two minutes old then").toBeLessThan(m.endedCeil + CAMERA_EVIDENCE_AFTER_MS);
+
+    const early = await pass(m, new Date(homeReady.getTime() - 1));
+    expect([early.cameraSettled, rtkReads()], "one millisecond before home's room is ready: nothing, and nothing read").toEqual([0, []]);
+    const first = await pass(m, homeReady);
+    expect([first.cameraSettled, cameraFailures(first)]).toEqual([1, []]);
+    expect(await settledSides(m.b.fixtureId), "only home's room").toEqual(["home"]);
+    expect(rtkReads().filter((c) => c.path === "/sessions").length, "one room's sessions read").toBe(1);
+    rtk.calls = [];
+    const second = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([second.cameraSettled, cameraFailures(second)]).toEqual([1, []]);
+    expect(await settledSides(m.b.fixtureId)).toEqual(BOTH_SETTLED);
+    expect(rtkReads().filter((c) => c.path === "/sessions").length, "and only away's now - home's is never read again").toBe(1);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  it("D16: a room settles while the OTHER is still live - no V442 abort (evidence requires an ended room, per row), and the live one is untouched", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    // Stands for a half-ended board: away's teardown failed at the vendor and its row is unended.
+    await sql`update fixture_video_meetings set ended_at = null where fixture_id = ${m.b.fixtureId} and side = 'away'`;
+    // The teardown job would end the due away room in this very pass (and rightly); a stand-in leaves it live to prove the
+    // evidence job on its own.
+    const r = await sweep(m.b, { now: after(m, CAMERA_EVIDENCE_AFTER_MS), endMeeting: async () => {}, realtimeKit: RTK });
+    expect([r.cameraSettled, r.failures.filter((f) => f.job === "camera_evidence")], "home's room settled, nothing failed").toEqual([1, []]);
+    const rows = await sql<{ side: string; ended_at: Date | null; camera_evidence_at: Date | null }[]>`
+      select side, ended_at, camera_evidence_at from fixture_video_meetings where fixture_id = ${m.b.fixtureId} order by side`;
+    expect(rows.map((x) => [x.side, x.ended_at !== null, x.camera_evidence_at !== null]), "home settled, away live and unstamped").toEqual([
+      ["away", false, false],
+      ["home", true, true],
+    ]);
+  });
+
+  it("D16: a camera_lost is the player of THAT room's: one player's gap, read from their own room, is flagged to them alone", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt });
+    // away's camera was off for 200 s, in away's own room.
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([ROOMS, 1]);
+    expect((await flagsOf(m.b.fixtureId)).map((f) => [f.kind, f.person_id])).toEqual([["camera_lost", m.b.away.personId]]);
+  });
+
   it("RealtimeKit down: a failure, nothing stored, read again next pass", async () => {
     const m = await playedMatch();
     bothOnThroughout(m);
     rtk.sessionsFail = 1;
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    // One request failed: the room it was for is not settled; the other player's room, read after it, is.
     expect(cameraFailures(r)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "unavailable" }]);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect([r.cameraSettled, (await settledSides(m.b.fixtureId)).length], "exactly one of the two rooms settled").toEqual([1, 1]);
     const next = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
     expect(cameraFailures(next)).toEqual([]);
-    expect(next.cameraSettled).toBe(1);
+    expect(next.cameraSettled, "the one left").toBe(1);
+    expect(await settledSides(m.b.fixtureId)).toEqual(BOTH_SETTLED);
   });
 
   // D21: a read the call budget refused tells nothing about the match — so it is neither a failure nor a reason to give up.
@@ -4903,20 +4998,21 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const spent = { ...RTK, budget: async () => false };
     const deferredPass = (now: Date) => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: spent });
     const first = await deferredPass(after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect([first.failures, first.failed, first.deferred, first.cameraSettled]).toEqual([[], 0, 1, 0]);
+    // The budget is the account's: the first refused read ends the job and the rest are counted deferred (D21-fix) - both rooms.
+    expect([first.failures, first.failed, first.deferred, first.cameraSettled]).toEqual([[], 0, ROOMS, 0]);
     expect(rtkReads(), "no request was made").toEqual([]);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
     // A day and a second on, where an UNREADABLE answer gives up (the test above): a deferral does not.
     const late = await deferredPass(new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
     expect(cameraFailures(late), "never CAMERA_EVIDENCE_UNREAD for a read that was not made").toEqual([]);
-    expect([late.cameraSettled, late.deferred]).toEqual([0, 1]);
-    expect(await settledAt(m.b.fixtureId), "still unsettled: it keeps its place").toBeNull();
+    expect([late.cameraSettled, late.deferred]).toEqual([0, ROOMS]);
+    expect(await settledSides(m.b.fixtureId), "still unsettled: it keeps its place").toEqual(NONE_SETTLED);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     // The budget back (the same late clock): read for real and settled.
     const back = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 2));
     expect(cameraFailures(back)).toEqual([]);
-    expect([back.cameraSettled, back.deferred]).toEqual([1, 0]);
-    expect(await settledAt(m.b.fixtureId)).not.toBeNull();
+    expect([back.cameraSettled, back.deferred]).toEqual([ROOMS, 0]);
+    expect(await settledSides(m.b.fixtureId)).toEqual(BOTH_SETTLED);
   });
 
   it("evidence never ready after a day: settled with no flag, and SAID so (no endless re-read)", async () => {
@@ -4928,10 +5024,10 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     // On the millisecond clock the sweep judges with (`ended_at` as a Date).
     const before = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS));
     expect(before.cameraSettled, "AT the day: still retrying").toBe(0);
-    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
     const late = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
-    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
-    expect(late.cameraSettled).toBe(1);
+    expect(cameraFailures(late)).toEqual(perRoom({ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }));
+    expect(late.cameraSettled).toBe(ROOMS);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     rtk.calls = [];
     await pass(m, after(m, CAMERA_EVIDENCE_GIVE_UP_MS + SWEEP_CADENCE_MS));
@@ -4943,7 +5039,6 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
   /** The panel's REAL join, its RealtimeKit calls through the adapter over
    *  this file's fake fetch. */
   const VIDEO: ArbiterVideo = {
-    ensureMeeting: (fixtureId) => ensureMeeting(fixtureId, RTK),
     addParticipant: (a) => addParticipant(a, RTK),
     removeParticipant: (a) => removeParticipant(a, RTK),
   };
@@ -4952,6 +5047,8 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
   async function watched(): Promise<{ b: Board; userId: string; participantId: string; meetingId: string; createdAt: number }> {
     const b = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
     await liveGame(b);
+    // The player's room, which the first arrival opened (an arbiter never makes one - D16).
+    await ensureMeeting(b.fixtureId, "home", RTK);
     const [u] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified, locale)
       values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
@@ -4959,11 +5056,12 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     const out = await joinAsArbiter(
       { orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null },
       b.fixtureId,
+      "home",
       { video: VIDEO },
     );
     const [row] = await sql<{ created_at: Date; meeting_id: string }[]>`
       select vp.created_at, m.meeting_id from fixture_video_participants vp
-        join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+        join fixture_video_meetings m on m.fixture_id = vp.fixture_id and m.side = vp.side
        where vp.participant_id = ${out.participantId}`;
     rtk.calls = [];
     return { b, userId: u!.id, participantId: out.participantId, meetingId: row!.meeting_id, createdAt: row!.created_at.getTime() };
@@ -5080,7 +5178,8 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
       insert into users (email, display_name, email_verified, locale)
       values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
     await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
-    const out = await joinAsArbiter({ orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, b.fixtureId, { video: VIDEO });
+    await ensureMeeting(b.fixtureId, "home", RTK); // the player's room, which the first arrival opened (an arbiter never makes one)
+    const out = await joinAsArbiter({ orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, b.fixtureId, "home", { video: VIDEO });
     await sql`update org_members set role = 'viewer' where org_id = ${b.orgId} and user_id = ${u!.id}`;
     rtk.calls = [];
     const r = await sweep(b, { now: b.at(45), endMeeting: (m) => endMeeting(m, RTK), ...quiet });
@@ -5088,9 +5187,108 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     expect([r.arbitersRemoved, removals()]).toEqual([0, []]);
     const [row] = await sql<{ removed_at: Date | null; ended_at: Date | null }[]>`
       select vp.removed_at, m.ended_at from fixture_video_participants vp
-        join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+        join fixture_video_meetings m on m.fixture_id = vp.fixture_id and m.side = vp.side
        where vp.participant_id = ${out.participantId}`;
     expect(row!.removed_at?.getTime(), "the watch ended with the room").toBe(row!.ended_at?.getTime());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D16 - a board's two rooms: teardown and the arbiter's watches are per room.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("D16 - a board has a room per player: teardown, the arbiter's removal and its stamp are per room", () => {
+  const VIDEO: ArbiterVideo = {
+    addParticipant: (a) => addParticipant(a, RTK),
+    removeParticipant: (a) => removeParticipant(a, RTK),
+  };
+  const quiet: Pick<SweepDeps, "reconcile" | "realtimeKit"> = { reconcile: async () => null, realtimeKit: RTK };
+  const SIDES = ["home", "away"] as const;
+
+  /** A board with both players' rooms (T7's REAL ensureMeeting), a player participant in each, and an arbiter watching each room
+   *  through the panel's REAL join. No game on file, so past T+20 both teardowns are due. */
+  async function twoRooms() {
+    const b = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
+    const rooms = {} as Record<Side, string>;
+    const players = {} as Record<Side, string>;
+    const arbiters = {} as Record<Side, string>;
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, locale)
+      values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
+    const auth = { orgId: b.orgId, via: "session" as const, userId: u!.id, role: "admin" as const, keyId: null };
+    for (const side of SIDES) {
+      rooms[side] = (await ensureMeeting(b.fixtureId, side, RTK)).meetingId;
+      players[side] = await putVideoParticipant({ fixtureId: b.fixtureId, side, personId: b[side].personId });
+      arbiters[side] = (await joinAsArbiter(auth, b.fixtureId, side, { video: VIDEO })).participantId;
+    }
+    rtk.calls = [];
+    return { b, rooms, players, arbiters, userId: u!.id };
+  }
+  const endedAtOf = async (fixtureId: string, side: Side) =>
+    (await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_video_meetings where fixture_id = ${fixtureId} and side = ${side}`)[0]!.ended_at;
+  const removedAtOf = async (participantId: string) =>
+    (await sql<{ removed_at: Date | null }[]>`select removed_at from fixture_video_participants where participant_id = ${participantId}`)[0]!.removed_at;
+
+  it("both rooms are ended, each by its own vendor id, and counted as two", async () => {
+    const w = await twoRooms();
+    expect(new Set(Object.values(w.rooms)).size, "premise: two different vendor meetings").toBe(2);
+    const ended: string[] = [];
+    const r = await sweep(w.b, { now: w.b.at(45), endMeeting: async (id) => (ended.push(id), endMeeting(id, RTK)), ...quiet });
+    expect(r.failures).toEqual([]);
+    expect(r.meetingsEnded).toBe(2);
+    expect(ended.sort()).toEqual([w.rooms.home, w.rooms.away].sort());
+    for (const side of SIDES) expect(await endedAtOf(w.b.fixtureId, side), `${side}'s room`).not.toBeNull();
+    // Each room's watch is stamped with ITS end, none left behind.
+    for (const side of SIDES) {
+      expect((await removedAtOf(w.arbiters[side]))?.getTime(), `${side}'s arbiter ended with its room`).toBe((await endedAtOf(w.b.fixtureId, side))!.getTime());
+    }
+  });
+
+  it("a HALF-ENDED board: one teardown fails at the vendor and the other ends; the next pass retries only the failed room; a watch in the live room is not stamped removed and the one in the ended room is; the failed room's player is untouched", async () => {
+    const w = await twoRooms();
+    const attempts: string[] = [];
+    let refuse: string | null = w.rooms.away;
+    const end: NonNullable<SweepDeps["endMeeting"]> = async (id) => {
+      attempts.push(id);
+      if (id === refuse) throw new RealtimeKitError(503, "unavailable", "test: the vendor refused this room");
+      await endMeeting(id, RTK);
+    };
+    const first = await sweep(w.b, { now: w.b.at(45), endMeeting: end, ...quiet });
+    expect(attempts.sort(), "premise: both rooms were tried").toEqual([w.rooms.home, w.rooms.away].sort());
+    expect(first.meetingsEnded, "one of the two").toBe(1);
+    expect(first.failures.filter((f) => f.job === "teardown")).toEqual([{ job: "teardown", fixtureId: w.b.fixtureId, code: "unavailable" }]);
+    expect(await endedAtOf(w.b.fixtureId, "home"), "home's room ended").not.toBeNull();
+    expect(await endedAtOf(w.b.fixtureId, "away"), "away's room is still up").toBeNull();
+    expect(await removedAtOf(w.arbiters.home), "the watch in the ended room is stamped").not.toBeNull();
+    expect(await removedAtOf(w.arbiters.away), "the watch in the live room is NOT").toBeNull();
+    // The vendor was only ever asked about home's room, and the failed room's player is exactly as seated.
+    expect(rtk.calls.some((c) => c.path.includes(w.rooms.away)), "no request touched the failed room").toBe(false);
+    const awayPlayer = await sql<{ participant_id: string }[]>`
+      select participant_id from fixture_video_participants where fixture_id = ${w.b.fixtureId} and side = 'away' and preset = 'player'`;
+    expect(awayPlayer.map((x) => x.participant_id), "the failed room's player is still on file").toEqual([w.players.away]);
+    // The next pass: the vendor back, ONLY the failed row is tried.
+    attempts.length = 0;
+    refuse = null;
+    const second = await sweep(w.b, { now: w.b.at(50), endMeeting: end, ...quiet });
+    expect(attempts, "only the failed room").toEqual([w.rooms.away]);
+    expect([second.meetingsEnded, second.failures]).toEqual([1, []]);
+    expect(await endedAtOf(w.b.fixtureId, "away")).not.toBeNull();
+    expect((await removedAtOf(w.arbiters.away))?.getTime(), "and now its watch is stamped with ITS end").toBe((await endedAtOf(w.b.fixtureId, "away"))!.getTime());
+    const third = await sweep(w.b, { now: w.b.at(55), endMeeting: end, ...quiet });
+    expect([third.meetingsEnded, attempts.length], "once both are ended nothing is tried again").toEqual([0, 1]);
+  });
+
+  it("the arbiter removal acts on the room the watch is in: each is removed from its own vendor meeting", async () => {
+    const w = await twoRooms();
+    await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
+    const r = await sweep(w.b, { now: new Date(Date.now() + 60_000), ...quiet });
+    expect([r.arbitersRemoved, r.failures]).toEqual([2, []]);
+    const removed = rtk.calls.filter((c) => c.method === "DELETE").map((c) => c.path).sort();
+    expect(removed).toEqual(
+      SIDES.map((side) => `/meetings/${w.rooms[side]}/participants/${w.arbiters[side]}`).sort(),
+    );
+    const kicks = rtk.calls.filter((c) => c.path.endsWith("/active-session/kick")).map((c) => c.path).sort();
+    expect(kicks, "and each kick was asked of its own room").toEqual(SIDES.map((side) => `/meetings/${w.rooms[side]}/active-session/kick`).sort());
   });
 });
 

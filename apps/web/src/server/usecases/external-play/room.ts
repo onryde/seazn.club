@@ -50,6 +50,7 @@ import {
   roomPhaseWire,
   turnAfter,
   windowWire,
+  CAMERA_REPORT_STALE_MS,
   ROOM_BEING_REPAIRED,
   type Colour,
   type RoomGame,
@@ -65,6 +66,7 @@ import {
   resetStaleBridge,
   whiteSideOf,
   type OnlinePlayFixture,
+  type Side,
   type SidePlayer,
 } from "./guard";
 import { createGameIfReady, type CreateOutcome } from "./create-game";
@@ -128,10 +130,10 @@ const clockZeroReadAt = new Map<string, number>();
  *  start a second held read of the same thing. Skipped instead; freed when the read answers or fails. Per process. */
 const clockZeroInFlight = new Set<string>();
 
-const ROOM_NOT_FOUND = () => new HttpError(404, "This match room could not be found", "NOT_FOUND");
+export const ROOM_NOT_FOUND = () => new HttpError(404, "This match room could not be found", "NOT_FOUND");
 const ROOM_REPAIRING = () => new HttpError(409, "This board is being re-paired", ROOM_BEING_REPAIRED);
 
-type Resolved = {
+export type Resolved = {
   f: OnlinePlayFixture;
   player: SidePlayer & { personId: string };
   home: SidePlayer;
@@ -150,7 +152,7 @@ type Resolved = {
  * collapses to the same 404 so a probe learns nothing — save one (fix round 4b, `tellRepairing`: GET and POST room):
  * a board being re-paired, to a caller tied to it (boardBeingRepaired), is the 409 the open room reads on through.
  */
-async function resolveRoom(identity: RoomIdentity, fixtureId: string, opts: { tellRepairing?: boolean } = {}): Promise<Resolved> {
+export async function resolveRoom(identity: RoomIdentity, fixtureId: string, opts: { tellRepairing?: boolean } = {}): Promise<Resolved> {
   const f = await loadOnlinePlayFixture(fixtureId);
   if (!f) throw opts.tellRepairing === true && (await boardBeingRepaired(identity, fixtureId)) ? ROOM_REPAIRING() : ROOM_NOT_FOUND();
   const [{ home, away }, open] = await Promise.all([loadSides(f), roundOpenFor(sql, fixtureId)]);
@@ -287,23 +289,28 @@ async function settledWinner(fixtureId: string, afterSeq: number): Promise<strin
   return row?.winner ?? null;
 }
 
-/** Who the opponent is in the fixture's meeting (review I8): their player
- *  participant id — the one preflight keeps per person, the one their client
- *  joins with — or null when they hold no seat in a meeting that is still
- *  open (absent by construction). A DB read only: whether they are in the
- *  meeting and on camera is the viewer's own client's answer
- *  (match-room/opponent-presence.ts), so a room read never calls the
- *  vendor. */
-async function opponentParticipant(fixtureId: string, opponentPersonId: string): Promise<string | null> {
-  const [row] = await sql<{ participantId: string }[]>`
-    select p.participant_id as "participantId"
-      from fixture_video_meetings m
-      join fixture_video_participants p on p.fixture_id = m.fixture_id
-     where m.fixture_id = ${fixtureId} and m.ended_at is null
-       and p.person_id = ${opponentPersonId} and p.preset = 'player'
-     order by p.created_at, p.id
-     limit 1`;
-  return row?.participantId ?? null;
+/** D16 (§5.6.3): the opponent's camera as their OWN browser last reported it (the camera-report usecase writes it), judged
+ *  on this server's clock. The opponent is in a meeting of their own, so nothing about it can be read from the viewer's -
+ *  and nothing is read from the vendor: a DB read of one participant row, the opponent's, found by the one rule for whose
+ *  participant is whose (storedPlayerParticipant, by `(fixture, side)` and person).
+ *    - fresh `live` / `off`: as reported;
+ *    - no fresh report - none yet, a stale one, or no participant on file - `unknown`, never `off` and never hidden.
+ *  A report is fresh while it is YOUNGER than CAMERA_REPORT_STALE_MS. An ENDED meeting reads nothing: its room is over. */
+async function opponentCameraReport(
+  fixtureId: string,
+  opponent: { side: Side; personId: string },
+  now: Date,
+): Promise<"live" | "off" | "unknown"> {
+  const participantId = await storedPlayerParticipant(sql, { fixtureId, side: opponent.side, personId: opponent.personId });
+  if (participantId === null) return "unknown";
+  const [row] = await sql<{ state: string | null; at: Date | null }[]>`
+    select p.camera_reported as state, p.camera_reported_at as at
+      from fixture_video_participants p
+      join fixture_video_meetings m on m.fixture_id = p.fixture_id and m.side = p.side
+     where p.fixture_id = ${fixtureId} and p.side = ${opponent.side} and p.participant_id = ${participantId} and m.ended_at is null`;
+  if (!row || row.state === null || row.at === null) return "unknown";
+  if (now.getTime() - row.at.getTime() >= CAMERA_REPORT_STALE_MS) return "unknown";
+  return row.state === "live" ? "live" : row.state === "off" ? "off" : "unknown";
 }
 
 async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnapshot> {
@@ -415,22 +422,22 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   const cameraPolicy = await fixtureCameraPolicy(f.fixtureId);
   // The pill shows only on a live board the viewer may play on (review I8):
   // never before the game, on a held or finished board, or for a frozen seat.
-  // An opponent with no person on file cannot be named in the meeting: no
-  // pill, rather than a "camera off" nobody can verify.
+  // An opponent with no person on file has no report to read: no pill, rather than a "camera off" nobody can verify.
   // While OUR safeguard holds the opponent's camera out of the meeting (a
   // guard fault, I-1) their absence is not theirs: no pill, never "off".
-  const opponentPresence: RoomSnapshot["opponentPresence"] =
+  // D16 (§5.6.3): past those, the pill is the opponent's OWN report, relayed - live, off, or unknown (opponentCameraReport).
+  const opponentCamera: RoomSnapshot["opponentCamera"] =
     cameraPolicy === "off" ||
     facts.videoOverrideAt !== null ||
     over ||
     !canAct ||
     opponent.personId === null ||
-    (await hasOpenGuardFault(sql, { fixtureId: f.fixtureId, personId: opponent.personId }))
+    (await hasOpenGuardFault(sql, { fixtureId: f.fixtureId, side: opponent.side, personId: opponent.personId }))
       ? null
-      : { participantId: await opponentParticipant(f.fixtureId, opponent.personId) };
+      : await opponentCameraReport(f.fixtureId, { side: opponent.side, personId: opponent.personId }, now);
   // R3-1: who the server holds the viewer as in the meeting — what the room re-claims on when it is not the one its
   // camera joined (a re-pair's retire took it). A DB read: a room read never calls the vendor.
-  const ownParticipantId = await storedPlayerParticipant(sql, { fixtureId: f.fixtureId, personId: player.personId });
+  const ownParticipantId = await storedPlayerParticipant(sql, { fixtureId: f.fixtureId, side: player.side, personId: player.personId });
 
   let realtime: RoomSnapshot["realtime"] = null;
   try {
@@ -472,7 +479,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     you: { colour: mine, name: player.displayName, checkedIn: youIn },
     opponent: { colour: theirs, name: opponent.displayName, checkedIn: theyIn },
     cameraPolicy,
-    opponentPresence,
+    opponentCamera,
     ownParticipantId,
     frozen,
     canAct,
@@ -555,7 +562,7 @@ export async function claimRoomSeat(
   const seat = await (deps.seat ?? seatPlayer)({ fixtureId, personId: r.player.personId, heldParticipantId: ask.heldParticipantId ?? null }, { now });
   // Seated again (a reload's way back after a guard fault): our gap is over,
   // even if the page that opened it never said so (I-1).
-  if (seat.seated && (await closeGuardFault(sql, { fixtureId, personId: r.player.personId, at: now }))) {
+  if (seat.seated && (await closeGuardFault(sql, { fixtureId, side: r.player.side, personId: r.player.personId, at: now }))) {
     await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
   }
   let create: CreateOutcome | null = null;
@@ -692,12 +699,12 @@ export async function reportCameraFault(
   const [own] = await sql<{ participantId: string }[]>`
     select p.participant_id as "participantId"
       from fixture_video_participants p
-      join fixture_video_meetings m on m.fixture_id = p.fixture_id
-     where p.fixture_id = ${fixtureId} and p.person_id = ${r.player.personId} and p.preset = 'player'
+      join fixture_video_meetings m on m.fixture_id = p.fixture_id and m.side = p.side
+     where p.fixture_id = ${fixtureId} and p.side = ${r.player.side} and p.person_id = ${r.player.personId} and p.preset = 'player'
        and p.participant_id = ${body.participantId} and m.ended_at is null`;
   if (!own) throw ROOM_NOT_FOUND();
   const personId = r.player.personId;
-  const seat = { fixtureId, personId, at: now };
+  const seat = { fixtureId, side: r.player.side, personId, at: now };
   let changed: boolean;
   if (body.state === "start") {
     const o = await openGuardFault(sql, seat);

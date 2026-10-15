@@ -344,7 +344,8 @@ export async function openRound(
       // claim (T9 in flight, before its marker; R2-3) — gameEvidenceOn, the one rule ensureMeeting keeps too. Every
       // other board's meeting goes, with its participants: players who checked in through the lobby inside the old
       // window are kicked too, because the window starts now for everyone. Only the still-active meetings are ended
-      // at RealtimeKit, after the commit.
+      // at RealtimeKit, after the commit. D16: a board has a meeting PER PLAYER and this deletes BY BOARD on purpose -
+      // both rows go, and every one returned is ended below, not the first (allow-listed in the source guard).
       staleMeetings = (
         await tx<{ meeting_id: string; ended_at: Date | null }[]>`
           delete from fixture_video_meetings m
@@ -371,7 +372,8 @@ export async function openRound(
     // sweep's no-show). As a re-pair resets a board (stages.ts clearSwissFixtureSeats, M-10): its row goes, and with
     // it the closed pairing's stamps, so the attach below mints it afresh for this open. Its video meeting goes too —
     // it holds no game's evidence, and a meeting the sweep ended at the No result would refuse the replay's check-in
-    // (VIDEO_MEETING_ENDED) — ended at RealtimeKit after the commit, as N-2's are.
+    // (VIDEO_MEETING_ENDED) — ended at RealtimeKit after the commit, as N-2's are. D16: both players' meetings, by board
+    // on purpose (allow-listed in the source guard).
     if (rearmed.size > 0) {
       const rearmedIds = [...rearmed];
       staleMeetings.push(

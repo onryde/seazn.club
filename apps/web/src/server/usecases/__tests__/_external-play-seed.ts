@@ -456,3 +456,36 @@ export async function seedOnlineSwiss(opts: {
     players,
   };
 }
+
+// ---------------------------------------------------------------------------
+// D16 - a RealtimeKit meeting per PLAYER. The rows preflight leaves, written directly for the suites that stage what
+// the sweep, the room or the arbiter then read. A meeting is (fixture, side); a participant lives on one.
+// ---------------------------------------------------------------------------
+
+export type VideoSide = "home" | "away";
+
+/** A meeting row for one side of the board, made for the board's CURRENT pairing (the R2-2 stamp). Returns its vendor id. */
+export async function putVideoMeeting(
+  a: { fixtureId: string; orgId: string; side: VideoSide },
+  over: { meetingId?: string; endedAt?: Date | null; evidenceAt?: Date | null } = {},
+): Promise<string> {
+  const meetingId = over.meetingId ?? `mtg-${a.side}-${randomUUID().slice(0, 10)}`;
+  await sql`
+    insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id, ended_at, camera_evidence_at)
+    select f.id, ${a.side}, ${a.orgId}, ${meetingId}, f.home_entrant_id, f.away_entrant_id, ${over.endedAt ?? null}, ${over.evidenceAt ?? null}
+      from fixtures f where f.id = ${a.fixtureId}`;
+  return meetingId;
+}
+
+/** A participant row on one side's meeting (the meeting must exist). `report` is the player's last camera report. */
+export async function putVideoParticipant(
+  a: { fixtureId: string; side: VideoSide; personId: string | null; preset?: "player" | "arbiter"; participantId?: string },
+  over: { report?: { state: "live" | "off"; at: Date } | null; removedAt?: Date | null } = {},
+): Promise<string> {
+  const participantId = a.participantId ?? `pt-${a.side}-${randomUUID().slice(0, 10)}`;
+  await sql`
+    insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, camera_reported, camera_reported_at, removed_at)
+    values (${a.fixtureId}, ${a.side}, ${a.personId}, ${a.preset ?? "player"}, ${participantId},
+            ${over.report?.state ?? null}, ${over.report?.at ?? null}, ${over.removedAt ?? null})`;
+  return participantId;
+}
