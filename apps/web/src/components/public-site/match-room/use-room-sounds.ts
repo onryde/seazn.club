@@ -60,7 +60,7 @@ export function useRoomSounds(state: RoomState, on: boolean, audio: RoomAudio = 
   }, [gameId, ended, myBase, asOf, running, skewMs, on, audio]);
 }
 
-/** The header's switch: on/off from the device's memory, and a press. Turning sounds ON plays one short move sound,
+/** The sound switch (drawn in the player's own clock bar): on/off from the device's memory, and a press. Turning sounds ON plays one short move sound,
  *  so the player hears that it works (the press is itself a gesture, so audio is unlocked first). */
 export function useSoundSwitch(store: SoundPrefStore = ROOM_SOUND_PREF, audio: RoomAudio = ROOM_AUDIO) {
   const on = useSyncExternalStore(store.subscribe, store.get, store.server);

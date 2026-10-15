@@ -355,6 +355,26 @@ describe("the header and the boards (canvas)", () => {
     expect(t).toContain("4:17");
   });
 
+  // T17B fix 2, D24 (re-review M4): formatClock is the room's, and the arbiter's tiles share it, so they show tenths from
+  // 20 s too — declared here: the arbiter reading 0:15.7 with the player's own screen reading the same is the point.
+  it("D24: a clock under 20 s reads in tenths on the arbiter's tile, from 20 s whole seconds again — typed from the ruling at its edges (counted)", () => {
+    const FACES: [number, string][] = [
+      [19_700, "0:19.7"],
+      [20_000, "0:20"],
+      [20_300, "0:21"],
+      [15_700, "0:15.7"],
+      [10_000, "0:10.0"],
+      [9_950, "0:09.9"],
+    ];
+    let checked = 0;
+    for (const [ms, face] of FACES) {
+      const b = { ...ROUND.boards[2]!, clock: { whiteMs: ms, blackMs: 300_000, asOf: at(19, 44), running: false, turn: "white" as const } };
+      expect(text(html(props({ round: { ...ROUND, boards: [b] } }))), `${ms} ms reads ${face}`).toContain(face);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: faces").toBe(FACES.length);
+  });
+
   it("every board state reads as the run sheet would say it", () => {
     const states: [ArbiterBoard["state"], string][] = [
       [{ kind: "checking_in" }, "Checking in"],

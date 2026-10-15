@@ -459,7 +459,10 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
       roundNo: facts.roundNo,
       boardNo: facts.boardNo,
       limitSeconds: f.clock.limit,
-      incrementSeconds: f.clock.increment,
+      // D24 (re-review M2): the ledger's number is the game's own clock (stamped by the first move, re-read from Lichess),
+      // the one play.ts adds on every move — the division's can be edited after the game began. `??`: a stamped 0 is a
+      // real "no increment", never a fall-through to the division's.
+      incrementSeconds: bridge?.clock_increment_s ?? f.clock.increment,
     },
     orgSlug: f.orgSlug,
     you: { colour: mine, name: player.displayName, checkedIn: youIn },

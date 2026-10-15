@@ -23,8 +23,9 @@ import { RoomControls, RoomControlsView } from "../controls";
 import { FlagNotice } from "../room-cards";
 import { HeldSeam } from "../room-seams";
 import { GameOver } from "../game-over";
-import { initialRoomState, type RoomState } from "../room-state";
-import { moverFlagAt } from "../clock-math";
+import { initialRoomState, roomReducer, type RoomState } from "../room-state";
+import { moverFlagAt, OPTIMISTIC_CLOCK_MAX_MS } from "../clock-math";
+import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
 
 const T0 = Date.parse("2026-10-14T16:50:00.000Z");
@@ -276,5 +277,109 @@ describe("D13: RoomControls locked — every game action disabled, in every shap
       return propsOf(dialogs[0]!).open;
     };
     expect([dialogOpen(false), dialogOpen(true)]).toEqual([true, false]);
+  });
+});
+
+// T17B fix 2, D24 (re-review I2) — the lock reads the SERVER's numbers (moverFlagAt), so while a move is in flight the
+// face (the guess: the clock as the drop left it, plus the increment) said 0:09.6 under "Time's up — confirming with
+// Lichess". The guess is the player's own clock; a move dropped in time is not a clock at zero, and the lock stands
+// down while that move is out. When the answer is a refusal the guess goes, the server's number is again the one on the
+// face, and the lock reapplies (and the zero report with it: use-clock-faces.test.tsx).
+describe("D24: a move dropped in time and still in flight when the SERVER's clock reaches zero does not lock the room", () => {
+  const DROPPED_AT = 1_000;
+  /** The REAL reducer's own guess: a move dropped DROPPED_AT into White's 5 s, on a +5 division — 4 s left + 5 s = 9 s. */
+  const inFlight = (action: { kind: "move"; uci: string } | { kind: "resign" } = { kind: "move", uci: "g1f3" }) =>
+    roomReducer(stateOf(snap({ meta: { divisionName: "Open Blitz", roundNo: 1, boardNo: 1, limitSeconds: 300, incrementSeconds: 5 } })), {
+      type: "act_sent",
+      action,
+      at: T0 + DROPPED_AT,
+    });
+  /** PlayColumn's own props, the part of the live board that takes the lock (the clocks' "over" look). */
+  const playColumnHeld = (island: Island) => {
+    const cols = els(island).filter((e) => propsOf(e).onZero !== undefined && propsOf(e).optimistic !== undefined);
+    expect(cols, "premise: one play column").toHaveLength(1);
+    return propsOf(cols[0]!).held as boolean;
+  };
+
+  it("the guess is what the reducer made (premise), and past the server's zero the room is NOT locked: no notice, the controls as they were, the clocks not stopped", async () => {
+    const state = inFlight();
+    expect(state.optimistic, "premise: 4 s left at the drop, +5 s").toMatchObject({ ms: 9_000, ply: 3 });
+    const island = renderIsland(Screen, props(state, "live"));
+    await at(WHITE_LEFT + 700);
+    expect(moverFlagAt(LIVE), "premise: the server's flag instant is behind us").toBe(T0 + WHITE_LEFT);
+    expect(flagKind(island), "no 'Time's up' over a face reading 0:0x").toBeNull();
+    expect(locked(island), "the controls are not the flag's to lock").toBe(false);
+    expect(playColumnHeld(island), "the clocks are not stopped").toBe(false);
+    island.unmount();
+  });
+
+  it("the answer is a REFUSAL: the guess goes, the server's number is the face again, and the lock reapplies (board, controls, notice, clocks)", async () => {
+    const island = renderIsland(Screen, props(inFlight(), "live"));
+    await at(WHITE_LEFT + 700);
+    expect(flagKind(island), "premise: standing down while the move is out").toBeNull();
+    const refused = roomReducer(inFlight(), { type: "act_answered", answer: { ok: false, reconcile: true, reason: "not_your_turn_or_over" } as never });
+    expect([refused.pending, refused.optimistic], "premise: the refusal cleared both").toEqual([null, null]);
+    island.rerender(props(refused, "live"));
+    await at(WHITE_LEFT + 800);
+    expect([boardMovable(island), locked(island), flagKind(island), playColumnHeld(island)], "locked again").toEqual([false, true, "lichess", true]);
+    island.unmount();
+  });
+
+  it("the answer was a SUCCESS: pending clears, the guess still stands until the re-read puts the ply on the ledger — still no lock over the guess face; once the guess has expired (a re-read that never came) the lock applies", async () => {
+    const answeredOk = roomReducer(inFlight(), { type: "act_answered", answer: { ok: true, applied: true } as never });
+    expect([answeredOk.pending, answeredOk.optimistic !== null], "premise: answered, the guess is still on the face").toEqual([null, true]);
+    const island = renderIsland(Screen, props(answeredOk, "live"));
+    await at(WHITE_LEFT + 700);
+    expect([flagKind(island), locked(island), playColumnHeld(island)], "inside the re-read's window: the guess is the face").toEqual([null, false, false]);
+    // The guess's own life is OPTIMISTIC_CLOCK_MAX_MS from the drop; past it the server's number is the face (clock-math).
+    await at(DROPPED_AT + OPTIMISTIC_CLOCK_MAX_MS + 1_500);
+    expect([flagKind(island), locked(island)], "the guess expired: the face is the server's zero, and the lock is truthful again").toEqual(["lichess", true]);
+    island.unmount();
+  });
+
+  it("only a MOVE earns the stand-down: a resign in flight at the flag is locked as ever (the pair, counted with the move)", async () => {
+    let checked = 0;
+    for (const [why, action, lockedAtFlag] of [
+      ["a move", { kind: "move", uci: "g1f3" } as const, false],
+      ["a resign", { kind: "resign" } as const, true],
+    ] as const) {
+      vi.setSystemTime(T0);
+      const island = renderIsland(Screen, props(inFlight(action), "live"));
+      await at(WHITE_LEFT + 700);
+      expect([locked(island), flagKind(island) !== null], `${why} in flight at the flag`).toEqual([lockedAtFlag, lockedAtFlag]);
+      island.unmount();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // The ruling is "suppressed while a MOVE is pending", not "while a guess exists": a control with no increment leaves no
+  // guess (the server adds nothing), and its move in flight at the flag is still a move dropped in time.
+  it("a control with NO increment (no guess to stand on): the move in flight at the flag still does not lock; a resign there does", async () => {
+    const noInc = SHIP1_TIME_CONTROLS.find((tc) => tc.incrementSeconds === 0);
+    expect(noInc, "premise: the catalogue has a zero-increment control").toBeDefined();
+    const base = stateOf(snap({ meta: { divisionName: "Open Blitz", roundNo: 1, boardNo: 1, limitSeconds: noInc!.limitSeconds, incrementSeconds: noInc!.incrementSeconds } }));
+    let checked = 0;
+    for (const [why, action, lockedAtFlag] of [
+      ["a move", { kind: "move", uci: "g1f3" } as const, false],
+      ["a resign", { kind: "resign" } as const, true],
+    ] as const) {
+      vi.setSystemTime(T0);
+      const state = roomReducer(base, { type: "act_sent", action, at: T0 + DROPPED_AT });
+      expect(state.optimistic, `${why}: premise — no increment, no guess`).toBeNull();
+      const island = renderIsland(Screen, props(state, "live"));
+      await at(WHITE_LEFT + 700);
+      expect([locked(island), flagKind(island) !== null], `${why} in flight at the flag (${noInc!.key})`).toEqual([lockedAtFlag, lockedAtFlag]);
+      island.unmount();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the empty case: with nothing in flight the flag locks at the server's zero, as D13 has it (the stand-down is for a move out, nothing else)", async () => {
+    const island = renderIsland(Screen, props(stateOf(snap()), "live"));
+    await at(WHITE_LEFT + 700);
+    expect([boardMovable(island), locked(island), flagKind(island)]).toEqual([false, true, "lichess"]);
+    island.unmount();
   });
 });

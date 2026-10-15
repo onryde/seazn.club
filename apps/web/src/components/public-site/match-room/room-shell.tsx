@@ -18,7 +18,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlural, useLocale, useT } from "@/components/i18n/dict-provider";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
-import { moverFlagAt, type OptimisticClock } from "./clock-math";
+import { moverFlagAt, optimisticOwnMs, type OptimisticClock } from "./clock-math";
 import { ClockBar, ClocksStrip } from "./clocks-strip";
 import { SoundToggle, type SoundSwitch } from "./sound-toggle";
 import { useClockFaces } from "./use-clock-faces";
@@ -200,10 +200,10 @@ export function RoomShell({
   const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId, cameraEnds(state));
   // The pill reads this client's own meeting join (review I8): no server call.
   const presence = useOpponentPresence(camera, cameraOn ? snap.opponentPresence : null);
-  // T17B fix 2 (D19): move sounds, and the header's switch for them.
+  // T17B fix 2 (D19): move sounds, and their switch (D24: drawn in the player's own clock bar).
   const sound = useSoundSwitch();
   useRoomSounds(state, sound.on);
-  // D24: the switch lives in the player's own clock bar now (it was the header's).
+  // D24: the switch lives in the player's own clock bar, handed to it as a prop.
   const soundSwitch = useMemo<SoundSwitch>(() => ({ on: sound.on, onToggle: sound.toggle }), [sound.on, sound.toggle]);
 
   // Re-entry with cameras on: the seat is already ours, but the participant
@@ -468,7 +468,18 @@ export function Screen({
     if (handoverActive) endHandover("seat");
   }, [seatFailures, handoverActive, endHandover]);
   // T17B fix 2, D13: the side to move's clock at zero, the game not over — the board and every action lock.
-  const flagged = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
+  const flagFallen = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
+  // D24 (re-review I2): the flag is read off the SERVER's numbers, but while the player's own MOVE is in flight their face
+  // is the guess (the clock as the drop left it, plus the increment) — "Time's up" over a face reading 0:09.6 contradicts
+  // itself, and a move dropped in time is not a clock at zero. The lock stands down while that move is out; a refusal
+  // clears it and the server's number is the face again, so the lock reapplies (and the clock-zero report with it:
+  // use-clock-faces). Only a move: a resign or an offer in flight is locked as ever.
+  // The stand-down is the guess's own life: the move is out (`movePending`) AND, after its answer, until the re-read puts
+  // the ply on the ledger (the guess still on the face, `ownGuess`) — "one POST plus a re-read", the review's own span.
+  const movePending = state.pending?.kind === "act" && state.pending.action.kind === "move";
+  const ownGuess =
+    snap.game === null ? null : optimisticOwnMs({ optimistic: state.optimistic, game: snap.game, resultWritten: snap.result !== null, nowMs: now });
+  const flagged = flagFallen && !movePending && ownGuess === null;
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);
   const countdownTo = (iso: string | null) => (iso !== null && now !== null ? formatCountdown(Date.parse(iso) - now) : null);
 

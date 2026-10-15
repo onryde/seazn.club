@@ -65,8 +65,10 @@ export function formatClock(ms: number): string {
 // increment (play.ts, scalachess Clock.step) — the first two plies cost and earn nothing (the clocks are not running),
 // and the increment is earned only if time remained. The record is a guess and nothing more: the moment the move is on
 // the ledger (the board's ply reaches the move's) the SERVER's number stands, so the increment is never added twice, and
-// a refusal removes the record (room-state), so the clock is the server's again. Nothing else reads it: the low-time
-// cue, the flag lock and the clock-zero report all keep reading the server's own numbers (room-sounds, moverFlagAt).
+// a refusal removes the record (room-state), so the clock is the server's again. Who reads it: the face, and with it the
+// clock-zero report (use-clock-faces: a move dropped in time is not a clock at zero) and the flag lock, which stands
+// down while the guess applies (room-shell: no "Time's up" over a live face). The low-time cue keeps reading the
+// server's own clock (room-sounds), so a drop within one round trip of 10 s can fire it with the face above 10 s.
 
 /** The longest a guess may stand with no confirmation: past any honest round trip, short of a minute pinned on a move
  *  Lichess never confirmed (the next read of the room would have replaced it long before). */
@@ -81,7 +83,11 @@ const plyOfGame = (g: RoomGame): number => plyOfFen(g.fen);
 /**
  * The guess a move dropped at `atMs` (the server's clock) leaves, or null when the server adds nothing: no game, the
  * game over or a result written, the clocks not yet running (the first two plies), not the player's turn, no
- * increment, or no time left at the drop (a move made at zero earns nothing).
+ * increment, an instant that is not a finite number, or no time left at the drop (a move made at zero earns nothing).
+ *
+ * `incrementSeconds` is the snapshot's `meta.incrementSeconds`: the LEDGER's number (the game's own clock — the one
+ * play.ts adds on every move) once the game has one, the division's before it (room.ts, re-review M2) — so the guess and
+ * the server's write read the same number even if the division's clock was edited after the game began.
  */
 export function optimisticAfterDrop(a: {
   game: RoomGame | null;
@@ -93,6 +99,9 @@ export function optimisticAfterDrop(a: {
   const g = a.game;
   if (g === null || g.over || a.resultWritten || !g.clockRunning || g.clockAsOf === null || g.turn !== a.you) return null;
   if (!(a.incrementSeconds > 0)) return null;
+  // The instant is the sender's clock plus the viewer's skew: an unreadable serverNow makes it NaN, which slides through
+  // every comparison below into a guess of NaN milliseconds (re-review M3).
+  if (!Number.isFinite(a.atMs)) return null;
   const left = remainingMs({
     baseMs: a.you === "white" ? g.whiteMs : g.blackMs,
     asOfMs: Date.parse(g.clockAsOf),

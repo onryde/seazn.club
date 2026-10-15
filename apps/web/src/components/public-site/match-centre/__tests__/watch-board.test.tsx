@@ -88,6 +88,27 @@ describe("WatchBoard", () => {
     expect(face(blackToMove, "black")).toBe("9:48");
   });
 
+  // T17B fix 2, D24 (re-review M4): formatClock is the room's, and the spectators' board shares it, so it shows tenths from
+  // 20 s too — declared here, typed from the owner's ruling at its edges.
+  it("D24: a clock under 20 s reads in tenths on the spectators' board, from 20 s whole seconds again (counted)", () => {
+    const FACES: [number, string][] = [
+      [19_700, "0:19.7"],
+      [20_000, "0:20"],
+      [20_300, "0:21"],
+      [15_700, "0:15.7"],
+      [10_000, "0:10.0"],
+      [9_950, "0:09.9"],
+    ];
+    let checked = 0;
+    for (const [ms, face] of FACES) {
+      const html = render({ ...watch, whiteMs: ms });
+      const white = /data-testid="watch-clock-white"[^]*?font-display[^>]*>([^<]+)</.exec(html)?.[1];
+      expect(white, `${ms} ms reads ${face}`).toBe(face);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: faces").toBe(FACES.length);
+  });
+
   it("no names yet: each side says its colour", () => {
     const html = render(watch, null);
     expect(html).toContain("externalPlay.room.colour.white");

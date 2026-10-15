@@ -10,12 +10,14 @@ import { Chess } from "chess.js";
 import {
   clockFaces,
   OPTIMISTIC_CLOCK_MAX_MS,
+  optimisticAfterDrop,
   optimisticOwnMs,
   type OptimisticClock,
 } from "../clock-math";
 import { initialRoomState, roomReducer, type RoomEvent, type RoomState } from "../room-state";
 import type { RoomActBody } from "../room-api";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
+import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 
 const SCRIPT = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5"];
 const FENS: string[] = (() => {
@@ -120,15 +122,25 @@ describe("D24 — the increment at the drop", () => {
     expect(faces(s, T0 + 1_000).white, "ticking down as ever").toBe(9_000);
   });
 
-  it("for every increment the add is exactly that increment (counted), from the division's own number", () => {
-    let checked = 0;
-    for (const inc of [1, 2, 3, 5, 10, 30]) {
-      const s = drop(roomWith(20_000, inc), T0);
-      expect(s.optimistic?.ms, `+${inc}`).toBe(20_000 + inc * 1_000);
-      expect(faces(s, T0 + 100).white, `+${inc}`).toBe(20_000 + inc * 1_000);
-      checked += 1;
+  // The list is the product's own: every control a board can be created with (SHIP1_TIME_CONTROLS — the setup gate's
+  // catalogue), not a typed set of increments. A zero increment is a control too: the server adds nothing, so no guess.
+  it("for every ship-1 time control the add is exactly that control's increment, and a control with none leaves no guess (counted)", () => {
+    let withInc = 0;
+    let without = 0;
+    for (const tc of SHIP1_TIME_CONTROLS) {
+      const s = drop(roomWith(20_000, tc.incrementSeconds), T0);
+      if (tc.incrementSeconds > 0) {
+        expect(s.optimistic?.ms, tc.key).toBe(20_000 + tc.incrementSeconds * 1_000);
+        expect(faces(s, T0 + 100).white, tc.key).toBe(20_000 + tc.incrementSeconds * 1_000);
+        withInc += 1;
+      } else {
+        expect(s.optimistic, `${tc.key}: no increment, nothing to add`).toBeNull();
+        expect(faces(s, T0 + 100).white, `${tc.key}: ticking down as ever`).toBe(20_000 - 100);
+        without += 1;
+      }
     }
-    expect(checked, "anti-vacuity: increments").toBe(6);
+    expect(withInc + without, "anti-vacuity: every control").toBe(SHIP1_TIME_CONTROLS.length);
+    expect([withInc > 0, without > 0], "both kinds of control are in the list").toEqual([true, true]);
   });
 
   it("both colours: Black's drop adds to BLACK's clock (by viewer, never by colour)", () => {
@@ -158,6 +170,19 @@ describe("D24 — the guards: no add where the server adds nothing", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: guards").toBe(cases.length);
+  });
+
+  // D24 re-review M3: `atMs` is the sender's clock plus the viewer's skew; a skew that was never a number (an unreadable
+  // serverNow) makes it NaN, and NaN slides through every comparison below it into a guess of NaN milliseconds.
+  it("an instant that is not a finite number leaves no guess at all (NaN, ±Infinity) — and the finite pair does (counted)", () => {
+    let checked = 0;
+    for (const atMs of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(optimisticAfterDrop({ game: game(4, { whiteMs: 10_000, blackMs: 120_000 }), you: "white", incrementSeconds: 3, resultWritten: false, atMs }), `${atMs}`).toBeNull();
+      expect(drop(roomWith(10_000, 3), atMs).optimistic, `${atMs} through the reducer`).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: instants").toBe(3);
+    expect(drop(roomWith(10_000, 3), T0).optimistic?.ms, "the pair: a finite instant earns its guess").toBe(13_000);
   });
 
   it("the pair: one millisecond before zero the add still happens (the boundary)", () => {

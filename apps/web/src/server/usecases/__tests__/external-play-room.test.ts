@@ -20,6 +20,7 @@ import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import { roomPhase, windowFor, DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
 import { act, type PlayResult } from "../external-play/play";
@@ -136,7 +137,7 @@ async function tokenFor(
  *  suite drives the real one; external-play-room-game.test.ts drives it here). */
 async function gameOnFile(
   s: SeedOnlineChessFixtureResult,
-  over: Partial<{ status: string; whiteSide: "home" | "away"; moves: string[]; needsReason: string; revokedSeat: string; whiteMs: number; blackMs: number; lastMoveAt: Date }> = {},
+  over: Partial<{ status: string; whiteSide: "home" | "away"; moves: string[]; needsReason: string; revokedSeat: string; whiteMs: number; blackMs: number; lastMoveAt: Date; clockIncrementS: number }> = {},
 ) {
   const gameId = `gm-${randomUUID().slice(0, 12)}`;
   const whiteSide = over.whiteSide ?? "home";
@@ -146,15 +147,16 @@ async function gameOnFile(
   await sql`
     insert into fixture_external_play
       (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, white_lichess_id, black_lichess_id,
-       moves_uci, move_count, last_move_at, white_ms, black_ms, needs_reason, revoked_seat)
+       moves_uci, move_count, last_move_at, white_ms, black_ms, needs_reason, revoked_seat, clock_increment_s)
     values (${s.fixtureId}, ${s.orgId}, ${over.status ?? "ready"}, ${T}, ${gameId}, ${whiteSide}, ${white.lichessId},
             ${black.lichessId}, ${sql.json(moves as never)}, ${moves.length}, ${over.lastMoveAt ?? (moves.length ? now : null)},
-            ${over.whiteMs ?? null}, ${over.blackMs ?? null}, ${over.needsReason ?? null}, ${over.revokedSeat ?? null})
+            ${over.whiteMs ?? null}, ${over.blackMs ?? null}, ${over.needsReason ?? null}, ${over.revokedSeat ?? null},
+            ${over.clockIncrementS ?? null})
     on conflict (fixture_id) do update set status = excluded.status, challenge_id = excluded.challenge_id,
       white_side = excluded.white_side, white_lichess_id = excluded.white_lichess_id, black_lichess_id = excluded.black_lichess_id,
       moves_uci = excluded.moves_uci, move_count = excluded.move_count, last_move_at = excluded.last_move_at,
       white_ms = excluded.white_ms, black_ms = excluded.black_ms, needs_reason = excluded.needs_reason,
-      revoked_seat = excluded.revoked_seat`;
+      revoked_seat = excluded.revoked_seat, clock_increment_s = excluded.clock_increment_s`;
   return gameId;
 }
 
@@ -510,6 +512,30 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(v.meta).toMatchObject({ limitSeconds: 900, incrementSeconds: 10, roundNo: 1, boardNo: 1 });
     expect([v.game!.whiteMs, v.game!.blackMs]).toEqual([900_000, 900_000]);
     expect(v.game!.clockRunning).toBe(false);
+  });
+
+  // T17B fix 2, D24 (re-review M2): the client's guess at a drop adds `meta.incrementSeconds`; the server's write adds
+  // `coalesce(clock_increment_s, f.clock.increment)` (play.ts). The ledger's number is the game's own clock — stamped on
+  // the first move and re-read from Lichess's — and the division's can be edited after the game began, so the snapshot
+  // carries the LEDGER's when it holds one: the guess and the write then read the same number by construction.
+  it("D24 M2: meta.incrementSeconds is the LEDGER's clock_increment_s once the game has one (0 included), the division's before — for every ship-1 control (counted)", async () => {
+    const seed15_10 = await seed(); // the division is 15+10 (the case above)
+    await gameOnFile(seed15_10, { status: "ready" });
+    const before = await readRoom({ kind: "session", userId: seed15_10.home.userId }, seed15_10.fixtureId, deps());
+    expect(before.meta.incrementSeconds, "no ledger number yet: the division's own").toBe(10);
+    let checked = 0;
+    let differing = 0;
+    for (const tc of SHIP1_TIME_CONTROLS) {
+      const s = await seed();
+      await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"], whiteMs: 300_000, blackMs: 300_000, clockIncrementS: tc.incrementSeconds });
+      const v = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+      expect(v.meta.incrementSeconds, `${tc.key}: the ledger's number (the division says 10)`).toBe(tc.incrementSeconds);
+      if (tc.incrementSeconds !== 10) differing += 1;
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every ship-1 control").toBe(SHIP1_TIME_CONTROLS.length);
+    expect(differing, "anti-vacuity: most differ from the division's 10, so a fall-through to it would be seen").toBeGreaterThanOrEqual(SHIP1_TIME_CONTROLS.length - 1);
+    expect(SHIP1_TIME_CONTROLS.some((tc) => tc.incrementSeconds === 0), "premise: a zero-increment control is in the list (0 must not fall through)").toBe(true);
   });
 
   it("T11 M7 (+ final re-review P11 (1)): a seat hold — token_revoked or account_changed — freezes ONE seat: its player reads `you`, the opponent `opponent` and keeps a live board and the watch link — counted", async () => {

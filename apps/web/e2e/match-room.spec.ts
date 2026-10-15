@@ -2502,3 +2502,41 @@ test("T17B fix 2, D24: my increment shows AT ONCE on my move — the clock jumps
   expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
   await ctx.close();
 });
+
+test("T17B fix 2, D24 (re-review I1, I2): a move dropped in time and still in flight when the SERVER's clock reaches zero is not a flag — no 'Time's up' over a live face, no clock-zero report; its refusal brings the lock and the report back", async ({ page, browser }) => {
+  test.setTimeout(180_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  // White to move with 9 s on the clock as at the last move (seeded now): the server's zero is 9 s from here, the drop
+  // lands a few seconds in, and the move is held past that zero. The division is 10+5, so the guess is ~10 s.
+  const seededAt = Date.now();
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: 9_000, blackMs: 300_000 });
+  const ctx = await cold(browser);
+  let zeroReports = 0;
+  await ctx.route("**/external-play/room/clock-zero*", async (route: Route) => {
+    zeroReports += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data: { reconciled: false }, requestId: "e2e" }) });
+  });
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  const mine = faceOf(p, "room-clock-you");
+  const acts = await catchActs(p, { hold: true });
+  await tap(p, "g1", "white");
+  await tap(p, "f3", "white");
+  await expect.poll(() => acts.bodies.length, { message: "the move is in flight" }).toBe(1);
+  const dropAt = Date.now();
+  expect(dropAt, "premise: the drop is before the server's zero").toBeLessThan(seededAt + 9_000 - 1_000);
+  // Past the server's zero, the move still out.
+  await p.waitForTimeout(Math.max(0, seededAt + 9_000 + 900 - Date.now()));
+  expect(Date.now() - dropAt, "premise: the guess (10 s) outlives this wait").toBeLessThan(9_000);
+  expect(faceSeconds(await mine.textContent()), "the face is the guess, not 0:00").toBeGreaterThan(3);
+  await expect(p.getByTestId("room-flag-notice"), "no 'Time's up' over a live face").toHaveCount(0);
+  expect(zeroReports, "a move dropped in time is not a clock at zero: nothing reported").toBe(0);
+  // The refusal: the guess goes, the server's zero is the face again, and the lock — and the report — return.
+  acts.release();
+  await expect(p.getByTestId("room-flag-notice")).toHaveAttribute("data-kind", "lichess", { timeout: 6_000 });
+  await expect(p.getByTestId("room-clock-you")).toContainText("0:00.0");
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "false");
+  await expect.poll(() => zeroReports, { message: "the room reports the zero it now sees" }).toBeGreaterThanOrEqual(1);
+  expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
+  await ctx.close();
+});
