@@ -1697,11 +1697,20 @@ export const RelayHeartbeat = z
     // The FINAL beat's why (owner, 2026-10-15): C06's `ExitReason`, snake_case. A record of what the Machine said, kept
     // in the two beat stores only — never the runner's exit columns (A5: those are persisted from the OBSERVED exit), and
     // nothing here reacts to it (R2003 owns what a stopped beat does). exitDetail is compositor-redacted human text,
-    // never parsed.
+    // never parsed, and scrubbed again before it is stored (stream-sessions.ts `heartbeat`). Its max counts UTF-16
+    // units; the contract publishes maxLength 100 (code points), the bound under which any text fits (review M1).
     exitReason: z.enum(["ended", "deadline", "signalled", "session_gone", "refused", "fatal"]).nullish(),
     exitDetail: z.string().max(200).nullish(),
   })
-  .strict();
+  .strict()
+  // Review M6: the exit fields ride only on the FINAL beat. null is no report (the fields are nullish), so only a
+  // present value is refused, at its own field.
+  .superRefine((b, ctx) => {
+    if (b.state === "stopped") return;
+    for (const field of ["exitReason", "exitDetail"] as const) {
+      if (b[field] != null) ctx.addIssue({ code: "custom", path: [field], message: `${field} is carried only by a stopped beat` });
+    }
+  });
 export type RelayHeartbeat = z.infer<typeof RelayHeartbeat>;
 export const RelayHeartbeatReply = z.object({ desiredState: z.enum(["live", "ending"]) });
 export type RelayHeartbeatReply = z.infer<typeof RelayHeartbeatReply>;

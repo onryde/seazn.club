@@ -68,6 +68,27 @@ function walk(v: unknown, depth: number): unknown {
   return undefined; // functions, symbols, bigints: not data
 }
 
+/** A relay token is a JWT: base64url `{"` is `eyJ`. Eight more characters make it a token's header (or more of one),
+ *  never an ordinary word; the dotted segments after it ride along, so a FRAGMENT of a token is still caught. */
+const JWT_SHAPED = /eyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)*/g;
+const REDACTED = "[redacted]";
+/** Below this a "secret" would redact ordinary words — and the replacement could lengthen the text. */
+const MIN_SECRET_LENGTH = REDACTED.length;
+
+/** R2002 review Q3 — defence in depth for a Machine's free text (the final beat's `exitDetail`). The compositor redacts
+ *  it before sending; the server scrubs it again before EITHER beat store keeps it: each named secret (the job token the
+ *  handler holds), anything JWT-shaped, and everything from the first `?` (the cut `sanitise` makes for samples.raw, so
+ *  both stores keep the same text). Never lengthens the text, and idempotent. */
+export function scrubBeatText(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret.length >= MIN_SECRET_LENGTH) out = out.split(secret).join(REDACTED);
+  }
+  out = out.replace(JWT_SHAPED, REDACTED);
+  const q = out.indexOf("?");
+  return q === -1 ? out : out.slice(0, q);
+}
+
 /** Allowlisted keys only; strings cut at `?` and at EVENT_PAYLOAD_MAX_STRING;
  *  depth ≤ 4; arrays ≤ 50. A non-object input is the empty payload. */
 export function sanitise(input: unknown): Record<string, unknown> {

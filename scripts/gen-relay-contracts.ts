@@ -64,6 +64,9 @@ const SESSION: Shape = {
   },
 };
 
+/** The server's exitDetail bound (schemas.ts `.max(200)`), in UTF-16 code units — JavaScript string length. */
+const EXIT_DETAIL_UTF16_MAX = 200;
+
 const HEARTBEAT: Shape = {
   twin: RelayHeartbeat,
   description: `POST /api/internal/relay/sessions/{sid}/heartbeat with \`Authorization: Bearer <job token>\`, every heartbeatIntervalMs (${SPEC} §5.3): the Machine's report, and the control channel. The body is bare (no envelope). Strict: an unknown key is a 400, never dropped. Every field but \`state\` is optional. ${ABSENT} null is admitted and stored as sent, but a compositor omits a field rather than sending null. The server keeps the whole latest body and every beat as a sample. The 200 is \`{ "ok": true, "data": <heartbeatReply> }\`; 400 a body this schema refuses; 401 a refused token; 404 an unknown session; 410 SESSION_ENDED.`,
@@ -88,8 +91,8 @@ const HEARTBEAT: Shape = {
     sinkSwaps: "Output pipeline builds after the first, since the process started. A present 0 is a measured zero.",
     rung: "The degrade ladder's rung: full, overlay_half_rate, fast_preset. Anything but full means the encoder overran and the ladder stepped down.",
     scoreStale: "true while the overlay page cannot reach the score feed (it keeps the last score). Omitted until the page has reported either way.",
-    exitReason: "On the final beat only: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. The server records it with the beat; the runner's observed exit stays the authority for how the session ends.",
-    exitDetail: "On the final beat only: what went wrong, in words, at most 200 characters. Redacted by the compositor before it is sent (no key, token or query). Human text, never parsed. The latest beat keeps it whole; the per-beat history keeps it cut at its first `?`.",
+    exitReason: "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400): a rule this schema states here, in prose. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
+    exitDetail: `Sent only with \`state: "stopped"\`, on the final beat: what went wrong, in words. The server's bound is ${EXIT_DETAIL_UTF16_MAX} UTF-16 code units. This schema's maxLength counts characters (code points), and a character is at most two UTF-16 code units, so it publishes ${EXIT_DETAIL_UTF16_MAX / 2} characters: a text within that is never refused. Redacted by the compositor before it is sent (no key, token or query). The server scrubs it again before storing it (anything JWT-shaped, the session's own job token, everything from the first \`?\`), and both stores keep the same text. Human text, never parsed.`,
   },
 };
 
@@ -122,6 +125,18 @@ function nodesAt(node: unknown, path: string[]): Json[] {
   return [...viaUnions, ...(next === undefined ? [] : nodesAt(next, path.slice(1)))];
 }
 
+/** Review M1: JSON Schema's maxLength counts code points, zod's max counts UTF-16 units, so the twin's 200 would let a
+ *  validator admit 150 emoji (300 units) that the server refuses. The file publishes the code-point bound under which any
+ *  text fits 200 units — never looser than the twin. The ONE structural key not taken from z.toJSONSchema. */
+function publishExitDetailInCodePoints(heartbeat: Json): void {
+  const node = (heartbeat.properties as Record<string, Json>).exitDetail;
+  const strings = ((node?.anyOf as Json[] | undefined) ?? []).filter((b) => b.type === "string");
+  if (strings.length !== 1 || strings[0].maxLength !== EXIT_DETAIL_UTF16_MAX) {
+    throw new Error(`heartbeat.exitDetail: expected one string branch with maxLength ${EXIT_DETAIL_UTF16_MAX}, got ${JSON.stringify(node)}`);
+  }
+  strings[0].maxLength = EXIT_DETAIL_UTF16_MAX / 2;
+}
+
 function render(shape: Shape, where: string): Json {
   // The round trip unshares nodes: a zod instance reused by two fields (the input/output link enum) may come back as
   // ONE object, and a description set on one field would then land on the other.
@@ -148,7 +163,7 @@ const doc: Json = {
   description: `The web↔Machine contract for a relay session (${SPEC} §5.3, §5.4). The root is bare: validate against #/$defs/session (the GET's data), #/$defs/heartbeat (the POST body) and #/$defs/heartbeatReply (the POST's data). ${ENVELOPE} ${PINNED_BY}`,
   $defs: {
     session: render(SESSION, `${FILE}#/$defs/session`),
-    heartbeat: render(HEARTBEAT, `${FILE}#/$defs/heartbeat`),
+    heartbeat: ((h) => (publishExitDetailInCodePoints(h), h))(render(HEARTBEAT, `${FILE}#/$defs/heartbeat`)),
     heartbeatReply: render(REPLY, `${FILE}#/$defs/heartbeatReply`),
   },
 };

@@ -495,10 +495,11 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
 const CONTRACT_FIXTURES = resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/relay-job.v1");
 const vector = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(CONTRACT_FIXTURES, `${name}.json`), "utf8")) as Record<string, unknown>;
-/** The fields R2 adds to the beat, typed from compositor spec 2026-10-14 §5.3 / C06 `HealthReport` / C07 `heartbeat_wire`,
- *  and the final beat's exit reason (owner scope addition 2026-10-15; C06 `ExitReason`). */
-const R2_BEAT_FIELDS = ["programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps", "rung", "scoreStale",
-  "exitReason", "exitDetail"];
+/** The fields R2 adds to the beat, typed from compositor spec 2026-10-14 §5.3 / C06 `HealthReport` / C07 `heartbeat_wire`. */
+const R2_HEALTH_FIELDS = ["programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps", "rung", "scoreStale"];
+/** The final beat's (owner scope addition 2026-10-15; C06 `ExitReason`) — only ever with `state: "stopped"` (review M6). */
+const EXIT_FIELDS = ["exitReason", "exitDetail"];
+const R2_BEAT_FIELDS = [...R2_HEALTH_FIELDS, ...EXIT_FIELDS];
 /** Spec §5.3: the keys only a composed session carries (R2004 serves them). */
 const COMPOSED_ONLY = ["input", "output", "heartbeatIntervalMs", "overlayUrl"];
 
@@ -519,19 +520,19 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
   it("heartbeat-full through the ROUTE is 200 { desiredState }, and each R2 field round-trips in BOTH stores — last_heartbeat and the newest sample's raw", async () => {
     const s = await session();
     const full = vector("heartbeat-full");
-    for (const k of R2_BEAT_FIELDS) expect(full, `premise: the vector carries ${k}`).toHaveProperty(k);
+    for (const k of R2_HEALTH_FIELDS) expect(full, `premise: the vector carries ${k}`).toHaveProperty(k);
     const res = await postBeat(s.sessionId, full, { token: s.jobToken });
     expect(res.status).toBe(200);
     expect(((await json(res)) as { data: unknown }).data).toEqual({ desiredState: "live" });
     const stored = await lastHeartbeat(s.sessionId);
     const { raw } = await newestRaw(s.sessionId);
     let checked = 0;
-    for (const k of R2_BEAT_FIELDS) {
+    for (const k of R2_HEALTH_FIELDS) {
       expect(stored, `last_heartbeat.${k}`).toHaveProperty(k, full[k]);
       expect(raw, `samples.raw.${k}`).toHaveProperty(k, full[k]);
       checked += 2;
     }
-    expect(checked, "anti-vacuity: twelve fields, two stores").toBe(24);
+    expect(checked, "anti-vacuity: ten fields, two stores (the exit fields are the final beat's test below)").toBe(20);
     // The whole body, both stores — the R1 facts beside the R2 ones (ruling 13: the whole body in raw).
     expect(stored).toEqual(full);
     expect(raw).toEqual(full);
@@ -567,7 +568,7 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect(newest.n).toBe(2);
     const [{ raw: first }] = await sql<{ raw: Record<string, unknown> }[]>`
       select raw from fixture_stream_samples where session_id = ${s.sessionId} and source = 'heartbeat' order by id asc limit 1`;
-    for (const k of R2_BEAT_FIELDS) expect(first, `the earlier sample keeps ${k}`).toHaveProperty(k);
+    for (const k of R2_HEALTH_FIELDS) expect(first, `the earlier sample keeps ${k}`).toHaveProperty(k);
   });
 
   it("a present 0 is a measurement: heartbeat-zero-is-a-measurement stores fps 0 (typed column too), and zero counters store 0 — the differential to the absent case above", async () => {
@@ -639,6 +640,7 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     for (const [label, body] of [
       ["exitReason \"crashed\"", vector("heartbeat-invalid-exit-reason")],
       ["exitDetail of 201 characters", { ...fatal, exitDetail: "x".repeat(201) }],
+      ["an exit reason on a playing beat (review M6)", vector("heartbeat-refused-exit-while-playing")],
     ] as const) {
       expect((await postBeat(t.sessionId, body, { token: t.jobToken })).status, label).toBe(400);
     }
@@ -649,6 +651,47 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect((await postBeat(t.sessionId, at200, { token: t.jobToken })).status).toBe(200);
     expect(await lastHeartbeat(t.sessionId)).toHaveProperty("exitDetail", at200.exitDetail);
     expect((await newestRaw(t.sessionId)).raw).toHaveProperty("exitDetail", at200.exitDetail);
+  });
+
+  // Review Q3 (defence in depth): the compositor redacts exitDetail, and the server scrubs it again before EITHER store
+  // keeps it. A whole job token (~240 characters) cannot fit the detail's 200, so what can ride is a FRAGMENT of one —
+  // JWT-shaped, which is what the scrub catches — and a query string.
+  it("review Q3: the server scrubs exitDetail before either store keeps it — a fragment of the session's own job token and a query are gone, and both stores hold the same text", async () => {
+    const s = await session();
+    expect(s.jobToken.length, "premise: a whole job token is longer than the detail's bound").toBeGreaterThan(200);
+    const detail = `auth refused for ${s.jobToken.slice(0, 80)} at https://relay.example.test/v1/sessions?st=abc&host=compositor`;
+    expect(detail.length, "premise: the detail is within its bound").toBeLessThanOrEqual(200);
+    const res = await postBeat(s.sessionId, { state: "stopped", exitReason: "refused", exitDetail: detail }, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    const want = "auth refused for [redacted] at https://relay.example.test/v1/sessions";
+    const stored = await lastHeartbeat(s.sessionId);
+    const { raw } = await newestRaw(s.sessionId);
+    expect(stored, "last_heartbeat").toHaveProperty("exitDetail", want);
+    expect(raw, "samples.raw").toHaveProperty("exitDetail", want);
+    expect(JSON.stringify([stored, raw]), "no piece of the token in either store").not.toContain(s.jobToken.slice(0, 40));
+    // Only the detail is rewritten: the rest of the beat is stored as sent.
+    expect(stored).toMatchObject({ state: "stopped", exitReason: "refused" });
+  });
+
+  // Review M4: Session.fixtureId is `string | null` — V410 `on delete set null`, the session outlives its fixture. The
+  // runtime witness: the Machine's own GET after the fixture is gone, in both modes.
+  it("review M4: delete the fixture mid-session and GET facts answers fixtureId null — still a strict RelayJobSession", async () => {
+    let checked = 0;
+    for (const mode of ["composed", "passthrough"] as const) {
+      const x = await session(mode);
+      const before = ((await json(await getFacts(x.sessionId, { token: x.jobToken }))) as { data: Record<string, unknown> }).data;
+      expect(before.fixtureId, `${mode}: the positive pair — before, the fixture's id`).toBe(x.fixtureId);
+      await sql`delete from fixtures where id = ${x.fixtureId}`;
+      const [{ fixture_id }] = await sql<{ fixture_id: string | null }[]>`select fixture_id from fixture_stream_sessions where id = ${x.sessionId}`;
+      expect(fixture_id, `${mode}: premise — the session row survives with a null fixture`).toBeNull();
+      const res = await getFacts(x.sessionId, { token: x.jobToken });
+      expect(res.status, mode).toBe(200);
+      const data = ((await json(res)) as { data: Record<string, unknown> }).data;
+      expect(data, mode).toHaveProperty("fixtureId", null);
+      expect(RelayJobSession.parse(data), `${mode}: parse keeps every key`).toEqual(data);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("GET facts is a STRICT RelayJobSession: passthrough carries no composed-only key; composed carries none either until R2004 serves them (R2004 turns that half around)", async () => {
@@ -700,7 +743,9 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
       { state: "playing", programmePhase: "reconnecting", input: "backoff", output: "connected", graphics: "failed", rung: "fast_preset", inputKicks: 4, inputKickAlert: true, pipelineRebuilds: 3, sinkSwaps: 1, scoreStale: true },
       { state: "playing", programmePhase: "live", input: "connected", output: "backoff", graphics: "ready", rung: "full", inputKicks: 2, inputKickAlert: false, pipelineRebuilds: 3, sinkSwaps: 2, scoreStale: false },
       { state: "playing", programmePhase: "live", input: "backoff", output: "connected", graphics: "ready", rung: "full", inputKicks: 2, inputKickAlert: false, pipelineRebuilds: 3, sinkSwaps: 2 },
-      vector("heartbeat-final-fatal"),   // the final beat: why the Machine exited (heartbeat-full above said "signalled")
+      // The first Machine's final beat (it was signalled), then the retry's (fatal) — R2003's one retry, as beats.
+      { state: "stopped", exitReason: "signalled", exitDetail: "SIGTERM: draining before exit" },
+      vector("heartbeat-final-fatal"),
     ];
     for (const b of beats) expect((await postBeat(s.sessionId, b, { token: s.jobToken })).status, JSON.stringify(b)).toBe(200);
     // The beats landed milliseconds apart; space them 5 s apart in posting order, as a Machine beats.
@@ -734,8 +779,8 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
     expect(Number(r.longest_input_backoff_s)).toBe(15);
     expect(new Date(r.first_kick_alert_at as string).toISOString()).toBe("2026-10-15T12:00:10.000Z");
     expect(new Date(r.first_beat_at as string).toISOString()).toBe("2026-10-15T12:00:00.000Z");
-    expect(new Date(r.last_beat_at as string).toISOString()).toBe("2026-10-15T12:00:35.000Z");
-    // The exit reason is the LATEST one reported (the final beat's), never the first (heartbeat-full's "signalled").
+    expect(new Date(r.last_beat_at as string).toISOString()).toBe("2026-10-15T12:00:40.000Z");
+    // The exit reason is the LATEST one reported (the final beat's), never the first (the signalled one before it).
     expect(r).toMatchObject({ exit_reason: "fatal", exit_detail: "programme start failed: cefsrc not found" });
     // The latest beat, whole, is the session row's — the review shows it beside the history.
     expect(r.last_heartbeat).toEqual(beats.at(-1));

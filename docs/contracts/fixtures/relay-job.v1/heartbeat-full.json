@@ -18,7 +18,5 @@
   "pipelineRebuilds": 2,
   "sinkSwaps": 1,
   "rung": "overlay_half_rate",
-  "scoreStale": true,
-  "exitReason": "signalled",
-  "exitDetail": "SIGTERM: draining before exit"
+  "scoreStale": true
 }

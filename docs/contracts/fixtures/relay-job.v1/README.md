@@ -19,10 +19,13 @@ What follows the prefix says how a reader must treat the vector:
 
 - **A plain name** (`session-composed-720p`) is valid: the schema admits it, and so does a consumer.
 - **`invalid-`** (`heartbeat-invalid-unknown-field`) is refused by the JSON Schema itself.
-- **`refused-`** (`session-refused-delay-mismatch`, `session-refused-delay-absent`) is admitted by the
-  JSON Schema and refused by a rule that JSON Schema cannot state, which the contract states in the
-  field's prose: a composed session's `overlayUrl` carries `delay=` exactly once, equal to
-  `overlayDelayMs`. A consumer must refuse these. Each is a one-field edit of `session-composed-720p`.
+- **`refused-`** is admitted by the JSON Schema and refused by a rule that the contract states in the
+  field's prose, because this schema does not state it. A consumer must refuse these. Each one is a
+  one-field edit of a valid vector:
+  - `session-refused-delay-mismatch` and `session-refused-delay-absent` edit `session-composed-720p`.
+    A composed session's `overlayUrl` carries `delay=` exactly once, equal to `overlayDelayMs`.
+  - `heartbeat-refused-exit-while-playing` edits `heartbeat-final-fatal`. `exitReason` and
+    `exitDetail` are sent only with `state: "stopped"`.
 
 ## The envelope
 
@@ -46,8 +49,11 @@ stored beat, never a `null` and never a `0`.
   no one constant satisfies both.
 - The output profiles are the compositor's Global Constraints: 1280×720 at 30 fps and 4000 kbps, and
   1920×1080 at 30 fps and 6000 kbps.
-- `heartbeat-final-fatal` is a Machine's last beat: `state` `stopped` with the reason it is exiting
-  (`exitReason`, the compositor's `ExitReason`) and what went wrong in words (`exitDetail`, at most 200
-  characters, redacted by the compositor). `heartbeat-invalid-exit-reason` names a reason outside that
-  vocabulary. The server records both fields with the beat and does nothing else with them.
+- `heartbeat-full` carries every heartbeat field except the final beat's two. `heartbeat-final-fatal`
+  is a Machine's last beat: `state` `stopped`, the reason it is exiting (`exitReason`, the
+  compositor's `ExitReason`) and what went wrong in words (`exitDetail`, redacted by the compositor).
+  The server's bound on `exitDetail` is 200 UTF-16 code units. The schema publishes 100 characters,
+  the bound under which any text fits. `heartbeat-invalid-exit-reason` names a reason outside the
+  vocabulary. The server records both fields with the beat, scrubbed again, and does nothing else with
+  them.
 - Every id, key, passphrase and token here is a placeholder, never a real credential.

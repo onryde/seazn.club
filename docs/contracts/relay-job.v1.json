@@ -435,7 +435,7 @@
           ]
         },
         "exitReason": {
-          "description": "On the final beat only: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. The server records it with the beat; the runner's observed exit stays the authority for how the session ends.",
+          "description": "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400): a rule this schema states here, in prose. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
           "anyOf": [
             {
               "type": "string",
@@ -454,11 +454,11 @@
           ]
         },
         "exitDetail": {
-          "description": "On the final beat only: what went wrong, in words, at most 200 characters. Redacted by the compositor before it is sent (no key, token or query). Human text, never parsed. The latest beat keeps it whole; the per-beat history keeps it cut at its first `?`.",
+          "description": "Sent only with `state: \"stopped\"`, on the final beat: what went wrong, in words. The server's bound is 200 UTF-16 code units. This schema's maxLength counts characters (code points), and a character is at most two UTF-16 code units, so it publishes 100 characters: a text within that is never refused. Redacted by the compositor before it is sent (no key, token or query). The server scrubs it again before storing it (anything JWT-shaped, the session's own job token, everything from the first `?`), and both stores keep the same text. Human text, never parsed.",
           "anyOf": [
             {
               "type": "string",
-              "maxLength": 200
+              "maxLength": 100
             },
             {
               "type": "null"

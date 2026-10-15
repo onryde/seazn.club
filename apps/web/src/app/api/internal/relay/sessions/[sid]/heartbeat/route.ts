@@ -10,8 +10,9 @@ type Ctx = { params: Promise<{ sid: string }> };
 /** POST …/heartbeat — the control channel (design §6.4): the Machine reports, the reply carries `{ desiredState }`. A
  *  Machine takes no inbound traffic, so this reply is the only way a stop reaches it. The bearer's PRESENCE is checked
  *  before the body is read; the token itself is verified by the usecase before anything is written. The body is
- *  `RelayHeartbeat` (strict) — never a carrier of exit facts (A5: those are the runner's, persisted from its observed
- *  exit, and a beat must not be able to overwrite them). */
+ *  `RelayHeartbeat` (strict). Its final beat may carry the Machine's own exit reason (`exitReason`/`exitDetail`, owner
+ *  2026-10-15): a record only, kept in the two beat stores — never the runner's exit columns (A5: those are persisted
+ *  from its observed exit, and a beat must not be able to overwrite them). */
 export async function POST(req: Request, { params }: Ctx) {
   return handler(async () => {
     const { sid } = await params;

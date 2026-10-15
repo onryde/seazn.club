@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { RelayHeartbeat } from "@/server/api-v1/schemas";
 import { EVENT_PAYLOAD_MAX_STRING } from "../config";
-import { ALLOWED_KEYS, pathTemplate, sanitise } from "../sanitise";
+import { ALLOWED_KEYS, pathTemplate, sanitise, scrubBeatText } from "../sanitise";
 
 const SECRET = "sekrit-9f3a1c";
 /** The fields R2 adds to the beat, typed from compositor spec 2026-10-14 §5.3 / C06 `HealthReport` / C07 `heartbeat_wire`,
@@ -70,8 +70,9 @@ describe("sanitise — allowlist", () => {
   it("R2002: every field the relay heartbeat declares survives into a sample's raw — the contract's full beat, unchanged", () => {
     const declared = Object.keys(RelayHeartbeat.shape).sort();
     expect(declared.length).toBeGreaterThan(R2_BEAT_FIELDS.length);
-    const full = contractFixture("heartbeat-full");
-    expect(Object.keys(full).sort(), "premise: the full beat carries every declared field").toEqual(declared);
+    // heartbeat-full carries every field but the final beat's two, which heartbeat-final-fatal carries (review M6).
+    const full = { ...contractFixture("heartbeat-full"), ...contractFixture("heartbeat-final-fatal") };
+    expect(Object.keys(full).sort(), "premise: the two beats carry every declared field").toEqual(declared);
     expect(sanitise(full)).toEqual(full);
     let checked = 0;
     for (const k of declared) {
@@ -110,5 +111,46 @@ describe("pathTemplate — a template, never a URL", () => {
     // the whole path to "{id}" and a `//` becomes "/{id}/".
     expect(pathTemplate("/a/b/", [""])).toBe("/a/b/");
     expect(pathTemplate("/a//b", [""])).toBe("/a//b");
+  });
+});
+
+// Review Q3 (defence in depth): the compositor redacts exitDetail before it sends it, and the server scrubs it again
+// before EITHER store keeps it — the session's own secrets, anything JWT-shaped (every relay token is a JWT, and a
+// fragment of one is still a credential), and everything from the first `?` (the cut samples.raw already made).
+describe("scrubBeatText (R2002 review Q3)", () => {
+  const JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaWQiOiJhYmMiLCJzY29wZSI6InJlbGF5LWpvYiJ9.c2lnbmF0dXJlLXBsYWNlaG9sZGVy";
+  it("the empty case and a clean text are unchanged", () => {
+    expect(scrubBeatText("", ["opaque-secret-0123456789"])).toBe("");
+    expect(scrubBeatText("programme start failed: cefsrc not found", ["opaque-secret-0123456789"])).toBe("programme start failed: cefsrc not found");
+    expect(scrubBeatText("no secrets given", [])).toBe("no secrets given");
+  });
+  it("redacts each named secret wherever it appears — even one that is not JWT-shaped", () => {
+    const secret = "opaque-secret-0123456789";
+    expect(scrubBeatText(`auth ${secret} refused; retried with ${secret}`, [secret])).toBe("auth [redacted] refused; retried with [redacted]");
+  });
+  it("redacts a whole JWT, and a JWT FRAGMENT (a header and a cut payload) — no secret named", () => {
+    expect(scrubBeatText(`token ${JWT} expired`, [])).toBe("token [redacted] expired");
+    const fragment = JWT.slice(0, 60);
+    expect(fragment.split(".")).toHaveLength(2);
+    expect(scrubBeatText(`bad bearer ${fragment}`, [])).toBe("bad bearer [redacted]");
+  });
+  it("cuts at the first `?` — after redacting, so a secret before it is still redacted", () => {
+    expect(scrubBeatText(`GET https://relay.example.test/v1/x?st=${JWT}&host=compositor failed`, [])).toBe("GET https://relay.example.test/v1/x");
+    expect(scrubBeatText(`with ${JWT} at /a?b=1`, [])).toBe("with [redacted] at /a");
+  });
+  it("never lengthens a text (both stores keep the same text, under the beat's own bound), and is idempotent", () => {
+    const secret = "opaque-secret-0123456789";
+    const cases = [`x ${secret}`, `y ${JWT}`, `z ${JWT.slice(0, 11)}`, "short eyJabc", "plain", `/p?q=${secret}`];
+    let checked = 0;
+    for (const text of cases) {
+      const once = scrubBeatText(text, [secret]);
+      expect(once.length, text).toBeLessThanOrEqual(text.length);
+      expect(scrubBeatText(once, [secret]), text).toBe(once);
+      expect(sanitise({ exitDetail: once }), "samples.raw keeps it as is").toEqual({ exitDetail: once });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // A too-short "secret" is never used as a pattern: it would redact ordinary words.
+    expect(scrubBeatText("the end", ["e"])).toBe("the end");
   });
 });

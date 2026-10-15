@@ -41,6 +41,7 @@ import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials, wipeStreamCodeTok } from "@/server/relay/secret-columns";
+import { scrubBeatText } from "@/server/relay/sanitise";
 import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
@@ -2144,9 +2145,12 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
   // G5 (Task 11 review): `egressBytes` is optional, and an omitted field leaves the stored count alone — only a Machine
   // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero).
-  await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(body as never)}, heartbeat_at = ${deps.now()},
-              egress_bytes = coalesce(${body.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;
-  await sampleBeat(sessionId, before.org_id, body, deps);
+  // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
+  // JWT-shaped, everything from the first `?`), so last_heartbeat and the sample's raw hold the same detail.
+  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, [token]) };
+  await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
+              egress_bytes = coalesce(${beat.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;
+  await sampleBeat(sessionId, before.org_id, beat, deps);
   let s = (await applyExpiry(sessionId, deps))!;
   // The runner's own callbacks are lifecycle triggers (plan §"Fly machine lifecycle"): playing/stopped, nothing else moves the table from a beat.
   // m1 (lane C final review): each callback is re-decided on the LOCKED row (T5-a) — another writer may have moved the row
