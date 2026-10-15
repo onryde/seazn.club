@@ -286,6 +286,62 @@ describe("seat round trip", () => {
   });
 });
 
+// D21 (T17B fix 2, review I2): a `camera_starting` answer can come back WITHOUT the player's token when the platform's
+// RealtimeKit call budget was spent before the server could refresh one (the answer says "not yet", never "no camera").
+// The camera is already joined with the token the room holds; replacing it with nothing would take the camera down in the
+// middle of a check-in the budget merely delayed.
+describe("a camera_starting answer with no token (the call budget was spent) keeps the token the room holds (D21)", () => {
+  const HELD = { authToken: "own-token", participantId: "p-own" };
+  const answer = (seat: unknown, at = 1) => ({
+    type: "seat_answered" as const,
+    answer: { snapshot: snap({ serverNow: iso(T0 + at) }), seat: seat as never, create: null },
+    receivedAt: T0,
+  });
+  const holding = () =>
+    roomReducer(initialRoomState(snap(), T0), answer({ seated: false, reason: "camera_required", participant: HELD }));
+
+  it("the defect: starting-without-a-token after a held token KEEPS the held participant, and still reads as camera_starting", () => {
+    const s = roomReducer(holding(), answer({ seated: false, reason: "camera_starting", participant: null }, 2));
+    expect(s.seat).toEqual({ seated: false, reason: "camera_starting", participant: HELD });
+  });
+
+  it("empty case: starting-without-a-token with NO token held stays without one (nothing is invented)", () => {
+    const s = roomReducer(initialRoomState(snap(), T0), answer({ seated: false, reason: "camera_starting", participant: null }));
+    expect(s.seat).toEqual({ seated: false, reason: "camera_starting", participant: null });
+  });
+
+  it("the pair: starting WITH a token replaces the held one (a re-pair's newcomer), and sequences of deferrals keep the same one", () => {
+    const other = { authToken: "new-token", participantId: "p-new" };
+    let s = roomReducer(holding(), answer({ seated: false, reason: "camera_starting", participant: other }, 2));
+    expect(s.seat?.participant).toEqual(other);
+    for (let i = 3; i < 8; i += 1) s = roomReducer(s, answer({ seated: false, reason: "camera_starting", participant: null }, i));
+    expect(s.seat?.participant, "five deferrals in a row").toEqual(other);
+  });
+
+  it("only camera_starting inherits: every other answer without a token drops it (the refusals that carry none), counted", () => {
+    const withoutToken = [
+      { seated: false, reason: "window_closed", participant: null },
+      { seated: false, reason: "round_not_open", participant: null },
+      { seated: false, reason: "video_unavailable", participant: null },
+      { seated: false, reason: "not_a_player", participant: null },
+      { seated: true, participant: null },
+    ];
+    let checked = 0;
+    for (const seat of withoutToken) {
+      const s = roomReducer(holding(), answer(seat, 2));
+      expect(s.seat?.participant, JSON.stringify(seat)).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(withoutToken.length);
+  });
+
+  it("a camera_starting answer BETWEEN seated answers does not leak the token into a later tokenless one", () => {
+    let s = roomReducer(holding(), answer({ seated: false, reason: "camera_starting", participant: null }, 2));
+    s = roomReducer(s, answer({ seated: false, reason: "window_closed", participant: null }, 3));
+    expect(s.seat?.participant).toBeNull();
+  });
+});
+
 // D23-fix-3: the reducer no longer COUNTS failed seat calls (D23-fix-2 (b) did, and ended the cover on every one — a single
 // 500 on a camera_starting poll ended it while the camera check was still running). What a failed call leaves is what the
 // room reads to keep going: the seat answer as it was (so a camera_starting seat is still being polled) and nothing pending.

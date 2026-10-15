@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
 import {
+  RealtimeKitDeferred,
   RealtimeKitError,
   addParticipant,
   endMeeting,
@@ -16,6 +17,7 @@ import {
   removeParticipant,
   seatCameraEvidence,
 } from "../realtimekit";
+import { RTK_BUDGET_BURST, budgetKey, takeRealtimeKitCall } from "../budget";
 
 const ENV_KEYS = [
   "CLOUDFLARE_ACCOUNT_ID",
@@ -1605,5 +1607,236 @@ describe("listMeetingSessions", () => {
     configure({ REALTIMEKIT_API_TOKEN: "" });
     await expect(listMeetingSessions(M, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unconfigured" });
     expect(stub.calls.length).toBe(0);
+  });
+});
+
+// ─── D21: the platform-wide call budget (T17B fix 2, review I2) ──────────────────────────────────────────────
+// The vendor allows 1,200 calls per five minutes for the whole account and refuses EVERY call for five minutes past
+// it. Every request this adapter makes spends a token first (budget.ts); over budget the request is NOT made and the
+// caller is told `deferred` — a RealtimeKitError subtype every caller can still catch as "video, not now", and one
+// that a caller can tell from an outage and from a camera that is off.
+describe("the call budget (D21): every vendor request spends a token first, and a refused one is never made", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const DEFAULT_KEY = budgetKey("https://api.cloudflare.com/client/v4", "acct-1");
+  const refuse = vi.fn(async () => false);
+  const live = { status: 200, body: { success: true, data: { id: "sess-b", status: "LIVE" } } };
+  const peerRow = {
+    id: "conn-1",
+    user_id: "p-b",
+    joined_at: "2026-10-01T12:00:00Z",
+    left_at: null,
+    peer_events: [{ event_name: "PEER_JOINING", peer_id: "peer-b", created_at: "2026-10-01T12:00:00Z" }],
+  };
+  const participantsOf = (rows: unknown[]) => ({ status: 200, body: { success: true, data: { participants: rows } } });
+
+  /** Every adapter entry that reaches the vendor, with the OK answer its first request wants. */
+  const ENTRIES: { name: string; ok: { status: number; body: unknown }[]; run: (deps: { fetch: typeof fetch; budget?: () => Promise<boolean> }) => Promise<unknown> }[] = [
+    {
+      name: "addParticipant",
+      ok: [{ status: 201, body: { success: true, data: { id: "p-b", token: "t" } } }],
+      run: (d) => addParticipant({ meetingId: "mtg-b", subject: "person-b", preset: "player" }, d),
+    },
+    {
+      name: "refreshParticipantToken",
+      ok: [{ status: 200, body: { success: true, data: { token: "t2" } } }],
+      run: (d) => refreshParticipantToken({ meetingId: "mtg-b", participantId: "p-b" }, d),
+    },
+    {
+      name: "removeParticipant",
+      ok: [
+        { status: 200, body: { success: true, data: {} } },
+        { status: 200, body: { success: true, data: {} } },
+      ],
+      run: (d) => removeParticipant({ meetingId: "mtg-b", participantId: "p-b" }, d),
+    },
+    {
+      name: "seatCameraEvidence",
+      ok: [live, participantsOf([]),],
+      run: (d) => seatCameraEvidence({ meetingId: "mtg-b", participantId: "p-b" }, d),
+    },
+    {
+      name: "fetchVideoOffCoverage",
+      ok: [{ status: 200, body: { success: true, data: { participant: { joined_at: "2026-10-01T12:00:00Z", left_at: "2026-10-01T12:30:00Z", peer_report: { metadata: { events: [] }, quality: { video_producer: [] } } } } } }],
+      run: (d) => fetchVideoOffCoverage("peer-b", d).catch((e) => { if (e instanceof RealtimeKitDeferred) throw e; return "answered"; }),
+    },
+    {
+      name: "listPeerIds",
+      ok: [participantsOf([peerRow])],
+      run: (d) => listPeerIds("sess-b", "p-b", d),
+    },
+    {
+      name: "listMeetingSessions",
+      ok: [{ status: 200, body: { success: true, data: { sessions: [] }, paging: { total_count: 0 } } }],
+      run: (d) => listMeetingSessions("mtg-b", d),
+    },
+    {
+      name: "endMeeting",
+      ok: [
+        { status: 200, body: { success: true, data: {} } },
+        { status: 200, body: { success: true, data: {} } },
+      ],
+      run: (d) => endMeeting(mtg("budget-end"), d).catch((e) => { if (e instanceof RealtimeKitDeferred) throw e; return "answered"; }),
+    },
+  ];
+
+  it("sweep: a refused request is never made — RealtimeKitDeferred (still a RealtimeKitError), code `deferred`, zero requests — and the same call, granted, is made", async () => {
+    configure();
+    let checked = 0;
+    for (const e of ENTRIES) {
+      const refused = stubFetch(e.ok);
+      const budget = vi.fn(async () => false);
+      const err = await e.run({ fetch: refused.fetch, budget }).then(() => null, (x: unknown) => x);
+      expect(err, `${e.name}: a refused budget defers`).toBeInstanceOf(RealtimeKitDeferred);
+      expect(err, `${e.name}: and stays catchable as the vendor's family`).toBeInstanceOf(RealtimeKitError);
+      expect((err as RealtimeKitError).code, e.name).toBe("deferred");
+      expect(refused.calls.length, `${e.name}: NO request made`).toBe(0);
+      expect(budget, `${e.name}: asked exactly once, before the first request`).toHaveBeenCalledTimes(1);
+      // The positive pair: a granted budget makes the request, and spends one token per request.
+      const granted = stubFetch(e.ok);
+      const spend = vi.fn(async () => true);
+      await e.run({ fetch: granted.fetch, budget: spend });
+      expect(granted.calls.length, `${e.name}: granted, it is made`).toBeGreaterThan(0);
+      expect(spend, `${e.name}: one token per request`).toHaveBeenCalledTimes(granted.calls.length);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every entry").toBe(ENTRIES.length);
+  });
+
+  it("ensureMeeting defers its create and writes no meeting row; the retry, granted, makes the meeting", async () => {
+    if (!process.env.DATABASE_URL) return;
+    configure();
+    const s = await seedFixture();
+    const stub = stubFetch([{ status: 200, body: { success: true, data: { id: mtg("budget-ens") } } }]);
+    await expect(ensureMeeting(s.fixtureId, { fetch: stub.fetch, budget: refuse })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+    expect(stub.calls.length).toBe(0);
+    const [none] = await sql`select 1 from fixture_video_meetings where fixture_id = ${s.fixtureId}`;
+    expect(none, "a deferral leaves no row").toBeUndefined();
+    const ref = await ensureMeeting(s.fixtureId, { fetch: stub.fetch, budget: async () => true });
+    expect(ref).toEqual({ meetingId: mtg("budget-ens") });
+  });
+
+  it("endMeeting deferred leaves the row UNENDED, so the sweep's teardown retries it", async () => {
+    if (!process.env.DATABASE_URL) return;
+    configure();
+    const s = await seedFixture();
+    const id = mtg("budget-end2");
+    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch, budget: async () => true });
+    const stub = stubFetch([]);
+    await expect(endMeeting(id, { fetch: stub.fetch, budget: refuse })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+    const [row] = await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_video_meetings where fixture_id = ${s.fixtureId}`;
+    expect(row?.ended_at, "not ended").toBeNull();
+  });
+
+  it("a deferral on the THIRD request (the peer report) is rethrown — never folded into `unreadable`, which the seat would wait out and then call an outage", async () => {
+    configure();
+    const stub = stubFetch([live, participantsOf([peerRow])]);
+    let n = 0;
+    const budget = async () => ++n <= 2; // active-session and participants granted; the peer report refused
+    await expect(seatCameraEvidence({ meetingId: "mtg-b", participantId: "p-b" }, { fetch: stub.fetch, budget })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+    expect(stub.calls.length, "the two granted requests were made; the refused one was not").toBe(2);
+    // The positive pair: a vendor that FAILS the same read is `unreadable` — the distinction is the point.
+    const failing = stubFetch([live, participantsOf([peerRow]), { status: 503, body: {} }]);
+    const got = await seatCameraEvidence({ meetingId: "mtg-b", participantId: "p-b" }, { fetch: failing.fetch, budget: async () => true });
+    expect(got.state).toBe("unreadable");
+  });
+
+  it("the spender is asked with the vendor host + account key, before the request, once per request", async () => {
+    configure();
+    const keys: string[] = [];
+    const order: string[] = [];
+    const stub = stubFetch([live, participantsOf([peerRow]), { status: 200, body: { success: true, data: { participant: { peer_report: { metadata: { events: [] } } } } } }]);
+    const wrapped = (async (...a: Parameters<typeof fetch>) => {
+      order.push("request");
+      return (stub.fetch as unknown as (...x: Parameters<typeof fetch>) => ReturnType<typeof fetch>)(...a);
+    }) as typeof fetch;
+    await seatCameraEvidence({ meetingId: "mtg-b", participantId: "p-b" }, {
+      fetch: wrapped,
+      budget: async (k: string) => {
+        keys.push(k);
+        order.push("spend");
+        return true;
+      },
+    } as never);
+    expect(keys, "three requests, three spends, one bucket").toEqual([DEFAULT_KEY, DEFAULT_KEY, DEFAULT_KEY]);
+    expect(order, "each spend precedes its request").toEqual(["spend", "request", "spend", "request", "spend", "request"]);
+  });
+
+  it("a deferral message names no secret and no body, like every adapter failure", async () => {
+    configure();
+    const err = (await refreshParticipantToken({ meetingId: "mtg-b", participantId: "p-b" }, { fetch: stubFetch([]).fetch, budget: refuse }).catch((e) => e)) as RealtimeKitDeferred;
+    expect(err.message).not.toContain("cf-token-do-not-leak-0123456789");
+    expect(err.status).toBe(429);
+    expect(err.name).toBe("RealtimeKitDeferred");
+  });
+
+  describe.skipIf(!process.env.DATABASE_URL)("the PRODUCTION path (no fetch, no budget passed): metered by the real database bucket", () => {
+    /** The real Cloudflare base URL (REALTIMEKIT_BASE_URL unset) on an account id no other test or run shares, so this
+     *  drains nobody else's bucket and nobody else's drains it. */
+    function onTheVendor() {
+      configure();
+      vi.stubEnv("REALTIMEKIT_BASE_URL", undefined);
+      const account = `acct-budget-${randomUUID()}`;
+      vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", account);
+      return budgetKey("https://api.cloudflare.com/client/v4", account);
+    }
+    const okBody = () => new Response(JSON.stringify({ success: true, data: { token: "t" } }), { status: 200, headers: { "content-type": "application/json" } });
+    const args = { meetingId: "mtg-b", participantId: "p-b" };
+
+    it("global fetch stubbed, the real bucket drained: the request is never made; before it was drained, it was — and cost one token", async () => {
+      const key = onTheVendor();
+      try {
+        const calls: string[] = [];
+        vi.stubGlobal("fetch", async (url: string | URL) => {
+          calls.push(String(url));
+          return okBody();
+        });
+        await refreshParticipantToken(args, {});
+        expect(calls.length, "a fresh bucket lets the request through").toBe(1);
+        expect(calls[0]!.startsWith("https://api.cloudflare.com/client/v4/")).toBe(true);
+        const [row] = await sql<{ tokens: number }[]>`select tokens from realtimekit_call_budget where key = ${key}`;
+        expect(row!.tokens, "the request cost one token").toBeLessThan(RTK_BUDGET_BURST);
+        expect(row!.tokens).toBeGreaterThan(RTK_BUDGET_BURST - 2);
+        let drained = 0;
+        while (await takeRealtimeKitCall(key)) drained += 1;
+        expect(drained, "anti-vacuity: there was something to drain").toBeGreaterThan(RTK_BUDGET_BURST - 5);
+        await expect(refreshParticipantToken(args, {})).rejects.toBeInstanceOf(RealtimeKitDeferred);
+        expect(calls.length, "the refused request never reached the network").toBe(1);
+      } finally {
+        await sql`delete from realtimekit_call_budget where key = ${key}`;
+      }
+    });
+
+    it("a caller-supplied fetch (a test double) on Cloudflare's own base spends nothing either — the bucket for it is never made", async () => {
+      const key = onTheVendor();
+      const stub = stubFetch([{ status: 200, body: { success: true, data: { token: "t" } } }]);
+      await refreshParticipantToken(args, { fetch: stub.fetch });
+      expect(stub.calls.length).toBe(1);
+      expect(await sql`select key from realtimekit_call_budget where key = ${key}`, "no token taken, no bucket made").toHaveLength(0);
+    });
+
+    it("a base URL that is NOT Cloudflare's (a fixture, a proxy) spends no account's budget — the bucket for it is never made", async () => {
+      configure();
+      const base = `http://127.0.0.1:${40_000 + Math.floor(Math.random() * 20_000)}`;
+      vi.stubEnv("REALTIMEKIT_BASE_URL", base);
+      let calls = 0;
+      vi.stubGlobal("fetch", async () => {
+        calls += 1;
+        return okBody();
+      });
+      await refreshParticipantToken(args, {});
+      await refreshParticipantToken(args, { baseUrl: `${base}/other` });
+      expect(calls, "both requests were made").toBe(2);
+      const rows = await sql`select key from realtimekit_call_budget where key like ${base + "%"}`;
+      expect(rows.length, "and neither spent a token").toBe(0);
+    });
+
+    it("the same non-Cloudflare base, with a budget PASSED (a load test, a suite proving the refusal), is metered like the vendor", async () => {
+      configure();
+      vi.stubEnv("REALTIMEKIT_BASE_URL", "http://127.0.0.1:41999");
+      vi.stubGlobal("fetch", async () => okBody());
+      await expect(refreshParticipantToken(args, { budget: refuse })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+    });
   });
 });

@@ -1605,6 +1605,26 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
     expect(ended).toEqual([m]);
   });
 
+  // D21: the platform's RealtimeKit call budget is spent. The teardown is NOT made, and the pass says so as a deferral —
+  // not a failure (the row keeps its place, the next firing reaches it) and never as an ended room.
+  it("D21: a teardown the call budget defers is counted `deferred`, not failed — the row stays unended, and the next pass ends it", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const m = await meetingFor(b);
+    const spent = { ...RTK, budget: async () => false };
+    const end: NonNullable<SweepDeps["endMeeting"]> = (id) => endMeeting(id, spent);
+    const report = await sweep(b, { now: b.at(45), endMeeting: end });
+    expect([report.failures, report.failed], "a deferral is not a failure").toEqual([[], 0]);
+    expect(report.deferred, "…it is counted as one").toBe(1);
+    expect(report.meetingsEnded).toBe(0);
+    expect(rtk.calls, "and no request was made").toEqual([]);
+    expect(await endedAt(b.fixtureId), "the room is still up").toBeNull();
+    // The pair: the budget back, the same row is ended.
+    const next = await sweep(b, { now: b.at(50), endMeeting: (id) => endMeeting(id, RTK) });
+    expect([next.meetingsEnded, next.deferred, next.failures]).toEqual([1, 0, []]);
+    expect(rtk.calls.map((c) => c.path)).toEqual([`/meetings/${m}/active-session/kick-all`, `/meetings/${m}`]);
+    expect(await endedAt(b.fixtureId)).not.toBeNull();
+  });
+
   it("BEFORE T+20 a room with no game yet stays up — somebody may still come", async () => {
     const b = await openedBoard({ checkedIn: ["home"] });
     await meetingFor(b);
@@ -4610,6 +4630,29 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(next.cameraSettled).toBe(1);
   });
 
+  // D21: a read the call budget refused tells nothing about the match — so it is neither a failure nor a reason to give up.
+  it("D21: the call budget spent — a deferral: not a failure, nothing stored, and NOT given up even a day on; the next pass settles it", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    const spent = { ...RTK, budget: async () => false };
+    const deferredPass = (now: Date) => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: spent });
+    const first = await deferredPass(after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([first.failures, first.failed, first.deferred, first.cameraSettled]).toEqual([[], 0, 1, 0]);
+    expect(rtkReads(), "no request was made").toEqual([]);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    // A day and a second on, where an UNREADABLE answer gives up (the test above): a deferral does not.
+    const late = await deferredPass(new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
+    expect(cameraFailures(late), "never CAMERA_EVIDENCE_UNREAD for a read that was not made").toEqual([]);
+    expect([late.cameraSettled, late.deferred]).toEqual([0, 1]);
+    expect(await settledAt(m.b.fixtureId), "still unsettled: it keeps its place").toBeNull();
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    // The budget back (the same late clock): read for real and settled.
+    const back = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 2));
+    expect(cameraFailures(back)).toEqual([]);
+    expect([back.cameraSettled, back.deferred]).toEqual([1, 0]);
+    expect(await settledAt(m.b.fixtureId)).not.toBeNull();
+  });
+
   it("evidence never ready after a day: settled with no flag, and SAID so (no endless re-read)", async () => {
     const m = await playedMatch();
     const x = session(m, m.startedAt - 120_000, m.endedAt);
@@ -4680,6 +4723,21 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     expect(kept.failures).toEqual([]);
     expect(removals()).toEqual([]);
     expect(await removedAt(w.participantId)).toBeNull();
+  });
+
+  it("D21: a removal the call budget defers is counted `deferred`, not failed — the watch stays on file, and the next pass removes it", async () => {
+    const w = await watched();
+    await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
+    const pass = new Date(w.createdAt + 60_000);
+    const spent = { ...RTK, budget: async () => false };
+    const r = await sweep(w.b, { now: pass, reconcile: async () => null, realtimeKit: spent });
+    expect([r.failures, r.failed, r.arbitersRemoved]).toEqual([[], 0, 0]);
+    expect(r.deferred).toBe(1);
+    expect(removals(), "no request was made").toEqual([]);
+    expect(await removedAt(w.participantId), "not stamped removed").toBeNull();
+    const next = await sweep(w.b, { now: new Date(pass.getTime() + 5 * 60_000), ...quiet });
+    expect([next.arbitersRemoved, next.deferred, next.failures]).toEqual([1, 0, []]);
+    expect(removals()).toHaveLength(2);
   });
 
   it("every reason the watch must end is removed at the vendor and stamped — one board each, counted; a second pass changes nothing", async () => {

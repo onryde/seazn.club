@@ -36,6 +36,7 @@ import { cameraMatchWindow, matchGuardFaults, type MatchTimes } from "@/server/e
 import {
   addParticipant,
   ensureMeeting,
+  RealtimeKitDeferred,
   RealtimeKitError,
   removeParticipant,
   type ParticipantToken,
@@ -524,11 +525,14 @@ export async function joinAsArbiter(
     token = await mintArbiter({ fixtureId, userId, meetingId }, video);
   } catch (err) {
     if (!(err instanceof RealtimeKitError)) throw err;
-    captureError(err, {
-      orgId: f.orgId,
-      route: "external-play/arbiter",
-      extra: { fixtureId, status: err.status, code: err.code },
-    });
+    // D21: a deferral (the platform's call budget is spent) is the same 503 — try again — but it is not an error to report.
+    if (!(err instanceof RealtimeKitDeferred)) {
+      captureError(err, {
+        orgId: f.orgId,
+        route: "external-play/arbiter",
+        extra: { fixtureId, status: err.status, code: err.code },
+      });
+    }
     throw new HttpError(503, "video is unavailable right now", "VIDEO_UNAVAILABLE");
   }
 
@@ -621,11 +625,14 @@ export async function leaveAsArbiter(
       await (deps.video ?? REAL_ARBITER_VIDEO).removeParticipant({ meetingId: row.meetingId, participantId });
     } catch (err) {
       if (!(err instanceof RealtimeKitError)) throw err;
-      captureError(err, {
-        orgId: auth.orgId,
-        route: "external-play/arbiter/leave",
-        extra: { fixtureId, status: err.status, code: err.code },
-      });
+      // D21: as the join — a deferral is a retry, not an error to report. The watch stays open for the sweep either way.
+      if (!(err instanceof RealtimeKitDeferred)) {
+        captureError(err, {
+          orgId: auth.orgId,
+          route: "external-play/arbiter/leave",
+          extra: { fixtureId, status: err.status, code: err.code },
+        });
+      }
       throw new HttpError(503, "video is unavailable right now", "VIDEO_UNAVAILABLE");
     }
   }

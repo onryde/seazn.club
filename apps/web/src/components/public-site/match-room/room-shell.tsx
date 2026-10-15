@@ -63,7 +63,7 @@ import { HANDED } from "./camera-test";
 import { useCameraTest } from "./use-camera-test";
 import { isHandoverActive } from "./camera-handover";
 import { useCameraHandover } from "./use-camera-handover";
-import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomGame, type RoomSnapshot } from "./room-snapshot";
+import { CAMERA_EVIDENCE_MAX_POLLS, cameraEvidenceDelayMs, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
 const Board = dynamic(() => import("./board"), { ssr: false });
@@ -248,8 +248,9 @@ export function RoomShell({
     reclaimedFor.current = retiredKey;
     void claim();
   }, [retiredKey, claim]);
-  // T17B fix 2 (D2): the seat answered `camera_starting` — joined, the camera's own report not in yet. Re-ask every
-  // CAMERA_EVIDENCE_POLL_MS: it is not a terminal card, and the server ends the wait at its deadline. The room's own
+  // T17B fix 2 (D2): the seat answered `camera_starting` — joined, the camera's own report not in yet. Re-ask on the
+  // back-off schedule (D21: 1, 2, 4, 8 s — a read is four vendor calls, so the wait grows; cameraEvidenceDelayMs is
+  // the server's minimum interval too): it is not a terminal card, and the server ends the wait at its deadline. The room's own
   // bound (CAMERA_EVIDENCE_MAX_POLLS, per participant like the retry budget) only stops a disagreeing clock from
   // polling for ever; past it the check-in button is offered again.
   const [startPolls, setStartPolls] = useState<{ for: string | null; n: number }>({ for: null, n: 0 });
@@ -258,10 +259,12 @@ export function RoomShell({
   const checkingCamera = cameraStarting && polls < CAMERA_EVIDENCE_MAX_POLLS;
   useEffect(() => {
     if (!checkingCamera || state.pending !== null) return;
+    // `polls` re-asks are done, so the answer in hand is read number polls + 1 (the one that started the wait was 1):
+    // the wait is the schedule's step after it.
     const id = setTimeout(() => {
       setStartPolls({ for: participantId, n: polls + 1 });
       void claim();
-    }, CAMERA_EVIDENCE_POLL_MS);
+    }, cameraEvidenceDelayMs(polls + 1));
     return () => clearTimeout(id);
   }, [checkingCamera, state.pending, polls, participantId, claim]);
 

@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { EngineError, FORFEIT_REASONS, foldMatch } from "@seazn/engine/core";
 import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import {
+  CAMERA_EVIDENCE_BACKOFF_MS,
+  CAMERA_EVIDENCE_DEADLINE_MS,
+  CAMERA_EVIDENCE_MAX_POLLS,
   ROOM_REALTIME_TTL_MS,
+  cameraEvidenceDelayMs,
   forfeitResultFor,
   frozenFor,
   gameClocks,
@@ -260,5 +264,54 @@ describe("realtimeExpiry (T10 carry — the subscriber token must outlive a game
     expect(exp.getTime()).toBeGreaterThan(readAt.getTime());
     expect(exp.getTime()).toBeGreaterThan(windowFor(opened).deadline.getTime());
     expect(exp.getTime() - readAt.getTime()).toBe(ROOM_REALTIME_TTL_MS);
+  });
+});
+
+// T17B fix 2, D21 — the camera-evidence re-ask SCHEDULE. The seat gate used to ask the vendor about a starting camera every
+// second (four vendor calls a claim), which at 50 boards checking in at once is ~6,000 calls in five minutes against a
+// 1,200-per-account limit. The ruling: back off 1, 2, 4, 8 s (reads at about t = 0, 1, 3, 7, 15 s), capped at about five
+// reads — never a 1 s poll. ONE function is both the room's timer and the server's minimum interval between reads.
+describe("the camera-evidence back-off schedule (D21)", () => {
+  it("is the ruling's table: 1, 2, 4, 8 seconds", () => {
+    expect([...CAMERA_EVIDENCE_BACKOFF_MS]).toEqual([1_000, 2_000, 4_000, 8_000]);
+  });
+
+  it("the delay after the k-th read is the k-th step, held at the last step for ever after — every k, counted", () => {
+    const want = [1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000];
+    let checked = 0;
+    want.forEach((ms, i) => {
+      expect(cameraEvidenceDelayMs(i + 1), `after read ${i + 1}`).toBe(ms);
+      checked += 1;
+    });
+    expect(checked, "anti-vacuity").toBe(want.length);
+  });
+
+  it("never faster than one a second: no read count has a delay under a second", () => {
+    for (let k = 1; k <= 50; k += 1) expect(cameraEvidenceDelayMs(k), `after read ${k}`).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("refuses a read count that is not a positive whole number rather than guessing a delay (the empty case: no read done has no delay)", () => {
+    for (const bad of [0, -1, 1.5, Number.NaN]) expect(() => cameraEvidenceDelayMs(bad), String(bad)).toThrow();
+  });
+
+  it("the reads land at the ruling's instants: about 1, 3, 7, 15 seconds after the first", () => {
+    let t = 0;
+    const at: number[] = [];
+    for (let k = 1; k <= 4; k += 1) {
+      t += cameraEvidenceDelayMs(k);
+      at.push(t / 1_000);
+    }
+    expect(at).toEqual([1, 3, 7, 15]);
+  });
+
+  it("the room's bound is the ruling's five re-asks, and they reach past the server's deadline by a full last step — fewer would stop before the deadline's verdict", () => {
+    expect(CAMERA_EVIDENCE_MAX_POLLS).toBe(5);
+    let t = 0;
+    for (let k = 1; k <= CAMERA_EVIDENCE_MAX_POLLS; k += 1) t += cameraEvidenceDelayMs(k);
+    expect(t, "time covered by the room's polls").toBeGreaterThanOrEqual(CAMERA_EVIDENCE_DEADLINE_MS + cameraEvidenceDelayMs(CAMERA_EVIDENCE_MAX_POLLS));
+    // …and not by more than one extra step: a bound that runs on is a poll that never stops.
+    let shorter = 0;
+    for (let k = 1; k < CAMERA_EVIDENCE_MAX_POLLS; k += 1) shorter += cameraEvidenceDelayMs(k);
+    expect(shorter, "one poll fewer would stop short").toBeLessThan(CAMERA_EVIDENCE_DEADLINE_MS + cameraEvidenceDelayMs(CAMERA_EVIDENCE_MAX_POLLS));
   });
 });

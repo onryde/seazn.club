@@ -21,7 +21,7 @@ import { RoomShell, Screen } from "../room-shell";
 import { CameraBlockedCard, CameraGaveUpNotice } from "../room-cards";
 import { initialRoomState } from "../room-state";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, STAMP_RETRY_MS } from "../camera-session";
-import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomSnapshot } from "../room-snapshot";
+import { CAMERA_EVIDENCE_MAX_POLLS, cameraEvidenceDelayMs, type RoomSnapshot } from "../room-snapshot";
 import type { MeetingLink, OwnCamera } from "../camera-loader";
 import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
 import { useOpponentPresence } from "../use-own-camera";
@@ -67,7 +67,7 @@ const ok = (data: unknown) => new Response(JSON.stringify({ ok: true, data, requ
 const PARTICIPANT = { participantId: "p-own", authToken: "own-rtk-token" };
 const TRACK = { id: "cam" } as unknown as MediaStreamTrack;
 
-type Call = { method: string; url: string };
+type Call = { method: string; url: string; at: number };
 let calls: Call[] = [];
 // Thunks: each answer is composed when the server would compose it, so its
 // serverNow is later than every earlier read (the reducer drops stale ones).
@@ -91,7 +91,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
-      calls.push({ method: String(init.method), url });
+      calls.push({ method: String(init.method), url, at: Date.now() });
       if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) {
         // A thunk may answer with a whole Response (a refusal by status, R3-1). A seat call nobody scripted is never
         // answered (it is still counted): a runaway re-claim stops at its first extra call instead of spinning.
@@ -233,7 +233,7 @@ describe("camera required: check in → refused for camera → the camera joins 
   });
 
   // T17B fix 2 (D2): the seat waits for the camera's own report. `camera_starting` is not a terminal card — the room
-  // re-asks on CAMERA_EVIDENCE_POLL_MS; `camera_blocked` is, and its one action reloads.
+  // re-asks on the back-off schedule (D21: cameraEvidenceDelayMs); `camera_blocked` is, and its one action reloads.
   /** What the shell hands the screen: is the room still re-asking a starting camera? (The check-in's own button is
    *  drawn from it — checkin-privacy.test.tsx paints that.) */
   const checkingOf = (island: Island) => {
@@ -251,7 +251,7 @@ describe("camera required: check in → refused for camera → the camera joins 
   };
   const starting = () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_starting", participant: PARTICIPANT } });
 
-  it("camera_starting: the check-in stays up and says it is checking, the room re-asks every poll step, and the seat lands", async () => {
+  it("camera_starting: the check-in stays up and says it is checking, the room re-asks on the back-off schedule, and the seat lands", async () => {
     seatAnswers = [
       () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } }),
       starting,
@@ -269,15 +269,17 @@ describe("camera required: check in → refused for camera → the camera joins 
     expect(screenOf(island), "starting is the check-in, never a card").toBe("checkin");
     expect(checkingOf(island), "the button waits, and says why").toBe(true);
     expect(budgetSpentOf(island), "still inside the budget: nothing spent").toBe(false);
-    await settle(CAMERA_EVIDENCE_POLL_MS - 1);
-    expect(seatPosts(), "not before the step").toBe(2);
+    await settle(cameraEvidenceDelayMs(1) - 1);
+    expect(seatPosts(), "not before the first step").toBe(2);
     await settle(1);
-    expect(seatPosts(), "… then the room re-asks on the poll step").toBe(3);
-    await settle(CAMERA_EVIDENCE_POLL_MS);
+    expect(seatPosts(), "… then the room re-asks after the first step").toBe(3);
+    await settle(cameraEvidenceDelayMs(2) - 1);
+    expect(seatPosts(), "the second wait is the LONGER one: not after another first step").toBe(3);
+    await settle(1);
     expect(seatPosts()).toBe(4);
     expect(screenOf(island)).toBe("creating");
     expect(checkingOf(island)).toBe(false);
-    await settle(CAMERA_EVIDENCE_POLL_MS * 5);
+    await settle(60_000);
     expect(seatPosts(), "seated: the polling stops").toBe(4);
     island.unmount();
   });
@@ -292,7 +294,7 @@ describe("camera required: check in → refused for camera → the camera joins 
     await roomOf(island).claim();
     await settle(1_500);
     expect(seatPosts()).toBe(2);
-    for (let i = 0; i < CAMERA_EVIDENCE_MAX_POLLS + 5; i += 1) await settle(CAMERA_EVIDENCE_POLL_MS);
+    for (let t = 0; t < 120_000; t += 500) await settle(500);
     expect(seatPosts(), "two claims, then exactly the bound").toBe(2 + CAMERA_EVIDENCE_MAX_POLLS);
     expect(screenOf(island)).toBe("checkin");
     expect(checkingOf(island), "the check-in button is offered again").toBe(false);
@@ -301,8 +303,64 @@ describe("camera required: check in → refused for camera → the camera joins 
     await settle(0);
     expect(checkingOf(island), "the press starts a fresh wait").toBe(true);
     expect(budgetSpentOf(island), "and a fresh budget").toBe(false);
-    await settle(CAMERA_EVIDENCE_POLL_MS);
-    expect(seatPosts(), "the press, then a fresh poll").toBe(2 + CAMERA_EVIDENCE_MAX_POLLS + 2);
+    await settle(cameraEvidenceDelayMs(1));
+    expect(seatPosts(), "the press, then a fresh poll — on the FIRST step again, not the last").toBe(2 + CAMERA_EVIDENCE_MAX_POLLS + 2);
+    island.unmount();
+  });
+
+  it("D21: the re-asks land on the schedule — 1, 3, 7, 15, 23 seconds after the first camera_starting answer, never a poll a second (counted)", async () => {
+    seatAnswers = [
+      () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } }),
+      ...Array.from({ length: 1 + CAMERA_EVIDENCE_MAX_POLLS + 1 }, () => starting),
+    ];
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle(1_500);
+    for (let t = 0; t < 120_000; t += 250) await settle(250);
+    const posts = calls.filter((c) => c.method === "POST" && c.url.includes("/external-play/room?"));
+    expect(posts.length).toBe(2 + CAMERA_EVIDENCE_MAX_POLLS);
+    // The first starting answer is the second POST; every re-ask is measured from it.
+    const base = posts[1]!.at;
+    const offsets = posts.slice(2).map((c) => Math.round((c.at - base) / 250) * 250);
+    // Derived from the ruling's table, summed here, never read back from the shell.
+    const ruling = [1_000, 2_000, 4_000, 8_000, 8_000];
+    let acc = 0;
+    const want = ruling.slice(0, CAMERA_EVIDENCE_MAX_POLLS).map((d) => (acc += d));
+    expect(offsets).toEqual(want);
+    expect(offsets, "the ruling's instants").toEqual([1_000, 3_000, 7_000, 15_000, 23_000]);
+    island.unmount();
+  });
+
+  it("D21: a camera_starting answer WITHOUT a token (the call budget was spent) leaves the camera joined, keeps polling on the schedule, and the seat still lands", async () => {
+    const deferred = () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_starting", participant: null } });
+    seatAnswers = [
+      () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } }),
+      starting,
+      deferred,
+      deferred,
+      () => ({
+        snapshot: snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, creation: { state: "creating" } }),
+        seat: { seated: true, participant: PARTICIPANT },
+      }),
+    ];
+    const cam = faultingCamera();
+    join.fn.mockResolvedValue(cam.cam);
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle(1_500);
+    expect(seatPosts()).toBe(2);
+    await settle(cameraEvidenceDelayMs(1)); // starting → deferred
+    await settle(cameraEvidenceDelayMs(2)); // deferred → deferred
+    expect(seatPosts()).toBe(4);
+    expect(screenOf(island), "a deferral is the check-in still checking, never a card").toBe("checkin");
+    expect(checkingOf(island)).toBe(true);
+    expect(cam.left.n, "the camera was NOT taken down by an answer with no token").toBe(0);
+    await settle(cameraEvidenceDelayMs(3));
+    expect(seatPosts()).toBe(5);
+    expect(screenOf(island)).toBe("creating");
+    expect(join.fn, "one join for the whole flow: the token was kept, so nothing re-joined").toHaveBeenCalledTimes(1);
+    expect(cam.left.n).toBe(0);
     island.unmount();
   });
 
@@ -453,7 +511,7 @@ describe("I2: a refused act never stops the room — it re-reads, backing off wh
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
-        calls.push({ method: String(init.method), url });
+        calls.push({ method: String(init.method), url, at: Date.now() });
         if (init.method === "POST" && url.includes("/external-play/room/act?")) return actAnswers.shift()!();
         if (init.method === "GET") return ok(snap(base));
         return new Response("{}", { status: 500 });
@@ -629,7 +687,7 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
-        calls.push({ method: String(init.method), url });
+        calls.push({ method: String(init.method), url, at: Date.now() });
         if (init.method === "POST" && url.includes("/external-play/room/camera-fault?")) {
           const body = JSON.parse(String(init.body)) as { state: string };
           stamps.push({ url, body });

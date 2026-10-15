@@ -19,7 +19,8 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { RealtimeKitError, type ParticipantToken } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, RealtimeKitError, type ParticipantToken } from "@/server/external-play/video/realtimekit";
+import { captureError } from "@/lib/sentry";
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "../external-play/auth";
@@ -39,6 +40,7 @@ import { seedOnlineChessRound, seedOwner, seedPlayer, type SeedOnlineChessRoundR
 // functions, wrapped to count how many boards are being read AT ONCE. Only
 // the test that sets `slow` changes anything.
 const guardSpy = vi.hoisted(() => ({ slow: false, inFlight: 0, maxInFlight: 0, calls: 0 }));
+vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 vi.mock("../external-play/guard", async (importOriginal) => {
   const real = await importOriginal<typeof import("../external-play/guard")>();
   return {
@@ -675,6 +677,46 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     });
     const out = await joinAsArbiter(r.owner, board.fixtureId, { video });
     expect(await codeOf(leaveAsArbiter(r.owner, board.fixtureId, out.participantId, { video }))).toEqual([503, "VIDEO_UNAVAILABLE"]);
+    expect((await arbiterRows(board.fixtureId))[0]!.removed_at).toBeNull();
+  });
+
+  // D21: the platform's RealtimeKit call budget is spent. The organiser is told to try again — the same 503 as an outage —
+  // but it is not an outage: nothing is reported to Sentry, and nothing is left half done.
+  it("D21: a join the call budget defers is a 503 VIDEO_UNAVAILABLE that is NOT reported as an error — at each of its two requests — and the retry joins", async () => {
+    const { r, board } = await liveRequired();
+    let checked = 0;
+    const stages = {
+      "ensureMeeting": (err: Error) => fakeVideo({ ensureMeeting: vi.fn(async () => { throw err; }) }),
+      "mint (addParticipant)": (err: Error) => fakeVideo({ addParticipant: vi.fn(async () => { throw err; }) }),
+    };
+    for (const [stage, make] of Object.entries(stages)) {
+      vi.mocked(captureError).mockClear();
+      const deferred = make(new RealtimeKitDeferred("test: budget spent"));
+      expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, { video: deferred.video })), stage).toEqual([503, "VIDEO_UNAVAILABLE"]);
+      expect(vi.mocked(captureError), `${stage}: a deferral is not an error`).not.toHaveBeenCalled();
+      expect(await arbiterRows(board.fixtureId), `${stage}: nothing half done`).toEqual([]);
+      // The pair: a real outage on the same call IS reported.
+      const outage = make(new RealtimeKitError(503, "unavailable", "test outage"));
+      expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, { video: outage.video })), `${stage}: outage`).toEqual([503, "VIDEO_UNAVAILABLE"]);
+      expect(vi.mocked(captureError), `${stage}: an outage is reported`).toHaveBeenCalledTimes(1);
+      checked += 1;
+    }
+    expect(checked).toBe(Object.keys(stages).length);
+    const { video } = fakeVideo();
+    expect((await joinAsArbiter(r.owner, board.fixtureId, { video })).authToken, "retried, it joins").toBeTruthy();
+  });
+
+  it("D21: a leave the call budget defers is a 503 and the watch stays OPEN for the sweep — and is not reported as an error", async () => {
+    const { r, board } = await liveRequired();
+    vi.mocked(captureError).mockClear();
+    const { video } = fakeVideo({
+      removeParticipant: vi.fn(async () => {
+        throw new RealtimeKitDeferred("test: budget spent");
+      }),
+    });
+    const out = await joinAsArbiter(r.owner, board.fixtureId, { video });
+    expect(await codeOf(leaveAsArbiter(r.owner, board.fixtureId, out.participantId, { video }))).toEqual([503, "VIDEO_UNAVAILABLE"]);
+    expect(vi.mocked(captureError)).not.toHaveBeenCalled();
     expect((await arbiterRows(board.fixtureId))[0]!.removed_at).toBeNull();
   });
 

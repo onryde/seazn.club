@@ -2021,7 +2021,7 @@ test("T17B fix 2, D23-fix-3: ONE failed camera_starting poll does NOT end the co
   }
 });
 
-test("T17B fix 2: the seat's camera verdicts in the browser — a camera still starting keeps the check-in, its button waiting and the room re-asking each second; a browser that refused it gets the blocked card, whose Reload reloads — at every width", async ({
+test("T17B fix 2: the seat's camera verdicts in the browser — a camera still starting keeps the check-in, its button waiting and the room re-asking on its back-off; a browser that refused it gets the blocked card, whose Reload reloads — at every width", async ({
   page,
   browser,
 }) => {
@@ -2060,12 +2060,14 @@ test("T17B fix 2: the seat's camera verdicts in the browser — a camera still s
   await expect(p.getByTestId("room-checkin-cta")).toBeDisabled();
   expect(await screenOf(p), "starting is never a card").toBe("checkin");
   const first = claims;
-  await expect.poll(() => claims, { timeout: 5_000, message: "the room re-asks on its own" }).toBeGreaterThanOrEqual(first + 2);
+  // The first two re-asks fall 1 s and 3 s after the first answer (the D21 back-off: 1, 2, 4, 8 s).
+  await expect.poll(() => claims, { timeout: 8_000, message: "the room re-asks on its own" }).toBeGreaterThanOrEqual(first + 2);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "camera-starting");
 
   verdict = "camera_blocked";
-  await expect.poll(() => screenOf(p), { timeout: 5_000, message: "the next re-ask lands the refusal" }).toBe("cameraBlocked");
+  // The third re-ask is 4 s after the second: the longest wait this test sits through.
+  await expect.poll(() => screenOf(p), { timeout: 10_000, message: "the next re-ask lands the refusal" }).toBe("cameraBlocked");
   await expect(p.getByRole("heading", { name: uiEn["externalPlay.room.state.cameraBlocked.title"]! })).toBeVisible();
   await expect(p.getByText(uiEn["externalPlay.room.state.cameraBlocked.body"]!)).toBeVisible();
   await expect(p.getByTestId("room-checkin-cta"), "no check-in to press").toHaveCount(0);
@@ -2082,6 +2084,50 @@ test("T17B fix 2: the seat's camera verdicts in the browser — a camera still s
   await reloaded;
   await expect(p.getByTestId("match-room")).toBeVisible();
   expect(await screenOf(p), "the fresh page is the check-in again").toBe("checkin");
+  await ctx.close();
+});
+
+test("T17B fix 2, D21: a camera still starting is re-asked on the BACK-OFF — 1, 2, 4, then 8 seconds apart in a real browser, never once a second", async ({ page, browser }) => {
+  // The ruling's table (controller, 2026-10-15), typed here, never read back from the room's constants. Every re-ask is
+  // four RealtimeKit calls against an account-wide limit of 1,200 per five minutes, so the wait between them grows.
+  const RULING_S = [1, 2, 4, 8];
+  const reAsks = RULING_S.length;
+  test.setTimeout(Math.max(120_000, (RULING_S.reduce((a, b) => a + b, 0) + 40) * 1_000));
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  expect(await screenOf(p)).toBe("checkin");
+  // Every claim is answered camera_starting with NO participant (the SDK never joins: only the room's own timer moves).
+  const claimedAt: number[] = [];
+  await p.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      claimedAt.push(Date.now());
+      const read = await route.fetch({ method: "GET" });
+      const snapshot = ((await read.json()) as { data: unknown }).data;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: null }, create: null }, requestId: "e2e" }),
+      });
+    },
+  );
+  await p.getByTestId("room-checkin-cta").click();
+  await expect
+    .poll(() => claimedAt.length, { timeout: (RULING_S.reduce((a, b) => a + b, 0) + 12) * 1_000, message: "the claim, then every re-ask" })
+    .toBeGreaterThanOrEqual(1 + reAsks);
+  const gaps = claimedAt.slice(1, 1 + reAsks).map((t, i) => t - claimedAt[i]!);
+  expect(gaps.length, "anti-vacuity: every wait was observed").toBe(reAsks);
+  RULING_S.forEach((s, i) => {
+    // A timer never fires early; the round trip only adds. The upper bound is slack for a loaded machine, not a target.
+    expect(gaps[i], `wait ${i + 1} is at least ${s} s`).toBeGreaterThanOrEqual(s * 1_000 - 100);
+    expect(gaps[i], `wait ${i + 1} is not lost: at most ${s} s and the slack`).toBeLessThan(s * 1_000 + 3_000);
+  });
+  // The differential a once-a-second poll cannot pass: seven seconds in, the claim and the 1 s and 3 s re-asks are all there is (7 s lands the 4th).
+  const first = claimedAt[0]!;
+  expect(claimedAt.filter((t) => t - first < 6_500).length, "re-asks in the first 6.5 s").toBeLessThanOrEqual(3);
+  await p.unrouteAll({ behavior: "ignoreErrors" });
   await ctx.close();
 });
 

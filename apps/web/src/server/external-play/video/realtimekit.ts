@@ -37,10 +37,11 @@ import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import { liveMintClaimSince } from "@/server/external-play/window";
 import { log } from "@/server/logger";
+import { budgetKey, takeRealtimeKitCall, type CallBudget } from "./budget";
 
 export const REALTIMEKIT_TIMEOUT_MS = 10_000;
 
-export type RealtimeKitCode = "unconfigured" | "unauthorized" | "not_found" | "unavailable";
+export type RealtimeKitCode = "unconfigured" | "unauthorized" | "not_found" | "unavailable" | "deferred";
 
 export class RealtimeKitError extends Error {
   constructor(
@@ -53,7 +54,21 @@ export class RealtimeKitError extends Error {
   }
 }
 
-export type RealtimeKitDeps = { fetch?: typeof fetch; baseUrl?: string };
+/** The request was NOT made: the platform's RealtimeKit call budget (budget.ts, D21) is spent. Not an outage and not an
+ *  answer — "ask again shortly". A subtype, so a caller that only knows `RealtimeKitError` still treats it as "video,
+ *  not now"; a caller that can wait (the seat, the sweep) tells it apart with `instanceof`, because reading it as an
+ *  outage would tell a player their video is down, and reading it as "no camera" would flag a camera that is fine. */
+export class RealtimeKitDeferred extends RealtimeKitError {
+  constructor(message: string) {
+    super(429, "deferred", message);
+    this.name = "RealtimeKitDeferred";
+  }
+}
+
+/** `budget` — who spends a token for each request. Default: the platform's database bucket for the real `fetch` to
+ *  Cloudflare's own API (the path that counts against the vendor's limit), and none otherwise (cfEnvelope says why).
+ *  A test passes its own to drive a refusal without a database. */
+export type RealtimeKitDeps = { fetch?: typeof fetch; baseUrl?: string; budget?: CallBudget };
 
 type Config = {
   accountId: string;
@@ -156,6 +171,16 @@ async function cfEnvelope(
   const base = (deps.baseUrl ?? process.env.REALTIMEKIT_BASE_URL ?? CF_BASE).replace(/\/$/, "");
   const url = `${base}/accounts/${cfg.accountId}/realtime/kit/${cfg.appId}${path}`;
   const doFetch = deps.fetch ?? fetch;
+  // D21: ONE token per request, taken BEFORE it is made (never after — a refused request must not reach the vendor, whose
+  // limit is the account's and blocks every call for five minutes once passed). Metered by default on the path that
+  // counts against the vendor — the real `fetch` to Cloudflare's own API — so a new caller cannot forget. Exempt: a
+  // caller-supplied `fetch` (a test double that never leaves the process) and a base URL that is not Cloudflare's (a
+  // fixture or a proxy: it spends no account's budget, and a bucket on it would only throttle the suites and the e2e
+  // run that use it). A caller can always pass its own `budget`.
+  const spend = deps.budget ?? (deps.fetch === undefined && base === CF_BASE ? takeRealtimeKitCall : null);
+  if (spend && !(await spend(budgetKey(base, cfg.accountId)))) {
+    throw new RealtimeKitDeferred(`RealtimeKit ${init.method} ${path} deferred: the platform's call budget is spent`);
+  }
   let res: Response;
   try {
     res = await doFetch(url, {
@@ -562,6 +587,9 @@ export async function seatCameraEvidence(
     report = await cf(cfg, `/sessions/peer-report/${encodeURIComponent(peer.peerId)}`, { method: "GET" }, deps);
   } catch (err) {
     if (!(err instanceof RealtimeKitError)) throw err;
+    // D21: a read we did not make says nothing about the vendor or the camera — never `unreadable`, which the seat
+    // waits out and then reports as an outage.
+    if (err instanceof RealtimeKitDeferred) throw err;
     // RealtimeKit's own "no peer event exists for id" (measured body): no
     // report for this peer YET — not an outage, and not a camera.
     if (err.code === "not_found") return { state: "starting", since };

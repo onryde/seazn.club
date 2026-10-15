@@ -918,7 +918,7 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
     const r2 = await claim(s, "home", rtk);
     expect(r2.seated, "optional never blocks").toBe(true);
     expect(r2.seated && r2.participant?.participantId, "the same participant, reused").toBe(
-      !r1.seated && "participant" in r1 ? r1.participant.participantId : "",
+      !r1.seated && "participant" in r1 ? r1.participant?.participantId : "",
     );
     await patchDivision(owner, s.divisionId, { camera_policy: "off" });
     expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });

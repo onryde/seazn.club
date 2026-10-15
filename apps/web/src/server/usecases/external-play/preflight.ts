@@ -22,14 +22,16 @@ import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import type { GrantRefusal } from "@/server/external-play/types";
 import { assertLichessConsentForPlay } from "../external-accounts";
 import {
+  RealtimeKitDeferred,
   RealtimeKitError,
   addParticipant,
   ensureMeeting,
   refreshParticipantToken,
   seatCameraEvidence,
   type ParticipantToken,
+  type SeatCamera,
 } from "@/server/external-play/video/realtimekit";
-import { CAMERA_EVIDENCE_DEADLINE_MS } from "@/components/public-site/match-room/room-snapshot";
+import { CAMERA_EVIDENCE_BACKOFF_MS, CAMERA_EVIDENCE_DEADLINE_MS } from "@/components/public-site/match-room/room-snapshot";
 import {
   effectiveBridge,
   ensureBridgeRow,
@@ -69,7 +71,10 @@ export type { GrantRefusal };
 
 export type SeatResult =
   | { seated: true; participant: ParticipantToken | null }
-  | { seated: false; reason: CameraRefusal; participant: ParticipantToken }
+  | { seated: false; reason: Exclude<CameraRefusal, "camera_starting">; participant: ParticipantToken }
+  // D21: `camera_starting` is also what a DEFERRED request answers (the platform's RealtimeKit call budget was spent, so
+  // the claim could not look) — and the caller's token may not have been issued yet, or refreshed: null then.
+  | { seated: false; reason: "camera_starting"; participant: ParticipantToken | null }
   | {
       seated: false;
       reason:
@@ -188,7 +193,8 @@ export async function seatPlayer(
       return { seated: true, participant: await issuePlayerToken(a, meeting.meetingId, video) };
     } catch (err) {
       if (!(err instanceof RealtimeKitError)) throw err;
-      reportOutage(err, f.orgId, a.fixtureId, policy);
+      // D21: a deferral (the call budget is spent) is not an outage, and is not reported as one.
+      if (!(err instanceof RealtimeKitDeferred)) reportOutage(err, f.orgId, a.fixtureId, policy);
       return { seated: true, participant: null };
     }
   }
@@ -247,42 +253,115 @@ function isReentry(f: OnlinePlayFixture, player: SidePlayer): boolean {
  *  CAMERA_EVIDENCE_DEADLINE_MS from the peer's join; past it, the camera
  *  refusal. A peer-report read that FAILS is waited out the same way and then
  *  rethrown — the outage path (`video_unavailable`), never a seat. A browser
- *  that refused the camera is `camera_blocked` at once. */
+ *  that refused the camera is `camera_blocked` at once.
+ *
+ *  D21 — the vendor's budget. Re-asked on every claim, except that a camera still STARTING is read on the back-off
+ *  schedule (readSlot), not on every claim: a claim between reads is answered from what the last read found, judged
+ *  against THIS claim's clock, so the answer never flaps either side of a read. And a request the platform's call budget
+ *  refuses is `camera_starting` too — "we could not look", never "no camera" and never an outage. */
 async function verifyRequiredSeat(
   a: { fixtureId: string; personId: string },
   now: Date,
   video: Video,
 ): Promise<SeatResult> {
-  const meeting = await video.ensureMeeting(a.fixtureId);
-  const participant = await issuePlayerToken(a, meeting.meetingId, video);
-  const [prior] = await sql<{ last_publisher_seen_at: Date | null }[]>`
-    select last_publisher_seen_at from fixture_video_participants
-     where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
-  const camera = await video.seatCameraEvidence({
-    meetingId: meeting.meetingId,
-    participantId: participant.participantId,
-  });
-  if (camera.state === "blocked") return { seated: false, reason: "camera_blocked", participant };
-  if (camera.state === "starting" || camera.state === "unreadable") {
-    // Waited from the peer's OWN join; a vendor clock ahead of ours is a
-    // negative wait, which is still inside it.
-    const waited = now.getTime() - camera.since.getTime();
-    if (waited < CAMERA_EVIDENCE_DEADLINE_MS) return { seated: false, reason: "camera_starting", participant };
-    if (camera.state === "unreadable") throw camera.error;
-  }
-  if (camera.state === "on") {
-    await sql`
-      update fixture_video_participants set last_publisher_seen_at = ${now}
+  let participant: ParticipantToken | null = null;
+  try {
+    const meeting = await video.ensureMeeting(a.fixtureId);
+    participant = await issuePlayerToken(a, meeting.meetingId, video);
+    const [prior] = await sql<{ last_publisher_seen_at: Date | null }[]>`
+      select last_publisher_seen_at from fixture_video_participants
        where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
-    return { seated: true, participant };
+
+    const mine = { fixtureId: a.fixtureId, participantId: participant.participantId };
+    let camera: SeatCamera;
+    let cached = false;
+    if (await claimEvidenceRead(mine, now)) {
+      camera = await video.seatCameraEvidence({ meetingId: meeting.meetingId, participantId: participant.participantId });
+      await recordEvidence(mine, camera);
+    } else {
+      camera = await cachedEvidence(mine, now);
+      cached = true;
+    }
+
+    if (camera.state === "blocked") return { seated: false, reason: "camera_blocked", participant };
+    if (camera.state === "starting" || camera.state === "unreadable") {
+      // Waited from the peer's OWN join; a vendor clock ahead of ours is a
+      // negative wait, which is still inside it.
+      const waited = now.getTime() - camera.since.getTime();
+      if (waited < CAMERA_EVIDENCE_DEADLINE_MS) return { seated: false, reason: "camera_starting", participant };
+      // Past the deadline an unreadable report is an outage. A claim answered from the cache says so without reporting it
+      // again: the read that found it already did.
+      if (camera.state === "unreadable") {
+        if (cached) return { seated: false, reason: "video_unavailable" };
+        throw camera.error;
+      }
+    }
+    if (camera.state === "on") {
+      await sql`
+        update fixture_video_participants set last_publisher_seen_at = ${now}
+         where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
+      return { seated: true, participant };
+    }
+    // `last_publisher_seen_at` is EVIDENCE — when this participant was last
+    // verified live — and never a pass: nothing seats on it (every claim above
+    // re-asks the meeting) and nothing clears it. Clearing it on a loss (the
+    // brief's design) made a repeat claim with the camera still off answer
+    // camera_required, telling a player who HAD passed that they never had.
+    const hadPassed = prior?.last_publisher_seen_at != null;
+    return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required", participant };
+  } catch (err) {
+    // D21: the call budget refused a request. The token we hold (if any) rides along so the caller's camera stays joined.
+    if (err instanceof RealtimeKitDeferred) return { seated: false, reason: "camera_starting", participant };
+    throw err;
   }
-  // `last_publisher_seen_at` is EVIDENCE — when this participant was last
-  // verified live — and never a pass: nothing seats on it (every claim above
-  // re-asks the meeting) and nothing clears it. Clearing it on a loss (the
-  // brief's design) made a repeat claim with the camera still off answer
-  // camera_required, telling a player who HAD passed that they never had.
-  const hadPassed = prior?.last_publisher_seen_at != null;
-  return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required", participant };
+}
+
+type SeatRead = { fixtureId: string; participantId: string };
+
+/** Claim the right to read this participant's camera at the vendor, in ONE statement so that claims racing each other —
+ *  two tabs, T9's freshness check beside a poll, two machines — make one read between them. Allowed when no starting
+ *  verdict is outstanding (`seat_reads = 0`: anything definite clears it) or the back-off for the reads so far has
+ *  passed. A claim whose clock is BEHIND the stamp is allowed too: a stamp from a machine with a fast clock must not hold
+ *  the player off for longer than the wait itself. The wait is the room's own schedule (cameraEvidenceDelayMs's table). */
+async function claimEvidenceRead(r: SeatRead, now: Date): Promise<boolean> {
+  const steps = CAMERA_EVIDENCE_BACKOFF_MS as unknown as number[];
+  const got = await sql`
+    update fixture_video_participants
+       set seat_read_at = ${now}::timestamptz, seat_reads = seat_reads + 1
+     where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}
+       and (seat_reads = 0
+            or ${now}::timestamptz < seat_read_at
+            or ${now}::timestamptz >= seat_read_at + ((${sql.array(steps)}::int[])[least(seat_reads, ${steps.length})] * interval '1 millisecond'))
+    returning 1`;
+  return got.length > 0;
+}
+
+/** What a read found, kept for the claims that come before the next is allowed. Only the two NOT-YET verdicts are kept;
+ *  anything definite clears the cache, so a seat — or its loss — is never answered from the past. */
+async function recordEvidence(r: SeatRead, camera: SeatCamera): Promise<void> {
+  if (camera.state === "starting" || camera.state === "unreadable") {
+    await sql`
+      update fixture_video_participants set seat_read_state = ${camera.state}, seat_read_since = ${camera.since}
+       where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}`;
+    return;
+  }
+  await sql`
+    update fixture_video_participants
+       set seat_reads = 0, seat_read_at = null, seat_read_state = null, seat_read_since = null
+     where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}`;
+}
+
+/** The last read's verdict, for a claim that was not allowed to make its own. Nothing recorded yet means the read that
+ *  holds the slot has not finished (a claim racing it, or one a deferral cut short): not yet, judged from this claim's
+ *  own clock, so it neither seats nor refuses. */
+async function cachedEvidence(r: SeatRead, now: Date): Promise<SeatCamera> {
+  const [row] = await sql<{ state: string | null; since: Date | null }[]>`
+    select seat_read_state as state, seat_read_since as since from fixture_video_participants
+     where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}`;
+  if (row?.state === "unreadable" && row.since) {
+    return { state: "unreadable", since: row.since, error: new RealtimeKitError(503, "unavailable", "the peer report could not be read (cached)") };
+  }
+  return { state: "starting", since: row?.since ?? now };
 }
 
 /** THE one place a player's RealtimeKit token is issued — so the

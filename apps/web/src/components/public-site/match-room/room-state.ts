@@ -230,7 +230,14 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       return { ...s, pending: { kind: "seat" }, error: null };
     case "seat_answered": {
       const merged = mergeSnapshot(s, e.answer.snapshot, e.receivedAt);
-      const seat = e.answer.seat;
+      // D21: `camera_starting` with no token is the platform's RealtimeKit call budget being spent before the server could
+      // refresh one — "not yet", never "no camera". The camera has already joined with the token the room holds, so the
+      // answer keeps it (and ONLY this answer does: every other tokenless answer means there is none).
+      const heldToken = s.seat?.participant ?? null;
+      const seat =
+        e.answer.seat !== null && !e.answer.seat.seated && e.answer.seat.reason === "camera_starting" && e.answer.seat.participant === null
+          ? { ...e.answer.seat, participant: heldToken }
+          : e.answer.seat;
       const relink = seat !== null && !seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required");
       return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false };
     }

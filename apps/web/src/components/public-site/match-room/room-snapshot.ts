@@ -37,16 +37,44 @@ export type SeatRefusal =
  *  own camera report — `media_permission` ACCEPTED and `video_on` — and
  *  answers `camera_starting` until it is there. Sized from the one live
  *  measurement (2026-10-14): `media_permission` was on the report 1.4 s after
- *  PEER_JOINING. The room re-asks every CAMERA_EVIDENCE_POLL_MS; the server
- *  stops waiting CAMERA_EVIDENCE_DEADLINE_MS after the peer joined (about ten
- *  times the measured 1.4 s) and answers the camera refusal — or, when the
- *  report itself could not be read, `video_unavailable`. */
-export const CAMERA_EVIDENCE_POLL_MS = 1_000;
+ *  PEER_JOINING. The room re-asks on CAMERA_EVIDENCE_BACKOFF_MS (below); the
+ *  server stops waiting CAMERA_EVIDENCE_DEADLINE_MS after the peer joined
+ *  (about ten times the measured 1.4 s) and answers the camera refusal — or,
+ *  when the report itself could not be read, `video_unavailable`. */
 export const CAMERA_EVIDENCE_DEADLINE_MS = 15_000;
-/** The room's own bound on that wait, past the server's deadline: a server
- *  whose clock disagrees with the vendor's can never make the room poll for
- *  ever. Past it the check-in button is offered again. */
-export const CAMERA_EVIDENCE_MAX_POLLS = Math.ceil(CAMERA_EVIDENCE_DEADLINE_MS / CAMERA_EVIDENCE_POLL_MS) + 5;
+
+/** D21 (T17B fix 2, review I2): the re-ask SCHEDULE, which is also the server's minimum interval between vendor reads of
+ *  one participant. Every read of a starting camera costs the vendor four calls (a token refresh, the live session, its
+ *  participants, the peer report) against an account limit of 1,200 per five minutes, past which EVERY call is refused
+ *  for five minutes; polling once a second put 50 boards checking in at once at ~6,000. So the wait between reads grows —
+ *  1, 2, 4, 8 s, held at 8 — which reads a camera that is up in the measured ~1.4 s within about a second of it, and
+ *  costs a camera that never comes five reads, not twenty. Owner-set (controller ruling, 2026-10-15); never below a
+ *  second. */
+export const CAMERA_EVIDENCE_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000] as const;
+
+/** The wait after the `readsDone`-th read of a starting camera (1-based: the read that just answered counts), before the
+ *  next may be made. The room's timer and the server's per-participant cache (preflight.ts) both come here, so the two
+ *  can never disagree about how soon a re-ask is welcome. */
+export function cameraEvidenceDelayMs(readsDone: number): number {
+  if (!Number.isInteger(readsDone) || readsDone < 1) {
+    throw new RangeError(`cameraEvidenceDelayMs needs a read count of 1 or more, got ${readsDone}`);
+  }
+  return CAMERA_EVIDENCE_BACKOFF_MS[Math.min(readsDone, CAMERA_EVIDENCE_BACKOFF_MS.length) - 1]!;
+}
+
+/** The room's own bound on that wait: enough re-asks to reach past the server's deadline by one full last step (the
+ *  deadline's verdict needs a read AFTER it), and no more — a server whose clock disagrees with the vendor's can never
+ *  make the room poll for ever. Past it the check-in button is offered again. */
+export const CAMERA_EVIDENCE_MAX_POLLS = (() => {
+  const margin = cameraEvidenceDelayMs(CAMERA_EVIDENCE_BACKOFF_MS.length);
+  let elapsed = 0;
+  let polls = 0;
+  while (elapsed < CAMERA_EVIDENCE_DEADLINE_MS + margin) {
+    polls += 1;
+    elapsed += cameraEvidenceDelayMs(polls);
+  }
+  return polls;
+})();
 
 export type RoomGame = {
   gameId: string;

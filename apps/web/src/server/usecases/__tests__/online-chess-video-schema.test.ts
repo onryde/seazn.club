@@ -192,6 +192,74 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     expect(Number(count)).toBe(2);
   });
 
+  // V446 (D21): the seat gate's per-participant evidence cache. A participant starts with no read on file; the columns
+  // move together (no outstanding read ⇒ nothing cached), and only the two not-yet verdicts are ever cached.
+  describe("D21: the seat-read cache columns", () => {
+    const insertWith = (cols: { reads?: number; at?: Date | null; state?: string | null; since?: Date | null }) =>
+      rolledBack((tx) => tx`
+        insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, seat_reads, seat_read_at, seat_read_state, seat_read_since)
+        values (${fixtureId}, ${personId}, 'player', ${`p-c-${randomUUID().slice(0, 8)}`}, ${cols.reads ?? 0}, ${cols.at ?? null}, ${cols.state ?? null}, ${cols.since ?? null})`);
+    const NOW = new Date("2026-10-15T09:00:00Z");
+
+    it("a participant starts with no read on file (never read, zero reads, nothing cached)", async () => {
+      const pid = `p-cache-${randomUUID().slice(0, 8)}`;
+      await sql`
+        insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+        values (${fixtureId}, ${personId}, 'player', ${pid})`;
+      const [row] = await sql<{ seat_read_at: Date | null; seat_reads: number; seat_read_state: string | null; seat_read_since: Date | null }[]>`
+        select seat_read_at, seat_reads, seat_read_state, seat_read_since from fixture_video_participants where participant_id = ${pid}`;
+      expect(row).toEqual({ seat_read_at: null, seat_reads: 0, seat_read_state: null, seat_read_since: null });
+    });
+
+    it("the read count cannot be negative (the pair: zero is accepted)", async () => {
+      expect(await insertWith({ reads: -1 })).toMatchObject({ accepted: false, code: CHECK_VIOLATION });
+      expect(await insertWith({ reads: 0 })).toEqual({ accepted: true });
+    });
+
+    it("no outstanding read ⇒ nothing cached: a stamp, a state or a since beside a zero count is refused — each alone, counted", async () => {
+      let checked = 0;
+      for (const cols of [{ at: NOW }, { state: "starting", since: NOW }, { since: NOW }]) {
+        expect(await insertWith({ reads: 0, ...cols }), JSON.stringify(cols)).toMatchObject({
+          accepted: false, code: CHECK_VIOLATION,
+        });
+        checked += 1;
+      }
+      expect(checked).toBe(3);
+      // The pairs: the same columns beside an outstanding read are fine.
+      expect(await insertWith({ reads: 1, at: NOW })).toEqual({ accepted: true });
+      expect(await insertWith({ reads: 2, at: NOW, state: "unreadable", since: NOW })).toEqual({ accepted: true });
+    });
+
+    it("only the two not-yet verdicts are cached, and a cached verdict always carries its peer's join time", async () => {
+      for (const state of ["on", "off", "blocked", "absent", ""]) {
+        expect(await insertWith({ reads: 1, at: NOW, state, since: NOW }), `state ${state}`).toMatchObject({
+          accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_participants_seat_read_state_check",
+        });
+      }
+      expect(await insertWith({ reads: 1, at: NOW, state: "starting", since: null }), "a verdict with no since").toMatchObject({
+        accepted: false, code: CHECK_VIOLATION,
+      });
+      expect(await insertWith({ reads: 1, at: NOW, state: null, since: NOW }), "a since with no verdict").toMatchObject({
+        accepted: false, code: CHECK_VIOLATION,
+      });
+      expect(await insertWith({ reads: 1, at: NOW, state: "starting", since: NOW }), "the pair").toEqual({ accepted: true });
+    });
+  });
+
+  it("D21: the call budget's tokens cannot be negative, and one row per vendor key", async () => {
+    const key = `schema-test|${randomUUID()}`;
+    expect(await rolledBack((tx) => tx`
+      insert into realtimekit_call_budget (key, tokens, refilled_at) values (${key}, -1, now())`,
+    )).toMatchObject({ accepted: false, code: CHECK_VIOLATION });
+    expect(await rolledBack(async (tx) => {
+      await tx`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${key}, 0, now())`;
+    }), "the pair: an empty bucket is a valid state").toEqual({ accepted: true });
+    expect(await rolledBack(async (tx) => {
+      await tx`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${key}, 1, now())`;
+      await tx`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${key}, 2, now())`;
+    })).toMatchObject({ accepted: false, code: "23505" });
+  });
+
   it("a participant cannot exist without a meeting", async () => {
     // Anti-vacuity: the fixture this case uses is REAL and is not the one that
     // has a meeting — otherwise the rejection below would prove nothing.
@@ -317,7 +385,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
      *  and V442's guard faults enable + force with no policy), never read from the catalogue. */
     const SEALED = [
       "fixture_play_flags", "fixture_video_guard_faults", "fixture_video_meetings",
-      "fixture_video_participants", "online_chess_audit", "stage_round_opens",
+      "fixture_video_participants", "online_chess_audit", "realtimekit_call_budget", "stage_round_opens",
     ];
     /** The four with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). */
     const WITH_ORG_ID = ["fixture_play_flags", "fixture_video_meetings", "online_chess_audit", "stage_round_opens"];

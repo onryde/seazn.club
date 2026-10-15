@@ -35,6 +35,7 @@ import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/
 import { concurrentConnections, matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
 import { cameraMatchWindow, matchGuardFaults } from "@/server/external-play/video/match-window";
 import {
+  RealtimeKitDeferred,
   endMeeting,
   fetchVideoOffCoverage,
   listMeetingSessions,
@@ -232,6 +233,14 @@ async function each<T extends { fixtureId: string }>(
     try {
       await act(row);
     } catch (err) {
+      // D21: the platform's RealtimeKit call budget refused a request. Nothing was made and nothing is wrong: the row keeps
+      // its place and the next firing reaches it — a deferral, the report's word for exactly that (never a failure, which
+      // the cron Worker pages on).
+      if (err instanceof RealtimeKitDeferred) {
+        pass.report.deferred++;
+        log.info({ job, fixtureId: row.fixtureId }, "external-play sweep: RealtimeKit call budget spent; the row keeps its place");
+        continue;
+      }
       const code = codeOf(err);
       pass.report.failures.push({ job, fixtureId: row.fixtureId, code });
       // Review M7: the report stays code-only (it is returned to the cron
@@ -1075,7 +1084,9 @@ async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDe
     try {
       read = await readCameraEvidence(c, window, rtk);
     } catch (err) {
-      if (!givenUp) throw err; // reported by `each`; read again next pass
+      // A day on, an unreadable answer gives up (below) — but a read the call budget REFUSED was never made, and says
+      // nothing about the match (D21): it is `each`'s deferral, whatever the day.
+      if (!givenUp || err instanceof RealtimeKitDeferred) throw err; // reported by `each`; read again next pass
       read = "not_ready";
     }
   }

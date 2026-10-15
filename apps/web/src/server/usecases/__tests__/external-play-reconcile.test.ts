@@ -58,7 +58,7 @@ import { offersSettle } from "@/lib/arbiter-view";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
-import { ensureMeeting } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { endRoomAtResult } from "../external-play/room-end";
 import {
   REALTIMEKIT_FIXTURE_ENV,
@@ -3056,6 +3056,19 @@ describe.runIf(HAS_DB)("the result ends the camera room — after the answer, ne
     fx.setUnavailable(false);
     expect(fx.meetingStatus(meetingId)).toBe("ACTIVE");
     warn.mockRestore();
+  });
+
+  it("D21: the call budget spent never fails the result either: the teardown is deferred, no request is made, the room is left unended for the sweep", async () => {
+    const g = await liveGame();
+    const { meetingId } = await ensureMeeting(g.fixtureId);
+    const asked = fx.calls.length;
+    const tail = heldTail();
+    endRoomAtResult(g.fixtureId, { defer: tail.defer, endMeeting: async () => { throw new RealtimeKitDeferred("test: budget spent"); } });
+    await sql`update fixture_external_play set status = 'finished', finished_at = now() where fixture_id = ${g.fixtureId}`;
+    await expect(tail.run(), "the tail never rejects").resolves.toBeDefined();
+    expect(await endedAt(g.fixtureId), "left for the sweep's job 3").toBeNull();
+    expect(fx.calls.length - asked, "the stub made no request").toBe(0);
+    expect(fx.meetingStatus(meetingId)).toBe("ACTIVE");
   });
 
   it("the guard: a room whose game is still on (bridge live, fixture playable) is never ended — and the positive pair, a finished bridge, is", async () => {

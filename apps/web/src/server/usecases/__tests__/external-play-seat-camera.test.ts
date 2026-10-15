@@ -165,7 +165,9 @@ describe.skipIf(!DB)("the seat reads the current peer's camera (T17B fix 2, D2)"
     const s = await seed();
     const { before, after } = await joinWith(s, "on");
     fx.setPeerReportsUnavailable(true);
-    expect(reasonOf(await claim(s, new Date(before + CAMERA_EVIDENCE_DEADLINE_MS - 1)))).toBe("camera_starting");
+    // D21: a read of a starting camera is cached for the back-off, so the two claims are a simulated clock APART (the
+    // cache itself is external-play-seat-budget.test.ts's): the first is the moment of the join, the second the deadline.
+    expect(reasonOf(await claim(s, new Date(before)))).toBe("camera_starting");
     expect(vi.mocked(captureError), "a wait is not an outage yet").not.toHaveBeenCalled();
     expect(reasonOf(await claim(s, new Date(after + CAMERA_EVIDENCE_DEADLINE_MS)))).toBe("video_unavailable");
     expect(vi.mocked(captureError)).toHaveBeenCalledTimes(1);
