@@ -505,12 +505,19 @@ export async function createStages(auth: AuthCtx, divisionId: string, input: Cre
   return withTenant(auth.orgId, (tx) => insertStageBatch(tx, divisionId, inputs, stageCap, frozen));
 }
 
-/** The write half of a stage batch, inside the CALLER's transaction: the division (404), each stage's config, the frozen
- *  competition, the stage cap against the stages that stand, the inserts, the progression rules, the reopen. Every
- *  refusal it raises rolls back with that transaction — which is what lets `replaceStages` run its delete in the same
- *  one (R-T13-3). No pooled reads in here (lib/db.ts): the caller asks the gates (`assertStageBatchGates`) and the
- *  frozen set before opening `withTenant` and hands them in. `carried` is replaceStages' own: what a slot kept across
- *  its delete-and-recreate (`StageCarry`). */
+/** The write half of a stage batch, inside the CALLER's transaction: the division lock, the division (404), each stage's
+ *  config, the frozen competition, the stage cap against the stages that stand, the inserts, the progression rules, the
+ *  reopen. Every refusal it raises rolls back with that transaction — which is what lets `replaceStages` run its delete
+ *  in the same one (R-T13-3). No pooled reads in here (lib/db.ts): the caller asks the gates (`assertStageBatchGates`)
+ *  and the frozen set before opening `withTenant` and hands them in. `carried` is replaceStages' own: what a slot kept
+ *  across its delete-and-recreate (`StageCarry`).
+ *
+ *  Batch 4 I1: the division lock comes FIRST, and the division's variant and config are read after it. The presets each
+ *  stage is seeded from, and every rules and points question it is asked, depend on that variant; `patchDivision` takes
+ *  the same lock to change it and to re-seed the stages that stand, so a create that read the variant before waiting
+ *  could store a preset the variant no longer takes (cricket `t20` -> `test` with a stored super over). The key is the
+ *  one `patchDivision` and `replaceStages` take; `replaceStages` already holds it in this transaction, and a second
+ *  `pg_advisory_xact_lock` by the same session on the same key is re-entrant. */
 async function insertStageBatch(
   tx: Tx,
   divisionId: string,
@@ -519,7 +526,8 @@ async function insertStageBatch(
   frozen: ReadonlySet<string>,
   carried?: ReadonlyMap<string, StageCarry>,
 ): Promise<StageRow[]> {
-  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+  const [division]= await tx<({ competition_id: string } & StageRulesScope)[]>`
     select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
   if (!division) throw new HttpError(404, "division not found");
   // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
