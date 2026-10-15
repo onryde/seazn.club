@@ -7,16 +7,22 @@ import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { checkEngineBoundary, checkPhoneClosure, checkPhoneSafety, IMPORT_EXEMPTIONS, importSpecifiers, phoneClosureDrift, scanEngineBoundary } from "../scripts/engine-boundary.ts";
+import { checkEngineBoundary, checkPhoneClosure, checkPhoneSafety, codeSkeleton, IMPORT_EXEMPTIONS, importSpecifiers, phoneClosureDrift, scanEngineBoundary } from "../scripts/engine-boundary.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 // Every scratch directory a test makes is tracked and removed after THAT test (a test may make several: the CLI "scanned nothing" test
-// makes three), and afterAll holds the line: none made by this file is still there.
+// makes three), and afterAll holds the line: none made by this file is still there. It asks only for no leftovers, never for "some were
+// made": a run of a single test (`-t`) that makes none must stay green. That tracking really removes is proved by its own test below.
 const made: string[] = [];
 const everMade: string[] = [];
-afterEach(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); });
+/** Remove every scratch directory made since the last call; returns how many it removed. */
+function cleanUp(): number {
+  const dirs = made.splice(0);
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  return dirs.length;
+}
+afterEach(cleanUp);
 afterAll(() => {
-  expect(everMade.length, "scratch directories this file made").toBeGreaterThan(0);
   expect(everMade.filter((d) => existsSync(d)), "scratch directories left behind").toEqual([]);
 });
 function scratchDir(prefix: string): string {
@@ -25,6 +31,18 @@ function scratchDir(prefix: string): string {
   everMade.push(d);
   return d;
 }
+
+describe("scratch directories", () => {
+  it("every one a test makes is tracked, removed by the cleanup, and forgotten - however many a test makes", () => {
+    const dirs = [scratchDir("engine-scratch-a-"), scratchDir("engine-scratch-b-"), scratchDir("engine-scratch-c-")];
+    for (const d of dirs) expect(existsSync(d), `${d} exists once made`).toBe(true);
+    expect(made).toEqual(dirs);
+    expect(cleanUp(), "the cleanup reports how many it removed").toBe(3);
+    for (const d of dirs) expect(existsSync(d), `${d} is gone after the cleanup`).toBe(false);
+    expect(made, "and the list is empty again").toEqual([]);
+    expect(cleanUp(), "a second cleanup removes nothing").toBe(0);
+  });
+});
 
 function seed(files: Record<string, string>): string {
   const dir = scratchDir("engine-boundary-");
@@ -227,6 +245,167 @@ describe("engine boundary gate: it reads code, not text", () => {
   });
 });
 
+// The code skeleton is built from the TypeScript parser's own reading of the file (batch 1c review, M1): the hand-rolled lexer that came
+// first guessed regex-versus-division from the preceding character and read the `/` after a non-null `!` (and after postfix `++`/`--`) as
+// the start of a regular expression, which blanked the rest of the line - or, inside a template placeholder, the rest of the function - and
+// with it a `process.env` or a `Date.now()`. The probes below are valid TypeScript with the banned thing on the SAME line after the idiom.
+// Single-sport reason: no sport is involved - this is a text-scanning rule.
+const DIVISION_AND_REGEX_PROBES: [string, string][] = [
+  ["a non-null assertion before a division", "const a = x! / 2;"],
+  ["a non-null assertion on a member before a division", "const a = x.y! / z.w!;"],
+  ["a postfix ++ before a division", "let i = 0; const q = i++ / 2;"],
+  ["a postfix -- before a division", "let i = 0; const q = i-- / 2;"],
+  ["a non-null assertion in a template placeholder", "export const p = `${(done! / total) * 100}%`;"],
+  ["a non-null assertion in a nested template placeholder", "export const p = `a ${`b ${(done! / total)}`} c`;"],
+  ["a non-null assertion before a division and a string", 'const s = a! / 2 + "x";'],
+  ["a division after a property named return", "const q = a.return / 2;"],
+  ["a division after a property named in", "const q = a.in / 2;"],
+  ["a division after a property named typeof", "const q = a.typeof / 2;"],
+  ["a division after a cast", "const q = (a as number) / 2;"],
+  ["a division after an angle-bracket assertion", "const q = (<number>a) / 2;"],
+  ["a division after a generic call", "const q = f<number>(a) / 2;"],
+  ["a division after an indexed non-null", "const q = a[0]! / a[1]!;"],
+  ["a division after a call", "const q = f(a) / 2;"],
+  ["a regex after an if condition", 'if (a) /"/.test(b);'],
+  ["a regex after a block", '{ } /"/.test(b);'],
+  ["a regex in an arrow body", 'const f = (s: string) => /"/.test(s);'],
+  ["a division after a closing bracket and a regex after", 'const q = a[0] / 2, r = /"/;'],
+];
+
+describe("code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character)", () => {
+  it.each(DIVISION_AND_REGEX_PROBES)("the purity scan still sees a banned call after %s", (_label, idiom) => {
+    const violations = checkEngineBoundary(seed({ "core/bad.ts": `${idiom} export const t = Date.now();\n` }));
+    expect(violations).toEqual([{ file: "core/bad.ts", line: 1, rule: expect.stringContaining("forbidden call Date.now(") }]);
+  });
+
+  it.each(DIVISION_AND_REGEX_PROBES)("the phone walk still sees process after %s", (_label, idiom) => {
+    const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": `${idiom} export const e = process.env;\n` }));
+    expect(r.violations.map((v) => [v.kind, v.detail.split(":")[0]])).toEqual([["process", "line 1"]]);
+  });
+
+  it.each(DIVISION_AND_REGEX_PROBES)("the purity scan still sees a banned import after %s", (_label, idiom) => {
+    const violations = checkEngineBoundary(seed({ "core/bad.ts": `${idiom} import postgres from "postgres";\nexport {};\n` }));
+    expect(violations.map((v) => v.rule)).toEqual([expect.stringContaining('forbidden import "postgres"')]);
+  });
+
+  it("the skeleton of a fixture is exactly what its author wrote: comments and the insides of strings, templates and regular expressions blank, quotes and code kept", () => {
+    const z = (text: string) => " ".repeat(text.length); // the blanking of `text`, piece by piece, so each expectation is written down rather than computed from the gate
+    const source = [
+      "// it's a /** comment",
+      'import a from "node:fs"; /* "q" */ const b = `x${a! / 2}y${`z`}`;',
+      String.raw`const c = /[/"]\//g, d = 'it\'s', e = a++ / 2;`,
+      "export const f = `${(b! / 1)}%`; // tail 'x",
+    ].join("\n");
+    const expected = [
+      z("// it's a /** comment"),
+      `import a from "${z("node:fs")}"; ${z('/* "q" */')} const b = \`${z("x")}\${a! / 2}${z("y")}\${\`${z("z")}\`}\`;`,
+      `const c = /${z(String.raw`[/"]\/`)}/g, d = '${z(String.raw`it\'s`)}', e = a++ / 2;`,
+      `export const f = \`\${(b! / 1)}${z("%")}\`; ${z("// tail 'x")}`,
+    ].join("\n");
+    expect(codeSkeleton(source).split("\n")).toEqual(expected.split("\n"));
+  });
+
+  it("keeps the source's length and its line breaks outside comments, strings and templates", () => {
+    const source = 'const a = "x";\n// c\n/* m\nn */\nconst b = `p\nq`;\n';
+    const out = codeSkeleton(source);
+    expect(out.length).toBe(source.length);
+    expect(out.split("\n").length, "block comments and templates may blank their own newlines, nothing else").toBeLessThanOrEqual(source.split("\n").length);
+    expect(out.split("\n")[0]).toBe('const a = " ";');
+  });
+});
+
+// The skeleton against the TypeScript parser on every file of the real src/: each token's own text, and the trivia between tokens, read
+// through a second path (the parser's token list and its comment-range functions) from the one the gate uses (literal nodes plus a scan for
+// the comments that remain). A position the parser calls code must be the source's own character; a position inside a comment or a
+// literal's text must be blank. Anti-vacuity: the files, the literals and the comments it covered are counted, and none is a failure.
+/** What the skeleton of `source` should be, from the parser's tokens: the text of string, template and regular-expression literals and the
+ *  comments between tokens blanked, everything else as written. Also counts the spans it blanked. */
+function expectedSkeleton(source: string): { text: string; literals: number; comments: number } {
+  const sf = ts.createSourceFile("oracle.ts", source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+  const out = source.split("");
+  const blank = (from: number, to: number) => { for (let i = from; i < to; i++) out[i] = " "; };
+  let literals = 0;
+  let comments = 0;
+  const leaves: ts.Node[] = [];
+  const collect = (n: ts.Node): void => {
+    // a JSDoc comment is trivia, not a token (and a comment dangling before the end of the file hangs off the end-of-file token as a child)
+    if (n.kind >= ts.SyntaxKind.FirstJSDocNode && n.kind <= ts.SyntaxKind.LastJSDocNode) return;
+    const kids = n.kind === ts.SyntaxKind.EndOfFileToken ? [] : n.getChildren(sf);
+    if (kids.length === 0) leaves.push(n);
+    else kids.forEach(collect);
+  };
+  collect(sf);
+  for (const leaf of leaves) {
+    for (const range of [...(ts.getLeadingCommentRanges(source, leaf.pos) ?? []), ...(ts.getTrailingCommentRanges(source, leaf.pos) ?? [])]) {
+      blank(range.pos, range.end);
+      comments++;
+    }
+    const start = leaf.getStart(sf);
+    const text = source.slice(start, leaf.end);
+    switch (leaf.kind) {
+      case ts.SyntaxKind.StringLiteral:
+      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+      case ts.SyntaxKind.TemplateTail:
+        blank(start + 1, text.length > 1 && text.endsWith(text[0] === "}" ? "`" : text[0]!) ? leaf.end - 1 : leaf.end);
+        literals++;
+        break;
+      case ts.SyntaxKind.TemplateHead:
+      case ts.SyntaxKind.TemplateMiddle:
+        blank(start + 1, leaf.end - 2);
+        literals++;
+        break;
+      case ts.SyntaxKind.RegularExpressionLiteral:
+        blank(start + 1, start + text.lastIndexOf("/"));
+        literals++;
+        break;
+      default:
+    }
+  }
+  return { text: out.join(""), literals, comments };
+}
+
+/** Compare the skeleton of every file to the parser's reading. A comparison over no file is a failure. */
+function skeletonMismatches(files: { name: string; source: string }[], skeleton: (s: string) => string): { files: number; literals: number; comments: number; mismatches: string[] } {
+  if (files.length === 0) throw new Error("skeletonMismatches: no file to compare - a comparison over nothing proves nothing");
+  const mismatches: string[] = [];
+  let literals = 0;
+  let comments = 0;
+  for (const { name, source } of files) {
+    const want = expectedSkeleton(source);
+    literals += want.literals;
+    comments += want.comments;
+    const got = skeleton(source);
+    if (got === want.text) continue;
+    let at = 0;
+    while (got[at] === want.text[at]) at++;
+    mismatches.push(`${name}:${source.slice(0, at).split("\n").length}: ${JSON.stringify(source.slice(Math.max(0, at - 20), at + 20))}`);
+  }
+  return { files: files.length, literals, comments, mismatches };
+}
+
+describe("code skeleton: against the TypeScript parser, over every file of the real src/", () => {
+  it("is what the parser says on every file: no code position blanked, no comment or literal text left", () => {
+    const real = new URL("../src", import.meta.url).pathname;
+    const files = globSync("**/*.ts", { cwd: real }).map((name) => ({ name, source: readFileSync(join(real, name), "utf8") }));
+    const r = skeletonMismatches(files, codeSkeleton);
+    expect(r.files, "anti-vacuity: files compared").toBeGreaterThan(100);
+    expect(r.literals, "anti-vacuity: string, template and regular-expression literals compared").toBeGreaterThan(5000);
+    expect(r.comments, "anti-vacuity: comments compared").toBeGreaterThan(2000);
+    expect(r.mismatches, `${r.files} files, ${r.literals} literals, ${r.comments} comments: ${JSON.stringify(r.mismatches)}`).toEqual([]);
+  });
+
+  it("refuses to compare nothing, and sees a skeleton that is wrong", () => {
+    expect(() => skeletonMismatches([], codeSkeleton)).toThrow(/no file to compare/);
+    const idiom = [{ name: "idiom.ts", source: "const a = x! / 2; const s = \"it's\";\n" }];
+    expect(skeletonMismatches(idiom, codeSkeleton).mismatches).toEqual([]);
+    // a skeleton that leaves a comment's text, one that blanks code, and one that blanks the rest of the line after a `!` are all seen
+    const withComment = [{ name: "c.ts", source: "const a = 1; // note\n" }];
+    expect(skeletonMismatches(withComment, (s) => s).mismatches).toHaveLength(1);
+    expect(skeletonMismatches(idiom, (s) => codeSkeleton(s).replace("const", "     ")).mismatches).toHaveLength(1);
+    expect(skeletonMismatches(idiom, (s) => s.replace(/!.*/, (m) => " ".repeat(m.length))).mismatches).toHaveLength(1);
+  });
+});
+
 // The one named exemption (orchestrator ruling, a recommendation to the owner, reversible): src/testkit/golden.ts imports node:crypto
 // for createHash, and has since 2dd25ba4b; the old stripper hid that import from the gate, so the gate was never red over it. Replacing
 // createHash would churn every golden digest, so the import is allowed in that ONE file, and only that specifier.
@@ -346,6 +525,24 @@ describe("phone-safe subpaths: the real engine", () => {
     expect(sportIndexes().length, "anti-vacuity: the sport directories the ./sports/* pattern expands over").toBeGreaterThan(5);
     expect(r.entries.length).toBe(cfg.subpaths.filter((p) => !p.includes("*")).length + sportIndexes().length);
     for (const e of r.entries) expect(r.walked).toContain(e);
+  });
+
+  it("is red against the real src/ when the recorded closure is perturbed: a module dropped from the pin, one invented", () => {
+    const dropped = cfg.closure.modules[0]!;
+    const invented = "src/core/not-a-module.ts";
+    expect(cfg.closure.modules, "the invented module is not a real one").not.toContain(invented);
+    // a scratch engine whose package.json and src/ are the real ones and whose pin is the real one, perturbed
+    const dir = scratchDir("engine-pin-");
+    copyFileSync(join(ENGINE, "package.json"), join(dir, "package.json"));
+    symlinkSync(join(ENGINE, "src"), join(dir, "src"));
+    const writePin = (modules: string[]) => writeFileSync(join(dir, "phone-subpaths.json"), JSON.stringify({ subpaths: cfg.subpaths, closure: { ...cfg.closure, modules } }));
+    writePin([...cfg.closure.modules]);
+    expect(checkPhoneClosure(dir).violations, "the unperturbed pin is green against the real src/ - the red below is the perturbation's").toEqual([]);
+    writePin([...cfg.closure.modules.slice(1), invented]);
+    const r = checkPhoneClosure(dir);
+    expect(r.violations).toEqual([{ kind: "closure-changed", file: "phone-subpaths.json", detail: expect.stringContaining(`added: ${dropped}`) }]);
+    expect(r.violations[0]!.detail).toContain(`removed: ${invented}`);
+    expect(r.walked.length, "the walk is reported whole").toBe(cfg.closure.modules.length);
   });
 
   it("lists the D25 phone subpaths, and every one is a key of the package's exports", () => {
@@ -481,9 +678,33 @@ describe("phone-safe subpaths: what the walk refuses", () => {
     ["globalThis.process with whitespace", "export const p = globalThis . process;", "process"],
     ["process after a return", "export function f() { return process; }", "process"],
     ["process as a default parameter", "export function f(p = process) { return p; }", "process"],
+    ["globalThis behind a template literal", "export const lvl = globalThis[`process`];", "process"],
+    ["global behind an optional template literal", "export const lvl = global?.[`process`];", "process"],
+    ["process as a switch label", "export function f(x: unknown) { switch (x) { case process: return 1; default: return 0; } }", "process"],
+    ["process as a switch label after another case", "export function f(x: unknown) { switch (x) { case 1: case process: return 1; default: return 0; } }", "process"],
+    ["Buffer", "export const b = Buffer.from([1]);", "node-global"],
+    ["Buffer as a type annotation", "export function f(b: Buffer) { return b; }", "node-global"],
+    ["new Buffer", "export const b = new Buffer(4);", "node-global"],
+    ["optional-chained Buffer", "export const b = Buffer?.from([1]);", "node-global"],
+    ["typeof Buffer", 'export const has = typeof Buffer !== "undefined";', "node-global"],
+    ["Buffer after a spread", "export const b = [...Buffer.from([1])];", "node-global"],
+    ["Buffer as a shorthand property", "export const o = { Buffer };", "node-global"],
+    ["globalThis.Buffer", "export const b = globalThis.Buffer;", "node-global"],
+    ["globalThis behind brackets for Buffer", 'export const b = globalThis["Buffer"];', "node-global"],
+    ["Buffer destructured from globalThis under another name", "const { Buffer: B } = globalThis; export const e = B;", "node-global"],
+    ["__dirname", 'export const d = __dirname + "/x";', "node-global"],
+    ["__filename", "export const d = __filename;", "node-global"],
+    ["__dirname in a template placeholder", "export const d = `${__dirname}/x`;", "node-global"],
+    ["__filename as an argument", "declare function f(x: string): void; f(__filename);", "node-global"],
+    ["typeof __dirname", 'export const has = typeof __dirname !== "undefined";', "node-global"],
     ["require of a variable", "export const load = (n: string) => require(n);", "unresolved-import"],
     ["require of a template", "export const load = require(`node:fs`);", "unresolved-import"],
     ["an empty require", "export const load = require();", "unresolved-import"],
+    ["a dynamic import of a concatenation", 'export const load = () => import("./" + "../scheduling/build.ts");', "unresolved-import"],
+    ["a require of a concatenation", 'export const load = require("./leak" + ".ts");', "unresolved-import"],
+    ["a dynamic import of a literal and a variable", 'export const load = (n: string) => import("./" + n);', "unresolved-import"],
+    ["a dynamic import of a literal in a conditional", 'export const load = (c: boolean) => import(c ? "./a.ts" : "./b.ts");', "unresolved-import"],
+    ["a dynamic import of a literal then an operator", 'export const load = () => import("./a.ts" as string);', "unresolved-import"],
     ["a dynamic import of a template", "export const load = () => import(`node:fs`);", "unresolved-import"],
     ["an import with no spaces", 'import{readFileSync}from"node:fs";', "node-builtin"],
     ["a re-export with no spaces", 'export{join}from"path";', "node-builtin"],
@@ -551,6 +772,9 @@ describe("phone-safe subpaths: what the walk refuses", () => {
     ["an import after a statement on its line", 'export const k = 1; import "./leak.ts";'],
     ["a dynamic import with spaces inside the parentheses", 'export const load = () => import( "./leak.ts" );'],
     ["a require with spaces inside the parentheses", 'export const load = require( "./leak.ts" );'],
+    ["a dynamic import with import attributes", 'export const load = () => import("./leak.ts", { with: { type: "json" } });'],
+    ["a dynamic import with a trailing comma", 'export const load = () => import("./leak.ts",);'],
+    ["a require split over lines", 'export const load = require(\n  "./leak.ts"\n);'],
   ])("follows %s", (_label, line) => {
     const dir = seedEngine({ "src/core/index.ts": line, "src/core/leak.ts": 'import "node:fs"; export const a = 1; export const c = 2; export default 3;' });
     const r = checkPhoneSafety(dir);
@@ -746,6 +970,19 @@ describe("phone-safe subpaths: what the walk reads", () => {
         "export const o = [e].map((x) => x.process);",
         "export const q = e\n  .process;", // a property access split over lines
         "export const r = { ...e, process: 3 };", // a spread of something else, then the key
+        "export const b1 = { Buffer: 1 };", // the other Node globals are property names too when they are one
+        "export const b2 = e.Buffer;",
+        "export const b3 = e?.__dirname;",
+        "export interface Io { Buffer: string; __filename?: string }",
+        "export const b4 = e.__filename;",
+        "export const b5 = { __dirname: 1, __filename: 2 };",
+        "export const b6 = globalThis.fetch;",
+        "export const b7 = globalThis[`fetch`];", // a global other than the Node ones, behind a template literal
+        'export const b8 = "Buffer __dirname __filename";', // names inside a string
+        "export const b9 = `${1} Buffer`; // __dirname",
+        "export const Buffered = 1; export const mybuffer = Buffered; export const __dirnames = 1;", // longer words that contain the names
+        "export const b10 = subBuffer.length;",
+        "export const b11 = sw === 1 ? e : { case1: 1 };",
         'export const x1 = loader.import("node:fs");', // a method named import / require is not a module load
         'export const x2 = loader.require("node:fs");',
         'export const x3 = reimport("node:fs");',
@@ -786,16 +1023,80 @@ describe("phone-safe subpaths: what the walk reads", () => {
     expect(r.violations.map((v) => v.kind)).toEqual(["process"]);
   });
 
-  // The characters and words after which a `/` opens a regular expression (JavaScript's grammar, not the scanner's table): a quote inside
-  // that regex must not be read as a string, or the code after it on the line disappears from the scan.
-  it.each(Array.from("(,=:[!&|?{;+-*%<>~^"))("reads a / after %s as a regular expression", (before) => {
-    const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": `a ${before} /"/ ; export const e = process.env;` }));
-    expect(r.violations.map((v) => v.kind)).toEqual(["process"]);
+  it("reads an unterminated block comment as a comment to the end of the file, and the same text closed as a comment and then code", () => {
+    const head = "export const a = 1;\n";
+    const open = `${head}/* process.env; import "node:fs"; Buffer.from([1]);`;
+    expect(checkPhoneSafety(seedEngine({ "src/core/index.ts": open })).violations).toEqual([]);
+    expect(codeSkeleton(open)).toBe(head + " ".repeat(open.length - head.length));
+    // the control: closed, the comment ends where it says and the code after it is read
+    const closed = `${head}/* process.env; */ export const e = process.env;`;
+    expect(checkPhoneSafety(seedEngine({ "src/core/index.ts": closed })).violations.map((v) => [v.kind, v.detail.split(":")[0]])).toEqual([["process", "line 2"]]);
   });
 
-  it.each(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"])("reads a / after the word %s as a regular expression", (word) => {
-    const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": `${word} /"/ ; export const e = process.env;` }));
-    expect(r.violations.map((v) => v.kind)).toEqual(["process"]);
+  it.each([
+    ["import()", 'export const load = () => import("./b.ts" + "x");'],
+    ["require()", 'export const load = require("./b.ts" + "x");'],
+  ])("does not follow the first literal of a concatenated %s as if it were the module, and follows a plain one", (_what, code) => {
+    const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": code, "src/core/b.ts": "export const b = 1;" }));
+    expect(r.violations.map((v) => v.kind)).toEqual(["unresolved-import"]);
+    expect(r.walked, "b.ts is not what this loads").not.toContain("src/core/b.ts");
+    const plain = checkPhoneSafety(seedEngine({ "src/core/index.ts": code.replace(' + "x"', ""), "src/core/b.ts": "export const b = 1;" }));
+    expect(plain.violations).toEqual([]);
+    expect(plain.walked, "the control: a plain literal is followed").toContain("src/core/b.ts");
+  });
+
+  // The places a `/` opens a regular expression (JavaScript's grammar, read by the TypeScript parser, not by a table of preceding characters):
+  // a quote inside that regex must not be read as a string, or the code after it on the line disappears from the scan. Every row is a valid
+  // program, followed on its own line by a read of `process`.
+  it.each([
+    ["(", 'f( /"/ );'],
+    [",", 'f(a, /"/);'],
+    ["=", 'x = /"/;'],
+    [":", '({ k: /"/ });'],
+    ["[", '[ /"/ ];'],
+    ["!", '!/"/.test(s);'],
+    ["&&", 'a && /"/.test(s);'],
+    ["||", 'a || /"/.test(s);'],
+    ["?", 'a ? /"/ : 1;'],
+    ["{ (a block)", '{ /"/.test(s); }'],
+    [";", 'a; /"/.test(s);'],
+    ["+", 'a + /"/.lastIndex;'],
+    ["-", 'a - /"/.lastIndex;'],
+    ["*", 'a * /"/.lastIndex;'],
+    ["%", 'a % /"/.lastIndex;'],
+    ["<", 'a < /"/.lastIndex;'],
+    [">", 'a > /"/.lastIndex;'],
+    ["~", "~/\"/.lastIndex;"],
+    ["^", 'a ^ /"/.lastIndex;'],
+    ["&", 'a & /"/.lastIndex;'],
+    ["|", 'a | /"/.lastIndex;'],
+    ["=>", "const f = (s: string) => /\"/.test(s);"],
+    [") of an if", 'if (a) /"/.test(b);'],
+    [") of a while", 'while (a) /"/.test(b);'],
+    ["} of a block", '{ } /"/.test(b);'],
+  ])("reads a / after %s as a regular expression, and still sees the next line", (_where, code) => {
+    const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": `${code}\nexport const e = process.env;` }));
+    expect(r.violations.map((v) => [v.kind, v.detail.split(":")[0]])).toEqual([["process", "line 2"]]);
+  });
+
+  it.each([
+    ["return", 'function f() { return /"/.test(s); }'],
+    ["typeof", 'const t = typeof /"/;'],
+    ["instanceof", 'const t = a instanceof /"/;'],
+    ["in", 'const t = a in /"/;'],
+    ["of", 'for (const a of /"/.exec(s) ?? []) { a; }'],
+    ["new", 'const t = new /"/();'],
+    ["delete", 'delete /"/.x;'],
+    ["void", 'const t = void /"/;'],
+    ["throw", 'function f() { throw /"/; }'],
+    ["case", 'switch (a) { case /"/: break; }'],
+    ["do", 'do /"/.test(s); while (a);'],
+    ["else", 'if (a) b; else /"/.test(s);'],
+    ["yield", 'function* g() { yield /"/; }'],
+    ["await", 'async function h() { await /"/; }'],
+  ])("reads a / after the word %s as a regular expression, and still sees the next line", (_word, code) => {
+    const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": `${code}\nexport const e = process.env;` }));
+    expect(r.violations.map((v) => [v.kind, v.detail.split(":")[0]])).toEqual([["process", "line 2"]]);
   });
 
   it("sees an import written after a string that holds a // as well", () => {
@@ -831,7 +1132,7 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
   const GATE = fileURLToPath(new URL("../scripts/engine-boundary.ts", import.meta.url));
   const HELPER = fileURLToPath(new URL("../scripts/lib/main-module.ts", import.meta.url));
 
-  /** A scratch engine checkout: `eng/scripts/{engine-boundary.ts,lib/main-module.ts}`, `eng/src/<files>` (no src/ at all when `src` is null),
+  /** A scratch engine checkout: `eng/scripts/{engine-boundary.ts,lib/main-module.ts}`, `eng/node_modules` (the real one, for `typescript`), `eng/src/<files>` (no src/ at all when `src` is null),
    *  and the phone walk's inputs, `eng/package.json` + `eng/phone-subpaths.json` (1c-1; `phone` shapes or omits them), plus `bin/gate.ts`,
    *  a symlink to the copy. Every root it makes is tracked, so afterEach removes them all. */
   function checkout(src: Record<string, string> | null, phone: PhoneConfig | null = { pinned: CLEAN_PIN }): { root: string; eng: string; via: string } {
@@ -840,6 +1141,8 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
     mkdirSync(join(eng, "scripts/lib"), { recursive: true });
     copyFileSync(GATE, join(eng, "scripts/engine-boundary.ts"));
     copyFileSync(HELPER, join(eng, "scripts/lib/main-module.ts"));
+    // the gate parses with the `typescript` devDependency, which a scratch checkout finds the way a real one does: through its node_modules
+    symlinkSync(join(ENGINE, "node_modules"), join(eng, "node_modules"));
     if (phone !== null) writePhoneConfig(eng, phone);
     if (src !== null) mkdirSync(join(eng, "src"), { recursive: true });
     for (const [rel, text] of Object.entries(src ?? {})) {
@@ -911,7 +1214,8 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
     expect(here.status, here.stdout + here.stderr).toBe(1);
     expect(here.stderr).toContain('FAIL  src/core/ok.ts  node-builtin: line 1: imports "node:fs"');
     expect(here.stdout).toContain(`1 phone-safety violation(s) in ${WALKED} modules walked`);
-    expect(here.stdout, "the phone rule failed, so neither the boundary PASS nor the phone-safe line may print").not.toMatch(/PASS|phone-safe:/);
+    expect(here.stdout, "the phone rule failed, so neither the PASS line nor the phone-safe line may print").not.toMatch(/PASS|phone-safe:/);
+    expect(here.stdout, "the boundary scan was clean, and says how many files it scanned: a red gate still states what it checked").toContain(`engine boundary clean (${Object.keys(CLEAN).length} files scanned)`);
     const above = run(via, root);
     expect(above.status, above.stdout + above.stderr).toBe(1);
     expect(above.stderr).toContain('FAIL  eng/src/core/ok.ts  node-builtin: line 1: imports "node:fs"');
@@ -929,12 +1233,13 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
     expect(r.stdout).not.toContain("PASS");
   }, spawnBudget(1));
 
-  it("a phone-safety violation does not hide a clean boundary line count, and a clean phone walk does not hide a boundary violation", () => {
+  it("a boundary violation does not hide the phone walk's own line, and says nothing of a clean boundary", () => {
     const { eng, via } = checkout({ ...CLEAN, "deep/er/nested/bad.ts": NESTED_BAD });
     const r = run(via, eng);
     expect(r.status, r.stdout + r.stderr).toBe(1);
     expect(r.stdout, "the phone walk was clean, and says so").toContain(`phone-safe: ${WALKED} modules walked`);
-    expect(r.stdout).toContain("1 boundary violation(s)");
+    expect(r.stdout).toContain(`1 boundary violation(s) in ${Object.keys(CLEAN).length + 1} files scanned`);
+    expect(r.stdout, "a boundary violation is not a clean boundary").not.toContain("engine boundary clean");
   }, spawnBudget(1));
 
   const CRYPTO_IMPORT = 'import { createHash } from "node:crypto";\nexport const h = createHash;\n';
