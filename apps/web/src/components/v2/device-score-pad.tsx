@@ -721,6 +721,14 @@ export function DeviceScorePad({
             {entrantDisplayName(away!)}
           </p>
           <p className="mt-2 text-xs text-slate-400">{msg("device.scan.confirmHint")}</p>
+          {/* W2c Task 15 fix round 1 (I-1): a correction before kickoff refuses this Start too, and its refusal line
+           *  asks the scorer to check the format — which this card does not otherwise show. The same banner as the
+           *  started pad's, above the Start it asks them to retake; once the match starts it moves with the pad. */}
+          {chromeRules !== null && chromeRulesShown && (
+            <div className="mt-3">
+              <RulesChangedBanner formatLine={chromeRules.formatLine} onDismiss={() => setChromeRulesShown(false)} />
+            </div>
+          )}
           <button
             type="button"
             data-testid="score-start-match"

@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, TAG } from "./helpers";
 import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
@@ -138,6 +138,35 @@ async function formatLineNow(request: APIRequestContext, fixtureId: string): Pro
   return rules.data!.format_line!;
 }
 
+/** The house widths (AGENTS.md: 320, 768 and desktop 1280). At each: no horizontal page scroll with `target` on screen —
+ *  and, only for a per-screen visual verdict, a crop from `target`'s top to `below` px under its bottom into
+ *  W2A_SHOTS_DIR (unset in CI, where no picture is taken). Restores the viewport it found; counts what it checked. */
+async function verdictAtWidths(page: Page, name: string, target: Locator, below = 16): Promise<void> {
+  const found = page.viewportSize()!;
+  const dir = process.env.W2A_SHOTS_DIR;
+  let checked = 0;
+  for (const width of [320, 768, 1280]) {
+    await page.setViewportSize({ width, height: found.height });
+    await expect(target, `${name} at ${width}: on screen`).toBeVisible();
+    const { scroll, client } = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }));
+    expect(scroll, `${name} at ${width}: no horizontal page scroll`).toBeLessThanOrEqual(client);
+    if (dir) {
+      await target.scrollIntoViewIfNeeded();
+      const box = (await target.boundingBox())!;
+      const { sy, sh } = await page.evaluate(() => ({ sy: window.scrollY, sh: document.documentElement.scrollHeight }));
+      const top = Math.max(0, box.y + sy - 8);
+      const height = Math.min(sh - top, box.height + 8 + below);
+      await page.screenshot({ path: `${dir}/${name}-${width}.png`, fullPage: true, clip: { x: 0, y: top, width, height } });
+    }
+    checked++;
+  }
+  await page.setViewportSize(found);
+  expect(checked, `${name}: anti-vacuity, the three house widths`).toBe(3);
+}
+
 test("X-SR-7 P5: a tap after a correction is refused and writes nothing; the pad says the new format, folds it, and the retaken tap lands", async ({
   browser,
   request,
@@ -163,20 +192,8 @@ test("X-SR-7 P5: a tap after a correction is refused and writes nothing; the pad
   await expect(banner, "…and what it is now, in the reader's language").toContainText(line);
   await expect(pad(page).locator('[data-role="v3-rejection"]'), "the tap is said NOT recorded").toContainText(/not recorded/i);
   await expect(scorebug, "the pad now folds the corrected format").toContainText(/best of 5/i);
-  // Only for a per-screen visual verdict (desktop): a crop from the scorebug to the top of the board into W2A_SHOTS_DIR
-  // (the switch bracket-finish.spec.ts uses). Unset in CI, where it does nothing.
-  const dir = process.env.W2A_SHOTS_DIR;
-  if (dir) {
-    const width = page.viewportSize()!.width;
-    const sy = await page.evaluate(() => window.scrollY);
-    const [sb, tiles] = await Promise.all([scorebug.boundingBox(), pad(page).locator('[data-role="v3-tiles"]').boundingBox()]);
-    const top = Math.max(0, sb!.y + sy - 8);
-    await page.screenshot({
-      path: `${dir}/t15-rules-banner-${width}.png`,
-      fullPage: true,
-      clip: { x: 0, y: top, width, height: tiles!.y + sy + 120 - top },
-    });
-  }
+  // The banner and the refusal line under the scorebug, at the three house widths (the crop runs to the board's top).
+  await verdictAtWidths(page, "t15-rules-banner", scorebug, 420);
   expect(await countEvents(request, seeded.fixtureId), "the refused tap wrote nothing").toBe(before);
   const last = (await ledger(request, seeded.fixtureId)).at(-1);
   expect(last?.type, "the ledger still ends where it did").toBe("core.start");
@@ -277,4 +294,69 @@ test("X-SR-7 P5 (the organiser's console pad): the fixture page's pad sends the 
   expect(await tapAndReadVersion(), "after the correction the console sends the version it reloaded").toBe(corrected);
   await expect.poll(() => countEvents(request, seeded.fixtureId), { timeout: WIRE_MS }).toBe(before + 2);
   await expect(page.getByTestId("pad-rules-changed"), "a fresh load is not a correction under an open pad").toHaveCount(0);
+});
+
+test("X-SR-7 before kickoff (fix round 1, I-1): a pad opened on an UNSTARTED match, then a division correction — its Start is refused, it says the new format, and the retaken Start plays it", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(Math.max(120_000, 30_000 + 3 * WIRE_MS));
+  // The review's probe, through the product: a pad loaded before kickoff carried version 0 and a pre-kickoff correction
+  // left the version alone, so the pad's first write was accepted and froze the NEW format under a pad folding the OLD.
+  // The device pad's Start is its chrome's own write (`device-score-pad.tsx` `send`), so the refusal it meets and the
+  // reload that follows (`followCorrection`) are the chrome's.
+  const fx = await seedRosteredFixture(request, {
+    label: `W2c rules prekickoff ${TAG}`,
+    sportKey: "badminton",
+    variantKey: "short",
+    entrantKind: "individual",
+    home: [{ fullName: `W2c Rules Home pre ${TAG}` }],
+    away: [{ fullName: `W2c Rules Away pre ${TAG}` }],
+    emitCoreStart: false,
+  });
+  const minted = await apiJson<{ secret: string }>(request, `/api/v1/fixtures/${fx.fixtureId}/device-links`, "POST", {
+    label: `w2c prekickoff ${TAG}`,
+  });
+  expect(minted.status, `mint device link: ${JSON.stringify(minted.error)}`).toBe(201);
+  const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
+  const page = await ctx.newPage();
+  await page.goto(`/score/${minted.data!.secret}`);
+  const start = page.getByTestId("score-start-match");
+  await expect(start, "premise: an unstarted match opens on its Start").toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("pad-rules-changed"), "the empty case: no correction, no banner").toHaveCount(0);
+  const loaded = await apiJson<{ rules_version: number; cfg: { bestOf: number } }>(request, `/api/v1/fixtures/${fx.fixtureId}/rules`);
+  expect(loaded.status, JSON.stringify(loaded.error)).toBe(200);
+  const target = loaded.data!.cfg.bestOf === 5 ? 3 : 5;
+
+  // The organiser corrects the DIVISION's format before kickoff (a different writer from the live tests' override).
+  const fix = await apiJson(request, `/api/v1/divisions/${fx.divisionId}`, "PATCH", { config: { bestOf: target } });
+  expect(fix.status, JSON.stringify(fix.error)).toBe(200);
+  const line = await formatLineNow(request, fx.fixtureId);
+  const after = await apiJson<{ rules_version: number }>(request, `/api/v1/fixtures/${fx.fixtureId}/rules`);
+  expect(after.data?.rules_version, "premise: the pre-kickoff correction moved the version").toBe(loaded.data!.rules_version + 1);
+
+  // The pad's first write, made under the version it loaded: refused, nothing written, and the confirm card — which
+  // otherwise shows no format — says the new one above the Start the refusal asks the scorer to retake.
+  await start.click();
+  const confirm = page.getByTestId("scan-confirm");
+  const banner = page.getByTestId("pad-rules-changed");
+  await expect(confirm.getByTestId("pad-rules-changed"), "the confirm card says the format changed").toBeVisible({ timeout: WIRE_MS });
+  await expect(banner, "…and what it is now, in the reader's language").toContainText(line);
+  await expect(page.getByText(/not recorded/i).first(), "the Start is said NOT recorded").toBeVisible();
+  expect(await countEvents(request, fx.fixtureId), "the refused Start wrote nothing").toBe(0);
+  await expect(start, "the match is still to start").toBeVisible();
+  await verdictAtWidths(page, "t15-prekickoff-confirm", confirm);
+
+  // The second call: the retaken Start carries the reloaded version, lands, and the match plays the corrected format;
+  // the banner moves with the pad.
+  await page.waitForTimeout(DOUBLE_SUBMIT_WINDOW_MS + 60);
+  await start.click();
+  await expect.poll(() => countEvents(request, fx.fixtureId), { timeout: WIRE_MS }).toBe(1);
+  expect((await ledger(request, fx.fixtureId))[0]?.type).toBe("core.start");
+  await expect(pad(page).locator('[data-role="v3-scorebug"]'), "the pad folds the corrected format").toContainText(
+    new RegExp(`best of ${target}`, "i"),
+    { timeout: WIRE_MS },
+  );
+  await expect(banner, "the banner moved with the pad").toContainText(line);
+  await ctx.close();
 });
