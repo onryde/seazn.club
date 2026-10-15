@@ -540,7 +540,7 @@
  {
   "id": "t15fr1-stage-save-no-bump",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "      await bumpMovedRules(tx, rulesBefore);\n",
+  "find": "    if (rulesBefore !== null) await bumpMovedRules(tx, rulesBefore);\n",
   "replace": "",
   "killers": [
    {

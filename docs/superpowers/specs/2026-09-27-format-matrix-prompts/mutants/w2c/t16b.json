@@ -518,5 +518,80 @@
         ]
       }
     ]
+  },
+  {
+    "id": "t16b-dialog-nil-award-suppressed",
+    "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+    "find": "if (h === 0 && a === 0 && !awarded) return null;",
+    "replace": "if (h === 0 && a === 0) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+        ],
+        "name": "nil-nil award"
+      }
+    ]
+  },
+  {
+    "id": "t16b-dialog-nil-suppression-dropped",
+    "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+    "find": "if (h === 0 && a === 0 && !awarded) return null;",
+    "replace": "if (h === 0 && a === 0 && false) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+        ],
+        "name": "nil-nil award"
+      }
+    ]
+  },
+  {
+    "id": "t16b-football-nil-award-dropped",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "...(forfeitAward === undefined ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),",
+    "replace": "...(forfeitAward === undefined || (forfeitAward[0] === 0 && forfeitAward[1] === 0) ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ],
+        "name": "nil-nil award"
+      }
+    ]
+  },
+  {
+    "id": "t16b-cascade-writer-skips-award",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const forfeitAward = stageForfeitAward(stage, sportModule);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "replace": "const forfeitAward = input.writer === \"withdrawal_cascade\" ? undefined : stageForfeitAward(stage, sportModule);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ],
+        "name": "TABLE stage"
+      }
+    ]
+  },
+  {
+    "id": "t16b-write-fold-defaults-an-award",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const forfeitAward = stageForfeitAward(stage, sportModule);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "replace": "const forfeitAward = stageForfeitAward(stage, sportModule) ?? ([1, 0] as [number, number]);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ],
+        "name": "every reaching sport, both orientations"
+      }
+    ]
   }
 ]
