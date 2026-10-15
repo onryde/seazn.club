@@ -58,7 +58,7 @@ import { offersSettle } from "@/lib/arbiter-view";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
-import { RealtimeKitDeferred, ensureMeeting } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { endRoomAtResult } from "../external-play/room-end";
 import {
   REALTIMEKIT_FIXTURE_ENV,
@@ -3089,6 +3089,47 @@ describe.runIf(HAS_DB)("the result ends the camera room — after the answer, ne
     endRoomAtResult(g.fixtureId, { defer: tail.defer });
     await tail.run();
     expect(fx.calls.length, "no vendor call for a room already ended").toBe(asked);
+  });
+
+  it("D16: a game with a room PER PLAYER ends both at the result, each in its own try - a room the vendor refuses stays unended for the sweep and the other still ends", async () => {
+    const g = await liveGame();
+    const home = await ensureMeeting(g.fixtureId, "home");
+    const away = await ensureMeeting(g.fixtureId, "away");
+    expect(home.meetingId, "premise: two rooms").not.toBe(away.meetingId);
+    await sql`update fixture_external_play set status = 'finished', finished_at = now() where fixture_id = ${g.fixtureId}`;
+    const state = async () =>
+      (await sql<{ side: string; ended_at: Date | null }[]>`select side, ended_at from fixture_video_meetings where fixture_id = ${g.fixtureId} order by side`).map(
+        (r) => [r.side, r.ended_at !== null],
+      );
+
+    const asked: string[] = [];
+    const tail = heldTail();
+    endRoomAtResult(g.fixtureId, {
+      defer: tail.defer,
+      endMeeting: async (id) => {
+        asked.push(id);
+        if (id === home.meetingId) throw new Error("test: the vendor refused home's room");
+        return endMeeting(id);
+      },
+    });
+    await expect(tail.run(), "the tail never rejects").resolves.toBeDefined();
+    expect(asked.sort(), "both rooms were tried - the first one's refusal did not stop the second").toEqual([away.meetingId, home.meetingId].sort());
+    expect(await state(), "away ended, home left for the sweep").toEqual([["away", true], ["home", false]]);
+    expect([fx.meetingStatus(home.meetingId), fx.meetingStatus(away.meetingId)]).toEqual(["ACTIVE", "INACTIVE"]);
+
+    // The next reader of the same end asks only about the room still unended, and then both are ended.
+    asked.length = 0;
+    endRoomAtResult(g.fixtureId, {
+      defer: tail.defer,
+      endMeeting: async (id) => {
+        asked.push(id);
+        return endMeeting(id);
+      },
+    });
+    await tail.run();
+    expect(asked, "only the unended room is asked").toEqual([home.meetingId]);
+    expect(await state()).toEqual([["away", true], ["home", true]]);
+    expect([fx.meetingStatus(home.meetingId), fx.meetingStatus(away.meetingId)]).toEqual(["INACTIVE", "INACTIVE"]);
   });
 
   it("the organiser's settle ends the room too — after the answer", async () => {

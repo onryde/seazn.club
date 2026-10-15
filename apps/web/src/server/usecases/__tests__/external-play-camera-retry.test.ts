@@ -244,6 +244,39 @@ describe.skipIf(!DB)("cameraTokenForSeat - the token-only door (D21-fix-3)", () 
     expect(calledRoute("POST /meetings/:id/participants")).toBe(1);
   });
 
+  it("D16: each player asks for their OWN tile - their meeting is made on their retry, in a meeting of their own, and neither retry makes or touches the other's", async () => {
+    const s = await seed("optional");
+    const away = { fixtureId: s.fixtureId, personId: s.away.personId };
+    await drain();
+    expect(await cameraTokenForSeat(ask(s), { now: new Date() }), "home, budget spent").toStrictEqual({ participant: null, retry: true });
+    expect(await cameraTokenForSeat(away, { now: new Date() }), "away, budget spent").toStrictEqual({ participant: null, retry: true });
+    expect(fx.calls.length, "premise: nothing reached the vendor").toBe(0);
+    await refill();
+
+    const home1 = await cameraTokenForSeat(ask(s), { now: new Date() });
+    expect(home1.participant?.participantId, "home's token").toBeTruthy();
+    expect(calledRoute("POST /meetings"), "home's retry made ONE meeting - its own").toBe(1);
+    expect(await sql`select side from fixture_video_meetings where fixture_id = ${s.fixtureId} order by side`, "only home's row").toHaveLength(1);
+
+    const away1 = await cameraTokenForSeat(away, { now: new Date() });
+    expect(away1.participant?.participantId, "away's token").toBeTruthy();
+    expect(calledRoute("POST /meetings"), "away's retry made a SECOND meeting").toBe(2);
+    expect(calledRoute("POST /meetings/:id/participants"), "one participant each").toBe(2);
+
+    // The vendor's own record: the two participants are in different meetings, and the database names those meetings per side.
+    const homeMeeting = fx.participant(home1.participant!.participantId)!.meetingId;
+    const awayMeeting = fx.participant(away1.participant!.participantId)!.meetingId;
+    expect(homeMeeting, "different meetings").not.toBe(awayMeeting);
+    const rows = await sql<{ side: string; meeting_id: string }[]>`select side, meeting_id from fixture_video_meetings where fixture_id = ${s.fixtureId} order by side`;
+    expect(rows.map((r) => [r.side, r.meeting_id])).toEqual([["away", awayMeeting], ["home", homeMeeting]]);
+
+    // A second ask by either hands a token for the same participant and makes nothing new.
+    const again = await cameraTokenForSeat(ask(s), { now: new Date() });
+    expect(again.participant?.participantId).toBe(home1.participant!.participantId);
+    expect(calledRoute("POST /meetings"), "no meeting made again").toBe(2);
+    expect(calledRoute("POST /meetings/:id/participants"), "no participant minted again").toBe(2);
+  });
+
   it("an OUTAGE is final: retry false (a vendor that is down is not hammered by every tab's back-off)", async () => {
     const s = await seed("optional");
     expect(await cameraTokenForSeat(ask(s), { now: new Date(), video: down })).toStrictEqual({ participant: null, retry: false });
