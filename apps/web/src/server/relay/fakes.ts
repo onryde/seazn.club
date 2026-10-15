@@ -291,12 +291,16 @@ export class FakeRecorder implements ProviderCallRecorder {
   }
 }
 
+type FakeObserved = Pick<RunnerObservation, "state" | "exit"> & { restart?: { since: Date; count: number } };
+const observation = (o: FakeObserved): RunnerObservation =>
+  ({ state: o.state, exit: o.exit, restarting: o.restart !== undefined, restartingSince: o.restart?.since ?? null, restartCount: o.restart?.count ?? null });
+
 export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
   readonly stops: { runnerId: string; signal: string; timeoutSeconds: number }[] = [];
   readonly destroyed: string[] = [];
   private readonly alive = new Map<string, { sessionId: string | null; name: string | null; environment: string | null }>(); // runnerId → who (and which deployment) it was created for
-  private readonly observed = new Map<string, RunnerObservation>();
+  private readonly observed = new Map<string, FakeObserved>();
   private nextCreateFailure: { retryable: boolean; proof: { status: number | null; retryable: boolean } | null } | null = null;
   private n = 0;
   private readonly rec: ProviderCallRecorder;
@@ -357,14 +361,14 @@ export class FakeRunner implements RunnerProvider {
   async observe(runnerId: string): Promise<RunnerObservation> {
     this.record("getMachine", "GET", `/machines/${runnerId}`, runnerId);
     const o = this.observed.get(runnerId);
-    if (!o || !this.alive.has(runnerId)) return { state: "destroyed", exit: o?.exit ?? null };
+    if (!o || !this.alive.has(runnerId)) return observation({ state: "destroyed", exit: o?.exit ?? null });
     if (o.state === "stopped" && o.exit?.requestedStop) {
       // auto_destroy: a cleanly stopped Machine is gone by the next look
       this.alive.delete(runnerId);
       this.observed.set(runnerId, { state: "destroyed", exit: o.exit });
-      return { state: "stopped", exit: o.exit };
+      return observation({ state: "stopped", exit: o.exit });
     }
-    return o;
+    return observation(o);
   }
 
   async destroy(runnerId: string): Promise<void> {
@@ -380,8 +384,10 @@ export class FakeRunner implements RunnerProvider {
   }
 
   /** Test controls. */
-  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null): void {
-    this.observed.set(runnerId, { state, exit });
+  /** `restart` (F-007): the provider is restarting this runner in place since `since` — what runner-fly.ts reads off
+   *  Fly's latest exit event. Absent: not restarting. */
+  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null, restart?: { since: Date; count: number }): void {
+    this.observed.set(runnerId, { state, exit, restart });
     if (state === "destroyed") this.alive.delete(runnerId);
   }
   /** Fail the next `create`. The ARGUMENT is the proof the failure carries (lane C A3, owner-confirmed 2026-09-28; A23):

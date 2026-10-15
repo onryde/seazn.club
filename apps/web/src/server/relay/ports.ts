@@ -152,7 +152,14 @@ export function createFailureOf(e: unknown): { retryable: boolean; outcomeUnknow
  *  that proves no ownership, which the sweep counts and never destroys. */
 export interface RunnerListing { runnerId: string; sessionId: string | null; name: string | null; environment: string | null; state: "running" | "stopped" | "other" }
 /** The lifecycle's observed input (plan §"Fly machine lifecycle"): the adapter's fromFlyState mapping, never Fly's spelling. */
-export interface RunnerObservation { state: ObservedRunnerState; exit: ExitInfo | null }   // both types from domain/runner.ts
+/** `restarting` (R2003, F-007): the provider is restarting this runner IN PLACE after a crash — its latest exit was one
+ *  the provider will restart, and it is not running again yet. Neutral on purpose (ADR 0007): each adapter derives it from
+ *  its own evidence (runner-fly.ts reads Fly's exit event). `restartingSince` is that exit's instant (null when not
+ *  restarting, or when the provider gave none); `restartCount` the provider's count, when it reports one. */
+export interface RunnerObservation {
+  state: ObservedRunnerState; exit: ExitInfo | null;   // both types from domain/runner.ts
+  restarting: boolean; restartingSince: Date | null; restartCount: number | null;
+}
 export interface RunnerProvider {
   /** m1 (Task 12 fix round 1): how long a runner created just before a `list()` may still be MISSING from it — the
    *  provider's list-consistency window (Fly's is undocumented: runner-fly.ts's adoption notes, and fly-client.ts settles
@@ -161,7 +168,8 @@ export interface RunnerProvider {
   readonly listSettleMs: number;
   create(spec: RunnerSpec): Promise<RunnerHandle>;   // idempotent per (sessionId, attempt): a retry after an ambiguous failure returns the SAME runner. Rejects with RunnerCreateError (A23)
   stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void>;   // the stop sequence; idempotent (already stopped / absent = success)
-  /** GET + events → { state, exit }. "Absent" is TWO cases and they answer
+  /** GET + events → { state, exit, restarting… }. `restarting` (F-007) is read for every non-running state, `pending`
+   *  included — mid-restart the provider says `starting`. "Absent" is TWO cases and they answer
    *  differently (lane-A minors, Task 3 review m1 — this line said only
    *  `absent = { destroyed, exit: null }`, which the fake appeared to contradict):
    *    * an id the provider never had → `{ state: "destroyed", exit: null }`.

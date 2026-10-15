@@ -525,12 +525,36 @@ export type MachineEvent = z.infer<typeof MachineEventSchema>;
  *  `timestamp` wins, and a tie keeps the earliest index — which is the newest
  *  under Fly's ordering. */
 export function exitInfoFrom(events: readonly MachineEvent[]): { exitCode: number | null; oomKilled: boolean | null; requestedStop: boolean | null } | null {
+  const newest = newestExit(events);
+  if (!newest) return null;
+  const ev = newest.request?.exit_event;
+  return { exitCode: ev?.exit_code ?? null, oomKilled: ev?.oom_killed ?? null, requestedStop: ev?.requested_stop ?? null };
+}
+
+function newestExit(events: readonly MachineEvent[]): MachineEvent | null {
   const exits = events.filter((e) => e.type === "exit" || e.request?.exit_event);
   if (exits.length === 0) return null;
   let newest = exits[0]!;
   for (const e of exits) if ((e.timestamp ?? -Infinity) > (newest.timestamp ?? -Infinity)) newest = e;
-  const ev = newest.request?.exit_event;
-  return { exitCode: ev?.exit_code ?? null, oomKilled: ev?.oom_killed ?? null, requestedStop: ev?.requested_stop ?? null };
+  return newest;
+}
+
+/** F-007 (live probe, compositor `_FINDINGS.md`, 2026-10-15): is Fly restarting this Machine in place? Under
+ *  `restart.policy: on-failure` a crash writes an `exit` event with `request.exit_event.restarting: true` and
+ *  `request.restart_count`, then `restart` (starting) ~110 ms later, then `start` (started) ~1.3 s after that; the final
+ *  exit once `max_retries` is spent says `restarting: false`. So a restart is in flight while the NEWEST exit says
+ *  `restarting: true` and no `start` event is newer than it. Read DEFENSIVELY like the exit itself (passthrough, untyped
+ *  in the spec): anything but a literal `true` is not a restart, and a count that is not a number is null. `since` is the
+ *  exit's own `timestamp` (epoch ms), null when Fly gave none. */
+export function restartFrom(events: readonly MachineEvent[]): { restarting: boolean; since: Date | null; count: number | null } {
+  const newest = newestExit(events);
+  const ev = newest?.request?.exit_event as Record<string, unknown> | undefined;
+  const count = (newest?.request as Record<string, unknown> | null | undefined)?.restart_count;
+  const restartCount = typeof count === "number" ? count : null;
+  if (!newest || ev?.restarting !== true) return { restarting: false, since: null, count: restartCount };
+  const at = newest.timestamp ?? -Infinity;
+  if (events.some((e) => e.type === "start" && (e.timestamp ?? -Infinity) > at)) return { restarting: false, since: null, count: restartCount };
+  return { restarting: true, since: newest.timestamp === undefined ? null : new Date(newest.timestamp), count: restartCount };
 }
 
 function safeJson(text: string): unknown {

@@ -720,7 +720,7 @@ export async function reconcileSession(sessionId: string, deps: SessionDeps): Pr
   }
   if (!r.machineId) return s;
   const observed = await deps.drivers.runner.observe(r.machineId);
-  return apply(sessionId, { type: "runner", trigger: { type: "observed", state: observed.state, exit: observed.exit } }, deps);
+  return apply(sessionId, { type: "runner", trigger: { type: "observed", state: observed.state, exit: observed.exit, restarting: observed.restarting, restartingSince: observed.restartingSince } }, deps);
 }
 
 async function runEffects(session: Session, effects: Effect[], deps: SessionDeps): Promise<Session> {

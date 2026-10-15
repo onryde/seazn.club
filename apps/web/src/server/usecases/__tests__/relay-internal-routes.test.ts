@@ -33,7 +33,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import {
   MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
-  RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
+  RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
 } from "@/server/relay/config";
 import { BEAT_EXIT_REASONS, failReasonFromExit, type BeatExitReason, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
@@ -1015,6 +1015,67 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     expect(s.runner.destroyed, "lost at the window: torn down").toEqual([m1]);
     expect(s.runner.created, "then the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
     expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "booting" });
+  });
+
+  // F-007 (live Fly probe): an in-place restart reads stopped (~110 ms) → starting (~1.3 s) → started, and only the latest
+  // exit's `restarting` flag tells it from a loss. Through the facts route — the Machine's own read ticks the observation.
+  it("F-007: the probe's restart sequence through the facts route — stopped+restarting, starting, started — keeps the SAME Machine playing: no destroy, no create, no retry spent", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    const crash = { exitCode: 1, oomKilled: false, requestedStop: false };
+    const exitAt = new Date();
+    let checked = 0;
+    for (const [state, restart] of [["stopped", { since: exitAt, count: 1 }], ["pending", { since: exitAt, count: 1 }], ["running", null]] as const) {
+      s.runner.setObserved(m1, state, state === "running" ? null : crash, restart ?? undefined);
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, state).toBe(200);
+      expect(await row(s.sessionId), state).toMatchObject({ state: "live", runner_state: "playing", machine_id: m1 });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(s.runner.destroyed).toEqual([]);
+    expect(s.runner.created).toHaveLength(1);
+  });
+
+  it("F-007, its pairs: Fly's FINAL exit (restarting false) is lost → torn down → the ONE retry; a restart still starting past RUNNER_RESTART_STUCK_SECONDS is lost the same way", async () => {
+    const crash = { exitCode: 1, oomKilled: false, requestedStop: false };
+    let checked = 0;
+    for (const [label, state, restart] of [
+      ["final exit", "stopped", undefined],
+      ["stuck starting", "pending", { since: new Date(Date.now() - (RUNNER_RESTART_STUCK_SECONDS + 1) * 1000), count: 1 }],
+    ] as const) {
+      const s = await playingSession();
+      const m1 = (await row(s.sessionId)).machine_id!;
+      s.runner.setObserved(m1, state, crash, restart);
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, label).toBe(200);
+      expect(s.runner.destroyed, `${label}: torn down`).toEqual([m1]);
+      expect(s.runner.created, `${label}: the ONE retry`).toHaveLength(RUNNER_MAX_ATTEMPTS);
+      expect(await row(s.sessionId), label).toMatchObject({ state: "live", runner_state: "booting" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("F-007 result 2 (Fly restarts exit 78 too): a refused final beat FAILS the session and issues the teardown ONCE; while the DELETE is still out and Fly keeps restarting the refusal, every later read leaves it failed — no create, no retry, no second destroy", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    let destroys = 0;
+    // the DELETE is accepted by nobody yet: the Machine stays up and Fly restarts it into the same refusal
+    const lagging = Object.assign(Object.create(s.runner) as FakeRunner, { async destroy() { destroys++; throw Object.assign(new Error("fake destroy pending"), { status: 503 }); } });
+    setRelayDriversForTest({ ingest: s.ingest, runner: lagging });
+    expect((await postBeat(s.sessionId, stoppedBeat("refused"), { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_refused", runner_state: "lost" });
+    expect(destroys, "the teardown, once").toBe(1);
+    const refusedExit = { exitCode: RELAY_EXIT_REFUSED, oomKilled: false, requestedStop: false };
+    let checked = 0;
+    for (const [state, exit, restart] of [["stopped", refusedExit, { since: new Date(), count: 1 }], ["pending", refusedExit, { since: new Date(), count: 1 }], ["running", null, undefined]] as const) {
+      s.runner.setObserved(m1, state, exit, restart);
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, state).toBe(410);
+      expect(await row(s.sessionId), state).toMatchObject({ state: "failed", fail_reason: "machine_refused" });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(s.runner.created, "never a retry").toHaveLength(1);
+    expect(destroys, "an observation never re-issues it").toBe(1);
   });
 
   it("exit 78 observed through the facts route fails the session machine_refused with NO retry; its positive pair (exit 1) takes the ONE retry", async () => {

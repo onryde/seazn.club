@@ -153,6 +153,10 @@ export const RUNNER_MAX_ATTEMPTS = 2;
  *  restart is the SAME attempt — same Machine, same name — so it never counts against RUNNER_MAX_ATTEMPTS. Fly's own
  *  docs (re-pinned 2026-10-15): `max_retries` defaults to 10 when unset, and the count runs "within a 5-minute window". */
 export const RUNNER_INPLACE_RESTARTS = 2;
+/** F-007 (live probe, compositor `_FINDINGS.md`, 2026-10-15): an in-place restart goes exit → `started` in 1.40–1.51 s
+ *  (stopped ~110 ms, then starting ~1.3 s). A Machine still restarting this long after its restarting exit is not coming
+ *  back: the domain reads it as lost (domain/runner.ts `observedFrom`). Coordinator ruling, 2026-10-15: 10 s. */
+export const RUNNER_RESTART_STUCK_SECONDS = 10;
 /** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. */
 export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
 /** Compositor spec §5.3; served as `heartbeatIntervalMs` (R2004); R2003's composed stale rule is 3× this. Defined

@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { RelayHeartbeat } from "@/server/api-v1/schemas";
 import {
   MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
+  RUNNER_RESTART_STUCK_SECONDS,
   RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
 } from "../../config";
 import { evaluate } from "../expiry";
@@ -52,11 +53,21 @@ const SAMPLE: Record<Exclude<RunnerTrigger["type"], "create_started">, RunnerTri
  *  create_started. The derived invariants walk this, never the one-sample-per-type sweep above. */
 /** R2003: the compositor's refusal exit as Fly reports it — the one exit a cell branches on (`afterLostDestroyed`). */
 const REFUSED_EXIT: ExitInfo = { exitCode: RELAY_EXIT_REFUSED, oomKilled: false, requestedStop: false };
+/** A plain crash (F-007's probes exit 1). */
+const CRASH_EXIT: ExitInfo = { exitCode: 1, oomKilled: false, requestedStop: false };
 const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
   t === "observed" ? [
       ...OBSERVED_STATES.map((state) => ({ type: "observed" as const, state })),
       // R2003: an observed exit 78 — the refusal that must never earn the retry — on each state that carries an exit
       ...(["stopped", "failed", "destroyed"] as const).map((state) => ({ type: "observed" as const, state, exit: REFUSED_EXIT })),
+      // F-007: Fly restarting the Machine in place — fresh (inside RUNNER_RESTART_STUCK_SECONDS) and stuck (past it).
+      // `exit: null` on purpose: no cell branches on a crash exit's code, and a crash exit OVERWRITING a refused one is
+      // a new walk node per edge — the longest-path walk went 4 s → 39 s on it. The refused-and-restarting case is
+      // pinned by the F-007 describe below (refusal is read before the flag).
+      ...(["stopped", "failed", "pending", "destroyed"] as const).flatMap((state) => [
+        { type: "observed" as const, state, exit: null, restarting: true, restartingSince: T0 },
+        { type: "observed" as const, state, exit: null, restarting: true, restartingSince: new Date(T0.getTime() - 3_600_000) },
+      ]),
     ]
   // R2003: both flavours of a stopped beat — a plain one, and the final beat that said its run was refused
   : t === "callback_stopped" ? [{ type: "callback_stopped" }, { type: "callback_stopped", refused: true },
@@ -233,7 +244,7 @@ describe("the crash path", () => {
       expect(step.next.state, JSON.stringify(t)).toBe("destroyed");
       expect(confirmedDestroy(t) || step.signal?.type === "completed", JSON.stringify(t)).toBe(true);
     }
-    expect(left).toBe(5);   // destroy_ok, observed destroyed (plain, and with the refusal exit — R2003), deadline, session_stop — and nothing else
+    expect(left).toBe(7);   // destroy_ok, observed destroyed (plain, with the refusal exit — R2003, and the two F-007 restarting flavours), deadline, session_stop — and nothing else
   });
   // Fix round 4 (orchestrator ruling on round 3's residual): a create_ok that returns AFTER the runner moved on is a Machine
   // whose destroy is not yet confirmed. Into `destroyed` it goes LOST (the returned id force-destroyed), so only destroy_ok /
@@ -827,5 +838,107 @@ describe("R2003 — exit 78 (refused) never retries", () => {
     expect(checked).toBe(5);
     expect(failReasonFromExit(REFUSED_EXIT)).toBe("machine_refused");
     expect(failReasonFromExit({ ...REFUSED_EXIT, exitCode: 1 })).toBe("machine_exit_nonzero");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// F-007 (live Fly probe, compositor `_FINDINGS.md`, 2026-10-15): during an on-failure restart the Machine reads `stopped`
+// for ~110 ms, then `starting` (`pending` here) for ~1.3 s, then `started`; never `failed`. Only the latest exit event's
+// `restarting` flag tells a restart from a loss — the adapter reports it as the neutral `restarting` (ADR 0007). Rule:
+// lost = stopped/failed AND NOT restarting; a restart that has not come back within RUNNER_RESTART_STUCK_SECONDS is lost.
+// And Fly restarts exit 78 too, so a refusal is failed AND force-destroyed the moment it is seen.
+// ---------------------------------------------------------------------------------------------------------------------
+const ms = (n: number) => new Date(T0.getTime() + n);
+const obs = (state: (typeof OBSERVED_STATES)[number], exit: ExitInfo | null, restartingSince: Date | null): RunnerTrigger =>
+  ({ type: "observed", state, exit, restarting: restartingSince !== null, restartingSince });
+
+describe("F-007 — an in-place restart as the Machines API shows it", () => {
+  // F-007 appendix, M1 crash #1: exit (stopped, restarting: true) at 18:12:41.655, restart (starting) +109 ms, start
+  // (started) +1407 ms. The polled states, in order, with the latest exit event's flag on each.
+  const M1_CRASH_1: [number, (typeof OBSERVED_STATES)[number]][] = [[0, "stopped"], [109, "pending"], [1407, "running"]];
+
+  it("the probe's sequence (stopped+restarting → starting → started) leaves a PLAYING runner and a BOOTING one exactly as they were — no effect, no signal, no retry; through decide, no create and no force_destroy", () => {
+    let checked = 0;
+    for (const from of ["playing", "booting"] as const) {
+      let r = inState(from);
+      for (const [at, state] of M1_CRASH_1) {
+        const step = stepRunner(r, obs(state, state === "running" ? null : CRASH_EXIT, state === "running" ? null : T0), ms(at));
+        expect(step.effects, `${from} ${state} +${at} ms`).toEqual([]);
+        expect(step.signal, `${from} ${state} +${at} ms`).toBeNull();
+        expect(step.next.state, `${from} ${state} +${at} ms`).toBe(from);
+        r = step.next;
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * M1_CRASH_1.length);
+    const w = sim();
+    for (const [at, state] of M1_CRASH_1) feed(w, { type: "runner", trigger: obs(state, state === "running" ? null : CRASH_EXIT, state === "running" ? null : T0) }, at / 1000);
+    expect(w.s).toMatchObject({ state: "live", runnerRetries: 0, runner: { state: "playing", attempt: 1 } });
+    expect(w.effects).toEqual([]);
+    expect(w.creates).toEqual([]);
+  });
+
+  it("the positive pair: stopped (or failed) with restarting FALSE — Fly's final exit once max_retries is spent — is lost with force_destroy, as before", () => {
+    let checked = 0;
+    for (const state of ["stopped", "failed"] as const) for (const from of ["playing", "booting"] as const) {
+      expect(stepRunner(inState(from), obs(state, CRASH_EXIT, null), T0), `${from} ${state}`).toEqual({ next: { ...inState(from), state: "lost", lastExit: CRASH_EXIT }, effects: [{ type: "force_destroy" }], signal: null });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("stuck: a restart not back within RUNNER_RESTART_STUCK_SECONDS — still starting (pending) or still stopped — is lost; at the bound it is still a restart", () => {
+    expect(RUNNER_RESTART_STUCK_SECONDS, "F-007: exit → started is ~1.4 s").toBeGreaterThan(2);
+    let checked = 0;
+    for (const state of ["pending", "stopped"] as const) for (const from of ["playing", "booting"] as const) {
+      const atBound = stepRunner(inState(from), obs(state, CRASH_EXIT, T0), ms(RUNNER_RESTART_STUCK_SECONDS * 1000));
+      expect(atBound.next.state, `${from} ${state} at the bound`).toBe(from);
+      expect(atBound.effects).toEqual([]);
+      const stuck = stepRunner(inState(from), obs(state, CRASH_EXIT, T0), ms(RUNNER_RESTART_STUCK_SECONDS * 1000 + 1));
+      expect(stuck, `${from} ${state} stuck`).toMatchObject({ next: { state: "lost" }, effects: [{ type: "force_destroy" }], signal: null });
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // a plain pending (a cold boot: no restart in flight) is never timed by this rule
+    expect(stepRunner(inState("booting"), obs("pending", null, null), ms(3_600_000)).next.state).toBe("booting");
+  });
+
+  it("destroyed is gone whatever the last exit said: a destroyed observation carrying restarting is NOT exempt (it signals the retry, as before)", () => {
+    expect(stepRunner(inState("playing"), obs("destroyed", CRASH_EXIT, T0), T0)).toMatchObject({ next: { state: "destroyed" }, signal: { type: "retry" } });
+  });
+
+  it("exit 78 is restarted by Fly (F-007 result 2), so it is never waited out: stopped/failed with exit 78 — restarting or not — FAILS the session machine_refused and force-destroys the Machine at once", () => {
+    let checked = 0;
+    for (const state of ["stopped", "failed"] as const) for (const since of [T0, null]) for (const from of ["playing", "booting"] as const) {
+      expect(stepRunner(inState(from), obs(state, REFUSED_EXIT, since), T0), `${from} ${state} restarting=${since !== null}`).toEqual({
+        next: { ...inState(from), state: "lost", lastExit: REFUSED_EXIT }, effects: [{ type: "force_destroy" }], signal: { type: "failed", reason: "machine_refused" },
+      });
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("a refusal stays refused while Fly restarts it: after the refused beat (and after an observed exit 78), the teardown is issued ONCE and every later observation of that Machine — stopped+restarting, starting, started — leaves the session failed, the runner lost, no create, no retry", () => {
+    const later: RunnerTrigger[] = [obs("stopped", REFUSED_EXIT, T0), obs("pending", REFUSED_EXIT, T0), obs("running", null, null), obs("stopped", REFUSED_EXIT, null)];
+    let checked = 0;
+    for (const [label, first] of [["refused beat", (w: Sim) => finalBeat(w, 1, "refused")], ["observed exit 78", (w: Sim) => observe(w, 1, "stopped", REFUSED_EXIT)]] as const) {
+      const w = sim();
+      first(w);
+      expect(w.s, label).toMatchObject({ state: "failed", failReason: "machine_refused", runner: { state: "lost" } });
+      expect(w.effects.filter((e) => e === "force_destroy"), `${label}: the teardown, once`).toHaveLength(1);
+      for (const [i, t] of later.entries()) {
+        feed(w, { type: "runner", trigger: t }, 2 + i);
+        expect(w.s, `${label} after ${i}`).toMatchObject({ state: "failed", failReason: "machine_refused", runner: { state: "lost", attempt: 1 } });
+        checked++;
+      }
+      expect(w.effects.filter((e) => e === "force_destroy"), `${label}: never re-issued by an observation`).toHaveLength(1);
+      expect(w.creates, label).toEqual([]);
+      expect(w.effects, label).not.toContain("retry_runner");
+      // the destroy finally lands: still failed, still no retry (C27)
+      feed(w, { type: "runner", trigger: { type: "destroy_ok" } }, 9);
+      expect(w.s, label).toMatchObject({ state: "failed", failReason: "machine_refused", runner: { state: "destroyed" } });
+      expect(w.creates, label).toEqual([]);
+    }
+    expect(checked).toBe(2 * later.length);
   });
 });

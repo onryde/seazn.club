@@ -39,7 +39,7 @@
 // Machine or start a second one — the 409 adopt (T5-c), the unestablished
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
-import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, type Machine } from "./fly-client";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, restartFrom, type Machine } from "./fly-client";
 import { RUNNER_INPLACE_RESTARTS, liveRunnerIdentity } from "./config";
 import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
@@ -348,11 +348,17 @@ export class FlyRunner implements RunnerProvider {
    *  are fetched for every non-running state rather than only for a stopped one. */
   async observe(runnerId: string): Promise<RunnerObservation> {
     const m = await this.client.getMachine(runnerId);
-    if (!m) return { state: "destroyed", exit: null };
+    const NOT_RESTARTING = { restarting: false, restartingSince: null, restartCount: null } as const;
+    if (!m) return { state: "destroyed", exit: null, ...NOT_RESTARTING };
     const state = fromFlyState(m.state);
-    if (state === "running" || state === "pending") return { state, exit: null };
+    if (state === "running") return { state, exit: null, ...NOT_RESTARTING };
+    // F-007: `starting` (pending) is read through the events too — it is the ~1.3 s middle of an in-place restart as
+    // well as a cold boot, and only the latest exit event tells them apart. A cold boot has no exit: exit null, as before.
     const events = await this.client.machineEvents(runnerId).catch((e: unknown) => (e instanceof FlyApiError && e.status === 404 ? [] : Promise.reject(e)));
-    return { state, exit: exitInfoFrom(events) };
+    const restart = restartFrom(events);
+    // ADR 0007: Fly's fields end here — the port carries the neutral `restarting`.
+    if (state === "pending" && !restart.restarting) return { state, exit: null, ...NOT_RESTARTING };
+    return { state, exit: exitInfoFrom(events), restarting: restart.restarting, restartingSince: restart.since, restartCount: restart.count };
   }
 
   async destroy(runnerId: string): Promise<void> {

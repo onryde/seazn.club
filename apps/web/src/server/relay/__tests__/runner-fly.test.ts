@@ -257,8 +257,8 @@ describe("FlyRunner", () => {
     expect(JSON.parse(String(s.calls[0]!.init.body))).toEqual({ signal: "SIGINT", timeout: "10s" });
     // T5-f: `requestedStop` is PRODUCED here and pinned. Nothing READS it yet —
     // `failReasonFromExit` ignores it — so the consumer side stays owed by Task 10.
-    expect(await runner.observe("m_1")).toEqual({ state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true } });
-    expect(await runner.observe("m_gone")).toEqual({ state: "destroyed", exit: null });
+    expect(await runner.observe("m_1")).toEqual({ state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true }, restarting: false, restartingSince: null, restartCount: null });
+    expect(await runner.observe("m_gone")).toEqual({ state: "destroyed", exit: null, restarting: false, restartingSince: null, restartCount: null });
   });
 
   it("a DESTROYED Machine answers GET 200, not 404 (C1, measured) — observe still reads its exit off the events", async () => {
@@ -274,8 +274,51 @@ describe("FlyRunner", () => {
       return { status: 200, body: { id: "m_dead", name: NAME, state: "destroyed" } };
     });
     const runner = new FlyRunner({ client: s.client, image: "img" });
-    expect(await runner.observe("m_dead")).toEqual({ state: "destroyed", exit: { exitCode: 1, oomKilled: false, requestedStop: false } });
+    expect(await runner.observe("m_dead")).toEqual({ state: "destroyed", exit: { exitCode: 1, oomKilled: false, requestedStop: false }, restarting: false, restartingSince: null, restartCount: null });
     expect(s.calls.map((c) => c.url.replace(`${FLY_MACHINES_BASE}/apps/seazn-relay`, ""))).toEqual(["/machines/m_dead", "/machines/m_dead/events"]);
+  });
+
+  // F-007 (live probe, compositor `_FINDINGS.md`, 2026-10-15): the restart is read off the LATEST exit event's
+  // `request.exit_event.restarting` — the only discriminator — and reported as the neutral `restarting` (ADR 0007: no Fly
+  // field name crosses the port). The payloads below are the probe's M1 events (Fly sends them NEWEST FIRST).
+  it("F-007: observe reports an in-place restart — stopped+restarting, then starting (pending) — as `restarting` with the exit's instant and count; started clears it; Fly's final exit (restarting false) and a cold boot are not restarts", async () => {
+    const EXIT_1 = Date.UTC(2026, 9, 15, 18, 12, 41, 655);   // M1 crash #1, exit event
+    const EXIT_3 = Date.UTC(2026, 9, 15, 18, 13, 26, 84);    // M1 final exit, max_retries spent
+    const ev = {
+      launch: { id: "e0", type: "launch", status: "created", source: "user", timestamp: EXIT_1 - 23_221, request: null },
+      started0: { id: "e1", type: "start", status: "started", source: "flyd", timestamp: EXIT_1 - 20_308, request: null },
+      exit1: { id: "e2", type: "exit", status: "stopped", source: "flyd", timestamp: EXIT_1,
+        request: { exit_event: { exit_code: 1, oom_killed: false, requested_stop: false, restarting: true }, restart_count: 1 } },
+      restart1: { id: "e3", type: "restart", status: "starting", source: "flyd", timestamp: EXIT_1 + 109, request: null },
+      started1: { id: "e4", type: "start", status: "started", source: "flyd", timestamp: EXIT_1 + 1407, request: null },
+      exit3: { id: "e9", type: "exit", status: "stopped", source: "flyd", timestamp: EXIT_3,
+        request: { exit_event: { exit_code: 1, oom_killed: false, requested_stop: false, restarting: false }, restart_count: 2 } },
+    };
+    let machineState = "stopped";
+    let events: unknown[] = [ev.exit1, ev.started0, ev.launch];
+    const s = scripted((url) => (url.endsWith("/events") ? { status: 200, body: events } : { status: 200, body: { id: "m_r", name: NAME, state: machineState } }));
+    const runner = new FlyRunner({ client: s.client, image: "img" });
+    const CRASH = { exitCode: 1, oomKilled: false, requestedStop: false };
+    // +0 ms: the exit, restarting
+    expect(await runner.observe("m_r")).toEqual({ state: "stopped", exit: CRASH, restarting: true, restartingSince: new Date(EXIT_1), restartCount: 1 });
+    // +109 ms: the restart event, Fly says `starting`
+    machineState = "starting"; events = [ev.restart1, ev.exit1, ev.started0, ev.launch];
+    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: CRASH, restarting: true, restartingSince: new Date(EXIT_1), restartCount: 1 });
+    // +1407 ms: started — running, nothing in flight, and no events call made for it
+    machineState = "started"; events = [ev.started1, ev.restart1, ev.exit1, ev.started0, ev.launch];
+    const callsBefore = s.calls.length;
+    expect(await runner.observe("m_r")).toEqual({ state: "running", exit: null, restarting: false, restartingSince: null, restartCount: null });
+    expect(s.calls.slice(callsBefore).map((c) => c.url.replace(`${FLY_MACHINES_BASE}/apps/seazn-relay`, ""))).toEqual(["/machines/m_r"]);
+    // the final exit: max_retries spent, `restarting: false` — a loss, not a restart
+    machineState = "stopped"; events = [ev.exit3, ev.started1, ev.restart1, ev.exit1, ev.started0, ev.launch];
+    expect(await runner.observe("m_r")).toEqual({ state: "stopped", exit: CRASH, restarting: false, restartingSince: null, restartCount: 2 });
+    // a restart that already COMPLETED (a `start` newer than the restarting exit) is not one in flight: a later
+    // `starting` is no claim of a restart — and so never runs the stuck clock from that old exit
+    machineState = "starting"; events = [ev.started1, ev.restart1, ev.exit1, ev.started0, ev.launch];
+    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: null, restarting: false, restartingSince: null, restartCount: null });
+    // a cold boot: starting with no exit in its history — pending, not a restart
+    machineState = "starting"; events = [ev.launch];
+    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: null, restarting: false, restartingSince: null, restartCount: null });
   });
 
   it("create is idempotent per session through the client: a 503 on the POST is followed by a metadata lookup that finds the Machine — no second POST", async () => {

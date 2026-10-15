@@ -276,16 +276,16 @@ describe("FakeRunner", () => {
     const runner = new FakeRunner();
     const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const h = await runner.create(spec);
-    expect(await runner.observe(h.runnerId)).toEqual({ state: "running", exit: null });
+    expect(await runner.observe(h.runnerId)).toEqual({ state: "running", exit: null, restarting: false, restartingSince: null, restartCount: null });
     await runner.stop(h.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
     expect(runner.stops).toEqual([{ runnerId: h.runnerId, signal: "SIGINT", timeoutSeconds: 10 }]);
-    expect(await runner.observe(h.runnerId)).toEqual({ state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true } });
+    expect(await runner.observe(h.runnerId)).toEqual({ state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true }, restarting: false, restartingSince: null, restartCount: null });
     expect((await runner.observe(h.runnerId)).state).toBe("destroyed"); // auto_destroy, as both R0 soaks did
     expect(await runner.list()).toEqual([]);
     const crashed = await runner.create({ ...spec, sessionId: "s2" });
     runner.setObserved(crashed.runnerId, "failed", { exitCode: 137, oomKilled: true, requestedStop: false });
-    expect(await runner.observe(crashed.runnerId)).toEqual({ state: "failed", exit: { exitCode: 137, oomKilled: true, requestedStop: false } });
-    expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null });   // the port: NEVER EXISTED = destroyed, exit null
+    expect(await runner.observe(crashed.runnerId)).toEqual({ state: "failed", exit: { exitCode: 137, oomKilled: true, requestedStop: false }, restarting: false, restartingSince: null, restartCount: null });
+    expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null, restarting: false, restartingSince: null, restartCount: null });   // the port: NEVER EXISTED = destroyed, exit null
     // Lane-A minors, Task 3 review m1: the OTHER absent case — a Machine the
     // provider knew and has now destroyed — keeps its exit, and that is the branch
     // the fake models on purpose. It is what the real adapter does: C1 measured that
@@ -297,13 +297,13 @@ describe("FakeRunner", () => {
     const exited = await runner.create({ ...spec, sessionId: "s_exit" });
     runner.setObserved(exited.runnerId, "stopped", { exitCode: 3, oomKilled: false, requestedStop: false });
     await runner.destroy(exited.runnerId);
-    expect(await runner.observe(exited.runnerId)).toEqual({ state: "destroyed", exit: { exitCode: 3, oomKilled: false, requestedStop: false } });
+    expect(await runner.observe(exited.runnerId)).toEqual({ state: "destroyed", exit: { exitCode: 3, oomKilled: false, requestedStop: false }, restarting: false, restartingSince: null, restartCount: null });
     // Lane-A minors, Task 3 review m2: `stop` on a runner the fake never knew is a
     // no-op that still records, and the observe after it is unchanged. Hunt mutant E
     // survived on this; the port declares stop idempotent for an absent runner.
     await runner.stop("never-created", { signal: "SIGINT", timeoutSeconds: 10 });
     expect(runner.stops.at(-1)).toEqual({ runnerId: "never-created", signal: "SIGINT", timeoutSeconds: 10 });
-    expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null });
+    expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null, restarting: false, restartingSince: null, restartCount: null });
     runner.failNextCreate(true);
     await expect(runner.create({ ...spec, sessionId: "s3" })).rejects.toMatchObject({ retryable: true });
     expect((await runner.create({ ...spec, sessionId: "s4" })).runnerId).toMatch(/^fake-machine-/);   // ONE create fails, not every one after

@@ -15,7 +15,7 @@
 // expiry policy hands it to a live composed session whose runner is playing or
 // booting, or carries no stop mark while the session still wants to be live —
 // which is any state — and a null cell would throw on every lazy read of that row.
-import { MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RUNNER_MAX_ATTEMPTS, RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, WARMING_TIMEOUT_MINUTES } from "../config";
+import { MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, WARMING_TIMEOUT_MINUTES } from "../config";
 
 export const RUNNER_STATES = ["none", "creating", "booting", "playing", "stopping", "exited", "destroyed", "lost"] as const;
 export type RunnerState = (typeof RUNNER_STATES)[number];
@@ -52,7 +52,10 @@ export type RunnerTrigger =
   // it ENDED the run (I2, PR #967 review), and the session ends with this reason. Both optional on purpose: absent is
   // every stopped beat before R2003, and the one other producer (a legacy runner's beat, no exit reason).
   | { type: "callback_stopped"; refused?: true; endReason?: RunnerEndReason }
-  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null } | { type: "stale_beat" } | { type: "deadline" }
+  // R2003 / F-007: `restarting` — the provider is restarting this Machine in place (ports.ts RunnerObservation), since
+  // `restartingSince`. Optional: absent is every observation before F-007, read as "not restarting" (today's rule).
+  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null; restarting?: boolean; restartingSince?: Date | null }
+  | { type: "stale_beat" } | { type: "deadline" }
   // Capture QR v2 §5.3: the stop's reason. Optional on purpose: the teardown producers (a timeout or a credit refusal
   // tearing a Machine down before `fail`) drop the stop's ending, or keep the session's own reason (M2), so for them the
   // reason is never read; absent reads "stopped" — the reason every session_stop carried before §5.3.
@@ -163,12 +166,14 @@ const toLost = (r: Runner, t: RunnerTrigger): RunnerStep => ({ next: { ...withEx
  *  observed exit 78 would let the stopped beat's ordinary `lost` path spend the retry first — and the Machine Fly would
  *  restart into the same refusal is torn down. The session is terminal by the time `lost × destroy_ok` confirms the
  *  destroy, so C27 drops the retry that cell signals. No exit is written: a beat never writes the exit facts (A5). */
-const refusedByBeat = (r: Runner): RunnerStep => ({ next: { ...r, state: "lost" }, effects: [FORCE_DESTROY], signal: { type: "failed", reason: "machine_refused" } });
+/** The run was refused (the final beat said so, or an observed exit 78): failed, and the Machine torn down NOW — Fly
+ *  restarts exit 78 like any crash (F-007 result 2), so waiting for it to die would watch it refuse again. */
+const refusedNow = (r: Runner): RunnerStep => ({ next: { ...r, state: "lost" }, effects: [FORCE_DESTROY], signal: { type: "failed", reason: "machine_refused" } });
 /** booting/playing × a stopped beat: refused → fail now; an end reason → the session-ending teardown (`lostTornDown`, the
  *  F17 shape: destroyed + force_destroy + completed — nothing after a completed session can retry); otherwise today's lost. */
 const stoppedWhileActive: Cell = (r, t) =>
   t.type !== "callback_stopped" ? toLost(r, t)
-  : t.refused ? refusedByBeat(r)
+  : t.refused ? refusedNow(r)
   : t.endReason !== undefined ? lostTornDown(r, t.endReason)
   : toLost(r, t);
 /** Fix round 3, ruling (a): a `lost` runner's teardown has not been SEEN to land. Re-issue it and stay — `destroyed` means
@@ -208,13 +213,29 @@ const markedDuringCreate = (r: Runner, now: Date, endReason: RunnerEndReason): R
 const destroyLateCreate: Cell = (r, t) =>
   (t.type === "create_ok" ? { next: { ...r, state: "lost", machineId: t.machineId }, effects: [FORCE_DESTROY], signal: null } : stay(r));
 
+/** F-007: the observation is an in-place restart still inside its bound. A restart with no instant (a provider that gave
+ *  none) cannot be timed here; the composed stale window is its backstop. */
+function restartInFlight(t: Extract<RunnerTrigger, { type: "observed" }>, now: Date): boolean {
+  if (t.restarting !== true) return false;
+  return !t.restartingSince || now.getTime() - t.restartingSince.getTime() <= RUNNER_RESTART_STUCK_SECONDS * 1000;
+}
+
 function observedFrom(active: "booting" | "playing"): Cell {
-  return (r, t) => {
+  return (r, t, now) => {
     if (t.type !== "observed") throw new InvalidRunnerTransition(active, t.type);
     switch (t.state) {
-      case "stopped": case "failed": return toLost(r, t);
-      case "destroyed": return afterLostDestroyed(withExit(r, t));   // gone without our stop: retry or fail
-      default: return stay(withExit(r, t));                           // running / pending / stopping / destroying / unknown: no claim
+      case "stopped": case "failed":
+        // F-007 result 2: Fly restarts exit 78 like any crash, so a refusal is never waited out — the session fails and
+        // the Machine is torn down NOW, restarting or not (the refused beat's own path, with the observed exit kept).
+        if (refusedExit(t.exit ?? null)) return refusedNow(withExit(r, t));
+        // F-007 result 1: mid-restart the Machine reads `stopped` for ~110 ms. Only the restarting flag tells that from
+        // a loss; past RUNNER_RESTART_STUCK_SECONDS it is a loss after all.
+        return restartInFlight(t, now) ? stay(withExit(r, t)) : toLost(r, t);
+      // gone without our stop: retry or fail. A restarting flag does not exempt it — a destroyed Machine is not coming back.
+      case "destroyed": return afterLostDestroyed(withExit(r, t));
+      // `starting` mid-restart (~1.3 s): still the same Machine — unless the restart is stuck past its bound.
+      case "pending": return t.restarting === true && !restartInFlight(t, now) ? toLost(r, t) : stay(withExit(r, t));
+      default: return stay(withExit(r, t));                           // running / stopping / destroying / unknown: no claim
     }
   };
 }
