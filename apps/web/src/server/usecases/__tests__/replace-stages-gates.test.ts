@@ -380,3 +380,81 @@ describe.skipIf(!HAS_DB)("batch 4 N1: patchDivision and the stage writers take t
     expect(checked, "cases checked").toBe(cases.length);
   });
 });
+
+// Batch 4 re-check residual (it predates the batch: the probe reds at 123468fc2 too). A save that RENAMES a division
+// regenerates its slug, and an update of a column in the unique index (competition_id, slug) takes the row `FOR UPDATE`,
+// which waits for the KEY SHARE every stage INSERT holds on the division through its foreign key. With a masking field in
+// the body the save already holds the row `for no key update` (the stored-before read), and on a COMPLETED division the
+// stage writer's reopen update wants that same lock: the save waits for the writer's KEY SHARE, the writer for the save's
+// row lock, and Postgres breaks it with 40P01. The stage writer therefore takes the row `for no key update` as it reads
+// the division, before its insert, so the two serialise on that row instead of crossing.
+//
+// Interleaving, with no sleeps: a holder transaction writes the slug_history key the rename's bookkeeping upserts, so the
+// save parks AFTER its row lock and BEFORE the slug write; the stage writer starts and parks behind the save; the holder
+// commits. Without the fix the writer has already inserted (KEY SHARE) by then, and the save's slug write meets it.
+describe.skipIf(!HAS_DB)("batch 4 round 3: a rename that names a masking field, racing a stage write on a completed division", () => {
+  type Case = { name: string; seedStage: boolean; write: (auth: AuthCtx, divisionId: string) => Promise<unknown> };
+  const cases: Case[] = [
+    { name: "createStages", seedStage: false, write: (auth, id) => createStages(auth, id, [league(1)]) },
+    { name: "replaceStages", seedStage: true, write: (auth, id) => replaceStages(auth, id, [league(1)]) },
+  ];
+  let checked = 0;
+
+  it.each(cases)("$name on a COMPLETED division, racing a rename that also names a masking field: both finish, no 40P01", async (c) => {
+    const auth = await seedOrg("pro");
+    const { divisionId, competitionId } = await seedDivision(auth);
+    if (c.seedStage) await createStages(auth, divisionId, [league(1)]);
+    const stagesBefore = await stageIds(divisionId);
+    expect(stagesBefore.length, "premise: the stage graph the writer finds").toBe(c.seedStage ? 1 : 0);
+    await sql`update divisions set status = 'completed' where id = ${divisionId}`;
+    const read = async () =>
+      (await sql<{ status: string; name: string; slug: string; player_name_display: string | null }[]>`
+        select status, name, slug, player_name_display from divisions where id = ${divisionId}`)[0]!;
+    const start = await read();
+    expect(start.status, "premise: a completed division").toBe("completed");
+    const renamed = "Renamed " + randomUUID().slice(0, 6);
+    expect(start.name, "premise: the name the save changes").not.toBe(renamed);
+
+    let writer!: Promise<unknown>;
+    let save!: Promise<unknown>;
+    await sql.begin(async (holder) => {
+      // The row the rename's `recordSlugHistory` upserts (slugs.ts): an uncommitted insert of the same key parks the save there.
+      await holder`
+        insert into slug_history (entity_type, parent_id, old_slug, entity_id)
+        values ('division', ${competitionId}, ${start.slug}, ${divisionId})`;
+      const [held] = await holder<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      // A body with no format field: no advisory lock, so only the row lock and the slug write below can order it.
+      save = patchDivision(auth, divisionId, { name: renamed, player_name_display: "first_initial" });
+      save.catch(() => undefined); // the verdict is read below; a rejection must not escape as an unhandled one first
+      await until("the save parks on the slug history key the holder wrote", async () => (await waitersOn(held!.pid)).length === 1);
+      const [saver] = await waitersOn(held!.pid);
+      // The premise the whole interleaving rests on: the save already holds the division row, as it parks.
+      await expect(
+        sql`select 1 from divisions where id = ${divisionId} for no key update nowait`,
+        "premise: the parked save holds the division row",
+      ).rejects.toMatchObject({ code: "55P03" });
+      writer = c.write(auth, divisionId);
+      writer.catch(() => undefined);
+      await until("the stage writer parks behind the save", async () => (await waitersOn(saver!)).length === 1);
+    }); // commits: the save goes on to write the slug
+
+    const verdict = (r: PromiseSettledResult<unknown>) =>
+      r.status === "fulfilled" ? "fulfilled" : String((r.reason as { code?: string }).code ?? r.reason);
+    const settled = await Promise.allSettled([writer, save]);
+    expect(settled.map(verdict), "[stage writer, save]: a deadlock would be 40P01 for one of them").toEqual(["fulfilled", "fulfilled"]);
+
+    const end = await read();
+    expect(end.name, "the rename landed").toBe(renamed);
+    expect(end.slug, "the slug was regenerated").not.toBe(start.slug);
+    expect(end.player_name_display, "the masking write landed").toBe("first_initial");
+    expect(end.status, "the stage write reopened the division").toBe("active");
+    const stagesAfter = await stageIds(divisionId);
+    expect(stagesAfter.length, "one stage stands").toBe(1);
+    if (c.seedStage) expect(stagesAfter, "replaceStages replaced the graph").not.toEqual(stagesBefore);
+    checked += 1;
+  });
+
+  it("anti-vacuity: both stage writers were driven through the race", () => {
+    expect(checked, "cases checked").toBe(cases.length);
+  });
+});
