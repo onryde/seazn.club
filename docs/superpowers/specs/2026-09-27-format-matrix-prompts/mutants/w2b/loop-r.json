@@ -640,7 +640,7 @@
  {
   "id": "lr-i2-revive-takes-no-stage-lock",
   "file": "apps/web/src/server/engine-db/fed-seats.ts",
-  "find": "  await lockStageSeats(tx, src.stage_id);\n",
+  "find": "  await lockStageSeats(tx, f.stage_id);\n",
   "replace": "",
   "killers": [
    {
@@ -662,8 +662,8 @@
  {
   "id": "lr-i2-decision-takes-no-stage-lock",
   "file": "apps/web/src/server/usecases/scoring.ts",
-  "find": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) await lockStageSeats(tx, fixture.stage_id);",
-  "replace": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) void 0;",
+  "find": "    if (pre?.feeds) await lockStageSeats(tx, pre.stage_id);\n",
+  "replace": "",
   "killers": [
    {
     "cwd": "apps/web",
