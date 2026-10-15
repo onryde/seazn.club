@@ -1,0 +1,377 @@
+[
+ {
+  "id": "b5-i1-composer-no-deciders",
+  "file": "apps/web/src/server/public-site/describe-rules.ts",
+  "find": "return [...format, ...describeDeciders(module_, kind, cfg), ...(changed ? abandon : [])];",
+  "replace": "return [...format, ...(changed ? abandon : [])];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-line-parity.test.ts"
+    ],
+    "name": "I-1 football knockout"
+   }
+  ]
+ },
+ {
+  "id": "b5-i1-abandon-always",
+  "file": "apps/web/src/server/public-site/describe-rules.ts",
+  "find": "...(changed ? abandon : [])];",
+  "replace": "...abandon];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-line-parity.test.ts"
+    ],
+    "name": "the abandon policy rides the line when the stage CHANGED it from the division's"
+   }
+  ]
+ },
+ {
+  "id": "b5-i1-formatline-kind-dropped",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "matchRulesLine(sportKey, module, cfg, divisionCfg, stageKind)",
+  "replace": "matchRulesLine(sportKey, module, cfg, divisionCfg)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-line-parity.test.ts"
+    ],
+    "name": "I-1 football knockout"
+   }
+  ]
+ },
+ {
+  "id": "b5-i1-409-kind-undefined",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "      stage?.kind,\n      division.config,\n      await getDictionary(\"en\", \"public\"),",
+  "replace": "      undefined,\n      division.config,\n      await getDictionary(\"en\", \"public\"),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-line-parity.test.ts"
+    ],
+    "name": "the 409 and the public line agree"
+   }
+  ]
+ },
+ {
+  "id": "b5-i1-getrules-kind-dropped",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "formatLineOf(sportKey, sportModule, cfg, stageKind, divisionConfig, dict)",
+  "replace": "formatLineOf(sportKey, sportModule, cfg, null, divisionConfig, dict)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-line-parity.test.ts"
+    ],
+    "name": "the 409 and the public line agree"
+   }
+  ]
+ },
+ {
+  "id": "b5-q1-stage-line-kind-null",
+  "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+  "find": "{ kind, config: { rules: stage.rules } },",
+  "replace": "{ kind: null, config: { rules: stage.rules } },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+    ],
+    "name": "stage-format-lines.ts stageFormatLines: a knockout chip gets the bracket overlay"
+   }
+  ]
+ },
+ {
+  "id": "b5-q2-saved-always-wins",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "if (saved !== null && saved.against === propRules) return saved.rules;",
+  "replace": "if (saved !== null) return saved.rules;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+    ],
+    "name": "once the props are a different object"
+   }
+  ]
+ },
+ {
+  "id": "b5-q2-saved-inverted",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "if (saved !== null && saved.against === propRules) return saved.rules;",
+  "replace": "if (saved !== null && saved.against !== propRules) return saved.rules;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+    ],
+    "name": "while the props are still the ones the save started from"
+   }
+  ]
+ },
+ {
+  "id": "b5-q3-has-active-abandon-false",
+  "file": "apps/web/src/server/public-site/data.ts",
+  "find": "${hasActiveAbandonSql(sql, \"x\")} as has_active_abandon",
+  "replace": "false as has_active_abandon",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
+    ],
+    "name": "the scene holds what the replaced subselects produced"
+   }
+  ]
+ },
+ {
+  "id": "b5-q3-expunged-false",
+  "file": "apps/web/src/server/public-site/data.ts",
+  "find": "${hasActiveAbandonSql(sql, \"x\", { expunge: true })} as expunged,",
+  "replace": "false as expunged,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
+    ],
+    "name": "the scene holds what the replaced subselects produced"
+   }
+  ]
+ },
+ {
+  "id": "b5-q3-abandon-reason-null",
+  "file": "apps/web/src/server/public-site/data.ts",
+  "find": "${activeAbandonReasonSql(sql, \"x\")} as abandon_reason",
+  "replace": "null as abandon_reason",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
+    ],
+    "name": "the scene holds what the replaced subselects produced"
+   }
+  ]
+ },
+ {
+  "id": "b5-q4-second-bare-summary-call",
+  "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+  "find": "        {step.summary(answers)}\n",
+  "replace": "        {step.summary(answers)}{step.summary(answers)}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/outcome-readers.test.ts"
+    ],
+    "name": "summaryOf's web readers are exactly these"
+   }
+  ]
+ },
+ {
+  "id": "b5-q5-overbump-reset",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "update fixtures set ${seatCol} = null, ${labelCol} = ${json}, status = 'scheduled', outcome = null",
+  "replace": "update fixtures set ${seatCol} = null, ${labelCol} = ${json}, status = 'scheduled', outcome = null, rules_version = rules_version + 1",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "taking back the played semi resets the walkover it advanced"
+   }
+  ]
+ },
+ {
+  "id": "b5-q5-overbump-walkover-revive",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "update fixtures set ${labelCol} = ${json}, status = 'scheduled', outcome = null\n            where id = ${r.target}",
+  "replace": "update fixtures set ${labelCol} = ${json}, status = 'scheduled', outcome = null, rules_version = rules_version + 1\n            where id = ${r.target}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "the void of the double walkover that killed the seat reopens the walkover"
+   }
+  ]
+ },
+ {
+  "id": "b5-q5-overbump-abandoned-revive",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "update fixtures set ${labelCol} = ${json}, status = 'scheduled'\n            where id = ${r.target}",
+  "replace": "update fixtures set ${labelCol} = ${json}, status = 'scheduled', rules_version = rules_version + 1\n            where id = ${r.target}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "the void of a double walkover reopens the semi the cascade voided"
+   }
+  ]
+ },
+ {
+  "id": "b5-m1-never-fires",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "formatMoved = configApplied || variantApplied;",
+  "replace": "formatMoved = false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "revalidates the public pages when the format it stores moved"
+   }
+  ]
+ },
+ {
+  "id": "b5-m1-variant-dropped",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "formatMoved = configApplied || variantApplied;",
+  "replace": "formatMoved = configApplied;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
+    ],
+    "name": "the public pages are revalidated when a change re-seeded a stage"
+   }
+  ]
+ },
+ {
+  "id": "b5-m2-no-overlay",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now };",
+  "replace": "true ? replay : { ...replay, rules_version: now };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/scoring-idem-cache-version.test.ts"
+    ],
+    "name": "a retry served from the Redis fast path carries the rules version NOW"
+   }
+  ]
+ },
+ {
+  "id": "b5-m3-no-reask",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "atLeast === undefined || waited ? inFlight : inFlight.then(() => attempt(true))",
+  "replace": "true ? inFlight : inFlight.then(() => attempt(true))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "m-3: a refusal naming a newer version while a reload is in flight triggers a second read"
+   }
+  ]
+ },
+ {
+  "id": "b5-m3-unbounded-reask",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "atLeast === undefined || waited ? inFlight",
+  "replace": "atLeast === undefined ? inFlight",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "m-3, the bound: a server that keeps failing the read"
+   }
+  ]
+ },
+ {
+  "id": "b5-nbsp-en-one-game",
+  "file": "apps/web/src/dictionaries/en/public.json",
+  "find": "\"1 game, {points} points (cap {cap})\"",
+  "replace": "\"1 game, {points} points (cap {cap})\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/describe-rules.test.ts"
+    ],
+    "name": "the points-cap parenthetical never breaks across a line"
+   }
+  ]
+ },
+ {
+  "id": "b5-nbsp-en-decider",
+  "file": "apps/web/src/dictionaries/en/public.json",
+  "find": "(cap {cap}), decider {decider}\"",
+  "replace": "(cap {cap}), decider {decider}\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/describe-rules.test.ts"
+    ],
+    "name": "the points-cap parenthetical never breaks across a line"
+   }
+  ]
+ },
+ {
+  "id": "b5-nbsp-es-one-game",
+  "file": "apps/web/src/dictionaries/es/public.json",
+  "find": "\"1 juego, {points} puntos (máx. {cap})\"",
+  "replace": "\"1 juego, {points} puntos (máx. {cap})\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/describe-rules.test.ts"
+    ],
+    "name": "the points-cap parenthetical never breaks across a line"
+   }
+  ]
+ },
+ {
+  "id": "b5-nbsp-fr-one-game",
+  "file": "apps/web/src/dictionaries/fr/public.json",
+  "find": "\"1 jeu, {points} points (max. {cap})\"",
+  "replace": "\"1 jeu, {points} points (max. {cap})\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/describe-rules.test.ts"
+    ],
+    "name": "the points-cap parenthetical never breaks across a line"
+   }
+  ]
+ },
+ {
+  "id": "b5-nbsp-nl-one-game",
+  "file": "apps/web/src/dictionaries/nl/public.json",
+  "find": "\"1 game, {points} punten (max. {cap})\"",
+  "replace": "\"1 game, {points} punten (max. {cap})\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/describe-rules.test.ts"
+    ],
+    "name": "the points-cap parenthetical never breaks across a line"
+   }
+  ]
+ }
+]

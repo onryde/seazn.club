@@ -371,6 +371,29 @@ describe("X-SR-7 the pad follows a correction", () => {
     expect(t.appendCalls[t.appendCalls.length - 1]!.rules_version, "its next tap carries the latest version").toBe(2);
   });
 
+  it("m-3, the bound: a server that keeps failing the read costs the waiting callers ONE more read between them, not a chain", async () => {
+    let release!: (r: FixtureRulesResult) => void;
+    const first = new Promise<FixtureRulesResult>((r) => (release = r));
+    let reads = 0;
+    const t = scripted({
+      appends: [{ kind: "network-error", message: "down" }, rulesChangedRefusal(1), rulesChangedRefusal(2), rulesChangedRefusal(2)],
+      // The first read lands version 1; every read after it fails.
+      rules: () => (reads++ === 0 ? first : Promise.reject(new Error("rules read failed"))),
+    });
+    const pad = mount(params({ rulesVersion: 0, transport: t.transport }));
+    await pad.current.submit("badminton.game.summary", GAME); // stays queued (offline)
+    await settle();
+    await pad.current.submit("badminton.game.summary", { home: 11, away: 7 }); // refused at 1 (starts the read), then at 2 (waits)
+    await settle();
+    await pad.current.submit("badminton.game.summary", { home: 11, away: 6 }); // refused at 2 while the first read is still in flight
+    await settle();
+    expect(t.rulesCalls.length, "premise: one read in flight, two refusals naming 2 waiting on it").toBe(1);
+    release({ cfg: CFG5, rules_version: 1, format_line: "Best of 5" });
+    await settle();
+    expect(t.rulesCalls.length, "the first read, and one more for both waiters together").toBe(2);
+    expect(foldedBestOf(pad.current), "the pad keeps the newest rules it did read").toBe(CFG5.bestOf);
+  });
+
   it("m-3, the negative pair: the in-flight read already returns the newer version, and the second refusal costs no second read", async () => {
     let release!: (r: FixtureRulesResult) => void;
     const first = new Promise<FixtureRulesResult>((r) => (release = r));
