@@ -435,7 +435,7 @@ export const FLOOR_EXEMPTIONS: readonly FloorExemption[] = [];
 
 /** The recorded outcome of [start, abandon, settle] against the outcome the kernel reads from the same ledger. Under the module-only
  *  recorder they differ (the old exemption's reason); under the format-2 recorder they are the same settled win. */
-export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = statsRecorder): { recorded: string; effective: string } | string {
+export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = kernelRecorder): { recorded: string; effective: string } | string {
   const [name, raw] = Object.entries(corpus.configs)[0] ?? [];
   if (name === undefined) return "the corpus records no config";
   const cfg = module.configSchema.parse(raw) as unknown;
@@ -668,8 +668,9 @@ function ablationProbe(
       }
     }
     // Format 3 also records the final player-stats rows: an event the stats fold reads (an award the sport declares) moves them.
-    // A recorder that does not produce them (format 1 and 2) has nothing to compare, and the comparison is the narrower one it was.
-    const statsSame = a.playerStats === undefined || b.playerStats === undefined || a.playerStats === b.playerStats;
+    // Both sides come from ONE recorder, so a recorder that does not produce them (format 1 and 2) has `undefined` on both and the
+    // comparison is the narrower one it was.
+    const statsSame = a.playerStats === b.playerStats;
     if (!(sameSteps && ownStepsNeutral && kernelSame && statsSame && a.outcome === b.outcome && a.summary === b.summary && a.deltas === b.deltas)) moved++;
   }
   const verdict: OverlayVerdict = streams === 0 ? "unrecorded" : moved > 0 || refused > 0 ? "pinned" : "unpinned";

@@ -582,8 +582,8 @@ function buildExpunge(ctx: Ctx): Built | null {
 /** What the player-stats FOLD says each person holds of one award key (`<key>_awards`), for a ledger: asked of the real fold
  *  (recordPlayerStats), never of the builder's belief that an award took effect. */
 export function awardCredits(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], key: string): Map<string, number> {
-  const rows = readStatRows(recordPlayerStats(ctx.module, cfg, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids))));
-  if (rows === null) throw new Error(`golden floor: ${ctx.module.key} recorded player stats that are not rows`);
+  // (recordPlayerStats writes canonical rows by construction - golden-stats.test.ts reads every committed text back - so null is not a case)
+  const rows = readStatRows(recordPlayerStats(ctx.module, cfg, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids))))!;
   const credits = new Map<string, number>();
   for (const row of rows) {
     const held = row.stats[awardStatKey(key)];
@@ -592,10 +592,19 @@ export function awardCredits(ctx: Ctx, cfg: unknown, lineups: LineupPair, events
   return credits;
 }
 
+/** Whether an award story took effect, asked of the player-stats fold itself: for every key, the struck award credits nobody and the
+ *  standing one credits `away` exactly once (so exactly one person holds the key, and it is `away`). */
+export function awardStoryHolds(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], keys: readonly string[], away: string): boolean {
+  return keys.every((key) => {
+    const credits = awardCredits(ctx, cfg, lineups, events, key);
+    return credits.size === 1 && credits.get(away) === 1;
+  });
+}
+
 /** An award the sport DECLARES (`playerStats.awards`), given and struck: the match is played out, an award goes to a home player
  *  (and is struck at once, so the undo of an award is on the record), then the same award to an away player stands. Where the
  *  sport declares no award key there is no such token and this builds nothing. The story is kept only when the stats fold says it
- *  took effect: the struck award credits nobody, the standing one credits its person exactly once. */
+ *  took effect (`awardStoryHolds`). */
 function buildAward(ctx: Ctx): Built | null {
   const keys = (ctx.module.playerStats?.awards ?? []).map((a) => a.key).filter((key) => ctx.holes.has(statsAwardToken(key)));
   if (keys.length === 0) return null;
@@ -616,11 +625,7 @@ function buildAward(ctx: Ctx): Built | null {
       if (!folds(ctx, cfg, lineups, events)) continue;
       // an award leaves the module's story untouched: the match ends on the outcome the bare walk reached
       if (outcomeAfter(ctx, cfg, lineups, events).token !== walk.token) continue;
-      const took = keys.every((key) => {
-        const credits = awardCredits(ctx, cfg, lineups, events, key);
-        return !credits.has(home) && credits.get(away) === 1 && credits.size === 1;
-      });
-      if (!took) continue;
+      if (!awardStoryHolds(ctx, cfg, lineups, events, keys, away)) continue;
       return { config: cfgName, seed: 11 * FLOOR_SEED_STRIDE + seed, events };
     }
   }

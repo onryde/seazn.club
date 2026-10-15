@@ -11,6 +11,7 @@ import { eventToken, floorHoles as holesOf, floorRequirement, LEVEL_OUTCOME_TOKE
 import { creditedAwardKeys, readStatRows, recordPlayerStats } from "./golden-stats.ts";
 import {
   awardCredits,
+  awardStoryHolds,
   corpusBefore,
   expungeStrike,
   extendFloor,
@@ -728,6 +729,55 @@ describe("the award story (GF-2 T4) — an award the sport declares, given, stru
     const unstruck = stream.events.filter((e) => e.voids === undefined);
     expect(new Map(awardCredits(ctx, cfg, lineups as never, unstruck, "potm"))).toEqual(new Map([[home, 1], [away, 1]]));
     expect(awardCredits(ctx, cfg, lineups as never, stream.events.slice(0, stream.events.findIndex((e) => e.type === "core.award")), "potm").size, "before any award").toBe(0);
+  });
+
+  it("awardStoryHolds is asked of the stats fold: it holds for the committed story and fails for each way the story can fail to take effect", () => {
+    // single-sport: hockey (potm); every sport's committed award stream is read by the sweep above
+    const key = "hockey";
+    const stream = readCorpus(key).streams.find(isAwardStory)!;
+    const { module, corpus, cfg, lineups } = setup(key, stream);
+    const ctx: Ctx = { module, corpus, cfgNames: ["default"], holes: new Set() };
+    const away = lineups.away.slots[0]!.personId;
+    const home = lineups.home.slots[0]!.personId;
+    const holds = (events: readonly GoldenEvent[], keys: readonly string[], who: string) => awardStoryHolds(ctx, cfg, lineups as never, events, keys, who);
+    expect(holds(stream.events, ["potm"], away), "the committed story").toBe(true);
+    // the struck award still stands (no void): two people hold it
+    expect(holds(stream.events.filter((e) => e.voids === undefined), ["potm"], away), "no void: the home player holds it too").toBe(false);
+    // only the first (struck) award, no void: one person holds it, but it is not the away player
+    const first = stream.events.findIndex((e) => e.type === "core.award");
+    expect(holds(stream.events.slice(0, first + 1), ["potm"], away), "the standing award is missing: one holder, the wrong one").toBe(false);
+    // the away award said twice credits the away player twice
+    const last = stream.events[stream.events.length - 1]!;
+    expect(holds([...stream.events, last], ["potm"], away), "credited twice").toBe(false);
+    // a key the sport does not declare credits nobody, so the story did not take effect
+    expect(holds(stream.events, ["motm"], away), "an undeclared key").toBe(false);
+    expect(holds(stream.events, ["potm"], home), "the wrong person").toBe(false);
+    // every key is asked: one that took effect does not cover one that did not
+    expect(holds(stream.events, ["potm", "motm"], away)).toBe(false);
+  });
+
+  it("the scenario builds only for the declared keys that are holes: nothing for an empty hole set, for an undeclared token or for a sport that declares none; the story for a hole", () => {
+    const award = SCENARIOS.find((x) => x.id === "award")!;
+    const hockey = builtinModules.find((m) => m.key === "hockey")!;
+    const corpus = readCorpus("hockey");
+    const cfgNames = Object.keys(corpus.configs);
+    const build = (module: (typeof builtinModules)[number], c: GoldenCorpus, holes: FloorToken[]) => award.build({ module, corpus: c, cfgNames: Object.keys(c.configs), holes: new Set(holes) });
+    expect(build(hockey, corpus, []), "no hole, no story").toBeNull();
+    expect(build(hockey, corpus, [statsAwardToken("motm")]), "a token the sport does not declare").toBeNull();
+    const built = build(hockey, corpus, [statsAwardToken("potm")])!;
+    expect(built, "a hole gets its story").not.toBeNull();
+    expect(cfgNames).toContain(built.config);
+    expect(built.seed).toBeGreaterThan(11 * FLOOR_SEED_STRIDE);
+    expect(built.seed).toBeLessThan(12 * FLOOR_SEED_STRIDE);
+    expect(built.events.slice(-3).map((e) => e.type)).toEqual(["core.award", "core.void", "core.award"]);
+    // a sport that declares no award key never builds one, whatever the hole set names
+    const cricket = builtinModules.find((m) => m.key === "cricket")!;
+    expect(cricket.playerStats?.awards ?? [], "cricket declares none").toEqual([]);
+    expect(build(cricket, readCorpus("cricket"), [statsAwardToken("potm")])).toBeNull();
+    // the corpus's committed award stream is what this build reproduces (the seed contract)
+    const committed = corpus.streams.find(isAwardStory)!;
+    expect(built.seed).toBe(committed.seed);
+    expect(built.events).toEqual(committed.events);
   });
 
   it("the scenario serves exactly the declared award tokens, and none for a sport that declares no key", () => {

@@ -289,6 +289,9 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
         expect(messages, `${key}: and holds`).toEqual([]);
         quiet++;
       }
+      // with no recorder named the probe is the real one: it says what it says under the format-3 recorder
+      expect(staleOverlayClaims(module, corpus, undefined, [RETIRED_AWARD]), `${key}: the default recorder is the format-3 one`).toEqual(messages);
+      expect(overlayVerdicts(module, corpus, undefined, [RETIRED_AWARD]).get(eventToken("core.award"))?.verdict, `${key}: overlayVerdicts' default`).toBe(declaredAwards(module).length > 0 ? "pinned" : "unpinned");
       // the PRODUCTION table is never stale: it asserts the award claim only where it holds
       expect(staleOverlayClaims(module, corpus), `${key}: production claims hold`).toEqual([]);
     });
