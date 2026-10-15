@@ -355,8 +355,10 @@ export class FlyRunner implements RunnerProvider {
     // F-007: `starting` (pending) is read through the events too — it is the ~1.3 s middle of an in-place restart as
     // well as a cold boot, and only the latest exit event tells them apart. A cold boot has no exit: exit null, as before.
     const events = await this.client.machineEvents(runnerId).catch((e: unknown) => (e instanceof FlyApiError && e.status === 404 ? [] : Promise.reject(e)));
-    // F-007 race: down before Fly recorded this stop's exit — UNRECORDED (restarting null), never the previous run's exit.
-    if ((state === "stopped" || state === "failed") && !exitRecorded(events)) return { state, exit: null, restarting: null, restartingSince: null, restartCount: null };
+    // F-007 race: STOPPED before Fly recorded this stop's exit — UNRECORDED (restarting null), never the previous run's exit.
+    // `stopped` only, the one state F-007 measured racing: a failed launch never ran and Fly writes it NO exit, so for
+    // `failed` "unrecorded" would be forever (pass-3 review) — it falls through and is a plain, immediate loss.
+    if (state === "stopped" && !exitRecorded(events)) return { state, exit: null, restarting: null, restartingSince: null, restartCount: null };
     const restart = restartFrom(events);
     // ADR 0007: Fly's fields end here — the port carries the neutral `restarting`.
     if (state === "pending" && !restart.restarting) return { state, exit: null, ...NOT_RESTARTING };

@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "../fly-client";
 import { ENDING_TIMEOUT_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_INPLACE_RESTARTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, ENV_METADATA_KEY, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, fromFlyState, isUnestablishedCreate, runnerCreateErrorFrom } from "../runner-fly";
-import { OBSERVED_STATES, machineNameFor, stepRunner } from "../domain/runner";
+import { OBSERVED_STATES, RUNNER_NONE, machineNameFor, stepRunner } from "../domain/runner";
 import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
 import { log } from "@/server/logger";
 import { FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
@@ -348,12 +348,27 @@ describe("FlyRunner", () => {
     // 18:12:45.767 — stopped, 320 ms before the SECOND exit event: the newest exit (#1) is older than the newest start
     machineState = "stopped"; events = [ev.start1, ev.restart1, ev.exit1, ev.start0, ev.launch];
     expect(await runner.observe("m_78")).toEqual(UNRECORDED);
-    // failed reads the same way
-    machineState = "failed";
-    expect(await runner.observe("m_78")).toEqual({ ...UNRECORDED, state: "failed" });
     // 18:12:46.098 — the second exit recorded, Fly still says stopped: restarting, with that exit
     machineState = "stopped"; events = [ev.exit2, ev.start1, ev.restart1, ev.exit1, ev.start0, ev.launch];
     expect(await runner.observe("m_78")).toEqual({ state: "stopped", exit: REFUSED, restarting: true, restartingSince: new Date(ev.exit2.timestamp), restartCount: 2 });
+  });
+
+  it("pass-3 regression: a FAILED launch (Fly `failed` / `launch_failed`, a launch event only — it never ran, so Fly writes NO exit) is NOT unrecorded: observe says failed, not restarting, and the real domain step makes it lost → torn down → the ONE retry at once, not after the warming timeout", async () => {
+    let checked = 0;
+    for (const flyState of ["failed", "launch_failed"]) {
+      const s = scripted((url) => (url.endsWith("/events")
+        ? { status: 200, body: [{ id: "e0", type: "launch", status: "created", source: "user", timestamp: 1_760_550_000_000, request: null }] }
+        : { status: 200, body: { id: "m_f", name: NAME, state: flyState } }));
+      const observed = await new FlyRunner({ client: s.client, image: "img" }).observe("m_f");
+      expect(observed, flyState).toEqual({ state: "failed", exit: null, restarting: false, restartingSince: null, restartCount: null });
+      // through the domain's own step, as reconcileSession feeds it
+      const booting = { ...RUNNER_NONE, state: "booting" as const, attempt: 1, name: machineNameFor("s1", 1), machineId: "m_f" };
+      const lost = stepRunner(booting, { type: "observed", ...observed }, new Date());
+      expect(lost, flyState).toMatchObject({ next: { state: "lost" }, effects: [{ type: "force_destroy" }], signal: null });
+      expect(stepRunner(lost.next, { type: "destroy_ok" }, new Date()).signal, `${flyState}: the ONE retry`).toEqual({ type: "retry" });
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("create is idempotent per session through the client: a 503 on the POST is followed by a metadata lookup that finds the Machine — no second POST", async () => {

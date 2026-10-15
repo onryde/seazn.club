@@ -933,13 +933,14 @@ describe("F-007 — an in-place restart as the Machines API shows it", () => {
     expect(w.creates).toEqual([]);
   });
 
-  it("the stopped-before-the-exit-event race (F-007 appendix, M2: `stopped` polled 90 ms and 320 ms BEFORE its exit event): down with the exit UNRECORDED makes no claim — not lost, not a restart — for a playing and a booting runner", () => {
+  it("the stopped-before-the-exit-event race (F-007 appendix, M2: `stopped` polled 90 ms and 320 ms BEFORE its exit event): STOPPED with the exit UNRECORDED makes no claim — not lost, not a restart — for a playing and a booting runner; FAILED never does (pass 3: a failed launch writes no exit at all, so 'unrecorded' would be forever) — it is lost at once", () => {
     let checked = 0;
-    for (const state of ["stopped", "failed"] as const) for (const from of ["playing", "booting"] as const) {
-      expect(stepRunner(inState(from), unrecorded(state), T0), `${from} ${state}`).toEqual({ next: inState(from), effects: [], signal: null });
+    for (const from of ["playing", "booting"] as const) {
+      expect(stepRunner(inState(from), unrecorded("stopped"), T0), `${from} stopped`).toEqual({ next: inState(from), effects: [], signal: null });
+      expect(stepRunner(inState(from), unrecorded("failed"), T0), `${from} failed`).toEqual({ next: { ...inState(from), state: "lost" }, effects: [{ type: "force_destroy" }], signal: null });
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(2);
   });
 
   it("…and the window decides: after an unrecorded stop and NO beat, a playing runner is alive through the composed window and lost AT it; a booting one through the boot allowance", () => {

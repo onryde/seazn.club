@@ -229,9 +229,10 @@ function observedFrom(active: "booting" | "playing"): Cell {
         // F-007 result 2: Fly restarts exit 78 like any crash, so a refusal is never waited out — the session fails and
         // the Machine is torn down NOW, restarting or not (the refused beat's own path, with the observed exit kept).
         if (refusedExit(t.exit ?? null)) return refusedNow(withExit(r, t));
-        // F-007 race: read down before the provider recorded the exit — restart or loss is not knowable yet. No claim:
-        // the stale window (composed, or the boot allowance) decides if no beat and no recorded exit follow.
-        if (t.restarting === null) return stay(r);
+        // F-007 race: read STOPPED before the provider recorded the exit — restart or loss is not knowable yet. No claim:
+        // the stale window (composed, or the boot allowance) decides if no beat and no recorded exit follow. Never for
+        // `failed`: a launch that failed has no exit to wait for (pass-3 review), so it is lost below, as it always was.
+        if (t.restarting === null && t.state === "stopped") return stay(r);
         // F-007 result 1: mid-restart the Machine reads `stopped` for ~110 ms. Only the restarting flag tells that from
         // a loss; past RUNNER_RESTART_STUCK_SECONDS it is a loss after all.
         return restartInFlight(t, now) ? stay(withExit(r, t)) : toLost(r, t);

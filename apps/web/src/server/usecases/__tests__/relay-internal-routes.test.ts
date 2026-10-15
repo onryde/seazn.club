@@ -1071,6 +1071,16 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     expect(s.runner.created, "then the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
   });
 
+  it("pass-3 regression through the facts route: a FAILED launch (no exit, not restarting) is lost on the read that sees it — torn down and the ONE retry with no clock moved, never held to the warming timeout", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    s.runner.setObserved(m1, "failed", null);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.destroyed, "torn down at once").toEqual([m1]);
+    expect(s.runner.created, "the ONE retry at once").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "booting" });
+  });
+
   it("the reviewer's trace through the facts route: first seen mid-restart of a refusal (starting, restarting, exit 78) — failed machine_refused at once, torn down, no retry", async () => {
     const s = await playingSession();
     const m1 = (await row(s.sessionId)).machine_id!;
