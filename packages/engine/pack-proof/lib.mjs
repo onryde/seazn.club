@@ -167,6 +167,20 @@ export function assertBundleMatchesWalk({ bundle, walked }) {
   return expected.size;
 }
 
+/** The static phone rule (scripts/engine-boundary.ts, `checkPhoneClosure`) must be green before the bundle is compared to the walk it took:
+ *  any violation - the closure-changed one, a walked module that no longer matches the pin, included - or an empty walk is a failure.
+ *  Returns the number of modules walked. */
+export function assertPhoneRuleGreen(phone) {
+  if (phone === null || typeof phone !== "object" || !Array.isArray(phone.walked) || !Array.isArray(phone.violations)) {
+    throw new Error("assertPhoneRuleGreen needs a phone report ({ walked, violations })");
+  }
+  if (phone.walked.length === 0) throw new Error("the static phone walk visited no module: a rule over nothing proves nothing");
+  if (phone.violations.length > 0) {
+    throw new Error(`the static phone rule is red, so there is nothing safe to bundle:\n${phone.violations.map((v) => `${v.file} ${v.kind}: ${v.detail}`).join("\n")}`);
+  }
+  return phone.walked.length;
+}
+
 /** Run every selected fixture, never stopping at the first failure (CI should show every red leg at once). `fixtures` maps a
  *  name to `async (ctx) => N`. A thrown error and a count that is not a positive integer are both failures. `log` receives
  *  each `<name>: <N> checked` line. Returns `{ results, failures }`. */

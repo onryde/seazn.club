@@ -43,3 +43,4 @@ export declare function phoneSpecifiers(input: { subpaths: readonly string[]; ma
 export declare function distTwin(srcPath: string): string;
 export declare function engineDistPaths(paths: readonly string[], names: readonly string[]): string[];
 export declare function assertBundleMatchesWalk(input: { bundle: readonly string[]; walked: readonly string[] }): number;
+export declare function assertPhoneRuleGreen(phone: { walked: readonly string[]; violations: readonly { kind: string; file: string; detail: string }[] }): number;

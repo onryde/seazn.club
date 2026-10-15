@@ -23,6 +23,7 @@ import {
   assertBundleMatchesWalk,
   assertExactVersions,
   assertOutsideRepo,
+  assertPhoneRuleGreen,
   assertSameSet,
   checkTarballExports,
   declaredAppRoutes,
@@ -301,10 +302,10 @@ function hermescPath(dir) {
 async function rnFixture(ctx) {
   // The static half first (scripts/engine-boundary.ts, on the workspace source): a closure that already reads a Node builtin, `process`
   // or scheduling is a finding of its own, and the bundle below is then compared to the modules it walked.
-  const { checkPhoneSafety } = await import(pathToFileURL(path.join(ENGINE, "scripts", "engine-boundary.ts")).href);
-  const phone = checkPhoneSafety(ENGINE);
-  if (phone.violations.length > 0) throw new Error(`rn: the static phone rule is red, so there is nothing safe to bundle:\n${phone.violations.map((v) => `${v.file} ${v.kind}: ${v.detail}`).join("\n")}`);
-  info(`rn: static phone walk ${phone.walked.length} modules from ${phone.entries.length} entries`);
+  const { checkPhoneClosure } = await import(pathToFileURL(path.join(ENGINE, "scripts", "engine-boundary.ts")).href);
+  const phone = checkPhoneClosure(ENGINE); // the walk, and the closure pin of phone-subpaths.json: a drift is a violation
+  assertPhoneRuleGreen(phone);
+  info(`rn: static phone walk ${phone.walked.length} modules from ${phone.entries.length} entries, equal to the closure phone-subpaths.json pins`);
 
   const dir = await installFixture("rn", ctx);
   const specifiers = phoneSubpathSpecifiers(ctx);

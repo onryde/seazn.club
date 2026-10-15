@@ -5,16 +5,18 @@
 // source/dangling targets, the right pnpm is picked, and the Metro module count is read from a bundle that actually parses.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   assertBundleMatchesWalk,
   assertExactVersions,
   assertOutsideRepo,
+  assertPhoneRuleGreen,
   assertSameSet,
   checkTarballExports,
   declaredAppRoutes,
@@ -32,7 +34,7 @@ import {
   sourceSportDirs,
   sportDirsOf,
 } from "../pack-proof/lib.mjs";
-import { checkPhoneSafety } from "../scripts/engine-boundary.ts";
+import { checkPhoneClosure, checkPhoneSafety, phoneClosureDrift } from "../scripts/engine-boundary.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(ENGINE, "..", "..");
@@ -299,24 +301,149 @@ describe("the dev bundle is held to the static phone walk", () => {
     expect(() => assertBundleMatchesWalk({ bundle: [], walked: [] })).toThrow(/empty/);
   });
 
-  it("holds against the real engine: the walk's modules all have a dist/ twin the build emits, and the count is the recorded closure", () => {
+  // The compiler's own account of the build, read from tsconfig.build.json: what tsc would emit (getOutputFileNames) and, file by file, what the
+  // emitted JavaScript imports (transpileModule, which elides an import used only as a type, as the build does). Neither goes through distTwin
+  // or through the static walk, so a walk that follows an import the build erases, or misses one it keeps, cannot agree with them by construction.
+  const build = (() => {
+    const read = ts.readConfigFile(join(ENGINE, "tsconfig.build.json"), ts.sys.readFile);
+    expect(read.error, "tsconfig.build.json parses").toBeUndefined();
+    return ts.parseJsonConfigFileContent(read.config, ts.sys, ENGINE, undefined, join(ENGINE, "tsconfig.build.json"));
+  })();
+  const emittedJs = (): Set<string> => {
+    const out = new Set<string>();
+    for (const file of build.fileNames) {
+      for (const o of ts.getOutputFileNames(build, file, false)) if (o.endsWith(".js")) out.add(relative(ENGINE, o).split(sep).join("/"));
+    }
+    return out;
+  };
+  /** The dist/ modules reachable from `entries` through the imports of the emitted JavaScript, by emitting each source file in memory. */
+  const emittedClosure = (entries: readonly string[]): string[] => {
+    const seen = new Set<string>();
+    const queue = entries.map((e) => e.replace(/^src\//, "dist/").replace(/\.ts$/, ".js"));
+    while (queue.length > 0) {
+      const dist = queue.shift()!;
+      if (seen.has(dist)) continue;
+      seen.add(dist);
+      const srcFile = dist.replace(/^dist\//, "src/").replace(/\.js$/, ".ts");
+      const js = ts.transpileModule(readFileSync(join(ENGINE, srcFile), "utf8"), { compilerOptions: build.options, fileName: srcFile }).outputText;
+      const sf = ts.createSourceFile(dist, js, ts.ScriptTarget.ESNext, true);
+      const follow = (spec: string) => {
+        if (spec.startsWith(".")) queue.push(posix.join(posix.dirname(dist), spec));
+      };
+      const visit = (n: ts.Node): void => {
+        if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) follow(n.moduleSpecifier.text);
+        else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword && n.arguments[0] && ts.isStringLiteral(n.arguments[0])) follow(n.arguments[0].text);
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+    }
+    return [...seen].sort();
+  };
+
+  it("holds against the real engine: every walked module's dist/ twin is a file tsc's build emits (tsconfig.build.json), and a test file is not", () => {
     const real = checkPhoneSafety(ENGINE);
-    const cfg = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { closure: { modules: number } };
-    const twins = real.walked.map(distTwin);
-    expect(twins.length).toBe(cfg.closure.modules);
-    expect(new Set(twins).size, "no two sources share a twin").toBe(twins.length);
-    expect(assertBundleMatchesWalk({ bundle: twins, walked: real.walked })).toBe(cfg.closure.modules);
+    const emitted = emittedJs();
+    expect(emitted.size, "anti-vacuity: the files the build emits").toBeGreaterThan(100);
+    expect(real.walked.length, "anti-vacuity: the modules checked").toBeGreaterThan(30);
+    for (const src of real.walked) expect(emitted, `${src} -> ${distTwin(src)}`).toContain(distTwin(src));
+    // the emit list can say no: a source file the build excludes has no twin in it
+    const aTest = globSync("src/**/*.test.ts", { cwd: ENGINE })[0];
+    expect(aTest, "the engine has a co-located test").toBeDefined();
+    expect(emitted.has(distTwin(aTest!))).toBe(false);
   });
 
-  it("run.mjs imports the subpaths from phone-subpaths.json, runs the static walk, and compares the bundle to it (no module-count floor)", () => {
-    const source = readFileSync(join(PROOF, "run.mjs"), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-    // the calls themselves, not the import lines that also name them
-    expect(source).toContain('readJson(path.join(ENGINE, "phone-subpaths.json"))');
-    expect(source).toContain("phoneSpecifiers({ subpaths,");
-    expect(source).toContain("checkPhoneSafety(ENGINE)");
-    expect(source).toContain("phone.violations.length > 0");
-    expect(source).toContain("assertBundleMatchesWalk({ bundle: engine, walked: phone.walked })");
-    expect(source).not.toContain("RN_ENGINE_MODULE_FLOOR");
+  it("holds against the real engine: the modules the emitted JavaScript imports, from the phone entries, are exactly the walked modules", () => {
+    const real = checkPhoneClosure(ENGINE);
+    expect(real.violations).toEqual([]);
+    const bundle = emittedClosure(real.entries);
+    expect(bundle.length, "anti-vacuity: the emitted closure").toBeGreaterThan(30);
+    // assertBundleMatchesWalk names the module either side lacks; the count it returns is the pinned closure's
+    const pinned = (JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { closure: { modules: string[] } }).closure.modules;
+    expect(assertBundleMatchesWalk({ bundle, walked: real.walked })).toBe(pinned.length);
+    expect(phoneClosureDrift(real.walked, pinned), "the phone closure drifted from the pin").toBeNull();
+  });
+
+  it("the emitted-closure check can fail: a walk with a module added or dropped disagrees with it", () => {
+    const real = checkPhoneSafety(ENGINE);
+    const bundle = emittedClosure(real.entries);
+    expect(() => assertBundleMatchesWalk({ bundle, walked: real.walked.slice(1) })).toThrow(/never walked/);
+    expect(() => assertBundleMatchesWalk({ bundle, walked: [...real.walked, "src/core/not-a-module.ts"] })).toThrow(/absent from the dev bundle/);
+  });
+
+  it("assertPhoneRuleGreen passes a clean walk, and refuses any violation (the closure-changed one included) and an empty walk", () => {
+    const walked = ["src/core/index.ts"];
+    expect(assertPhoneRuleGreen({ walked, violations: [] })).toBe(1);
+    expect(() => assertPhoneRuleGreen({ walked, violations: [{ kind: "node-builtin", file: "src/core/index.ts", detail: "line 1: imports node:fs" }] })).toThrow(/rule is red[\s\S]*src\/core\/index\.ts node-builtin: line 1/);
+    expect(() => assertPhoneRuleGreen({ walked, violations: [{ kind: "closure-changed", file: "phone-subpaths.json", detail: "1 module(s) added: x" }] })).toThrow(/closure-changed: 1 module\(s\) added/);
+    expect(() => assertPhoneRuleGreen({ walked: [], violations: [] })).toThrow(/visited no module/);
+    expect(() => assertPhoneRuleGreen({} as never)).toThrow(/report/);
+  });
+
+  // run.mjs is not importable (it runs on load), so its wiring is read from its SYNTAX: the rn leg must, as unconditional top-level statements
+  // of rnFixture and in this order, take the combined phone check (walk + pin), assert it green, and later compare the bundle to the walk it
+  // took. A text search would pass `if (false) assertPhoneRuleGreen(phone)` and `phone.violations.length > 0 && false`; this does not.
+  const rnLegProblems = (source: string): string[] => {
+    const sf = ts.createSourceFile("run.mjs", source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.JS);
+    const fn = sf.statements.find((n): n is ts.FunctionDeclaration => ts.isFunctionDeclaration(n) && n.name?.text === "rnFixture");
+    if (!fn?.body) return ["rnFixture is not a function declaration with a body"];
+    const unwrap = (e: ts.Expression): ts.Expression => (ts.isAwaitExpression(e) ? unwrap(e.expression) : ts.isParenthesizedExpression(e) ? unwrap(e.expression) : e);
+    const flat = (n: ts.Node) => n.getText(sf).replace(/\s+/g, " ");
+    const steps: { bound: string | null; callee: string; args: string[] }[] = [];
+    for (const st of fn.body.statements) {
+      const call = (e: ts.Expression | undefined, bound: string | null) => {
+        const c = e && unwrap(e);
+        if (c && ts.isCallExpression(c)) steps.push({ bound, callee: c.expression.kind === ts.SyntaxKind.ImportKeyword ? "import" : flat(c.expression), args: c.arguments.map(flat) });
+      };
+      if (ts.isExpressionStatement(st)) call(st.expression, null);
+      else if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) call(d.initializer, flat(d.name));
+    }
+    const at = (pred: (s: (typeof steps)[number]) => boolean) => steps.findIndex(pred);
+    const problems: string[] = [];
+    const takeAt = at((s) => s.bound === "phone" && s.callee === "checkPhoneClosure" && s.args.join(",") === "ENGINE");
+    const assertAt = at((s) => s.bound === null && s.callee === "assertPhoneRuleGreen" && s.args.join(",") === "phone");
+    const engineAt = at((s) => s.bound === "engine" && s.callee === "engineDistPaths");
+    const compareAt = at((s) => s.callee === "assertBundleMatchesWalk" && s.args.join(",") === "{ bundle: engine, walked: phone.walked }");
+    if (at((s) => s.bound === "{ checkPhoneClosure }" && s.callee === "import") === -1) problems.push("rnFixture does not import checkPhoneClosure as a top-level statement");
+    if (takeAt === -1) problems.push("rnFixture does not take `const phone = checkPhoneClosure(ENGINE)` as a top-level statement");
+    if (assertAt === -1) problems.push("rnFixture does not call assertPhoneRuleGreen(phone) as a top-level statement");
+    if (engineAt === -1) problems.push("rnFixture does not take `const engine = engineDistPaths(...)` as a top-level statement");
+    if (compareAt === -1) problems.push("rnFixture does not call assertBundleMatchesWalk({ bundle: engine, walked: phone.walked }) as a top-level statement");
+    if ([takeAt, assertAt, engineAt, compareAt].every((i) => i !== -1) && !(takeAt < assertAt && assertAt < compareAt && engineAt < compareAt)) problems.push("rnFixture's phone check, assertion and bundle comparison are out of order");
+    return problems;
+  };
+
+  it("run.mjs's rn leg takes the combined phone check, asserts it green, and compares the dev bundle to the walk - as top-level statements, in order", () => {
+    const real = readFileSync(join(PROOF, "run.mjs"), "utf8");
+    expect(rnLegProblems(real)).toEqual([]);
+    expect(real, "the 1b-3 interim floor is gone").not.toContain("RN_ENGINE_MODULE_FLOOR");
+    const code = real.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).toContain('readJson(path.join(ENGINE, "phone-subpaths.json"))');
+    expect(code).toContain("phoneSpecifiers({ subpaths,");
+  });
+
+  it.each([
+    ["the assertion guarded by a constant", "assertPhoneRuleGreen(phone);", "if (false) assertPhoneRuleGreen(phone);"],
+    ["the assertion short-circuited", "assertPhoneRuleGreen(phone);", "assertPhoneRuleGreen(phone) && false;"],
+    ["the assertion commented out", "assertPhoneRuleGreen(phone);", "// assertPhoneRuleGreen(phone);"],
+    ["the assertion on a copy", "assertPhoneRuleGreen(phone);", "assertPhoneRuleGreen({ ...phone, violations: [] });"],
+    ["the pin dropped (the plain walk instead of the combined check)", "const phone = checkPhoneClosure(ENGINE);", "const phone = checkPhoneSafety(ENGINE);"],
+    ["the comparison against an empty walk", "walked: phone.walked }", "walked: [] }"],
+    ["the comparison against the wrong list", "bundle: engine, walked", "bundle: paths, walked"],
+    ["the comparison made conditional", "const agreed = assertBundleMatchesWalk(", "const agreed = false && assertBundleMatchesWalk("],
+  ])("the wiring check sees %s", (_label, find, replace) => {
+    const real = readFileSync(join(PROOF, "run.mjs"), "utf8");
+    expect(real.split(find).length - 1, `${find} appears once in run.mjs`).toBe(1);
+    expect(rnLegProblems(real.replace(find, replace)).length).toBeGreaterThan(0);
+  });
+
+  it("the wiring check sees the assertion moved after the comparison", () => {
+    const real = readFileSync(join(PROOF, "run.mjs"), "utf8");
+    const assertion = "  assertPhoneRuleGreen(phone);\n";
+    expect(real.split(assertion).length - 1).toBe(1);
+    const afterCompare = "  info(`rn: the dev bundle holds exactly"; // the line after the comparison
+    expect(real.split(afterCompare).length - 1).toBe(1);
+    const moved = real.replace(assertion, "").replace(afterCompare, `${assertion}${afterCompare}`);
+    expect(rnLegProblems(moved)).toEqual(["rnFixture's phone check, assertion and bundle comparison are out of order"]);
   });
 });
 
