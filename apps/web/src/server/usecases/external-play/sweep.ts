@@ -41,6 +41,8 @@ import {
   listMeetingSessions,
   listPeerIds,
   removeParticipant,
+  retireStaleMeeting,
+  gameEvidenceOn,
   type RealtimeKitDeps,
 } from "@/server/external-play/video/realtimekit";
 import { EDITOR_ROLES } from "@/lib/types";
@@ -206,6 +208,9 @@ type Pass = {
   spent: boolean;
   /** D20: the settling reads this pass has made (SWEEP_SETTLING_READS_PER_PASS). */
   settlingReads: number;
+  /** D16 review G1: the boards whose stale meetings this pass has already tried to retire. The retire takes EVERY stale row of
+   *  a board, so the board's second candidate must not ask the vendor again, in the same pass, for a room it just failed to end. */
+  retired: Set<string>;
 };
 
 /** I-1: has the pass spent its budget — for reconcile (D20), its own slice of it? Once the pass's budget is spent it
@@ -626,6 +631,13 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
 //   - nobody played: the round's deadline has passed and no game is, or may
 //     be, on file (gameMayBeOnFile — the predicate job 1 waits on). Past T+20
 //     no game can be made (T9 refuses), so the room has no further use.
+//   - it is STALE: made for another pairing than the board's current one, with
+//     no game behind it (D16 review G1). The claim that finds one ends the room
+//     at the vendor first and deletes its row only after the end succeeded
+//     (retireStaleMeeting), so a refused end (a failure, or the call budget)
+//     leaves the row; this is the pass that asks again, whatever the round's
+//     window says - an old pair's tokens must not stay live in an ACTIVE room
+//     until the deadline just because no new claim came.
 // A game on file that is not finished keeps its meeting, past T+20 or not:
 // "nothing in our system ends a live game early" (spec §3.6).
 
@@ -635,13 +647,17 @@ type TeardownCandidate = BridgeFacts & {
   meetingId: string;
   fixtureStatus: string;
   openedAt: Date | null;
+  /** Made for another pairing than the fixture's, with no game behind it: the retire's own judgement (gameEvidenceOn). */
+  retirable: boolean;
 };
 
 async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
   return sql<TeardownCandidate[]>`
     select m.fixture_id as "fixtureId", m.side, m.meeting_id as "meetingId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
-           ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt"
+           ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt",
+           ((m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
+            and not coalesce(${gameEvidenceOn(pass.now)}, false)) as "retirable"
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
       left join fixture_external_play ep on ep.fixture_id = m.fixture_id
@@ -660,6 +676,19 @@ function meetingIsDone(pass: Pass, c: TeardownCandidate): boolean {
 }
 
 async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<SweepDeps["endMeeting"]>): Promise<void> {
+  if (c.retirable) {
+    // The claim's own retire, with the sweep's teardown: it takes EVERY stale row of the board (both players'), so the other
+    // side's candidate, reached next, has nothing left to do (and a room that just refused is not asked again in this pass).
+    // Counted per room actually ended; a refusal is thrown (a deferral by `each` as one, anything else as a failure) after
+    // the other row has had its turn.
+    if (pass.retired.has(c.fixtureId)) return;
+    pass.retired.add(c.fixtureId);
+    await retireStaleMeeting(c.fixtureId, pass.now, async (id) => {
+      await end(id);
+      pass.report.meetingsEnded++;
+    });
+    return;
+  }
   if (!meetingIsDone(pass, c)) return;
   await end(c.meetingId);
   pass.report.meetingsEnded++;
@@ -1313,6 +1342,7 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
     startedAt: clock(),
     spent: false,
     settlingReads: 0,
+    retired: new Set(),
   };
 
   // Job 0 before everything: a board whose fixture is decided is over for us.

@@ -1503,7 +1503,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
 
   /** RealtimeKit at its HTTP boundary; the adapter functions are the real ones, so the meeting rows are real. The
    *  camera is reported live, so a required seat seats on its first claim. */
-  function fakeRtk(hooks: { onCreate?: () => Promise<unknown> } = {}) {
+  function fakeRtk(hooks: { onCreate?: () => Promise<unknown>; onEnd?: (meetingId: string) => Promise<unknown> } = {}) {
     const http: string[] = [];
     const tag = randomUUID().slice(0, 8);
     let seq = 0;
@@ -1526,7 +1526,10 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
         return reply(200, { token: `jwt-regen-${m[1]}-${++seq}` });
       }
       if (method === "POST" && /^\/meetings\/[^/]+\/active-session\/kick-all$/.test(path)) return reply(200, {});
-      if (method === "PATCH" && (m = path.match(/^\/meetings\/([^/]+)$/))) return reply(200, { id: m[1], status: "INACTIVE" });
+      if (method === "PATCH" && (m = path.match(/^\/meetings\/([^/]+)$/))) {
+        await hooks.onEnd?.(m[1]!);
+        return reply(200, { id: m[1], status: "INACTIVE" });
+      }
       throw new Error(`fake RealtimeKit: unrouted ${method} ${path}`);
     }) as typeof globalThis.fetch;
     const video: NonNullable<PreflightDeps["video"]> = {
@@ -2144,15 +2147,18 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     });
   });
 
-  it("R2-2, the retire judges and deletes in ONE statement: a stale meeting that the pairing's own seat has just replaced, or that a game has just appeared behind, is never taken — staged behind a SHARE lock, each arm, counted", async () => {
-    type Arm = { label: string; land: (tx: Awaited<ReturnType<typeof sql.reserve>>, fixtureId: string, fresh: string) => Promise<unknown>; fresh: boolean };
+  // D16 review G1 changed the retire's shape: it ENDS a stale room first and deletes the row only after the end succeeded, so the
+  // old "judge and delete in one statement" staging (a SHARE lock parking the delete) no longer describes it. The race that is
+  // left is the vendor round trip itself, and the test stages it there: the world changes while the stale room's end is in flight.
+  it("R2-2, the retire's delete is judged by the row's own id and the pairing: a stale meeting that the pairing's own seat has just replaced, or that a game has just appeared behind, is not deleted - staged at the stale room's end, each arm, counted", async () => {
+    type Arm = { label: string; land: (fixtureId: string, fresh: string) => Promise<unknown>; fresh: boolean };
     const ARMS: Arm[] = [
       {
         label: "a concurrent seat made the pairing's own meeting",
         fresh: true,
-        land: async (tx, fixtureId, fresh) => {
-          await tx`delete from fixture_video_meetings where fixture_id = ${fixtureId}`;
-          await tx`
+        land: async (fixtureId, fresh) => {
+          await sql`delete from fixture_video_meetings where fixture_id = ${fixtureId}`;
+          await sql`
             insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
             select f.id, 'home', f.org_id, ${fresh}, f.home_entrant_id, f.away_entrant_id from fixtures f where f.id = ${fixtureId}`;
         },
@@ -2160,12 +2166,11 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       {
         label: "a game appeared behind the stale meeting",
         fresh: false,
-        land: (tx, fixtureId) => tx`update fixture_external_play set create_sent_at = now() where fixture_id = ${fixtureId}`,
+        land: (fixtureId) => sql`update fixture_external_play set create_sent_at = now() where fixture_id = ${fixtureId}`,
       },
     ];
     let checked = 0;
     for (const arm of ARMS) {
-      const rtk = fakeRtk();
       const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
       expect(await open(s, 1, new Date()), arm.label).toMatchObject({ opened: true });
       const [b1, b2] = await swissRound1(s.stageId);
@@ -2173,38 +2178,30 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       const fresh = `r22f-${randomUUID().slice(0, 8)}`;
       await insertMeeting(b1!.fixtureId, stale);
       await sql`update fixture_video_meetings set away_entrant_id = ${b2!.home} where fixture_id = ${b1!.fixtureId}`;
-      const holder = await sql.reserve();
-      let outcome: { ok: { meetingId: string } } | { err: unknown };
-      try {
-        await holder`begin`;
-        // Plain selects pass a SHARE lock; the retire's DELETE (ROW EXCLUSIVE) waits on it — after its read saw the
-        // stale meeting, before it judges.
-        await holder`lock table fixture_video_meetings in share mode`;
-        const pid = await backendPid(holder);
-        let done = false;
-        const racing = rtk.video.ensureMeeting(b1!.fixtureId, "home").then(
-          (ok) => ({ ok }),
-          (err: unknown) => ({ err }),
-        ).finally(() => {
-          done = true;
-        });
-        const parked = await pollWaitersBehind(pid, { queryLike: "%delete from fixture_video_meetings%", finished: () => done });
-        expect(parked, `${arm.label}: premise — the retire is parked behind the lock`).toBeGreaterThanOrEqual(1);
-        await arm.land(holder, b1!.fixtureId, fresh);
-        await holder`commit`;
-        outcome = await racing;
-      } finally {
-        await holder`rollback`.catch(() => undefined);
-        holder.release();
-      }
+      let landed = 0;
+      const rtk = fakeRtk({
+        onEnd: async (id) => {
+          if (id !== stale) return;
+          landed += 1;
+          await arm.land(b1!.fixtureId, fresh);
+        },
+      });
+      const outcome = await rtk.video.ensureMeeting(b1!.fixtureId, "home").then(
+        (ok) => ({ ok }),
+        (err: unknown) => ({ err }),
+      );
+      expect(landed, `${arm.label}: premise - the world changed while the stale room's end was in flight`).toBe(1);
+      expect(rtk.http.filter((c) => c.includes(`/meetings/${stale}`) && c.startsWith("PATCH")), `${arm.label}: the stale room was asked to end`).toHaveLength(1);
       if (arm.fresh) {
         expect(outcome, `${arm.label}: the pairing's own meeting is handed out`).toEqual({ ok: { meetingId: fresh } });
-        expect(await meetingsOf(b1!.fixtureId), `${arm.label}: and kept`).toEqual([{ meeting_id: fresh, ended_at: null }]);
-        expect(rtk.http.filter((c) => c.includes(fresh)), `${arm.label}: and never ended`).toEqual([]);
+        expect(await meetingsOf(b1!.fixtureId), `${arm.label}: and kept, unended`).toEqual([{ meeting_id: fresh, ended_at: null }]);
+        expect(rtk.http.filter((c) => c.includes(fresh)), `${arm.label}: and never touched at the vendor`).toEqual([]);
       } else {
         expect(outcome, arm.label).toMatchObject({ err: { status: 409, code: "VIDEO_MEETING_PAIRING_CHANGED" } });
-        expect(await meetingsOf(b1!.fixtureId), `${arm.label}: the game's meeting is kept`).toEqual([{ meeting_id: stale, ended_at: null }]);
-        expect(rtk.http.filter((c) => c.includes(stale)), `${arm.label}: and never ended`).toEqual([]);
+        // The row of a board with a game behind it is never deleted. Its room WAS ended: the guard and the vendor call are not
+        // one atomic step, and a game appearing inside that round trip is the residual window (it cannot arise in play: a game
+        // needs both players seated in their own side's CURRENT meeting, and a stale row on a side means that side was not).
+        expect(await meetingsOf(b1!.fixtureId), `${arm.label}: the game's row is kept`).toEqual([{ meeting_id: stale, ended_at: expect.any(Date) }]);
       }
       checked += 1;
     }

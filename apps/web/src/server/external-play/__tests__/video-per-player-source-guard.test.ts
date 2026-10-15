@@ -63,7 +63,7 @@ const BOTH_SIDES: readonly BothSides[] = [
     fn: "retireStaleMeeting",
     table: "fixture_video_meetings",
     times: 1,
-    reason: "a re-pair makes EVERY row of the board stale at once; the delete takes both and the caller ends each one it took",
+    reason: "a re-pair makes EVERY row of the board stale at once: the select takes both, each room is ended, and each row is then deleted by its own meeting_id",
   },
   {
     file: "usecases/external-play/room-end.ts",

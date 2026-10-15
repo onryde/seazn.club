@@ -2017,6 +2017,109 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
     expect(ended).toEqual([m, m]);
     expect(await endedAt(b.fixtureId)).not.toBeNull();
   });
+
+  // D16 review G1: a re-pair makes the old pair's rooms stale and the next claim retires them - ending each room at the vendor
+  // FIRST, deleting its row only once the end succeeded. A refused end (a failure, or the platform's call budget) keeps the row,
+  // and nothing else would ask again if no claim came: the old pair's tokens would stay live in an ACTIVE room until the round's
+  // deadline. The sweep is the other half of that promise.
+  describe("G1: a stale room whose retire was refused is ended, and its row deleted, by the sweep's next pass", () => {
+    const repairHome = async (b: Board) => {
+      // The board was re-paired: its rooms were made for the OLD pair (the stamp no longer matches the fixture).
+      await sql`update fixture_video_meetings m set away_entrant_id = f.home_entrant_id from fixtures f where f.id = m.fixture_id and m.fixture_id = ${b.fixtureId}`;
+    };
+    const rowsOf = (fixtureId: string) =>
+      sql<{ side: string; meeting_id: string; ended_at: Date | null }[]>`
+        select side, meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId} order by side`;
+
+    it("a FAILED end in the claim's retire keeps the row; the sweep, on a board still playable and before any deadline, ends the room and deletes the row; a third pass finds nothing", async () => {
+      const b = await openedBoard({ checkedIn: [] });
+      const m = await meetingFor(b);
+      await repairHome(b);
+      rtk.patchFails = 1;
+      await expect(ensureMeeting(b.fixtureId, "away", RTK)).rejects.toMatchObject({ name: "RealtimeKitError", code: "unavailable" });
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.side, r.meeting_id, r.ended_at]), "premise: the row survived the refused end, unended").toEqual([["home", m, null]]);
+      const { ended, end } = recordingEnd();
+      const report = await sweep(b, { now: b.at(5), endMeeting: end });
+      expect(ended, "the sweep ended the stale room").toEqual([m]);
+      expect(report.meetingsEnded).toBe(1);
+      expect(await rowsOf(b.fixtureId), "and deleted its row").toEqual([]);
+      const again = await sweep(b, { now: b.at(6), endMeeting: end });
+      expect([again.meetingsEnded, ended.length], "idempotent").toEqual([0, 1]);
+    });
+
+    it("a DEFERRED end (the platform's call budget) in the claim's retire keeps the row; the sweep's pass ends it - and a sweep whose own end is deferred counts a deferral, keeps the row, and the next pass finishes it", async () => {
+      const b = await openedBoard({ checkedIn: [] });
+      const m = await meetingFor(b);
+      await repairHome(b);
+      await expect(ensureMeeting(b.fixtureId, "away", { ...RTK, budget: async () => false })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at]), "premise: the row survived the deferred end").toEqual([[m, null]]);
+      const refused: NonNullable<SweepDeps["endMeeting"]> = async () => {
+        throw new RealtimeKitDeferred("budget spent");
+      };
+      const first = await sweep(b, { now: b.at(5), endMeeting: refused });
+      expect([first.deferred, first.meetingsEnded, first.failures.length], "a deferral, never a failure").toEqual([1, 0, 0]);
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at]), "still kept").toEqual([[m, null]]);
+      const { ended, end } = recordingEnd();
+      const second = await sweep(b, { now: b.at(6), endMeeting: end });
+      expect([second.meetingsEnded, ended]).toEqual([1, [m]]);
+      expect(await rowsOf(b.fixtureId)).toEqual([]);
+    });
+
+    it("both players' rooms stale and ONE end fails: the other row is ended and deleted at once, the failed one is reported and kept, and the next pass finishes it", async () => {
+      const b = await openedBoard({ checkedIn: [] });
+      const home = await meetingFor(b);
+      const { meetingId: away } = await ensureMeeting(b.fixtureId, "away", RTK);
+      rtk.calls = [];
+      await repairHome(b);
+      const { ended, end } = recordingEnd();
+      let refusals = 0;
+      const flaky: NonNullable<SweepDeps["endMeeting"]> = async (id) => {
+        if (id === away && refusals++ === 0) throw new RealtimeKitError(503, "unavailable", "down");
+        await end(id);
+      };
+      const first = await sweep(b, { now: b.at(5), endMeeting: flaky });
+      expect(ended, "the room that could be ended was").toEqual([home]);
+      expect(first.failures.filter((f) => f.job === "teardown").length, "the refusal is reported").toBe(1);
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.side, r.meeting_id, r.ended_at]), "only the refused room's row is kept").toEqual([["away", away, null]]);
+      const second = await sweep(b, { now: b.at(6), endMeeting: flaky });
+      expect([second.meetingsEnded, second.failures.length]).toEqual([1, 0]);
+      expect([...ended].sort()).toEqual([home, away].sort());
+      expect(await rowsOf(b.fixtureId)).toEqual([]);
+    });
+
+    it("a stale room with a GAME behind it is not this path's: it keeps its row and its room before the deadline (a game on file is never ended early)", async () => {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const m = await meetingFor(b);
+      await readyGame(b);
+      await repairHome(b);
+      const { ended, end } = recordingEnd();
+      const report = await sweep(b, { now: b.at(5), endMeeting: end });
+      expect([ended, report.meetingsEnded]).toEqual([[], 0]);
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at])).toEqual([[m, null]]);
+    });
+
+    it("a stale room whose game has FINISHED is torn down by the result rule, not the retire: ended and stamped, and its row stays (a game's meeting is evidence)", async () => {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const m = await meetingFor(b);
+      const gameId = await liveGame(b);
+      serveStream(gameFull(b, gameId, ENDED));
+      await reconcile(b.fixtureId, "game_end", { now: b.at(10) });
+      await repairHome(b);
+      const { ended, end } = recordingEnd();
+      const report = await sweep(b, { now: b.at(11), endMeeting: end });
+      expect([ended, report.meetingsEnded], "the finished game's room is ended once").toEqual([[m], 1]);
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at !== null]), "stamped, kept").toEqual([[m, true]]);
+    });
+
+    it("a room made for the board's CURRENT pair is not stale: before the deadline the sweep leaves it alone", async () => {
+      const b = await openedBoard({ checkedIn: [] });
+      const m = await meetingFor(b);
+      const { ended, end } = recordingEnd();
+      await sweep(b, { now: b.at(5), endMeeting: end });
+      expect(ended).toEqual([]);
+      expect((await rowsOf(b.fixtureId)).map((r) => r.meeting_id)).toEqual([m]);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

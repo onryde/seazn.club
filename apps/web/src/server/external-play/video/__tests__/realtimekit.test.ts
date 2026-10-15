@@ -427,6 +427,122 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting, per player (D16)", ()
     expect(calm.calls.map((c) => c.method), "no stale room, so the claim only creates").toEqual(["POST"]);
     expect((await rowsOf(t.fixtureId)).map((r) => r.side), "and the current room is untouched").toEqual(["away", "home"]);
   });
+
+  // D16 review G1: retire used to DELETE the row and only then end the room at the vendor, so a deferred or failed end left an
+  // ACTIVE room (the old pair's tokens still live in it) that nothing tracked. Now the room is ended FIRST and the row goes
+  // only after the end has succeeded; a refusal keeps the row (the sweep and the next claim retry it) and fails the claim, as the
+  // create that would have followed it would have failed too.
+  describe("G1: a stale room is ended at the vendor BEFORE its row is deleted", () => {
+    const staleHome = async (name: string) => {
+      const s = await seedFixture();
+      const room = mtg(name);
+      await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([created(room)]).fetch });
+      // The board was re-paired: the home room was made for the OLD pair; the newcomer arrives on away, where nothing is on file.
+      await sql`update fixture_video_meetings m set away_entrant_id = f.home_entrant_id from fixtures f where f.id = m.fixture_id and m.fixture_id = ${s.fixtureId}`;
+      expect((await rowsOf(s.fixtureId)).map((r) => r.side), "premise: only the stayer's stale row is on file").toEqual(["home"]);
+      return { s, room };
+    };
+    /** A vendor that answers every call 200 except a PATCH on a room in `patchFails` (503) or `patchGone` (RealtimeKit's own not-found). */
+    const vendor = (
+      fresh: string,
+      patchFails: ReadonlySet<string> = new Set(),
+      patchGone: ReadonlySet<string> = new Set(),
+      patchRefused: ReadonlySet<string> = new Set(),
+    ) => {
+      const calls: { method: string; path: string }[] = [];
+      const fn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const path = String(url).split("/realtime/kit/app-1")[1]!;
+        const method = init?.method ?? "GET";
+        calls.push({ method, path });
+        if (method === "PATCH" && patchFails.has(path.replace("/meetings/", ""))) return new Response("{}", { status: 503 });
+        if (method === "PATCH" && patchRefused.has(path.replace("/meetings/", ""))) return new Response("{}", { status: 401 });
+        if (method === "PATCH" && patchGone.has(path.replace("/meetings/", ""))) {
+          return new Response(JSON.stringify({ success: false, error: { code: 404, message: "Meeting not found" } }), { status: 404 });
+        }
+        if (method === "POST" && path === "/meetings") return new Response(JSON.stringify(created(fresh).body), { status: 200 });
+        return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+      });
+      return { fetch: fn as unknown as typeof fetch, calls };
+    };
+    const ends = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "PATCH").map((c) => c.path.replace("/meetings/", ""));
+
+    it("a FAILED end keeps the row (unended, still tracked) and fails the claim: no new meeting is made; the next claim ends the room, deletes the row, and creates", async () => {
+      configure();
+      const { s, room } = await staleHome("g1-fail-home");
+      const fresh = mtg("g1-fail-fresh");
+      const down = vendor(fresh, new Set([room]));
+      await expect(ensureMeeting(s.fixtureId, "away", { fetch: down.fetch })).rejects.toMatchObject({ name: "RealtimeKitError", code: "unavailable" });
+      expect(ends(down.calls), "the end was tried").toEqual([room]);
+      expect(down.calls.some((c) => c.method === "POST" && c.path === "/meetings"), "and no new room was made on top of it").toBe(false);
+      const kept = await rowsOf(s.fixtureId);
+      expect(kept.map((r) => [r.side, r.meeting_id, r.ended_at]), "the row survives, unended: the room is still ACTIVE upstream and still tracked").toEqual([["home", room, null]]);
+      // The pair: the vendor back, the same claim ends the room, deletes the row, and creates.
+      const up = vendor(fresh);
+      expect(await ensureMeeting(s.fixtureId, "away", { fetch: up.fetch })).toEqual({ meetingId: fresh });
+      expect(ends(up.calls)).toEqual([room]);
+      expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id]), "only after the end succeeded did the row go").toEqual([["away", fresh]]);
+    });
+
+    it("a DEFERRED end (the platform's call budget is spent) makes no request, keeps the row, and fails the claim as a deferral - never as a failure; with the budget back it goes through", async () => {
+      configure();
+      const { s, room } = await staleHome("g1-defer-home");
+      const fresh = mtg("g1-defer-fresh");
+      const spent = vendor(fresh);
+      await expect(ensureMeeting(s.fixtureId, "away", { fetch: spent.fetch, budget: async () => false })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+      expect(spent.calls, "no request was made").toEqual([]);
+      expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id, r.ended_at]), "the row survives").toEqual([["home", room, null]]);
+      const back = vendor(fresh);
+      expect(await ensureMeeting(s.fixtureId, "away", { fetch: back.fetch, budget: async () => true })).toEqual({ meetingId: fresh });
+      expect(ends(back.calls)).toEqual([room]);
+      expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id])).toEqual([["away", fresh]]);
+    });
+
+    it("two stale rows, ONE end fails: the room that ended is deleted, the one that did not is kept - each row on its own outcome - and the claim fails", async () => {
+      configure();
+      const s = await seedFixture();
+      const idOf = { home: mtg("g1-two-home"), away: mtg("g1-two-away") };
+      for (const side of SIDES) await ensureMeeting(s.fixtureId, side, { fetch: stubFetch([created(idOf[side])]).fetch });
+      await sql`update fixture_video_meetings m set away_entrant_id = f.home_entrant_id from fixtures f where f.id = m.fixture_id and m.fixture_id = ${s.fixtureId}`;
+      const fresh = mtg("g1-two-fresh");
+      const v = vendor(fresh, new Set([idOf.away]));
+      await expect(ensureMeeting(s.fixtureId, "away", { fetch: v.fetch })).rejects.toMatchObject({ code: "unavailable" });
+      expect(new Set(ends(v.calls)), "both ends were tried: a failure on one does not skip the other").toEqual(new Set([idOf.home, idOf.away]));
+      expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id, r.ended_at]), "home's room ended, so its row is gone; away's did not, so its row stays").toEqual([["away", idOf.away, null]]);
+    });
+
+    it("two stale rows and BOTH ends fail: both rows are kept, and the claim fails with the FIRST refusal (side order), not the last", async () => {
+      configure();
+      const s = await seedFixture();
+      const idOf = { home: mtg("g1-both-home"), away: mtg("g1-both-away") };
+      for (const side of SIDES) await ensureMeeting(s.fixtureId, side, { fetch: stubFetch([created(idOf[side])]).fetch });
+      await sql`update fixture_video_meetings m set away_entrant_id = f.home_entrant_id from fixtures f where f.id = m.fixture_id and m.fixture_id = ${s.fixtureId}`;
+      // away is tried first (side order) and is refused as `unavailable`; home is tried second and is refused as `unauthorized`.
+      const v = vendor(mtg("g1-both-fresh"), new Set([idOf.away]), new Set(), new Set([idOf.home]));
+      await expect(ensureMeeting(s.fixtureId, "away", { fetch: v.fetch })).rejects.toMatchObject({ code: "unavailable" });
+      expect(new Set(ends(v.calls)), "both were tried").toEqual(new Set([idOf.home, idOf.away]));
+      expect((await rowsOf(s.fixtureId)).map((r) => r.side), "both rows kept: neither room is known to be ended").toEqual(["away", "home"]);
+    });
+
+    it("a stale row whose room is already ENDED needs no vendor call: its row is deleted and the claim goes on", async () => {
+      configure();
+      const { s, room } = await staleHome("g1-ended-home");
+      await sql`update fixture_video_meetings set ended_at = now() where meeting_id = ${room}`;
+      const fresh = mtg("g1-ended-fresh");
+      const v = vendor(fresh);
+      expect(await ensureMeeting(s.fixtureId, "away", { fetch: v.fetch })).toEqual({ meetingId: fresh });
+      expect(v.calls.map((c) => `${c.method} ${c.path}`), "only the create: the ended room is not asked again").toEqual(["POST /meetings"]);
+      expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id])).toEqual([["away", fresh]]);
+    });
+
+    it("a room RealtimeKit itself says is not there (its documented not-found) is already gone: the row is deleted and the claim goes on", async () => {
+      configure();
+      const { s, room } = await staleHome("g1-gone-home");
+      const fresh = mtg("g1-gone-fresh");
+      const v = vendor(fresh, new Set(), new Set([room]));
+      expect(await ensureMeeting(s.fixtureId, "away", { fetch: v.fetch })).toEqual({ meetingId: fresh });
+      expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id])).toEqual([["away", fresh]]);
+    });
+  });
 });
 
 describe("addParticipant", () => {

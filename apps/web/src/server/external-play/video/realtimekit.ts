@@ -329,33 +329,62 @@ async function meetingOnFile(fixtureId: string, side: MeetingSide, now: Date): P
   return row ?? null;
 }
 
-/** R2-2: retire the board's meetings if they are (still) another pairing's with no game behind them — their rows
- *  (their participants cascade: the player who moved, and the one who stayed, who re-seats into the new pairing's
- *  meeting), then each room at RealtimeKit, so no token of the old pairing is live in it. A re-pair makes EVERY row of
- *  the board stale at once, so this deletes by fixture on purpose (a both-sides statement, allow-listed in the source
- *  guard) and ends every row it took, not the first (D16). ONE statement judges and deletes, so a meeting a
- *  concurrent seat has just made for this pairing, or one a game has since appeared behind, is never taken: the
- *  caller's next read decides. An ended meeting is not asked again. Ending is best effort and never silent — its
- *  row is gone, so nothing hands out a token for it. */
-async function retireStaleMeeting(fixtureId: string, now: Date, deps: RealtimeKitDeps): Promise<void> {
-  const gone = await sql<{ meeting_id: string; side: MeetingSide; ended_at: Date | null }[]>`
-    delete from fixture_video_meetings m
-     using fixtures f
-     where m.fixture_id = ${fixtureId} and f.id = m.fixture_id
+/** R2-2: retire the board's meetings if they are (still) another pairing's with no game behind them: each room is ENDED at
+ *  RealtimeKit, so no token of the old pairing is live in it, and only THEN is its row deleted (its participants cascade:
+ *  the player who moved, and the one who stayed, who re-seats into the new pairing's meeting). The order is the point (D16
+ *  review G1): the row is the only thing that tracks an ACTIVE vendor room, so a row deleted before its end succeeded, with
+ *  the end then deferred or failed, left a live room nothing knew about. A refusal keeps the row and throws: the claim that
+ *  asked cannot make its own room on top of one it could not clear (the create that would follow would be refused for the
+ *  same reason, and a room with the old pair's tokens live is the thing this exists to prevent), and the next claim, or the
+ *  sweep (job 3), asks again. A room RealtimeKit itself says is not there (its documented not-found) is already gone, so its
+ *  row goes. A re-pair makes EVERY row of the board stale at once, so this selects by fixture on purpose (a both-sides
+ *  statement, allow-listed in the source guard) and handles every row it took, each on its own outcome - one refusal does
+ *  not skip the others; the first is thrown once all have been tried. A row a game stands behind, or one made for this
+ *  pairing, is never selected, and a game that appears while a room's end is in flight still keeps its row (the delete
+ *  judges it again; the vendor call and that guard are not one atomic step, which is the residual window). An ended row
+ *  needs no vendor call. `end` is the teardown (the sweep passes its own); `ensureMeeting` passes `endMeeting`. */
+export async function retireStaleMeeting(
+  fixtureId: string,
+  now: Date,
+  end: (meetingId: string) => Promise<void>,
+): Promise<void> {
+  const stale = await sql<{ meeting_id: string; side: MeetingSide; ended_at: Date | null }[]>`
+    select m.meeting_id, m.side, m.ended_at
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where m.fixture_id = ${fixtureId}
        and (m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
        and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})
-    returning m.meeting_id, m.side, m.ended_at`;
-  for (const retired of gone) {
-    if (retired.ended_at !== null) continue;
+     order by m.side`;
+  let refused: unknown = null;
+  for (const row of stale) {
     try {
-      await endMeeting(retired.meeting_id, deps);
+      if (row.ended_at === null) {
+        try {
+          await end(row.meeting_id);
+        } catch (err) {
+          // The vendor's own "no such meeting" is the end already done by someone else; anything else is not.
+          if (!(err instanceof RealtimeKitError && err.code === "not_found")) throw err;
+        }
+      }
+      // Reached by its own id: the room is ended (or was), so the row has nothing left to track - EXCEPT that a game's meeting
+      // is never deleted. The select above judged "no game" before the vendor round trip; judged again here, a game that
+      // appeared meanwhile keeps its row (the claim is then refused by name, `pairingChanged`).
+      await sql`
+        delete from fixture_video_meetings m
+         where m.meeting_id = ${row.meeting_id}
+           and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
     } catch (err) {
-      log.error(
-        { fixtureId, side: retired.side, meetingId: retired.meeting_id, err: err instanceof Error ? err.message : String(err) },
-        "realtimekit: could not end an earlier pairing's meeting — its row is gone and it is no longer used",
+      refused ??= err;
+      // A call the platform's budget refused is nothing broken (D21): a warning, not an error.
+      (err instanceof RealtimeKitDeferred ? log.warn : log.error).call(
+        log,
+        { fixtureId, side: row.side, meetingId: row.meeting_id, err: err instanceof Error ? err.message : String(err) },
+        "realtimekit: could not end an earlier pairing's meeting - its row is kept and asked again (next claim, or the sweep)",
       );
     }
   }
+  if (refused !== null) throw refused;
 }
 
 /** Created when a PLAYER first arrives in the window, not after both check
@@ -380,14 +409,14 @@ export async function ensureMeeting(fixtureId: string, side: MeetingSide, deps: 
       return { meetingId: existing.meetingId };
     }
     if (existing.evidence) throw pairingChanged(fixtureId);
-    await retireStaleMeeting(fixtureId, now, deps);
+    await retireStaleMeeting(fixtureId, now, (id) => endMeeting(id, deps));
   } else {
     // A re-pair makes EVERY row of the board stale at once (§5.6.1, R3-1 unchanged), but it is a claim that finds a stale row
     // on ITS OWN side that retires them. A newcomer who lands on the side where nothing is on file finds none, and the
     // player who stayed would keep a room made for the old pair until their own next claim. So a claim that is about to
     // CREATE retires the board's other stale rows first: one statement that takes only stale rows with no game behind
     // them, and no vendor call when there is nothing to take.
-    await retireStaleMeeting(fixtureId, now, deps);
+    await retireStaleMeeting(fixtureId, now, (id) => endMeeting(id, deps));
   }
 
   const [fixture] = await sql<{ org_id: string; home: string | null; away: string | null }[]>`
