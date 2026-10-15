@@ -273,7 +273,7 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     expect(accepted, "anti-vacuity: some variant accepts").toBeGreaterThan(0);
   }, 120_000);
 
-  it("Review Focus 3: bonuses and forfeit points need standings.custom_points; the base sentence is free", async () => {
+  it("Review Focus 3: bonuses and forfeit points need standings.custom_points; the base sentence is free (X-PT-1)", async () => {
     const denied = await seedOrg("community");
     await denyFeature(denied.orgId, "standings.custom_points");
     const { divisionId } = await seedDivision(denied, "badminton", "short");
@@ -377,7 +377,7 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     expect(unreached, "a set sport refuses it").toBeGreaterThan(0);
   }, 60_000);
 
-  it("the table moves with the save: a Swiss bye already on the table is re-paid under the new points, and again when they are cleared", async () => {
+  it("the table moves with the save: a Swiss bye already on the table is re-paid under the new points, and again when they are cleared (X-PT-1)", async () => {
     // single-sport: the standings fold is sport-blind under a rule; a Swiss bye is the one result an unstarted stage holds.
     const auth = await seedOrg("pro");
     const { divisionId } = await seedDivision(auth, "badminton", "short", 3);
@@ -706,7 +706,7 @@ describe.skipIf(!HAS_DB)("ST-G8 over the real HTTP route", () => {
     expect(ruleRefusalText(body.error!.code, body.error, msg), "the en client sentence IS the server's").toBe(body.error!.message);
   });
 
-  it("Review Focus 3: 402 PAYMENT_REQUIRED names standings.custom_points; the base rule lands 200 with the stored rule in the answer", async () => {
+  it("Review Focus 3: 402 PAYMENT_REQUIRED names standings.custom_points; the base rule lands 200 with the stored rule in the answer (X-PT-1)", async () => {
     const auth = await seedOrg("enterprise");
     const secret = await keyFor(auth);
     await denyFeature(auth.orgId, "standings.custom_points");
