@@ -1,0 +1,1713 @@
+[
+  {
+    "id": "t16-pl-win-guard",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];",
+    "replace": "if (!isNum(base?.draw) || !isNum(base?.loss)) return [];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-draw-guard",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];",
+    "replace": "if (!isNum(base?.win) || !isNum(base?.loss)) return [];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-loss-guard",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];",
+    "replace": "if (!isNum(base?.win) || !isNum(base?.draw)) return [];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-base-params",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "params: { win: base.win, draw: base.draw, loss: base.loss }",
+    "replace": "params: { win: base.win, draw: base.loss, loss: base.draw }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-forfeit",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (isNum(forfeit?.winnerPoints) && isNum(forfeit?.loserPoints)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-forfeit-loser-guard",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (isNum(forfeit?.winnerPoints) && isNum(forfeit?.loserPoints)) {",
+    "replace": "if (isNum(forfeit?.winnerPoints)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-forfeit-winner-guard",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (isNum(forfeit?.winnerPoints) && isNum(forfeit?.loserPoints)) {",
+    "replace": "if (isNum(forfeit?.loserPoints)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-forfeit-params",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "params: { winner: forfeit.winnerPoints, loser: forfeit.loserPoints }",
+    "replace": "params: { winner: forfeit.loserPoints, loser: forfeit.winnerPoints }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-score-array",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (Array.isArray(score) && score.length === 2",
+    "replace": "if (score !== undefined && score !== null && (score as unknown[]).length === 2",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-score-length",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "score.length === 2",
+    "replace": "score.length >= 2",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-score-first",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "&& isNum(score[0]) && isNum(score[1]))",
+    "replace": "&& isNum(score[1]))",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-score-second",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "&& isNum(score[0]) && isNum(score[1]))",
+    "replace": "&& isNum(score[0]))",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-score-params",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "params: { winner: score[0], loser: score[1] }",
+    "replace": "params: { winner: score[1], loser: score[0] }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-bonus-one",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (bonuses === 1)",
+    "replace": "if (bonuses >= 1)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-bonus-many",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "else if (bonuses > 1)",
+    "replace": "else if (bonuses > 2)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-bonus-array",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "Array.isArray(r?.bonuses) ? r.bonuses.length : 0",
+    "replace": "Array.isArray(r?.bonuses) ? r.bonuses.length : 1",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-score-nested-in-forfeit",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "    const score = forfeit.awardScore;",
+    "replace": "    const score = undefined as unknown;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-rl-capitalise",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "return text.charAt(0).toUpperCase() + text.slice(1);",
+    "replace": "return text;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rules-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-rl-capitalise-once",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "return text.charAt(0).toUpperCase() + text.slice(1);",
+    "replace": "return text.toUpperCase();",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rules-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-rl-joiner",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "export const RULES_LINE_JOINER = \", \";",
+    "replace": "export const RULES_LINE_JOINER = \" · \";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rules-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-family",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "period: (_k, _m, c) => describePeriods(c),",
+    "replace": "period: () => null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules.test.ts"
+        ],
+        "name": "every builtin sport"
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-entry",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "innings: (_k, _m, c) => describeInnings(c),",
+    "replace": "innings: () => null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-boards-entry",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "boards: (_k, _m, c) => describeBoards(c),",
+    "replace": "boards: () => null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-board-entry",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "board: (_k, m, c) => describeBoardGame(m, c),",
+    "replace": "board: () => null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-score-entry",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "score: (_k, _m, c) => describeScore(c),",
+    "replace": "score: () => null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-setbased-entry",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return bestOf === undefined ? null : [describeSetKernel(sportKey, c, bestOf)];",
+    "replace": "return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-nested-entry",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return bestOf === undefined ? null : describeNested(c, bestOf);",
+    "replace": "return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-halfminutes",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"halfMinutes\", \"period\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-periods",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"periods.minutes\", \"period\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-innings",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"ballsPerInnings\", \"innings\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-boards",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"maxBoards\", \"boards\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-clock",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"clock\", \"board\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-score",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"resultMode\", \"score\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-settarget",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"setTo\", \"setbased\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-marker-nested",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  [\"set\", \"nested\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-family-nokeys",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  if (!declared) return null;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-shape-nested",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "(record(c.set) !== undefined ? \"nested\" : \"setbased\")",
+    "replace": "\"setbased\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-shape-keys-null",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "(module_.ruleKeys === undefined ? (record(c.set) !== undefined ? \"nested\" : \"setbased\") : null)",
+    "replace": "(record(c.set) !== undefined ? \"nested\" : \"setbased\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-period-halves",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (count === 2) return",
+    "replace": "if (false) return",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-period-thirds",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (count === 3) return",
+    "replace": "if (false) return",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-period-quarters",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (count === 4) return",
+    "replace": "if (false) return",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-period-needs-both",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (count === undefined || minutes === undefined) return null;",
+    "replace": "if (count === undefined && minutes === undefined) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-period-count-source",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "positive(periods?.count) ?? positive(c.halves)",
+    "replace": "positive(c.halves)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-period-minutes-source",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "positive(periods?.minutes) ?? positive(c.halfMinutes)",
+    "replace": "positive(c.halfMinutes)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-whole-overs",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (perOver !== undefined && balls % perOver === 0)",
+    "replace": "if (perOver !== undefined)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-per-over",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (perOver !== undefined && balls % perOver === 0)",
+    "replace": "if (balls % 6 === 0)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-multi",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (innings !== undefined && innings > 1)",
+    "replace": "if (innings !== undefined && innings > 0)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-test",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "} else if (innings !== undefined) {",
+    "replace": "} else if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-bowler",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (bowler !== undefined) out.push",
+    "replace": "if (false) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-null",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return out.length > 0 ? out : null;\n}\n\n/** Carrom",
+    "replace": "return out;\n}\n\n/** Carrom",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-boards-one-game",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (bestOf === 1) out.push({ key: \"format.rules.oneGame\" });",
+    "replace": "if (false) out.push({ key: \"format.rules.oneGame\" });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-boards-best-of",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "else if (bestOf !== undefined) out.push",
+    "replace": "else if (false) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-boards-points",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (points !== undefined) out.push({ key: \"format.rules.boards.gameTo\"",
+    "replace": "if (false) out.push({ key: \"format.rules.boards.gameTo\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-boards-max",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (boards !== undefined) out.push",
+    "replace": "if (false) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-boards-null",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return out.length > 0 ? out : null;\n}\n\n/** A minutes figure",
+    "replace": "return out;\n}\n\n/** A minutes figure",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-minutes-rounding",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "Math.round((seconds / 60) * 100) / 100",
+    "replace": "Math.round(seconds / 60)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-board-variant",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "typeof variant === \"string\" && Object.hasOwn(module_.variants, variant)",
+    "replace": "typeof variant === \"string\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-board-clock",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  if (base !== undefined) {\n    const increment",
+    "replace": "  if (true) {\n    const increment",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-board-increment",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (increment !== undefined) out.push",
+    "replace": "if (false) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-board-delay",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (delay !== undefined) out.push",
+    "replace": "if (false) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-board-null",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return out.length > 0 ? out : null;\n}\n\n/** The result-entry",
+    "replace": "return out;\n}\n\n/** The result-entry",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-score-draws",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return c.allowDraws === true ? [{ key: head }, { key: \"format.rules.score.draws\" }] : [{ key: head }];",
+    "replace": "return [{ key: head }];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-score-modes",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "c.resultMode === \"win_loss\" ? \"format.rules.score.winLoss\" : c.resultMode === \"score\" ? \"format.rules.score.score\" : null",
+    "replace": "c.resultMode === \"win_loss\" ? \"format.rules.score.winLoss\" : \"format.rules.score.score\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-extratime-enabled",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "    if (x?.enabled !== true) return null;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-shootout-bool",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (c.shootout === true) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-shootout-whenabsent",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "?? positive(m.ruleKeys?.shootoutAttempts?.whenAbsent)",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-shootout-object",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "    const x = record(c.shootout);\n    if (x === undefined) return null;\n",
+    "replace": "    const x = record(c.shootout) ?? {};\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-overtime-off",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "    const x = record(c.overtime);\n    if (x === undefined) return null;\n",
+    "replace": "    const x = record(c.overtime) ?? {};\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-superover",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "superOver: (c) => (c.superOver === true ?",
+    "replace": "superOver: (c) => (c.superOver !== undefined ?",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-rungs-none",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return rungs.length === 0 ? null :",
+    "replace": "return false ? null :",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-rungs-array",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "tiebreakRungs: Array.isArray(c.tiebreakRungs) ? (c.tiebreakRungs as TiebreakRung[]) : undefined",
+    "replace": "tiebreakRungs: undefined",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-tieboard",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "tieBoard: (c) => (c.tieBoard === \"extra\" ?",
+    "replace": "tieBoard: (c) => (true ?",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-refused",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  const parsed = module_.configSchema.safeParse(cfg);\n  if (!parsed.success) return [];\n  const bracket",
+    "replace": "  const parsed = module_.configSchema.safeParse(cfg);\n  if (!parsed.success) return [{ key: \"format.rules.decider.none\" }];\n  const bracket",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-bracket",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "const bracket = forbidsLevelResult(kind);",
+    "replace": "const bracket = false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-forced-table",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "const forced = bracket && typeof module_.bracketDeciders",
+    "replace": "const forced = typeof module_.bracketDeciders",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-forced-wins",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "const c = { ...base, ...forced };",
+    "replace": "const c = { ...forced, ...base };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-forced-ignored",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "const c = { ...base, ...forced };",
+    "replace": "const c = { ...base };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-applicable",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (!applicable.has(key) && !Object.hasOwn(forced, key)) continue;",
+    "replace": "if (!applicable.has(key)) continue;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-all-kinds",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (!applicable.has(key) && !Object.hasOwn(forced, key)) continue;",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-unknown-off",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "    if (!Object.hasOwn(DECIDERS, key)) {\n      on = true;\n      continue;\n    }",
+    "replace": "    if (!Object.hasOwn(DECIDERS, key)) {\n      continue;\n    }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-unspeakable-on",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "    on = true;\n    out.push(...said);",
+    "replace": "    if (said.length > 0) on = true;\n    out.push(...said);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-none-considered",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (!on && bracket && considered > 0)",
+    "replace": "if (!on && bracket)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-none-bracket",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (!on && bracket && considered > 0)",
+    "replace": "if (!on && considered > 0)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-deciders-none-on",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (!on && bracket && considered > 0)",
+    "replace": "if (bracket && considered > 0)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-abandon-absent",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "?? ABANDON_ABSENT;",
+    "replace": "?? \"\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-abandon-offered",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return typeof policy === \"string\" && offered.includes(policy) ?",
+    "replace": "return typeof policy === \"string\" ?",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-abandon-refused",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  const parsed = module_.configSchema.safeParse(cfg);\n  if (!parsed.success) return [];\n  const policy",
+    "replace": "  const parsed = module_.configSchema.safeParse(cfg);\n  const policy",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-differ-raw-fallback",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (a === undefined || b === undefined) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-differ-keys-fallback",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "const keys = module_?.ruleKeys !== undefined ? stageKeysFor(module_, null, null) : configKeysFor(sportKey);",
+    "replace": "const keys = module_?.ruleKeys !== undefined ? stageKeysFor(module_, null, null) : [];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-differ-canonical",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (canonical(valueAt(ra, key)) !== canonical(valueAt(rb, key))) return true;",
+    "replace": "if (valueAt(ra, key) !== valueAt(rb, key)) return true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-differ-dotted",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return path.split(\".\").reduce<unknown>((acc, step) => record(acc)?.[step], cfg);",
+    "replace": "return cfg[path];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-line-differ",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (!module_ || !rulesDifferFromDivision(sportKey, module_, effectiveCfg, divisionCfg)) return null;",
+    "replace": "if (!module_) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-line-format-null",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "  if (format === null) return null;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-line-abandon-changed",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "...(changed ? abandon : [])",
+    "replace": "...abandon",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-line-abandon-compare",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "const changed = canonical(abandon) !== canonical(describeAbandon(module_, divisionCfg));",
+    "replace": "const changed = true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-line-deciders",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "...describeDeciders(module_, kind, effectiveCfg), ...(changed",
+    "replace": "...(changed",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-line-order",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return [...format, ...describeDeciders(module_, kind, effectiveCfg), ...(changed ? abandon : [])];",
+    "replace": "return [...describeDeciders(module_, kind, effectiveCfg), ...format, ...(changed ? abandon : [])];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-line-kind",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "...describeDeciders(module_, kind, effectiveCfg), ...(changed",
+    "replace": "...describeDeciders(module_, undefined, effectiveCfg), ...(changed",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-sort",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "[...stages].sort((a, b) => a.seq - b.seq)",
+    "replace": "[...stages]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-kind",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "const kind = stage.kind ?? null;",
+    "replace": "const kind = null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-stage-rules",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "{ kind, config: { rules: stage.rules } }",
+    "replace": "{ kind, config: {} }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-bracket-only",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "?? (forbidsLevelResult(kind) ? describeDeciders(module_, kind, effective) : []);",
+    "replace": "?? [];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-bracket-gate",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "?? (forbidsLevelResult(kind) ? describeDeciders(module_, kind, effective) : []);",
+    "replace": "?? describeDeciders(module_, kind, effective);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-points",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "const points = pointsLine(stage.points_rule as PointsRule);",
+    "replace": "const points: ReturnType<typeof pointsLine> = [];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-empty-stage",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "if (line.length + points.length > 0) out.push",
+    "replace": "if (true) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-points-only",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "if (line.length + points.length > 0) out.push",
+    "replace": "if (line.length > 0) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-order",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "line: [...line, ...points]",
+    "replace": "line: [...points, ...line]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-sf-module",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "    if (module_) {\n",
+    "replace": "    if (module_ !== undefined) {\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-mc-kind",
+    "file": "apps/web/src/server/public-site/match-centre-load.ts",
+    "find": "rawCfg, configRows.division?.config, configRows.stage?.kind);",
+    "replace": "rawCfg, configRows.division?.config);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/public-fixture-stage-rules-label.test.ts"
+        ]
+      }
+    ]
+  }
+]
