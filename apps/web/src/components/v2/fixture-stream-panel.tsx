@@ -176,6 +176,15 @@ export function previewScaleFor(stripWidth: number): number {
   return Math.min(w, PREVIEW_MAX_W_PX) / CANVAS_W;
 }
 
+/** True when stream code `a` was issued AFTER `b` (both ISO instants off the same server). An instant that does not
+ *  parse falls back to "they differ" — the safe reading, since the card then re-asks rather than trusts a code it
+ *  cannot order. Exported for its test. */
+export function codeIsNewer(a: string, b: string): boolean {
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  return Number.isNaN(x) || Number.isNaN(y) ? a !== b : x > y;
+}
+
 /** What the panel needs off the row. Structurally a subset of
  *  `RunSheetFixture`, declared narrowly so the panel does not import the run
  *  sheet's own shape and become un-mountable anywhere else. */
@@ -1103,6 +1112,16 @@ export function PhoneTab({
   // shown one ended (expired) on a match no longer finished (C5) — is asked for again, ONCE per such answer, so a stale
   // read can never spin the ensure.
   const codeSeen = phone?.code ? `${phone.code.issuedAt}|${phone.code.state === "ended" ? "ended" : "open"}` : null;
+  // A shown code the read model has moved past is stale: reissued from another tab it is already REVOKED, and an ended
+  // one on a match still going is dead. One predicate for the card (it draws `loading` for a stale code — a revoked code
+  // must never stay scannable, with "Reissue" enabled, until the new one lands) and for the re-ask below. "Moved past"
+  // is ORDERED: a read model that names an OLDER code than the card holds is only lagging (the answer to our own
+  // reissue or re-ask lands before the next poll does), and blanking a fresh code until the poll catches up would be a
+  // spinner the organiser did nothing to deserve.
+  const codeStale =
+    code.status === "ok" &&
+    !!phone?.code &&
+    (codeIsNewer(phone.code.issuedAt, code.issuedAt) || (phone.code.state === "ended" && !phone.finished && !codeIsNewer(code.issuedAt, phone.code.issuedAt)));
   const askedFor = useRef<string | null>(null);
   // The FIRST ask is in flight (a poll can re-run the effect before it answers). While it is, `code` is still `idle`
   // — and the card already draws `idle` as loading, so no state needs setting to show the ask.
@@ -1119,14 +1138,12 @@ export function PhoneTab({
       });
       return;
     }
-    if (code.status !== "ok" || codeSeen === null || askedFor.current === codeSeen || !phone?.code) return;
-    const stale = phone.code.issuedAt !== code.issuedAt || (phone.code.state === "ended" && !phone.finished);
-    if (!stale) return;
+    if (!codeStale || codeSeen === null || askedFor.current === codeSeen) return;
     askedFor.current = codeSeen;
-    // The code on screen stays until the new one lands (it was valid until this read model said otherwise); a failed
-    // ask replaces it with the error card, as before.
+    // The card already draws `loading` for the stale code (derived, above); the answer replaces it — a new code, or the
+    // error card when the ask is refused.
     void askCode().then(landCode);
-  }, [wantCode, code, codeSeen, phone, askCode, landCode]);
+  }, [wantCode, code.status, codeStale, codeSeen, askCode, landCode]);
   const codeText = code.status === "ok" ? captureQrV2Text(code.qr) : null;
   const [codeImage, setCodeImage] = useState<{ text: string; qr: SeaznQr } | null>(null);
   useEffect(() => {
@@ -1145,7 +1162,7 @@ export function PhoneTab({
     };
   }, [codeText]);
   const codeCard: CodeCard =
-    code.status === "ok"
+    code.status === "ok" && !codeStale
       ? { status: "ok", text: codeText!, image: codeImage && codeImage.text === codeText ? codeImage.qr : null }
       : code.status === "error"
         ? { status: "error" }
