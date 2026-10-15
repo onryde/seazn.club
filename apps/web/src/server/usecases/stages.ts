@@ -529,7 +529,7 @@ async function insertStageBatch(
   carried?: ReadonlyMap<string, StageCarry>,
 ): Promise<StageRow[]> {
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-  const [division]= await tx<({ competition_id: string } & StageRulesScope)[]>`
+  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
     select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
   if (!division) throw new HttpError(404, "division not found");
   // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
