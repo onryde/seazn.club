@@ -135,10 +135,9 @@ export function compactOverlay(dense: DenseOverlay): string {
   return `{${parts.join(",")}}`;
 }
 
-/** The inverse of `compactOverlay`: carries each change point forward to the dense per-step form, `steps` entries per column.
- *  A malformed overlay is refused by name (an unknown column, a step out of range, steps not ascending, a non-array column)
- *  rather than read as "no change". */
-export function expandOverlay(overlay: string, steps: number, initial: Readonly<Record<OverlayColumn, string>>): Record<OverlayColumn, string[]> {
+/** The change points of every column a recorded overlay holds, shape-checked: an object of known columns, each an array of
+ *  `[step, value]` pairs. A malformed overlay is refused by name, never read as "no change". A column with no entry holds none. */
+function overlayPairs(overlay: string): Map<OverlayColumn, (readonly [unknown, unknown])[]> {
   const parsed: unknown = JSON.parse(overlay);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`overlay must be a JSON object of columns, got ${overlay.slice(0, 40)}`);
@@ -147,17 +146,34 @@ export function expandOverlay(overlay: string, steps: number, initial: Readonly<
   for (const key of Object.keys(record)) {
     if (!(OVERLAY_COLUMNS as readonly string[]).includes(key)) throw new Error(`overlay names unknown column "${key}"`);
   }
+  const out = new Map<OverlayColumn, (readonly [unknown, unknown])[]>();
+  for (const column of OVERLAY_COLUMNS) {
+    const pairs = record[column];
+    if (pairs === undefined) continue;
+    if (!Array.isArray(pairs)) throw new Error(`overlay column "${column}" must be an array of [step, value] pairs`);
+    out.set(
+      column,
+      (pairs as unknown[]).map((pair) => {
+        if (!Array.isArray(pair) || pair.length !== 2) throw new Error(`overlay column "${column}" holds a malformed pair: ${JSON.stringify(pair)}`);
+        return pair as [unknown, unknown];
+      }),
+    );
+  }
+  return out;
+}
+
+/** The inverse of `compactOverlay`: carries each change point forward to the dense per-step form, `steps` entries per column.
+ *  A malformed overlay is refused by name (an unknown column, a step out of range, steps not ascending, a non-array column)
+ *  rather than read as "no change". */
+export function expandOverlay(overlay: string, steps: number, initial: Readonly<Record<OverlayColumn, string>>): Record<OverlayColumn, string[]> {
+  const held = overlayPairs(overlay);
   const out = {} as Record<OverlayColumn, string[]>;
   for (const column of OVERLAY_COLUMNS) {
-    const pairs = record[column] ?? [];
-    if (!Array.isArray(pairs)) throw new Error(`overlay column "${column}" must be an array of [step, value] pairs`);
     const values: string[] = [];
     let current = initial[column];
     let next = 0;
     let last = -1;
-    for (const pair of pairs as unknown[]) {
-      if (!Array.isArray(pair) || pair.length !== 2) throw new Error(`overlay column "${column}" holds a malformed pair: ${JSON.stringify(pair)}`);
-      const [step, value] = pair as [unknown, unknown];
+    for (const [step, value] of held.get(column) ?? []) {
       if (typeof step !== "number" || !Number.isInteger(step) || step < 0 || step >= steps) {
         throw new Error(`overlay column "${column}" has a change point at step ${String(step)}, outside the ${steps} recorded step(s)`);
       }
@@ -187,26 +203,14 @@ export interface ColumnTransitions {
  *  column whose default is not static (the digest of the team sheets): any change point is a `set`, and a `cleared` is never
  *  claimed, because it cannot be read from the stream alone. A malformed overlay is refused by name, never read as "no change". */
 export function overlayTransitions(overlay: string): Map<OverlayColumn, ColumnTransitions> {
-  const parsed: unknown = JSON.parse(overlay);
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`overlay must be a JSON object of columns, got ${overlay.slice(0, 40)}`);
-  }
-  const record = parsed as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (!(OVERLAY_COLUMNS as readonly string[]).includes(key)) throw new Error(`overlay names unknown column "${key}"`);
-  }
   const out = new Map<OverlayColumn, ColumnTransitions>();
-  for (const column of OVERLAY_COLUMNS) {
-    const pairs = record[column];
-    if (pairs === undefined) continue;
-    if (!Array.isArray(pairs)) throw new Error(`overlay column "${column}" must be an array of [step, value] pairs`);
+  for (const [column, pairs] of overlayPairs(overlay)) {
     const dflt: string | undefined = column === "squads" ? undefined : STATIC_COLUMN_DEFAULTS[column];
     let set = false;
     let cleared = false;
     let away = false;
-    for (const pair of pairs as unknown[]) {
-      if (!Array.isArray(pair) || pair.length !== 2) throw new Error(`overlay column "${column}" holds a malformed pair: ${JSON.stringify(pair)}`);
-      const atDefault = dflt !== undefined && json((pair as [unknown, unknown])[1]) === dflt;
+    for (const [, value] of pairs) {
+      const atDefault = dflt !== undefined && json(value) === dflt;
       if (!atDefault) {
         set = true;
         away = true;
