@@ -542,7 +542,8 @@ describe("guards - what the describers refuse to say, and the doubles they must 
   });
 
   it("an ON shoot-out whose kick count is neither stored nor declared says no number - and is still ON, so the line never claims 'none'", () => {
-    const { whenAbsent: _declared, ...noDefault } = football.ruleKeys!.shootoutAttempts!;
+    const noDefault = Object.fromEntries(Object.entries(football.ruleKeys!.shootoutAttempts!).filter(([k]) => k !== "whenAbsent"));
+    expect(football.ruleKeys!.shootoutAttempts!.whenAbsent, "premise: the engine declares a default kick count").toBeGreaterThan(0);
     const bare = { ...football, ruleKeys: { ...football.ruleKeys, shootoutAttempts: noDefault } } as unknown as AnySportModule;
     expect(describeDeciders(bare, "knockout", { ...divisionCfg(football, "11-a-side"), shootout: true })).toEqual([]);
     // The same cfg with the engine's declaration intact says its count (the declared number, not an invented one).
