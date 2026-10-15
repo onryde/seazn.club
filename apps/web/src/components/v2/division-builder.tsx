@@ -539,12 +539,15 @@ export function DivisionBuilder({
 
   // Any change to the format or its knobs invalidates a shown example. The
   // example carries the knobs it was drawn for, and one drawn for other knobs
-  // is dropped during render (not from an effect) — which also drops an answer
+  // is CLEARED during render (not from an effect) — which also drops an answer
   // that was still in flight when a knob moved, instead of showing the old
-  // format's draw under the new format's settings.
+  // format's draw under the new format's settings. A render-phase set discards
+  // the pass it was made in, so no stale example is ever committed; and it is
+  // a clear, not just a hidden value, so changing the knobs back does not
+  // resurrect a draw (see division-builder-example-knobs.test.tsx).
   const knobs = JSON.stringify([template, qualified, swissRounds, poolCount, legs, standingsCarry]);
   if (shownPreview && shownPreview.knobs !== knobs) setPreview(null);
-  const preview = shownPreview?.knobs === knobs ? shownPreview.phases : null;
+  const preview = shownPreview?.phases ?? null;
 
   async function runPreview() {
     setPreviewError(null);
