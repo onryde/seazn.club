@@ -202,7 +202,7 @@ that compared no stream); `3` the guard itself crashed.
 
 The epoch guard compares corpora, so it is only as wide as they are. It judges
 the **module layer** of the **exercised paths**, and a change outside that owes
-a **manual bump of every sport it reaches** (raise each sport's `FOLD_EPOCH` by
+a **manual MAJOR bump of every sport it reaches** (raise each sport's `FOLD_EPOCH` by
 hand in the same PR; no tool will tell you):
 
 - **The kernel overlays.** The harness records `module.outcome(finalState)`,
@@ -234,8 +234,8 @@ hand in the same PR; no tool will tell you):
     ablation, not from the `onLineup` declaration: `uncoveredUnpinned` ablates every
     recorded `core.*` event and reds on any that moves nothing yet is named by no
     `OVERLAY_CLAIMS` class (the declaration alone had missed football's position).
-  A change to how any of these folds therefore owes a **manual bump of every sport
-  it reaches**: raise each sport's `FOLD_EPOCH` (the MAJOR) by hand in the same PR,
+  A change to how any of these folds therefore owes a **manual MAJOR bump of every
+  sport it reaches**: raise each sport's `FOLD_EPOCH` (the MAJOR) by hand in the same PR,
   exactly like the overlays above. Nothing here is a closed gap; the floor only
   makes the open one visible and keeps it from widening unnoticed.
   `forfeit-credit.ts`: walkover credit is pinned only where a corpus has a forfeit
@@ -246,7 +246,7 @@ hand in the same PR; no tool will tell you):
   decided), so a void that stopped clearing them fails to fold. What stays
   unrecorded is the kernel's own flags beside module state (an abandon in force,
   a level withdrawal, the stoppage a suspend opened); changing how those clear
-  owes the same manual bump.
+  owes the same manual MAJOR bump.
 - **`core.settle`.** The one kernel type no corpus holds, by exemption: a
   settlement lives beside module state, the harness records the module's bare
   outcome, and a stream carrying one would record a value that is wrong the
@@ -321,7 +321,7 @@ cannot run, fails by name. `finalize`, `abandon` and `forfeit` are probed beside
 them as controls and answer "pinned" in all eleven. Recording the kernel overlay
 in the corpus and comparing it in the guard would pin all of these; that rewrites
 `fold-epoch-guard.ts` and is a separate piece of work (GF-2). Until it lands, the
-list under "What the guard cannot see" is the list of manual bumps.
+list under "What the guard cannot see" is the list of manual MAJOR bumps.
 
 **Anti-vacuity.** Every sweep reports how many sports, tokens and holes it
 checked; zero is a failure; the empty-corpus case is tested first (an emptied
@@ -345,7 +345,7 @@ so a generator walk a later `EXTEND_GOLDEN` appends after the floor changes neit
 the reproduction nor the keep-rule. Floor
 streams have `seed >= FLOOR_SEED_STRIDE` (100000); the epoch guard keys a stream
 by `config#seed`, so a floor stream is a plain **added** stream, never a changed
-one, and a floor append owes no `FOLD_EPOCH` bump. The existing streams are not
+one, and a floor append owes no version bump (neither `FOLD_EPOCH` nor `FOLD_MINOR`). The existing streams are not
 touched; `golden.test.ts` asserts the prefix.
 
 ## How the comparison actually works

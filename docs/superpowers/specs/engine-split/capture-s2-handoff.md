@@ -159,11 +159,15 @@ rules instead needs an epoch per division or fixture, which does not exist.
 
 ## 4. Known limits of the epoch guard (do not rely on it for more than it does)
 
-- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Those pin the **module layer** only. Coverage
-  of core events is thin: `core.void`, `note`, `finalize`, `award`, `suspend`, `resume`, `settle` appear in 0 of 11 corpora and
-  `core.abandon` in 6 of 11. The extension is on branch `test/golden-core-event-floor` (in flight).
+- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Those pin the **module layer** only. The golden
+  floor (#962, `src/testkit/golden-floor.test.ts`) now makes every sport's corpus record every `core.*` event the kernel accepts, bar
+  `core.settle`, and every outcome kind the module can produce. Recording is not pinning: pause/resume (`core.suspend` / `core.resume`),
+  notes, awards and any lineup change a module does not read are recorded but move no golden (the floor's `OVERLAY_CLAIMS` list names
+  them and goes red the day one starts to). `core.settle` (the floor's one exemption) is not recorded at all. A change to how any of these
+  folds owes a MANUAL MAJOR of every sport it reaches. GF-2 (record the kernel overlay so the guard can compare it) is the follow-up, and
+  until it lands that list is the list of manual bumps.
 - **Kernel overlays are not pinned**: the kernel's `outcomeOf` / `summaryOf` (settlement, expunge, withdrawal over a held level
-  result), stoppage, and `forfeit-credit.ts`. A rule change there moves no golden and does NOT force a bump: it owes a MANUAL bump of
+  result), stoppage, and `forfeit-credit.ts`. A rule change there moves no golden and does NOT force a bump: it owes a MANUAL MAJOR of
   every sport it reaches. See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
 - A harness-only rewrite of a corpus (a state string that moves without changing its meaning) is a MAJOR bump and locks out every
   older phone of that sport; the guard cannot tell it from a real change. A deltas-only
