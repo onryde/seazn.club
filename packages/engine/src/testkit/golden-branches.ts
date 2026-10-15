@@ -178,23 +178,20 @@ function drawSport(module: AnySportModule, state: unknown, rng: Rng): GoldenEven
 }
 
 /** `[core.start, ...]` drawn from the module's own generator until `stop` holds on the state it reaches, or null when the
- *  match is decided first. The walk is `module.apply`, as `buildWalk` is; the finished ledger is folded strictly by the
- *  verdict, so an event the real fold would refuse sends the search to the next seed. */
+ *  match is decided first. Each step folds the WHOLE ledger so far through the kernel (`replay`, strict) rather than
+ *  stepping `module.apply` by hand, so the state the generator draws from is the one the real fold holds, and an event the
+ *  fold would refuse sends the search to the next seed. */
 function playUntil(c: BuildCtx, seed: number, stop: (state: Record<string, unknown>, events: readonly GoldenEvent[]) => boolean): GoldenEvent[] | null {
   const rng = mulberry32(seed);
   const events: GoldenEvent[] = [ev("core.start")];
-  try {
-    let state: unknown = c.module.apply(c.module.init(c.cfg, c.lineups), makeEnvelope(0, events[0]!) as never);
-    for (let i = 0; i < WALK_MAX; i++) {
-      if (held(obj(state)) !== null) return null;
-      if (stop(obj(state), events)) return events;
-      const next = drawSport(c.module, state, rng);
-      if (next === null) return null;
-      state = c.module.apply(state, makeEnvelope(events.length, next) as never);
-      events.push(next);
-    }
-  } catch {
-    return null;
+  for (let i = 0; i < WALK_MAX; i++) {
+    const folded = replay({ module: c.module, raw: c.raw, lineups: c.lineups, events }, c.raw);
+    if (typeof folded === "string") return null;
+    if (held(folded.state) !== null) return null;
+    if (stop(folded.state, events)) return events;
+    const next = drawSport(c.module, folded.state, rng);
+    if (next === null) return null;
+    events.push(next);
   }
   return null;
 }
