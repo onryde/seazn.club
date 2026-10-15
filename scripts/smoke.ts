@@ -7383,7 +7383,8 @@ async function w2cPublicStageFormatChecks(owner: Session, orgId: string): Promis
  * goals-against all say the RULE's award - never the division's own walkover goals, which the same headline said before.
  * Both numbers come from the engine's declarations: the division's is football's `awardScore.goals` for the variant, the
  * rule's is that figure plus 4 for the winner and 1 for the side that did not turn up, so the right answer differs from the
- * wrong one's constant on both figures. A second match, played to a score and then retired, keeps the sport's own credit.
+ * wrong one's constant on both figures. A second match, played to a score and then retired, keeps the sport's own credit:
+ * its stored summary equals the same three events' in a twin pool of the division that carries no points rule.
  */
 async function w2cWalkoverHeadlineChecks(owner: Session, orgId: string): Promise<void> {
   const football = builtinModules.find((m) => m.key === "football") as AnySportModule;
@@ -7408,7 +7409,10 @@ async function w2cWalkoverHeadlineChecks(owner: Session, orgId: string): Promise
   const put = await v1(owner, `/api/v1/stages/${stage.id}/rules`, "PUT", {
     points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
   });
+  // The twin: a second pool over the same entrants with NO points rule - the same ledger read without an award.
+  const twinStage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 2, kind: "league", name: "Pool B" }));
   const generated = v1data<{ fixtures: { id: string }[] }>(await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST")).fixtures;
+  const twinGenerated = v1data<{ fixtures: { id: string }[] }>(await v1(owner, `/api/v1/stages/${twinStage.id}/generate`, "POST")).fixtures;
   const started = await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
   const fixtureId = generated[0]?.id ?? "";
   const fx = v1data<{ home_entrant_id: string; away_entrant_id: string }>(await v1(owner, `/api/v1/fixtures/${fixtureId}`));
@@ -7452,6 +7456,33 @@ async function w2cWalkoverHeadlineChecks(owner: Session, orgId: string): Promise
         ? ""
         : ` - rules ${put.status} ${JSON.stringify(put.json.error ?? null)}, start ${started.status}, forfeit ${walkover.status} ${JSON.stringify(walkover.json.error ?? null)}, console ${JSON.stringify(state.summary)}, hub ${JSON.stringify(card?.header.scoreLines)}, table ${JSON.stringify(rows.map((r) => [r.entrantId === fx.home_entrant_id ? "home" : "away", r.metrics.gf, r.metrics.ga]))} after ${reads} read(s)`),
     ok,
+  );
+
+  // P-3 "A": a match played to a score and then retired keeps the sport's own credit - the rule's award is for a forfeit with
+  // nothing played. The same three events go to a fixture of the rule's pool and of the twin pool (no rule): the stored
+  // summaries must be identical, and neither may be the rule's award.
+  const playThenRetire = async (id: string) => {
+    const f = v1data<{ home_entrant_id: string; away_entrant_id: string }>(await v1(owner, `/api/v1/fixtures/${id}`));
+    const send = (expectedSeq: number, type: string, payload: unknown) => v1(owner, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: expectedSeq, type, payload });
+    const statuses = [
+      (await send(0, "core.start", {})).status,
+      (await send(1, "football.goal", { by: f.home_entrant_id })).status,
+      (await send(2, "core.forfeit", { by: f.away_entrant_id, reason: "retired" })).status,
+    ];
+    const st = v1data<{ summary: { headline: string; perSide: { line: string }[] } }>(await v1(owner, `/api/v1/fixtures/${id}/state`));
+    return { statuses, lines: st.summary.perSide.map((p) => p.line) };
+  };
+  const ruled = await playThenRetire(generated[1]?.id ?? "");
+  const twin = await playThenRetire(twinGenerated[0]?.id ?? "");
+  const retiredOk =
+    [...ruled.statuses, ...twin.statuses].every((c) => c === 201) &&
+    ruled.lines.length === 2 &&
+    isDeepStrictEqual(ruled.lines, twin.lines) &&
+    !isDeepStrictEqual(ruled.lines, lines);
+  check(
+    `w2c: a match played then retired keeps the sport's own credit under a stage points rule (the rule's ${award[0]}-${award[1]} is for a walkover with nothing played)` +
+      (retiredOk ? "" : ` - rule pool ${JSON.stringify(ruled)}, twin pool ${JSON.stringify(twin)}, rule's award ${JSON.stringify(lines)}`),
+    retiredOk,
   );
 }
 
