@@ -519,7 +519,14 @@ export async function createStages(auth: AuthCtx, divisionId: string, input: Cre
  *  the same lock to change it and to re-seed the stages that stand, so a create that read the variant before waiting
  *  could store a preset the variant no longer takes (cricket `t20` -> `test` with a stored super over). The key is the
  *  one `patchDivision` and `replaceStages` take; `replaceStages` already holds it in this transaction, and a second
- *  `pg_advisory_xact_lock` by the same session on the same key is re-entrant. */
+ *  `pg_advisory_xact_lock` by the same session on the same key is re-entrant.
+ *
+ *  The division is read `for no key update`, so this transaction holds the row BEFORE its first insert. A stage INSERT
+ *  takes `for key share` on the division through its foreign key, and the reopen below wants the row `for no key update`;
+ *  a save that renames the division (slug regenerated: an update of the unique index (competition_id, slug) takes the row
+ *  `for update`, which waits for every key share) and names a masking field (it already holds the row `for no key update`)
+ *  crossed the two on a completed division: 40P01. Taking the row first makes them queue on it instead. Same order as
+ *  `patchDivision`'s format path (advisory lock, then row); `putStageRules` takes no division row lock. */
 async function insertStageBatch(
   tx: Tx,
   divisionId: string,
@@ -530,7 +537,8 @@ async function insertStageBatch(
 ): Promise<StageRow[]> {
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
   const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
-    select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
+    select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}
+    for no key update`;
   if (!division) throw new HttpError(404, "division not found");
   // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
   // The same door asks each stage's points the stage PUT's questions (W2c Task 13, `refuseStagePoints`), the old
