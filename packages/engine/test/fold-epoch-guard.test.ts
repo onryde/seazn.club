@@ -98,6 +98,19 @@ describe("fold-epoch guard: the rule", () => {
       { sport: "badminton", matched: 2, changed: 1, removed: 1, added: 1, before: 1, after: 1, reason: expect.stringMatching(/1 stream\(s\) fold differently.*1 stream\(s\) removed or re-recorded.*did not rise \(1 -> 1\)/) },
     ]);
   });
+  it("tells the author what to do: which entry in which file, and the number to set (one above the baseline's, not just 'bump it')", () => {
+    const v = epochViolations(side(3, [stream("std", 1)]), side(3, [stream("std", 1, { outcome: "B" })]));
+    expect(v).toHaveLength(1);
+    expect(v[0]!.reason).toContain("raise FOLD_EPOCH.badminton to 4 in src/sport/fold-epoch.ts");
+    const down = epochViolations(side(3, [stream("std", 1)]), side(2, [stream("std", 1)]));
+    expect(down).toHaveLength(1);
+    expect(down[0]!.reason).toContain("set FOLD_EPOCH.badminton back to at least 3 in src/sport/fold-epoch.ts");
+    // lowered AND changed: the number to raise to is one above the BASELINE's (4), not one above the lowered value (3)
+    const both = epochViolations(side(3, [stream("std", 1)]), side(2, [stream("std", 1, { outcome: "B" })]));
+    expect(both).toHaveLength(1);
+    expect(both[0]!.reason).toContain("raise FOLD_EPOCH.badminton to 4 in src/sport/fold-epoch.ts");
+    expect(both[0]!.reason).toContain("set FOLD_EPOCH.badminton back to at least 3");
+  });
   it("accounts every stream exactly once: matched + removed = baseline streams, matched + added = streams now", () => {
     const before = [stream("a", 1), stream("a", 2), stream("b", 1), stream("b", 2, { outcome: "X" })];
     const after = [stream("a", 1), stream("a", 2, { events: [{ seq: 5 }] as never }), stream("b", 2, { outcome: "Y" }), stream("c", 1)];
@@ -152,6 +165,16 @@ describe("fold-epoch guard: the rule", () => {
         expect(row, name).toMatchObject({ baseline: false, before: null, after: 1, matched: 0, added: 1, reason: null });
         expect(epochViolations(before, after), name).toEqual([]);
       }
+    });
+    it("a sport has a baseline when the baseline holds its epoch OR its corpus, and has none only when it holds neither (the 'N sports checked' count)", () => {
+      const now = side(1, [stream("std", 1)]);
+      const epochOnly: Side = { epochs: { badminton: 1 }, corpora: {} };
+      const corpusOnly: Side = { epochs: {}, corpora: { badminton: corpus([stream("std", 1)]) } };
+      const neither: Side = { epochs: { tennis: 1 }, corpora: { tennis: corpus([stream("std", 1)], "tennis") } };
+      const badminton = (before: Side) => compareSides(before, now).find((r) => r.sport === "badminton");
+      expect(badminton(epochOnly)).toMatchObject({ baseline: true, before: 1, matched: 0 });
+      expect(badminton(corpusOnly)).toMatchObject({ baseline: true, before: null, matched: 1 });
+      expect(badminton(neither)).toMatchObject({ baseline: false, before: null, matched: 0, added: 1 });
     });
     it("a changed stream of a sport whose baseline has a corpus but no epoch entry has nothing to bump from: not a violation", () => {
       const before: Side = { epochs: {}, corpora: { badminton: corpus([stream("std", 1)]) } };

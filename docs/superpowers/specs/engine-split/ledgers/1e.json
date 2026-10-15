@@ -1,6 +1,6 @@
 {
   "batch": "1e",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1e, built against the batch base 4e72944b2 (main after 1c). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection: its titles embed the checkout absolute path). Task 1e-1 (FOLD_EPOCH): no existing test id changed; six tests are added in the new src/sport/fold-epoch.test.ts. Task 1e-2 (the epoch guard, 7cf004038): 74 tests added - 35 in test/fold-epoch-guard.test.ts, 34 in test/fold-epoch-guard-cli.test.ts, 4 in tools/matrix/__tests__/ci-wiring.test.ts, and 1 in src/sport/fold-epoch.test.ts (the 1e-1 review fix: fold-epoch.ts imports nothing). Whole-batch parity after 1e-2: before-only 0, after-only 80, both 11324 (engine 5894 + matrix 5202 + scripts 228 before; engine 5970 + matrix 5206 + scripts 228 after), unaccounted 0.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1e, built against the batch base 4e72944b2 (main after 1c). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection: its titles embed the checkout absolute path). Task 1e-1 (FOLD_EPOCH): no existing test id changed; six tests are added in the new src/sport/fold-epoch.test.ts. Task 1e-2 (the epoch guard, 7cf004038): 74 tests added - 35 in test/fold-epoch-guard.test.ts, 34 in test/fold-epoch-guard-cli.test.ts, 4 in tools/matrix/__tests__/ci-wiring.test.ts, and 1 in src/sport/fold-epoch.test.ts (the 1e-1 review fix: fold-epoch.ts imports nothing). 1e-2 review fixes add 4 more tests (2 in each guard test file). Whole-batch parity after the 1e-2 review fixes: before-only 0, after-only 84, both 11324 (engine 5894 + matrix 5202 + scripts 228 before; engine 5974 + matrix 5206 + scripts 228 after), unaccounted 0.",
   "entries": [
     {
       "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › has exactly one positive integer epoch per registered sport (11, never zero)",
@@ -401,6 +401,26 @@
       "id": "__tests__/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › the step's command as ci.yml spells it, run the way CI runs it, reaches the guard and passes on this tree",
       "fate": "added",
       "reason": "1e-2 CI wiring: the fold-epoch step is pinned in ci.yml and run as CI spells it: the step's command as ci.yml spells it, run the way CI runs it, reaches the guard and passes on this tree"
+    },
+    {
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a baseline tree git cannot read is refused (exit 2, nothing printed on stdout): the sport inside it must not read as a new one",
+      "fate": "added",
+      "reason": "1e-2 review: an unreadable baseline (a tree or object git fails on) is refused, never read as a new sport: a baseline tree git cannot read is refused (exit 2, nothing printed on stdout): the sport inside it must not read as a new one"
+    },
+    {
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a baseline file whose object is damaged is refused with git's own failure named (exit 2), not trusted half-read",
+      "fate": "added",
+      "reason": "1e-2 review: an unreadable baseline (a tree or object git fails on) is refused, never read as a new sport: a baseline file whose object is damaged is refused with git's own failure named (exit 2), not trusted half-read"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › tells the author what to do: which entry in which file, and the number to set (one above the baseline's, not just 'bump it')",
+      "fate": "added",
+      "reason": "1e-2 review: guard rule (pure compareSides / epochViolations): tells the author what to do: which entry in which file, and the number to set (one above the baseline's, not just 'bump it')"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › across sports › a sport has a baseline when the baseline holds its epoch OR its corpus, and has none only when it holds neither (the 'N sports checked' count)",
+      "fate": "added",
+      "reason": "1e-2 review: guard rule (pure compareSides / epochViolations): a sport has a baseline when the baseline holds its epoch OR its corpus, and has none only when it holds neither (the 'N sports checked' count)"
     }
   ]
 }

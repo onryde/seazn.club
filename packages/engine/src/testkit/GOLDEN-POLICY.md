@@ -106,6 +106,38 @@ Prose in a comment enforced none of this, so the harness now does.
    A re-baseline that moves an event is a re-record wearing a re-baseline's
    name.
 
+## A re-baseline that changes a fold must raise that sport's FOLD_EPOCH
+
+A corpus change that alters what an existing stream folds to (any state, the
+outcome, the summary or the deltas), or that removes or re-records a stream,
+must raise that sport's entry in `src/sport/fold-epoch.ts` (`FOLD_EPOCH`) **in
+the same PR**. Native clients send their epoch, and the server (batch 1f)
+refuses one lower than its own, so an outdated phone is stopped instead of
+folding differently from the server. Appended streams (`EXTEND_GOLDEN`) need no
+bump; an epoch never goes down.
+
+`scripts/fold-epoch-guard.ts` enforces it in CI (the `gates` job). It compares
+the PR **as a whole** with the branch it merges into: CI runs it with
+`--against HEAD^1`, the first parent of the PR's merge commit, which is the base
+branch's tip, so it is a net diff and not a commit-by-commit one. That keeps
+the first clause above true: the corpus still goes in a commit of its own, the
+bump may follow in the next commit, and the PR is green. Run against the corpus
+commit's own parent it is red, which is the point of the second commit.
+
+To check before pushing (from any directory; it also reads uncommitted work, so
+re-baseline into a clean tree, bump, and run it):
+
+    pnpm --filter @onryde/seazn-engine fold-epoch:check --against origin/main
+
+It prints one line per sport (epoch before -> after; streams matched, changed,
+removed, added) and `N sports checked, M streams compared`. Exit codes: `0` every
+sport is in order (or the base has no `fold-epoch.ts` yet: the PR that
+introduces it); `1` a sport's results moved without its epoch rising, an epoch
+fell, or a corpus and an epoch entry do not pair up; `2` refused, nothing judged
+(the ref is not a commit, which is what a shallow clone or a root commit gives;
+git could not list or read the base; a table or corpus that does not load; a
+run that compared no stream); `3` the guard itself crashed.
+
 ## How the comparison actually works
 
 `stateMismatch` is the whole tripwire, and what it does and does not catch is

@@ -3,8 +3,8 @@
 // `fold-epoch:check --against HEAD^1`) fails a change to a golden corpus that does not. Planned in batch 1f (D31): native clients
 // send their epoch and the server refuses one lower than this for the fixture's sport.
 //
-// THIS FILE IMPORTS NOTHING, and a test holds it so. The guard reads the BASELINE's copy of it with `git show` into a temp file and
-// imports that, where no relative import resolves; a copy with an import would not load there.
+// THIS FILE IMPORTS NOTHING, and a test holds it so. The guard reads the BASELINE's copy of it out of git (`ls-tree` + `cat-file --batch`)
+// into a temp file and imports that, where no relative import resolves; a copy with an import would not load there.
 export const FOLD_EPOCH = {
   football: 1, cricket: 1, boardgame: 1, carrom: 1, generic: 1, volleyball: 1,
   badminton: 1, tabletennis: 1, tennis: 1, icehockey: 1, hockey: 1,

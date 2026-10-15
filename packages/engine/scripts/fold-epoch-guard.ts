@@ -18,9 +18,11 @@
 //   - A corpus with no epoch entry, an epoch entry with no corpus (nothing would ever compare it), and a sport that has vanished (corpus
 //     and entry both gone) are violations: retiring a sport is a decision, not a quiet deletion.
 //
-// THE CLI reads the tree's corpora and table from the working tree, and the baseline's from `git` at <ref> (rev-parse, ls-tree, show,
-// all relative to this engine's directory, so it works with the engine at packages/engine or at a repository root). The baseline's table
-// is TypeScript: it is written to a temp .mts file and imported under strip-types, so the baseline is what its own commit declared.
+// THE CLI reads the tree's corpora and table from the working tree, and the baseline's from `git` at <ref> (rev-parse, ONE ls-tree, ONE
+// cat-file --batch, all relative to this engine's directory, so it works with the engine at packages/engine or at a repository root). The
+// baseline's table is TypeScript: its text is written to a temp .mts file and imported under strip-types, so the baseline is what its own
+// commit declared. Anything git cannot list or read at <ref> (a tree or object it fails on, a gitlink, a damaged object) is a refusal: a
+// sport inside it would otherwise read as new, and a new sport owes nothing.
 //   --against <ref>   required. CI passes HEAD^1: on a pull_request the checkout is the merge commit refs/pull/N/merge, whose FIRST parent
 //                     is the base branch's tip, so the comparison is the PR's net change against the base it will merge into. The gates job
 //                     checks out with fetch-depth 0; a shallow checkout or a root commit has no HEAD^1 and is refused, never passed.
@@ -34,12 +36,13 @@
 //      (a pass over nothing proves nothing);
 //   3  a crash in the guard itself (an unexpected error is not a verdict; a bare uncaught exception would exit 1, which reads as one).
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { GoldenCorpus, GoldenStream } from "../src/testkit/golden.ts";
+import { isMainModule } from "./lib/main-module.ts";
 
 // ------------------------------------------------------------------------------------------------------------ the rule (pure)
 
@@ -137,13 +140,16 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
   for (const id of aStreams.keys()) if (!bStreams.has(id)) added++;
 
   const reasons: string[] = [];
-  if (baseline && aEpoch === undefined && aCorpus === undefined) {
+  // (a sport is in the union because one side names it, so with neither on the current side it was on the baseline)
+  if (aEpoch === undefined && aCorpus === undefined) {
     reasons.push(`sport "${sport}" is gone (no FOLD_EPOCH entry, no golden corpus): retiring a sport is a deliberate decision this guard does not wave through`);
   } else {
     if (aCorpus !== undefined && aEpoch === undefined) reasons.push(`a golden corpus but no FOLD_EPOCH entry for "${sport}"`);
     if (aEpoch !== undefined && aCorpus === undefined) reasons.push(`a FOLD_EPOCH entry but no golden corpus for "${sport}": nothing would ever compare it`);
   }
-  if (bEpoch !== undefined && aEpoch !== undefined && aEpoch < bEpoch) reasons.push(`FOLD_EPOCH went down (${bEpoch} -> ${aEpoch}); an epoch only rises`);
+  if (bEpoch !== undefined && aEpoch !== undefined && aEpoch < bEpoch) {
+    reasons.push(`FOLD_EPOCH went down (${bEpoch} -> ${aEpoch}); an epoch only rises: set FOLD_EPOCH.${sport} back to at least ${bEpoch} in ${TABLE}`);
+  }
   // "The baseline had streams and none matched" (a renamed config, a wholesale re-record) is `removed === bStreams.size > 0`, so it needs no
   // clause of its own to demand the bump; it only gets its own words in the reason.
   const needsBump = changed > 0 || removed > 0;
@@ -152,7 +158,7 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
     if (bStreams.size > 0 && matched === 0) parts.push("no baseline stream matched");
     if (changed > 0) parts.push(`${changed} stream(s) fold differently`);
     if (removed > 0) parts.push(`${removed} stream(s) removed or re-recorded`);
-    reasons.push(`${parts.join(", ")}, and FOLD_EPOCH did not rise (${bEpoch} -> ${aEpoch})`);
+    reasons.push(`${parts.join(", ")}, and FOLD_EPOCH did not rise (${bEpoch} -> ${aEpoch}): raise FOLD_EPOCH.${sport} to ${bEpoch + 1} in ${TABLE}, in this same change`);
   }
 
   return { sport, matched, changed, removed, added, before: bEpoch ?? null, after: aEpoch ?? null, baseline, reason: reasons.length === 0 ? null : reasons.join("; ") };
@@ -361,7 +367,11 @@ export async function main(argv: string[]): Promise<number> {
       out(`fold-epoch: ${r.sport}: ${epoch}, matched ${r.matched} changed ${r.changed} removed ${r.removed} added ${r.added}${r.reason === null ? "" : ` - VIOLATION: ${r.reason}`}`);
     }
     out(`fold-epoch: ${compared.length} sports checked, ${streams} streams compared against ${ref}: ${violations.length} violation(s)`);
-    if (violations.length > 0) return 1;
+    if (violations.length > 0) {
+      const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim(); // "packages/engine/" in the monorepo, "" with the engine at a repository root
+      out(`fold-epoch: to clear the violation(s) above, raise the sport's entry in ${prefix}${TABLE} in this same change (CI compares the whole PR with the branch it merges into); to check it before pushing: pnpm --filter @onryde/seazn-engine fold-epoch:check --against origin/main`);
+      return 1;
+    }
     if (streams === 0) throw new GuardRefusal(`compared no stream against ${ref}: the baseline holds no golden corpus to hold the tree to, and a pass over nothing proves nothing`);
     return 0;
   } catch (e) {
@@ -371,17 +381,10 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
-// Main-module guard [R32]: importing this file from a test must not run it. Compared by REAL path: a checkout under a symlinked directory
-// (macOS /var -> /private/var, a symlinked worktree) gives argv[1] the link and import.meta.url the target, and a guard that compared the
-// two as given would run nothing and exit 0, which for a gate is a pass.
-const isMain = (): boolean => {
-  try {
-    return process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-};
-if (isMain()) {
+// Main-module guard [R32]: importing this file from a test must not run it. isMainModule compares REAL paths (the engine's gates use it too):
+// a checkout under a symlinked directory (macOS /var -> /private/var, a symlinked worktree) gives argv[1] the link and import.meta.url the
+// target, and a guard that compared the two as given would run nothing and exit 0, which for a gate is a pass.
+if (isMainModule(import.meta.url)) {
   main(process.argv.slice(2)).then(
     (code) => { process.exitCode = code; },
     (e: unknown) => {

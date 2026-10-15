@@ -8,7 +8,7 @@
 // reads files and git only), so a Stryker related-mode run of a sport file does not run these spawns. Expected counts (sports, streams)
 // are read from the corpora on disk by this file, never from the guard's own output.
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,8 +27,8 @@ const CORPORA = (readdirSync(join(ENGINE, SPORTS_DIR), { recursive: true }) as s
 const KEYS = CORPORA.map((f) => basename(f, ".golden.json"));
 const FIRST = KEYS[0] as string;
 const LAST = KEYS[KEYS.length - 1] as string;
-/** The files a scratch checkout needs: the real guard, the real package.json (type: module), the real table, the real corpora. */
-const FILES = [GUARD, "package.json", EPOCH_FILE, ...CORPORA.map((f) => join(SPORTS_DIR, f))];
+/** The files a scratch checkout needs: the real guard and the helper it imports, the real package.json (type: module), the real table, the real corpora. */
+const FILES = [GUARD, "scripts/lib/main-module.ts", "package.json", EPOCH_FILE, ...CORPORA.map((f) => join(SPORTS_DIR, f))];
 
 // Git must not see the parent's repository (a hook sets GIT_DIR) or its identity.
 const cleanEnv = (): NodeJS.ProcessEnv => {
@@ -158,6 +158,12 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 1, matched \d+ changed 1 removed 0 added 0 - VIOLATION: 1 stream\(s\) fold differently/);
     expect(r.stdout).toContain(summary(realSports, realStreams, "HEAD^1", 1));
     expect(r.stderr).toBe("");
+    // and what to do about it: the entry, the number (read from the baseline's own table, not typed here), the file as git spells it, the command
+    const was = new RegExp(`\\b${FIRST}: (\\d+)`).exec(readFileSync(join(ENGINE, EPOCH_FILE), "utf8"))?.[1];
+    expect(was).toBeDefined();
+    expect(lineOf(r.stdout, FIRST)).toContain(`raise FOLD_EPOCH.${FIRST} to ${Number(was) + 1} in src/sport/fold-epoch.ts`);
+    expect(r.stdout).toContain(`fold-epoch: to clear the violation(s) above, raise the sport's entry in ${relPrefix(mono)}src/sport/fold-epoch.ts in this same change`);
+    expect(r.stdout).toContain("fold-epoch:check --against origin/main");
   });
 
   spawnIt(3)("the same change with that sport's bump is green, and the report shows the epoch moving", () => {
@@ -264,6 +270,9 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     const r = guard(rooted);
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([FIRST]);
+    // the file is named as the repository spells it: with the engine at the root there is no packages/engine/ in front of it
+    expect(relPrefix(rooted)).toBe("");
+    expect(r.stdout).toContain(" raise the sport's entry in src/sport/fold-epoch.ts in this same change");
   });
 
   spawnIt(3)("uncommitted work against HEAD is judged too: the way to check a re-baseline before committing it", () => {
@@ -556,6 +565,53 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
     expect(tableUnreadable.status).toBe(2);
     expect(tableUnreadable.stderr).toMatch(/could not read HEAD\^1:.*fold-epoch\.ts as a file/);
     expect(tableUnreadable.stdout).not.toMatch(/nothing to compare yet/);
+  });
+
+  /** The loose object file of `sha` in the scratch repository's object store (nothing here ever packs, so a commit's objects are loose). */
+  const looseObject = (repo: Repo, sha: string): string => join(repo.top, ".git", "objects", sha.slice(0, 2), sha.slice(2));
+
+  spawnIt(8)("a baseline tree git cannot read is refused (exit 2, nothing printed on stdout): the sport inside it must not read as a new one", () => {
+    atBase(mono);
+    moveOutcome(mono, "football");
+    const changed = commit(mono, "football corpus changed (this commit's football directory is a tree no other commit has)");
+    git(mono.top, "checkout", "-q", "base", "--", ".");
+    commit(mono, "football as it was");
+    // control: the history reads, and football is compared like every other sport (the same run is red or green for the right reason)
+    const control = guard(mono);
+    expect({ status: control.status, stderr: control.stderr }).toEqual({ status: 1, stderr: "" });
+    expect(violated(control.stdout)).toEqual(["football"]);
+
+    const footballDir = git(mono.top, "rev-parse", `${changed}:${relPrefix(mono)}${SPORTS_DIR}/football`);
+    const file = looseObject(mono, footballDir);
+    expect(existsSync(file), "the object is loose, so deleting the file deletes the tree").toBe(true);
+    chmodSync(dirname(file), 0o755);
+    chmodSync(file, 0o644);
+    rmSync(file);
+    const r = guard(mono);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(/git ls-tree HEAD\^1 failed/);
+  });
+
+  spawnIt(8)("a baseline file whose object is damaged is refused with git's own failure named (exit 2), not trusted half-read", () => {
+    atBase(mono);
+    moveOutcome(mono, LAST);
+    const changed = commit(mono, `${LAST} corpus changed (its blob exists only in this commit)`);
+    git(mono.top, "checkout", "-q", "base", "--", ".");
+    commit(mono, `${LAST} as it was`);
+    expect(guard(mono).status, "control: the history reads").toBe(1);
+
+    const blob = git(mono.top, "rev-parse", `${changed}:${relative(mono.top, corpusPath(mono, LAST))}`);
+    const file = looseObject(mono, blob);
+    expect(existsSync(file)).toBe(true);
+    chmodSync(dirname(file), 0o755);
+    chmodSync(file, 0o644);
+    const bytes = readFileSync(file);
+    writeFileSync(file, bytes.subarray(0, bytes.length >> 1)); // cut in half: git can read its header and name it, and cannot read the rest
+    const r = guard(mono);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr, "the message names git cat-file, not a JSON parse error that happens to follow").toMatch(/git cat-file --batch HEAD\^1 failed/);
   });
 
   spawnIt(5)("usage: --against is required, takes a value, and nothing else is accepted", () => {
