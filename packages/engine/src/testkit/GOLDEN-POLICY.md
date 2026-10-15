@@ -452,7 +452,11 @@ hand in the same PR; no tool will tell you):
   recorded stream (none sets it) folds the same. W2c's were raised by hand
   (owner 2026-10-15, manual MAJOR for opt-in cfg keys the guard cannot see):
   football `shootoutAttempts`, hockey fih-shootout `abandonPolicy:"q4_stands"`,
-  carrom and generic `abandonPolicy:"share"`.
+  carrom and generic `abandonPolicy:"share"`. Task 16c then recorded a stream
+  for each branch (`golden-branches.ts`, next section), so a later change to
+  how those keys fold is seen by the guard. The bump already raised stays: it
+  covers the keys' arrival, which no stream can show a baseline without them.
+  A NEW opt-in key owes a story in that table, not just a name in a config.
 - **Player-statistics folds outside the recorded final rows** (`src/stats/stats.ts`).
   Format 3 records the FINAL rows of each stream, so a change to how a recorded stat
   folds is a **minor** the guard asks for (the server computes it; a phone must not).
@@ -623,6 +627,29 @@ by `config#seed`, so a floor stream is a plain **added** stream, never a changed
 one, and a floor append owes no version bump (neither `FOLD_EPOCH` nor `FOLD_MINOR`). The existing streams are not
 touched; `golden.test.ts` asserts the prefix.
 
+## Branch streams (W2c Task 16c)
+
+`src/testkit/golden-branches.ts` is the fourth append path, for the branches a
+config key switches on that none of the others can reach: the generator never
+sets an opt-in key, `extendCorpus` stops once the key is pinned, and the floor
+derives its tokens from kernel events. It is a table of **stories**; each builds
+its ledger from the module's own generator plus the kernel event the branch is
+about, and carries a verdict (`reached`) over the engine's own folds. Every
+verdict is a **differential**: the same ledger refolded without the key must
+decide differently (the default five kicks leave the shoot-out running; the
+replay default holds nothing), so a stream that only names the key proves
+nothing. `branchHoles` is the skip rule (any recorded stream that reaches a
+branch makes it a skip, whatever its config name or seed) and `extendBranches`
+appends one slim stream per hole; `EXTEND_GOLDEN=1` runs it after the floor.
+
+Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
+and up): above every generator seed, below the floor's stride, so the floor's
+reproduction and keep-rule never count them. They are appended streams, so they
+owe no version bump. They add configs, appended at the end of `configs`; no
+existing stream or config changes. The seven stories today: football
+`shootoutAttempts`, hockey `q4_stands`, carrom and generic `share`, and the
+`award` abandon with a withdrawal's expunge for football, hockey and ice hockey.
+
 ## How the comparison actually works
 
 `stateMismatch` is the whole tripwire, and what it does and does not catch is
@@ -784,13 +811,15 @@ knob must stay green in both forms. Without it a gate that reds on everything
 would kill every entry in the list and guard nothing.
 
 One entry is recorded as **`killedBy: "schema-snapshot"`** rather than by the
-corpus: narrowing football's `abandonPolicy` enum. Every football stream records
-`"replay"`, so the frozen states pin that one member and dropping any other moves
-no recorded state — all eleven corpora stay green. The schema snapshot records
-the declaration instead of a replay, so the narrowing is a removed line there.
-The test asserts that blindness (one recorded value against several declared
-members) instead of describing it, because "this gate cannot see X" is exactly
-the kind of claim that rots into folklore.
+corpus: narrowing cricket's `superOverStillTied` enum. Every cricket stream
+records `"repeat"`, so the frozen states pin that one member and dropping any
+other moves no recorded state — all eleven corpora stay green. The schema
+snapshot records the declaration instead of a replay, so the narrowing is a
+removed line there. The test asserts that blindness (one recorded value against
+several declared members) instead of describing it, because "this gate cannot
+see X" is exactly the kind of claim that rots into folklore. (The exemplar was
+football's `abandonPolicy` until W2c Task 16c recorded its second member,
+`award`: that narrowing is now a corpus kill, and the test asserts that too.)
 
 # Schema snapshots (#429 scope item 2)
 
