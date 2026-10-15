@@ -32,6 +32,8 @@ show before they go live.
 | D10 | How the page learns the compositor's state | **A:** a loopback endpoint inside the Machine, with **B** (via web) as the fallback. |
 | D12 | Templates extendable and updatable | **Yes** (owner, at spec approval). A template is a registry entry behind a fixed contract; adding, changing and retiring one each have a defined path (§4.7). |
 | D13 | Events (six, goal, game point…) | **Covered** (owner, at spec approval). The existing moment slabs work in every template and in the compositor (§4.8). |
+| D14 | Moments during Starting soon (2026-10-16) | **Fire**, only Final drops them (§4.8). |
+| D15 | Stop grace vs the Final hold (2026-10-16) | **`RUNNER_STOP_GRACE_SECONDS` = 20**, so the 10 s hold plus the ~7 s drain fit before the platform's forced kill. |
 | D11 | Mockups | Mockups decide layout and behaviour only. **The build uses the house theme** (overlay tokens, `--sport-led`, sport palettes, the stadium-night plate, bundled fonts). |
 
 ## 3. What already exists (re-pinned 2026-10-15)
@@ -182,7 +184,8 @@ Moments are **sport-owned and template-independent**. The rules decide WHICH eve
   - Test: the slab's on-screen time is ≥ `delay` after the event, at `host=compositor`.
 - **Moments during scenes:**
   - **Reconnecting:** moments **still fire**. With no picture, the slab is the only way a viewer learns a goal happened. The slab sits above the scene card.
-  - **Starting soon / Final:** none fire. No scoring happens before the start, and the deciding moment has already shown before Final.
+  - **Starting soon:** moments **fire** (owner ruling 2026-10-16). A stream can start after the match has begun, and a goal scored before the first camera frame must still reach viewers, the same reasoning as Reconnecting.
+  - **Final:** none fire; the deciding moment has already shown, and the Result card carries the outcome.
 - **Readability:** slab text meets the §4.5 floor.
 - **Gallery:** shows each template × each sport's moments (a sample event per rule, enumerated from `MOMENT_RULES`).
 - **Adding a moment later** (e.g. chess check/mate, carrom, a "last over" alert) stays one rule plus 4-locale keys, guarded by the existing `MOMENT_KEYS` dictionary gate. New moment kinds are a product decision per sport, not part of this spec.
@@ -206,13 +209,14 @@ Moments are **sport-owned and template-independent**. The rules decide WHICH eve
   - reconnecting while the match is decided (Result card + backdrop)
   - another sport (cricket bar, badminton bug)
 - **Extensibility:** register a throwaway test-only template in the unit test, then assert it appears in the picker list, the gallery matrix and the readability sweep without any other edit. Retired-id resolution: stored choice → replacement; OBS URL → replacement.
-- **Moments:** each `MOMENT_RULES` entry × each template renders a slab (enumerated, count > 0); a moment during Reconnecting shows; a moment during Starting soon is dropped; slab timing ≥ delay at `host=compositor`.
+- **Moments:** each `MOMENT_RULES` entry × each template renders a slab (enumerated, count > 0); a moment during Reconnecting shows; a moment during Starting soon shows (match already in play); a moment during Final is dropped; slab timing ≥ delay at `host=compositor`.
 - **Mutants:**
   - the scene layer mounting without `host=compositor` → RED
   - the text floor drops to 29 px → RED
   - fallback never engages → RED
   - a template's `slabPlacement` ignored → RED
   - moments suppressed during Reconnecting → RED
+  - moments suppressed during Starting soon → RED
 
 ## 6. Plan changes (R2)
 
