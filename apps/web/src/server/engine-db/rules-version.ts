@@ -61,9 +61,15 @@ export type UnfrozenRules = ReadonlyMap<string, string>;
  * resolver (`resolveFixtureCfg` over the row — division, stage, deciders, the match's own override).
  *
  * "Such a match": no frozen cfg (a started match keeps its snapshot, and a save never moves it — the stage lock refuses
- * what it inherits) and not decided without play (a bye or an event-less walkover: no tap reaches it, and the per-match
- * writer does not bump it either — `fixture-rules.ts` (7a)). A match decided by recorded play with no frozen cfg (the
- * legacy shape before V347) folds under the live format, so it is one.
+ * what it inherits) and not a SEEDED BYE: the system's award with no feeder, which no take-back can ever reopen, so no pad
+ * is ever opened on it (and its format is locked against the per-match writer — `fixture-rules.ts` (7a)). Every other
+ * shape with no frozen cfg is read, an event-less award included (batch-5 re-review, Q5): a take-back can reopen one that
+ * HAS feeders (`fed-seats.ts`: the walkover revive, the reset release) — and the award a dead seat leaves in a later round
+ * is written with `reason: "bye"` too (`awardSeededByes`' cascade, stages.ts), so the reason alone cannot tell a seeded bye
+ * from it; a feeder can. A table (points-scope) key is not refused on a played knockout (`rule-locks.ts` "a knockout has no
+ * table to protect"), so a division save can move what that award resolves to after a pad loaded it and before the
+ * reopen. A bump at the save is the only place that can see the move; nothing bumps at the reopen. A match decided by
+ * recorded play with no frozen cfg (the legacy shape before V347) folds under the live format, so it is one too.
  */
 export async function unfrozenRules(tx: Tx, scope: RulesScope): Promise<UnfrozenRules> {
   return resolvedNow(tx, "stageId" in scope ? tx`f.stage_id = ${scope.stageId}` : tx`f.division_id = ${scope.divisionId}`);
@@ -100,7 +106,8 @@ async function resolvedNow(tx: Tx, where: postgres.PendingQuery<postgres.Row[]>)
            s.kind as stage_kind, s.config as stage_config
       from fixtures f join divisions d on d.id = f.division_id left join stages s on s.id = f.stage_id
      where ${where}
-       and (f.outcome is null or exists (select 1 from score_events e where e.fixture_id = f.id))`;
+       and not (coalesce(f.outcome->>'reason', '') = 'bye'
+                and not exists (select 1 from fixtures g where g.winner_to_fixture = f.id or g.loser_to_fixture = f.id))`;
   const out = new Map<string, string>();
   for (const r of rows) {
     if (hasFrozenCfg(r.config_snapshot)) continue;

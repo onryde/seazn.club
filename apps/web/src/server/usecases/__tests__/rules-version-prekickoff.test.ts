@@ -26,13 +26,12 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import enPublic from "@/dictionaries/en/public.json";
 import { sql } from "@/lib/db";
 import type { Dict } from "@/lib/i18n-constants";
-import { rulesLineText } from "@/lib/rules-line";
-import { describeMatchRules } from "@/server/public-site/describe-rules";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { declaredVariant, insertLegacyEvents, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, post, rowsOf, siblingOf } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { patchDivision } from "../divisions";
 import { writeFixtureRulesOverride } from "../fixture-rules";
-import { loadFixturePadCfg } from "../fixtures";
+import { getFixtureRules, loadFixturePadCfg } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { putStageRules } from "../stage-rules";
 
@@ -71,10 +70,14 @@ const SHORT_BEST_OF = declared("badminton", "short").bestOf as number;
 /** The corrected format: a best-of the variant does not declare (the right answer differs from the wrong one's). */
 const TARGET = SHORT_BEST_OF === 5 ? 3 : 5;
 
-const formatLine = (sport: string, cfg: unknown): string | null => {
-  const line = describeMatchRules(sport, moduleOf(sport), cfg);
-  return line === null ? null : rulesLineText(enPublic as unknown as Dict, line);
-};
+const EN = enPublic as unknown as Dict;
+/** The line the 409 and the pad's banner say, as the rules read answers it (`getFixtureRules`: GET /rules, the pad's own
+ *  reload). This used to be `describeMatchRules` run on the reloaded cfg of a KNOCKOUT, which mirrored the code under test
+ *  and agreed only because badminton states no decider and these corrections leave the abandon policy alone (batch-5
+ *  re-review N-4); the describer's own oracle, built from the dictionary and the engine's declarations and checked against
+ *  the match centre, is `rules-line-parity.test.ts`. Each use below also asserts the line CHANGED, so a 409 stuck on the
+ *  old line cannot pass. */
+const rulesLineNow = async (auth: AuthCtx, id: string): Promise<string | null> => (await getFixtureRules(auth, id, EN)).format_line;
 const count = async (id: string) =>
   (await sql<{ n: number }[]>`select count(*)::int n from score_events where fixture_id = ${id}`)[0]!.n;
 const snapshotOf = async (id: string) =>
@@ -107,11 +110,14 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff: a correction reaches a pad alre
     const id = b.fixtureIds[0]!;
     const pad = await loadFixturePadCfg(b.auth, id);
     expect((pad.cfg as { bestOf: number }).bestOf, "premise: the pad opened on the variant's format").toBe(SHORT_BEST_OF);
+    const lineBefore = await rulesLineNow(b.auth, id);
     await correct(b, id);
     const reloaded = await loadFixturePadCfg(b.auth, id);
     expect((reloaded.cfg as { bestOf: number }).bestOf, "premise: the correction moved the format").toBe(TARGET);
     expect(reloaded.rulesVersion, "the correction moved the version the pad compares").toBe(pad.rulesVersion + 1);
-    const format = formatLine("badminton", reloaded.cfg);
+    const format = await rulesLineNow(b.auth, id);
+    expect(format, "premise: the corrected match has a line to say").not.toBeNull();
+    expect(format, "and it is not the line the pad opened on").not.toBe(lineBefore);
     await expect(scoreEvent(b.auth, id, start(pad.rulesVersion))).rejects.toMatchObject({
       code: "FIXTURE_RULES_CHANGED",
       extra: { rules_version: reloaded.rulesVersion, format },
@@ -147,12 +153,15 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff: a correction reaches a pad alre
     const half = (pad.cfg as { halfMinutes: number }).halfMinutes;
     expect(half, "premise: the variant declares its halves").toBe((declared("football", "11-a-side") as { halfMinutes: number }).halfMinutes);
     const next = half === 40 ? 35 : 40;
+    const lineBefore = await rulesLineNow(b.auth, id);
     await patchDivision(b.auth, b.divisionId, { config: { halfMinutes: next } } as never);
     const reloaded = await loadFixturePadCfg(b.auth, id);
     expect((reloaded.cfg as { halfMinutes: number }).halfMinutes).toBe(next);
+    const lineAfter = await rulesLineNow(b.auth, id);
+    expect(lineAfter, "premise: football's own line moved with its halves").not.toBe(lineBefore);
     await expect(scoreEvent(b.auth, id, start(pad.rulesVersion))).rejects.toMatchObject({
       code: "FIXTURE_RULES_CHANGED",
-      extra: { rules_version: pad.rulesVersion + 1, format: formatLine("football", reloaded.cfg) },
+      extra: { rules_version: pad.rulesVersion + 1, format: lineAfter },
     });
     expect(await count(id)).toBe(0);
     corrected.push("football");
@@ -224,6 +233,11 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff, the positive pair: a save that 
     expect(byes.length, "premise: the odd draw has byes").toBeGreaterThan(0);
     expect(open.length, "premise: and matches still to play").toBeGreaterThan(0);
     for (const r of byes) expect(r.s, "premise: a bye freezes nothing").toBeNull();
+    // The bye excluded is the SEEDED one: no feeder, so no take-back can ever reopen it. (The award a dead seat leaves in a
+    // later round carries `reason: "bye"` too, but it has feeders and IS read: the table-key door tests below.)
+    const [{ fed }] = await sql<{ fed: number }[]>`
+      select count(*)::int fed from fixtures g where g.winner_to_fixture = any(${byes.map((r) => r.id)}::uuid[]) or g.loser_to_fixture = any(${byes.map((r) => r.id)}::uuid[])`;
+    expect(fed, "premise: nothing feeds a seeded bye").toBe(0);
     const before = await versions(odd.stageId);
     await patchDivision(odd.auth, odd.divisionId, { config: { bestOf: bestOf === 5 ? 3 : 5 } } as never);
     const after = await versions(odd.stageId);
@@ -240,21 +254,23 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff, the positive pair: a save that 
   });
 });
 
-// Batch-5 Q5 (review class 13, "CONFIRMED" by reading `unfrozenRules`): a take-back that reopens an event-less award
-// (fed-seats.ts: the `reset` release, the walkover revive, the abandoned revive) was said to miss a version bump, so a
-// pad opened before the award would freeze, at its first tap, a format that a save moved while the award was excluded
-// from `unfrozenRules`. The sequence was DRIVEN through the real doors and the premise is false: step 3 cannot happen.
-//   - A take-back needs an event in the stage (the void), and a played stage is locked: the division save refuses
-//     DIVISION_FORMAT_LOCKED, the stage PUT STAGE_FORMAT_LOCKED, and the per-match writer FIXTURE_FORMAT_LOCKED on the
-//     award itself (decided without play) - rule-locks.ts `lockedStageIdsAmong` reads PLAYED, and a double walkover or
-//     a played semi is an event. So nothing moves what an excluded award resolves to between the pad's load and the
-//     reopen: the cfg the pad folds IS the cfg the first event freezes.
-//   - So a bump at the reopen would only refuse a pad that holds the right rules, and tell the scorer "the format
-//     changed" over a line that did not. These tests pin that: the pad's first tap, sent under the version it loaded,
-//     is TAKEN after each reopen, and freezes the cfg the pad folded. A bump added at any of the three UPDATEs reds them.
-// If a future door can move a played stage's award (the planned bulk apply to unstarted matches), THAT door bumps the
-// awards it moves; the guard to keep is that the pad's version and the cfg it folds never disagree.
-describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: the lock keeps the pad's version honest (batch-5 Q5)", () => {
+// Batch-5 Q5 (review class 13): a take-back that reopens an event-less award (fed-seats.ts: the `reset` release, the walkover
+// revive, the abandoned revive) must not leave a pad's version dishonest: a pad opened on the award's match before the award
+// must never freeze, at its first tap, a cfg a save moved while the award sat out of `unfrozenRules`.
+//   - The FORMAT keys cannot move it: a take-back needs an event in the stage, a played stage is locked, and the division
+//     save refuses `DIVISION_FORMAT_LOCKED`, the stage PUT `STAGE_FORMAT_LOCKED`, the per-match writer
+//     `FIXTURE_FORMAT_LOCKED` on the award (rule-locks.ts reads PLAYED; a double walkover or a played semi is an event).
+//     The first fix round probed only those and ruled the premise false; the three reopen tests below pin that they bump
+//     nothing when nothing moved (a bump there would refuse a pad holding the right rules).
+//   - The TABLE keys CAN: `divisionRefusals` lets a table (points-scope) key through on a started KNOCKOUT ("a knockout
+//     has no table to protect", rule-locks.ts), and table keys flow into `resolveFixtureCfg` (football's `awardScore` is
+//     the walkover's headline, a set sport's `pointsMap` is table-only). The re-review's probe drove it through the real
+//     doors: the award is excluded from `unfrozenRules`, the save moved its cfg and bumped nothing, the revive reopened it,
+//     and a tap at the old version was ACCEPTED and froze the new cfg under a pad folding the old. `resolvedNow` now
+//     excludes only a bye (the system's award: no pad, no format a save can change), so the SAVE bumps an event-less
+//     walkover whose resolved cfg moved, and nothing bumps at the reopen. The "table-key door" tests below drive it.
+// A future door that moves a played stage's award (the planned bulk apply to unstarted matches) bumps what it moves.
+describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: the format-key doors refuse and a reopen alone bumps nothing; the table-key door bumps at the save (batch-5 Q5)", () => {
   const BWF = declared("badminton", "bwf").bestOf as number;
   const MOVED = BWF === 5 ? 3 : 5; // a best-of the variant does not declare: a format save that landed would be seen
   type Ko = Awaited<ReturnType<typeof knockout>>;
@@ -275,9 +291,10 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
   const versionOf = async (id: string) =>
     (await sql<{ v: number }[]>`select rules_version v from fixtures where id = ${id}`)[0]!.v;
 
-  /** Every door that could move what the award resolves to refuses, and nothing moved. `perMatch: false` is the cascade
-   *  void: it has no outcome, so the per-match writer is allowed on it (and bumps it itself - the last test below). */
-  async function everyFormatDoorRefuses(b: Ko, awardId: string, perMatch = true) {
+  /** The three FORMAT-key doors refuse (the division's `bestOf`, the stage's rules, the match's own override) and nothing
+   *  moved. Table keys are NOT among them - that door is open, and the "table-key door" tests below drive it. `perMatch:
+   *  false` is the cascade void: it has no outcome, so the per-match writer is allowed on it (and bumps it itself). */
+  async function formatKeyDoorsRefuse(b: Ko, awardId: string, perMatch = true) {
     await expect(patchDivision(b.auth, b.divisionId, { config: { bestOf: MOVED } } as never)).rejects.toMatchObject({
       code: "DIVISION_FORMAT_LOCKED",
     });
@@ -309,7 +326,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     await winOut(b, b.fixtureIds[1]!);
     const walked = await fixtureRow(finalId);
     expect([walked.status, walked.outcome?.kind, await count(finalId)], "premise: the final is an event-less award").toEqual(["forfeited", "award", 0]);
-    await everyFormatDoorRefuses(b, finalId);
+    await formatKeyDoorsRefuse(b, finalId);
     expect(await versionOf(finalId), "the award sat out the doors, version untouched").toBe(pad.rulesVersion);
     await post(b.auth, sf1.id, "core.void", { event_id: killed.event_id });
     expect((await fixtureRow(finalId)).status, "premise: the revive reopened the award").toBe("scheduled");
@@ -327,7 +344,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     const killed = await dw(b, sf1.id);
     await winOut(b, sf2Id);
     expect((await fixtureRow(finalId)).status, "premise: the final is walked over").toBe("forfeited");
-    await everyFormatDoorRefuses(b, finalId);
+    await formatKeyDoorsRefuse(b, finalId);
     await post(b.auth, sf2Id, "core.void", { event_id: await lastEvent(sf2Id) });
     const reset = await fixtureRow(finalId);
     expect([reset.status, reset.outcome, await versionOf(finalId)], "premise: the reset reopened the award").toEqual(["scheduled", null, pad.rulesVersion]);
@@ -349,7 +366,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     const k2 = await dw(b, qf2.id);
     const voided = await fixtureRow(semiId);
     expect([voided.status, voided.outcome, await count(semiId)], "premise: both feeders dead, the semi is a cascade void").toEqual(["abandoned", null, 0]);
-    await everyFormatDoorRefuses(b, semiId, false);
+    await formatKeyDoorsRefuse(b, semiId, false);
     await post(b.auth, qf1.id, "core.void", { event_id: k1.event_id });
     await post(b.auth, qf2.id, "core.void", { event_id: k2.event_id });
     expect((await fixtureRow(semiId)).status, "premise: the revive reopened the semi").toBe("scheduled");
@@ -367,6 +384,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     const qf2 = siblingOf(await rowsOf(b.stageId), qf1);
     const semiId = qf1.winner_to_fixture!;
     const pad = await loadFixturePadCfg(b.auth, semiId);
+    const lineBefore = await rulesLineNow(b.auth, semiId);
     const k1 = await dw(b, qf1.id);
     const k2 = await dw(b, qf2.id);
     expect((await fixtureRow(semiId)).status, "premise: the semi is a cascade void").toBe("abandoned");
@@ -380,9 +398,11 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     await winOut(b, qf2.id);
     const now = await loadFixturePadCfg(b.auth, semiId);
     expect((now.cfg as { bestOf: number }).bestOf).toBe(MOVED);
+    const lineAfter = await rulesLineNow(b.auth, semiId);
+    expect(lineAfter, "premise: the line moved with the best-of").not.toBe(lineBefore);
     await expect(scoreEvent(b.auth, semiId, start(pad.rulesVersion))).rejects.toMatchObject({
       code: "FIXTURE_RULES_CHANGED",
-      extra: { rules_version: pad.rulesVersion + 1, format: formatLine("badminton", now.cfg) },
+      extra: { rules_version: pad.rulesVersion + 1, format: lineAfter },
     });
     await expect(scoreEvent(b.auth, semiId, start(now.rulesVersion))).resolves.toMatchObject({ seq: 1 });
     reopened.push("abandoned revive + per-match");
@@ -390,6 +410,156 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
 
   it("counted: all three reopening writes were driven, and the one open door", () => {
     expect(reopened).toEqual(["walkover revive", "reset", "abandoned revive", "abandoned revive + per-match"]);
+  });
+
+  // ---- the table-key door (batch-5 re-review, Q5) -------------------------------------------------------------------
+  // A points-scope key is NOT refused on a played knockout, so a division save can move what an event-less walkover
+  // resolves to between the pad's load and the reopen. The save bumps the walkover (`resolvedNow` excludes only byes).
+  const PM = declared("badminton", "bwf").pointsMap as Record<string, [number, number]>;
+  const PM_KEY = Object.keys(PM)[0]!;
+  /** A points map the variant does not declare: the winner's points one higher (so the right answer differs from the old). */
+  const PM_MOVED = { ...PM, [PM_KEY]: [PM[PM_KEY]![0] + 1, PM[PM_KEY]![1]] as [number, number] };
+  const tableKey: string[] = [];
+  const forfeitAway = (b: Ko, row: { id: string; away_entrant_id: string | null }) =>
+    post(b.auth, row.id, "core.forfeit", { by: row.away_entrant_id, reason: "walkover" });
+  /** A division save of one table key on the played knockout: accepted (no refusal), and what it landed. */
+  async function saveTableKey(b: Ko, config: Record<string, unknown>) {
+    const out = await patchDivision(b.auth, b.divisionId, { config } as never);
+    expect((out as { refused?: unknown[] }).refused ?? [], "premise: the played knockout lets a table key through").toEqual([]);
+  }
+  /** The pad that loaded before the save taps under the version it loaded: refused (nothing recorded, nothing frozen) with
+   *  the corrected version and the line the rules read says; it reloads, the cfg carries the moved key, and the retaken tap
+   *  lands and freezes it. `pick` reads the moved key off a cfg. */
+  async function staleThenReload(b: Ko, id: string, pad: Awaited<ReturnType<typeof loadFixturePadCfg>>, pick: (cfg: unknown) => unknown, want: unknown) {
+    expect(pick(pad.cfg), "premise: the pad was folding the old value").not.toEqual(want);
+    await expect(scoreEvent(b.auth, id, start(pad.rulesVersion))).rejects.toMatchObject({
+      status: 409,
+      code: "FIXTURE_RULES_CHANGED",
+      extra: { rules_version: pad.rulesVersion + 1, format: await rulesLineNow(b.auth, id) },
+    });
+    expect(await count(id), "the refused tap wrote nothing").toBe(0);
+    expect(await snapshotOf(id), "and froze nothing").toBeNull();
+    const reloaded = await loadFixturePadCfg(b.auth, id);
+    expect(pick(reloaded.cfg), "the reload carries the moved key").toEqual(want);
+    expect(reloaded.rulesVersion).toBe(pad.rulesVersion + 1);
+    await expect(scoreEvent(b.auth, id, start(reloaded.rulesVersion))).resolves.toMatchObject({ seq: 1, rules_version: reloaded.rulesVersion });
+    expect(pick(await snapshotOf(id)), "the first event froze the moved cfg").toEqual(want);
+  }
+
+  it("football 11-a-side, a knockout of 4 (the re-review's probe): awardScore saved while the final is a walkover bumps it, so the pad's old version is refused after the revive and the reload carries the new goals", async () => {
+    const b = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 4 });
+    const sf1 = await fixtureRow(b.fixtureIds[0]!);
+    const sf2 = siblingOf(await rowsOf(b.stageId), sf1);
+    const finalId = sf1.winner_to_fixture!;
+    const pad = await loadFixturePadCfg(b.auth, finalId);
+    const award = (pad.cfg as { awardScore: { goals: number } }).awardScore;
+    const GOALS = award.goals + 2;
+    const goalsOf = (cfg: unknown) => (cfg as { awardScore?: { goals?: number } } | null)?.awardScore?.goals;
+
+    const killed = await dw(b, sf1.id); // SF1: both sides forfeit, its seat in the final is dead
+    await forfeitAway(b, sf2); // SF2: the away side forfeits, the home side advances: the final is walked over
+    const walked = await fixtureRow(finalId);
+    expect([walked.status, walked.outcome?.kind, await count(finalId), await versionOf(finalId)], "premise: the final is an event-less award at the pad's version").toEqual(["forfeited", "award", 0, pad.rulesVersion]);
+    const semiVersions = [await versionOf(sf1.id), await versionOf(sf2.id)];
+
+    // The empty case first: re-sending the stored value moves nothing the award resolves to, so it bumps nothing.
+    await saveTableKey(b, { awardScore: award });
+    expect(await versionOf(finalId), "a re-sent table key moves no version").toBe(pad.rulesVersion);
+    // The save that moves it.
+    await saveTableKey(b, { awardScore: { ...award, goals: GOALS } });
+    expect(await versionOf(finalId), "the save moved what the walkover resolves to, so it bumped it").toBe(pad.rulesVersion + 1);
+    expect([await versionOf(sf1.id), await versionOf(sf2.id)], "the played semis keep their snapshots: no bump").toEqual(semiVersions);
+
+    await post(b.auth, sf1.id, "core.void", { event_id: killed.event_id });
+    expect((await fixtureRow(finalId)).status, "premise: the revive reopened the final").toBe("scheduled");
+    await forfeitAway(b, sf1); // SF1 re-decided: both seats of the final are filled again
+    const seated = await fixtureRow(finalId);
+    expect([seated.home_entrant_id !== null, seated.away_entrant_id !== null], "premise: the final is seated").toEqual([true, true]);
+    expect(await versionOf(finalId), "the reopen bumped nothing more").toBe(pad.rulesVersion + 1);
+
+    await staleThenReload(b, finalId, pad, goalsOf, GOALS);
+    tableKey.push("football walkover revive");
+  }, 120_000);
+
+  it.each([
+    {
+      name: "badminton walkover revive",
+      run: async (b: Ko) => {
+        const sf1 = await fixtureRow(b.fixtureIds[0]!);
+        const finalId = sf1.winner_to_fixture!;
+        const pad = await loadFixturePadCfg(b.auth, finalId);
+        const killed = await dw(b, sf1.id);
+        await winOut(b, b.fixtureIds[1]!);
+        expect((await fixtureRow(finalId)).status, "premise: the final is walked over").toBe("forfeited");
+        return { id: finalId, pad, bumpedAtSave: true, reopen: async () => {
+          await post(b.auth, sf1.id, "core.void", { event_id: killed.event_id });
+          expect((await fixtureRow(finalId)).status, "premise: the revive reopened it").toBe("scheduled");
+          await winOut(b, sf1.id);
+        } };
+      },
+      entrants: 4 as const,
+    },
+    {
+      name: "badminton reset (taking back the played semi)",
+      run: async (b: Ko) => {
+        const sf1 = await fixtureRow(b.fixtureIds[0]!);
+        const sf2Id = b.fixtureIds[1]!;
+        const finalId = sf1.winner_to_fixture!;
+        const pad = await loadFixturePadCfg(b.auth, finalId);
+        const killed = await dw(b, sf1.id);
+        await winOut(b, sf2Id);
+        expect((await fixtureRow(finalId)).status, "premise: the final is walked over").toBe("forfeited");
+        return { id: finalId, pad, bumpedAtSave: true, reopen: async () => {
+          await post(b.auth, sf2Id, "core.void", { event_id: await lastEvent(sf2Id) });
+          expect((await fixtureRow(finalId)).outcome, "premise: the reset released the award").toBeNull();
+          await post(b.auth, sf1.id, "core.void", { event_id: killed.event_id });
+          await winOut(b, sf2Id);
+          await winOut(b, sf1.id);
+        } };
+      },
+      entrants: 4 as const,
+    },
+    {
+      // The pair that was never excluded: a cascade void has no outcome, so `resolvedNow` always read it. It must still bump.
+      name: "badminton abandoned revive (a cascade void)",
+      run: async (b: Ko) => {
+        const qf1 = await fixtureRow(b.fixtureIds[0]!);
+        const qf2 = siblingOf(await rowsOf(b.stageId), qf1);
+        const semiId = qf1.winner_to_fixture!;
+        const pad = await loadFixturePadCfg(b.auth, semiId);
+        const k1 = await dw(b, qf1.id);
+        const k2 = await dw(b, qf2.id);
+        expect((await fixtureRow(semiId)).status, "premise: the semi is a cascade void").toBe("abandoned");
+        return { id: semiId, pad, bumpedAtSave: true, reopen: async () => {
+          await post(b.auth, qf1.id, "core.void", { event_id: k1.event_id });
+          await post(b.auth, qf2.id, "core.void", { event_id: k2.event_id });
+          expect((await fixtureRow(semiId)).status, "premise: the revive reopened the semi").toBe("scheduled");
+          await winOut(b, qf1.id);
+          await winOut(b, qf2.id);
+        } };
+      },
+      entrants: 8 as const,
+    },
+  ])("$name: a points-map save while the match is decided without play bumps it at the save, and the pad's old version is refused after the reopen", async ({ name, run, entrants }) => {
+    const b = await knockout(entrants);
+    const { id, pad, reopen } = await run(b);
+    const v0 = pad.rulesVersion;
+    expect(await versionOf(id), "premise: nothing has bumped it yet").toBe(v0);
+    await saveTableKey(b, { pointsMap: PM_MOVED });
+    expect(await versionOf(id), "the save moved what the match resolves to, so it bumped it").toBe(v0 + 1);
+    await reopen();
+    expect(await versionOf(id), "the reopen bumped nothing more").toBe(v0 + 1);
+    await staleThenReload(b, id, pad, (cfg) => (cfg as { pointsMap?: unknown } | null)?.pointsMap, PM_MOVED);
+    tableKey.push(name);
+  }, 180_000);
+
+  it("counted: the table-key door was driven on a walkover revive in both a goal sport and a set sport, the reset, and the cascade void", () => {
+    expect(tableKey).toEqual([
+      "football walkover revive",
+      "badminton walkover revive",
+      "badminton reset (taking back the played semi)",
+      "badminton abandoned revive (a cascade void)",
+    ]);
   });
 });
 
