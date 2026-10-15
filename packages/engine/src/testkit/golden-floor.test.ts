@@ -2,7 +2,7 @@
 // (CORE_EVENT_SCHEMAS, FORFEIT_REASONS, forfeitAdmission, supportsDraws, the lineup reducer), never typed in.
 import { describe, expect, it } from "vitest";
 import { CORE_EVENT_SCHEMAS, foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
-import { DEFAULT_LINEUP_POLICY } from "../core/lineup.ts";
+import { DEFAULT_LINEUP_POLICY, type LineupRejectionReason } from "../core/lineup.ts";
 import { FORFEIT_REASONS } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
@@ -18,6 +18,7 @@ import {
   floorRequirement,
   forfeitAdmissions,
   lineupOffers,
+  lineupTypesOf,
   outcomeToken,
   outcomeTokenOf,
   planLineupEvents,
@@ -421,5 +422,76 @@ describe("golden floor — a recorded void is a real void", () => {
     }
     expect(streams).toBeGreaterThan(200);
     expect(voids, "core.void events across the corpora").toBeGreaterThanOrEqual(builtinModules.length);
+  });
+});
+
+// ------------------------------------------------------------------------------------- the lineup vocabulary (review 3)
+
+/** The reducer's refusal codes, exhaustive by construction: a `Record` keyed by the union does not compile if
+ *  `LineupRejectionReason` grows and this does not. The expected set is the reducer's own declaration. */
+const REDUCER_CODES: Record<LineupRejectionReason, true> = {
+  "unknown-lineup-event": true,
+  "invalid-payload": true,
+  "unknown-entrant": true,
+  "unknown-person": true,
+  "not-on-field": true,
+  "already-on-field": true,
+  "not-a-player": true,
+  "squad-growth-forbidden": true,
+  "reentry-forbidden": true,
+  "reentry-limit": true,
+  "reentry-position": true,
+  "sub-cap-reached": true,
+  "exemption-not-declared": true,
+  "exemption-role-absent": true,
+  "exemption-cap-reached": true,
+};
+
+describe("golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure", () => {
+  it("LINEUP_TYPES are exactly the kernel's core.lineup.* types, none missing, none extra", () => {
+    const declared = CORE_TYPES.filter((t) => t.startsWith("core.lineup."));
+    expect(declared.length).toBeGreaterThan(0);
+    expect([...LINEUP_TYPES].sort()).toEqual([...declared].sort());
+    expect(lineupTypesOf()).toEqual([...LINEUP_TYPES]);
+  });
+
+  it("a lineup type the kernel declares and no planner covers throws BY NAME (the review's core.lineup.swap), at every entry point", () => {
+    const widened = [...CORE_TYPES, "core.lineup.swap"];
+    expect(() => lineupTypesOf(widened)).toThrow(/core\.lineup\.swap.*no planner/);
+    const football = builtinModules.find((m) => m.key === "football")!;
+    expect(() => floorRequirement(football, corpusOf("football"), widened)).toThrow(/core\.lineup\.swap.*no planner/);
+    expect(() => lineupOffers(football, corpusOf("football"), widened)).toThrow(/core\.lineup\.swap.*no planner/);
+    const cfg = football.configSchema.parse(corpusOf("football").configs.default);
+    expect(() => planLineupEvents(benchPair(football, cfg), DEFAULT_LINEUP_POLICY, widened)).toThrow(/core\.lineup\.swap.*no planner/);
+  });
+
+  it("a planner for a type the kernel no longer declares is a named failure too (the other direction)", () => {
+    const narrowed = CORE_TYPES.filter((t) => t !== "core.lineup.entry");
+    expect(() => lineupTypesOf(narrowed)).toThrow(/core\.lineup\.entry.*no longer declares/);
+  });
+
+  it("every impossible-by-policy reason is a reducer refusal code per config — never '?' and never the planner's own 'no-candidate'", () => {
+    let reasons = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      for (const [token, why] of req.impossible) {
+        for (const part of why.split("; ")) {
+          const code = part.split(": ")[1];
+          expect(code, `${key} ${token}: ${part}`).toBeDefined();
+          expect(Object.hasOwn(REDUCER_CODES, code!), `${key} ${token}: "${code}" is not a reducer refusal code`).toBe(true);
+          reasons++;
+        }
+      }
+    });
+    expect(reasons).toBeGreaterThan(0);
+  });
+
+  it("a plan that never got to ask the reducer ('no-candidate') cannot become a floor reason: the requirement refuses to derive from it", () => {
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const cfg = football.configSchema.parse(corpusOf("football").configs.default);
+    const plan = planLineupEvents(benchPair(football, cfg, 0), DEFAULT_LINEUP_POLICY);
+    expect(plan.refused["core.lineup.substitution"]).toBe("no-candidate");
+    // a corpus whose only config gets no bench cannot be offered: the offers always bench, so this is the direct guard
+    expect(Object.hasOwn(REDUCER_CODES, "no-candidate")).toBe(false);
   });
 });

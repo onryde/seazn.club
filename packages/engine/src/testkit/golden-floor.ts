@@ -100,8 +100,10 @@ export function benchPair(module: AnySportModule, cfg: unknown, size: number = F
   return { home: withBench(base.home), away: withBench(base.away) };
 }
 
-/** The five lineup types, in the order a match plausibly produces them. */
-export const LINEUP_TYPES = [
+/** The order a match plausibly produces lineup changes in: each depends on the squad the earlier ones left (a squad of
+ *  ONE takes a position change, then a substitution that puts a bench player on, then an exempt replacement OF that
+ *  player, ...). A planner exists for each; `lineupTypesOf` ties this list to the kernel's own declaration. */
+const LINEUP_PLAN_ORDER = [
   "core.lineup.position",
   "core.lineup.substitution",
   "core.lineup.replacement",
@@ -109,20 +111,86 @@ export const LINEUP_TYPES = [
   "core.lineup.entry",
 ] as const;
 
+/** The lineup types the floor plans, in plan order — and ONLY if they are exactly the `core.lineup.*` types the kernel
+ *  declares. A type the kernel gained with no planner here, or a planner for a type it dropped, is a named failure: the
+ *  list is an ORDER, not a vocabulary, and the vocabulary is `CORE_EVENT_SCHEMAS`. */
+export function lineupTypesOf(coreTypes: readonly string[] = CORE_TYPES): string[] {
+  const declared = coreTypes.filter((t) => t.startsWith("core.lineup."));
+  const planned: readonly string[] = LINEUP_PLAN_ORDER;
+  const unplanned = declared.filter((t) => !planned.includes(t));
+  if (unplanned.length > 0) {
+    throw new Error(`golden floor: the kernel declares ${unplanned.join(", ")} and golden-floor.ts has no planner for it: add one to LINEUP_PLAN_ORDER / ATTEMPTS`);
+  }
+  const retired = planned.filter((t) => !declared.includes(t));
+  if (retired.length > 0) {
+    throw new Error(`golden floor: golden-floor.ts plans ${retired.join(", ")} but the kernel no longer declares it: remove its planner`);
+  }
+  return [...planned];
+}
+
+/** The five lineup types — derived from, and checked against, the kernel's own declaration at import. */
+export const LINEUP_TYPES: readonly string[] = lineupTypesOf();
+
 export interface LineupPlan {
   /** The accepted events, in order, ready to append (home side). */
   readonly events: GoldenEvent[];
   /** Types the real reducer accepted under this policy. */
   readonly accepted: string[];
-  /** Types it refused, with the reducer's own reason code. */
+  /** Types it refused, with the reducer's own reason code — or `no-candidate` when the plan never got to ask. */
   readonly refused: Record<string, string>;
+}
+
+/** What a planner may read: the squad as it stands, the policy, and the helpers that name a person's slot. */
+interface PlanCtx {
+  readonly side: string;
+  readonly lineups: LineupPair;
+  readonly policy: LineupPolicy;
+  readonly exemption: string | undefined;
+  readonly fields: readonly { personId: string; positionKey?: string }[];
+  readonly benched: readonly { personId: string; positionKey?: string }[];
+  slotOf(personId: string, positionKey?: string, roles?: readonly string[]): LineupSlot;
+}
+type Attempt = { payload: Record<string, unknown> };
+
+/** One candidate payload list per lineup type — a `Record` keyed by the plan order, so a type with no entry here does not
+ *  compile, and there is no `else` for a new type to fall into silently. */
+const ATTEMPTS: Readonly<Record<(typeof LINEUP_PLAN_ORDER)[number], (c: PlanCtx) => Attempt[]>> = {
+  "core.lineup.position": (c) => {
+    const groups = resolveGroupKeys(c.lineups);
+    return c.fields.map((m) => {
+      const other = groups.find((g) => g !== m.positionKey) ?? `${m.positionKey ?? "pos"}-alt`;
+      return { payload: { side: c.side, personId: m.personId, positionKey: other } };
+    });
+  },
+  "core.lineup.substitution": (c) => substitutionAttempts(c, false),
+  "core.lineup.replacement": (c) => substitutionAttempts(c, true),
+  "core.lineup.retirement": (c) => [...c.fields].reverse().map((m) => ({ payload: { side: c.side, personId: m.personId, reason: "retired hurt" } })),
+  "core.lineup.entry": (c) => c.benched.map((on) => ({ payload: { side: c.side, on: c.slotOf(on.personId) } })),
+};
+
+function substitutionAttempts(c: PlanCtx, replacement: boolean): Attempt[] {
+  const required = c.exemption === undefined ? undefined : c.policy.exemptions?.[c.exemption]?.requiresRole;
+  const out: Attempt[] = [];
+  for (const off of [...c.fields].reverse()) {
+    for (const on of c.benched) {
+      out.push({
+        payload: {
+          side: c.side,
+          off: off.personId,
+          on: c.slotOf(on.personId, off.positionKey, replacement && required !== undefined ? [required] : undefined),
+          ...(replacement ? { exemption: c.exemption, reason: "injury" } : {}),
+        },
+      });
+    }
+  }
+  return out;
 }
 
 /** One home-side lineup event of each type, chosen against the squad AS IT STANDS and checked by the real reducer
  *  (`reduceLineupEvent`, strict policy), so a type the policy refuses is named with the reducer's reason instead of
- *  being assumed impossible. The chain evolves the squads event by event: a squad of one (tennis) takes its position
- *  change, then a substitution that puts a bench player on, then an exempt replacement OF that player, and so on. */
-export function planLineupEvents(lineups: LineupPair, policy: LineupPolicy): LineupPlan {
+ *  being assumed impossible. The chain evolves the squads event by event. */
+export function planLineupEvents(lineups: LineupPair, policy: LineupPolicy, coreTypes: readonly string[] = CORE_TYPES): LineupPlan {
+  const types = lineupTypesOf(coreTypes);
   const side = lineups.home.entrantId;
   let squads: SquadState = initSquads(lineups);
   const events: GoldenEvent[] = [];
@@ -131,8 +199,6 @@ export function planLineupEvents(lineups: LineupPair, policy: LineupPolicy): Lin
   const exemption = Object.keys(policy.exemptions ?? {})[0];
 
   const members = () => squads.home.members.filter((m) => m.role === "player");
-  const onField = () => members().filter((m) => m.onField);
-  const bench = () => members().filter((m) => !m.onField && m.timesOff === 0 && !m.started);
   const slotOf = (personId: string, positionKey?: string, roles?: readonly string[]): LineupSlot => {
     const named = lineups.home.slots.find((s) => s.personId === personId);
     const position = positionKey ?? named?.positionKey;
@@ -145,41 +211,23 @@ export function planLineupEvents(lineups: LineupPair, policy: LineupPolicy): Lin
     };
   };
 
-  for (const type of LINEUP_TYPES) {
+  for (const type of types) {
     if (type === "core.lineup.replacement" && exemption === undefined) {
       refused[type] = "exemption-not-declared";
       continue;
     }
-    const fields = onField();
-    const benched = bench();
-    const attempts: { payload: Record<string, unknown> }[] = [];
-    if (type === "core.lineup.position") {
-      for (const m of fields) {
-        const groups = resolveGroupKeys(lineups);
-        const other = groups.find((g) => g !== m.positionKey) ?? `${m.positionKey ?? "pos"}-alt`;
-        attempts.push({ payload: { side, personId: m.personId, positionKey: other } });
-      }
-    } else if (type === "core.lineup.substitution" || type === "core.lineup.replacement") {
-      const required = exemption === undefined ? undefined : policy.exemptions?.[exemption]?.requiresRole;
-      for (const off of [...fields].reverse()) {
-        for (const on of benched) {
-          attempts.push({
-            payload: {
-              side,
-              off: off.personId,
-              on: slotOf(on.personId, off.positionKey, type === "core.lineup.replacement" && required !== undefined ? [required] : undefined),
-              ...(type === "core.lineup.replacement" ? { exemption, reason: "injury" } : {}),
-            },
-          });
-        }
-      }
-    } else if (type === "core.lineup.retirement") {
-      for (const m of [...fields].reverse()) attempts.push({ payload: { side, personId: m.personId, reason: "retired hurt" } });
-    } else {
-      for (const on of benched) attempts.push({ payload: { side, on: slotOf(on.personId) } });
-    }
+    const ctx: PlanCtx = {
+      side,
+      lineups,
+      policy,
+      exemption,
+      fields: members().filter((m) => m.onField),
+      benched: members().filter((m) => !m.onField && m.timesOff === 0 && !m.started),
+      slotOf,
+    };
+    const attempts = ATTEMPTS[type as (typeof LINEUP_PLAN_ORDER)[number]](ctx);
 
-    let last = "no candidate: nobody to act on";
+    let last = "no-candidate";
     let placed = false;
     for (const { payload } of attempts) {
       const result = reduceLineupEvent(squads, { type, payload }, policy);
@@ -208,12 +256,12 @@ export interface LineupOffer {
 }
 
 /** For each config the corpus records: the bench pair, and what the sport's own policy lets that config do. */
-export function lineupOffers(module: AnySportModule, corpus: GoldenCorpus): LineupOffer[] {
+export function lineupOffers(module: AnySportModule, corpus: GoldenCorpus, coreTypes: readonly string[] = CORE_TYPES): LineupOffer[] {
   return Object.entries(corpus.configs).map(([cfgName, raw]) => {
     const cfg = module.configSchema.parse(raw) as unknown;
     const lineups = benchPair(module, cfg);
     const policy = module.lineupPolicy?.(cfg) ?? DEFAULT_LINEUP_POLICY;
-    return { cfgName, lineups, plan: planLineupEvents(lineups, policy) };
+    return { cfgName, lineups, plan: planLineupEvents(lineups, policy, coreTypes) };
   });
 }
 
@@ -338,6 +386,203 @@ export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record
 
 const exemptionApplies = (e: FloorExemption, sport: string): boolean => e.sports === "all" || e.sports.includes(sport);
 
+// -------------------------------------------------------------------------------------- recorded, overlay unpinned
+//
+// The floor is a PRESENCE check: a corpus that records `core.suspend` satisfies it. It does not follow that the epoch guard
+// can see a change to how a pause folds, because the harness records the MODULE's state, outcome, summary and deltas — not
+// the kernel overlay (stoppage clock, squads, settlement). An event the kernel owns, or one a module folds as `return
+// state`, can sit in a stream and move nothing the guard compares. That is a class, not a gap to hide: each CLAIM below
+// says which events are inert in which sports and why, the inertness is DERIVED by ablation (remove the event, compare
+// every recorded field), and a claim whose ablation starts finding movement is stale — the day the harness records the
+// overlay, every claim goes red and is deleted, and the manual-bump caveat in GOLDEN-POLICY.md goes with it.
+
+export type OverlayVerdict = "unpinned" | "pinned" | "unrecorded";
+
+export interface OverlayResult {
+  readonly verdict: OverlayVerdict;
+  /** Recorded streams that carry the event, i.e. were ablated. */
+  readonly streams: number;
+  /** Of those, how many changed a recorded field (a state, the outcome, the summary or the deltas) when it was removed. */
+  readonly moved: number;
+  /** Of those, how many the kernel REFUSED once it was removed (its absence is load-bearing for admission). */
+  readonly refused: number;
+}
+
+export interface OverlayClaim {
+  readonly id: string;
+  /** The events claimed unpinned, in plan order. */
+  readonly tokens: readonly FloorToken[];
+  /** `together`: the tokens are removed as one (a pause is a suspend AND its resume). `chain`: token k is judged by what
+   *  it adds to the tokens planned before it, i.e. the ledger without tokens k.. against the one without k+1.. (a lineup
+   *  change depends on the squad the earlier ones left, so it cannot be removed alone). */
+  readonly mode: "together" | "chain";
+  /** The sports the claim covers — a statement about the module's own declaration, not a list typed here. */
+  appliesTo(module: AnySportModule): boolean;
+  readonly reason: string;
+}
+
+export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
+  {
+    id: "stoppage",
+    tokens: [eventToken("core.suspend"), eventToken("core.resume")],
+    mode: "together",
+    appliesTo: () => true,
+    reason:
+      "kernel-owned: core.suspend / core.resume never reach module.apply, and the stoppage clock (core/time.ts) and the " +
+      "open-stoppage refusals live in the kernel overlay, which the harness does not record — a change to how a pause folds moves no golden",
+  },
+  {
+    id: "note",
+    tokens: [eventToken("core.note")],
+    mode: "together",
+    appliesTo: () => true,
+    reason:
+      "a free-text annotation: it reaches module.apply but every module folds it as `return state`, so the recorded states, " +
+      "outcome, summary and deltas are identical with or without it",
+  },
+  {
+    id: "award",
+    tokens: [eventToken("core.award")],
+    mode: "together",
+    appliesTo: () => true,
+    reason:
+      "a player award (motm and the like): it reaches module.apply but every module folds it as `return state`, so the recorded " +
+      "fields are identical with or without it",
+  },
+  {
+    id: "lineup",
+    tokens: LINEUP_TYPES.map(eventToken),
+    mode: "chain",
+    appliesTo: (module) => module.onLineup === undefined,
+    reason:
+      "kernel-owned squads: a module that declares no onLineup never sees a lineup change, so its recorded fields are identical " +
+      "with or without them — a change to the lineup reducer (core/lineup.ts) moves no golden in that sport",
+  },
+];
+
+/** `core.finalize` is probed beside the claims as a CONTROL: it is folded by every module and is not claimed unpinned, so
+ *  a probe that could only ever answer "unpinned" would show here. */
+const OVERLAY_CONTROLS: readonly OverlayClaim["tokens"][] = [[eventToken("core.finalize")]];
+
+interface Ablation {
+  readonly kept: GoldenEvent[];
+}
+
+/** The ledger without every event whose type is in `remove`, the `voids` ids renumbered to the survivors' new places; null
+ *  when a void targets a removed event (its target is gone, so there is nothing sound to compare). */
+function ablate(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ablation | null {
+  const place = new Map<number, number>();
+  let next = 0;
+  events.forEach((event, i) => {
+    if (!remove.has(event.type)) place.set(i, next++);
+  });
+  const kept: GoldenEvent[] = [];
+  for (const event of events) {
+    if (remove.has(event.type)) continue;
+    if (event.voids === undefined) {
+      kept.push(event);
+      continue;
+    }
+    const target = place.get(Number(event.voids.slice(2)));
+    if (target === undefined) return null;
+    kept.push({ ...event, voids: `e-${target}` });
+  }
+  return { kept };
+}
+
+/** Whether removing `big \ small` from the ledger changes any recorded field, across every recorded stream that carries one
+ *  of those events. Moved = a retained step's state differs, the outcome / summary / deltas differ, or an ablated event's
+ *  OWN step already changed the state (a module that folds the event into state). */
+function ablationProbe(
+  module: AnySportModule,
+  corpus: GoldenCorpus,
+  small: ReadonlySet<string>,
+  big: ReadonlySet<string>,
+  record: Recorder,
+): OverlayResult {
+  const extra = new Set([...big].filter((t) => !small.has(t)));
+  let streams = 0;
+  let moved = 0;
+  let refused = 0;
+  for (const stream of corpus.streams) {
+    if (!stream.events.some((e) => extra.has(e.type))) continue;
+    const near = ablate(stream.events, small);
+    const far = ablate(stream.events, big);
+    if (near === null || far === null) continue;
+    const raw = corpus.configs[stream.config];
+    streams++;
+    // The recorded ledger itself must fold: a recorder that cannot is the probe's failure, not evidence.
+    const a = record(module, raw, near.kept, stream.lineups);
+    let b;
+    try {
+      b = record(module, raw, far.kept, stream.lineups);
+    } catch {
+      refused++;
+      continue;
+    }
+    const gone = near.kept.map((e, i) => (extra.has(e.type) ? i : -1)).filter((i) => i >= 0);
+    const retained = near.kept.map((_, i) => i).filter((i) => !gone.includes(i));
+    const sameSteps = JSON.stringify(retained.map((i) => a.states[i])) === JSON.stringify(b.states);
+    const ownStepsNeutral = gone.every((i) => i === 0 || a.states[i] === a.states[i - 1]);
+    if (!(sameSteps && ownStepsNeutral && a.outcome === b.outcome && a.summary === b.summary && a.deltas === b.deltas)) moved++;
+  }
+  const verdict: OverlayVerdict = streams === 0 ? "unrecorded" : moved > 0 || refused > 0 ? "pinned" : "unpinned";
+  return { verdict, streams, moved, refused };
+}
+
+/** For every event a claim names (and the finalize control): is it recorded, and does it move a recorded golden? */
+export function overlayVerdicts(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = recomputeStream): Map<FloorToken, OverlayResult> {
+  const out = new Map<FloorToken, OverlayResult>();
+  const typeOf = (token: FloorToken): string => token.slice("event:".length);
+  for (const claim of OVERLAY_CLAIMS) {
+    const types = claim.tokens.map(typeOf);
+    claim.tokens.forEach((token, k) => {
+      const big = new Set(claim.mode === "chain" ? types.slice(k) : types);
+      const small = new Set(claim.mode === "chain" ? types.slice(k + 1) : []);
+      out.set(token, ablationProbe(module, corpus, small, big, record));
+    });
+  }
+  for (const tokens of OVERLAY_CONTROLS) {
+    const types = new Set(tokens.map(typeOf));
+    for (const token of tokens) out.set(token, ablationProbe(module, corpus, new Set(), types, record));
+  }
+  return out;
+}
+
+/** Claims that no longer hold for this sport, named: the event moves a recorded golden, is not recorded, or could not be
+ *  probed. A token the sport's own policy makes impossible is not claimed (nothing to record). */
+export function staleOverlayClaims(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder): string[] {
+  const out: string[] = [];
+  const impossible = floorRequirement(module, corpus).impossible;
+  let verdicts: Map<FloorToken, OverlayResult>;
+  try {
+    verdicts = overlayVerdicts(module, corpus, record);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    for (const claim of OVERLAY_CLAIMS) {
+      if (!claim.appliesTo(module)) continue;
+      for (const token of claim.tokens) if (!impossible.has(token)) out.push(`${module.key} ${token}: the probe that proves the "${claim.id}" claim could not run: ${why}`);
+    }
+    return out;
+  }
+  for (const claim of OVERLAY_CLAIMS) {
+    if (!claim.appliesTo(module)) continue;
+    for (const token of claim.tokens) {
+      if (impossible.has(token)) continue;
+      const r = verdicts.get(token);
+      if (r === undefined || r.verdict === "unrecorded") {
+        out.push(`${module.key} ${token}: not recorded, so the "${claim.id}" claim holds over nothing (the floor reds first)`);
+      } else if (r.verdict === "pinned") {
+        out.push(
+          `${module.key} ${token}: moves a recorded golden (${r.moved} of ${r.streams} stream(s) change, ${r.refused} refused, when it is removed): ` +
+            `the "${claim.id}" claim no longer holds — the manual-bump caveat in GOLDEN-POLICY.md does not apply to it in this sport, move it out of OVERLAY_CLAIMS`,
+        );
+      }
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------------- requirement
 
 export interface FloorRequirement {
@@ -352,14 +597,14 @@ export interface FloorRequirement {
   readonly examined: { coreTypes: number; configs: number; admissionStates: number };
 }
 
-export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus): FloorRequirement {
+export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus, coreTypes: readonly string[] = CORE_TYPES): FloorRequirement {
   const required = new Map<FloorToken, string>();
   const exempt = new Map<FloorToken, string>();
   const impossible = new Map<FloorToken, string>();
 
   // 1. core events — the kernel's own map, less exemptions, less lineup types no recorded config's policy accepts.
-  const offers = lineupOffers(module, corpus);
-  for (const type of CORE_TYPES) {
+  const offers = lineupOffers(module, corpus, coreTypes);
+  for (const type of coreTypes) {
     const token = eventToken(type);
     const exemption = FLOOR_EXEMPTIONS.find((e) => e.token === token && exemptionApplies(e, module.key));
     if (exemption !== undefined) {
@@ -369,7 +614,17 @@ export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus): 
     if (type.startsWith("core.lineup.")) {
       const offer = offers.find((o) => o.plan.accepted.includes(type));
       if (offer === undefined) {
-        impossible.set(token, offers.map((o) => `${o.cfgName}: ${o.plan.refused[type] ?? "?"}`).join("; "));
+        // The reason is the reducer's own refusal code per config. A type the plan never got to ask the reducer about
+        // ('no-candidate': nobody to act on) or one the plan neither accepted nor refused is a defect of the PLAN, not a
+        // policy fact — the floor refuses to derive an exemption from it.
+        const reasons = offers.map((o) => {
+          const why = o.plan.refused[type];
+          if (why === undefined || why === "no-candidate") {
+            throw new Error(`golden floor: ${module.key}/${o.cfgName} cannot say why ${type} is impossible (${why ?? "the plan neither accepted nor refused it"}): the planner found nobody to act on`);
+          }
+          return `${o.cfgName}: ${why}`;
+        });
+        impossible.set(token, reasons.join("; "));
         continue;
       }
       required.set(token, `accepted by the reducer under ${module.key}/${offer.cfgName}'s lineup policy`);
@@ -401,7 +656,7 @@ export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus): 
     required,
     exempt,
     impossible,
-    examined: { coreTypes: CORE_TYPES.length, configs: Object.keys(corpus.configs).length, admissionStates: admission.states },
+    examined: { coreTypes: coreTypes.length, configs: Object.keys(corpus.configs).length, admissionStates: admission.states },
   };
 }
 
