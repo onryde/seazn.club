@@ -34,6 +34,7 @@ import { writeFixtureRulesOverride } from "../fixture-rules";
 import { getFixtureRules, loadFixturePadCfg } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { putStageRules } from "../stage-rules";
+import { withdrawEntrantCascade } from "../withdrawal";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -221,8 +222,9 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff, the positive pair: a save that 
 
   it("after a bye (decided without play, nothing frozen): a division save bumps the matches still to play and leaves the bye alone", async () => {
     // A bye takes no tap and its own format cannot be corrected (`fixture-rules.ts` (7a), FIXTURE_FORMAT_LOCKED), so the
-    // per-match writer never bumps it; a save's bump agrees (`unfrozenRules` reads only matches with no outcome or with
-    // recorded play). An odd knockout draw is the rig that has byes beside matches still to play.
+    // per-match writer never bumps it; a save's bump agrees: `unfrozenRules` skips a SEEDED bye, a bye with no feeder that
+    // no take-back can reopen, and reads every other shape with no frozen cfg (the feeder test in `resolvedNow`). An odd
+    // knockout draw is the rig that has seeded byes beside matches still to play.
     const variant = declaredVariant("badminton", "bwf");
     const bestOf = declared("badminton", variant).bestOf as number;
     const odd = await seedBracket({ sport: "badminton", variant, stageKind: "knockout", entrants: 6 });
@@ -376,7 +378,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     reopened.push("abandoned revive");
   }, 120_000);
 
-  it("the abandoned revive, the one door that is open: the per-match writer bumps the cascade void ITSELF, so the revive adds nothing and the stale pad is refused once", async () => {
+  it("the abandoned revive, the one FORMAT-key door that is open: the per-match writer bumps the cascade void ITSELF, so the revive adds nothing and the stale pad is refused once", async () => {
     // A cascade void has no outcome, so `unfrozenRules` reads it (it is not decided without play) and the per-match writer
     // is not locked out of it: the one format door that reaches a reopenable shape, and it bumps in its own transaction.
     const b = await knockout(8);
@@ -408,7 +410,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     reopened.push("abandoned revive + per-match");
   }, 120_000);
 
-  it("counted: all three reopening writes were driven, and the one open door", () => {
+  it("counted: all three reopening writes were driven, and the one FORMAT-key door that is open", () => {
     expect(reopened).toEqual(["walkover revive", "reset", "abandoned revive", "abandoned revive + per-match"]);
   });
 
@@ -420,6 +422,8 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
   /** A points map the variant does not declare: the winner's points one higher (so the right answer differs from the old). */
   const PM_MOVED = { ...PM, [PM_KEY]: [PM[PM_KEY]![0] + 1, PM[PM_KEY]![1]] as [number, number] };
   const tableKey: string[] = [];
+  /** The per-match writer's door onto an event-less walkover (fixture-rules.ts 7a), driven below. */
+  const walkoverDoor: string[] = [];
   const forfeitAway = (b: Ko, row: { id: string; away_entrant_id: string | null }) =>
     post(b.auth, row.id, "core.forfeit", { by: row.away_entrant_id, reason: "walkover" });
   /** A division save of one table key on the played knockout: accepted (no refusal), and what it landed. */
@@ -578,6 +582,44 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     tableKey.push("badminton third place (loser edges)");
   }, 180_000);
 
+  it("football 11-a-side, a ruling-116 walkover (the winner withdrew before her opponent arrived): the per-match writer's correction bumps it, so the pad's old version is refused after the take-back and the reload carries the new halves", async () => {
+    // The re-review's second probe. The semi's winner withdraws before the other semi is decided, so the arriving side walks
+    // over her dead seat: an award with `reason: "withdrew"`, NO event and no snapshot (not a bye: it is a walkover a
+    // take-back can reopen). The per-match writer's 7a branch fits a halves correction on it and re-writes the award - and
+    // used to bump nothing ("no frozen cfg to bump"), so the reopened final accepted a tap at the old version and froze 40
+    // under a pad folding 45. Control: the division table-key door bumped it (the tests above).
+    const b = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 4 });
+    const sf1 = await fixtureRow(b.fixtureIds[0]!);
+    const sf2 = siblingOf(await rowsOf(b.stageId), sf1);
+    const finalId = sf1.winner_to_fixture!;
+    await post(b.auth, sf1.id, "core.forfeit", { by: sf1.away_entrant_id, reason: "walkover" }); // SF1 decided: its home side advances
+    const pad = await loadFixturePadCfg(b.auth, finalId); // the pad opens on the final, SF2 still to play
+    const halves = (pad.cfg as { halfMinutes: number }).halfMinutes;
+    const HALVES = halves === 40 ? 35 : 40; // a length the variant does not declare: the right answer differs from the old
+    await withdrawEntrantCascade(b.auth, sf1.home_entrant_id!); // the SF1 winner withdraws before her opponent arrives
+    await post(b.auth, sf2.id, "core.forfeit", { by: sf2.away_entrant_id, reason: "walkover" }); // SF2 decided: her opponent arrives
+    const walked = await fixtureRow(finalId);
+    expect(
+      [walked.status, walked.outcome?.kind, walked.outcome?.reason, await count(finalId), await snapshotOf(finalId), await versionOf(finalId)],
+      "premise: the final is a ruling-116 award: no event, no snapshot, the pad's version",
+    ).toEqual(["forfeited", "award", "withdrew", 0, null, pad.rulesVersion]);
+
+    await writeFixtureRulesOverride(b.auth, [finalId], { halfMinutes: HALVES });
+    expect(await versionOf(finalId), "the correction moved what the walkover resolves to, so it bumped it").toBe(pad.rulesVersion + 1);
+    await writeFixtureRulesOverride(b.auth, [finalId], { halfMinutes: HALVES }); // the second call: a re-send moves nothing
+    expect(await versionOf(finalId), "re-sending the format it already plays bumps nothing").toBe(pad.rulesVersion + 1);
+
+    await post(b.auth, sf1.id, "core.void", { event_id: await lastEvent(sf1.id) }); // take SF1's decision back: the final reopens
+    expect((await fixtureRow(finalId)).status, "premise: the take-back reopened the final").toBe("scheduled");
+    await post(b.auth, sf1.id, "core.forfeit", { by: sf1.home_entrant_id, reason: "walkover" }); // SF1 re-decided the other way
+    const seated = await fixtureRow(finalId);
+    expect([seated.home_entrant_id === sf1.away_entrant_id, seated.away_entrant_id === sf2.home_entrant_id], "premise: the final is seated again").toEqual([true, true]);
+    expect(await versionOf(finalId), "the reopen bumped nothing more").toBe(pad.rulesVersion + 1);
+
+    await staleThenReload(b, finalId, pad, (cfg) => (cfg as { halfMinutes?: number } | null)?.halfMinutes, HALVES);
+    walkoverDoor.push("football ruling-116 walkover, per-match writer");
+  }, 180_000);
+
   it("counted: the table-key door was driven on a walkover revive in both a goal sport and a set sport, the reset, the cascade void and a loser-fed bye", () => {
     expect(tableKey).toEqual([
       "football walkover revive",
@@ -586,6 +628,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
       "badminton abandoned revive (a cascade void)",
       "badminton third place (loser edges)",
     ]);
+    expect(walkoverDoor, "the per-match writer's walkover door was driven too").toEqual(["football ruling-116 walkover, per-match writer"]);
   });
 });
 

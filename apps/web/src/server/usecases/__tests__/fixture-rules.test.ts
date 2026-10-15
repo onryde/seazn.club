@@ -1004,10 +1004,14 @@ describe.skipIf(!HAS_DB)("X-SR-5 I1 a match decided without play is started (fix
     const stateCfg = async () => ((await awardRow(w.id)).state as { cfg?: Record<string, unknown> }).cfg;
     const stamp = async () => (await sql<{ u: Date }[]>`select updated_at u from match_states where fixture_id = ${w.id}`)[0]!.u.getTime();
 
-    await writeFixtureRulesOverride(w.b.auth, [w.id], first);
+    // An award with no snapshot resolves LIVE, so every correction that moves its cfg moves its version too (re-review N-5: a
+    // pad opened on the award's reopened match must be refused at its old version). The base is read, not typed.
+    const v0 = (await row(w.id)).rules_version;
+    const first1 = await writeFixtureRulesOverride(w.b.auth, [w.id], first);
+    expect(first1.fixtures[0], "the first correction moves the cfg: bumped").toEqual({ id: w.id, started: true, rules_version: v0 + 1 });
     expect(await stateCfg()).toMatchObject(first);
     // A second correction: judged against the format the award now plays (the first), stored as a whole replace.
-    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], second)).resolves.toEqual({ fixtures: [{ id: w.id, started: true, rules_version: 0 }] });
+    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], second)).resolves.toEqual({ fixtures: [{ id: w.id, started: true, rules_version: v0 + 2 }] });
     expect((await row(w.id)).rules_override).toEqual(second);
     expect(await stateCfg(), "the score is re-written under the second").toMatchObject(second);
     expect((await audit(w.id)).at(-1)!.payload).toMatchObject({ before: first, after: second, started: true });
@@ -1015,8 +1019,10 @@ describe.skipIf(!HAS_DB)("X-SR-5 I1 a match decided without play is started (fix
     const t0 = await stamp();
     await writeFixtureRulesOverride(w.b.auth, [w.id], second);
     expect(await stamp(), "re-sending the format it plays re-writes nothing").toBe(t0);
-    // A CLEAR: back to the stage's format — the cached score with it, never left on the cleared override's.
-    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], null)).resolves.toEqual({ fixtures: [{ id: w.id, started: true, rules_version: 0 }] });
+    expect((await row(w.id)).rules_version, "...and bumps nothing").toBe(v0 + 2);
+    // A CLEAR: back to the stage's format — the cached score with it, never left on the cleared override's. It moves the cfg
+    // back, so it bumps too.
+    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], null)).resolves.toEqual({ fixtures: [{ id: w.id, started: true, rules_version: v0 + 3 }] });
     expect((await row(w.id)).rules_override).toBeNull();
     const cleared = await awardRow(w.id);
     expect((cleared.state as { cfg?: unknown }).cfg, "the score is re-written under the stage's format").toMatchObject({
@@ -1042,9 +1048,10 @@ describe.skipIf(!HAS_DB)("X-SR-5 I1 a match decided without play is started (fix
     expect(await audit(id)).toHaveLength(0);
   });
 
-  it("a withdrawal's walkover over her dead seat (ruling 116): a correction that changes the credited score is refused; one that keeps it fits — the award stands, its score is re-written under the new format, no version bump", async () => {
+  it("a withdrawal's walkover over her dead seat (ruling 116): a correction that changes the credited score is refused; one that keeps it fits — the award stands, its score is re-written under the new format, and its version bumps (no snapshot: it resolves live, N-5)", async () => {
     const w = await withdrawnWinnerWalkover();
     const before = await awardRow(w.id);
+    const before0 = (await row(w.id)).rules_version;
     const current = await padCfg(w.b, w.id);
     // Candidates from the preset's own values; the engine's walkover fold says which keep the credited score.
     const frags: Record<string, unknown>[] = [{ bestOf: BWF.bestOf + 2 }, { setTo: BWF.setTo - 6, finalSetTo: BWF.finalSetTo - 6 }];
@@ -1054,7 +1061,8 @@ describe.skipIf(!HAS_DB)("X-SR-5 I1 a match decided without play is started (fix
     for (const [i, frag] of frags.entries()) {
       if (verdicts[i]) {
         const out = await writeFixtureRulesOverride(w.b.auth, [w.id], frag);
-        expect(out.fixtures[0]).toEqual({ id: w.id, started: true, rules_version: 0 }); // no snapshot moved: no bump (P-1)
+        // No snapshot to re-freeze (so P-1's re-freeze bump does not apply), but the cfg it resolves live moved: bumped (N-5).
+        expect(out.fixtures[0]).toEqual({ id: w.id, started: true, rules_version: before0 + 1 });
         const after = await awardRow(w.id);
         expect([after.status, after.outcome], "the award stands").toEqual([before.status, before.outcome]);
         const want = await awardFold(w, { ...current, ...frag });

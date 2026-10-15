@@ -55,7 +55,10 @@ import { invalidatePublicCache } from "./scoring";
  *     is refused (`FIXTURE_FORMAT_LOCKED`) — as is an award its current format cannot reproduce (`awarded-state.ts`
  *     `awardFit`, the pure verdict). Re-sending the format it already plays is no change: nothing is fitted. On a fit the award's score is re-written under the corrected cfg; a frozen
  *     snapshot is re-frozen and bumped (`freezeCfg` — never `refreezeFixture`, whose refold of the empty ledger would
- *     write over the award), and an award with no snapshot has no frozen cfg to bump.
+ *     write over the award), and an award with no snapshot, which resolves live, is bumped by hand (`bumpRulesVersion`,
+ *     as 7b does): a take-back can reopen a ruling-116 walkover, and a pad opened on that match before the correction
+ *     would otherwise freeze the corrected format under a pad folding the old (batch-5 re-review N-5). A bye is the
+ *     exception that is refused outright (above), so nothing of its own is ever bumped here.
  *  7b. NO FROZEN CFG and not decided without play — UNSTARTED, or played before V347 froze a snapshot (legacy, which
  *     must fit its play first, X-SR-5): the match folds, or will freeze at its first event, under the live resolution.
  *     A write that moves what it resolves to bumps `rules_version` (W2c Task 15 fix round 1, I-1 and M-4), so a pad open
@@ -314,7 +317,10 @@ export async function writeFixtureRulesOverride(
         const current = snapshotted ? row.config_snapshot : liveNow;
         if (canonicalJson(cfg) !== canonicalJson(current)) {
           await assertAwardFits(tx, row, cfg);
-          if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;
+          // A frozen award re-freezes (which bumps); one with NO snapshot resolves LIVE, so a correction that moves it is the
+          // 7b write and bumps by hand: a take-back can reopen a ruling-116 walkover, and a pad opened on that match before the
+          // correction must be refused on its first tap, not freeze a format it is not folding (batch-5 re-review N-5).
+          version = snapshotted ? (await freezeCfg(tx, id, cfg)).rules_version : await bumpRulesVersion(tx, id);
           rewriteAward = true;
         }
       } else if (snapshotted) {
