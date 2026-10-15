@@ -96,7 +96,7 @@ describe("fold-epoch guard: the rule", () => {
     const before = side(1, [stream("std", 1), stream("std", 2), stream("std", 3)]);
     const after = side(1, [stream("std", 1), stream("std", 2, { outcome: "B" }), stream("std", 4)]);
     expect(epochViolations(before, after)).toEqual([
-      { sport: "badminton", matched: 2, changed: 1, removed: 1, added: 1, before: 1, after: 1, reason: expect.stringMatching(/1 stream\(s\) fold differently.*1 stream\(s\) removed or re-recorded.*did not rise \(1 -> 1\)/) },
+      { sport: "badminton", matched: 2, changed: 1, deltasOnly: 0, removed: 1, added: 1, before: 1, after: 1, beforeMinor: 0, afterMinor: 0, owes: "major", reason: expect.stringMatching(/1 stream\(s\) fold differently.*1 stream\(s\) removed or re-recorded.*did not rise \(1 -> 1\)/) },
     ]);
   });
   describe("a stream's input is its raw config object as well as its events and lineups", () => {
@@ -156,6 +156,149 @@ describe("fold-epoch guard: the rule", () => {
   it("refuses two streams with the same identity in one corpus instead of comparing the wrong pair", () => {
     expect(() => epochViolations(side(1, [stream("std", 1), stream("std", 1, { outcome: "B" })]), side(1, [stream("std", 1)]))).toThrow(GuardRefusal);
     expect(() => epochViolations(side(1, [stream("std", 1)]), side(1, [stream("std", 1), stream("std", 1)]))).toThrow(/duplicate stream identity "std#1"/);
+  });
+
+  describe("the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR", () => {
+    /** A side holding badminton at (major, minor). */
+    const at = (major: number, minor: number, streams: GoldenStream[]): Side => ({ epochs: { badminton: major }, minors: { badminton: minor }, corpora: { badminton: corpus(streams) } });
+    const base = [stream("std", 1), stream("std", 2)];
+    const deltasMoved = [stream("std", 1), stream("std", 2, { deltas: "[1]" })];
+    /** The three recorded results a phone computes, each moved on its own. */
+    const PHONE: ReadonlyArray<readonly [string, Partial<GoldenStream>]> = [["states", { states: ["s1-new"] }], ["outcome", { outcome: "B" }], ["summary", { summary: '{"x":1}' }]];
+    const owes = (v: ReturnType<typeof epochViolations>) => v.map((x) => [x.sport, x.owes]);
+
+    it("a deltas-only change (states, outcome and summary the same) owes a MINOR: red unbumped, counted as deltas-only and not as a changed fold, and the reason names FOLD_MINOR and the number", () => {
+      const v = epochViolations(at(1, 0, base), at(1, 0, deltasMoved));
+      expect(v).toHaveLength(1);
+      expect(v[0]).toMatchObject({ sport: "badminton", matched: 2, changed: 0, deltasOnly: 1, removed: 0, added: 0, owes: "minor", before: 1, after: 1, beforeMinor: 0, afterMinor: 0 });
+      expect(v[0]!.reason).toContain("minor owed");
+      expect(v[0]!.reason).toContain("raise FOLD_MINOR.badminton to 1 in src/sport/fold-epoch.ts");
+      expect(v[0]!.reason, "the major is not what is owed").not.toContain("raise FOLD_EPOCH");
+      // one above the BASELINE's minor, whatever it is (a constant 1 would pass the case above)
+      const later = epochViolations(at(2, 4, base), at(2, 4, deltasMoved));
+      expect(later[0]!.reason).toContain("raise FOLD_MINOR.badminton to 5 in src/sport/fold-epoch.ts");
+    });
+
+    it("is settled by a minor bump, by any rise of it, or by a major bump with the minor unchanged or reset to 0", () => {
+      expect(epochViolations(at(1, 0, base), at(1, 1, deltasMoved))).toEqual([]);
+      expect(epochViolations(at(1, 4, base), at(1, 9, deltasMoved))).toEqual([]);
+      expect(epochViolations(at(1, 4, base), at(2, 4, deltasMoved))).toEqual([]);
+      expect(epochViolations(at(1, 4, base), at(2, 0, deltasMoved))).toEqual([]);
+      expect(epochViolations(at(1, 4, base), at(3, 0, deltasMoved))).toEqual([]);
+    });
+
+    it("a change a phone computes (a state, the outcome or the summary) owes a MAJOR: a minor bump, however large, does not settle it, and says so", () => {
+      let checked = 0;
+      for (const [field, over] of PHONE) {
+        const moved = [stream("std", 1), stream("std", 2, over)];
+        expect(owes(epochViolations(at(1, 0, base), at(1, 0, moved))), `${field}: nothing bumped`).toEqual([["badminton", "major"]]);
+        const minorOnly = epochViolations(at(1, 0, base), at(1, 7, moved));
+        expect(owes(minorOnly), `${field}: only the minor bumped`).toEqual([["badminton", "major"]]);
+        expect(minorOnly[0]).toMatchObject({ changed: 1, deltasOnly: 0, beforeMinor: 0, afterMinor: 7 });
+        expect(minorOnly[0]!.reason, field).toContain("raise FOLD_EPOCH.badminton to 2 in src/sport/fold-epoch.ts");
+        expect(minorOnly[0]!.reason, field).toMatch(/FOLD_MINOR 0 -> 7 does not stand in for it/);
+        expect(epochViolations(at(1, 0, base), at(2, 0, moved)), `${field}: major bumped`).toEqual([]);
+        expect(epochViolations(at(1, 3, base), at(2, 0, moved)), `${field}: major bumped, minor reset`).toEqual([]);
+        expect(epochViolations(at(1, 3, base), at(2, 9, moved)), `${field}: major bumped, minor raised`).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(PHONE.length);
+    });
+
+    it("a stream that differs in its standings deltas AND in a state, outcome or summary is one changed fold, not also a deltas-only one", () => {
+      const both = [stream("std", 1), stream("std", 2, { outcome: "B", deltas: "[1]" })];
+      const [row] = compareSides(at(1, 0, base), at(1, 0, both));
+      expect(row).toMatchObject({ matched: 2, changed: 1, deltasOnly: 0, owes: "major" });
+    });
+
+    it("both kinds in one sport owe the MAJOR: the minor bump that would settle the deltas does not settle the other stream, the major bump settles both", () => {
+      const mixed = [stream("std", 1, { deltas: "[1]" }), stream("std", 2, { outcome: "B" })];
+      const v = epochViolations(at(1, 0, base), at(1, 1, mixed));
+      expect(v).toHaveLength(1);
+      expect(v[0]).toMatchObject({ matched: 2, changed: 1, deltasOnly: 1, owes: "major" });
+      expect(v[0]!.reason).toContain("raise FOLD_EPOCH.badminton to 2");
+      expect(epochViolations(at(1, 0, base), at(2, 0, mixed))).toEqual([]);
+    });
+
+    it("accounts every matched stream exactly once: unchanged + changed + deltas-only", () => {
+      const before = [stream("a", 1), stream("a", 2), stream("a", 3), stream("a", 4)];
+      const after = [stream("a", 1), stream("a", 2, { deltas: "[2]" }), stream("a", 3, { summary: "{}x" }), stream("a", 4, { deltas: "[3]", outcome: "Z" })];
+      const [row] = compareSides(at(1, 0, before), at(1, 0, after));
+      expect(row).toMatchObject({ matched: 4, changed: 2, deltasOnly: 1 });
+      expect(row!.matched - row!.changed - row!.deltasOnly, "the unchanged one").toBe(1);
+    });
+
+    it("a stream removed, re-recorded or recorded against a changed config object owes the MAJOR whatever the minor does (the laundering route stays closed)", () => {
+      const withConfig = (major: number, minor: number, cfg: unknown, streams = base): Side => ({ epochs: { badminton: major }, minors: { badminton: minor }, corpora: { badminton: corpus(streams, "badminton", { std: cfg }) } });
+      // removed
+      expect(owes(epochViolations(at(1, 0, base), at(1, 5, [stream("std", 1)])))).toEqual([["badminton", "major"]]);
+      expect(epochViolations(at(1, 0, base), at(2, 0, [stream("std", 1)]))).toEqual([]);
+      // re-recorded (its events differ)
+      expect(owes(epochViolations(at(1, 0, base), at(1, 5, [stream("std", 1), stream("std", 2, { events: [{ seq: 9 }] as never })])))).toEqual([["badminton", "major"]]);
+      // the config object changed and every result is byte for byte the same
+      const launder = epochViolations(withConfig(1, 0, { setTo: 21 }), withConfig(1, 5, { setTo: 21, cap: 30 }));
+      expect(launder).toHaveLength(1);
+      expect(launder[0]).toMatchObject({ changed: 0, deltasOnly: 0, removed: 2, added: 2, owes: "major", beforeMinor: 0, afterMinor: 5 });
+      expect(epochViolations(withConfig(1, 0, { setTo: 21 }), withConfig(2, 0, { setTo: 21, cap: 30 }))).toEqual([]);
+      // and the same laundering with a deltas-only move beside it is still a major
+      const both = epochViolations(withConfig(1, 0, { setTo: 21 }), withConfig(1, 5, { setTo: 21, cap: 30 }, deltasMoved));
+      expect(owes(both)).toEqual([["badminton", "major"]]);
+    });
+
+    it("a minor on its own, with nothing changed, is not a violation; a minor that fell is, whatever the streams did", () => {
+      expect(epochViolations(at(1, 0, base), at(1, 1, base))).toEqual([]);
+      const down = epochViolations(at(1, 3, base), at(1, 2, base));
+      expect(down).toHaveLength(1);
+      expect(down[0]).toMatchObject({ owes: null, matched: 2, changed: 0, deltasOnly: 0, beforeMinor: 3, afterMinor: 2 });
+      expect(down[0]!.reason).toMatch(/FOLD_MINOR went down \(3 -> 2\)/);
+      expect(down[0]!.reason).toContain("set FOLD_MINOR.badminton back to at least 3 in src/sport/fold-epoch.ts");
+      expect(epochViolations(at(1, 3, base), at(1, 3, base))).toEqual([]);
+    });
+
+    it("the pair only goes up lexicographically: a major that fell is red even when the minor rose, and a major that rose may reset the minor to 0", () => {
+      const lower = epochViolations(at(2, 1, base), at(1, 5, base));
+      expect(lower).toHaveLength(1);
+      expect(lower[0]!.reason).toMatch(/FOLD_EPOCH went down \(2 -> 1\)/);
+      expect(lower[0]!.reason).toContain("set FOLD_EPOCH.badminton back to at least 2 in src/sport/fold-epoch.ts");
+      expect(epochViolations(at(1, 3, base), at(2, 0, base))).toEqual([]);
+      expect(epochViolations(at(1, 3, base), at(2, 1, base))).toEqual([]);
+      expect(epochViolations(at(1, 3, base), at(2, 9, base))).toEqual([]);
+    });
+
+    it("a minor that fell while deltas moved is red twice over: it went down, and a rise is still owed (one above the baseline's)", () => {
+      const v = epochViolations(at(1, 3, base), at(1, 2, deltasMoved));
+      expect(v).toHaveLength(1);
+      expect(v[0]!.reason).toContain("set FOLD_MINOR.badminton back to at least 3");
+      expect(v[0]!.reason).toContain("raise FOLD_MINOR.badminton to 4");
+    });
+
+    it("a baseline whose table has no FOLD_MINOR is minor 0 for every sport: the introducing change owes nothing unless it moves a delta", () => {
+      const old = (streams: GoldenStream[]): Side => ({ epochs: { badminton: 1 }, corpora: { badminton: corpus(streams) } });
+      expect(epochViolations(old(base), at(1, 0, base))).toEqual([]);
+      expect(epochViolations(old(base), at(1, 4, base))).toEqual([]);
+      const unbumped = epochViolations(old(base), at(1, 0, deltasMoved));
+      expect(owes(unbumped)).toEqual([["badminton", "minor"]]);
+      expect(unbumped[0]).toMatchObject({ beforeMinor: 0, afterMinor: 0 });
+      expect(unbumped[0]!.reason).toContain("raise FOLD_MINOR.badminton to 1");
+      expect(epochViolations(old(base), at(1, 1, deltasMoved))).toEqual([]);
+      expect(owes(epochViolations(old(base), at(1, 3, [stream("std", 1), stream("std", 2, { outcome: "B" })])))).toEqual([["badminton", "major"]]);
+    });
+
+    it("two sports, one owing a minor and one a major: each is judged by its own pair, and a bump in the other sport settles neither", () => {
+      const two = (b: [[number, number], [number, number]], a: [[number, number], [number, number]]): [Side, Side] => [
+        { epochs: { badminton: b[0][0], tennis: b[1][0] }, minors: { badminton: b[0][1], tennis: b[1][1] }, corpora: { badminton: corpus([stream("std", 1)], "badminton"), tennis: corpus([stream("std", 1)], "tennis") } },
+        { epochs: { badminton: a[0][0], tennis: a[1][0] }, minors: { badminton: a[0][1], tennis: a[1][1] }, corpora: { badminton: corpus([stream("std", 1, { deltas: "[1]" })], "badminton"), tennis: corpus([stream("std", 1, { outcome: "B" })], "tennis") } },
+      ];
+      const zero: [number, number] = [1, 0];
+      expect(owes(epochViolations(...two([zero, zero], [zero, zero])))).toEqual([["badminton", "minor"], ["tennis", "major"]]);
+      expect(epochViolations(...two([zero, zero], [[1, 1], [2, 0]]))).toEqual([]);
+      // tennis (a phone-computed change) given only a minor, badminton given the right one: tennis alone is red
+      expect(owes(epochViolations(...two([zero, zero], [[1, 1], [1, 1]])))).toEqual([["tennis", "major"]]);
+      // badminton given a major instead of a minor is fine; tennis given nothing is red
+      expect(owes(epochViolations(...two([zero, zero], [[2, 0], zero])))).toEqual([["tennis", "major"]]);
+      // badminton's deltas moved and only TENNIS's minor bumped: badminton is still owed its own
+      expect(owes(epochViolations(...two([zero, zero], [zero, [2, 1]])))).toEqual([["badminton", "minor"]]);
+    });
   });
 
   describe("across sports", () => {
@@ -275,13 +418,42 @@ describe("fold-epoch guard: over every registered sport's real golden corpus", (
         const moved = withFirst(c, field === "states" ? { states: [...first.states.slice(0, -1), `${first.states.at(-1) ?? ""} `] } : { [field]: `${first[field]} ` });
         const v = epochViolations(only(key, c), only(key, moved));
         expect(v.map((x) => x.sport), `${key}: ${field} moved`).toEqual([key]);
-        expect(v[0], `${key}: ${field} moved`).toMatchObject({ matched: c.streams.length, changed: 1, removed: 0, added: 0 });
+        // a phone computes states, outcome and summary; only the server computes the standings deltas
+        expect(v[0], `${key}: ${field} moved`).toMatchObject({ matched: c.streams.length, changed: field === "deltas" ? 0 : 1, deltasOnly: field === "deltas" ? 1 : 0, removed: 0, added: 0, owes: field === "deltas" ? "minor" : "major" });
         expect(epochViolations(only(key, c), only(key, moved, 2)), `${key}: ${field} moved and bumped`).toEqual([]);
         checked++;
       }
     });
     expect(checked).toBe(builtinModules.length * FIELDS.length);
   }, budget(FIELDS.length * 2));
+
+  // A side holding only `key`, with a FOLD_MINOR of its own: the pair (major, minor) is what the real-corpus sweeps below move.
+  const pair = (key: string, c: GoldenCorpus, major: number, minor: number): Side => ({ epochs: { [key]: major }, minors: { [key]: minor }, corpora: { [key]: c } });
+  it("for every sport and each recorded result: a minor bump alone settles a deltas-only move and NEVER a move a phone computes; a major bump settles both", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      const first = c.streams[0]!;
+      for (const field of FIELDS) {
+        const moved = withFirst(c, field === "states" ? { states: [...first.states.slice(0, -1), `${first.states.at(-1) ?? ""} `] } : { [field]: `${first[field]} ` });
+        const minorOnly = epochViolations(pair(key, c, 1, 0), pair(key, moved, 1, 1));
+        const majorOnly = epochViolations(pair(key, c, 1, 0), pair(key, moved, 2, 0));
+        const majorAndReset = epochViolations(pair(key, c, 3, 5), pair(key, moved, 4, 0));
+        expect(majorOnly, `${key}: ${field} moved, major bumped`).toEqual([]);
+        expect(majorAndReset, `${key}: ${field} moved, major bumped and minor reset`).toEqual([]);
+        if (field === "deltas") {
+          expect(minorOnly, `${key}: only deltas moved, minor bumped`).toEqual([]);
+        } else {
+          expect(minorOnly.map((x) => [x.sport, x.owes]), `${key}: ${field} moved, only the minor bumped`).toEqual([[key, "major"]]);
+          expect(minorOnly[0]!.reason, key).toContain(`raise FOLD_EPOCH.${key} to 2 in src/sport/fold-epoch.ts`);
+        }
+        const unbumped = epochViolations(pair(key, c, 1, 0), pair(key, moved, 1, 0));
+        expect(unbumped.map((x) => [x.sport, x.owes]), `${key}: ${field} moved, nothing bumped`).toEqual([[key, field === "deltas" ? "minor" : "major"]]);
+        checked++;
+      }
+    });
+    expect(checked).toBe(builtinModules.length * FIELDS.length);
+  }, budget(FIELDS.length * 4));
 
   it("names the sport whose recorded config changed, though not one event or result did, and is satisfied by that sport's bump alone", () => {
     let checked = 0;

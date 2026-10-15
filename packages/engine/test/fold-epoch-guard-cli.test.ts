@@ -130,12 +130,42 @@ function editCorpus(repo: Repo, sport: string, fn: (c: Corpus) => void): void {
 }
 /** What a rule fix does to one sport: the first stream's recorded outcome is different. */
 const moveOutcome = (repo: Repo, sport: string): void => editCorpus(repo, sport, (c) => { c.streams[0]!.outcome = `${String(c.streams[0]!.outcome)} `; });
-function setEpoch(repo: Repo, sport: string, n: number): void {
+/** The table file keeps FOLD_EPOCH first and FOLD_MINOR after it (each a literal of `sport: n` entries): an edit is made inside one of them. */
+const MINOR_DECL = "export const FOLD_MINOR =";
+function setEntry(repo: Repo, table: "FOLD_EPOCH" | "FOLD_MINOR", sport: string, n: number): void {
   const file = join(repo.eng, EPOCH_FILE);
   const text = readFileSync(file, "utf8");
+  const cut = text.indexOf(MINOR_DECL);
+  if (cut < 0) throw new Error(`${EPOCH_FILE} declares no FOLD_MINOR`);
+  const [from, to] = table === "FOLD_EPOCH" ? [0, cut] : [cut, text.length];
   const re = new RegExp(`\\b${sport}: \\d+`);
-  if (!re.test(text)) throw new Error(`${sport} has no entry in ${EPOCH_FILE}`);
-  writeFileSync(file, text.replace(re, `${sport}: ${n}`));
+  const part = text.slice(from, to);
+  if (!re.test(part)) throw new Error(`${sport} has no entry in ${table} (${EPOCH_FILE})`);
+  writeFileSync(file, text.slice(0, from) + part.replace(re, `${sport}: ${n}`) + text.slice(to));
+}
+const setEpoch = (repo: Repo, sport: string, n: number): void => setEntry(repo, "FOLD_EPOCH", sport, n);
+const setMinor = (repo: Repo, sport: string, n: number): void => setEntry(repo, "FOLD_MINOR", sport, n);
+/** What the REAL table (the one the scratch repositories start from) holds for a sport. */
+function realEntry(table: "FOLD_EPOCH" | "FOLD_MINOR", sport: string): number {
+  const text = readFileSync(join(ENGINE, EPOCH_FILE), "utf8");
+  const cut = text.indexOf(MINOR_DECL);
+  const part = table === "FOLD_EPOCH" ? text.slice(0, cut) : text.slice(cut);
+  const found = new RegExp(`\\b${sport}: (\\d+)`).exec(part)?.[1];
+  if (found === undefined) throw new Error(`${sport} has no entry in ${table}`);
+  return Number(found);
+}
+/** The table as it was before FOLD_MINOR existed: no FOLD_MINOR declaration at all. */
+function withoutMinor(text: string): string {
+  const from = text.indexOf(MINOR_DECL);
+  const end = text.indexOf(");", from);
+  if (from < 0 || end < 0) throw new Error("the table declares no FOLD_MINOR to remove");
+  return text.slice(0, from) + text.slice(end + 3);
+}
+/** What a re-rank of the standings does to one sport: the first stream's recorded standings deltas are different, every state, outcome and summary the same. */
+const moveDeltas = (repo: Repo, sport: string): void => editCorpus(repo, sport, (c) => { c.streams[0]!.deltas = `${String(c.streams[0]!.deltas)} `; });
+function editTable(repo: Repo, fn: (text: string) => string): void {
+  const file = join(repo.eng, EPOCH_FILE);
+  writeFileSync(file, fn(readFileSync(file, "utf8")));
 }
 /** The engine's path inside the repository, as git spells it ("packages/engine/" or ""). */
 const relPrefix = (repo: Repo): string => (repo.eng === repo.top ? "" : `${relative(repo.top, repo.eng)}/`);
@@ -229,13 +259,12 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([FIRST]);
-    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 1, matched \d+ changed 1 removed 0 added 0 - VIOLATION: 1 stream\(s\) fold differently/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 1, minor 0 -> 0, matched \d+ changed 1 deltas-only 0 removed 0 added 0 - VIOLATION: major owed.*1 stream\(s\) fold differently/);
     expect(r.stdout).toContain(summary(realSports, realStreams, "HEAD^1", 1));
     expect(r.stderr).toBe("");
     // and what to do about it: the entry, the number (read from the baseline's own table, not typed here), the file as git spells it, the command
-    const was = new RegExp(`\\b${FIRST}: (\\d+)`).exec(readFileSync(join(ENGINE, EPOCH_FILE), "utf8"))?.[1];
-    expect(was).toBeDefined();
-    expect(lineOf(r.stdout, FIRST)).toContain(`raise FOLD_EPOCH.${FIRST} to ${Number(was) + 1} in src/sport/fold-epoch.ts`);
+    const was = realEntry("FOLD_EPOCH", FIRST);
+    expect(lineOf(r.stdout, FIRST)).toContain(`raise FOLD_EPOCH.${FIRST} to ${was + 1} in src/sport/fold-epoch.ts`);
     expect(r.stdout).toContain(`fold-epoch: to clear the violation(s) above, raise the sport's entry in ${relPrefix(mono)}src/sport/fold-epoch.ts in this same change`);
     expect(r.stdout).toContain("fold-epoch:check --against origin/main");
   });
@@ -247,7 +276,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     commit(mono, "rule fix with bump");
     const r = guard(mono);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 2, matched \d+ changed 1 removed 0 added 0$/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 1 deltas-only 0 removed 0 added 0$/);
     expect(violated(r.stdout)).toEqual([]);
   });
 
@@ -277,7 +306,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
       const red = guard(mono);
       expect(red.status, knob).toBe(1);
       expect(violated(red.stdout), knob).toEqual(["badminton"]);
-      expect(lineOf(red.stdout, "badminton"), knob).toMatch(/changed 0 removed [1-9]\d* added [1-9]\d* - VIOLATION/);
+      expect(lineOf(red.stdout, "badminton"), knob).toMatch(/changed 0 deltas-only 0 removed [1-9]\d* added [1-9]\d* - VIOLATION: major owed/);
 
       atBase(mono);
       launder();
@@ -294,7 +323,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     const red = guard(mono);
     expect(red.status).toBe(1);
     expect(violated(red.stdout)).toEqual([FIRST]);
-    expect(lineOf(red.stdout, FIRST)).toMatch(/changed 0 removed 1 added 0 - VIOLATION/);
+    expect(lineOf(red.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 1 added 0 - VIOLATION: major owed/);
 
     atBase(mono);
     editCorpus(mono, FIRST, (c) => { c.streams.pop(); });
@@ -307,7 +336,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     commit(mono, "stream added");
     const added = guard(mono);
     expect(added.status).toBe(0);
-    expect(lineOf(added.stdout, FIRST)).toMatch(/changed 0 removed 0 added 1$/);
+    expect(lineOf(added.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 0 added 1$/);
   });
 
   spawnIt(4)("a sport added by the PR (absent from the baseline entirely) needs no bump, and the other sports are still compared", () => {
@@ -315,7 +344,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     // the baseline commit has no trace of LAST: no corpus file, no table entry
     rmSync(corpusPath(mono, LAST));
     const tablePath = join(mono.eng, EPOCH_FILE);
-    writeFileSync(tablePath, readFileSync(tablePath, "utf8").replace(new RegExp(`\\s*\\b${LAST}: \\d+,?`), ""));
+    writeFileSync(tablePath, readFileSync(tablePath, "utf8").replace(new RegExp(`\\s*\\b${LAST}: \\d+,?`, "g"), "")); // from FOLD_EPOCH and from FOLD_MINOR
     const without = commit(mono, "engine without the last sport");
     git(mono.top, "checkout", "-q", "base", "--", ".");
     const withIt = commit(mono, "the last sport arrives");
@@ -323,7 +352,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     expect(withIt).not.toBe(without);
     const r = guard(mono);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(lineOf(r.stdout, LAST)).toMatch(/epoch \(none\) -> 1, matched 0 changed 0 removed 0 added \d+$/);
+    expect(lineOf(r.stdout, LAST)).toMatch(/epoch \(none\) -> 1, minor \(none\) -> 0, matched 0 changed 0 deltas-only 0 removed 0 added \d+$/);
     expect(r.stdout).toContain(`${realSports - 1} sports checked`);
     expect(violated(r.stdout)).toEqual([]);
   });
@@ -349,7 +378,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([LAST]);
-    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 2, matched \d+ changed 1 .* added 0$/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 1 .* added 0$/);
   });
 
   spawnIt(3)("run from another working directory: the script finds its engine by its own location, not by the shell's cwd", () => {
@@ -386,6 +415,252 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
   });
 });
 
+describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34)", () => {
+  /** The first corpus's report line, after one commit on the base. */
+  const minorLine = (r: { stdout: string }, sport = FIRST): string => lineOf(r.stdout, sport);
+
+  spawnIt(6)("a deltas-only change (every state, outcome and summary the same) owes a MINOR: red unbumped naming FOLD_MINOR and its number, green with the minor bump, green with the major bump", () => {
+    atBase(mono);
+    moveDeltas(mono, FIRST);
+    commit(mono, "standings deltas changed, no bump");
+    const red = guard(mono);
+    expect(red.status).toBe(1);
+    expect(violated(red.stdout)).toEqual([FIRST]);
+    expect(minorLine(red)).toMatch(/epoch 1 -> 1, minor 0 -> 0, matched \d+ changed 0 deltas-only 1 removed 0 added 0 - VIOLATION: minor owed/);
+    const was = realEntry("FOLD_MINOR", FIRST);
+    expect(minorLine(red)).toContain(`raise FOLD_MINOR.${FIRST} to ${was + 1} in src/sport/fold-epoch.ts`);
+    expect(red.stdout).not.toContain("raise FOLD_EPOCH");
+    expect(red.stderr).toBe("");
+
+    atBase(mono);
+    moveDeltas(mono, FIRST);
+    setMinor(mono, FIRST, was + 1);
+    commit(mono, "standings deltas changed, minor bumped");
+    const minor = guard(mono);
+    expect({ status: minor.status, stderr: minor.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(minorLine(minor)).toMatch(new RegExp(`epoch 1 -> 1, minor ${was} -> ${was + 1}, matched \\d+ changed 0 deltas-only 1 removed 0 added 0$`));
+    expect(violated(minor.stdout)).toEqual([]);
+
+    atBase(mono);
+    moveDeltas(mono, FIRST);
+    setEpoch(mono, FIRST, 2);
+    commit(mono, "standings deltas changed, major bumped");
+    const major = guard(mono);
+    expect({ status: major.status, stderr: major.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(minorLine(major)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 0 deltas-only 1 removed 0 added 0$/);
+  });
+
+  spawnIt(5)("a change a phone computes, with only the minor bumped, is still red and says the MAJOR is owed (and that the minor does not stand in); the major bump, with the minor reset, is green", () => {
+    atBase(mono);
+    moveOutcome(mono, FIRST);
+    setMinor(mono, FIRST, 1);
+    commit(mono, "outcome changed, only the minor bumped");
+    const red = guard(mono);
+    expect(red.status).toBe(1);
+    expect(violated(red.stdout)).toEqual([FIRST]);
+    expect(minorLine(red)).toMatch(/epoch 1 -> 1, minor 0 -> 1, matched \d+ changed 1 deltas-only 0 removed 0 added 0 - VIOLATION: major owed/);
+    expect(minorLine(red)).toContain(`raise FOLD_EPOCH.${FIRST} to 2 in src/sport/fold-epoch.ts`);
+    expect(minorLine(red)).toContain("FOLD_MINOR 0 -> 1 does not stand in for it");
+
+    atBase(mono);
+    moveOutcome(mono, FIRST);
+    setEpoch(mono, FIRST, 2);
+    commit(mono, "outcome changed, major bumped");
+    expect(guard(mono).status).toBe(0);
+  });
+
+  spawnIt(5)("both kinds in one sport owe the major; and a stream REMOVED, with only the minor bumped, owes it too", () => {
+    atBase(mono);
+    moveOutcome(mono, FIRST); // stream 0: a phone computes it
+    editCorpus(mono, FIRST, (c) => { c.streams[1]!.deltas = `${String(c.streams[1]!.deltas)} `; }); // stream 1: deltas only
+    setMinor(mono, FIRST, 1);
+    commit(mono, "an outcome and a deltas change in one sport, minor bumped");
+    const red = guard(mono);
+    expect(red.status).toBe(1);
+    expect(minorLine(red)).toMatch(/matched \d+ changed 1 deltas-only 1 removed 0 added 0 - VIOLATION: major owed/);
+
+    atBase(mono);
+    editCorpus(mono, FIRST, (c) => { c.streams.pop(); });
+    setMinor(mono, FIRST, 1);
+    commit(mono, "stream removed, only the minor bumped");
+    const removed = guard(mono);
+    expect(removed.status).toBe(1);
+    expect(minorLine(removed)).toMatch(/changed 0 deltas-only 0 removed 1 added 0 - VIOLATION: major owed/);
+  });
+
+  spawnIt(8)("two sports, one owing a minor and one a major: each judged by its own pair; a bump in the other sport settles neither", () => {
+    atBase(mono);
+    moveDeltas(mono, FIRST);
+    moveOutcome(mono, LAST);
+    setMinor(mono, FIRST, 1);
+    setMinor(mono, LAST, 1); // wrong half for LAST
+    commit(mono, "FIRST: deltas + minor bump; LAST: outcome + minor bump");
+    const red = guard(mono);
+    expect(red.status).toBe(1);
+    expect(violated(red.stdout)).toEqual([LAST]);
+    expect(minorLine(red, FIRST)).toMatch(/deltas-only 1 removed 0 added 0$/);
+
+    atBase(mono);
+    moveDeltas(mono, FIRST);
+    moveOutcome(mono, LAST);
+    setEpoch(mono, LAST, 2);
+    setMinor(mono, FIRST, 1);
+    commit(mono, "FIRST: deltas + minor bump; LAST: outcome + major bump");
+    expect(guard(mono).status).toBe(0);
+
+    atBase(mono);
+    moveDeltas(mono, FIRST);
+    moveOutcome(mono, LAST);
+    setEpoch(mono, LAST, 2); // LAST is paid; FIRST's own minor is not
+    commit(mono, "FIRST: deltas, nothing; LAST: outcome + major bump");
+    const first = guard(mono);
+    expect(first.status).toBe(1);
+    expect(violated(first.stdout)).toEqual([FIRST]);
+    expect(minorLine(first, FIRST)).toContain("VIOLATION: minor owed");
+  });
+
+  spawnIt(9)("the pair only goes up: a minor that fell, a major that fell with the minor up, are red; a major up with the minor reset to 0 is green", () => {
+    /** Main at `from`, then a PR that sets `to`, nothing else moved: the guard's verdict on that PR. */
+    const pr = (from: readonly [number, number], to: readonly [number, number]) => {
+      atBase(mono);
+      setEpoch(mono, FIRST, from[0]);
+      setMinor(mono, FIRST, from[1]);
+      commit(mono, `main at (${from.join(", ")})`);
+      setEpoch(mono, FIRST, to[0]);
+      setMinor(mono, FIRST, to[1]);
+      commit(mono, `the PR sets (${to.join(", ")})`);
+      return guard(mono);
+    };
+    const minorDown = pr([3, 2], [3, 1]);
+    expect(minorDown.status).toBe(1);
+    expect(violated(minorDown.stdout)).toEqual([FIRST]);
+    expect(minorLine(minorDown)).toMatch(/epoch 3 -> 3, minor 2 -> 1, .* - VIOLATION: FOLD_MINOR went down \(2 -> 1\)/);
+    expect(minorLine(minorDown)).toContain(`set FOLD_MINOR.${FIRST} back to at least 2`);
+
+    const majorDown = pr([3, 2], [2, 9]);
+    expect(majorDown.status).toBe(1);
+    expect(minorLine(majorDown)).toMatch(/epoch 3 -> 2, minor 2 -> 9, .* - VIOLATION: FOLD_EPOCH went down \(3 -> 2\)/);
+
+    const reset = pr([3, 2], [4, 0]);
+    expect({ status: reset.status, stderr: reset.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(minorLine(reset)).toMatch(/epoch 3 -> 4, minor 2 -> 0, /);
+    expect(violated(reset.stdout)).toEqual([]);
+
+    const same = pr([3, 2], [3, 2]);
+    expect(same.status).toBe(0);
+  });
+
+  spawnIt(10)("a config object changed with every result the same (the laundering route) owes the MAJOR whatever the minor does", () => {
+    expect(KEYS).toContain("badminton");
+    const launder = (): void => editCorpus(mono, "badminton", (c) => { for (const cfg of Object.values(c.configs)) if (!("cap" in cfg)) cfg.cap = 30; });
+    atBase(mono);
+    launder();
+    setMinor(mono, "badminton", 5);
+    commit(mono, "cap written out explicitly, only the minor bumped");
+    const red = guard(mono);
+    expect(red.status).toBe(1);
+    expect(violated(red.stdout)).toEqual(["badminton"]);
+    expect(minorLine(red, "badminton")).toMatch(/changed 0 deltas-only 0 removed [1-9]\d* added [1-9]\d* - VIOLATION: major owed/);
+
+    atBase(mono);
+    launder();
+    setEpoch(mono, "badminton", 2);
+    commit(mono, "cap written out explicitly, major bumped");
+    expect(guard(mono).status).toBe(0);
+  });
+
+  spawnIt(6)("the PR that introduces FOLD_MINOR (the baseline's table has none) reads as minor 0 for every sport: green when nothing moved, minor owed for a deltas-only change, settled by the minor", () => {
+    const introduce = (edit: () => void): void => {
+      atBase(mono);
+      editTable(mono, withoutMinor);
+      commit(mono, "main before FOLD_MINOR existed");
+      git(mono.top, "checkout", "-q", "base", "--", ".");
+      edit();
+      commit(mono, "the PR that introduces FOLD_MINOR");
+    };
+    introduce(() => {});
+    const quiet = guard(mono);
+    expect({ status: quiet.status, stderr: quiet.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(minorLine(quiet)).toMatch(/epoch 1 -> 1, minor 0 -> 0, /);
+    expect(quiet.stdout).toContain(summary(realSports, realStreams, "HEAD^1", 0));
+
+    introduce(() => moveDeltas(mono, FIRST));
+    const red = guard(mono);
+    expect(red.status).toBe(1);
+    expect(violated(red.stdout)).toEqual([FIRST]);
+    expect(minorLine(red)).toContain(`raise FOLD_MINOR.${FIRST} to 1 in src/sport/fold-epoch.ts`);
+
+    introduce(() => { moveDeltas(mono, FIRST); setMinor(mono, FIRST, 1); });
+    expect(guard(mono).status).toBe(0);
+  });
+
+  spawnIt(4)("the engine at the repository root gives the same verdicts for a deltas-only change (the file is named as that repository spells it)", () => {
+    atBase(rooted);
+    moveDeltas(rooted, FIRST);
+    commit(rooted, "standings deltas changed, no bump");
+    const red = guard(rooted);
+    expect(red.status).toBe(1);
+    expect(violated(red.stdout)).toEqual([FIRST]);
+    expect(minorLine(red)).toContain(`raise FOLD_MINOR.${FIRST} to ${realEntry("FOLD_MINOR", FIRST) + 1} in src/sport/fold-epoch.ts`);
+    atBase(rooted);
+    moveDeltas(rooted, FIRST);
+    setMinor(rooted, FIRST, 1);
+    commit(rooted, "standings deltas changed, minor bumped");
+    expect(guard(rooted).status).toBe(0);
+  });
+
+  spawnIt(8)("a tree whose table has no FOLD_MINOR, declares one for other sports than FOLD_EPOCH's, or holds a minor that is not a non-negative integer, is refused (exit 2), never judged", () => {
+    atBase(mono);
+    editTable(mono, withoutMinor);
+    commit(mono, "table without FOLD_MINOR");
+    const none = guard(mono);
+    expect(none.status).toBe(2);
+    expect(none.stdout).toBe("");
+    expect(none.stderr).toMatch(/src\/sport\/fold-epoch\.ts does not load: it has no FOLD_MINOR object export/);
+
+    const inMinor = (fn: (literal: string) => string) => (text: string): string => {
+      const from = text.indexOf(MINOR_DECL);
+      const to = text.indexOf("} as const", from);
+      return text.slice(0, from) + fn(text.slice(from, to)) + text.slice(to);
+    };
+    for (const [why, edit, message] of [
+      ["a sport missing", inMinor((lit) => lit.replace(new RegExp(`\\b${FIRST}: \\d+,?\\s*`), "")), new RegExp(`FOLD_MINOR and FOLD_EPOCH must name the same sports.*${FIRST}`)],
+      ["a sport nobody has", inMinor((lit) => lit.replace(/\{/, "{ quidditch: 0,")), /FOLD_MINOR and FOLD_EPOCH must name the same sports.*quidditch/],
+      ["a negative minor", inMinor((lit) => lit.replace(new RegExp(`\\b${FIRST}: \\d+`), `${FIRST}: -1`)), new RegExp(`FOLD_MINOR\\.${FIRST} is -1, and a minor is a non-negative integer`)],
+      ["a fractional minor", inMinor((lit) => lit.replace(new RegExp(`\\b${FIRST}: \\d+`), `${FIRST}: 1.5`)), new RegExp(`FOLD_MINOR\\.${FIRST} is 1\\.5, and a minor is a non-negative integer`)],
+    ] as const) {
+      atBase(mono);
+      editTable(mono, edit);
+      commit(mono, why);
+      const r = guard(mono);
+      expect(r.status, why).toBe(2);
+      expect(r.stdout, why).toBe("");
+      expect(r.stderr, why).toMatch(message);
+    }
+  });
+
+  spawnIt(5)("a BASELINE table whose FOLD_MINOR is malformed is refused too, and says it is the baseline's", () => {
+    atBase(mono);
+    editTable(mono, (text) => text.replace(new RegExp(`(${MINOR_DECL}[^}]*?)\\b${FIRST}: \\d+`), `$1${FIRST}: -3`));
+    commit(mono, "main with a broken FOLD_MINOR");
+    git(mono.top, "checkout", "-q", "base", "--", ".");
+    commit(mono, "the table is repaired");
+    const r = guard(mono);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(new RegExp(`src/sport/fold-epoch\\.ts at HEAD\\^1: FOLD_MINOR\\.${FIRST} is -3`));
+  });
+
+  spawnIt(3)("every sport's report line shows its own minor on both sides, as the table declares it (counted)", () => {
+    atBase(mono);
+    commit(mono, "docs only");
+    const r = guard(mono);
+    expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+    const swept = KEYS.filter((k) => lineOf(r.stdout, k).includes(`, minor ${realEntry("FOLD_MINOR", k)} -> ${realEntry("FOLD_MINOR", k)}, `));
+    expect(swept.length).toBe(realSports);
+  });
+});
+
 describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on the merge commit refs/pull/N/merge, fetch-depth 0)", () => {
   /** The shape of a PR merge ref: main moved on (C, an earlier change to FIRST that is already on main), the PR (B) changes LAST, and
    *  the checkout is their merge commit M, whose first parent is main's tip. */
@@ -412,7 +687,7 @@ describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on t
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([LAST]);
     // FIRST differs from the merge BASE but not from main's tip, so it is clean here ...
-    expect(lineOf(r.stdout, FIRST)).toMatch(/changed 0 removed 0 added 0$/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 0 added 0$/);
     // ... and would be red if the comparison were against the merge base, which is not what HEAD^1 is
     const wrong = guard(mono, "base");
     expect(violated(wrong.stdout).sort()).toEqual([FIRST, LAST].sort());
@@ -422,7 +697,7 @@ describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on t
     mergeRef("green", true);
     const r = guard(mono);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(lineOf(r.stdout, LAST)).toMatch(/epoch 1 -> 2, matched \d+ changed 1 /);
+    expect(lineOf(r.stdout, LAST)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 1 /);
     expect(violated(r.stdout)).toEqual([]);
   });
 
@@ -646,7 +921,7 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout).sort()).toEqual([...KEYS].sort());
-    expect(lineOf(r.stdout, FIRST)).toMatch(/matched 0 changed 0 removed \d+ added 0 - VIOLATION: .*FOLD_EPOCH entry but no golden corpus/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(/matched 0 changed 0 deltas-only 0 removed \d+ added 0 - VIOLATION: .*FOLD_EPOCH entry but no golden corpus/);
   });
 
   spawnIt(3)("run through a symlink to the engine directory it still runs: a guard that compared the given path with the real one would print nothing and exit 0", () => {
