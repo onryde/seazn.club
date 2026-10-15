@@ -31,8 +31,17 @@ export interface StageFormatLine {
  * (`effectiveRulesLine`, review round 2).
  *
  * `stages[].rules` is the stored FRAGMENT (`PublicStage.rules`); only it is
- * overlaid, so the decider keys (`shootout`/`extraTime`) that also live on a
- * stage's config play no part — they are not format rules.
+ * overlaid. Since W2c the deciders (`shootout`, `extraTime`, `overtime`,
+ * `superOver`, `tiebreakRungs`, `tieBoard`) live INSIDE that fragment — a
+ * top-level decider on a stage's config is refused 400 (R-13b-1) — so a stage's
+ * own decider override DOES reach the effective config. It does not reach the
+ * LINE yet: the describer answers for the four set/nested sports only
+ * (`STAGE_RULES_SPORTS`), none of which declares a decider, and it compares on
+ * their format keys (`configKeysFor`). So a stage that differs from its
+ * division only by how a tie ends gets no line today, though spectators read
+ * that difference (ruling M4). Naming it is W2c Task 16 (`describeDeciders`,
+ * which also replaces this paragraph). `__tests__/stage-format-lines.test.ts`
+ * pins the premise, so the first described sport to declare a decider is seen.
  */
 export function stageFormatLines(
   sportKey: string,
