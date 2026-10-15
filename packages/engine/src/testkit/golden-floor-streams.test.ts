@@ -5,8 +5,9 @@
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
+import { sweepBudget } from "./golden-budget.ts";
 import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles as holesOf, floorRequirement, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
+import { eventToken, floorHoles as holesOf, floorRequirement, LEVEL_OUTCOME_TOKENS, NATURAL_OUTCOMES, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
 import {
   corpusBefore,
   expungeStrike,
@@ -27,6 +28,7 @@ import {
   type Scenario,
 } from "./golden-floor-streams.ts";
 import { EngineError } from "../core/errors.ts";
+import { DRAW_KINDS } from "../core/types.ts";
 import { foldMatchWithStoppage, outcomeOf, playRecorded } from "../core/events.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
@@ -91,7 +93,7 @@ describe("extendFloor — the golden floor's append path", () => {
     expect(floorStreams).toBeGreaterThan(builtinModules.length * 4);
     // Every sport's scenarios, including cricket's search for a tied match (a few hundred seeds): 1.1 s plain, 4.7 s under
     // the CI coverage run, so it carries an explicit budget rather than the 5 s default.
-  }, 120_000);
+  }, sweepBudget("build"));
 
   it("every committed floor stream closes a hole the streams PRECEDING it in the corpus left open (no noise kept)", () => {
     // The keep-rule: a scenario's stream is appended only when it reduces the holes. Measured against what came before it
@@ -274,6 +276,7 @@ describe("the undo stream strikes the KERNEL events that decide or end a match, 
 
   it("every undoable kernel event has a scenario that strikes it: the undo scenario the spliced ones, the settle scenario the rest (derived from UNDOABLE_KERNEL)", () => {
     const served = (id: string): string[] => {
+      // single-sport: `serves` names kernel tokens and reads only ctx.holes, never a module fact, so any one sport stands for all
       const ctx: Ctx = { module: builtinModules[0]!, corpus: readCorpus(builtinModules[0]!.key), cfgNames: [], holes: new Set() };
       return SCENARIOS.find((x) => x.id === id)!.serves(ctx);
     };
@@ -467,19 +470,20 @@ describe("floor batches — a floor is reproduced one maximal run at a time (GF-
     // OLD rule: the corpus before the first floor stream, with every config the corpus holds now
     const oldBase: GoldenCorpus = { ...grown, streams: grown.streams.slice(0, batch.start) };
     expect(Object.keys(oldBase.configs)).toContain("drawHouse");
-    let oldReproduces: boolean;
-    try {
-      oldReproduces = same(extendFloor(module, oldBase).corpus.streams.slice(oldBase.streams.length));
-    } catch {
-      oldReproduces = false;
-    }
-    expect(oldReproduces, "the old rule derives a different floor from the same streams").toBe(false);
+    // (it does not refuse: it builds a floor, and the floor it builds is a different one)
+    const oldStreams = extendFloor(module, oldBase).corpus.streams.slice(oldBase.streams.length);
+    expect(oldStreams.length, "the same number of floor streams").toBe(batch.streams.length);
+    expect(batch.streams.some((s) => s.config === "drawHouse"), "the committed floor never saw the later config").toBe(false);
+    expect(oldStreams.filter((s) => s.config === "drawHouse").map((s) => s.seed).length, "the old rule reaches for the config that did not exist when the floor was written").toBeGreaterThan(0);
+    expect(same(oldStreams), "so it derives a different floor from the same streams").toBe(false);
     // NEW rule: the configs the preceding streams reference
     expect(Object.keys(corpusBefore(grown, batch.start).configs)).not.toContain("drawHouse");
     expect(same(reproduceFloorBatch(module, grown, floorBatches(grown)[0]!)), "the new rule reproduces the batch").toBe(true);
-  }, 60_000);
+  }, sweepBudget("build", 1));
 
   it("a floor that GREW after its first batch is two batches, and each reproduces from the streams preceding it (the older one as the first of what today's rules append)", () => {
+    // single-sport: a batch boundary depends on stream order and the configs the streams reference, never on the sport; the all-sports
+    // reproduction is the test above, this one needs only a corpus whose floor can be grown after its first batch
     const module = builtinModules.find((m) => m.key === "badminton")!;
     const committed = readCorpus("badminton");
     const GF1 = SCENARIOS.filter((x) => x.id !== "settle" && x.id !== "expunge");
@@ -501,7 +505,7 @@ describe("floor batches — a floor is reproduced one maximal run at a time (GF-
     expect(reproduceFloorBatch(module, grown.corpus, batches[0]!).length).toBeGreaterThan(batches[0]!.streams.length);
     // the newer batch was derived with the walk and the older batch in front of it
     expect(corpusBefore(grown.corpus, batches[1]!.start).streams.length).toBe(batches[1]!.start);
-  }, 60_000);
+  }, sweepBudget("build", 1));
 });
 
 describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's own reading", () => {
@@ -522,6 +526,18 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
   it("every sport has one settle stream; where the floor wants a withdrawal over a level result it is the level route, elsewhere the abandon route, and the kernel reads each step as the story says", () => {
     let level = 0;
     let abandoned = 0;
+    // which sports can end level, from the modules' own declarations (not from the floor's requirement the route is chosen by): a draw
+    // in a draw-kind stage of some recorded config (`supportsDraws`), or a level kind the sport reaches by name (`NATURAL_OUTCOMES`)
+    const declaredLevel = new Set(
+      builtinModules
+        .filter((m) => {
+          const corpus = readCorpus(m.key);
+          const draws = Object.values(corpus.configs).some((raw) => [...DRAW_KINDS].some((kind) => m.supportsDraws(m.configSchema.parse(raw) as never, kind)));
+          const natural = Object.keys(NATURAL_OUTCOMES[m.key] ?? {}).some((token) => LEVEL_OUTCOME_TOKENS.includes(token));
+          return draws || natural;
+        })
+        .map((m) => m.key),
+    );
     forEachSport(({ key, module }) => {
       const found = stories(key, 9);
       expect(found.length, `${key}: one settle stream`).toBe(1);
@@ -529,6 +545,7 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
       const { lineups, folded, effective } = readingOf(key, stream);
       const requirement = floorRequirement(module, readCorpus(key)).required;
       const levelSport = requirement.has(overlayToken("levelWithdrawal", "set"));
+      expect(levelSport, `${key}: the floor wants a withdrawal over a level result exactly where the module can end level`).toBe(declaredLevel.has(key));
       const types = stream.events.map((e) => e.type);
       const n = stream.events.findIndex((e) => e.type === "core.forfeit" || e.type === "core.abandon");
       expect(n, `${key}: the story's first kernel event`).toBeGreaterThan(0);
@@ -556,10 +573,11 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
       expect(effective(stream.events.length), `${key}: said again by lot, for the other side`).toMatchObject({ kind: "win", method: "settled_lot", winner: lineups.away.entrantId });
       expect(folded(stream.events.length).settlement, key).not.toBeNull();
     });
-    expect(level, "the level-capable sports: football, cricket, boardgame, generic, icehockey, hockey").toBeGreaterThanOrEqual(5);
-    expect(abandoned, "and the rest").toBeGreaterThanOrEqual(5);
-    expect(level + abandoned).toBe(builtinModules.length);
-  }, 60_000);
+    expect(declaredLevel.size, "the level-capable sports, by declaration: football, cricket, boardgame, generic, icehockey, hockey").toBe(6);
+    expect(level, "the level route was taken by exactly those").toBe(declaredLevel.size);
+    expect(abandoned, "and the abandon route by the rest").toBe(builtinModules.length - declaredLevel.size);
+    expect(abandoned).toBe(5);
+  }, sweepBudget("read"));
 
   it("every sport has one expunge stream: the abandon takes the match off the table, its void puts it back, and play carries on to the result it had", () => {
     let proofs = 0;
@@ -586,9 +604,11 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
       proofs++;
     });
     expect(proofs).toBe(builtinModules.length);
-  }, 60_000);
+  }, sweepBudget("read"));
 
   it("expungeStrike is the abandon the withdrawal cascade writes (expunge flagged) and is in force exactly while the kernel says expunged", () => {
+    // single-sport: expungeStrike is one fixed event and its inForce reads the kernel's `expunged` fact, which no module influences;
+    // every sport's expunge stream is the sweep above
     const module = builtinModules.find((m) => m.key === "football")!;
     const corpus = readCorpus("football");
     const cfg = module.configSchema.parse(corpus.configs.default) as unknown;
@@ -607,6 +627,8 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
 });
 
 describe("readsAs — a story step is kept only when the kernel's own fold says it took effect", () => {
+  // single-sport: football is level-capable, so its committed settle stream is the level route (withdrawal, void, settle, void, settle),
+  // the one route that exercises all three facts readsAs asks; the all-sports settle sweep is the test above
   const module = builtinModules.find((m) => m.key === "football")!;
   const corpus = readCorpus("football");
   // the committed level-route settle stream: [walk to a level result] withdrew, void, settle, void, settle
@@ -657,6 +679,21 @@ describe("readsAs — a story step is kept only when the kernel's own fold says 
     expect(readsAs(ctx, cfg, lineups, at(n + 3), {})).toBe(true);
   });
 
+  it("only the fold's own refusal reads as 'did not take effect': any other throw (a defect in a module) surfaces, it is not swallowed into a story that did not fit", () => {
+    // a module whose apply blows up with something that is not the fold's refusal
+    const broken = Object.assign(Object.create(module) as typeof module, {
+      apply: () => {
+        throw new TypeError("module defect");
+      },
+    });
+    const brokenCtx: Ctx = { ...ctx, module: broken };
+    expect(() => readsAs(brokenCtx, cfg, lineups, [START], { settled: false })).toThrow(TypeError);
+    // ...while a refusal by the fold (an EngineError) is still a plain `false`, so the control is the same call on the real module
+    const refused = [START, { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } }];
+    expect(readsAs(ctx, cfg, lineups, refused, {})).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, [START], { settled: false }), "and the real module reads the same ledger").toBe(true);
+  });
+
   it("a ledger the fold REFUSES reads as nothing at all, whatever was asked (a settle over a match still live)", () => {
     const refused = [START, { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } }];
     expect(readsAs(ctx, cfg, lineups, refused, {})).toBe(false);
@@ -665,6 +702,8 @@ describe("readsAs — a story step is kept only when the kernel's own fold says 
 });
 
 describe("settleStoryHolds — a story is kept only when EVERY step took effect (each step is defeated alone)", () => {
+  // single-sport per route (reason: the two routes need one sport each, football for the level route and badminton, which cannot end level,
+  // for the abandon route; every sport's own stream on both routes is swept in the settle-stream test above)
   const rig = (key: string, scenarioIndex: number) => {
     const module = builtinModules.find((m) => m.key === key)!;
     const corpus = readCorpus(key);
@@ -770,9 +809,10 @@ describe("the withdrawal story carries lineup changes whenever the squads still 
       withLineup++;
     });
     expect(withLineup).toBe(builtinModules.length);
-  }, 60_000);
+  }, sweepBudget("build", 1));
 
   it("the withdrawal story serves overlay:squads:set and the stoppage story serves both stoppage tokens", () => {
+    // single-sport: `serves` names kernel tokens and reads only ctx.holes, never a module fact
     const ctx: Ctx = { module: builtinModules[0]!, corpus: readCorpus(builtinModules[0]!.key), cfgNames: [], holes: new Set() };
     expect(SCENARIOS.find((x) => x.id === "withdrew")!.serves(ctx)).toContain(overlayToken("squads", "set"));
     expect(SCENARIOS.find((x) => x.id === "stoppage")!.serves(ctx)).toEqual(expect.arrayContaining([overlayToken("stoppage", "set"), overlayToken("stoppage", "cleared")]));

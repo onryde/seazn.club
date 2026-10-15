@@ -335,12 +335,27 @@ hand in the same PR; no tool will tell you):
 - **A kernel overlay a corpus never exercises.** The harness records the effective
   outcome, the summary after every event and the overlay (settlement, expunge,
   withdrawal over a level result, stoppage, squads, a pending decider), and the floor
-  requires each fact to move. What it cannot require is a path no stream reaches: the
-  expunge of an `abandonPolicy: "award"` football match, where the module itself
-  answers an outcome after an abandon and so `outcomeOf`'s expunge guard is visible,
-  is owed a recorded config. (In the other ten sports a module answers no outcome
-  after an abandon, so a mutant that makes `outcomeOf` ignore the expunge reaches
-  cricket only; the `expunged` column is what pins it in all eleven.)
+  requires each fact to move. What it cannot require is a path no stream reaches: a
+  config knob no recorded config sets. Football, hockey and icehockey (the last two
+  through the shared period kernel's `applyAbandon`) carry `abandonPolicy: "replay" |
+  "award"`, and every recorded config says `replay`; under `award` the module itself
+  answers an outcome after an abandon (the leader wins, a level score is a draw where a
+  draw stands), so `outcomeOf`'s expunge guard (an expunged match has no outcome) would
+  be visible there, and no stream shows it. The expunge of an `award`-policy match is
+  owed a recorded config in each of the three. (Under the recorded configs only
+  cricket's module answers an outcome after an abandon, so a mutant that makes
+  `outcomeOf` ignore the expunge reaches cricket alone; the `expunged` column is what
+  pins it in all eleven.)
+- **Kernel refusals, and widening what the kernel accepts.** A rule that only REFUSES an
+  event moves no recorded byte when it is widened: a ledger it refused was never
+  recorded, and every ledger it accepted folds as before. There are two, both fed by the
+  fold's `abandonActive` flag in `core/events.ts`: X-AB-4, the refusal of a forfeit while
+  an unvoided abandon stands (`ABANDONED_SETTLE_OR_VOID`, the `core.forfeit` branch near
+  :943), and the settle admission (`SETTLE_NOT_APPLICABLE`, near :1108: a settle applies
+  only to a level result, an abandoned match with no result, or a pending tie-break).
+  Widening either one (accepting what it refused) changes what a ledger can mean without
+  changing a golden, so it owes a **manual MAJOR bump of every sport it reaches**, like
+  any other path the corpora do not show.
 - **Unexercised branches** of a module: a field no stream writes is invisible to
   a byte-exact comparison (see below), so a rule that fires only there moves
   nothing.

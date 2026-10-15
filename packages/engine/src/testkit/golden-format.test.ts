@@ -8,6 +8,7 @@ import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
+import { sweepBudget } from "./golden-budget.ts";
 import {
   FLOOR_SEED_STRIDE,
   extendFloor,
@@ -454,7 +455,7 @@ describe("rebaselineCorpus keeps the corpus's format", () => {
       aside += setAside.length;
     });
     expect(aside).toBe(builtinModules.length);
-  }, 30_000);
+  }, sweepBudget("probe"));
 
   it("format 1 stays format 1 (no field appears), format 2 stays format 2 and re-records both fields", () => {
     const module = sport("generic");

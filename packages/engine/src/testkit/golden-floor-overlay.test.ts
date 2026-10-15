@@ -20,6 +20,7 @@ import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
 import { FLOOR_SEED_STRIDE } from "./golden-floor-streams.ts";
+import { sweepBudget } from "./golden-budget.ts";
 import {
   ablateEvents,
   CORE_TYPES,
@@ -129,7 +130,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       }
     });
     expect(flipped).toBe(builtinModules.length * 2);
-  }, 60_000);
+  }, sweepBudget("probe"));
 
   it("the probe's DEFAULT recorder is the real format-2 one: with no recorder named, a retired class reads as pinned in every sport (overlayVerdicts and staleOverlayClaims)", () => {
     let checked = 0;
@@ -143,7 +144,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       expect(stale.length, `${key}: the retired claim is stale under the default recorder`).toBeGreaterThan(0);
     });
     expect(checked).toBe(builtinModules.length * RETIRED_STOPPAGE.tokens.length);
-  }, 60_000);
+  }, sweepBudget("probe"));
 
   it("RETIRED lineup: exactly boardgame, carrom and generic (every recorded type) and football's position change flip from unpinned to pinned; the other sports were pinned already", () => {
     // The set that was unpinned is the policy of record before this task: "inert in boardgame, carrom and generic (no onLineup,
@@ -172,7 +173,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(new Set(flips.map((f) => f.split(" ")[0])), "the sports that flip").toEqual(new Set(["boardgame", "carrom", "generic", "football"]));
     expect(flips.filter((f) => f.startsWith("football ")), "football flips on its position change only").toEqual(["football core.lineup.position"]);
     expect(flips.length).toBeGreaterThanOrEqual(7);
-  }, 120_000);
+  }, sweepBudget("probe"));
 
   it("the retirement is DETECTED by the staleness check itself: under the real recorder every retired claim is stale in every sport it applied to, under the module-only recorder none is", () => {
     let stale = 0;
@@ -195,7 +196,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     });
     expect(stale).toBe(held);
     expect(stale).toBeGreaterThan(builtinModules.length * 2);
-  }, 120_000);
+  }, sweepBudget("probe"));
 
   it("EVERY recorded core event whose ablation says 'unpinned' is covered by a claim, and the unpinned ones are exactly a note and an award (swept per sport x token, counted)", () => {
     let probed = 0;
@@ -217,7 +218,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     });
     expect(probed).toBeGreaterThan(builtinModules.length * 8);
     expect(unpinned).toBe(builtinModules.length * 2);
-  }, 120_000);
+  }, sweepBudget("probe"));
 
   it("core.settle is recorded and PINNED in every sport: it is the one event whose every recorded instance is struck once, so the probe must ablate the void with it", () => {
     let probed = 0;
@@ -231,7 +232,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       probed++;
     });
     expect(probed).toBe(builtinModules.length);
-  }, 30_000);
+  }, sweepBudget("probe"));
 
   it("the sweep has teeth: a claim table that forgets a class names it in every sport", () => {
     const withoutNote = OVERLAY_CLAIMS.filter((c) => c.id !== "note");
@@ -242,7 +243,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       named++;
     });
     expect(named).toBe(builtinModules.length);
-  }, 60_000);
+  }, sweepBudget("probe"));
 
   it("the controls are NOT in the class: finalize, abandon and forfeit each move a recorded golden in every sport (the probe can answer 'pinned')", () => {
     expect(OVERLAY_CONTROLS.length).toBeGreaterThanOrEqual(3);
@@ -328,6 +329,8 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
 });
 
 describe("ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested)", () => {
+  // single-sport: the clauses compare recorded columns and digests, whichever sport recorded them; badminton's corpus holds a note
+  // stream with play before and after the note (asserted below), and the all-sports sweeps are the tests above
   const badminton = builtinModules.find((m) => m.key === "badminton")!;
   const corpus = corpusOf("badminton");
   const noted = corpus.streams.find((s) => s.events.some((e) => e.type === "core.note"))!;

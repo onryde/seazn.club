@@ -169,8 +169,9 @@ rules instead needs an epoch per division or fixture, which does not exist.
   mid-match summaries and the kernel's side of an undo were on this list and are off it.
 - **Still not pinned, and so still a MANUAL MAJOR of every sport it reaches:** a note and an award (the floor's `OVERLAY_CLAIMS` names
   them and goes red the day one starts to move a golden), `forfeit-credit.ts` where no corpus has a forfeit that reaches it, a path no
-  stream exercises (for example the expunge of an `abandonPolicy: "award"` football match: no recorded config), and the
-  player-statistics folds (`src/stats/stats.ts`). See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
+  stream exercises (for example the expunge of an `abandonPolicy: "award"` football, hockey or icehockey match: no recorded config sets
+  it), a widening of a kernel REFUSAL (X-AB-4 `ABANDONED_SETTLE_OR_VOID`, the settle admission `SETTLE_NOT_APPLICABLE`: a refused ledger
+  was never recorded, so accepting more moves no byte), and the player-statistics folds (`src/stats/stats.ts`). See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
 - A harness-only rewrite of a corpus (a state string that moves without changing its meaning) is a MAJOR bump and locks out every
   older phone of that sport; the guard cannot tell it from a real change. A deltas-only
   change is a MINOR bump (D34) and locks nobody out.

@@ -22,6 +22,7 @@ import type { LineupPair } from "../core/types.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
+import { sweepBudget } from "./golden-budget.ts";
 import {
   corpusFormat,
   readCorpus,
@@ -212,11 +213,38 @@ describe("overlayTransitions — which kernel facts a recorded overlay SETS and 
     expect(() => expandOverlay(`{"stoppage":[[1,null]]}`, 3, initial)).not.toThrow();
   });
 
-  it("the static defaults are the kernel defaults overlayDefaults writes (one authority), for every column but the squads", () => {
-    const dflt = overlayDefaults(linesOf(builtinModules[0]!, rawOf(builtinModules[0]!)), textDigest);
-    const statics = Object.entries(STATIC_COLUMN_DEFAULTS);
-    expect(statics.map(([c]) => c).sort(), "every column but squads has a static default").toEqual(OVERLAY_COLUMNS.filter((c) => c !== "squads").sort());
-    for (const [column, value] of statics) expect(dflt[column as OverlayColumn], column).toBe(value);
+  it("the static defaults are what a REAL fold of an empty ledger holds in every column but the squads — read off the fold, not off overlayDefaults, which spreads them", () => {
+    let sports = 0;
+    let compared = 0;
+    forEachSport(({ module, key }) => {
+      const raw = rawOf(module);
+      const folded = foldMatchWithStoppage(module, module.configSchema.parse(raw), linesOf(module, raw), [], STRICT_ALL);
+      // the fold's facts, rendered the way the recorder renders a column (JSON text, nothing as `null`)
+      const real: Record<Exclude<OverlayColumn, "squads">, string> = {
+        outcome: text(outcomeOf(module, folded)),
+        stoppage: text(folded.stoppage),
+        settlement: text(folded.settlement),
+        expunged: text(folded.expunged),
+        levelWithdrawal: text(folded.levelWithdrawal),
+        decider: text(deciderPending(module, folded)),
+      };
+      for (const [column, value] of Object.entries(STATIC_COLUMN_DEFAULTS)) {
+        expect(real[column as keyof typeof real], `${key} ${column}`).toBe(value);
+        compared++;
+      }
+      sports++;
+    });
+    const statics = Object.keys(STATIC_COLUMN_DEFAULTS);
+    expect([...statics].sort(), "every column but squads has a static default").toEqual(OVERLAY_COLUMNS.filter((c) => c !== "squads").sort());
+    expect(sports, "every sport").toBe(builtinModules.length);
+    expect(compared, "every sport x every static column").toBe(builtinModules.length * statics.length);
+  });
+
+  it("overlayDefaults is the static defaults plus the squads digest of the team sheets, and nothing else", () => {
+    const module = builtinModules[0]!; // single-sport: a pure spread of one table; the squads half is swept per sport by the empty-ledger test below
+    const lineups = linesOf(module, rawOf(module));
+    const dflt = overlayDefaults(lineups, textDigest);
+    expect(dflt).toEqual({ ...STATIC_COLUMN_DEFAULTS, squads: text(textDigest(text(initSquads(lineups)))) });
   });
 
   it("over the committed corpora: every column a stream records is read (swept, counted), and the transitions agree with expandOverlay's dense form", () => {
@@ -246,7 +274,7 @@ describe("overlayTransitions — which kernel facts a recorded overlay SETS and 
     expect(streams).toBeGreaterThan(300);
     expect(columns).toBeGreaterThan(300);
     expect(withClear, "streams that return a column to its default: an undo, a resume").toBeGreaterThan(10);
-  }, 30_000);
+  }, sweepBudget("read"));
 });
 
 describe("the fold result's keys are all recorded (an inert-seam guard: a new kernel fact must be recorded or named)", () => {

@@ -159,6 +159,8 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     const settledMethods = SETTLE_METHODS.map(settledMethod);
     let streams = 0;
     let settleStreams = 0;
+    let checked = 0; // streams whose standing settle was read against the recorded outcome
+    let struck = 0; // settles a later void strikes (the "said again" half of every settle story)
     const wrong: string[] = [];
     const sports = new Set<string>();
     for (const dir of readdirSync(SPORTS)) {
@@ -179,7 +181,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
           if (corpus.format !== 2) wrong.push(`${label}: carries core.settle in a format-${corpus.format ?? 1} corpus`);
           // the settle in force at the end (no later void strikes it) decides the match: the recorded outcome is a settled win
           const standing = settles.filter((k) => !stream.events.some((e) => e.voids === `e-${k}`));
+          struck += settles.length - standing.length;
           if (standing.length === 0) return;
+          checked++;
           const outcome = JSON.parse(stream.outcome) as { kind?: string; method?: string } | null;
           if (outcome === null || outcome.kind !== "win" || !settledMethods.includes(outcome.method as never)) wrong.push(`${label}: ends on ${stream.outcome}, not a settled win`);
         });
@@ -188,6 +192,10 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     expect(streams).toBeGreaterThan(200);
     expect(settleStreams, "a settle stream in every sport's corpus").toBeGreaterThanOrEqual(sports.size);
     expect(sports.size, "every sport records a settle").toBeGreaterThanOrEqual(11);
+    // Anti-vacuity: a stream whose settle is struck and never said again is skipped, so a scan that skipped EVERY stream would
+    // read as clean. Every sport's settle story ends on a standing settle and strikes one on the way.
+    expect(checked, "a standing settle was actually checked in every sport").toBeGreaterThanOrEqual(sports.size);
+    expect(struck, "a struck settle in every sport").toBeGreaterThanOrEqual(sports.size);
     expect(wrong).toEqual([]);
   });
 });

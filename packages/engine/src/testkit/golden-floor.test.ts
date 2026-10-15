@@ -160,6 +160,8 @@ describe("golden floor — an undo of a KERNEL event is a token of its own (revi
 });
 
 describe("golden floor — the kernel overlay is a token family of its own (GF-2 T3)", () => {
+  // single-sport: the rows below build synthetic corpora to prove the token reader's arithmetic, which does not depend on the sport;
+  // football only lends a real format-2 corpus as the base (the per-sport requirement sweeps are further down)
   const football = builtinModules.find((m) => m.key === "football")!;
   const base = corpusOf("football");
   const OVERLAY = `{"stoppage":[[1,{"eventId":"e-1"}],[2,null]],"squads":[[3,"#bbbbbbbbbbbbbbbb"]],"expunged":[[4,true]]}`;
@@ -519,7 +521,7 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
     });
     expect(before).toBe(builtinModules.length);
     expect(after).toBe(builtinModules.length);
-    // the default recorder of the probe is the real one
+    // the default recorder of the probe is the real one (single-sport: it is one parameter default, not a per-sport fact)
     const first = builtinModules[0]!;
     expect(settleProbe(first, corpusOf(first.key))).toEqual(settleProbe(first, corpusOf(first.key), kernelRecorder));
   });
@@ -555,6 +557,7 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
   });
 
   it("the mechanism still works for the next exemption: an injected row is exempt (not required), applies only to its sports, and says why it went stale", () => {
+    // two sports: football carries the injected row and cricket is the control that must not (any two sports would do)
     const football = builtinModules.find((m) => m.key === "football")!;
     const cricket = builtinModules.find((m) => m.key === "cricket")!;
     const row: FloorExemption = {

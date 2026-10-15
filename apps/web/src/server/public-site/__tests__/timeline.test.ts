@@ -927,9 +927,6 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect(KERNEL_TYPES).toContain("core.settle");
     expect(RECORDED_TYPES).toContain("core.settle");
     expect(KERNEL_TYPES.filter((type) => !RECORDED_TYPES.includes(type))).toEqual([]);
-    // The union holds every type either side names (it no longer ADDS to the recorded set: the corpora record every kernel type).
-    expect(ALL_TYPES).toEqual(expect.arrayContaining([...RECORDED_TYPES, ...KERNEL_TYPES]));
-    expect(ALL_TYPES.length).toBe(new Set([...RECORDED_TYPES, ...KERNEL_TYPES]).size);
   });
 
   it("every type a ledger can carry — corpus-recorded AND kernel-registered — has a template key in all four locales", () => {

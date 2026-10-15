@@ -454,7 +454,7 @@ function buildForfeit(ctx: Ctx, story: ForfeitStory): Built | null {
 
 /** The kernel's reading of `events`, asserted fact by fact: the story below is only kept when the FOLD says each step took
  *  effect (never because the builder believes it did). False = a step did not take effect, or the ledger is refused. A fact the
- *  caller does not name is not asked. */
+ *  caller does not name is not asked. A ledger the fold REFUSES (an `EngineError`) reads as nothing; any other throw is rethrown. */
 export function readsAs(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], expect: { settled?: boolean; withdrawn?: boolean; expunged?: boolean }): boolean {
   try {
     const folded = foldKernel(ctx, cfg, lineups, events);
@@ -463,8 +463,11 @@ export function readsAs(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: rea
       (expect.withdrawn === undefined || (folded.levelWithdrawal !== null) === expect.withdrawn) &&
       (expect.expunged === undefined || folded.expunged === expect.expunged)
     );
-  } catch {
-    return false;
+  } catch (error) {
+    // Only the fold's own refusal reads as "this step did not take effect"; anything else (a TypeError in a module, a bad
+    // payload shape) is a defect and must surface, not read as a story that merely did not fit.
+    if (error instanceof EngineError) return false;
+    throw error;
   }
 }
 
