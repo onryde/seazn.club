@@ -717,12 +717,18 @@ test.describe("the overlay puts the right score on air", () => {
 // browser source open for the broadcast, and a reload would hide the defect
 // by refetching. The sequence is the test — decide → undo → re-decide → undo
 // — in two sports whose deciding writes differ in shape (a badminton rally,
-// a cricket innings summary). The budget per step is the poll period plus
-// slack, derived from `POLL_MS` (AGENTS.md #20), because locally and on CI's
-// stub Supabase host the overlay's transport IS the poll.
+// a cricket innings summary).
+//
+// BOTH transports died at `decided`, so each is held to its own budget. On
+// CI's stub Supabase host the overlay stays on the poll: a step gets the poll
+// period plus slack, derived from `POLL_MS` (AGENTS.md #20). Where a private
+// channel really SUBSCRIBES (a server with the ES256 signing key), every step
+// must land well under POLL_MS — the channel survived `decided` — the same
+// realtime-or-poll split the private-realtime test below makes.
 // ===========================================================================
 
 const CARD_WAIT_MS = POLL_MS + 15_000;
+const REALTIME_STEP_MS = POLL_MS / 2;
 
 const UNDO_CASES = [
   {
@@ -768,21 +774,39 @@ test.describe("an undo of the deciding write takes the end card down on the OPEN
         await c.approach(ownerPage.request, r);
 
         await page.goto(`/overlay/fixtures/${r.fixtureId}`);
-        await expect(page.getByTestId("ovl-root")).toHaveCount(1);
+        const root = page.getByTestId("ovl-root");
+        await expect(root).toHaveCount(1);
         const card = page.getByTestId("ovl-slate");
         await expect(card, "empty case first: an in-play match carries no end card").toHaveCount(0);
         let reloads = 0;
         page.on("framenavigated", (frame) => {
           if (frame === page.mainFrame()) reloads++;
         });
+        // `waitForFunction(fn, arg, options)`: options is the THIRD argument (see the private-realtime test).
+        const realtime = await page
+          .waitForFunction(
+            () => document.querySelector('[data-testid="ovl-root"]')?.getAttribute("data-transport") === "realtime",
+            undefined,
+            { timeout: 8_000 },
+          )
+          .then(() => true)
+          .catch(() => false);
+        if (!realtime) await expect(root, "not subscribed: the poll is the stub-host fallback").toHaveAttribute("data-transport", "poll");
+        const budget = realtime ? REALTIME_STEP_MS : CARD_WAIT_MS;
+        test.info().annotations.push({ type: "transport", description: `${c.sportKey}: ${realtime ? "realtime" : "poll"}` });
 
         const cardIs = async (up: boolean, step: string) => {
+          const t0 = Date.now();
           if (up) {
             await expect(card, `${step}: the Result card is on air`).toHaveAttribute("data-slate-state", "ended", {
-              timeout: CARD_WAIT_MS,
+              timeout: budget,
             });
           } else {
-            await expect(card, `${step}: the end card has come down`).toHaveCount(0, { timeout: CARD_WAIT_MS });
+            await expect(card, `${step}: the end card has come down`).toHaveCount(0, { timeout: budget });
+          }
+          test.info().annotations.push({ type: "step", description: `${c.sportKey} ${step}: ${Date.now() - t0}ms` });
+          if (realtime) {
+            await expect(root, `${step}: the private channel is still subscribed`).toHaveAttribute("data-transport", "realtime");
           }
         };
         const undo = (eventId: string) => sendEvent(ownerPage.request, r.fixtureId, "core.void", { event_id: eventId });
