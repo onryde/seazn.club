@@ -841,6 +841,12 @@
       "squads[].bench[]": [
         "string"
       ],
+      "squads[].exemptUsed": [
+        "object"
+      ],
+      "squads[].exemptUsed.concussion": [
+        "number"
+      ],
       "squads[].offUsed": [
         "array"
       ],
