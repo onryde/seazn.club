@@ -94,7 +94,8 @@ const failureBucket = (reason: FailReason | null): BackstopBucket => {
     case "no_inbound_timeout": case "machine_boot_timeout": return "warmingTimedOut";
     case "provision_timeout": return "provisionTimedOut";
     case "admission_timeout": return "admissionTimedOut";
-    case "machine_create_failed": case "machine_exit_nonzero": case "machine_oom": case "machine_crash": return "crashed";
+    // R2003: machine_refused is an observed Machine exit (78), reached by the same reconcile as a crash
+    case "machine_create_failed": case "machine_exit_nonzero": case "machine_oom": case "machine_crash": case "machine_refused": return "crashed";
     // Produced by the organiser's poll (target_rejected) and the go-live consume (no_credits), never by the backstop's
     // expiry + observation — so a visit that reads one raced another request. Counted apart, never folded into a timeout.
     case "target_rejected": case "no_credits": return "otherFailures";

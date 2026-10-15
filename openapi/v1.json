@@ -38589,6 +38589,7 @@
                                     "machine_exit_nonzero",
                                     "machine_oom",
                                     "machine_crash",
+                                    "machine_refused",
                                     "provision_timeout",
                                     "admission_timeout",
                                     "relay_disabled"
@@ -39296,6 +39297,7 @@
                                 "machine_exit_nonzero",
                                 "machine_oom",
                                 "machine_crash",
+                                "machine_refused",
                                 "provision_timeout",
                                 "admission_timeout",
                                 "relay_disabled"

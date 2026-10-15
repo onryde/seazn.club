@@ -8,8 +8,23 @@
 //    caller passes from config.ts, not a driver default that could drift.
 //  * auto_destroy: true — fires on a NON-ZERO exit too (R0 watch 4 closed:
 //    Machine `destroyed`, absent from the list).
-//  * restart.policy "no" — D4: the lazy expiry path is the only retry
-//    authority; any other policy puts two encoders on one stream key.
+//  * restart { policy "on-failure", max_retries RUNNER_INPLACE_RESTARTS } —
+//    R2003, ADR 0004/0007 (Fly specifics live HERE and nowhere else): Fly
+//    restarts a crashed compositor IN PLACE — the same Machine, the same name,
+//    the SAME attempt — so the organiser's stream reconnects inside YouTube's
+//    split threshold instead of waiting out a cold start. It never adds an
+//    encoder: the lazy expiry path stays the only authority for a SECOND
+//    Machine (attempt + 1), and the domain creates one only from a CONFIRMED
+//    destroyed (invariant 1: a restarting Machine reads `pending`, below; a
+//    beat that stays away for the composed window takes the runner lost +
+//    force_destroy, and destroy_ok/observed destroyed is the only road to
+//    r<n+1>) — runner.test.ts walks every order of crash/beat/observe/wait/
+//    destroy against it. Exit 0 is never restarted (Fly), and exit 78 (the
+//    refusal) is restarted at most this many times, each refused in a second,
+//    then fails machine_refused without the retry. Fly counts max_retries per
+//    5-minute window, not per Machine lifetime (docs.fly.io, re-pinned
+//    2026-10-15): a compositor that crashes repeatedly over a long session is
+//    restarted again after the window rolls — bounded per window, not overall.
 //  * name `machineNameFor(sessionId, attempt)` — i.e. `relay-<sid>-r<attempt>`,
 //    the domain's own spelling (domain/runner.ts), never a second one here —
 //    plus metadata.seazn_session: together the client's idempotency key, so a
@@ -24,8 +39,8 @@
 // Machine or start a second one — the 409 adopt (T5-c), the unestablished
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
-import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, type Machine } from "./fly-client";
-import { liveRunnerIdentity } from "./config";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, exitRecorded, isRetryable, restartFrom, type Machine } from "./fly-client";
+import { RUNNER_INPLACE_RESTARTS, liveRunnerIdentity } from "./config";
 import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
 import { NOOP_RECORDER, RunnerCreateError } from "./ports";
@@ -234,7 +249,7 @@ export class FlyRunner implements RunnerProvider {
           image: this.image,
           guest: { cpus: spec.guest.cpus, memory_mb: spec.guest.memoryMb, cpu_kind: cpuKindFor(spec.guest.cpuClass) },
           auto_destroy: true,
-          restart: { policy: "no" },
+          restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
           env: { SESSION_ID: spec.sessionId, JOB_TOKEN: spec.jobToken, APP_URL: spec.appUrl, RELAY_DEADLINE_AT: spec.deadlineAt.toISOString() },
           metadata: { [SESSION_METADATA_KEY]: spec.sessionId, [ENV_METADATA_KEY]: spec.environment },
         },
@@ -333,11 +348,21 @@ export class FlyRunner implements RunnerProvider {
    *  are fetched for every non-running state rather than only for a stopped one. */
   async observe(runnerId: string): Promise<RunnerObservation> {
     const m = await this.client.getMachine(runnerId);
-    if (!m) return { state: "destroyed", exit: null };
+    const NOT_RESTARTING = { restarting: false, restartingSince: null, restartCount: null } as const;
+    if (!m) return { state: "destroyed", exit: null, ...NOT_RESTARTING };
     const state = fromFlyState(m.state);
-    if (state === "running" || state === "pending") return { state, exit: null };
+    if (state === "running") return { state, exit: null, ...NOT_RESTARTING };
+    // F-007: `starting` (pending) is read through the events too — it is the ~1.3 s middle of an in-place restart as
+    // well as a cold boot, and only the latest exit event tells them apart. A cold boot has no exit: exit null, as before.
     const events = await this.client.machineEvents(runnerId).catch((e: unknown) => (e instanceof FlyApiError && e.status === 404 ? [] : Promise.reject(e)));
-    return { state, exit: exitInfoFrom(events) };
+    // F-007 race: STOPPED before Fly recorded this stop's exit — UNRECORDED (restarting null), never the previous run's exit.
+    // `stopped` only, the one state F-007 measured racing: a failed launch never ran and Fly writes it NO exit, so for
+    // `failed` "unrecorded" would be forever (pass-3 review) — it falls through and is a plain, immediate loss.
+    if (state === "stopped" && !exitRecorded(events)) return { state, exit: null, restarting: null, restartingSince: null, restartCount: null };
+    const restart = restartFrom(events);
+    // ADR 0007: Fly's fields end here — the port carries the neutral `restarting`.
+    if (state === "pending" && !restart.restarting) return { state, exit: null, ...NOT_RESTARTING };
+    return { state, exit: exitInfoFrom(events), restarting: restart.restarting, restartingSince: restart.since, restartCount: restart.count };
   }
 
   async destroy(runnerId: string): Promise<void> {

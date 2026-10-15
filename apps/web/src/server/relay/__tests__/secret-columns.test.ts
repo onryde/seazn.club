@@ -553,7 +553,9 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
       for (const c of cases) {
         const [row] = await sql<{ id: string }[]>`
           insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, ${c.kind}, 'stale', ${stale}) returning id`;
-        const next = secret65();
+        // the tail the leak check below looks for is "XYZ": no UUID (lowercase hex) and no word of the warn message can
+        // hold it, so a match is a leak — a random hex tail matched a random target UUID ~1% of runs (PR #967 CI)
+        const next = secret65().slice(0, 62) + "XYZ";
         const before = warns.length;
         const r = await sql.begin((tx) => replaceTargetKey(tx, orgId, row!.id, next));
         expect(r.ok ? "recovered" : (r as { reason: string }).reason, c.kind).toBe(c.want);

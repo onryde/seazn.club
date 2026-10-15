@@ -15,7 +15,7 @@
 // expiry policy hands it to a live composed session whose runner is playing or
 // booting, or carries no stop mark while the session still wants to be live —
 // which is any state — and a null cell would throw on every lazy read of that row.
-import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, WARMING_TIMEOUT_MINUTES } from "../config";
+import { MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, WARMING_TIMEOUT_MINUTES } from "../config";
 
 export const RUNNER_STATES = ["none", "creating", "booting", "playing", "stopping", "exited", "destroyed", "lost"] as const;
 export type RunnerState = (typeof RUNNER_STATES)[number];
@@ -47,8 +47,16 @@ export type RunnerTrigger =
   // assumed-clean (`createFailureOf`). false and `retryable: true` are consistent by
   // construction — T5-b downgrades a create it could not settle to `retryable: false`, so an ambiguous outcome can
   // never arrive with the domain's licence to create attempt + 1 under a different name.
-  | { type: "create_failed"; retryable: boolean; outcomeUnknown: boolean } | { type: "callback_playing" } | { type: "callback_stopped" }
-  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null } | { type: "stale_beat" } | { type: "deadline" }
+  | { type: "create_failed"; retryable: boolean; outcomeUnknown: boolean } | { type: "callback_playing" }
+  // R2003: what the compositor's final beat said (`stoppedBeatTrigger`). `refused` — its run was refused; `endReason` —
+  // it ENDED the run (I2, PR #967 review), and the session ends with this reason. Both optional on purpose: absent is
+  // every stopped beat before R2003, and the one other producer (a legacy runner's beat, no exit reason).
+  | { type: "callback_stopped"; refused?: true; endReason?: RunnerEndReason }
+  // R2003 / F-007: `restarting` — the provider is restarting this Machine in place (ports.ts RunnerObservation), since
+  // `restartingSince`; `null` — down, but the provider has not recorded that exit yet (no claim). Optional: absent is
+  // every observation before F-007, read as "not restarting" (today's rule) — so absent and null are NOT the same.
+  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null; restarting?: boolean | null; restartingSince?: Date | null }
+  | { type: "stale_beat" } | { type: "deadline" }
   // Capture QR v2 §5.3: the stop's reason. Optional on purpose: the teardown producers (a timeout or a credit refusal
   // tearing a Machine down before `fail`) drop the stop's ending, or keep the session's own reason (M2), so for them the
   // reason is never read; absent reads "stopped" — the reason every session_stop carried before §5.3.
@@ -58,7 +66,8 @@ export type RunnerEffect =
   | { type: "persist_intent" } | { type: "create_machine" }
   | { type: "stop_machine"; signal: "SIGINT"; timeoutSeconds: number } | { type: "force_destroy" };
 
-export type RunnerFailReason = "machine_create_failed" | "machine_boot_timeout" | "machine_exit_nonzero" | "machine_oom" | "machine_crash";
+/** `machine_refused` (R2003): the compositor's refusal — exit RELAY_EXIT_REFUSED observed, or a final beat saying `refused`. */
+export type RunnerFailReason = "machine_create_failed" | "machine_boot_timeout" | "machine_exit_nonzero" | "machine_oom" | "machine_crash" | "machine_refused";
 /** The reasons a runner signal can carry: a stop's (§5.3) or the wall clock's. */
 export type StopEndReason = "stopped" | "operator_stopped" | "auto_stopped" | "phone_lost";
 export type RunnerEndReason = StopEndReason | "max_duration";
@@ -72,6 +81,35 @@ export type SessionSignal =
 
 export interface RunnerStep { next: Runner; effects: RunnerEffect[]; signal: SessionSignal | null }
 
+/** R2002's `RelayHeartbeat.exitReason` (C06's exit reason, snake_case): WHY the compositor sent its one final
+ *  `state: stopped` beat. The domain's own declaration — it imports nothing but ../config — and runner.test.ts pins it
+ *  equal to the schema's enum, so the two cannot drift. */
+export const BEAT_EXIT_REASONS = ["ended", "deadline", "signalled", "session_gone", "refused", "fatal"] as const;
+export type BeatExitReason = (typeof BEAT_EXIT_REASONS)[number];
+
+/** R2003 (controller ruling, 2026-10-15): what a COMPOSED runner's stopped beat asks of the lifecycle, by the reason it
+ *  gave. null = RECORD ONLY: the beat is in its two stores (last_heartbeat, the sample) and the lifecycle hears nothing.
+ *  - none given (a legacy runner) → `callback_stopped`, exactly as before R2003 (lost → destroyed → the ONE retry).
+ *  - `ended` / `deadline` → `callback_stopped` carrying an end reason: the session ENDS (`stopped` / `max_duration`) and
+ *    is never retried (I2, orchestrator decision on the PR #967 review). A deadline retry would boot a Machine past
+ *    RELAY_DEADLINE_AT — the wall clock's own instant, hence max_duration — and an unsolicited `ended` is the
+ *    compositor's to make.
+ *  - `fatal`, `signalled` → record only. Fly restarts a crashed compositor IN PLACE (`on-failure`, RUNNER_INPLACE_RESTARTS)
+ *    and the restarted process beats again on the SAME attempt; if it does not, the composed stale window takes it
+ *    `lost` → force_destroy → destroyed → the ONE retry. A stop here force-destroyed the Machine Fly was restarting and
+ *    spent the retry on a cold start that splits the organiser's YouTube broadcast (F-004 addendum: 15–30 s).
+ *  - `session_gone` → record only: web said 410, so the session is already over and its own path ends the runner.
+ *  - `refused` → `callback_stopped` marked refused: the exit-78 outcome, failed(machine_refused), never a retry. */
+export function stoppedBeatTrigger(exitReason: BeatExitReason | null | undefined): RunnerTrigger | null {
+  switch (exitReason) {
+    case undefined: case null: return { type: "callback_stopped" };
+    case "ended": return { type: "callback_stopped", endReason: "stopped" };
+    case "deadline": return { type: "callback_stopped", endReason: "max_duration" };
+    case "refused": return { type: "callback_stopped", refused: true };
+    case "fatal": case "signalled": case "session_gone": return null;
+  }
+}
+
 export class InvalidRunnerTransition extends Error {
   constructor(readonly from: RunnerState, readonly trigger: RunnerTrigger["type"]) {
     super(`relay runner: ${trigger} is not legal from ${from}`);
@@ -82,8 +120,13 @@ export function machineNameFor(sessionId: string, attempt: number): string {
   return `relay-${sessionId}-r${attempt}`;
 }
 
+/** R2003: the compositor's refusal exit (RELAY_EXIT_REFUSED). Its bootstrap read was refused or did not decode, so a
+ *  replacement would be refused the same way — it never earns the retry. */
+const refusedExit = (exit: ExitInfo | null): boolean => exit?.exitCode === RELAY_EXIT_REFUSED;
+
 export function failReasonFromExit(exit: ExitInfo | null): RunnerFailReason {
   if (exit?.oomKilled) return "machine_oom";
+  if (refusedExit(exit)) return "machine_refused";
   if (exit && exit.exitCode !== null && exit.exitCode !== 0) return "machine_exit_nonzero";
   return "machine_crash";
 }
@@ -107,10 +150,11 @@ const withExit = (r: Runner, t: RunnerTrigger): Runner => (t.type === "observed"
 const retryLeft = (r: Runner): boolean => r.attempt < RUNNER_MAX_ATTEMPTS;
 
 /** Leaving `lost` for `destroyed` — or a `destroyed` runner a stale beat finds still awaiting its retry (C1):
- *  the ONE retry, or the failure the exit explains. */
+ *  the ONE retry, or the failure the exit explains. R2003: a refused exit (78) never spends the retry — Fly's on-failure
+ *  restarted it in place already, each run refused in about a second, and attempt + 1 reads the same session. */
 function afterLostDestroyed(r: Runner): RunnerStep {
   const next: Runner = { ...r, state: "destroyed" };
-  const signal: SessionSignal = retryLeft(r) ? { type: "retry" } : { type: "failed", reason: failReasonFromExit(r.lastExit) };
+  const signal: SessionSignal = retryLeft(r) && !refusedExit(r.lastExit) ? { type: "retry" } : { type: "failed", reason: failReasonFromExit(r.lastExit) };
   return { next, effects: [], signal };
 }
 
@@ -119,6 +163,20 @@ function toStopping(r: Runner, endReason: RunnerEndReason, now: Date): RunnerSte
 }
 
 const toLost = (r: Runner, t: RunnerTrigger): RunnerStep => ({ next: { ...withExit(r, t), state: "lost" }, effects: [FORCE_DESTROY], signal: null });
+/** R2003: a booting/playing runner's final beat said `refused` (stoppedBeatTrigger). The session FAILS now — waiting for an
+ *  observed exit 78 would let the stopped beat's ordinary `lost` path spend the retry first — and the Machine Fly would
+ *  restart into the same refusal is torn down. The session is terminal by the time `lost × destroy_ok` confirms the
+ *  destroy, so C27 drops the retry that cell signals. No exit is written: a beat never writes the exit facts (A5). */
+/** The run was refused (the final beat said so, or an observed exit 78): failed, and the Machine torn down NOW — Fly
+ *  restarts exit 78 like any crash (F-007 result 2), so waiting for it to die would watch it refuse again. */
+const refusedNow = (r: Runner): RunnerStep => ({ next: { ...r, state: "lost" }, effects: [FORCE_DESTROY], signal: { type: "failed", reason: "machine_refused" } });
+/** booting/playing × a stopped beat: refused → fail now; an end reason → the session-ending teardown (`lostTornDown`, the
+ *  F17 shape: destroyed + force_destroy + completed — nothing after a completed session can retry); otherwise today's lost. */
+const stoppedWhileActive: Cell = (r, t) =>
+  t.type !== "callback_stopped" ? toLost(r, t)
+  : t.refused ? refusedNow(r)
+  : t.endReason !== undefined ? lostTornDown(r, t.endReason)
+  : toLost(r, t);
 /** Fix round 3, ruling (a): a `lost` runner's teardown has not been SEEN to land. Re-issue it and stay — `destroyed` means
  *  confirmed gone, and only destroy_ok / observed destroyed confirm it (invariant 1: a retry only after that). */
 const reissueDestroy = (r: Runner): RunnerStep => ({ next: r, effects: [FORCE_DESTROY], signal: null });
@@ -156,13 +214,36 @@ const markedDuringCreate = (r: Runner, now: Date, endReason: RunnerEndReason): R
 const destroyLateCreate: Cell = (r, t) =>
   (t.type === "create_ok" ? { next: { ...r, state: "lost", machineId: t.machineId }, effects: [FORCE_DESTROY], signal: null } : stay(r));
 
+/** F-007: the observation is an in-place restart still inside its bound. A restart with no instant (a provider that gave
+ *  none) cannot be timed here; the composed stale window is its backstop. */
+function restartInFlight(t: Extract<RunnerTrigger, { type: "observed" }>, now: Date): boolean {
+  if (t.restarting !== true) return false;
+  return !t.restartingSince || now.getTime() - t.restartingSince.getTime() <= RUNNER_RESTART_STUCK_SECONDS * 1000;
+}
+
 function observedFrom(active: "booting" | "playing"): Cell {
-  return (r, t) => {
+  return (r, t, now) => {
     if (t.type !== "observed") throw new InvalidRunnerTransition(active, t.type);
     switch (t.state) {
-      case "stopped": case "failed": return toLost(r, t);
-      case "destroyed": return afterLostDestroyed(withExit(r, t));   // gone without our stop: retry or fail
-      default: return stay(withExit(r, t));                           // running / pending / stopping / destroying / unknown: no claim
+      case "stopped": case "failed":
+        // F-007 result 2: Fly restarts exit 78 like any crash, so a refusal is never waited out — the session fails and
+        // the Machine is torn down NOW, restarting or not (the refused beat's own path, with the observed exit kept).
+        if (refusedExit(t.exit ?? null)) return refusedNow(withExit(r, t));
+        // F-007 race: read STOPPED before the provider recorded the exit — restart or loss is not knowable yet. No claim:
+        // the stale window (composed, or the boot allowance) decides if no beat and no recorded exit follow. Never for
+        // `failed`: a launch that failed has no exit to wait for (pass-3 review), so it is lost below, as it always was.
+        if (t.restarting === null && t.state === "stopped") return stay(r);
+        // F-007 result 1: mid-restart the Machine reads `stopped` for ~110 ms. Only the restarting flag tells that from
+        // a loss; past RUNNER_RESTART_STUCK_SECONDS it is a loss after all.
+        return restartInFlight(t, now) ? stay(withExit(r, t)) : toLost(r, t);
+      // gone without our stop: retry or fail. A restarting flag does not exempt it — a destroyed Machine is not coming back.
+      case "destroyed": return afterLostDestroyed(withExit(r, t));
+      // `starting` mid-restart (~1.3 s): still the same Machine — unless the restart is stuck past its bound, or it is
+      // restarting a REFUSAL (the stopped instant fell between two polls; a refusal is never waited out).
+      case "pending":
+        if (refusedExit(t.exit ?? null)) return refusedNow(withExit(r, t));
+        return t.restarting === true && !restartInFlight(t, now) ? toLost(r, t) : stay(withExit(r, t));
+      default: return stay(withExit(r, t));                           // running / stopping / destroying / unknown: no claim
     }
   };
 }
@@ -233,7 +314,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
   booting: {
     create_started: null, create_ok: null, create_failed: null,
     callback_playing: (r) => ({ next: { ...r, state: "playing" }, effects: [], signal: { type: "went_live" } }),
-    callback_stopped: (r, t) => toLost(r, t),
+    callback_stopped: stoppedWhileActive,
     observed: observedFrom("booting"),
     stale_beat: (r, t) => toLost(r, t),                            // only reachable for a replacement booting in a LIVE session (expiry.ts)
     deadline: (r, _t, now) => toStopping(r, "max_duration", now),
@@ -245,7 +326,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     // F16: idempotent, and the RECOVERY for a beat the session had to ignore (one that arrived before
     // `provisioned`). went_live is a no-op on a live session and takes a warming one live, once.
     callback_playing: (r) => ({ next: r, effects: [], signal: { type: "went_live" } }),
-    callback_stopped: (r, t) => toLost(r, t),
+    callback_stopped: stoppedWhileActive,
     observed: observedFrom("playing"),
     stale_beat: (r, t) => toLost(r, t),
     deadline: (r, _t, now) => toStopping(r, "max_duration", now),

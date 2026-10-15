@@ -1188,6 +1188,9 @@ describe("relay sweep — pure parts", () => {
     no_inbound_timeout: "warmingTimedOut", machine_boot_timeout: "warmingTimedOut",
     provision_timeout: "provisionTimedOut", admission_timeout: "admissionTimedOut",
     machine_create_failed: "crashed", machine_exit_nonzero: "crashed", machine_oom: "crashed", machine_crash: "crashed",
+    // R2003: the backstop's reconcile produces it the way it produces a crash — an observed Machine exit (78) — so it is
+    // counted with the Machines that died, not with the outcomes the reconcile never reaches.
+    machine_refused: "crashed",
     // Neither is an outcome the backstop's reconcile produces (the poll and the go-live consume do): a visit that sees one
     // raced another request, and it is counted apart rather than folded into a timeout or a crash.
     target_rejected: "otherFailures", no_credits: "otherFailures",

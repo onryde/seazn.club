@@ -79,16 +79,17 @@ describe("relay wire enums equal their declarations", () => {
     expect(sorted(S.StreamSessionState.options)).toEqual(sorted(domain));
   });
 
-  it("StreamFailReason is exactly the domain's FailReason — eleven, and never storage_exhausted (E5: a refusal with no row)", () => {
+  it("StreamFailReason is exactly the domain's FailReason — twelve (R2003: machine_refused), and never storage_exhausted (E5: a refusal with no row)", () => {
     // Keyed by the DOMAIN type: tsc refuses this literal if FailReason gains or loses a member, so the runtime
     // comparison below always compares the wire enum against the domain's current declaration.
     const domain: Record<FailReason, true> = {
       no_inbound_timeout: true, provision_timeout: true, admission_timeout: true, target_rejected: true, no_credits: true,
       machine_create_failed: true, machine_boot_timeout: true, machine_exit_nonzero: true, machine_oom: true, machine_crash: true,
+      machine_refused: true,   // R2003: the compositor's refusal (exit 78, or a final beat saying `refused`)
       relay_disabled: true,
     };
     expect(sorted(S.StreamFailReason.options)).toEqual(sorted(Object.keys(domain)));
-    expect(S.StreamFailReason.options).toHaveLength(11);
+    expect(S.StreamFailReason.options).toHaveLength(12);
     expect(S.StreamFailReason.options as readonly string[]).not.toContain("storage_exhausted");
     // R2001: composed_unavailable is a create-time refusal with no row, exactly as storage_exhausted is — never a fail reason.
     expect(S.StreamFailReason.options as readonly string[]).not.toContain("composed_unavailable");

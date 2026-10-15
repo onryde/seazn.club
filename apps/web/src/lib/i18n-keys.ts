@@ -6455,6 +6455,7 @@ export type DictionaryKey =
   | "stream.fail.machine_create_failed"
   | "stream.fail.machine_exit_nonzero"
   | "stream.fail.machine_oom"
+  | "stream.fail.machine_refused"
   | "stream.fail.no_credits"
   | "stream.fail.no_inbound_timeout"
   | "stream.fail.provision_timeout"

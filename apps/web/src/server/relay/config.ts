@@ -134,7 +134,12 @@ export const MAX_ANCHOR_DRIFT_SECONDS =
  *  55 s operation: 30 + 55 + 55 + 55 = 195 s < 300 s. Unchanged at 300, and runner-fly.test.ts asserts that
  *  composed teardown term from `FLY_CLIENT_DEFAULTS` so it moves when a client constant does. */
 export const ENDING_TIMEOUT_SECONDS = 300;
-/** §6.4: a live COMPOSED session whose heartbeat is older than this gets ONE retry. */
+/** §6.4 (R1's stale window), and since R2003 (owner ruling 2026-10-15, option A) ONLY the BOOT ALLOWANCE: a live COMPOSED
+ *  session whose runner has NOT yet played in this attempt — `creating` or `booting`, i.e. the replacement a retry just
+ *  asked for — is `lost` when its beat window is older than this. A cold start is 25.07 s on a fresh host, 14.38 s of it
+ *  the image pull (compositor `_FINDINGS.md` platform notes), and a replacement sends its FIRST beat only after it has
+ *  booted and read its session, so the played-runner window below would kill every retry mid-boot. A runner that HAS
+ *  played is timed by STALE_HEARTBEAT_SECONDS_COMPOSED. A passthrough session has no Machine and owes no beat at all. */
 export const STALE_HEARTBEAT_SECONDS = 90;
 /** §7.2 + R0-memo.md:279: SIGINT → ffmpeg exit 0 in 114 ms; the supervisor's
  *  flush budget is ≤ 10 s. Sent as the Fly stop `timeout` (seconds before SIGKILL). */
@@ -143,11 +148,32 @@ export const RUNNER_STOP_GRACE_SECONDS = 10;
 export const RUNNER_OBSERVE_SLACK_SECONDS = 20;
 /** Design §6.4: ONE retry — two attempts, ever. Invariant 3's bound derives from this. */
 export const RUNNER_MAX_ATTEMPTS = 2;
+/** Compositor ADR 0004 (owner, 2026-10-14) and ADR 0007 host-contract item 5: the host restarts a crashed compositor IN
+ *  PLACE at most this many times (Fly `restart: { policy: "on-failure", max_retries }`, runner-fly.ts). An in-place
+ *  restart is the SAME attempt — same Machine, same name — so it never counts against RUNNER_MAX_ATTEMPTS. Fly's own
+ *  docs (re-pinned 2026-10-15): `max_retries` defaults to 10 when unset, and the count runs "within a 5-minute window". */
+export const RUNNER_INPLACE_RESTARTS = 2;
+/** F-007 (live probe, compositor `_FINDINGS.md`, 2026-10-15): an in-place restart goes exit → `started` in 1.40–1.51 s
+ *  (stopped ~110 ms, then starting ~1.3 s). A Machine still restarting this long after its restarting exit is not coming
+ *  back: the domain reads it as lost (domain/runner.ts `observedFrom`). Coordinator ruling, 2026-10-15: 10 s. */
+export const RUNNER_RESTART_STUCK_SECONDS = 10;
 /** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. */
 export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
 /** Compositor spec §5.3; served as `heartbeatIntervalMs` (R2004); R2003's composed stale rule is 3× this. Defined
  *  HERE only (R2002): R2003 and R2004 import it. */
 export const RELAY_HEARTBEAT_INTERVAL_MS = 5_000;
+/** Compositor spec 2026-10-14 §8 item 6: a COMPOSED runner that has PLAYED is `lost` after "3 missed beats at the 5 s
+ *  cadence of `heartbeatIntervalMs`" — defined AS that product, so the cadence the compositor is served and the rule that
+ *  times it cannot drift apart. It replaces R1's 90 s for a played runner (and for the idle lost/destroyed states that
+ *  re-fire on the same window); STALE_HEARTBEAT_SECONDS is now the boot allowance alone (owner ruling 2026-10-15). It is
+ *  the LOWER edge of the YouTube split threshold, 15–30 s of output gap (compositor `_FINDINGS.md` F-004 addendum): the
+ *  in-place restart is what keeps a crash inside it; this window only decides when web stops waiting for one. */
+export const STALE_HEARTBEAT_SECONDS_COMPOSED = (3 * RELAY_HEARTBEAT_INTERVAL_MS) / 1000;
+/** Compositor plan Global Constraints "Exit codes" (`78`: unauthorized or not found), whose final beat says
+ *  `exitReason: "refused"`: the compositor's REFUSAL exit — its bootstrap read was refused or did not decode. A
+ *  replacement would be refused the same way, so a runner that exits with it never spends the ONE retry
+ *  (domain/runner.ts `afterLostDestroyed`). */
+export const RELAY_EXIT_REFUSED = 78;
 /** Compositor ADR 0006 / `_FINDINGS.md` F-002 (C00 owner session, 2026-10-15): the camera→compositor delay measured
  *  IN-CHAIN (the overlay's clock against the camera's, 3083 and 3105 ms). The default `overlayDelayMs` a composed
  *  session serves when its fixture sets no override (R2004 writes `settings ?? this` at create; the override is

@@ -39,6 +39,7 @@ const FAIL_TO_WIRE: Record<FailReason, WireEndReason> = {
   machine_exit_nonzero: "failed",
   machine_oom: "failed",
   machine_crash: "failed",
+  machine_refused: "failed",
 };
 /** R11 (controller, 2026-10-01): session.ts's completion can store `endReason: null` (no stop reason was ever chosen,
  *  e.g. a runner that completed by itself). Neither a stop nor a timeout, so G0-f's `failed`. */
