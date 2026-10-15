@@ -7,7 +7,9 @@
 // method sets the usecases call.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeIngest, FakeRunner } from "../fakes";
-import { RelayDriversDisabled, disabledRelayDrivers, relayDrivers, relayUnavailable, setRelayDriversForTest } from "../drivers";
+import { FlyClient } from "../fly-client";
+import { FlyRunner } from "../runner-fly";
+import { RelayDriversDisabled, composedUnavailable, disabledRelayDrivers, relayDrivers, relayUnavailable, setRelayDriversForTest } from "../drivers";
 
 // m-2: the live pair's report reaches Sentry (last describe); the provider-call recorder's DB write is stubbed out.
 const sentry = vi.hoisted(() => ({ captureError: vi.fn<(err: unknown, ctx?: { route?: string; extra?: Record<string, unknown> }) => void>() }));
@@ -169,5 +171,122 @@ describe("m-2: the live drivers wire the Cloudflare adapter's unseen-word report
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// R2001 (the composed hazard): a composed start used to be admitted on a deployment with no compositor image, write its
+// row and open its Cloudflare input, and only THEN fail at FlyRunner's constructor. `composedUnavailable()` is the ONE
+// answer to "can this deployment run a composed session?" — the usecase refuses on it before any write, and the organiser
+// UI (R2006) reads the same predicate. Unavailable = the relay is unavailable OR RELAY_IMAGE is unset; only up + set is
+// available. Each side of the OR is witnessed ALONE (up + unset, down + set), so neither half can stand in for the other.
+describe("R2001: composedUnavailable() — the relay up/down × RELAY_IMAGE set/unset table", () => {
+  const IMAGE = "registry.fly.io/seazn-relay:r2001";
+  const CF = { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok" };
+  // "up"/"down" are built from the env relayUnavailable() reads (no override), in both a fake and a live shape; the
+  // PREMISE line asserts each relay cell is what its label says before the table is read.
+  const RELAY: { name: string; down: boolean; env: Record<string, string> }[] = [
+    { name: "up (fake, outside production)", down: false, env: { NODE_ENV: "test", RELAY_DRIVERS: "" } },
+    { name: "up (live, both Cloudflare secrets)", down: false, env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod", ...CF } },
+    { name: "down (disabled: production, RELAY_DRIVERS unset)", down: true, env: { NODE_ENV: "production", RELAY_DRIVERS: "" } },
+    { name: "down (live, no Cloudflare secret)", down: true, env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod", CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "" } },
+  ];
+  // Unset means unset OR empty — the same truthiness FlyRunner's constructor refuses on (derived below, not assumed).
+  const IMAGES: { name: string; value: string | undefined; set: boolean }[] = [
+    { name: "set", value: IMAGE, set: true },
+    { name: "unset (absent)", value: undefined, set: false },
+    { name: "unset (empty)", value: "", set: false },
+  ];
+
+  it("only relay up + RELAY_IMAGE set is available; every other cell is unavailable — and the predicate never throws", () => {
+    let checked = 0;
+    const seen = new Set<string>();
+    for (const relay of RELAY) {
+      for (const image of IMAGES) {
+        vi.unstubAllEnvs();
+        for (const [k, v] of Object.entries(relay.env)) vi.stubEnv(k, v);
+        vi.stubEnv("RELAY_IMAGE", image.value);
+        setRelayDriversForTest(null);
+        const label = `relay ${relay.name} × RELAY_IMAGE ${image.name}`;
+        expect(relayUnavailable(), `PREMISE ${label}`).toBe(relay.down);
+        expect(() => composedUnavailable(), label).not.toThrow();
+        const want = relay.down || !image.set;   // the table, as R2001 states it: only up + set is available
+        expect(composedUnavailable(), label).toBe(want);
+        seen.add(`${relay.down ? "down" : "up"}+${image.set ? "set" : "unset"}`);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(RELAY.length * IMAGES.length);
+    expect([...seen].sort(), "all four cells of the 2×2 are reached").toEqual(["down+set", "down+unset", "up+set", "up+unset"]);
+  });
+
+  it("each side of the OR alone: relay UP with no image is unavailable (the image half); relay DOWN with an image is unavailable (the relay half); up + set is the one available cell", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("RELAY_DRIVERS", "");
+    vi.stubEnv("RELAY_IMAGE", "");
+    setRelayDriversForTest(null);
+    expect(relayUnavailable(), "PREMISE: the relay is up").toBe(false);
+    expect(composedUnavailable(), "up + unset: the image half alone").toBe(true);
+    vi.stubEnv("RELAY_IMAGE", IMAGE);
+    expect(composedUnavailable(), "up + set: the positive pair").toBe(false);
+    vi.stubEnv("NODE_ENV", "production");
+    setRelayDriversForTest(null);
+    expect(relayUnavailable(), "PREMISE: the relay is down").toBe(true);
+    expect(composedUnavailable(), "down + set: the relay half alone").toBe(true);
+  });
+
+  it("the test override answers the relay half (as relayUnavailable does) but never excuses a missing image", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("RELAY_DRIVERS", "");
+    const cells: { override: "fake" | "disabled"; image: string; want: boolean }[] = [
+      { override: "fake", image: IMAGE, want: false },
+      { override: "fake", image: "", want: true },
+      { override: "disabled", image: IMAGE, want: true },
+      { override: "disabled", image: "", want: true },
+    ];
+    let checked = 0;
+    for (const c of cells) {
+      vi.stubEnv("RELAY_IMAGE", c.image);
+      setRelayDriversForTest(c.override === "fake" ? { ingest: new FakeIngest(), runner: new FakeRunner() } : disabledRelayDrivers());
+      expect(composedUnavailable(), JSON.stringify(c)).toBe(c.want);
+      checked++;
+    }
+    expect(checked).toBe(cells.length);
+  });
+
+  it("the image half agrees with the REAL consumer: with the relay up, unavailable EXACTLY when FlyRunner's constructor refuses for want of RELAY_IMAGE", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("RELAY_DRIVERS", "");
+    // An injected client: the constructor's ONLY env read is then RELAY_IMAGE, so its refusal is the image's alone.
+    const client = new FlyClient({ token: "fly-tok", app: "seazn-relay-r2001" });
+    let checked = 0;
+    let refused = 0;
+    for (const image of IMAGES) {
+      vi.stubEnv("RELAY_IMAGE", image.value);
+      setRelayDriversForTest(null);
+      let throws = false;
+      try {
+        new FlyRunner({ client });
+      } catch (e) {
+        expect(String(e), image.name).toMatch(/RELAY_IMAGE is not set/);
+        throws = true;
+      }
+      expect(composedUnavailable(), image.name).toBe(throws);
+      if (throws) refused++;
+      checked++;
+    }
+    expect(checked).toBe(IMAGES.length);
+    expect(refused, "the two unset shapes are both refused by the constructor").toBe(2);
+  });
+
+  it("answers without constructing anything: a live deployment short FLY_API_TOKEN (which the runner's constructor refuses) does not make the predicate throw", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("ENV_NAME", "prod");
+    for (const [k, v] of Object.entries(CF)) vi.stubEnv(k, v);
+    vi.stubEnv("RELAY_IMAGE", IMAGE);
+    vi.stubEnv("FLY_API_TOKEN", "");
+    setRelayDriversForTest(null);
+    expect(() => new FlyRunner(), "PREMISE: constructing the live runner here throws").toThrow(/FLY_API_TOKEN/);
+    expect(() => composedUnavailable()).not.toThrow();
   });
 });

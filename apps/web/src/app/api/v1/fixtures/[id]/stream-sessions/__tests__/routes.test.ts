@@ -72,6 +72,26 @@ afterAll(() => {
   else process.env.RELAY_KEK = savedKek;
 });
 
+// R2001: a composed start is refused 503 composed_unavailable while RELAY_IMAGE is unset (drivers.ts `composedUnavailable`).
+// This file's composed cases run on the fake runner, which needs no image, so the file names one of its own — put back
+// afterwards the KEK's way. The R2001 cases unset it for themselves.
+const TEST_IMAGE = "registry.fly.io/seazn-relay:routes-test";
+const savedImage = process.env.RELAY_IMAGE;
+beforeAll(() => { process.env.RELAY_IMAGE = TEST_IMAGE; });
+afterAll(() => {
+  if (savedImage === undefined) delete process.env.RELAY_IMAGE;
+  else process.env.RELAY_IMAGE = savedImage;
+});
+/** Runs `body` with RELAY_IMAGE unset, then puts this file's image back — whatever `body` threw. */
+async function withoutImage<T>(body: () => Promise<T>): Promise<T> {
+  delete process.env.RELAY_IMAGE;
+  try {
+    return await body();
+  } finally {
+    process.env.RELAY_IMAGE = TEST_IMAGE;
+  }
+}
+
 const BASE = "https://test.local/api/v1";
 /** A pool no plausible number of foreign reservations can exhaust — the pool is ONE account across the whole test
  *  database (Task 10 deviation 4); only the storage test sets its own. */
@@ -233,6 +253,66 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     // (stream-sessions.test.ts's C3 + B).
     const after = await current(o.fixtureId);
     expect(after.body.data).toMatchObject({ id: made.body.data!.sessionId, state: "completed", endReason: "stopped", failReason: null });
+  });
+
+  // R2001 (the composed hazard): a composed Go live on a deployment with no compositor image used to be ADMITTED — the
+  // session row written, the Cloudflare input opened, provisioning begun — and only then failed at the runner's
+  // constructor. It is refused at the start path's entry now, before any read for the plan and before any write.
+  it("R2001 over HTTP: composed with no RELAY_IMAGE → 503 composed_unavailable, documented on the route, and NOTHING is made — no session row, no pre-pick, no Cloudflare input (nor even the storage read), no runner create; a second ask answers the same; with the image set the same POST → 201 and every count moves", async () => {
+    const o = await organiser();
+    const createInput = vi.spyOn(o.ingest, "createLiveInput");
+    const storageRead = vi.spyOn(o.ingest, "storageUsage");
+    const refusedTwice = await withoutImage(async () => {
+      const answers = [];
+      for (const call of ["first", "second"]) {
+        const r = await create(o.fixtureId, { mode: "composed", targetId: o.target.id });
+        expect(r.status, call).toBe(503);
+        expect(r.body.ok, call).toBe(false);
+        expect(r.body.error, call).toMatchObject({ code: "composed_unavailable" });
+        expect(Object.keys(r.body.error!).sort(), `${call}: no extra rides this refusal`).toEqual(["code", "message"]);
+        expect(await sessionsOn(o.fixtureId), `${call}: no session row`).toBe(0);
+        expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${o.fixtureId}`, `${call}: no destination pre-pick`).toHaveLength(0);
+        expect(createInput, `${call}: no Cloudflare input`).toHaveBeenCalledTimes(0);
+        expect(storageRead, `${call}: not even the storage read`).toHaveBeenCalledTimes(0);
+        expect(o.runner.created, `${call}: no runner create`).toHaveLength(0);
+        answers.push(r.body.error!.code);
+      }
+      return answers;
+    });
+    expect(refusedTwice).toEqual(["composed_unavailable", "composed_unavailable"]);
+    const doc = buildOpenApiDocument() as { paths: Record<string, { post?: { summary?: string } }> };
+    expect(doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.summary).toContain("503 composed_unavailable");
+    // The positive pair: the same organiser, fixture and body with the image set is admitted — and every count the refusal
+    // held at zero moves, so none of the zeros above is vacuous.
+    const made = await create(o.fixtureId, { mode: "composed", targetId: o.target.id });
+    expect(made.status).toBe(201);
+    expect(await sessionsOn(o.fixtureId)).toBe(1);
+    expect(createInput).toHaveBeenCalledTimes(1);
+    expect(storageRead.mock.calls.length).toBeGreaterThan(0);
+    expect(o.runner.created).toHaveLength(1);
+    // Complete it, as the composed case above does: an `ending` row left behind is a storage reservation for every pool test.
+    expect((await stop(o.fixtureId, made.body.data!.sessionId)).status).toBe(200);
+    expect((await current(o.fixtureId)).body.data).toMatchObject({ state: "completed" });
+  });
+
+  it("R2001 over HTTP: passthrough is untouched by a missing RELAY_IMAGE — the same deployment's passthrough Go live → 201, with no runner call", async () => {
+    const o = await organiser();
+    const made = await withoutImage(() => create(o.fixtureId, { mode: "passthrough", targetId: o.target.id }));
+    expect(made.status).toBe(201);
+    expect(await sessionsOn(o.fixtureId)).toBe(1);
+    expect(o.runner.created).toHaveLength(0);
+    expect((await stop(o.fixtureId, made.body.data!.sessionId)).status).toBe(200);
+  });
+
+  it("R2001 ORDER over HTTP: with no image, composed_unavailable outranks no_credits; with the image, the same broke organiser's composed POST is 402 no_credits — the existing refusal still answers", async () => {
+    const o = await organiser({ credits: 0 });
+    const unavailable = await withoutImage(() => create(o.fixtureId, { mode: "composed", targetId: o.target.id }));
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body.error).toMatchObject({ code: "composed_unavailable" });
+    const broke = await create(o.fixtureId, { mode: "composed", targetId: o.target.id });
+    expect(broke.status).toBe(402);
+    expect(broke.body.error).toMatchObject({ code: "no_credits" });
+    expect(await sessionsOn(o.fixtureId)).toBe(0);
   });
 
   // Capture QR v2 §6.13 (W4, T11): the v1 QR and its `?reveal` flag are removed. A tab still sending it (an old bundle) gets

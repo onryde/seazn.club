@@ -54,6 +54,16 @@ afterAll(() => {
   else process.env.RELAY_KEK = savedKek;
 });
 
+// R2001: a composed start is refused 503 composed_unavailable while RELAY_IMAGE is unset (drivers.ts `composedUnavailable`).
+// This file's composed sessions run on the fake runner, which needs no image, so the file names one of its own — put
+// back afterwards the KEK's way.
+const savedImage = process.env.RELAY_IMAGE;
+beforeAll(() => { process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:internal-routes-test"; });
+afterAll(() => {
+  if (savedImage === undefined) delete process.env.RELAY_IMAGE;
+  else process.env.RELAY_IMAGE = savedImage;
+});
+
 
 /** The exit an OOM-killed Machine reports (Fly's event shape). Its fail reason is DERIVED from the domain's table. */
 const OOM_EXIT: ExitInfo = { exitCode: 137, oomKilled: true, requestedStop: false };

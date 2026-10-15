@@ -8,7 +8,7 @@ import {
 import { evaluate, type Expiry } from "../expiry";
 import {
   ACTIVE_STATES, InvalidTransition, TERMINAL_STATES, admit, decide, eventRowsOf, isActive, isTerminal,
-  type Command, type Effect, type PhoneStanding, type Session, type SessionState, type StopReason,
+  admitMode, type Command, type Effect, type Mode, type PhoneStanding, type Session, type SessionState, type StopReason,
 } from "../session";
 import { DB_END_REASONS } from "../end-reason";
 import {
@@ -22,13 +22,15 @@ const S = (over: Partial<Session> = {}): Session => ({
   heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null,
   startCause: "organiser", warmingAt: null, ...over,
 });
-const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding };
+const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding, mode: "passthrough" as Mode, composedUnavailable: false };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
 // per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once. Order amended by owner ruling
 // 2026-09-29 (F-A5): `active_session` right after the plan gates — a match already streaming is the truest answer to a
-// second start, whatever the credits, the destination or the storage say.
+// second start, whatever the credits, the destination or the storage say. R2001: `composed_unavailable` is FIRST — a
+// composed start on a deployment with no compositor runner is told so before anything else is weighed.
 const REFUSAL_LADDER = [
+  [{ mode: "composed", composedUnavailable: true }, "composed_unavailable"],
   [{ overlay: false, relay: false }, "plan_lacks_overlay"],
   [{ overlay: false, relay: true }, "overlay_required"],       // r5: relay without overlay is the implication check
   [{ relay: false }, "plan_lacks_relay"],
@@ -69,9 +71,10 @@ describe("admit — the §6.3 gates, in order", () => {
         expect(admit({ ...OK, ...a, ...b }), `${earlier} beside ${later}`).toMatchObject({ ok: false, refusal: earlier });
       }
     }
-    // C(9,2) = 36, minus overlay_required beside plan_lacks_overlay and beside plan_lacks_relay, minus the two phone rungs
-    // beside each other (one field: a phone is unpaired or silent, never both).
-    expect(pairs).toBe(33);
+    // C(10,2) = 45, minus overlay_required beside plan_lacks_overlay and beside plan_lacks_relay, minus the two phone rungs
+    // beside each other (one field: a phone is unpaired or silent, never both). composed_unavailable shares no field with
+    // any other gate, so all nine of its pairs count.
+    expect(pairs).toBe(42);
   });
   it("F-A5 (owner 2026-09-29): a second start on a match already streaming is told so even when STORAGE is exhausted — active_session, not storage_exhausted", () => {
     expect(admit({ ...OK, activeSessionId: "s0", headroomMinutes: 0 })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
@@ -128,6 +131,84 @@ describe("admit — the §6.3 gates, in order", () => {
       expect(admit({ ...OK, ...over, balance: 0, restartWithinReuseWindow: true }), refusal).toMatchObject({ ok: false, refusal });
     }
     expect(others).toBe(REFUSAL_LADDER.length - 1);
+  });
+});
+
+// R2001 (the composed hazard): a composed start on a deployment whose compositor runner cannot exist — the relay
+// unavailable, or no RELAY_IMAGE (drivers.ts `composedUnavailable()`) — used to be admitted, write its row, open its
+// Cloudflare input and only THEN fail at the runner's constructor. It is now a refusal, FIRST on the ladder. The
+// availability is the usecase's to read (an env fact); the domain is handed the boolean and stays pure.
+describe("admit — R2001: composed_unavailable, first on the ladder", () => {
+  const GATES_AFTER = REFUSAL_LADDER.filter(([, refusal]) => refusal !== "composed_unavailable");
+
+  it("composed + unavailable → composed_unavailable (everything else satisfied)", () => {
+    expect(admit({ ...OK, mode: "composed", composedUnavailable: true })).toEqual({ ok: false, refusal: "composed_unavailable" });
+  });
+
+  it("FIRST in order: composed + unavailable with every other refusal true at once → still composed_unavailable", () => {
+    // Every other gate's trip fields at once. Two pairs contradict on a shared field (overlay_required wants relay true,
+    // the plan gates false; unpaired and silent are one field), so the later row's value lands — the count below says
+    // how many gates the merged input really trips, and the premise proves it is refused WITHOUT the composed fields.
+    const everyOther = Object.assign({}, ...GATES_AFTER.map(([over]) => over)) as Partial<typeof OK>;
+    const all = { ...OK, ...everyOther };
+    let tripped = 0;
+    for (const [over] of GATES_AFTER) {
+      if (Object.entries(over).every(([k, v]) => (all as Record<string, unknown>)[k] === v)) tripped++;
+    }
+    expect(tripped, "anti-vacuity: the merged input trips every gate but the two that share a field with another").toBe(GATES_AFTER.length - 2);
+    const without = admit(all);
+    expect(without.ok, "PREMISE: the merged input is refused on its own").toBe(false);
+    expect(without).not.toMatchObject({ refusal: "composed_unavailable" });
+    expect(admit({ ...all, mode: "composed", composedUnavailable: true })).toEqual({ ok: false, refusal: "composed_unavailable" });
+  });
+
+  it("composed + AVAILABLE → the existing ladder answers exactly as for passthrough, gate by gate; and everything satisfied → ok", () => {
+    expect(admit({ ...OK, mode: "composed", composedUnavailable: false })).toEqual({ ok: true });
+    let checked = 0;
+    for (const [over, refusal] of GATES_AFTER) {
+      const composed = admit({ ...OK, ...over, mode: "composed", composedUnavailable: false });
+      expect(composed, refusal).toMatchObject({ ok: false, refusal });
+      expect(composed, `${refusal}: composed answers as passthrough does`).toEqual(admit({ ...OK, ...over, mode: "passthrough", composedUnavailable: false }));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every gate after the new one").toBe(REFUSAL_LADDER.length - 1);
+    // An existing ORDER pair, composed and available: no credits AND no headroom → no_credits, as before.
+    expect(admit({ ...OK, mode: "composed", composedUnavailable: false, balance: 0, headroomMinutes: 0 })).toMatchObject({ refusal: "no_credits" });
+  });
+
+  it("passthrough + unavailable → never composed_unavailable: admitted when nothing else refuses, and every other gate still answers", () => {
+    // The differential: the same unavailable flag that refuses a composed start does not touch a passthrough one.
+    expect(admit({ ...OK, mode: "passthrough", composedUnavailable: true })).toEqual({ ok: true });
+    let checked = 0;
+    for (const [over, refusal] of GATES_AFTER) {
+      expect(admit({ ...OK, ...over, mode: "passthrough", composedUnavailable: true }), refusal).toMatchObject({ ok: false, refusal });
+      checked++;
+    }
+    expect(checked).toBe(REFUSAL_LADDER.length - 1);
+  });
+
+  it("the free-restart waiver never waives it; a second ask answers the same (admit is pure)", () => {
+    const i = { ...OK, mode: "composed" as Mode, composedUnavailable: true, balance: 0, restartWithinReuseWindow: true };
+    expect(admit(i)).toEqual({ ok: false, refusal: "composed_unavailable" });
+    expect(admit(i), "the second call").toEqual({ ok: false, refusal: "composed_unavailable" });
+  });
+
+  it("admitMode — the gate alone, which the usecase asks at startBroadcast's entry: the whole mode × availability table, only composed + unavailable refuses, and admit agrees on every cell", () => {
+    const cells: { mode: Mode; composedUnavailable: boolean; refused: boolean }[] = [
+      { mode: "passthrough", composedUnavailable: false, refused: false },
+      { mode: "passthrough", composedUnavailable: true, refused: false },
+      { mode: "composed", composedUnavailable: false, refused: false },
+      { mode: "composed", composedUnavailable: true, refused: true },
+    ];
+    let checked = 0;
+    for (const c of cells) {
+      const label = JSON.stringify(c);
+      const want = c.refused ? { ok: false, refusal: "composed_unavailable" } : { ok: true };
+      expect(admitMode(c), label).toEqual(want);
+      expect(admit({ ...OK, ...c }), `${label}: admit agrees`).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
 

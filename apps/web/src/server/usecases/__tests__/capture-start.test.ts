@@ -123,6 +123,13 @@ describe("phoneStartRefusal — §6.7.2's table, every internal refusal (pure)",
     expect(checked).toBe(2);
   });
 
+  it("R2001, an assumption made a guard: composed_unavailable cannot reach a phone start (it passes no mode — passthrough) — refused by name, never mapped to an answer the phone would act on", () => {
+    const err = new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable");
+    expect(() => phoneStartRefusal(err)).toThrow(/answered composed_unavailable to a phone start/);
+    // The positive pair: the ingest's own 503 on the same status IS mapped — the guard is on the code, not the status.
+    expect(phoneStartRefusal(new HttpError(503, "x", "ingest_unavailable"))).toMatchObject({ status: 503, code: "unavailable" });
+  });
+
   it("anything else is NOT a phone refusal (null: the caller rethrows it, a logged 500)", () => {
     let checked = 0;
     for (const err of [new Error("boom"), new HttpError(500, "x"), new HttpError(409, "x", "something_new"), new HttpError(404, "fixture not found"), "a string"]) {

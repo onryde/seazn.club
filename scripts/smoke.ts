@@ -19421,7 +19421,7 @@ async function captureV2Suite(): Promise<void> {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 25;
+  const EXPECTED_STEPS = 26;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -19551,6 +19551,16 @@ async function captureV2Suite(): Promise<void> {
       step(
         `a paired phone gone silent → Go live 409 phone_not_responding, no session row; its next beat → 200 (pairings moved ${moved.count}, Go live ${silent.status} ${silent.json.error?.code ?? ""}, rows ${rows}, beat ${back.status})`,
         moved.count === 1 && silent.status === 409 && silent.json.error?.code === "phone_not_responding" && rows === 0 && back.status === 200,
+      );
+      // 2c. R2001: a COMPOSED Go live on a deployment with no compositor image is 503 composed_unavailable, refused before
+      // anything is written — no session row. A smoke server sets no RELAY_IMAGE (CI's smoke job, ci-local.sh and
+      // seazn-env alike); a smoke environment that starts naming one owes this step its positive answer instead. The phone
+      // is paired and answering again, so the passthrough Go live in step 3 is what admits.
+      const composed = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "composed", targetId });
+      const [{ n: composedRows }] = await quiet<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fx.fixtureId}`;
+      step(
+        `a composed Go live with no compositor image → 503 composed_unavailable, no session row (got ${composed.status} ${composed.json.error?.code ?? ""}, rows ${composedRows})`,
+        composed.status === 503 && composed.json.error?.code === "composed_unavailable" && composedRows === 0,
       );
     } finally {
       await quiet.end();

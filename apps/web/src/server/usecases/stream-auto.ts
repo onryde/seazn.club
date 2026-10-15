@@ -46,6 +46,10 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
     case "phone_not_paired":
     case "phone_not_responding":
       throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, which passes phone: "present"`);
+    // R2001, the same kind of guard: an automatic start passes no mode, so it is passthrough and the composed gate cannot
+    // answer it.
+    case "composed_unavailable":
+      throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, which passes no mode (passthrough)`);
   }
   // admit's target_not_found (the destination vanished between the read and the row lock) has no code.
   if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return "no_destination";

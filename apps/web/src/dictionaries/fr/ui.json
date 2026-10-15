@@ -5615,6 +5615,7 @@
   "stream.error.active_session": "Une diffusion est déjà en cours pour ce match.",
   "stream.error.storage_exhausted": "Le stockage des enregistrements est plein. Réessayez plus tard.",
   "stream.error.ingest_unavailable": "Le service de diffusion est indisponible. Réessayez dans une minute.",
+  "stream.error.composed_unavailable": "La diffusion avec la superposition du score n'est pas encore disponible. Passez en direct avec la caméra seule.",
   "stream.error.unknown": "Le démarrage a échoué. Réessayez.",
   "stream.error.stop": "La diffusion ne s'est pas arrêtée. Vérifiez votre connexion et touchez à nouveau Arrêter la diffusion.",
   "stream.error.cancel": "La diffusion n'a pas été annulée. Vérifiez votre connexion et touchez à nouveau Annuler.",

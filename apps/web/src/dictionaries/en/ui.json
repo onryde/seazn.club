@@ -5615,6 +5615,7 @@
   "stream.error.active_session": "A stream is already running for this match.",
   "stream.error.storage_exhausted": "Recording storage is full right now. Try again later.",
   "stream.error.ingest_unavailable": "The streaming service is unavailable. Try again in a minute.",
+  "stream.error.composed_unavailable": "Score overlay streaming isn't available yet. Go live with the camera only.",
   "stream.error.unknown": "That did not start. Try again.",
   "stream.error.stop": "The stream did not stop. Check your connection and tap Stop stream again.",
   "stream.error.cancel": "The stream was not cancelled. Check your connection and tap Cancel again.",

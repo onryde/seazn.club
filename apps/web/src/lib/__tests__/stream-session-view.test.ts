@@ -204,6 +204,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["phone_not_responding 409", new HttpError(409, "the phone paired on this match's stream code is not responding", "phone_not_responding"), "phone_not_responding"],
     ["storage_exhausted 503", new HttpError(503, "recording storage is exhausted", "storage_exhausted", { headroomMinutes: 12 }), "storage_exhausted"],
     ["ingest_unavailable 503", new HttpError(503, "the ingest service is unavailable", "ingest_unavailable"), "ingest_unavailable"],
+    // R2001: composed asked for on a deployment with no compositor image — its own sentence, never "try again in a minute".
+    ["composed_unavailable 503", new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable"), "composed_unavailable"],
     ["target_in_use 409, a holder with a court", new HttpError(409, "in use", "target_in_use", { holder: { fixtureId: "f-2", courtName: "Court 3", label: "Club channel" } }), "target_in_use"],
     ["target_in_use 409, the index race (holder null)", new HttpError(409, "in use", "target_in_use", { holder: null }), "target_in_use"],
     // m4 (Task 13 review): the server's OWN refusal class (stream-targets.ts), not an HttpError shaped like it.

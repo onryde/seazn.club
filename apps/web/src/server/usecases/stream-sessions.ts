@@ -28,7 +28,7 @@ import {
   RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
 } from "@/server/relay/config";
 import {
-  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
+  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, admitMode, decide, eventRowsOf, holdStateOf, isTerminal,
   type Command, type Decision, type Effect, type HoldState, type PhoneStanding, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
@@ -38,7 +38,7 @@ import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffe
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
 import { type Ask10Phone, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
-import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
+import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
@@ -1119,6 +1119,8 @@ function terminalHolder(r: TerminalHolderRow & { id: string; fixture_id: string 
 
 function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headroom: number): never {
   switch (refusal.refusal) {
+    // R2001: the deployment cannot run a composed session (no compositor image, or no relay) — the ingest's 503 family.
+    case "composed_unavailable": throw new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable");
     case "plan_lacks_overlay": throw new PaymentRequiredError(RELAY_PLAN_GATES.overlay);
     case "overlay_required": throw new HttpError(409, "phone streaming needs the overlay tier", "overlay_required");
     case "plan_lacks_relay": throw new PaymentRequiredError(RELAY_PLAN_GATES.relay);
@@ -1267,6 +1269,10 @@ export async function startBroadcast(
   if (orgId !== actor.orgId) throw new HttpError(404, "fixture not found");
   const actorUserId = actor.userId;
   const body = { mode: opts.mode ?? "passthrough", targetId: opts.targetId, themeId: opts.themeId ?? null };
+  // R2001: can this deployment run a composed session at all (drivers.ts `composedUnavailable()`, the ONE authority the
+  // organiser UI reads too)? Read ONCE, here, and handed to every `admit` below. Asked only for a composed start — a
+  // passthrough start reads no new fact and its path is unchanged.
+  const composedRunnerDown = body.mode === "composed" && composedUnavailable();
   // An assumption made a guard: every caller reads its pairing FROM this fixture's code, so a pairing on another
   // fixture's code is a caller bug — refused before anything is weighed or written, never a session tied to the wrong
   // phone. Witness: "startBroadcast refuses a pairing from another fixture's code".
@@ -1301,6 +1307,15 @@ export async function startBroadcast(
   if (deps.drivers.disabled) {
     log.warn({ fixtureId, orgId }, "stream session: the relay is disabled on this deployment — start refused");
     throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+  }
+  // R2001: a composed start on a deployment with no compositor runner is refused HERE — admission's FIRST gate, asked
+  // alone (`admitMode`) because nothing later on the ladder can change its answer. Before it nothing is written: no
+  // expiry, no destination teardown, no monthly grant, no storage read, no row, no Cloudflare input, no runner call. It
+  // used to be admitted and fail at the runner's constructor with the row, the input and provisioning already made.
+  const byMode = admitMode({ mode: body.mode, composedUnavailable: composedRunnerDown });
+  if (!byMode.ok) {
+    log.warn({ fixtureId, orgId }, "stream session: composed mode is unavailable on this deployment — start refused");
+    refuse(byMode, 0);
   }
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
@@ -1374,7 +1389,7 @@ export async function startBroadcast(
   // below, measurement included (ruling 13). Nothing was measured, so this refusal records no storage snapshot. The
   // destination doors above still answer first (§17.10).
   const early = admit({
-    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone,
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone, mode: body.mode, composedUnavailable: composedRunnerDown,
     headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,
     activeSessionId: (await activeSessionIdFor(fixtureId)) ?? priorMachineSessionId,
   });
@@ -1385,7 +1400,7 @@ export async function startBroadcast(
   // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
   // authority for everything that row lock protects.
   await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
-    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone,
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone, mode: body.mode, composedUnavailable: composedRunnerDown,
     headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here
     activeSessionId: activeSessionId ?? priorMachineSessionId,
   }).ok);
@@ -1401,7 +1416,7 @@ export async function startBroadcast(
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
-      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom, phone: opts.phone,
+      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom, phone: opts.phone, mode: body.mode, composedUnavailable: composedRunnerDown,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId, tx)) ?? priorMachineSessionId,   // m2: on the tx, never a 2nd pooled connection
     });
     if (!verdict.ok) {

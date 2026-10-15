@@ -90,6 +90,8 @@ describe("relay wire enums equal their declarations", () => {
     expect(sorted(S.StreamFailReason.options)).toEqual(sorted(Object.keys(domain)));
     expect(S.StreamFailReason.options).toHaveLength(11);
     expect(S.StreamFailReason.options as readonly string[]).not.toContain("storage_exhausted");
+    // R2001: composed_unavailable is a create-time refusal with no row, exactly as storage_exhausted is — never a fail reason.
+    expect(S.StreamFailReason.options as readonly string[]).not.toContain("composed_unavailable");
     // A failed session carries no end reason: the two vocabularies never overlap.
     expect(S.StreamFailReason.options.filter((r) => (S.StreamEndReason.options as readonly string[]).includes(r))).toEqual([]);
   });
@@ -339,6 +341,7 @@ describe("relay request schemas refuse what they must", () => {
     expect(S.StreamSessionCurrent.safeParse({ ...current, qr: null }).success, "qr: null").toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, streamKey: "k" }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, failReason: "storage_exhausted" }).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, failReason: "composed_unavailable" }).success, "R2001: a refusal, never a state").toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, balance: 1.5 }).success).toBe(false);
   });
 });

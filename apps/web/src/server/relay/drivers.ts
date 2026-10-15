@@ -81,8 +81,10 @@ export const dbRecorder: ProviderCallRecorder = {
 
 /** The Fly runner is constructed on FIRST USE: a live server without
  *  FLY_API_TOKEN (owed by the owner, 2026-09-14) still serves passthrough
- *  sessions on real Cloudflare — composed is disabled this wave, so the runner
- *  is never called; when it is, a missing token fails THAT call, not the boot. */
+ *  sessions on real Cloudflare. A composed start on a deployment with no
+ *  RELAY_IMAGE is refused before any write (R2001, `composedUnavailable()`
+ *  below), so the runner is not called there; when it is called, a missing
+ *  token fails THAT call, not the boot. */
 /** Every method is `async` on purpose. `get()` THROWS when the token is missing,
  *  and a plain `() => get().list()` throws SYNCHRONOUSLY — out of a method the
  *  port declares as returning a Promise, so a caller's `.catch()` never sees it
@@ -136,6 +138,17 @@ export function relayUnavailable(): boolean {
   if (override) return override.disabled === true;
   const mode = relayDriverMode();
   return mode === "disabled" || (mode === "live" && !CloudflareIngest.configured());
+}
+
+/** R2001: can this deployment run a COMPOSED session? Unavailable when the relay itself is (`relayUnavailable()`), or when
+ *  RELAY_IMAGE is unset or empty — the compositor image FlyRunner's constructor refuses to start without. Before this a
+ *  composed start was admitted on such a deployment, wrote its session row, opened its Cloudflare input and only then
+ *  failed at the constructor. The ONE authority for the question: startBroadcast refuses `composed_unavailable` (503) on
+ *  it before anything is written, and the organiser UI reads it to decide whether to offer composed at all, so the page
+ *  never offers what the API refuses. Like `relayUnavailable()` it answers from the env (and the test override, for the
+ *  relay half) WITHOUT constructing anything; the override never excuses a missing image. */
+export function composedUnavailable(): boolean {
+  return relayUnavailable() || !process.env.RELAY_IMAGE;
 }
 
 /** Tests only. `null` clears the override AND the cached instance. */

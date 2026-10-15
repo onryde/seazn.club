@@ -39,13 +39,15 @@ vi.mock("../stream-credits", async (importOriginal) => {
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS"] as const;
+const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "RELAY_IMAGE"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const KEK = randomBytes(32).toString("hex");
 function baseEnv() {
   for (const k of ENV_KEYS) delete process.env[k];
   process.env.RELAY_KEK = KEK;
   process.env.AUTH_SECRET = "stream-auto-stop-test-secret";
+  // R2001: a composed start is refused while RELAY_IMAGE is unset; this file's composed case runs on the fake runner.
+  process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:auto-stop-test";
 }
 beforeAll(baseEnv);
 beforeEach(() => { baseEnv(); hook.onLockOrg = null; hook.calls = 0; sentry.captureError.mockClear(); });
