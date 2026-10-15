@@ -29,6 +29,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { rulesLineText } from "@/lib/rules-line";
 import { describeMatchRules } from "@/server/public-site/describe-rules";
 import { declaredVariant, insertLegacyEvents, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { fixtureRow, post, rowsOf, siblingOf } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { patchDivision } from "../divisions";
 import { writeFixtureRulesOverride } from "../fixture-rules";
 import { loadFixturePadCfg } from "../fixtures";
@@ -222,5 +223,158 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff, the positive pair: a save that 
       checked++;
     }
     expect(checked, "anti-vacuity: every bye and every match still to play").toBe(byes.length + open.length);
+  });
+});
+
+// Batch-5 Q5 (review class 13, "CONFIRMED" by reading `unfrozenRules`): a take-back that reopens an event-less award
+// (fed-seats.ts: the `reset` release, the walkover revive, the abandoned revive) was said to miss a version bump, so a
+// pad opened before the award would freeze, at its first tap, a format that a save moved while the award was excluded
+// from `unfrozenRules`. The sequence was DRIVEN through the real doors and the premise is false: step 3 cannot happen.
+//   - A take-back needs an event in the stage (the void), and a played stage is locked: the division save refuses
+//     DIVISION_FORMAT_LOCKED, the stage PUT STAGE_FORMAT_LOCKED, and the per-match writer FIXTURE_FORMAT_LOCKED on the
+//     award itself (decided without play) - rule-locks.ts `lockedStageIdsAmong` reads PLAYED, and a double walkover or
+//     a played semi is an event. So nothing moves what an excluded award resolves to between the pad's load and the
+//     reopen: the cfg the pad folds IS the cfg the first event freezes.
+//   - So a bump at the reopen would only refuse a pad that holds the right rules, and tell the scorer "the format
+//     changed" over a line that did not. These tests pin that: the pad's first tap, sent under the version it loaded,
+//     is TAKEN after each reopen, and freezes the cfg the pad folded. A bump added at any of the three UPDATEs reds them.
+// If a future door can move a played stage's award (the planned bulk apply to unstarted matches), THAT door bumps the
+// awards it moves; the guard to keep is that the pad's version and the cfg it folds never disagree.
+describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: the lock keeps the pad's version honest (batch-5 Q5)", () => {
+  const BWF = declared("badminton", "bwf").bestOf as number;
+  const MOVED = BWF === 5 ? 3 : 5; // a best-of the variant does not declare: a format save that landed would be seen
+  type Ko = Awaited<ReturnType<typeof knockout>>;
+  async function knockout(entrants: 4 | 8) {
+    return seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants });
+  }
+  /** Home wins, game after game, until the match is decided (the format may not be the declared one). */
+  async function winOut(b: Ko, id: string) {
+    if ((await fixtureRow(id)).status === "scheduled") await post(b.auth, id, "core.start");
+    for (let g = 0; g < 5 && (await fixtureRow(id)).status !== "decided"; g++) {
+      await post(b.auth, id, "badminton.game.summary", { home: 21, away: 10 });
+    }
+    expect((await fixtureRow(id)).status, "rig: the match was played out").toBe("decided");
+  }
+  const dw = (b: Ko, id: string) => post(b.auth, id, "core.forfeit", { by: "both", reason: "walkover" });
+  const lastEvent = async (id: string) =>
+    (await sql<{ id: string }[]>`select id from score_events where fixture_id = ${id} order by seq desc limit 1`)[0]!.id;
+  const versionOf = async (id: string) =>
+    (await sql<{ v: number }[]>`select rules_version v from fixtures where id = ${id}`)[0]!.v;
+
+  /** Every door that could move what the award resolves to refuses, and nothing moved. `perMatch: false` is the cascade
+   *  void: it has no outcome, so the per-match writer is allowed on it (and bumps it itself - the last test below). */
+  async function everyFormatDoorRefuses(b: Ko, awardId: string, perMatch = true) {
+    await expect(patchDivision(b.auth, b.divisionId, { config: { bestOf: MOVED } } as never)).rejects.toMatchObject({
+      code: "DIVISION_FORMAT_LOCKED",
+    });
+    await expect(putStageRules(b.auth, b.stageId, { rules: { bestOf: MOVED } })).rejects.toMatchObject({ code: "STAGE_FORMAT_LOCKED" });
+    if (perMatch) {
+      await expect(writeFixtureRulesOverride(b.auth, [awardId], { bestOf: MOVED })).rejects.toMatchObject({ code: "FIXTURE_FORMAT_LOCKED" });
+    }
+    const [{ config }] = await sql<{ config: { bestOf?: number } }[]>`select config from divisions where id = ${b.divisionId}`;
+    expect(config.bestOf, "nothing landed on the division").not.toBe(MOVED);
+  }
+  /** The pad that loaded before the award sends its first tap under the version it loaded: taken, and it freezes the cfg it folds. */
+  async function padStillHonest(b: Ko, finalId: string, pad: Awaited<ReturnType<typeof loadFixturePadCfg>>) {
+    const reloaded = await loadFixturePadCfg(b.auth, finalId);
+    expect(reloaded.cfg, "the cfg the match resolves to is the one the pad folds").toEqual(pad.cfg);
+    expect(reloaded.rulesVersion).toBe(pad.rulesVersion);
+    expect(await versionOf(finalId), "no spurious bump from the reopen").toBe(pad.rulesVersion);
+    await expect(scoreEvent(b.auth, finalId, start(pad.rulesVersion))).resolves.toMatchObject({ seq: 1, rules_version: pad.rulesVersion });
+    expect(((await snapshotOf(finalId)) as { bestOf: number }).bestOf, "it froze the format the pad folds").toBe((pad.cfg as { bestOf: number }).bestOf);
+  }
+  const reopened: string[] = [];
+
+  it("the walkover revive: the void of the double walkover that killed the seat reopens the walkover; the pad's first tap is taken", async () => {
+    const b = await knockout(4);
+    const sf1 = await fixtureRow(b.fixtureIds[0]!);
+    const finalId = sf1.winner_to_fixture!;
+    const pad = await loadFixturePadCfg(b.auth, finalId);
+    expect((pad.cfg as { bestOf: number }).bestOf, "premise: the pad opened on the declared format").toBe(BWF);
+    const killed = await dw(b, sf1.id);
+    await winOut(b, b.fixtureIds[1]!);
+    const walked = await fixtureRow(finalId);
+    expect([walked.status, walked.outcome?.kind, await count(finalId)], "premise: the final is an event-less award").toEqual(["forfeited", "award", 0]);
+    await everyFormatDoorRefuses(b, finalId);
+    expect(await versionOf(finalId), "the award sat out the doors, version untouched").toBe(pad.rulesVersion);
+    await post(b.auth, sf1.id, "core.void", { event_id: killed.event_id });
+    expect((await fixtureRow(finalId)).status, "premise: the revive reopened the award").toBe("scheduled");
+    await winOut(b, sf1.id);
+    await padStillHonest(b, finalId, pad);
+    reopened.push("walkover revive");
+  }, 120_000);
+
+  it("the release (reset): taking back the played semi resets the walkover it advanced; the pad's first tap is taken", async () => {
+    const b = await knockout(4);
+    const sf1 = await fixtureRow(b.fixtureIds[0]!);
+    const sf2Id = b.fixtureIds[1]!;
+    const finalId = sf1.winner_to_fixture!;
+    const pad = await loadFixturePadCfg(b.auth, finalId);
+    const killed = await dw(b, sf1.id);
+    await winOut(b, sf2Id);
+    expect((await fixtureRow(finalId)).status, "premise: the final is walked over").toBe("forfeited");
+    await everyFormatDoorRefuses(b, finalId);
+    await post(b.auth, sf2Id, "core.void", { event_id: await lastEvent(sf2Id) });
+    const reset = await fixtureRow(finalId);
+    expect([reset.status, reset.outcome, await versionOf(finalId)], "premise: the reset reopened the award").toEqual(["scheduled", null, pad.rulesVersion]);
+    await post(b.auth, sf1.id, "core.void", { event_id: killed.event_id });
+    await winOut(b, sf2Id);
+    await winOut(b, sf1.id);
+    await padStillHonest(b, finalId, pad);
+    reopened.push("reset");
+  }, 120_000);
+
+  it("the abandoned revive: the void of a double walkover reopens the semi the cascade voided; the pad's first tap is taken", async () => {
+    const b = await knockout(8);
+    const rows = await rowsOf(b.stageId);
+    const qf1 = await fixtureRow(b.fixtureIds[0]!);
+    const qf2 = siblingOf(rows, qf1);
+    const semiId = qf1.winner_to_fixture!;
+    const pad = await loadFixturePadCfg(b.auth, semiId);
+    const k1 = await dw(b, qf1.id);
+    const k2 = await dw(b, qf2.id);
+    const voided = await fixtureRow(semiId);
+    expect([voided.status, voided.outcome, await count(semiId)], "premise: both feeders dead, the semi is a cascade void").toEqual(["abandoned", null, 0]);
+    await everyFormatDoorRefuses(b, semiId, false);
+    await post(b.auth, qf1.id, "core.void", { event_id: k1.event_id });
+    await post(b.auth, qf2.id, "core.void", { event_id: k2.event_id });
+    expect((await fixtureRow(semiId)).status, "premise: the revive reopened the semi").toBe("scheduled");
+    await winOut(b, qf1.id);
+    await winOut(b, qf2.id);
+    await padStillHonest(b, semiId, pad);
+    reopened.push("abandoned revive");
+  }, 120_000);
+
+  it("the abandoned revive, the one door that is open: the per-match writer bumps the cascade void ITSELF, so the revive adds nothing and the stale pad is refused once", async () => {
+    // A cascade void has no outcome, so `unfrozenRules` reads it (it is not decided without play) and the per-match writer
+    // is not locked out of it: the one format door that reaches a reopenable shape, and it bumps in its own transaction.
+    const b = await knockout(8);
+    const qf1 = await fixtureRow(b.fixtureIds[0]!);
+    const qf2 = siblingOf(await rowsOf(b.stageId), qf1);
+    const semiId = qf1.winner_to_fixture!;
+    const pad = await loadFixturePadCfg(b.auth, semiId);
+    const k1 = await dw(b, qf1.id);
+    const k2 = await dw(b, qf2.id);
+    expect((await fixtureRow(semiId)).status, "premise: the semi is a cascade void").toBe("abandoned");
+    await writeFixtureRulesOverride(b.auth, [semiId], { bestOf: MOVED });
+    expect(await versionOf(semiId), "the writer bumped it").toBe(pad.rulesVersion + 1);
+    await post(b.auth, qf1.id, "core.void", { event_id: k1.event_id });
+    await post(b.auth, qf2.id, "core.void", { event_id: k2.event_id });
+    expect((await fixtureRow(semiId)).status, "premise: the revive reopened the semi").toBe("scheduled");
+    expect(await versionOf(semiId), "the revive bumped nothing more").toBe(pad.rulesVersion + 1);
+    await winOut(b, qf1.id);
+    await winOut(b, qf2.id);
+    const now = await loadFixturePadCfg(b.auth, semiId);
+    expect((now.cfg as { bestOf: number }).bestOf).toBe(MOVED);
+    await expect(scoreEvent(b.auth, semiId, start(pad.rulesVersion))).rejects.toMatchObject({
+      code: "FIXTURE_RULES_CHANGED",
+      extra: { rules_version: pad.rulesVersion + 1, format: formatLine("badminton", now.cfg) },
+    });
+    await expect(scoreEvent(b.auth, semiId, start(now.rulesVersion))).resolves.toMatchObject({ seq: 1 });
+    reopened.push("abandoned revive + per-match");
+  }, 120_000);
+
+  it("counted: all three reopening writes were driven, and the one open door", () => {
+    expect(reopened).toEqual(["walkover revive", "reset", "abandoned revive", "abandoned revive + per-match"]);
   });
 });
