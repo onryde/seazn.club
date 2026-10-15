@@ -677,5 +677,35 @@
     "name": "after a bye"
    }
   ]
+ },
+ {
+  "id": "t15fr2-version-reread-dropped",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "    const [now] = await tx<{ rules_version: number }[]>`select rules_version from fixtures where id = ${fixtureId}`;\n    fixture.rules_version = now!.rules_version;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "moves its version is refused"
+   }
+  ]
+ },
+ {
+  "id": "t15fr2-version-reread-unused",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "    fixture.rules_version = now!.rules_version;\n",
+  "replace": "    void now;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "moves its version is refused"
+   }
+  ]
  }
 ]

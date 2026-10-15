@@ -327,6 +327,12 @@ export async function appendEventInTx(
   // holder takes no stage-seats or fixture lock after it; a shared holder takes no division lock after it).
   if (!hasFrozenCfg(fixture.config_snapshot)) {
     await tx`select pg_advisory_xact_lock_shared(hashtext(${"division-config:" + fixture.division_id}))`;
+    // Fix round 2 (re-review N-1): the row above was read BEFORE this wait, and a save that held the lock bumped the
+    // version of every match whose format it moved (`rules-version.ts` bumpMovedRules) — so the version is re-read
+    // now, as the division below is, and the check and the answer use the one that stands. Only the version: the
+    // match's own override cannot move meanwhile (its writer needs the `fixture:` lock this append holds).
+    const [now] = await tx<{ rules_version: number }[]>`select rules_version from fixtures where id = ${fixtureId}`;
+    fixture.rules_version = now!.rules_version;
   }
 
   const [division] = await tx<DivisionRow[]>`
