@@ -1,9 +1,332 @@
 {
   "batch": "1c",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1c, built against the batch base ca6e7a21a (main after 1d). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine's vitest binary (--exclude '**/strip-types-loadable.test.ts' for the matrix collection: its titles embed the checkout's absolute path, so a base worktree and a head worktree never agree; the file is unchanged). Task 1c-1 (phone-subpaths.json and the static RN-safe rule), as amended by its review: no existing test id changed or left, so there is no moved, rewritten or retired entry - the existing CLI tests of test/boundary-gate.test.ts keep their titles and gain the phone walk's inputs (package.json, phone-subpaths.json and a four-entry skeleton) in their scratch checkout. Every entry is `added`: 229 in test/boundary-gate.test.ts (the phone walk, its refusals and its reading of code, the code-skeleton boundary scan, the golden.ts exemption, the closure pin, the visit budget, the CLI's phone behaviour) and 21 in test/pack-proof.test.ts (the rn leg's phone helpers, the dist-twin proof against tsc's emit, the wiring check). Whole-batch parity: before-only 0, after-only 250, both 10970, unaccounted 0.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1c, built against the batch base ca6e7a21a (main after 1d). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine's vitest binary (--exclude '**/strip-types-loadable.test.ts' for the matrix collection: its titles embed the checkout's absolute path, so a base worktree and a head worktree never agree; the file is unchanged). Task 1c-1 (phone-subpaths.json and the static RN-safe rule), as amended by its review: no existing test id left in 1c-1 - the existing CLI tests of test/boundary-gate.test.ts keep their titles and gain the phone walk's inputs (package.json, phone-subpaths.json and a four-entry skeleton) in their scratch checkout. Three existing tests changed title in round 2 (they count what the engine exports, and it now exports one data file): three `rewritten` entries. Every other entry is `added`: 328 in test/boundary-gate.test.ts (the phone walk, its refusals and its reading of code, the code-skeleton boundary scan, the golden.ts exemption, the closure pin, the visit budget, the CLI's phone behaviour), 1 in test/publish-manifest.test.ts (the phone pin exported as a data file) and 23 in test/pack-proof.test.ts (the rn leg's phone helpers, the dist-twin proof against tsc's emit, the wiring check). Whole-batch parity: before-only 3, after-only 355, both 10967, unaccounted 0.",
   "entries": [
     {
-      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › a phone-safety violation does not hide a clean boundary line count, and a clean phone walk does not hide a boundary violation",
+      "id": "test/pack-proof.test.ts › checkTarballExports › passes the engine's own publishConfig.exports and counts every target (two conditions per declared export)",
+      "fate": "rewritten",
+      "to": "test/pack-proof.test.ts › checkTarballExports › passes the engine's own publishConfig.exports and counts every target (two conditions per module export, one per data export)",
+      "reason": "1c review round 2 (m6): the engine's exports now include a data file (./phone-subpaths.json, one target), so the count is two per module export plus one per data export - the test is the same check with the arithmetic from the engine's own declarations"
+    },
+    {
+      "id": "test/pack-proof.test.ts › exportSpecifiers: the proof imports every key and every sport directory › lists each non-pattern export key plus each sport directory with an index (the engine's own declarations, counted)",
+      "fate": "rewritten",
+      "to": "test/pack-proof.test.ts › exportSpecifiers: the proof imports every key and every sport directory › lists each non-pattern module export plus each sport directory with an index, and no data export (the engine's own declarations, counted)",
+      "reason": "1c review round 2 (m6): the specifier list leaves the data export out (it holds no module to import), so the test counts module exports and asserts the data file is not listed"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › mirrors all 21 workspace exports into dist (never zero)",
+      "fate": "rewritten",
+      "to": "test/publish-manifest.test.ts › publish manifest › mirrors all 22 workspace exports into dist (never zero)",
+      "reason": "1c review round 2 (m6): the count in the title follows the engine's export list, which gained ./phone-subpaths.json; the test still mirrors every module export into dist and now also pins that the data export is published as itself"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: against the TypeScript parser, over every file of the real src/ › is what the parser says on every file: no code position blanked, no comment or literal text left",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: against the TypeScript parser, over every file of the real src/ › refuses to compare nothing, and sees a skeleton that is wrong",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › keeps the source's length and its line breaks outside comments, strings and templates",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a cast",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a closing bracket and a regex after",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a generic call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a property named in",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a property named return",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a property named typeof",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after an angle-bracket assertion",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after an indexed non-null",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion before a division and a string",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion in a nested template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion in a template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion on a member before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a postfix ++ before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a postfix -- before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a regex after a block",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a regex after an if condition",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a regex in an arrow body",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a cast",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a closing bracket and a regex after",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a generic call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a property named in",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a property named return",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a property named typeof",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after an angle-bracket assertion",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after an indexed non-null",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion before a division and a string",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion in a nested template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion in a template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion on a member before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a postfix ++ before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a postfix -- before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a regex after a block",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a regex after an if condition",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a regex in an arrow body",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a cast",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a closing bracket and a regex after",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a generic call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a property named in",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a property named return",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a property named typeof",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after an angle-bracket assertion",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after an indexed non-null",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion before a division and a string",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion in a nested template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion in a template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion on a member before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a postfix ++ before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a postfix -- before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a regex after a block",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a regex after an if condition",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a regex in an arrow body",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the skeleton of a fixture is exactly what its author wrote: comments and the insides of strings, templates and regular expressions blank, quotes and code kept",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › a boundary violation does not hide the phone walk's own line, and says nothing of a clean boundary",
       "fate": "added",
       "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
     },
@@ -288,6 +611,11 @@
       "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › is red against the real src/ when the recorded closure is perturbed: a module dropped from the pin, one invented",
+      "fate": "added",
+      "reason": "1c review round 2 (m3): the closure pin is red against the real src/ when the recorded closure is perturbed"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › is red through the combined check when the pin and the walk disagree, and green when they agree (the real engine)",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
@@ -323,6 +651,16 @@
       "reason": "1c-1 review: the walk has a visit budget so a broken visited-guard fails fast instead of hanging"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › does not follow the first literal of a concatenated import() as if it were the module, and follows a plain one",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › does not follow the first literal of a concatenated require() as if it were the module, and follows a plain one",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › lists the externals it saw even when it refuses them, and not the package's own name",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
@@ -333,169 +671,204 @@
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ! as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ! as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after % as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after % as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after & as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after & as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ( as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after && as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after * as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ( as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after + as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ) of a while as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after , as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ) of an if as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after - as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after * as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after : as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after + as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ; as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after , as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after < as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after - as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after = as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after : as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after > as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ; as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ? as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after < as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after [ as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after = as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ^ as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after => as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word await as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after > as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word case as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ? as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word delete as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after [ as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word do as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ^ as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word else as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word await as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word in as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word case as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word instanceof as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word delete as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word new as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word do as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word of as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word else as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word return as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word in as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word throw as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word instanceof as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word typeof as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word new as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word void as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word of as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word yield as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word return as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after { as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word throw as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after | as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word typeof as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
     },
     {
-      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ~ as a regular expression",
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word void as a regular expression, and still sees the next line",
       "fate": "added",
       "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word yield as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after { (a block) as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after | as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after || as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after } of a block as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ~ as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads an unterminated block comment as a comment to the end of the file, and the same text closed as a comment and then code",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
     },
     {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads code, not text: a comment or a string that says process.env or node:fs is not an import or a read",
@@ -693,6 +1066,16 @@
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import with a trailing comma",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import with import attributes",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import with spaces inside the parentheses",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
@@ -716,6 +1099,11 @@
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a re-export with no spaces",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a require split over lines",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
     },
     {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a require with spaces inside the parentheses",
@@ -793,6 +1181,51 @@
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer after a spread reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer as a shorthand property reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer as a type annotation reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer destructured from globalThis under another name reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __dirname in a template placeholder reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __dirname reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __filename as an argument reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __filename reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a bare builtin reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
@@ -821,6 +1254,26 @@
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import it cannot resolve reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a concatenation reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a literal and a variable reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a literal in a conditional reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a literal then an operator reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
     },
     {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a template reached from a phone subpath",
@@ -903,6 +1356,11 @@
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a require of a concatenation reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a scoped package that is not declared reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
@@ -983,6 +1441,11 @@
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses global behind an optional template literal reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses global behind brackets reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
@@ -993,9 +1456,24 @@
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis behind a template literal reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis behind brackets for Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis behind brackets reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis.Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
     },
     {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis.process reached from a phone subpath",
@@ -1006,6 +1484,16 @@
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis.process with whitespace reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses new Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
     },
     {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained global.process reached from a phone subpath",
@@ -1029,6 +1517,16 @@
     },
     {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process as a default parameter reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process as a switch label after another case reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process as a switch label reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
     },
@@ -1113,6 +1611,16 @@
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
     },
     {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses typeof Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses typeof __dirname reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses typeof process reached from a phone subpath",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
@@ -1146,6 +1654,21 @@
       "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › treats an exports target that does not exist as a violation, not a smaller walk",
       "fate": "added",
       "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › scratch directories › every one a test makes is tracked, removed by the cleanup, and forgotten - however many a test makes",
+      "fate": "added",
+      "reason": "1c review round 2 (m5): the scratch-directory cleanup removes what a test made, however many, and the file's afterAll no longer demands that some test made one, so a single-test run stays green"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › holds the data exports to their file: present in the tarball, named exactly, and only as a plain string",
+      "fate": "added",
+      "reason": "1c review round 2 (m6): phone-subpaths.json is shipped and exported as a data file, and the pack proof holds the data export to its file (present, named exactly, a plain string, never a stand-in for modules) and reads it from the installed package"
+    },
+    {
+      "id": "test/pack-proof.test.ts › pack-proof/node/strip.ts: a data export is read as data, not imported as a module › imports each module export and sport directory, skips the data export in that list, and prints the data it read through the exports map",
+      "fate": "added",
+      "reason": "1c review round 2 (m6): phone-subpaths.json is shipped and exported as a data file, and the pack proof holds the data export to its file (present, named exactly, a plain string, never a stand-in for modules) and reads it from the installed package"
     },
     {
       "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › assertPhoneRuleGreen passes a clean walk, and refuses any violation (the closure-changed one included) and an empty walk",
@@ -1251,6 +1774,11 @@
       "id": "test/pack-proof.test.ts › the phone subpaths the rn leg imports › honours the alias, keeps the list's order, and refuses what it cannot import: nothing, an unexported subpath, an unknown pattern",
       "fate": "added",
       "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › exports the phone pin as a data file at the package root, the same in the workspace and in the published manifest, and ships it",
+      "fate": "added",
+      "reason": "1c review round 2 (m6): ./phone-subpaths.json is exported as a data file at the package root, the same in the workspace and in the published manifest, and listed in `files`"
     }
   ]
 }
