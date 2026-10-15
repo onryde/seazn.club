@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SETTLE_METHODS, settledMethod } from "@seazn/engine/core";
 
 // Finding 1 (W2a): a settle lives beside module state, so a fold's outcome is
 // `outcomeOf(module, folded)`. A bare `<module>.outcome(state)` on a FOLD
@@ -22,8 +23,8 @@ const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
   "packages/engine/src/testkit/simulation.ts": { calls: 3, reason: "testkit: simulation folds without settle" },
   "packages/engine/src/testkit/scenarios.ts": { calls: 6, reason: "testkit: scenario builder; `played.state` comes from decidedStream, which drives module.apply with the module's own generated events — never a kernel-owned type" },
   "packages/engine/src/testkit/golden-floor.ts": { calls: 1, reason: "golden floor (GF-1): the module-level outcome of a generator walk, to learn which outcome kinds a module can produce; no walk carries core.settle" },
-  "packages/engine/src/testkit/golden-floor-streams.ts": { calls: 1, reason: "golden floor (GF-1): the one bare read (`moduleOutcome`) of the module's outcome, as golden.ts records it; floor streams carry no core.settle (exempt, guarded in golden-floor.test.ts and by the corpus scan below)" },
-  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the frozen corpus records the MODULE's outcome (GOLDEN-POLICY: the per-sport back-compat tripwire); no corpus stream carries core.settle — guarded below, not assumed" },
+  "packages/engine/src/testkit/golden-floor-streams.ts": { calls: 1, reason: "golden floor (GF-1): the one bare read (`moduleOutcome`) of the module's outcome, to find a walk that is decided or a prefix that is still live; the settle story (GF-2 T3) reads the kernel's outcome through `effectiveToken`/`outcomeOf`, and the corpus scan below holds every settle stream to a settled win" },
+  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the format-1 recorder (`moduleRecorder`) records the MODULE's outcome; format 2 (every committed corpus since GF-2) records the effective outcome through outcomeOf in golden-overlay.ts. A stream carrying core.settle is guarded below, not assumed" },
 };
 const stripComments = (text: string): string => text.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "");
 function walk(dir: string, out: string[]): string[] {
@@ -153,22 +154,41 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
   it("every allowed file still exists and still holds a bare call (a stale entry is a failure)", () => {
     for (const rel of Object.keys(ALLOWED)) expect(stripComments(readFileSync(join(REPO, rel), "utf8")), rel).toMatch(BARE);
   });
-  it("golden.ts's allowance holds: no golden corpus stream carries core.settle (the reason is a guard, not a comment)", () => {
+  it("golden.ts's allowance holds: every corpus stream that carries core.settle is recorded by the format-2 recorder, and ends on a settled win (the reason is a guard, not a comment)", () => {
     const SPORTS = join(REPO, "packages/engine/src/sports");
+    const settledMethods = SETTLE_METHODS.map(settledMethod);
     let streams = 0;
-    const settled: string[] = [];
+    let settleStreams = 0;
+    const wrong: string[] = [];
+    const sports = new Set<string>();
     for (const dir of readdirSync(SPORTS)) {
       if (!statSync(join(SPORTS, dir)).isDirectory()) continue;
       for (const file of readdirSync(join(SPORTS, dir)).filter((n) => n.endsWith(".golden.json"))) {
-        const corpus = JSON.parse(readFileSync(join(SPORTS, dir, file), "utf8")) as { streams: { events: { type: string }[] }[] };
+        const corpus = JSON.parse(readFileSync(join(SPORTS, dir, file), "utf8")) as {
+          format?: number;
+          streams: { config: string; seed: number; outcome: string; events: { type: string; voids?: string }[] }[];
+        };
         corpus.streams.forEach((stream, i) => {
           streams++;
-          if (stream.events.some((e) => e.type === "core.settle")) settled.push(`${file}#${i}`);
+          const settles = stream.events.map((e, k) => (e.type === "core.settle" ? k : -1)).filter((k) => k >= 0);
+          if (settles.length === 0) return;
+          settleStreams++;
+          sports.add(file);
+          const label = `${file}#${i} (${stream.config}#${stream.seed})`;
+          // a settle only ever reaches a format-2 corpus: the format-1 recorder would have written the module's answer
+          if (corpus.format !== 2) wrong.push(`${label}: carries core.settle in a format-${corpus.format ?? 1} corpus`);
+          // the settle in force at the end (no later void strikes it) decides the match: the recorded outcome is a settled win
+          const standing = settles.filter((k) => !stream.events.some((e) => e.voids === `e-${k}`));
+          if (standing.length === 0) return;
+          const outcome = JSON.parse(stream.outcome) as { kind?: string; method?: string } | null;
+          if (outcome === null || outcome.kind !== "win" || !settledMethods.includes(outcome.method as never)) wrong.push(`${label}: ends on ${stream.outcome}, not a settled win`);
         });
       }
     }
     expect(streams).toBeGreaterThan(200);
-    expect(settled).toEqual([]);
+    expect(settleStreams, "a settle stream in every sport's corpus").toBeGreaterThanOrEqual(sports.size);
+    expect(sports.size, "every sport records a settle").toBeGreaterThanOrEqual(11);
+    expect(wrong).toEqual([]);
   });
 });
 

@@ -918,11 +918,18 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
       expect(RECORDED_TYPES, type).toContain(type);
       expect(ALL_TYPES, type).toContain(type);
     }
-    // The one kernel type no corpus records: core.settle, exempt from the floor
-    // because the harness records the module's bare outcome and a settlement
-    // lives beside module state (outcome-readers.test.ts guards the same fact).
-    expect(KERNEL_TYPES.filter((type) => !RECORDED_TYPES.includes(type))).toEqual(["core.settle"]);
-    expect(ALL_TYPES.length).toBeGreaterThan(RECORDED_TYPES.length);
+    // Every kernel type is recorded now: core.settle was the one no corpus held
+    // (exempt from the floor while the harness recorded the module's bare
+    // outcome), and format 2 records the effective outcome, so the floor
+    // requires it of every sport (GF-2 T3; outcome-readers.test.ts guards that a
+    // settle stream ends on a settled win). The empty list is only a finding
+    // while the registry still names core.settle and the corpora hold it.
+    expect(KERNEL_TYPES).toContain("core.settle");
+    expect(RECORDED_TYPES).toContain("core.settle");
+    expect(KERNEL_TYPES.filter((type) => !RECORDED_TYPES.includes(type))).toEqual([]);
+    // The union holds every type either side names (it no longer ADDS to the recorded set: the corpora record every kernel type).
+    expect(ALL_TYPES).toEqual(expect.arrayContaining([...RECORDED_TYPES, ...KERNEL_TYPES]));
+    expect(ALL_TYPES.length).toBe(new Set([...RECORDED_TYPES, ...KERNEL_TYPES]).size);
   });
 
   it("every type a ledger can carry — corpus-recorded AND kernel-registered — has a template key in all four locales", () => {
