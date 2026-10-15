@@ -1860,8 +1860,31 @@ describe("the call budget (D21): every vendor request spends a token first, and 
         for (let i = 0; i < 3; i += 1) await adapter.refreshParticipantToken(args, {});
         const warnings = unmeteredWarnings(warn);
         expect(warnings, "once per process").toHaveLength(1);
-        expect(warnings[0]![0]).toEqual({ base: PROXY });
+        expect(warnings[0]![0], "the origin, under the name it is: not the URL").toEqual({ origin: PROXY });
         expect(JSON.stringify(warn.mock.calls), "no credential in the log").not.toContain("cf-token-do-not-leak");
+      });
+
+      // D21-fix N2: a base URL can carry credentials (https://user:secret@host) and a path; the log gets the ORIGIN only.
+      it("a base URL with credentials and a path: the warning names the origin and neither the userinfo nor the path - and an unreadable base is named as such, never echoed", async () => {
+        let checked = 0;
+        for (const [base, origin] of [
+          ["http://proxy-user:s3cr3t-pw@proxy.example.test:8080/rtk/prefix", "http://proxy.example.test:8080"],
+          ["not a url but s3cr3t-pw is in it", "(unreadable)"],
+        ] as const) {
+          configure();
+          vi.stubEnv("NODE_ENV", "production");
+          vi.stubEnv("REALTIMEKIT_BASE_URL", base);
+          vi.stubGlobal("fetch", async () => okBody());
+          const { warn, adapter } = await freshAdapter();
+          await adapter.refreshParticipantToken(args, {}).catch(() => undefined);
+          const warnings = unmeteredWarnings(warn);
+          expect(warnings, `${origin}: warned once`).toHaveLength(1);
+          expect(warnings[0]![0]).toEqual({ origin });
+          const logged = JSON.stringify(warn.mock.calls);
+          for (const secret of ["proxy-user", "s3cr3t-pw", "/rtk/prefix"]) expect(logged, `${origin}: ${secret} is not in the log`).not.toContain(secret);
+          checked += 1;
+        }
+        expect(checked, "anti-vacuity").toBe(2);
       });
 
       it("not in production (a test, a dev machine): silent - a fixture is the point there", async () => {

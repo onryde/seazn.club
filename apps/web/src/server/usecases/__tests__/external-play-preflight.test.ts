@@ -849,6 +849,10 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
     for (const t of [t1, t2]) {
       expect("participant" in t && t.participant?.participantId, "both tabs hold the STORED participant").toBe(stored);
     }
+    // Whichever tab lost the slot, its NEXT claim is the camera refusal too (D21-fix, re-review): "not yet" is never
+    // where a player is left - the read it was told to wait for has landed and found nobody, so the answer is firm.
+    const next = await claim(s, "home", rtk);
+    expect(!next.seated && next.reason, "the next claim after the race: no camera, said plainly").toBe("camera_required");
     // Both tabs join; one closes; the other keeps the seat (measured: a
     // regenerated token does not invalidate the earlier one).
     rtk.join(t1);

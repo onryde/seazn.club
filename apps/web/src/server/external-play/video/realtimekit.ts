@@ -161,14 +161,25 @@ async function cf(
 }
 
 let warnedUnmetered = false;
+/** The origin of a base URL, for a log line: scheme, host and port, and NOTHING else. A base can carry credentials
+ *  (`https://user:secret@host`) and a path, and a URL that does not parse is not echoed either (the parse error quotes its
+ *  input). */
+function originOf(base: string): string {
+  try {
+    return new URL(base).origin;
+  } catch {
+    return "(unreadable)";
+  }
+}
 /** Once per process, in production only: RealtimeKit calls are going to a base URL that is not Cloudflare's, so the call
  *  budget (budget.ts) is NOT spending for them. Right for a fixture; wrong for a proxy in front of the real API, whose
- *  traffic would count against the account's limit unmetered. The warning names the base and nothing else (no token). */
+ *  traffic would count against the account's limit unmetered. The warning names the base's ORIGIN and nothing else (no
+ *  token, no userinfo, no path). */
 function warnUnmetered(base: string): void {
   if (warnedUnmetered || process.env.NODE_ENV !== "production") return;
   warnedUnmetered = true;
   log.warn(
-    { base },
+    { origin: originOf(base) },
     "RealtimeKit: REALTIMEKIT_BASE_URL is not Cloudflare's API, so the call budget does not meter these calls. Expected for a test fixture; a forwarding proxy to the real account needs its own limit",
   );
 }

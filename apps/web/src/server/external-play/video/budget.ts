@@ -65,13 +65,20 @@ export async function takeRealtimeKitCall(key: string, opts: { at?: Date; clockS
   // (an NTP correction) between the WHERE and the SET refilled less in the SET than the WHERE had judged, left the
   // bucket a hair below zero, and the CHECK (tokens >= 0) then refused the UPDATE - an exception out of every
   // RealtimeKit call until the clock caught up (D21 review m4).
+  //
+  // The VALUES row is evaluated BEFORE ON CONFLICT takes the row lock, so two callers racing for one bucket can lock in
+  // the opposite order to their clocks: the later reading first, the earlier one after. The earlier one refills nothing
+  // (elapsed is floored at zero), and the STAMP only ever moves forward (`greatest`): were it set to the earlier reading
+  // the stamp would go back, and the next caller would be credited that interval a second time (D21-fix N1). The cost
+  // of the monotone stamp is the safe direction: a clock that stepped back refills nothing until it has caught up with
+  // the stamp, never a credit for time the vendor has already counted.
   const refilled = sql`least(${RTK_BUDGET_BURST}::float8,
     b.tokens + ${RTK_BUDGET_REFILL_PER_S}::float8 * greatest(0, extract(epoch from (excluded.refilled_at - b.refilled_at))::float8))`;
   const spent = await sql`
     insert into realtimekit_call_budget as b (key, tokens, refilled_at)
     values (${key}, ${RTK_BUDGET_BURST}::float8 - 1, ${clock})
     on conflict (key) do update
-       set tokens = ${refilled} - 1, refilled_at = excluded.refilled_at
+       set tokens = ${refilled} - 1, refilled_at = greatest(b.refilled_at, excluded.refilled_at)
      where ${refilled} >= 1
     returning b.key`;
   return spent.length > 0;

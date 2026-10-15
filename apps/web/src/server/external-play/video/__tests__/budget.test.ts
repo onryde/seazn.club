@@ -112,6 +112,30 @@ describe.skipIf(!DB)("the bucket", () => {
     expect(allowed, "exactly the tokens left: the burst less the eleven spent").toBe(RTK_BUDGET_BURST - spentFirst - 1);
   });
 
+  it("the stamp never moves BACKWARDS: a caller that read its clock BEFORE waiting on the row lock, behind one that read a later clock, leaves the stamp where the later one put it - so the next caller is not credited that interval twice (D21-fix N1)", async () => {
+    // The clock is read in the VALUES row, before ON CONFLICT takes the row lock. Two callers racing for one bucket can
+    // therefore lock in the opposite order to their clocks: the later reading first, the earlier one after. The earlier
+    // one refills nothing (its elapsed time is floored at zero) - but if it also stamps ITS reading, the stamp has gone
+    // back, and the next caller is credited the whole interval a second time. `at` is the seam that plays that order.
+    const key = fresh();
+    for (let i = 0; i < RTK_BUDGET_BURST; i += 1) await takeRealtimeKitCall(key, { at: at(0) }); // drained at t0
+    const stamp = async () => {
+      const [row] = await sql<{ refilled_at: Date }[]>`select refilled_at from realtimekit_call_budget where key = ${key}`;
+      return row!.refilled_at.getTime();
+    };
+    const seconds = 60;
+    const refilled = Math.floor(seconds * RTK_BUDGET_REFILL_PER_S);
+    expect(refilled, "premise: a refill the bucket's cap does not hide").toBeLessThan(RTK_BUDGET_BURST);
+    expect(await takeRealtimeKitCall(key, { at: at(seconds * 1_000) }), "the later reading locks first").toBe(true);
+    expect(await stamp(), "premise: it stamped its reading").toBe(at(seconds * 1_000).getTime());
+    expect(await takeRealtimeKitCall(key, { at: at((seconds / 2) * 1_000) }), "the earlier reading locks second, and is served").toBe(true);
+    expect(await stamp(), "the stamp did not go back").toBe(at(seconds * 1_000).getTime());
+    // Counted: the minute refilled `refilled` tokens ONCE; two have been spent; exactly the rest are left.
+    let allowed = 0;
+    for (let i = 0; i < refilled + 5; i += 1) if (await takeRealtimeKitCall(key, { at: at(seconds * 1_000) })) allowed += 1;
+    expect(allowed, "no interval was credited twice").toBe(refilled - 2);
+  });
+
   it("the statement reads the clock ONCE: a volatile clock expression is evaluated exactly one time per call, on a new bucket and on an existing one (D21 review m4)", async () => {
     // A backward clock step between the statement's WHERE and its SET refilled less in the SET than the WHERE had
     // judged, took the bucket a hair under zero, and the CHECK (tokens >= 0) then threw out of every RealtimeKit call.
