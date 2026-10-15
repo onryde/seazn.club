@@ -66,6 +66,31 @@ describe("OpenAPI — every published request example parses against its own sch
     expect(removed, "anti-vacuity: properties a patch removes were checked").toBeGreaterThan(0);
   });
 
+  // The per-route test above holds a patch of several properties to one standard: the generator alone is refused. A property
+  // the schema no longer needs would ride along unseen as long as another property of the same patch still did the work, so
+  // each property is held to it on its own: the patched example with ONLY that property handed back to the generator is refused.
+  it("every property of a patch is load-bearing on its own: handing just that one back to the generator is refused (counted)", () => {
+    let props = 0;
+    let multi = 0;
+    for (const [key, patch] of Object.entries(REQUEST_EXAMPLE_PATCHES)) {
+      const route = ROUTES.find((r) => `${r.method.toUpperCase()} ${r.path}` === key)!;
+      const generated = requestExampleOf(route, { patched: false }) as Record<string, unknown>;
+      const patched = requestExampleOf(route) as Record<string, unknown>;
+      if (Object.keys(patch).length > 1) multi++;
+      for (const prop of Object.keys(patch)) {
+        const mixed = { ...patched };
+        if (Object.hasOwn(generated, prop)) mixed[prop] = generated[prop];
+        else delete mixed[prop];
+        expect(route.request!.safeParse(mixed).success, `${key}: ${prop} is not needed (the patched example parses without it)`).toBe(false);
+        props++;
+      }
+    }
+    expect(props, "anti-vacuity: every property of every patch was checked").toBe(
+      Object.values(REQUEST_EXAMPLE_PATCHES).reduce((n, p) => n + Object.keys(p).length, 0),
+    );
+    expect(multi, "anti-vacuity: a patch of several properties was among them").toBeGreaterThan(0);
+  });
+
   // `minItems` asks for several places: a tie-break order of two entrants is two DIFFERENT entrants, never one repeated.
   it("an array the schema asks several items of is several distinct items (a tie-break order)", () => {
     const route = ROUTES.find((r) => r.method === "post" && r.path === "/stages/{id}/seed-proposal/confirm")!;
