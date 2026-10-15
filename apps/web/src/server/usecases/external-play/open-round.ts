@@ -113,25 +113,30 @@ type Board = { f: OnlinePlayFixture; seats: [InviteSeat, InviteSeat] };
 type Tx = postgres.TransactionSql | postgres.Sql;
 
 /** D16 review G1: retire the video meetings of these boards in the open's transaction - BOTH players' rows, by board on purpose
- *  (allow-listed in the source guard). An ENDED meeting has no room left upstream, so its row is deleted here (its participants
- *  cascade). A still ACTIVE one is only MARKED (RETIRED_PAIR): its row is the only thing that tracks the active room, so it
- *  must survive until the room is ended, which is an HTTP call and cannot happen inside this transaction; the caller ends each
- *  room after the commit and deletes the row then (retireStaleMeeting). A board a game IS or MAY BE on file behind keeps its
- *  meeting, unmarked - the camera evidence of that game (N-2; gameEvidenceOn, the one rule ensureMeeting keeps too). The
- *  re-arm's boards are game-less by their own selection (a finished bridge with no challenge, no create marker, no move), so
- *  the same clause spares nothing there. Returns the boards that have a room to end. */
+ *  (allow-listed in the source guard). EVERY row is MARKED first (RETIRED_PAIR), ended or not; then the ENDED ones are
+ *  deleted (no room is left upstream; their participants cascade), and the boards whose rows were still ACTIVE when they
+ *  were marked are returned for the caller to end after the commit (retireStaleMeeting). The order is the point (D16 fix-2
+ *  R1): the old shape deleted the ended rows and THEN marked the active ones, and under READ COMMITTED a room ended
+ *  between the two statements was missed by both - not deleted, not marked, left on the old pairing, and the same-pair
+ *  claim that followed was refused VIDEO_MEETING_ENDED for ever. Marking first takes the row whatever happens to it next;
+ *  a row that ends after the mark is a marked, ended row, which the delete takes or the next retire does. A still active
+ *  row's row is the only thing that tracks its active room, so it must survive until that room is ended, which is an HTTP
+ *  call and cannot happen inside this transaction. A board a game IS or MAY BE on file behind keeps its meeting, unmarked -
+ *  the camera evidence of that game (N-2; gameEvidenceOn, the one rule ensureMeeting keeps too). The re-arm's boards are
+ *  game-less by their own selection (a finished bridge with no challenge, no create marker, no move), so the same clause
+ *  spares nothing there. */
 async function retireBoardsMeetings(tx: Tx, fixtureIds: readonly string[], now: Date): Promise<string[]> {
   if (fixtureIds.length === 0) return [];
   const spare = tx`and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
+  const marked = await tx<{ fixture_id: string; ended_at: Date | null }[]>`
+    update fixture_video_meetings m
+       set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
+     where m.fixture_id in ${tx(fixtureIds as string[])} ${spare}
+    returning m.fixture_id, m.ended_at`;
   await tx`
     delete from fixture_video_meetings m
      where m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is not null ${spare}`;
-  const marked = await tx<{ fixture_id: string }[]>`
-    update fixture_video_meetings m
-       set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
-     where m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is null ${spare}
-    returning m.fixture_id`;
-  return [...new Set(marked.map((r) => r.fixture_id))];
+  return [...new Set(marked.filter((r) => r.ended_at === null).map((r) => r.fixture_id))];
 }
 
 

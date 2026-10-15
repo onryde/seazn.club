@@ -1732,6 +1732,45 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(await meetingsOf(b!.fixtureId)).toEqual([{ meeting_id: healed.meetingId, ended_at: null }]);
   });
 
+  // D16 fix-2 R1: the helper ran two statements under READ COMMITTED - delete the ended rows, then mark the active ones - so a room
+  // ended BETWEEN them was missed by both (not deleted, not marked), and the same-pair claim that followed was refused
+  // VIDEO_MEETING_ENDED by a row nothing would ever heal. The mark now comes first and takes every unspared row, ended or not.
+  // Staged without timing: a holder transaction row-locks the meeting, the open's statement on that row parks behind it
+  // (pollWaitersBehind), and the holder ends the room and commits - the ending lands inside the open's own two statements.
+  it("D16 fix-2 R1: a room that is ENDED while the re-open is working through its statements is still retired - its row is gone, and nobody is asked to end it again", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    const t0 = new Date();
+    expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+    const [b] = await swissRound1(s.stageId);
+    const roomId = `r1-${randomUUID().slice(0, 8)}`;
+    await insertMeeting(b!.fixtureId, roomId);
+    await unpairSwissRound(s.owner, s.stageId);
+    await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+    const holder = await sql.reserve();
+    let outcome: Awaited<ReturnType<typeof reopen>>;
+    try {
+      await holder`begin`;
+      await holder`select meeting_id from fixture_video_meetings where meeting_id = ${roomId} for update`;
+      const pid = await backendPid(holder);
+      let done = false;
+      const racing = reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end).finally(() => {
+        done = true;
+      });
+      const parked = await pollWaitersBehind(pid, { queryLike: "%update fixture_video_meetings%", finished: () => done });
+      expect(parked, "premise: the open's statement on the room is parked behind the holder's row lock").toBeGreaterThanOrEqual(1);
+      await holder`update fixture_video_meetings set ended_at = now() where meeting_id = ${roomId}`;
+      await holder`commit`;
+      outcome = await racing;
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+    }
+    expect(outcome).toMatchObject({ opened: true });
+    expect(await meetingsOf(b!.fixtureId), "the ended room's row went with the re-open, not left on the old pairing").toEqual([]);
+    expect(rtk.http.filter((c) => c.includes(roomId)), "an already-ended room is not asked to end again").toEqual([]);
+  });
+
   it("a re-open ends the room at the vendor BEFORE its row goes, and a room the re-open could not end is ended - and its row deleted - by the sweep's next pass", async () => {
     const rtk = fakeRtk();
     const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
