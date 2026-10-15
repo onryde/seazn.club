@@ -1,25 +1,39 @@
-// extendFloor (GF-1) — the append path of the golden floor. The committed floor streams are the expected values: the
-// path must reproduce them byte for byte from a corpus that lacks them (deterministic), touch nothing it did not add,
-// do nothing when the floor is met (the empty case and the second call), and refuse an identity clash by name.
+// extendFloor (GF-1, batches GF-2 T3) — the append path of the golden floor. The committed floor streams are the expected values:
+// the path must reproduce them byte for byte, one BATCH at a time (each maximal run of consecutive floor streams, from the streams
+// preceding it and the configs those reference), touch nothing it did not add, do nothing when the floor is met (the empty case
+// and the second call), and refuse an identity clash by name.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
-import { readCorpus, type GoldenCorpus } from "./golden.ts";
-import { eventToken, floorHoles as holesOf } from "./golden-floor.ts";
-import { extendFloor, FLOOR_SEED_STRIDE, kernelStrikes, SCENARIOS, strikeKernelEvent, type Built, type Ctx, type KernelStrike, type Scenario } from "./golden-floor-streams.ts";
+import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, type GoldenCorpus, type GoldenStream } from "./golden.ts";
+import { eventToken, floorHoles as holesOf, floorRequirement, overlayToken, undoToken } from "./golden-floor.ts";
+import {
+  corpusBefore,
+  expungeStrike,
+  extendFloor,
+  floorBatches,
+  FLOOR_SEED_STRIDE,
+  isFloorStream as isFloor,
+  kernelStrikes,
+  reproduceFloorBatch,
+  SCENARIOS,
+  SPLICED_KERNEL,
+  strikeKernelEvent,
+  type Built,
+  type Ctx,
+  type KernelStrike,
+  type Scenario,
+} from "./golden-floor-streams.ts";
 import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage, outcomeOf, playRecorded } from "../core/events.ts";
 import { resolvePositions } from "../sport/catalog.ts";
-import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
+import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 import { UNDOABLE_KERNEL } from "./golden-floor.ts";
 
-const isFloor = (s: { seed: number }): boolean => s.seed >= FLOOR_SEED_STRIDE;
-/** The corpus as it stood when the floor streams were generated: every stream BEFORE the first floor stream, and none of
- *  what was appended after (a later `EXTEND_GOLDEN` appends generator walks at the END; the floor was never measured
- *  against them). */
+/** The corpus as it stood when its FIRST floor batch was generated: the streams before that batch, and the configs they reference. */
 const beforeFloor = (c: GoldenCorpus): GoldenCorpus => {
-  const first = c.streams.findIndex(isFloor);
-  return { ...c, streams: first < 0 ? c.streams : c.streams.slice(0, first) };
+  const first = floorBatches(c)[0];
+  return first === undefined ? c : corpusBefore(c, first.start);
 };
 /** The same corpus up to (not including) the stream at `index`: what a floor stream was measured against. */
 const upTo = (c: GoldenCorpus, index: number): GoldenCorpus => ({ ...c, streams: c.streams.slice(0, index) });
@@ -41,33 +55,41 @@ describe("extendFloor — the golden floor's append path", () => {
     expect(sports).toBe(builtinModules.length);
   });
 
-  it("reproduces the committed floor streams byte for byte from a corpus that lacks them, in order, touching nothing else", () => {
+  it("reproduces each committed floor BATCH byte for byte from the streams preceding it, in order, touching nothing else (batches counted, none is a pass)", () => {
+    let batches = 0;
     let floorStreams = 0;
     forEachSport(({ module, key }) => {
       const committed = readCorpus(key);
-      const base = beforeFloor(committed);
-      expect(base.streams.length, `${key}: the generator's walks are still there`).toBeGreaterThan(0);
-      const holesBefore = holesOf(module, base);
-      expect(holesBefore.length, `${key}: without its floor streams the floor has holes`).toBeGreaterThan(0);
-      const result = extendFloor(module, base);
-      // nothing the floor did not add is touched
-      expect(result.corpus.configs, key).toEqual(base.configs);
-      expect(result.corpus.streams.slice(0, base.streams.length), key).toEqual(base.streams);
-      // and what it added is exactly what is committed
-      const added = result.corpus.streams.slice(base.streams.length);
-      const expected = committed.streams.slice(base.streams.length).filter(isFloor);
-      expect(committed.streams.filter(isFloor).length, `${key}: every floor stream sits after the base`).toBe(expected.length);
-      expect(added.length, key).toBe(expected.length);
-      expect(JSON.stringify(added), key).toBe(JSON.stringify(expected));
-      expect(result.appended.length, key).toBe(expected.length);
-      expect(result.stillMissing, key).toEqual([]);
-      expect(holesOf(module, result.corpus), key).toEqual([]);
-      floorStreams += added.length;
+      const sportBatches = floorBatches(committed);
+      expect(sportBatches.length, `${key}: the corpus holds at least one floor batch`).toBeGreaterThan(0);
+      sportBatches.forEach((batch, n) => {
+        const base = corpusBefore(committed, batch.start);
+        expect(base.streams.length, `${key} batch ${n}: the generator's walks are still there`).toBeGreaterThan(0);
+        expect(holesOf(module, base).length, `${key} batch ${n}: without its streams the floor has holes`).toBeGreaterThan(0);
+        const result = extendFloor(module, base);
+        // nothing the floor did not add is touched
+        expect(result.corpus.configs, `${key} batch ${n}`).toEqual(base.configs);
+        expect(result.corpus.streams.slice(0, base.streams.length), `${key} batch ${n}`).toEqual(base.streams);
+        // and the first of what it added is exactly the batch that is committed (a later batch exists because the floor grew after this one)
+        const added = result.corpus.streams.slice(base.streams.length);
+        expect(added.length, `${key} batch ${n}: at least the committed streams`).toBeGreaterThanOrEqual(batch.streams.length);
+        expect(JSON.stringify(added.slice(0, batch.streams.length)), `${key} batch ${n}`).toBe(JSON.stringify(batch.streams));
+        expect(JSON.stringify(reproduceFloorBatch(module, committed, batch).slice(0, batch.streams.length)), `${key} batch ${n}: reproduceFloorBatch says the same`).toBe(JSON.stringify(batch.streams));
+        if (n === sportBatches.length - 1) {
+          // the LAST batch left the floor met: nothing more would be appended, and nothing is missing
+          expect(added.length, `${key}: the last batch is everything the floor appends`).toBe(batch.streams.length);
+          expect(result.stillMissing, key).toEqual([]);
+          expect(holesOf(module, result.corpus), key).toEqual([]);
+        }
+        batches++;
+        floorStreams += batch.streams.length;
+      });
     });
+    expect(batches, "one batch per sport at least").toBeGreaterThanOrEqual(builtinModules.length);
     expect(floorStreams).toBeGreaterThan(builtinModules.length * 4);
     // Every sport's scenarios, including cricket's search for a tied match (a few hundred seeds): 1.1 s plain, 4.7 s under
     // the CI coverage run, so it carries an explicit budget rather than the 5 s default.
-  }, 30_000);
+  }, 120_000);
 
   it("every committed floor stream closes a hole the streams PRECEDING it in the corpus left open (no noise kept)", () => {
     // The keep-rule: a scenario's stream is appended only when it reduces the holes. Measured against what came before it
@@ -214,17 +236,18 @@ describe("the undo stream strikes the KERNEL events that decide or end a match, 
     return { effective, abandonInForce };
   };
 
-  it("in every sport, a recorded void strikes each of core.forfeit and core.abandon: it took effect, the void clears it, and play resumes to a result", () => {
+  it("in every sport, the undo stream's void strikes each of core.forfeit and core.abandon: it took effect, the void clears it, and play resumes to a result", () => {
     let proofs = 0;
     const seen = new Map<string, Set<string>>();
     forEachSport(({ key }) => {
-      for (const stream of readCorpus(key).streams.filter(isFloor)) {
+      // (the undo scenario's own stream: the settle and expunge stories strike things too, and are held to their own readings below)
+      for (const stream of readCorpus(key).streams.filter((s) => isFloor(s) && s.seed < 2 * FLOOR_SEED_STRIDE)) {
         const { effective, abandonInForce } = setup(key, stream);
         stream.events.forEach((event, v) => {
           if (event.type !== "core.void") return;
           const t = Number(event.voids!.slice(2));
           const target = stream.events[t]!;
-          if (!UNDOABLE_KERNEL.includes(target.type)) return;
+          if (!SPLICED_KERNEL.includes(target.type)) return;
           const inForce = (count: number): boolean => (target.type === "core.forfeit" ? effective(stream.events, count) !== null : abandonInForce(stream.events, count));
           expect(effective(stream.events, t), `${key} ${target.type}: live before it`).toBeNull();
           expect(inForce(t + 1), `${key} ${target.type}: it takes effect`).toBe(true);
@@ -242,9 +265,25 @@ describe("the undo stream strikes the KERNEL events that decide or end a match, 
       }
     });
     for (const m of builtinModules) {
-      for (const type of UNDOABLE_KERNEL) expect(seen.get(m.key)?.has(type), `${m.key} ${type}`).toBe(true);
+      for (const type of SPLICED_KERNEL) expect(seen.get(m.key)?.has(type), `${m.key} ${type}`).toBe(true);
     }
-    expect(proofs).toBeGreaterThanOrEqual(builtinModules.length * UNDOABLE_KERNEL.length);
+    expect(proofs).toBeGreaterThanOrEqual(builtinModules.length * SPLICED_KERNEL.length);
+  });
+
+  it("every undoable kernel event has a scenario that strikes it: the undo scenario the spliced ones, the settle scenario the rest (derived from UNDOABLE_KERNEL)", () => {
+    const served = (id: string): string[] => {
+      const ctx: Ctx = { module: builtinModules[0]!, corpus: readCorpus(builtinModules[0]!.key), cfgNames: [], holes: new Set() };
+      return SCENARIOS.find((x) => x.id === id)!.serves(ctx);
+    };
+    const spliced = SPLICED_KERNEL.map(undoToken);
+    expect(UNDOABLE_KERNEL.length).toBeGreaterThan(SPLICED_KERNEL.length);
+    expect(served("undo")).toEqual(expect.arrayContaining(spliced));
+    expect(served("undo"), "the undo scenario cannot strike a settle: it cannot be spliced into a live match").not.toContain(undoToken("core.settle"));
+    const rest = UNDOABLE_KERNEL.filter((t) => !SPLICED_KERNEL.includes(t)).map(undoToken);
+    expect(rest).toEqual([undoToken("core.settle")]);
+    expect(served("settle")).toEqual(expect.arrayContaining(rest));
+    // every undo token of the floor is served by exactly one scenario
+    for (const t of UNDOABLE_KERNEL.map(undoToken)) expect(SCENARIOS.filter((x) => served(x.id).includes(t)).map((x) => x.id), t).toHaveLength(1);
   });
 
   it("each sport's undo stream holds a LATE correction: a sport event struck after later play, so the void is not next to its target (review finding 4)", () => {
@@ -348,5 +387,211 @@ describe("strikeKernelEvent — every guard of the splice is reached (a guard no
     const voided = [START, g, g, { type: "core.void", payload: {}, voids: "e-1" }];
     const dq: KernelStrike = { ...forfeit!, event: { type: "core.forfeit", payload: { by: lineups.home.entrantId, reason: "disqualified" } }, needsPlay: false };
     expect(strikeKernelEvent(ctx, cfg, lineups, voided, dq, 1), "every point has the void in its tail").toBeNull();
+  });
+});
+
+describe("floor batches — a floor is reproduced one maximal run at a time (GF-2 T3)", () => {
+  const donor = (seed: number): GoldenStream => ({ ...readCorpus("badminton").streams[0]!, seed });
+  const withSeeds = (seeds: number[]): GoldenCorpus => ({ ...readCorpus("badminton"), streams: seeds.map(donor) });
+
+  it("empty case first: a corpus with no stream, or no floor stream, has no batch", () => {
+    expect(floorBatches({ ...readCorpus("badminton"), streams: [] })).toEqual([]);
+    expect(floorBatches(withSeeds([1, 2, 3]))).toEqual([]);
+  });
+
+  it("a batch is a MAXIMAL run of consecutive floor streams: a generator walk between two runs splits them, two extends with nothing between are one", () => {
+    const S = FLOOR_SEED_STRIDE;
+    const batches = floorBatches(withSeeds([1, 2, S + 1, 2 * S + 1, 3, S + 2, 3 * S + 1, 3 * S + 2]));
+    expect(batches.map((b) => [b.start, b.streams.map((x) => x.seed)])).toEqual([
+      [2, [S + 1, 2 * S + 1]],
+      [5, [S + 2, 3 * S + 1, 3 * S + 2]],
+    ]);
+    // a floor stream first, and last
+    expect(floorBatches(withSeeds([S + 1, 1, S + 2])).map((b) => b.start)).toEqual([0, 2]);
+    // the seed that starts the floor is the stride itself, and one below is a walk
+    expect(floorBatches(withSeeds([S - 1, S])).map((b) => b.start)).toEqual([1]);
+  });
+
+  it("corpusBefore keeps the streams before the index and ONLY the configs they reference, in the corpus's own order, without touching the corpus it was given", () => {
+    let multi = 0;
+    forEachSport(({ key }) => {
+      const corpus = readCorpus(key);
+      const frozen = JSON.stringify(corpus);
+      const names = Object.keys(corpus.configs);
+      const none = corpusBefore(corpus, 0);
+      expect(none.streams, `${key}: nothing precedes the first stream`).toEqual([]);
+      expect(none.configs, `${key}: and no config is referenced`).toEqual({});
+      const all = corpusBefore(corpus, corpus.streams.length);
+      expect(all.streams, key).toEqual(corpus.streams);
+      expect(Object.keys(all.configs), `${key}: every committed config is referenced by some stream`).toEqual(names);
+      if (names.length > 1) {
+        multi++;
+        // the first stream that uses a config other than the first stream's: before it, that config is not there
+        const second = corpus.streams.findIndex((x) => x.config !== corpus.streams[0]!.config);
+        expect(second, `${key}: a stream of another config`).toBeGreaterThan(0);
+        const before = corpusBefore(corpus, second);
+        expect(Object.keys(before.configs), key).toEqual([corpus.streams[0]!.config]);
+        expect(Object.keys(before.configs).length).toBeLessThan(names.length);
+      }
+      expect({ ...none, configs: corpus.configs, streams: corpus.streams }, `${key}: every other field of the corpus is carried`).toEqual(corpus);
+      expect(JSON.stringify(corpus), `${key}: the input is untouched`).toBe(frozen);
+    });
+    expect(multi, "sports with more than one config were checked").toBeGreaterThan(3);
+  });
+
+  it("a config added AFTER the floor changes what the floor derives under the old rule (every config the corpus holds) and not under the new one — carrom, where a draw-house config widens the requirement", () => {
+    const module = builtinModules.find((m) => m.key === "carrom")!;
+    const committed = readCorpus("carrom");
+    const batch = floorBatches(committed)[0]!;
+    // what a later wave does: a new config (draws allowed on the tie board) and a generator walk of it, after the floor
+    const raw = { ...(committed.configs.default as object), tieBoard: "draw" };
+    const cfg = module.configSchema.parse(raw) as unknown;
+    expect((module.supportsDraws as (c: unknown, s: string) => boolean)(cfg, "league"), "the new config can end level (the sport's own declaration)").toBe(true);
+    const lineups = defaultLineupPair(resolvePositions(module, cfg));
+    const events = buildWalk(module, cfg, lineups, 1, 120).events.map((e) => ({ type: e.type, payload: e.payload }));
+    const walk: GoldenStream = { config: "drawHouse", seed: 1, events, ...storedFields(recomputeStream(module, raw, events, undefined, corpusFormat(committed))) };
+    const grown: GoldenCorpus = { ...committed, configs: { ...committed.configs, drawHouse: raw }, streams: [...committed.streams, slimStream(module, committed, walk)] };
+    expect(floorBatches(grown).map((b) => b.start), "the walk sits after the batch, which is untouched").toEqual([batch.start]);
+    // the new config moves the requirement: carrom had no reason to want a level outcome before it
+    const level = ["outcome:draw", "outcome:tie", "outcome:no_result"] as const;
+    const wanted = (c: GoldenCorpus): string[] => level.filter((t) => floorRequirement(module, c).required.has(t));
+    expect(wanted(committed), "before the config: no level outcome is required of carrom").toEqual([]);
+    expect(wanted(grown).length, "after it: one is").toBeGreaterThan(0);
+
+    const same = (streams: readonly GoldenStream[]): boolean => JSON.stringify(streams.slice(0, batch.streams.length)) === JSON.stringify(batch.streams);
+    // OLD rule: the corpus before the first floor stream, with every config the corpus holds now
+    const oldBase: GoldenCorpus = { ...grown, streams: grown.streams.slice(0, batch.start) };
+    expect(Object.keys(oldBase.configs)).toContain("drawHouse");
+    let oldReproduces: boolean;
+    try {
+      oldReproduces = same(extendFloor(module, oldBase).corpus.streams.slice(oldBase.streams.length));
+    } catch {
+      oldReproduces = false;
+    }
+    expect(oldReproduces, "the old rule derives a different floor from the same streams").toBe(false);
+    // NEW rule: the configs the preceding streams reference
+    expect(Object.keys(corpusBefore(grown, batch.start).configs)).not.toContain("drawHouse");
+    expect(same(reproduceFloorBatch(module, grown, floorBatches(grown)[0]!)), "the new rule reproduces the batch").toBe(true);
+  }, 60_000);
+
+  it("a floor that GREW after its first batch is two batches, and each reproduces from the streams preceding it (the older one as the first of what today's rules append)", () => {
+    const module = builtinModules.find((m) => m.key === "badminton")!;
+    const committed = readCorpus("badminton");
+    const GF1 = SCENARIOS.filter((x) => x.id !== "settle" && x.id !== "expunge");
+    expect(GF1.length, "the rules as GF-1 shipped them").toBe(SCENARIOS.length - 2);
+    // the floor as GF-1 left it, a later wave's walk, then the floor as it is today
+    const first = extendFloor(module, beforeFloor(committed), GF1).corpus;
+    const walkStream = slimStream(module, first, { ...committed.streams[0]!, seed: 99_001 });
+    const later: GoldenCorpus = { ...first, streams: [...first.streams, walkStream] };
+    const grown = extendFloor(module, later, SCENARIOS);
+    expect(grown.appended.length, "the grown floor appended streams").toBeGreaterThan(0);
+    const batches = floorBatches(grown.corpus);
+    expect(batches.length, "the walk splits the floor into two runs").toBe(2);
+    expect(batches[1]!.start, "the second run starts right after the walk").toBe(later.streams.length);
+    batches.forEach((batch, n) => {
+      const reproduced = reproduceFloorBatch(module, grown.corpus, batch);
+      expect(JSON.stringify(reproduced.slice(0, batch.streams.length)), `batch ${n}`).toBe(JSON.stringify(batch.streams));
+    });
+    // the older batch is only the FIRST of what today's rules append there (the settle story is theirs too): a whole-run comparison would be wrong
+    expect(reproduceFloorBatch(module, grown.corpus, batches[0]!).length).toBeGreaterThan(batches[0]!.streams.length);
+    // the newer batch was derived with the walk and the older batch in front of it
+    expect(corpusBefore(grown.corpus, batches[1]!.start).streams.length).toBe(batches[1]!.start);
+  }, 60_000);
+});
+
+describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's own reading", () => {
+  const stories = (key: string, scenarioIndex: number) => readCorpus(key).streams.filter((s) => s.seed >= scenarioIndex * FLOOR_SEED_STRIDE && s.seed < (scenarioIndex + 1) * FLOOR_SEED_STRIDE);
+  const readingOf = (key: string, stream: GoldenStream) => {
+    const module = builtinModules.find((m) => m.key === key)!;
+    const corpus = readCorpus(key);
+    const cfg = module.configSchema.parse(corpus.configs[stream.config]) as unknown;
+    const lineups = (stream.lineups as never) ?? defaultLineupPair(resolvePositions(module, cfg));
+    const folded = (count: number) => foldMatchWithStoppage(module as never, cfg as never, lineups, stream.events.slice(0, count).map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 });
+    return { module, lineups: lineups as { home: { entrantId: string }; away: { entrantId: string } }, folded, effective: (count: number) => outcomeOf(module as never, folded(count) as never) };
+  };
+
+  it("the scenario order is the order a floor is reproduced in: settle and expunge are APPENDED after the GF-1 stories", () => {
+    expect(SCENARIOS.map((x) => x.id)).toEqual(["undo", "stoppage", "abandon", "walkover", "double_walkover", "retired", "disqualified", "withdrew", "settle", "expunge"]);
+  });
+
+  it("every sport has one settle stream; where the floor wants a withdrawal over a level result it is the level route, elsewhere the abandon route, and the kernel reads each step as the story says", () => {
+    let level = 0;
+    let abandoned = 0;
+    forEachSport(({ key, module }) => {
+      const found = stories(key, 9);
+      expect(found.length, `${key}: one settle stream`).toBe(1);
+      const stream = found[0]!;
+      const { lineups, folded, effective } = readingOf(key, stream);
+      const requirement = floorRequirement(module, readCorpus(key)).required;
+      const levelSport = requirement.has(overlayToken("levelWithdrawal", "set"));
+      const types = stream.events.map((e) => e.type);
+      const n = stream.events.findIndex((e) => e.type === "core.forfeit" || e.type === "core.abandon");
+      expect(n, `${key}: the story's first kernel event`).toBeGreaterThan(0);
+      if (levelSport) {
+        // [walk to a level result] withdrew, void, settle, void, settle
+        expect(types.slice(n), key).toEqual(["core.forfeit", "core.void", "core.settle", "core.void", "core.settle"]);
+        expect(stream.events[n]!.payload, key).toEqual({ by: lineups.home.entrantId, reason: "withdrew" });
+        const held = effective(n);
+        expect(held && ["draw", "tie", "no_result"].includes(held.kind), `${key}: the walk ended level (${JSON.stringify(held)})`).toBe(true);
+        expect(folded(n).levelWithdrawal, key).toBeNull();
+        expect(folded(n + 1).levelWithdrawal, `${key}: the withdrawal is laid over the level result`).not.toBeNull();
+        expect(effective(n + 1), `${key}`).toMatchObject({ kind: "award", reason: "withdrew" });
+        expect(folded(n + 2).levelWithdrawal, `${key}: the void takes it away`).toBeNull();
+        expect(effective(n + 2), `${key}: and the level result is back`).toEqual(held);
+        expect(effective(n + 3), `${key}: the settle decides it`).toMatchObject({ kind: "win", method: "settled_organiser", winner: lineups.home.entrantId });
+        expect(effective(n + 4), `${key}: its void takes the win away`).toEqual(held);
+        level++;
+      } else {
+        expect(types.slice(n), key).toEqual(["core.abandon", "core.settle", "core.void", "core.settle"]);
+        expect(effective(n + 1), `${key}: an abandoned match decides nothing`).toBeNull();
+        expect(effective(n + 2), `${key}: the settle decides it`).toMatchObject({ kind: "win", method: "settled_organiser", winner: lineups.home.entrantId });
+        expect(effective(n + 3), `${key}: its void takes the win away`).toBeNull();
+        abandoned++;
+      }
+      expect(effective(stream.events.length), `${key}: said again by lot, for the other side`).toMatchObject({ kind: "win", method: "settled_lot", winner: lineups.away.entrantId });
+      expect(folded(stream.events.length).settlement, key).not.toBeNull();
+    });
+    expect(level, "the level-capable sports: football, cricket, boardgame, generic, icehockey, hockey").toBeGreaterThanOrEqual(5);
+    expect(abandoned, "and the rest").toBeGreaterThanOrEqual(5);
+    expect(level + abandoned).toBe(builtinModules.length);
+  }, 60_000);
+
+  it("every sport has one expunge stream: the abandon takes the match off the table, its void puts it back, and play carries on to the result it had", () => {
+    let proofs = 0;
+    forEachSport(({ key }) => {
+      const found = stories(key, 10);
+      expect(found.length, `${key}: one expunge stream`).toBe(1);
+      const stream = found[0]!;
+      const { folded, effective } = readingOf(key, stream);
+      const at = stream.events.findIndex((e) => e.type === "core.abandon");
+      expect(at, `${key}: an abandon`).toBeGreaterThan(0);
+      expect(stream.events[at]!.payload, key).toMatchObject({ expunge: true });
+      expect(stream.events[at + 1], `${key}: struck at once`).toEqual({ type: "core.void", payload: {}, voids: `e-${at}` });
+      expect(folded(at).expunged, `${key}: live before it`).toBe(false);
+      expect(folded(at + 1).expunged, `${key}: the abandon expunges the match`).toBe(true);
+      expect(effective(at + 1), `${key}: and an expunged match has no outcome`).toBeNull();
+      expect(folded(at + 2).expunged, `${key}: the void puts it back`).toBe(false);
+      expect(stream.events.length, `${key}: play resumes`).toBeGreaterThan(at + 2);
+      expect(effective(stream.events.length), `${key}: to a result`).not.toBeNull();
+      proofs++;
+    });
+    expect(proofs).toBe(builtinModules.length);
+  }, 60_000);
+
+  it("expungeStrike is the abandon the withdrawal cascade writes (expunge flagged) and is in force exactly while the kernel says expunged", () => {
+    const module = builtinModules.find((m) => m.key === "football")!;
+    const corpus = readCorpus("football");
+    const cfg = module.configSchema.parse(corpus.configs.default) as unknown;
+    const lineups = defaultLineupPair(resolvePositions(module, cfg));
+    const ctx: Ctx = { module, corpus, cfgNames: ["default"], holes: new Set() };
+    const strike = expungeStrike();
+    expect(strike.type).toBe("core.abandon");
+    expect(strike.event.payload).toMatchObject({ expunge: true });
+    const start = { type: "core.start", payload: {} };
+    expect(strike.inForce(ctx, cfg, lineups, [start])).toBe(false);
+    expect(strike.inForce(ctx, cfg, lineups, [start, strike.event])).toBe(true);
+    expect(strike.inForce(ctx, cfg, lineups, [start, strike.event, { type: "core.void", payload: {}, voids: "e-1" }])).toBe(false);
+    // a PLAIN abandon (no flag) is not an expunge
+    expect(strike.inForce(ctx, cfg, lineups, [start, { type: "core.abandon", payload: { reason: "rain" } }])).toBe(false);
   });
 });
