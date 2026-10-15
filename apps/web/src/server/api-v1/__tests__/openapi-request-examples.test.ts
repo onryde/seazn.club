@@ -45,16 +45,25 @@ describe("OpenAPI — every published request example parses against its own sch
   // or the generator moved), and one that names no route is a typo: both are caught here, with the generator alone as witness.
   it("every patch names a route with a body, and each is load-bearing: the generator alone is refused by that route's schema (counted)", () => {
     let checked = 0;
+    let removed = 0;
     for (const key of Object.keys(REQUEST_EXAMPLE_PATCHES)) {
       const route = ROUTES.find((r) => `${r.method.toUpperCase()} ${r.path}` === key);
       expect(route?.request, `${key}: a route with a request body`).toBeDefined();
       const alone = route!.request!.safeParse(requestExampleOf(route!, { patched: false }));
       expect(alone.success, `${key}: the generated example needs its patch`).toBe(false);
-      expect(route!.request!.safeParse(requestExampleOf(route!)).success, `${key}: and the patched one parses`).toBe(true);
+      const patched = requestExampleOf(route!) as Record<string, unknown>;
+      expect(route!.request!.safeParse(patched).success, `${key}: and the patched one parses`).toBe(true);
+      // A property a patch removes is absent from the example, not present as `undefined` (what a consumer of the object sees).
+      for (const [prop, value] of Object.entries(REQUEST_EXAMPLE_PATCHES[key]!)) {
+        if (value !== undefined) continue;
+        expect(Object.hasOwn(patched, prop), `${key}: ${prop} is removed, not set to undefined`).toBe(false);
+        removed++;
+      }
       checked++;
     }
     expect(checked, "anti-vacuity: patches checked").toBe(Object.keys(REQUEST_EXAMPLE_PATCHES).length);
     expect(checked).toBeGreaterThan(0);
+    expect(removed, "anti-vacuity: properties a patch removes were checked").toBeGreaterThan(0);
   });
 
   // `minItems` asks for several places: a tie-break order of two entrants is two DIFFERENT entrants, never one repeated.

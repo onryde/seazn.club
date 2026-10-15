@@ -323,6 +323,13 @@
      "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
     ],
     "name": "every published request example parses against its own schema"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
+    ],
+    "name": "every patch names a route with a body, and each is load-bearing"
    }
   ]
  },
