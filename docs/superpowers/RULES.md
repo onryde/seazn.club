@@ -62,6 +62,17 @@ backwards-compatible one; don't contort a design to dodge a migration.
   Opus `reviewer`. The `*-sonnet` agents stay until the engine split's Phase 1
   closes.
   Reviews the implementer's diff, reports gaps as a list, not prose.
+- **2026-10-14: ESLint zero-warnings exception (owner).** Next to the engine-split
+  exception above: ESLint zero-warnings tasks (clearing a warning class, the
+  review-minor fixes that ride with it, wiring `--max-warnings 0`) use
+  `implementer-sonnet` and `reviewer-sonnet`, with ONE Opus `reviewer` pass over
+  the whole branch before the PR. Routine runner dispatches — run-and-report,
+  no judgment (a lint run, a scoped test run, a smoke or e2e run whose result is
+  read off a count) — run on Sonnet. Anything that decides what the code should
+  do stays Opus-minimum. The ruling is about the work, not the agent files: the
+  `*-sonnet` agent definitions are not tracked in git (`git ls-files` lists only
+  `implementer`, `reviewer` and `scout`), so their description lines — which
+  still say "W2c-ONLY" — are a local edit for whoever holds them.
 
 **Loop**: Implementer → Reviewer → gap list → Implementer → Reviewer → …
 repeat until the review is clean AND all tests are green.
