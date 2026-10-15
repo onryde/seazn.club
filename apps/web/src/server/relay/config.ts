@@ -145,6 +145,15 @@ export const RUNNER_OBSERVE_SLACK_SECONDS = 20;
 export const RUNNER_MAX_ATTEMPTS = 2;
 /** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. */
 export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
+/** Compositor spec §5.3; served as `heartbeatIntervalMs` (R2004); R2003's composed stale rule is 3× this. Defined
+ *  HERE only (R2002): R2003 and R2004 import it. */
+export const RELAY_HEARTBEAT_INTERVAL_MS = 5_000;
+/** Compositor ADR 0006 / `_FINDINGS.md` F-002 (C00 owner session, 2026-10-15): the camera→compositor delay measured
+ *  IN-CHAIN (the overlay's clock against the camera's, 3083 and 3105 ms). The default `overlayDelayMs` a composed
+ *  session serves when its fixture sets no override (R2004 writes `settings ?? this` at create; the override is
+ *  nullable, null = this default, 0 a real override). PROVISIONAL: n=2 — C11 owes a ≥10-sample in-chain re-measure
+ *  and moves THIS line. */
+export const RELAY_OVERLAY_DELAY_DEFAULT_MS = 3_100;
 /** §5.2: a consume row for the same fixture within 24 h → no second consume. */
 export const CREDIT_REUSE_HOURS = 24;
 /** W23 (capture QR v2, owner 2026-10-01): inside one reuse window, the first THREE restarts that reach video are free;

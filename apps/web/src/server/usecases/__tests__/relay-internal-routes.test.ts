@@ -13,6 +13,8 @@
 // so every rig rides `_rig`'s `generic` division. The two MODES are what varies here, and both appear below.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 // The sample writer, passed through untouched — one test makes it fail ONCE, to prove a telemetry failure can never
 // cost a beat its lifecycle half (Task 11 review I1b). Every other test runs the real writer.
@@ -26,6 +28,7 @@ const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql } from "@/lib/db";
+import { RelayHeartbeatReply, RelayJobSession } from "@/server/api-v1/schemas";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS } from "@/server/relay/config";
@@ -482,5 +485,329 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     }
     expect(checked).toBe(2);
     expect(await samples(p.sessionId), "a beat on an ended session is not recorded").toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R2002: the relay-job.v1 contract through the REAL routes. The bodies are the contract's own hand-written vectors
+// (docs/contracts/fixtures/relay-job.v1), so what is posted here is exactly what the compositor vendors and sends.
+// ---------------------------------------------------------------------------------------------------------------
+const CONTRACT_FIXTURES = resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/relay-job.v1");
+const vector = (name: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(resolve(CONTRACT_FIXTURES, `${name}.json`), "utf8")) as Record<string, unknown>;
+/** The fields R2 adds to the beat, typed from compositor spec 2026-10-14 §5.3 / C06 `HealthReport` / C07 `heartbeat_wire`. */
+const R2_HEALTH_FIELDS = ["programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps", "rung", "scoreStale"];
+/** The final beat's (owner scope addition 2026-10-15; C06 `ExitReason`) — only ever with `state: "stopped"` (review M6). */
+const EXIT_FIELDS = ["exitReason", "exitDetail"];
+const R2_BEAT_FIELDS = [...R2_HEALTH_FIELDS, ...EXIT_FIELDS];
+/** Spec §5.3: the keys only a composed session carries (R2004 serves them). */
+const COMPOSED_ONLY = ["input", "output", "heartbeatIntervalMs", "overlayUrl"];
+
+/** Store 1: the whole latest body (`fixture_stream_sessions.last_heartbeat`). */
+async function lastHeartbeat(sid: string): Promise<Record<string, unknown> | null> {
+  const [r] = await sql<{ last_heartbeat: Record<string, unknown> | null }[]>`select last_heartbeat from fixture_stream_sessions where id = ${sid}`;
+  return r!.last_heartbeat;
+}
+/** Store 2: the NEWEST sample's raw (`fixture_stream_samples.raw`, the sanitised body), and how many samples exist. */
+async function newestRaw(sid: string): Promise<{ raw: Record<string, unknown>; fps: number | null; n: number }> {
+  const rows = await sql<{ raw: Record<string, unknown>; fps: number | null }[]>`
+    select raw, fps from fixture_stream_samples where session_id = ${sid} and source = 'heartbeat' order by id desc`;
+  expect(rows.length, "a sample exists").toBeGreaterThan(0);
+  return { raw: rows[0]!.raw, fps: rows[0]!.fps, n: rows.length };
+}
+
+describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal routes", () => {
+  it("heartbeat-full through the ROUTE is 200 { desiredState }, and each R2 field round-trips in BOTH stores — last_heartbeat and the newest sample's raw", async () => {
+    const s = await session();
+    const full = vector("heartbeat-full");
+    for (const k of R2_HEALTH_FIELDS) expect(full, `premise: the vector carries ${k}`).toHaveProperty(k);
+    const res = await postBeat(s.sessionId, full, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    expect(((await json(res)) as { data: unknown }).data).toEqual({ desiredState: "live" });
+    const stored = await lastHeartbeat(s.sessionId);
+    const { raw } = await newestRaw(s.sessionId);
+    let checked = 0;
+    for (const k of R2_HEALTH_FIELDS) {
+      expect(stored, `last_heartbeat.${k}`).toHaveProperty(k, full[k]);
+      expect(raw, `samples.raw.${k}`).toHaveProperty(k, full[k]);
+      checked += 2;
+    }
+    expect(checked, "anti-vacuity: ten fields, two stores (the exit fields are the final beat's test below)").toBe(20);
+    // The whole body, both stores — the R1 facts beside the R2 ones (ruling 13: the whole body in raw).
+    expect(stored).toEqual(full);
+    expect(raw).toEqual(full);
+  });
+
+  it("heartbeat-minimal: every R2 field is an ABSENT key in both stores — never null, never 0 — on a fresh session AND after a full beat (the latest body is replaced, never merged; the history keeps the earlier beat)", async () => {
+    const minimal = vector("heartbeat-minimal");
+    expect(Object.keys(minimal), "premise: state alone").toEqual(["state"]);
+    const expectAbsent = (row: Record<string, unknown> | null, label: string): number => {
+      expect(row, label).not.toBeNull();
+      let n = 0;
+      for (const k of R2_BEAT_FIELDS) {
+        expect(row, `${label}: ${k} is not a key`).not.toHaveProperty(k);
+        n++;
+      }
+      expect(Object.keys(row!), `${label}: state alone`).toEqual(["state"]);
+      return n;
+    };
+    // A fresh session: the first beat it ever stores is the minimal one.
+    const fresh = await session();
+    expect((await postBeat(fresh.sessionId, minimal, { token: fresh.jobToken })).status).toBe(200);
+    let checked = expectAbsent(await lastHeartbeat(fresh.sessionId), "fresh last_heartbeat");
+    checked += expectAbsent((await newestRaw(fresh.sessionId)).raw, "fresh samples.raw");
+    // The sequence: a full beat, then the minimal one. A stale carry-over (a merge into last_heartbeat) would show here.
+    const s = await session();
+    expect((await postBeat(s.sessionId, vector("heartbeat-full"), { token: s.jobToken })).status).toBe(200);
+    expect((await postBeat(s.sessionId, minimal, { token: s.jobToken })).status).toBe(200);
+    checked += expectAbsent(await lastHeartbeat(s.sessionId), "after full, last_heartbeat");
+    const newest = await newestRaw(s.sessionId);
+    checked += expectAbsent(newest.raw, "after full, the newest samples.raw");
+    expect(checked, "anti-vacuity: twelve fields, four reads").toBe(48);
+    // The positive pair: the earlier sample still carries the full beat's fields — absence above is not a lost write.
+    expect(newest.n).toBe(2);
+    const [{ raw: first }] = await sql<{ raw: Record<string, unknown> }[]>`
+      select raw from fixture_stream_samples where session_id = ${s.sessionId} and source = 'heartbeat' order by id asc limit 1`;
+    for (const k of R2_HEALTH_FIELDS) expect(first, `the earlier sample keeps ${k}`).toHaveProperty(k);
+  });
+
+  it("a present 0 is a measurement: heartbeat-zero-is-a-measurement stores fps 0 (typed column too), and zero counters store 0 — the differential to the absent case above", async () => {
+    const s = await session();
+    expect((await postBeat(s.sessionId, vector("heartbeat-zero-is-a-measurement"), { token: s.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(s.sessionId)).toHaveProperty("fps", 0);
+    const zero = await newestRaw(s.sessionId);
+    expect(zero.raw).toHaveProperty("fps", 0);
+    expect(zero.fps, "the typed column is 0, not NULL").toBe(0);
+    const counters = { state: "playing", inputKicks: 0, pipelineRebuilds: 0, sinkSwaps: 0, inputKickAlert: false, scoreStale: false };
+    expect((await postBeat(s.sessionId, counters, { token: s.jobToken })).status).toBe(200);
+    const stored = await lastHeartbeat(s.sessionId);
+    const { raw } = await newestRaw(s.sessionId);
+    let checked = 0;
+    for (const [k, v] of Object.entries(counters)) {
+      expect(stored, `last_heartbeat.${k}`).toHaveProperty(k, v);
+      expect(raw, `samples.raw.${k}`).toHaveProperty(k, v);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("heartbeat-invalid-unknown-field is a 400 and writes nothing; the minimal beat beside it is 200 { desiredState } (strict, not stripping)", async () => {
+    const s = await session();
+    const bad = await postBeat(s.sessionId, vector("heartbeat-invalid-unknown-field"), { token: s.jobToken });
+    expect(bad.status).toBe(400);
+    expect((await json(bad)).ok).toBe(false);
+    expect(await samples(s.sessionId), "a refused body is not a sample").toEqual([]);
+    expect(await lastHeartbeat(s.sessionId), "a refused body is not the latest beat").toBeNull();
+    const good = await postBeat(s.sessionId, vector("heartbeat-minimal"), { token: s.jobToken });
+    expect(good.status).toBe(200);
+    expect(((await json(good)) as { data: unknown }).data).toEqual({ desiredState: "live" });
+    expect(await samples(s.sessionId)).toHaveLength(1);
+  });
+
+  // Owner scope addition (2026-10-15): the final beat carries the exit reason. Recorded in both beat stores — and ONLY
+  // there: what web does with a stopped beat is R2003's, so this asserts the record, never a reaction. The runner's own
+  // exit columns are written from the OBSERVED exit (A5), never from a beat.
+  it("heartbeat-final-fatal through the ROUTE: exitReason and exitDetail land in BOTH stores; the runner's exit columns are not the beat's to write", async () => {
+    const s = await session();
+    const fatal = vector("heartbeat-final-fatal");
+    expect(fatal, "premise").toMatchObject({ state: "stopped", exitReason: "fatal" });
+    const res = await postBeat(s.sessionId, fatal, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    // The reply is a reply (its value after a stopped beat is R2003's to decide, not this test's).
+    const reply = ((await json(res)) as { data: unknown }).data;
+    expect(RelayHeartbeatReply.safeParse(reply).success, JSON.stringify(reply)).toBe(true);
+    const stored = await lastHeartbeat(s.sessionId);
+    const { raw } = await newestRaw(s.sessionId);
+    let checked = 0;
+    for (const k of ["exitReason", "exitDetail"]) {
+      expect(stored, `last_heartbeat.${k}`).toHaveProperty(k, fatal[k]);
+      expect(raw, `samples.raw.${k}`).toHaveProperty(k, fatal[k]);
+      checked += 2;
+    }
+    expect(checked).toBe(4);
+    expect(raw).toEqual(fatal);
+    // A stopped beat moves the runner today (callback_stopped — unchanged here; R2003 owns it). The exit REASON adds
+    // nothing to that: a twin session sent the same stopped beat WITHOUT the two fields ends with the same runner facts.
+    const twin = await session();
+    expect((await postBeat(twin.sessionId, { state: "stopped" }, { token: twin.jobToken })).status).toBe(200);
+    const pick = (r: Awaited<ReturnType<typeof row>>) => ({ state: r.state, runner_state: r.runner_state, desired_state: r.desired_state,
+      runner_exit_code: r.runner_exit_code, runner_oom_killed: r.runner_oom_killed, runner_requested_stop: r.runner_requested_stop });
+    expect(pick(await row(s.sessionId)), "the reason is recorded, never acted on").toEqual(pick(await row(twin.sessionId)));
+    expect((await row(s.sessionId)).runner_exit_code, "fatal's 70 is the Machine's word, not an observed exit").not.toBe(70);
+    // The two refusals the addition owes, through the same route: an exit reason outside C06's vocabulary, and a
+    // detail one character past its bound. Each is a 400 that writes nothing.
+    const t = await session();
+    for (const [label, body] of [
+      ["exitReason \"crashed\"", vector("heartbeat-invalid-exit-reason")],
+      ["exitDetail of 201 characters", { ...fatal, exitDetail: "x".repeat(201) }],
+      ["an exit reason on a playing beat (review M6)", vector("heartbeat-invalid-exit-while-playing")],
+    ] as const) {
+      expect((await postBeat(t.sessionId, body, { token: t.jobToken })).status, label).toBe(400);
+    }
+    expect(await samples(t.sessionId)).toEqual([]);
+    expect(await lastHeartbeat(t.sessionId)).toBeNull();
+    // The positive pair at the bound: exactly 200 characters is admitted and stored whole.
+    const at200 = { ...fatal, exitDetail: "y".repeat(200) };
+    expect((await postBeat(t.sessionId, at200, { token: t.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(t.sessionId)).toHaveProperty("exitDetail", at200.exitDetail);
+    expect((await newestRaw(t.sessionId)).raw).toHaveProperty("exitDetail", at200.exitDetail);
+  });
+
+  // Review Q3 (defence in depth): the compositor redacts exitDetail, and the server scrubs it again before EITHER store
+  // keeps it. A whole job token (~240 characters) cannot fit the detail's 200, so what can ride is a FRAGMENT of one —
+  // JWT-shaped, which is what the scrub catches — and a query string.
+  it("review Q3: the server scrubs exitDetail before either store keeps it — a fragment of the session's own job token and a query are gone, and both stores hold the same text", async () => {
+    const s = await session();
+    expect(s.jobToken.length, "premise: a whole job token is longer than the detail's bound").toBeGreaterThan(200);
+    const detail = `auth refused for ${s.jobToken.slice(0, 80)} at https://relay.example.test/v1/sessions?st=abc&host=compositor`;
+    expect(detail.length, "premise: the detail is within its bound").toBeLessThanOrEqual(200);
+    const res = await postBeat(s.sessionId, { state: "stopped", exitReason: "refused", exitDetail: detail }, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    const want = "auth refused for [redacted] at https://relay.example.test/v1/sessions";
+    const stored = await lastHeartbeat(s.sessionId);
+    const { raw } = await newestRaw(s.sessionId);
+    expect(stored, "last_heartbeat").toHaveProperty("exitDetail", want);
+    expect(raw, "samples.raw").toHaveProperty("exitDetail", want);
+    expect(JSON.stringify([stored, raw]), "no piece of the token in either store").not.toContain(s.jobToken.slice(0, 40));
+    // Only the detail is rewritten: the rest of the beat is stored as sent.
+    expect(stored).toMatchObject({ state: "stopped", exitReason: "refused" });
+    // Confirm pass, minor 2: a SIGNATURE-only fragment is not JWT-shaped (no `eyJ`), so only the token's own parts,
+    // redacted as named secrets, catch it.
+    const t = await session();
+    const signature = t.jobToken.split(".")[2]!;
+    expect(signature, "premise: the signature alone is not JWT-shaped").not.toMatch(/^eyJ/);
+    expect((await postBeat(t.sessionId, { state: "stopped", exitReason: "refused", exitDetail: `signature ${signature} rejected` }, { token: t.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(t.sessionId), "last_heartbeat").toHaveProperty("exitDetail", "signature [redacted] rejected");
+    expect((await newestRaw(t.sessionId)).raw, "samples.raw").toHaveProperty("exitDetail", "signature [redacted] rejected");
+  });
+
+  // Review M4: Session.fixtureId is `string | null` — V410 `on delete set null`, the session outlives its fixture. The
+  // runtime witness: the Machine's own GET after the fixture is gone, in both modes.
+  it("review M4: delete the fixture mid-session and GET facts answers fixtureId null — still a strict RelayJobSession", async () => {
+    let checked = 0;
+    for (const mode of ["composed", "passthrough"] as const) {
+      const x = await session(mode);
+      const before = ((await json(await getFacts(x.sessionId, { token: x.jobToken }))) as { data: Record<string, unknown> }).data;
+      expect(before.fixtureId, `${mode}: the positive pair — before, the fixture's id`).toBe(x.fixtureId);
+      await sql`delete from fixtures where id = ${x.fixtureId}`;
+      const [{ fixture_id }] = await sql<{ fixture_id: string | null }[]>`select fixture_id from fixture_stream_sessions where id = ${x.sessionId}`;
+      expect(fixture_id, `${mode}: premise — the session row survives with a null fixture`).toBeNull();
+      const res = await getFacts(x.sessionId, { token: x.jobToken });
+      expect(res.status, mode).toBe(200);
+      const data = ((await json(res)) as { data: Record<string, unknown> }).data;
+      expect(data, mode).toHaveProperty("fixtureId", null);
+      expect(RelayJobSession.parse(data), `${mode}: parse keeps every key`).toEqual(data);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("GET facts is a STRICT RelayJobSession: passthrough carries no composed-only key; composed carries none either until R2004 serves them (R2004 turns that half around)", async () => {
+    let checked = 0;
+    for (const mode of ["passthrough", "composed"] as const) {
+      const x = await session(mode);
+      const res = await getFacts(x.sessionId, { token: x.jobToken });
+      expect(res.status, mode).toBe(200);
+      const body = (await json(res)) as { ok: boolean; data: Record<string, unknown> };
+      expect(body.ok).toBe(true);
+      const parsed = RelayJobSession.parse(body.data);
+      expect(parsed, `${mode}: parse keeps every key`).toEqual(body.data);
+      expect(parsed).toMatchObject({ sessionId: x.sessionId, fixtureId: x.fixtureId, mode });
+      for (const k of COMPOSED_ONLY) expect(body.data, `${mode}: ${k}`).not.toHaveProperty(k);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The guard is live on this shape: one key more and the strict session refuses it.
+    const p = await session("passthrough");
+    const data = ((await json(await getFacts(p.sessionId, { token: p.jobToken }))) as { data: Record<string, unknown> }).data;
+    expect(RelayJobSession.safeParse({ ...data, lastExit: { exitCode: 1 } }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R2002: the named consumer of the R2 fields — C17's post-match health review. The query lives in
+// docs/runbooks/relay-health-review.sql (psql `:'sid'`), and it is run here against the real storage the routes wrote.
+// Every expected value is counted off the beats THIS test posts, never off the query.
+// ---------------------------------------------------------------------------------------------------------------
+const HEALTH_REVIEW = resolve(import.meta.dirname, "../../../../../../docs/runbooks/relay-health-review.sql");
+async function healthReview(sid: string): Promise<Record<string, unknown>[]> {
+  const text = readFileSync(HEALTH_REVIEW, "utf8");
+  expect(text, "the runbook takes the session as psql's :'sid'").toContain(":'sid'");
+  return sql.unsafe(text.replaceAll(":'sid'", "$1"), [sid]) as unknown as Promise<Record<string, unknown>[]>;
+}
+
+describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the R2 fields off the real storage", () => {
+  it("one session's beats: phase, link, graphics, ladder and score counts, the counters' maxima, the kick alert and the longest camera backoff — and an unmeasured beat counts as unmeasured, never as 0 or false", async () => {
+    // A second session's beats must never be counted in the first one's review. Each session beats on its own drivers
+    // (`session()` installs the newest one's), so the other one beats first.
+    const other = await session();
+    expect((await postBeat(other.sessionId, vector("heartbeat-full"), { token: other.jobToken })).status).toBe(200);
+    const s = await session();
+    const beats: Record<string, unknown>[] = [
+      { state: "starting", programmePhase: "waiting", input: "connecting", output: "connecting", graphics: "starting", rung: "full", inputKicks: 0, inputKickAlert: false, pipelineRebuilds: 0, sinkSwaps: 0 },
+      { state: "playing", programmePhase: "live", input: "connected", output: "connected", graphics: "ready", rung: "full", inputKicks: 1, inputKickAlert: false, pipelineRebuilds: 0, sinkSwaps: 0, scoreStale: false },
+      vector("heartbeat-full"),   // frozen, input backoff, graphics restarting, 4 kicks + alert, 2 rebuilds, 1 swap, overlay_half_rate, score stale
+      vector("heartbeat-minimal"),   // unmeasured: counted as a beat, never as a measured anything — and it does not end the run
+      { state: "playing", programmePhase: "reconnecting", input: "backoff", output: "connected", graphics: "failed", rung: "fast_preset", inputKicks: 4, inputKickAlert: true, pipelineRebuilds: 3, sinkSwaps: 1, scoreStale: true },
+      { state: "playing", programmePhase: "live", input: "connected", output: "backoff", graphics: "ready", rung: "full", inputKicks: 2, inputKickAlert: false, pipelineRebuilds: 3, sinkSwaps: 2, scoreStale: false },
+      { state: "playing", programmePhase: "live", input: "backoff", output: "connected", graphics: "ready", rung: "full", inputKicks: 2, inputKickAlert: false, pipelineRebuilds: 3, sinkSwaps: 2 },
+      // The first Machine's final beat (it was signalled), then the retry's (fatal) — R2003's one retry, as beats.
+      { state: "stopped", exitReason: "signalled", exitDetail: "SIGTERM: draining before exit" },
+      vector("heartbeat-final-fatal"),
+    ];
+    for (const b of beats) expect((await postBeat(s.sessionId, b, { token: s.jobToken })).status, JSON.stringify(b)).toBe(200);
+    // The beats landed milliseconds apart; space them 5 s apart in posting order, as a Machine beats.
+    await sql`update fixture_stream_samples x set sampled_at = '2026-10-15T12:00:00Z'::timestamptz + make_interval(secs => 5 * (o.n - 1))
+                from (select id, row_number() over (order by id) as n from fixture_stream_samples where session_id = ${s.sessionId}) o
+               where x.id = o.id`;
+
+    const rows = await healthReview(s.sessionId);
+    expect(rows, "one row for one session").toHaveLength(1);
+    const r = rows[0]!;
+    const has = (b: Record<string, unknown>, k: string, v: unknown) => b[k] === v;
+    const count = (k: string, v: unknown) => beats.filter((b) => has(b, k, v)).length;
+    const maxOf = (k: string) => Math.max(...beats.filter((b) => typeof b[k] === "number").map((b) => b[k] as number));
+    expect(r).toMatchObject({
+      session_id: s.sessionId, mode: "composed",
+      beats: beats.length,
+      reported_beats: beats.filter((b) => "programmePhase" in b).length,
+      phase_waiting: count("programmePhase", "waiting"), phase_live: count("programmePhase", "live"),
+      phase_frozen: count("programmePhase", "frozen"), phase_reconnecting: count("programmePhase", "reconnecting"),
+      input_backoff_beats: count("input", "backoff"), output_backoff_beats: count("output", "backoff"),
+      graphics_restarting_beats: count("graphics", "restarting"), graphics_failed_beats: count("graphics", "failed"),
+      kick_alert_beats: count("inputKickAlert", true),
+      rung_stepped_beats: beats.filter((b) => typeof b.rung === "string" && b.rung !== "full").length,
+      score_stale_beats: count("scoreStale", true),
+      max_input_kicks: maxOf("inputKicks"), max_pipeline_rebuilds: maxOf("pipelineRebuilds"), max_sink_swaps: maxOf("sinkSwaps"),
+    });
+    // The camera's first backoff run starts at beat 3 (t=10 s). Beat 4 (t=15 s) measured nothing, so it neither extends
+    // nor ends the run; beat 5 (t=20 s) is still backoff, and beat 6 (t=25 s) is the first REPORTED beat out of it: 15 s.
+    // A query that read the unmeasured beat as "not backoff" would split it into two 5 s runs. Beat 7 (t=30 s) starts a
+    // second run that never ended (the final beat reports no link): 0 s. The longest is the first.
+    expect(Number(r.longest_input_backoff_s)).toBe(15);
+    expect(new Date(r.first_kick_alert_at as string).toISOString()).toBe("2026-10-15T12:00:10.000Z");
+    expect(new Date(r.first_beat_at as string).toISOString()).toBe("2026-10-15T12:00:00.000Z");
+    expect(new Date(r.last_beat_at as string).toISOString()).toBe("2026-10-15T12:00:40.000Z");
+    // The exit reason is the LATEST one reported (the final beat's), never the first (the signalled one before it).
+    expect(r).toMatchObject({ exit_reason: "fatal", exit_detail: "programme start failed: cefsrc not found" });
+    // The latest beat, whole, is the session row's — the review shows it beside the history.
+    expect(r.last_heartbeat).toEqual(beats.at(-1));
+    // The differential to a query that counts the minimal beat's absent fields as measured: it is a beat, not a report.
+    expect(r.beats).not.toBe(r.reported_beats);
+  });
+
+  it("the empty case: a session with no beats is one row of zeros and nulls (never another session's numbers); an unknown session is no row", async () => {
+    const quiet = await session();
+    const busy = await session();   // the newest session: its drivers are the installed ones
+    expect((await postBeat(busy.sessionId, vector("heartbeat-full"), { token: busy.jobToken })).status).toBe(200);
+    const rows = await healthReview(quiet.sessionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      session_id: quiet.sessionId, beats: 0, reported_beats: 0, kick_alert_beats: 0, input_backoff_beats: 0,
+      max_input_kicks: null, longest_input_backoff_s: null, first_beat_at: null, last_heartbeat: null, exit_reason: null, exit_detail: null,
+    });
+    // The positive pair: the busy session's own review sees its one beat.
+    expect((await healthReview(busy.sessionId))[0]).toMatchObject({ beats: 1, reported_beats: 1, kick_alert_beats: 1, max_input_kicks: 4 });
+    expect(await healthReview(randomUUID())).toEqual([]);
   });
 });

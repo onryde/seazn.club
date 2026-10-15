@@ -19,6 +19,15 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   // Dd: the `recording_finalised` event's per-video facts (Cloudflare's own size/duration/dimensions/status)
   "sizeBytes", "durationSeconds", "width", "height", "videoState", "errorReasonCode",
   "bitrateKbps", "fps", "droppedFrames", "cpuPct", "memMb", "encoderSpeed",
+  // R2002: the rest of the Machine's beat, so a sample's raw keeps the WHOLE body (ruling 13) — the two R1 facts the
+  // list had missed, and the R2 compositor's ten (compositor spec §5.3; C14, C15 and C17 read them over time). Enum
+  // words, counts and booleans; `input`/`output` are link states on the beat, and as containers they keep only the
+  // keys this list names (a composed session's input keeps its protocol and bare url, never its stream id or passphrase).
+  "egressBytes", "measuredLatencyMs",
+  "programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps",
+  "rung", "scoreStale",
+  // …and its final beat's why (owner 2026-10-15): an enum word and compositor-redacted text (cut at `?` like any string).
+  "exitReason", "exitDetail",
   "usedMinutes", "limitMinutes", "reservedMinutes", "headroomMinutes", "deleted", "deferred", "count",
   // effects / http
   "ok", "result", "httpStatus", "latencyMs", "retryAfterSeconds", "requestId", "errorCode", "operation", "provider", "method", "pathTemplate",
@@ -57,6 +66,30 @@ function walk(v: unknown, depth: number): unknown {
     return out;
   }
   return undefined; // functions, symbols, bigints: not data
+}
+
+/** A relay token is a JWT: base64url `{"` is `eyJ`. Eight more characters make it a token's header (or more of one),
+ *  never an ordinary word; the dotted segments after it ride along, so a FRAGMENT of a token is still caught. */
+const JWT_SHAPED = /eyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)*/g;
+const REDACTED = "[redacted]";
+/** Below this a "secret" would redact ordinary words — and the replacement could lengthen the text. */
+const MIN_SECRET_LENGTH = REDACTED.length;
+
+/** R2002 review Q3 — defence in depth for a Machine's free text (the final beat's `exitDetail`). The compositor redacts
+ *  it before sending; the server scrubs it again before EITHER beat store keeps it: each named secret (the job token the
+ *  handler holds) AND each of its dot-separated parts (confirm pass: a JWT's signature alone is not JWT-shaped), anything
+ *  JWT-shaped, and everything from the first `?` (the cut `sanitise` makes for samples.raw, so both stores keep the same
+ *  text). Never lengthens the text, and idempotent. */
+export function scrubBeatText(text: string, secrets: readonly string[]): string {
+  const redact = (from: string, patterns: readonly string[]): string =>
+    patterns.filter((p) => p.length >= MIN_SECRET_LENGTH).reduce((acc, p) => acc.split(p).join(REDACTED), from);
+  // Widest first, so each secret is ONE redaction: whole secrets, then any JWT-shaped run (a header with whatever of
+  // the token follows it), then the secrets' own parts (what is left: a signature, or a payload, alone).
+  let out = redact(text, secrets);
+  out = out.replace(JWT_SHAPED, REDACTED);
+  out = redact(out, secrets.flatMap((s) => s.split(".")));
+  const q = out.indexOf("?");
+  return q === -1 ? out : out.slice(0, q);
 }
 
 /** Allowlisted keys only; strings cut at `?` and at EVENT_PAYLOAD_MAX_STRING;

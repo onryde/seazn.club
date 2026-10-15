@@ -10,6 +10,7 @@ import {
   FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME, PHONE_LOST_LIVE_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS,
   PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, buildShaOf, liveRunnerIdentity, relayDriverMode, relayEnvironment, tunable,
 } from "../config";
+import { DEFAULT_DELAY_MS, resolveDelayMs } from "@/lib/overlay-delay";
 
 describe("buildShaOf (Da)", () => {
   it("a 40-hex tag → the sha; a deployment-… tag → null; unset → null", () => {
@@ -350,5 +351,22 @@ describe("capture QR v2 constants equal the spec's own figures", () => {
     const m = /now − last_beat_at ≥ (\d+) × answered_poll_seconds/.exec(SPEC);
     expect(m).not.toBeNull();
     expect(config.NOT_RESPONDING_BEATS).toBe(Number(m![1]));
+  });
+});
+
+// R2002: the two numbers the R2 compositor's session facts serve (R2004 serves them; R2003's stale rule reads the beat
+// interval). Each expected value is typed from its SOURCE, never from config.ts: a change to the source moves this pin.
+describe("R2 relay numbers equal their sources", () => {
+  it("RELAY_HEARTBEAT_INTERVAL_MS is the compositor spec's §5.3 figure (\"`heartbeatIntervalMs`: 5000\")", () => {
+    expect(config.RELAY_HEARTBEAT_INTERVAL_MS).toBe(5000);
+  });
+
+  it("RELAY_OVERLAY_DELAY_DEFAULT_MS is F-002's in-chain delay (3100 ms, PROVISIONAL until C11's ≥10-sample re-measure) — and the overlay page's own ?delay= parser honours it rather than falling back to 0", () => {
+    // Compositor _FINDINGS.md F-002 (owner session 2026-10-15): in-chain readings 3083 and 3105 ms; recommendation 3100.
+    expect(config.RELAY_OVERLAY_DELAY_DEFAULT_MS).toBe(3100);
+    // The composed overlayUrl carries it as `delay=` (R2004). A default the page refused would silently render at 0 ms,
+    // the score running ahead of the picture — the exact defect ADR 0006 exists to prevent.
+    expect(resolveDelayMs(String(config.RELAY_OVERLAY_DELAY_DEFAULT_MS))).toBe(config.RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    expect(config.RELAY_OVERLAY_DELAY_DEFAULT_MS, "the differential: not the page's own no-delay default").not.toBe(DEFAULT_DELAY_MS);
   });
 });
