@@ -55,6 +55,26 @@ interface Repo { top: string; eng: string }
 let mono: Repo;   // the engine at packages/engine, as in the monorepo
 let rooted: Repo; // the engine at the repository root, as in its own repo (engine-split 2b)
 
+/** Git packs loose objects on its own (`gc --auto` after a commit, `git maintenance run --auto`) once enough have piled up, and how many is
+ *  "enough" depends on the machine's timing and git version: the same history stayed loose on a laptop and was packed on CI. The damage tests
+ *  delete or cut a LOOSE object file, so every scratch repository is told to never pack, before its first commit. */
+const NO_AUTO_PACK: ReadonlyArray<readonly [string, string]> = [["gc.auto", "0"], ["maintenance.auto", "false"], ["core.autocrlf", "false"]];
+function noAutoPack(top: string): void {
+  for (const [key, value] of NO_AUTO_PACK) git(top, "config", key, value);
+}
+/** Where git keeps `sha` when it is loose. */
+const objectFile = (top: string, sha: string): string => join(top, ".git", "objects", sha.slice(0, 2), sha.slice(2));
+
+/** The loose object file of `sha` in a scratch repository's object store. A packed object is a broken rig, not a case to skip: the test fails
+ *  and says why. */
+const looseObject = (repo: Repo, sha: string): string => {
+  const file = objectFile(repo.top, sha);
+  if (!existsSync(file)) {
+    throw new Error(`object ${sha} is not loose in ${repo.top}: git packed it. The rig sets gc.auto=0 and maintenance.auto=false right after \`git init\` (noAutoPack); a repository built any other way, or a setting overridden, breaks every test that damages an object file`);
+  }
+  return file;
+};
+
 function makeRepo(name: string, prefix: string): Repo {
   const top = join(scratch, name);
   const eng = join(top, prefix);
@@ -65,6 +85,7 @@ function makeRepo(name: string, prefix: string): Repo {
   }
   writeFileSync(join(top, "README.md"), "scratch\n");
   git(top, "init", "-q", "-b", "main");
+  noAutoPack(top);
   git(top, "add", "-A");
   git(top, "commit", "-q", "-m", "base");
   git(top, "tag", "base");
@@ -134,6 +155,59 @@ describe("fold-epoch-guard CLI: the scratch repository is the real tree's", () =
     expect(new Set(KEYS).size).toBe(KEYS.length);
     expect(FIRST).not.toBe(LAST);
     expect(realStreams).toBeGreaterThanOrEqual(realSports);
+  });
+});
+
+describe("fold-epoch-guard CLI: the scratch repositories never pack their objects (the damage tests delete or cut a loose object file)", () => {
+  /** A one-commit repository set up like the rig's (`pack`: false) or with git's defaults (`pack`: true), holding more than the 27 files
+   *  objects/17 needs to look like a repository with thousands of loose objects (git estimates the loose count from that one directory), then
+   *  given every chance to pack: `git maintenance run --auto` and `git gc --auto`, in the foreground. Reports where its one blob ended up. */
+  function probe(name: string, defaults: boolean): { loose: boolean; packs: number; fakes: number } {
+    const top = join(scratch, name);
+    mkdirSync(top, { recursive: true });
+    git(top, "init", "-q", "-b", "main");
+    if (!defaults) noAutoPack(top);
+    writeFileSync(join(top, "file.txt"), `${name}\n`);
+    git(top, "add", "-A");
+    git(top, "commit", "-q", "-m", "one blob");
+    const blob = git(top, "rev-parse", "HEAD:file.txt");
+    mkdirSync(join(top, ".git", "objects", "17"), { recursive: true });
+    const FAKES = 40;
+    for (let i = 1; i <= FAKES; i++) writeFileSync(join(top, ".git", "objects", "17", i.toString(16).padStart(38, "0")), "");
+    // not through git(): `maintenance run --auto` may exit non-zero on the empty objects, and what is asked is whether the blob moved
+    for (const args of [["maintenance", "run", "--auto"], ["gc", "--auto"]]) spawnSync("git", ["-C", top, "-c", "gc.autoDetach=false", ...args], { encoding: "utf8", env: cleanEnv(), timeout: SPAWN_MS });
+    const packs = readdirSync(join(top, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack")).length;
+    return { loose: existsSync(objectFile(top, blob)), packs, fakes: readdirSync(join(top, ".git", "objects", "17")).length };
+  }
+
+  spawnIt(14)("every scratch repository is created with auto-gc and auto-maintenance off, and a repository like that stays loose where git's defaults would pack it", () => {
+    for (const repo of [mono, rooted]) {
+      for (const [key, value] of NO_AUTO_PACK) expect(git(repo.top, "config", "--get", key), `${key} in ${repo.top}`).toBe(value);
+    }
+    // the probe has teeth: with git's defaults the same repository IS packed (else it proves nothing about the setting)
+    const control = probe("probe-defaults", true);
+    expect(control.fakes).toBeGreaterThan(27);
+    expect(control, "git's defaults pack this repository: the probe can see packing").toMatchObject({ loose: false });
+    expect(control.packs).toBeGreaterThan(0);
+    const rig = probe("probe-rig", false);
+    expect(rig, "the rig's settings keep the blob loose through maintenance and gc --auto").toMatchObject({ loose: true, packs: 0 });
+    expect(rig.fakes).toBe(control.fakes);
+  });
+
+  spawnIt(5)("looseObject refuses with the reason when the object is packed, and hands back the file when it is loose", () => {
+    const top = join(scratch, "probe-packed");
+    mkdirSync(top, { recursive: true });
+    git(top, "init", "-q", "-b", "main");
+    noAutoPack(top);
+    writeFileSync(join(top, "file.txt"), "packed\n");
+    git(top, "add", "-A");
+    git(top, "commit", "-q", "-m", "one blob");
+    const sha = git(top, "rev-parse", "HEAD:file.txt");
+    const repo: Repo = { top, eng: top };
+    expect(looseObject(repo, sha)).toBe(objectFile(top, sha));
+    git(top, "repack", "-ad", "-q");
+    expect(existsSync(objectFile(top, sha)), "repack -ad packed it").toBe(false);
+    expect(() => looseObject(repo, sha)).toThrow(/is not loose in .*: git packed it.*gc\.auto=0 and maintenance\.auto=false/);
   });
 });
 
@@ -364,8 +438,9 @@ describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on t
     atBase(mono);
     commit(mono, "second commit");
     const clone = join(scratch, "shallow");
-    git(scratch, "clone", "-q", "--depth", "1", `file://${mono.top}`, clone);
+    git(scratch, "clone", "-q", "--depth", "1", "-c", "gc.auto=0", "-c", "maintenance.auto=false", `file://${mono.top}`, clone);
     expect(git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+    for (const [key, value] of NO_AUTO_PACK.slice(0, 2)) expect(git(clone, "config", "--get", key), `${key} in the clone`).toBe(value);
     const r = guard({ top: clone, eng: join(clone, "packages/engine") });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/is not a commit/);
@@ -650,9 +725,6 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
     expect(tableUnreadable.stdout).not.toMatch(/nothing to compare yet/);
   });
 
-  /** The loose object file of `sha` in the scratch repository's object store (nothing here ever packs, so a commit's objects are loose). */
-  const looseObject = (repo: Repo, sha: string): string => join(repo.top, ".git", "objects", sha.slice(0, 2), sha.slice(2));
-
   spawnIt(8)("a baseline tree git cannot read is refused (exit 2, nothing printed on stdout): the sport inside it must not read as a new one", () => {
     atBase(mono);
     moveOutcome(mono, "football");
@@ -666,7 +738,6 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
 
     const footballDir = git(mono.top, "rev-parse", `${changed}:${relPrefix(mono)}${SPORTS_DIR}/football`);
     const file = looseObject(mono, footballDir);
-    expect(existsSync(file), "the object is loose, so deleting the file deletes the tree").toBe(true);
     chmodSync(dirname(file), 0o755);
     chmodSync(file, 0o644);
     rmSync(file);
@@ -686,7 +757,6 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
 
     const blob = git(mono.top, "rev-parse", `${changed}:${relative(mono.top, corpusPath(mono, LAST))}`);
     const file = looseObject(mono, blob);
-    expect(existsSync(file)).toBe(true);
     chmodSync(dirname(file), 0o755);
     chmodSync(file, 0o644);
     const bytes = readFileSync(file);
