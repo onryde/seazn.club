@@ -59,7 +59,7 @@ import { resolveModule } from "@/server/engine-db";
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
-import { killsLoserEdge, lockStageSeats } from "@/server/engine-db/fed-seats";
+import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import {
@@ -4144,6 +4144,9 @@ export async function writeDepartedSeat(
   const [at] = await tx<{ stage_id: string }[]>`select stage_id from fixtures where id = ${fixtureId}`;
   if (at) await lockStageSeats(tx, at.stage_id);
   await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
+  // W2c Task 15 fix round 1 (M-1): the cascade below may award a walkover scored under the division's live config, so a
+  // format save in flight is waited for — the format freeze's lock, SHARED, after the fixture lock (`fed-seats.ts`).
+  if (at) await lockDivisionConfigShared(tx, at.stage_id);
   const bye = tx.json(BYE_SLOT_LABEL as never);
   const [row] =
     mode === "tbd"

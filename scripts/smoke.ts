@@ -7241,6 +7241,7 @@ async function w2cStageRulesSuite(): Promise<void> {
   await w2cStageOffAndReseedChecks(owner);
   await w2cStagePointsWalkoverChecks(owner);
   await w2cRulesVersionChecks(owner);
+  await w2cRulesVersionPreKickoffChecks(owner);
 }
 
 /**
@@ -7503,7 +7504,9 @@ async function w2cStageRulesEverySportChecks(owner: Session): Promise<void> {
  * a `core.start` recorded, so any format fits): a live correction to best of 5 answers `started` with a bumped
  * `rules_version`, and the state every reader serves was refolded under it. Then the match is walked over and
  * finalized, and the same PUT is 409 FIXTURE_FORMAT_LOCKED. First (fix round 1), the same PUT on one of the pool's
- * UNSTARTED matches: 200 `started: false` with no bump, and once that match starts, the cfg it froze is its own format.
+ * UNSTARTED matches: 200 `started: false`, bumped once (W2c Task 15 fix round 1, I-1: a write that moves an unstarted
+ * match's format moves its version, so a pad open on it is refused), and once that match starts, the cfg it froze is
+ * its own format.
  */
 async function w2cFixtureRulesChecks(owner: Session, fixtureId: string, unstartedId: string): Promise<void> {
   const own = await v1(owner, `/api/v1/fixtures/${unstartedId}/rules`, "PUT", { rules: { bestOf: 1 } });
@@ -7514,7 +7517,7 @@ async function w2cFixtureRulesChecks(owner: Session, fixtureId: string, unstarte
   const ownSaved =
     own.status === 200 &&
     ownOut?.fixtures?.[0]?.started === false &&
-    ownOut.fixtures[0].rules_version === 0 &&
+    ownOut.fixtures[0].rules_version === 1 &&
     begun.status === 201 &&
     ownState.state?.cfg?.bestOf === 1;
   check(
@@ -7641,6 +7644,48 @@ async function w2cRulesVersionChecks(owner: Session): Promise<void> {
   check(
     "w2c: the same tap under the current rules version lands, and the rules read back corrected" +
       (landed ? "" : ` — POST ${fresh.status} ${JSON.stringify(fresh.json.error ?? fresh.json.data)}, GET cfg ${JSON.stringify(now.json.data)}`),
+    landed,
+  );
+}
+
+/**
+ * W2c Task 15 fix round 1 (review I-1) — over real HTTP, BEFORE kickoff: a pad opened on an UNSTARTED match reads its
+ * rules (version 0), the organiser corrects that match's own format (`PUT …/rules`, which now bumps it), and the pad's
+ * FIRST tap, still under version 0, is refused 409 FIXTURE_RULES_CHANGED with nothing written and nothing frozen. The
+ * first tap under the version it reloads lands and freezes the corrected format.
+ */
+async function w2cRulesVersionPreKickoffChecks(owner: Session): Promise<void> {
+  const { unstartedId } = await w2cSeedStartedPool(owner);
+  const before = await v1(owner, `/api/v1/fixtures/${unstartedId}/rules`);
+  const loaded = before.json.data as { rules_version?: number; cfg?: { bestOf?: unknown } } | undefined;
+  const target = loaded?.cfg?.bestOf === 5 ? 3 : 5;
+  const put = await v1(owner, `/api/v1/fixtures/${unstartedId}/rules`, "PUT", { rules: { bestOf: target } });
+  const start = { expected_seq: 0, type: "core.start", payload: {} };
+  const stale = await v1(owner, `/api/v1/fixtures/${unstartedId}/events`, "POST", { ...start, rules_version: loaded?.rules_version ?? 0 });
+  const tipAfter = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${unstartedId}/state`)).last_seq;
+  const refused =
+    before.status === 200 &&
+    loaded?.rules_version === 0 &&
+    put.status === 200 &&
+    stale.status === 409 &&
+    stale.json.error?.code === "FIXTURE_RULES_CHANGED" &&
+    (stale.json.error as { rules_version?: unknown } | undefined)?.rules_version === 1 &&
+    tipAfter === 0;
+  check(
+    "w2c: before kickoff, a correction refuses the open pad's first tap under the old rules version" +
+      (refused
+        ? ""
+        : ` — GET ${before.status} v${String(loaded?.rules_version)}, PUT ${put.status} ${JSON.stringify(put.json.error ?? put.json.data)}, POST ${stale.status} ${JSON.stringify(stale.json.error ?? stale.json.data)}, tip ${tipAfter}`),
+    refused,
+  );
+  const reloaded = await v1(owner, `/api/v1/fixtures/${unstartedId}/rules`);
+  const version = (reloaded.json.data as { rules_version?: number } | undefined)?.rules_version;
+  const fresh = await v1(owner, `/api/v1/fixtures/${unstartedId}/events`, "POST", { ...start, rules_version: version });
+  const state = v1data<{ state: { cfg?: { bestOf?: unknown } } | null }>(await v1(owner, `/api/v1/fixtures/${unstartedId}/state`));
+  const landed = version === 1 && fresh.status === 201 && state.state?.cfg?.bestOf === target;
+  check(
+    "w2c: before kickoff, the first tap under the reloaded rules version lands and freezes the corrected format" +
+      (landed ? "" : ` — v${String(version)}, POST ${fresh.status} ${JSON.stringify(fresh.json.error ?? fresh.json.data)}, cfg bestOf ${String(state.state?.cfg?.bestOf)}`),
     landed,
   );
 }

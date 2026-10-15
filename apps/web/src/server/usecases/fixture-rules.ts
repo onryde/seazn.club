@@ -14,6 +14,7 @@ import { bracketOrder } from "@/server/engine-db/fed-seats";
 import { liveCfg, mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
 import { foldFrom, loadFoldInputs } from "@/server/engine-db/fold";
 import { RefreezeFoldError, freezeCfg, refreezeFixture } from "@/server/engine-db/refreeze";
+import { bumpRulesVersion } from "@/server/engine-db/rules-version";
 import { log } from "@/server/logger";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { matchName } from "./fixture-override-guards";
@@ -55,6 +56,14 @@ import { invalidatePublicCache } from "./scoring";
  *     `awardFit`, the pure verdict). Re-sending the format it already plays is no change: nothing is fitted. On a fit the award's score is re-written under the corrected cfg; a frozen
  *     snapshot is re-frozen and bumped (`freezeCfg` — never `refreezeFixture`, whose refold of the empty ledger would
  *     write over the award), and an award with no snapshot has no frozen cfg to bump.
+ *  7b. NO FROZEN CFG and not decided without play — UNSTARTED, or played before V347 froze a snapshot (legacy, which
+ *     must fit its play first, X-SR-5): the match folds, or will freeze at its first event, under the live resolution.
+ *     A write that moves what it resolves to bumps `rules_version` (W2c Task 15 fix round 1, I-1 and M-4), so a pad open
+ *     on it before the write is refused on its first tap (409 FIXTURE_RULES_CHANGED) rather than freezing a format it is
+ *     not folding. Under this writer's `fixture:` lock — the one every append takes before it reads the version — and no
+ *     `division-config:` lock: this writer shares exactly one key with an append, so the two cannot deadlock
+ *     (`division-config-lock.test.ts` parks one behind the other). A re-send of what it already resolves to bumps
+ *     nothing.
  *  8. One `competition_events` row per fixture (`fixture.rules_override`: before, after, started).
  */
 export interface OverrideWriteResult {
@@ -298,13 +307,11 @@ export async function writeFixtureRulesOverride(
       // snapshot cleared: the stage's format with the override merged last (fixture-cfg.ts).
       const cfg = isObj(stageResolved) ? mergeRulesOverride(stageResolved, next) : stageResolved;
       let rewriteAward = false;
+      // What the match resolves to LIVE now (no frozen cfg), built as `cfg` is (`resolveFixtureCfg`'s live branch).
+      const liveNow = isObj(stageResolved) ? mergeRulesOverride(stageResolved, row.rules_override) : stageResolved;
       if (withoutPlay) {
         // What the match resolves to now, built as `cfg` is (`resolveFixtureCfg`'s two branches, over this row).
-        const current = snapshotted
-          ? row.config_snapshot
-          : isObj(stageResolved)
-            ? mergeRulesOverride(stageResolved, row.rules_override)
-            : stageResolved;
+        const current = snapshotted ? row.config_snapshot : liveNow;
         if (canonicalJson(cfg) !== canonicalJson(current)) {
           await assertAwardFits(tx, row, cfg);
           if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;
@@ -323,10 +330,12 @@ export async function writeFixtureRulesOverride(
           }
           corrected.push(id);
         }
-      } else if (played) {
+      } else {
         // Played with no frozen cfg (a row scored before V347 froze one): it folds under the live resolution, so the
         // override moves its play like a correction — X-SR-5's fit, with nothing to re-freeze.
-        await assertFits(tx, row, cfg);
+        if (played) await assertFits(tx, row, cfg);
+        // (7b) Unstarted, or that legacy shape: a write that moves what it resolves to moves its version.
+        if (canonicalJson(cfg) !== canonicalJson(liveNow)) version = await bumpRulesVersion(tx, id);
       }
       await tx`update fixtures set rules_override = ${next === null ? null : tx.json(next as never)} where id = ${id}`;
       // After the override lands: the award's score re-written under the cfg the fixture now resolves to.

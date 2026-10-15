@@ -478,10 +478,15 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
     expect((await row(id)).rules_version).toBe(2);
   });
 
-  it("an UNSTARTED write never bumps the version (only a correction or a re-freeze does)", async () => {
+  it("an UNSTARTED write bumps the version once when it moves the format, and its re-send bumps nothing (fix round 1, I-1)", async () => {
+    // Overturns Task 14's "an unstarted write never bumps": a pad open on the match before the write would otherwise
+    // freeze a format it is not folding (review I-1; rules-version-prekickoff.test.ts drives the pad's side).
     const b = await badmintonLeague();
-    await writeFixtureRulesOverride(b.auth, [b.fixtureIds[0]!], { bestOf: 1 });
-    expect((await row(b.fixtureIds[0]!)).rules_version).toBe(0);
+    const id = b.fixtureIds[0]!;
+    await expect(writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 })).resolves.toEqual({ fixtures: [{ id, started: false, rules_version: 1 }] });
+    expect((await row(id)).rules_version).toBe(1);
+    await expect(writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 })).resolves.toEqual({ fixtures: [{ id, started: false, rules_version: 1 }] });
+    expect((await row(id)).rules_version, "the same format again moves nothing").toBe(1);
   });
 
   it("a staff re-freeze (resnapshotFixtureConfig) bumps the version through refreezeFixture", async () => {

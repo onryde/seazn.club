@@ -18,6 +18,7 @@ import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import { resolveModule } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db/competition";
+import { bumpMovedRules, unfrozenRules } from "@/server/engine-db/rules-version";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
@@ -189,6 +190,9 @@ export async function putStageRules(
       // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE this save — re-written after it, under the
       // format the stage now plays (`award-rewrite.ts`). The stage lock above does not count them as play.
       const held = await heldAwards(tx, tx`stage_id = ${stageId}`);
+      // W2c Task 15 fix round 1 (I-1): what every unstarted match of the stage resolves to before this save — read under
+      // the `division-config:` EXCLUSIVE lock above, so no first event freezes between it and the bump below.
+      const rulesBefore = await unfrozenRules(tx, { stageId });
 
       if (next === null) {
         // `- 'rules'` removes the KEY. Writing null instead would leave a null
@@ -212,6 +216,9 @@ export async function putStageRules(
       // in. Read from the row just written, so a refusal rolls this save back whole.
       await refuseInvalidatedOverrides(tx, stage.division_id, stage.division_config, module_, stage.variant_key, stageId);
       await rewriteHeldAwards(tx, held);
+      // ...and every one whose format the save moved gets a new version: a pad open on it is refused on its first tap
+      // (409 FIXTURE_RULES_CHANGED) instead of freezing a format it is not folding.
+      await bumpMovedRules(tx, rulesBefore);
     }
 
     // W2c Task 13 — the points arm. A rule is written WHOLE (server-side `||`, as the rules arm, so a stale JS read of

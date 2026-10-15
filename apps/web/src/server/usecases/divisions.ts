@@ -29,6 +29,7 @@ import { refuseInvalidatedOverrides } from "./fixture-override-guards";
 import { refuseInexpressibleStagePoints, refuseInvalidatedStageRules } from "./stage-rules-merge";
 import { reseedStagePresets } from "./stage-preset-reseed";
 import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
+import { bumpMovedRules, unfrozenRules, type UnfrozenRules } from "@/server/engine-db/rules-version";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
 import {
   slugify,
@@ -818,6 +819,9 @@ export async function patchDivision(
   const row = await withTenant(auth.orgId, async (tx) => {
     // W2c batch-3 I1: the walkovers no event records, read before a format write (`award-rewrite.ts`); none otherwise.
     let held: HeldAward[] = [];
+    // W2c Task 15 fix round 1 (I-1): what every unstarted match resolves to before a format write (`rules-version.ts`);
+    // undefined when the save writes no format.
+    let rulesBefore: UnfrozenRules | undefined;
     const effective: Record<string, unknown> = { ...patch };
     // Batch 4 re-review N1: ONE lock order everywhere — the division advisory lock FIRST, then any row lock on `divisions`.
     // The stage writers (`insertStageBatch`, which `createStages` and `replaceStages` share) take the advisory lock and
@@ -1212,6 +1216,9 @@ export async function patchDivision(
         // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE this save's first write (the re-seed
         // below is one) — re-written after it.
         held = await heldAwards(tx, tx`division_id = ${id}`);
+        // W2c Task 15 fix round 1 (I-1): read at the same point, under this save's `division-config:` EXCLUSIVE lock, so no
+        // first event freezes between it and the bump after the write.
+        rulesBefore = await unfrozenRules(tx, { divisionId: id });
         // W2c Task 12 fix round 1 (R-T12-2): a variant change re-seeds the presets its unstarted stages still store
         // (`stage-preset-reseed.ts`), BEFORE the stages are re-asked below, so only a key the organiser chose meets the
         // new variant's allowlist. A refusal below rolls the re-seed back with the rest of the save.
@@ -1304,6 +1311,9 @@ export async function patchDivision(
     );
     // batch-3 I1: under the format the division now plays, in this transaction (`award-rewrite.ts`).
     rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;
+    // W2c Task 15 fix round 1 (I-1): every unstarted match whose format this save moved gets a new version, so a pad open
+    // on it before the save is refused on its first tap (409 FIXTURE_RULES_CHANGED) and reloads the format it will play.
+    if (rulesBefore !== undefined) await bumpMovedRules(tx, rulesBefore);
     return written;
   }, cameraPolicyNamed ? { privilegedPrelude: cameraGate } : {}).catch((err: unknown) => {
     // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
