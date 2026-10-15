@@ -34,7 +34,6 @@ import { corpusFormat, recomputeStream, slimStream, storedFields, type GoldenCor
 import {
   eventToken,
   floorHoles,
-  LEVEL_OUTCOME_TOKENS,
   lineupOffers,
   outcomeToken,
   outcomeTokenOf,
@@ -89,8 +88,9 @@ function folds(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly Gol
   }
 }
 
-/** The MODULE's outcome of a state — what the corpora record (GOLDEN-POLICY), the one bare read in this file. No floor
- *  stream carries `core.settle` (it is exempt, `FLOOR_EXEMPTIONS`), so a settle that would move it cannot occur. */
+/** The MODULE's outcome of a state — what the corpora record (GOLDEN-POLICY), the one bare read in this file. No ledger it
+ *  reads carries a `core.settle` (a settle's win is the kernel's reading, `effectiveToken` and `readsAs`, and the settle story
+ *  asks those), so the module's own outcome is the whole answer wherever this is used. */
 function moduleOutcome(ctx: Ctx, state: unknown): ReturnType<AnySportModule["outcome"]> {
   return ctx.module.outcome(state);
 }
@@ -472,6 +472,45 @@ export function readsAs(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: rea
 const settleEvent = (winner: string, method: "organiser" | "lot"): GoldenEvent =>
   ev("core.settle", { winner, method, note: method === "organiser" ? "the committee's decision" : "drawn by lot at the table" });
 
+/** Whether a settle story's ledger is read by the kernel the way the story says, prefix by prefix (`n` = the index of its first
+ *  kernel event: the withdrawal on the level route, the abandon on the other). Every step is asked of the FOLD, never of the
+ *  builder's belief, and each prefix is asked its own fact, so a step that folds but did not take effect (a settle in front of
+ *  a match the module already decided, a void that struck nothing) refuses the whole story. Each fact is asked ONCE, at the
+ *  prefix that can show it: a fact a neighbouring read already implies is not asked twice (two reads that cover for each other
+ *  are each untested). "Nothing is settled yet" is the read after the settle's void, which would still find a settlement
+ *  standing if one had been there from the start; "no withdrawal is left" is the read after its void.
+ *
+ *  A settle that stands is a WIN for the side it names (X-ST-1): that is the kernel's law, read per sport and per step by the
+ *  story test (golden-floor-streams.test.ts), so no outcome token is asked here. */
+export function settleStoryHolds(ctx: Ctx, cfg: unknown, lineups: LineupPair, ledger: readonly GoldenEvent[], n: number, route: "level" | "abandon"): boolean {
+  const at = (count: number): GoldenEvent[] => ledger.slice(0, count);
+  if (route === "level") {
+    return (
+      readsAs(ctx, cfg, lineups, at(n + 1), { withdrawn: true }) && //  the withdrawal is laid over the level result
+      readsAs(ctx, cfg, lineups, at(n + 2), { withdrawn: false }) && // its void takes it away (and nothing puts it back)
+      readsAs(ctx, cfg, lineups, at(n + 3), { settled: true }) && //    the settle decides
+      readsAs(ctx, cfg, lineups, at(n + 4), { settled: false }) && //   its void takes that away
+      readsAs(ctx, cfg, lineups, ledger, { settled: true }) //          said again by lot
+    );
+  }
+  return (
+    readsAs(ctx, cfg, lineups, at(n + 2), { settled: true }) && //   the settle decides an abandoned match
+    readsAs(ctx, cfg, lineups, at(n + 3), { settled: false }) && //  its void takes that away
+    readsAs(ctx, cfg, lineups, ledger, { settled: true }) //         said again by lot
+  );
+}
+
+/** Whether a ledger with an expunging abandon spliced into it plays on to the SAME result as the bare walk it came from. An
+ *  expunged match has no outcome, so a result equal to the walk's (which was decided) means no expunge is left standing. A
+ *  ledger the fold refuses plays on to nothing. */
+export function playsOnToTheSameResult(ctx: Ctx, cfg: unknown, lineups: LineupPair, spliced: readonly GoldenEvent[], token: string): boolean {
+  try {
+    return effectiveToken(ctx, cfg, lineups, spliced) === token;
+  } catch {
+    return false;
+  }
+}
+
 /** Where the sport can end level: a level result, a withdrawal laid over it (X-WD-1: an award the kernel keeps beside module
  *  state), that withdrawal struck (the level result is back), a settle (X-ST-1), the settle struck, a settle by another method.
  *  Where it cannot: a live match abandoned, the same settle, struck, said again. Every step is folded and read back from the
@@ -486,8 +525,9 @@ function buildSettle(ctx: Ctx): Built | null {
     const away = lineups.away.entrantId;
     if (wantsLevel) {
       for (let seed = 1; seed <= SEED_BUDGET; seed++) {
+        // (a walk that did not end level is refused by the readback below: no withdrawal is laid over a decided result)
         const walk = naturalWalk(ctx, cfg, lineups, seed);
-        if (walk === null || !LEVEL_OUTCOME_TOKENS.includes(walk.token)) continue;
+        if (walk === null) continue;
         const n = walk.events.length;
         const ledger: GoldenEvent[] = [
           ...walk.events,
@@ -497,16 +537,7 @@ function buildSettle(ctx: Ctx): Built | null {
           voidOf(n + 2), //                                          n + 3
           settleEvent(away, "lot"), //                               n + 4
         ];
-        const at = (count: number): GoldenEvent[] => ledger.slice(0, count);
-        if (
-          readsAs(ctx, cfg, lineups, at(n), { settled: false, withdrawn: false }) &&
-          readsAs(ctx, cfg, lineups, at(n + 1), { withdrawn: true, settled: false }) &&
-          readsAs(ctx, cfg, lineups, at(n + 2), { withdrawn: false, settled: false }) &&
-          readsAs(ctx, cfg, lineups, at(n + 3), { settled: true }) &&
-          readsAs(ctx, cfg, lineups, at(n + 4), { settled: false }) &&
-          readsAs(ctx, cfg, lineups, ledger, { settled: true, withdrawn: false }) &&
-          effectiveToken(ctx, cfg, lineups, ledger) === "win"
-        ) {
+        if (settleStoryHolds(ctx, cfg, lineups, ledger, n, "level")) {
           return { config: cfgName, seed: 9 * FLOOR_SEED_STRIDE + seed, events: ledger };
         }
       }
@@ -524,13 +555,7 @@ function buildSettle(ctx: Ctx): Built | null {
           voidOf(n + 1), //                                                                            n + 2
           settleEvent(away, "lot"), //                                                                 n + 3
         ];
-        if (
-          readsAs(ctx, cfg, lineups, ledger.slice(0, n + 1), { settled: false }) &&
-          readsAs(ctx, cfg, lineups, ledger.slice(0, n + 2), { settled: true }) &&
-          readsAs(ctx, cfg, lineups, ledger.slice(0, n + 3), { settled: false }) &&
-          readsAs(ctx, cfg, lineups, ledger, { settled: true }) &&
-          effectiveToken(ctx, cfg, lineups, ledger) === "win"
-        ) {
+        if (settleStoryHolds(ctx, cfg, lineups, ledger, n, "abandon")) {
           return { config: cfgName, seed: 9 * FLOOR_SEED_STRIDE + seed, events: ledger };
         }
       }
@@ -554,7 +579,7 @@ function buildExpunge(ctx: Ctx): Built | null {
       const spliced = strikeKernelEvent(ctx, cfg, lineups, walk.events, expungeStrike(), 1);
       if (spliced === null) continue;
       // The tail plays on exactly as the bare walk did: the same result, no expunge left standing.
-      if (!readsAs(ctx, cfg, lineups, spliced, { expunged: false }) || effectiveToken(ctx, cfg, lineups, spliced) !== walk.token) continue;
+      if (!playsOnToTheSameResult(ctx, cfg, lineups, spliced, walk.token)) continue;
       return { config: cfgName, seed: 10 * FLOOR_SEED_STRIDE + seed, events: spliced };
     }
   }

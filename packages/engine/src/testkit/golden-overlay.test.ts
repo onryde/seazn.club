@@ -180,6 +180,38 @@ describe("overlayTransitions — which kernel facts a recorded overlay SETS and 
     expect(() => overlayTransitions(`{"stoppage":[[1]]}`)).toThrow(/malformed pair/);
   });
 
+  it("both readers refuse the same malformed shapes by name — one shape check (overlayPairs) stands behind expandOverlay and overlayTransitions", () => {
+    const initial = flat(3).initial;
+    // [overlay text, the refusal it owes]. A name, never a TypeError out of Object.keys(null) or a pair read as 'nothing happened'.
+    const refused: [string, RegExp][] = [
+      ["null", /overlay must be a JSON object/],
+      ["3", /overlay must be a JSON object/],
+      [`"text"`, /overlay must be a JSON object/],
+      ["[1]", /overlay must be a JSON object/],
+      [`{"bogus":[]}`, /unknown column "bogus"/],
+      [`{"stoppage":null}`, /must be an array/],
+      [`{"stoppage":{"1":null}}`, /must be an array/],
+      [`{"stoppage":[[1]]}`, /malformed pair/],
+      [`{"stoppage":[[1,null,null]]}`, /malformed pair/],
+      [`{"stoppage":["ab"]}`, /malformed pair/],
+      [`{"stoppage":[{"length":2}]}`, /malformed pair/],
+      [`{"stoppage":[null]}`, /malformed pair/],
+      [`{"stoppage":[5]}`, /malformed pair/],
+    ];
+    let checked = 0;
+    for (const [text, refusal] of refused) {
+      expect(() => overlayTransitions(text), `overlayTransitions(${text})`).toThrow(refusal);
+      expect(() => expandOverlay(text, 3, initial), `expandOverlay(${text})`).toThrow(refusal);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every shape was asked of both readers").toBe(refused.length);
+    expect(refused.length).toBeGreaterThanOrEqual(13);
+    // and the well-formed neighbours of those shapes are NOT refused (the refusals are not blanket)
+    expect(() => overlayTransitions("{}")).not.toThrow();
+    expect(() => overlayTransitions(`{"stoppage":[]}`)).not.toThrow();
+    expect(() => expandOverlay(`{"stoppage":[[1,null]]}`, 3, initial)).not.toThrow();
+  });
+
   it("the static defaults are the kernel defaults overlayDefaults writes (one authority), for every column but the squads", () => {
     const dflt = overlayDefaults(linesOf(builtinModules[0]!, rawOf(builtinModules[0]!)), textDigest);
     const statics = Object.entries(STATIC_COLUMN_DEFAULTS);

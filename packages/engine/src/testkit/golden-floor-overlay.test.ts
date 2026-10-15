@@ -131,6 +131,20 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(flipped).toBe(builtinModules.length * 2);
   }, 60_000);
 
+  it("the probe's DEFAULT recorder is the real format-2 one: with no recorder named, a retired class reads as pinned in every sport (overlayVerdicts and staleOverlayClaims)", () => {
+    let checked = 0;
+    forEachSport(({ key, module }) => {
+      const verdicts = overlayVerdicts(module, corpusOf(key), undefined, [RETIRED_STOPPAGE]);
+      for (const token of RETIRED_STOPPAGE.tokens) {
+        expect(verdicts.get(token)?.verdict, `${key} ${token}`).toBe("pinned");
+        checked++;
+      }
+      const stale = staleOverlayClaims(module, corpusOf(key), undefined, [RETIRED_STOPPAGE]);
+      expect(stale.length, `${key}: the retired claim is stale under the default recorder`).toBeGreaterThan(0);
+    });
+    expect(checked).toBe(builtinModules.length * RETIRED_STOPPAGE.tokens.length);
+  }, 60_000);
+
   it("RETIRED lineup: exactly boardgame, carrom and generic (every recorded type) and football's position change flip from unpinned to pinned; the other sports were pinned already", () => {
     // The set that was unpinned is the policy of record before this task: "inert in boardgame, carrom and generic (no onLineup,
     // every type), and core.lineup.position is inert in football too". It is typed here from that text, and the probe must agree.
@@ -390,6 +404,28 @@ describe("ablationProbe — every clause of the format-2 comparison is reached (
     const suspend = [{ id: "stoppage", tokens: [eventToken("core.suspend"), eventToken("core.resume")] as const, mode: "together" as const, assertedFor: () => true, covers: () => true, reason: "x".repeat(50) }];
     const v = overlayVerdicts(badminton, only(noted), kernelRecorder, suspend).get(eventToken("core.suspend"))!;
     expect(v.verdict).toBe("pinned");
+  });
+
+  it("a MODULE state that differs at a retained step moves the verdict by itself — the overlay, the summary and the outcome all agree (the narrower, format-1 clause still stands under format 2)", () => {
+    const withState = (index: number): Recorder => perturbed((rec) => ({ ...rec, states: rec.states.map((st, i) => (i === index ? `{"perturbed":true}` : st)) }));
+    expect(verdictOf(kernelRecorder).verdict, "control: unperturbed").toBe("unpinned");
+    expect(verdictOf(withState(0)).verdict, "the first retained step").toBe("pinned");
+    expect(verdictOf(withState(noteAt + 1)).verdict, "a step after the note").toBe("pinned");
+  });
+
+  it("a void that WENT WITH its ablated target is not an ablated event: its own step re-folds the ledger without the target, which is the change under test", () => {
+    const walk = corpus.streams.find((s) => s.seed < FLOOR_SEED_STRIDE && s.events.length >= 6 && s.events.every((e) => !e.type.startsWith("core.") || e.type === "core.start"))!;
+    // [start, note, void(note), ...the rest of the walk]: the note and its void both leave when the note is ablated
+    const ledger: GoldenEvent[] = [walk.events[0]!, { type: "core.note", payload: { text: "mis-tap" } }, { type: "core.void", payload: {}, voids: "e-1" }, ...walk.events.slice(1)];
+    const lone = only({ ...walk, events: ledger });
+    const real = kernelRecorder(badminton, corpus.configs[walk.config], ledger, walk.lineups);
+    expect(real.summaries![2], "precondition: really recorded, the void's step reads as the step before it").toBe(real.summaries![1]);
+    expect(verdictOf(kernelRecorder, lone).streams).toBe(1);
+    expect(verdictOf(kernelRecorder, lone).verdict, "control: a note and its void are inert").toBe("unpinned");
+    // a digest at the VOID's step (index 2) that is not the step before it is no evidence about the note — the void is not compared
+    expect(verdictOf(withSummary(2), lone).verdict, "perturbing the collateral void's own step does not move the verdict").toBe("unpinned");
+    // while the same perturbation at the NOTE's own step (index 1) does: the ablated event itself must be neutral
+    expect(verdictOf(withSummary(1), lone).verdict, "perturbing the note's own step does").toBe("pinned");
   });
 });
 

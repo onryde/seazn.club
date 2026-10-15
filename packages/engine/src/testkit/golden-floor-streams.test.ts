@@ -5,8 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
-import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, type GoldenCorpus, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles as holesOf, floorRequirement, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
+import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
+import { eventToken, floorHoles as holesOf, floorRequirement, outcomeTokenOf, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
 import {
   corpusBefore,
   expungeStrike,
@@ -15,9 +15,11 @@ import {
   FLOOR_SEED_STRIDE,
   isFloorStream as isFloor,
   kernelStrikes,
+  playsOnToTheSameResult,
   readsAs,
   reproduceFloorBatch,
   SCENARIOS,
+  settleStoryHolds,
   SPLICED_KERNEL,
   strikeKernelEvent,
   type Built,
@@ -656,6 +658,79 @@ describe("readsAs — a story step is kept only when the kernel's own fold says 
     expect(readsAs(ctx, cfg, lineups, refused, {})).toBe(false);
     expect(readsAs(ctx, cfg, lineups, refused, { settled: true })).toBe(false);
   });
+});
+
+describe("settleStoryHolds and playsOnToTheSameResult — a story is kept only when EVERY step took effect (each step is defeated alone)", () => {
+  const rig = (key: string, scenarioIndex: number) => {
+    const module = builtinModules.find((m) => m.key === key)!;
+    const corpus = readCorpus(key);
+    const stream = corpus.streams.find((s) => s.seed >= scenarioIndex * FLOOR_SEED_STRIDE && s.seed < (scenarioIndex + 1) * FLOOR_SEED_STRIDE)!;
+    const cfg = module.configSchema.parse(corpus.configs[stream.config]) as unknown;
+    const lineups = defaultLineupPair(resolvePositions(module, cfg));
+    const ctx: Ctx = { module, corpus, cfgNames: [stream.config], holes: new Set() };
+    return { ctx, cfg, lineups, stream };
+  };
+  /** The same ledger with one event replaced by a note: it still folds, the step simply does not happen. */
+  const defeated = (events: readonly GoldenEvent[], index: number): GoldenEvent[] => events.map((e, i) => (i === index ? { type: "core.note", payload: { text: "this step did not happen" } } : e));
+
+  it("level route (football): the committed story holds, and defeating any ONE of its five kernel steps refuses it", () => {
+    const { ctx, cfg, lineups, stream } = rig("football", 9);
+    const n = stream.events.findIndex((e) => e.type === "core.forfeit");
+    expect(stream.events.slice(n).map((e) => e.type), "precondition: the level route").toEqual(["core.forfeit", "core.void", "core.settle", "core.void", "core.settle"]);
+    expect(settleStoryHolds(ctx, cfg, lineups, stream.events, n, "level"), "control").toBe(true);
+    let refused = 0;
+    for (let step = 0; step < 5; step++) {
+      expect(settleStoryHolds(ctx, cfg, lineups, defeated(stream.events, n + step), n, "level"), `step ${step} (${stream.events[n + step]!.type}) defeated`).toBe(false);
+      refused++;
+    }
+    expect(refused, "anti-vacuity: all five steps were defeated").toBe(5);
+  });
+
+  it("abandon route (badminton): the committed story holds, and defeating any ONE of its four kernel steps refuses it", () => {
+    const { ctx, cfg, lineups, stream } = rig("badminton", 9);
+    const n = stream.events.findIndex((e) => e.type === "core.abandon");
+    expect(stream.events.slice(n).map((e) => e.type), "precondition: the abandon route").toEqual(["core.abandon", "core.settle", "core.void", "core.settle"]);
+    expect(settleStoryHolds(ctx, cfg, lineups, stream.events, n, "abandon"), "control").toBe(true);
+    let refused = 0;
+    for (let step = 0; step < 4; step++) {
+      expect(settleStoryHolds(ctx, cfg, lineups, defeated(stream.events, n + step), n, "abandon"), `step ${step} (${stream.events[n + step]!.type}) defeated`).toBe(false);
+      refused++;
+    }
+    expect(refused, "anti-vacuity: all four steps were defeated").toBe(4);
+  });
+
+  it("a route is not interchangeable: the level story read as the abandon story (or the reverse) is refused", () => {
+    const level = rig("football", 9);
+    const nl = level.stream.events.findIndex((e) => e.type === "core.forfeit");
+    expect(settleStoryHolds(level.ctx, level.cfg, level.lineups, level.stream.events, nl, "abandon")).toBe(false);
+    const abandon = rig("badminton", 9);
+    const na = abandon.stream.events.findIndex((e) => e.type === "core.abandon");
+    expect(settleStoryHolds(abandon.ctx, abandon.cfg, abandon.lineups, abandon.stream.events, na, "level")).toBe(false);
+  });
+
+  it("expunge tail (swept, counted): the committed story plays on to the result of its bare walk; a standing expunge, a different result and a refused ledger do not", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const { ctx, cfg, lineups, stream } = rig(key, 10);
+      const at = stream.events.findIndex((e) => e.type === "core.abandon");
+      expect(at, `${key}: the expunging abandon`).toBeGreaterThan(0);
+      // the bare walk is the story with the abandon and its void taken out; ITS result is the token the tail must reach
+      const bare = stream.events.filter((_, i) => i !== at && i !== at + 1);
+      const result = outcomeOf(ctx.module as never, foldMatchWithStoppage(ctx.module as never, cfg as never, lineups, bare.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 }) as never);
+      expect(result, `${key}: the bare walk is decided`).not.toBeNull();
+      const token = outcomeTokenOf(JSON.stringify(result));
+      expect(token, `${key}: and has a token`).not.toBeNull();
+      expect(playsOnToTheSameResult(ctx, cfg, lineups, stream.events, token!), `${key}: control`).toBe(true);
+      expect(playsOnToTheSameResult(ctx, cfg, lineups, stream.events, `${token}-not`), `${key}: a different result`).toBe(false);
+      // the expunge left standing (the void taken out): an expunged match has no outcome, so it plays on to nothing
+      const standing = stream.events.filter((_, i) => i !== at + 1);
+      expect(playsOnToTheSameResult(ctx, cfg, lineups, standing, token!), `${key}: expunge left standing`).toBe(false);
+      // a ledger the strict fold refuses: a void of an event that is not there
+      expect(playsOnToTheSameResult(ctx, cfg, lineups, [...stream.events, { type: "core.void", payload: {}, voids: "e-9999" }], token!), `${key}: refused`).toBe(false);
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+  }, 60_000);
 });
 
 describe("every overlay, undo and settle token the floor can require is SERVED by some scenario (a token no scenario serves can never be extended)", () => {
