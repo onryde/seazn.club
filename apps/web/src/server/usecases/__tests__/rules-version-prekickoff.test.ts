@@ -28,7 +28,7 @@ import { sql } from "@/lib/db";
 import type { Dict } from "@/lib/i18n-constants";
 import { rulesLineText } from "@/lib/rules-line";
 import { describeMatchRules } from "@/server/public-site/describe-rules";
-import { insertLegacyEvents, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { declaredVariant, insertLegacyEvents, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { patchDivision } from "../divisions";
 import { writeFixtureRulesOverride } from "../fixture-rules";
 import { loadFixturePadCfg } from "../fixtures";
@@ -193,5 +193,34 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff, the positive pair: a save that 
     expect((await loadFixturePadCfg(b.auth, own!)).cfg).toMatchObject({ bestOf: 1 });
     await expect(scoreEvent(b.auth, own!, start(ownPad.rulesVersion)), "the untouched match's pad keeps scoring").resolves.toMatchObject({ seq: 1 });
     await expect(scoreEvent(b.auth, plain!, start(plainPad.rulesVersion))).rejects.toMatchObject({ code: "FIXTURE_RULES_CHANGED" });
+  });
+
+  it("after a bye (decided without play, nothing frozen): a division save bumps the matches still to play and leaves the bye alone", async () => {
+    // A bye takes no tap and its own format cannot be corrected (`fixture-rules.ts` (7a), FIXTURE_FORMAT_LOCKED), so the
+    // per-match writer never bumps it; a save's bump agrees (`unfrozenRules` reads only matches with no outcome or with
+    // recorded play). An odd knockout draw is the rig that has byes beside matches still to play.
+    const variant = declaredVariant("badminton", "bwf");
+    const bestOf = declared("badminton", variant).bestOf as number;
+    const odd = await seedBracket({ sport: "badminton", variant, stageKind: "knockout", entrants: 6 });
+    const rows = await sql<{ id: string; outcome: { reason?: string } | null; s: unknown }[]>`
+      select id, outcome, config_snapshot s from fixtures where stage_id = ${odd.stageId}`;
+    const byes = rows.filter((r) => r.outcome?.reason === "bye");
+    const open = rows.filter((r) => r.outcome === null);
+    expect(byes.length, "premise: the odd draw has byes").toBeGreaterThan(0);
+    expect(open.length, "premise: and matches still to play").toBeGreaterThan(0);
+    for (const r of byes) expect(r.s, "premise: a bye freezes nothing").toBeNull();
+    const before = await versions(odd.stageId);
+    await patchDivision(odd.auth, odd.divisionId, { config: { bestOf: bestOf === 5 ? 3 : 5 } } as never);
+    const after = await versions(odd.stageId);
+    let checked = 0;
+    for (const r of byes) {
+      expect(after[r.id], "a bye's version stays").toBe(before[r.id]);
+      checked++;
+    }
+    for (const r of open) {
+      expect(after[r.id], "a match still to play moves").toBe(before[r.id]! + 1);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every bye and every match still to play").toBe(byes.length + open.length);
   });
 });

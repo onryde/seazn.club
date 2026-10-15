@@ -4144,8 +4144,10 @@ export async function writeDepartedSeat(
   const [at] = await tx<{ stage_id: string }[]>`select stage_id from fixtures where id = ${fixtureId}`;
   if (at) await lockStageSeats(tx, at.stage_id);
   await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
-  // W2c Task 15 fix round 1 (M-1): the cascade below may award a walkover scored under the division's live config, so a
-  // format save in flight is waited for — the format freeze's lock, SHARED, after the fixture lock (`fed-seats.ts`).
+  // W2c Task 15 fix round 1 (M-1): the cascade below never interleaves with a format save in flight — the format
+  // freeze's lock, SHARED, after the fixture lock (`fed-seats.ts`). Defensive: the review asked for it on every no-event
+  // writer, and no read of the division's LIVE config was found on this path (a voided award refolds its frozen
+  // snapshot, pre-V347 rows aside; `awardSeededByes` scores only a "withdrew" award, which this cascade does not make).
   if (at) await lockDivisionConfigShared(tx, at.stage_id);
   const bye = tx.json(BYE_SLOT_LABEL as never);
   const [row] =

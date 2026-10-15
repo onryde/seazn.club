@@ -514,5 +514,168 @@
     "name": "the page's own reload wins"
    }
   ]
+ },
+ {
+  "id": "t15fr1-division-save-no-bump",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "    if (rulesBefore !== undefined) await bumpMovedRules(tx, rulesBefore);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "patchDivision"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "another sport"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-stage-save-no-bump",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "      await bumpMovedRules(tx, rulesBefore);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "putStageRules"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-override-unstarted-no-bump",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (canonicalJson(cfg) !== canonicalJson(liveNow)) version = await bumpRulesVersion(tx, id);",
+  "replace": "if (false) version = await bumpRulesVersion(tx, id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "writeFixture"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "legacy"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an UNSTARTED write bumps the version once"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-override-bumps-unmoved",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (canonicalJson(cfg) !== canonicalJson(liveNow)) version = await bumpRulesVersion(tx, id);",
+  "replace": "version = await bumpRulesVersion(tx, id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an UNSTARTED write bumps the version once"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-bump-every-unfrozen",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "  const moved = [...before].filter(([id, cfg]) => now.get(id) !== cfg).map(([id]) => id);",
+  "replace": "  const moved = [...before.keys()];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a rename, tiebreakers"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "per match: a save leaves alone"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-departed-seat-no-s-lock",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  if (at) await lockDivisionConfigShared(tx, at.stage_id);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "a withdrawal's no-event seat write"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-release-no-s-lock",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "fed waits for a format save in flight, after every fixture lock.\n  if (order.length > 0) await lockDivisionConfigShared(tx, src.stage_id);\n",
+  "replace": "fed waits for a format save in flight, after every fixture lock.\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "a take-back that RELEASES a seat"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-revive-no-s-lock",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "a revive waits for a format save in flight, after every fixture lock.\n  if (order.length > 0) await lockDivisionConfigShared(tx, src.stage_id);\n",
+  "replace": "a revive waits for a format save in flight, after every fixture lock.\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "a take-back that REVIVES"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-unfrozen-takes-awards",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "\n       and (f.outcome is null or exists (select 1 from score_events e where e.fixture_id = f.id))`;",
+  "replace": "`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "after a bye"
+   }
+  ]
  }
 ]
