@@ -7,6 +7,9 @@
 //  - an audit row's actor cannot be deleted out from under it.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { sql } from "@/lib/db";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 import { SUPERUSER_ONLY } from "../../../../../../scripts/rls-exempt.ts";
@@ -56,18 +59,18 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       returning id`;
     meetinglessFixtureId = other!.id;
     await sql`
-      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
-      values (${fixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`;
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      values (${fixtureId}, 'home', ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`;
   });
 
   afterAll(async () => {
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
 
-  it("one meeting per fixture — a second insert collides on the primary key", async () => {
+  it("one meeting per (fixture, side) — a second insert for the same side collides on the primary key", async () => {
     expect(await attempt(sql`
-      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
-      values (${fixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`,
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      values (${fixtureId}, 'home', ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`,
     )).toEqual({
       accepted: false, code: "23505", constraint: "fixture_video_meetings_pkey",
     });
@@ -81,8 +84,8 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       const [f] = await sql<{ home: string; away: string }[]>`
         select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${meetinglessFixtureId}`;
       const got = await sql`
-        insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
-        values (${meetinglessFixtureId}, ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`},
+        insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+        values (${meetinglessFixtureId}, 'home', ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`},
                 ${missing === "home_entrant_id" ? null : f!.home}, ${missing === "away_entrant_id" ? null : f!.away})`.then(
         () => ({ accepted: true as const }),
         (err: { code?: string; column_name?: string }) => ({ accepted: false as const, code: err.code, column: err.column_name }),
@@ -134,9 +137,9 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
   // V442 (T14 re-review 3, I-1): a guard fault is OUR safeguard taking the
   // player's camera out of the meeting. Every write is rolled back.
   describe("guard faults (I-1): our safeguard's gap, never the player's", () => {
-    const fault = (tx: typeof sql, o: { startedAt?: string; endedAt?: string | null; fixture?: string } = {}) => tx`
-      insert into fixture_video_guard_faults (fixture_id, person_id, started_at, ended_at)
-      values (${o.fixture ?? fixtureId}, ${personId}, ${o.startedAt ?? "2026-10-12T10:00:00Z"}, ${o.endedAt ?? null})`;
+    const fault = (tx: typeof sql, o: { startedAt?: string; endedAt?: string | null; fixture?: string; side?: string } = {}) => tx`
+      insert into fixture_video_guard_faults (fixture_id, side, person_id, started_at, ended_at)
+      values (${o.fixture ?? fixtureId}, ${o.side ?? "home"}, ${personId}, ${o.startedAt ?? "2026-10-12T10:00:00Z"}, ${o.endedAt ?? null})`;
 
     it("an open fault, and a closed one whose end follows its start, are accepted", async () => {
       expect(await rolledBack((tx) => fault(tx))).toEqual({ accepted: true });
@@ -150,7 +153,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       });
     });
 
-    it("at most ONE open fault per player per fixture — and any number of closed ones beside it", async () => {
+    it("at most ONE open fault per player per meeting — and any number of closed ones beside it", async () => {
       expect(await rolledBack(async (tx) => {
         await fault(tx);
         await fault(tx, { startedAt: "2026-10-12T10:05:00Z" });
@@ -165,7 +168,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     it("a fault needs the fixture's MEETING — a real fixture with none is refused", async () => {
       expect(meetinglessFixtureId).not.toBe(fixtureId);
       expect(await rolledBack((tx) => fault(tx, { fixture: meetinglessFixtureId }))).toEqual({
-        accepted: false, code: FK_VIOLATION, constraint: "fixture_video_guard_faults_fixture_id_fkey",
+        accepted: false, code: FK_VIOLATION, constraint: "fixture_video_guard_faults_fixture_id_side_fkey",
       });
     });
 
@@ -182,8 +185,8 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
   it("D6: two participants for ONE person are accepted — N angles are config, not a migration", async () => {
     for (const n of ["a", "b"]) {
       expect(await attempt(sql`
-        insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-        values (${fixtureId}, ${personId}, 'player', ${`p-${n}-${randomUUID().slice(0, 8)}`})`,
+        insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+        values (${fixtureId}, 'home', ${personId}, 'player', ${`p-${n}-${randomUUID().slice(0, 8)}`})`,
       )).toEqual({ accepted: true });
     }
     const [{ count }] = await sql<{ count: string }[]>`
@@ -197,15 +200,15 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
   describe("D21: the seat-read cache columns", () => {
     const insertWith = (cols: { reads?: number; at?: Date | null; state?: string | null; since?: Date | null }) =>
       rolledBack((tx) => tx`
-        insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, seat_reads, seat_read_at, seat_read_state, seat_read_since)
-        values (${fixtureId}, ${personId}, 'player', ${`p-c-${randomUUID().slice(0, 8)}`}, ${cols.reads ?? 0}, ${cols.at ?? null}, ${cols.state ?? null}, ${cols.since ?? null})`);
+        insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, seat_reads, seat_read_at, seat_read_state, seat_read_since)
+        values (${fixtureId}, 'home', ${personId}, 'player', ${`p-c-${randomUUID().slice(0, 8)}`}, ${cols.reads ?? 0}, ${cols.at ?? null}, ${cols.state ?? null}, ${cols.since ?? null})`);
     const NOW = new Date("2026-10-15T09:00:00Z");
 
     it("a participant starts with no read on file (never read, zero reads, nothing cached)", async () => {
       const pid = `p-cache-${randomUUID().slice(0, 8)}`;
       await sql`
-        insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-        values (${fixtureId}, ${personId}, 'player', ${pid})`;
+        insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+        values (${fixtureId}, 'home', ${personId}, 'player', ${pid})`;
       const [row] = await sql<{ seat_read_at: Date | null; seat_reads: number; seat_read_state: string | null; seat_read_since: Date | null }[]>`
         select seat_read_at, seat_reads, seat_read_state, seat_read_since from fixture_video_participants where participant_id = ${pid}`;
       expect(row).toEqual({ seat_read_at: null, seat_reads: 0, seat_read_state: null, seat_read_since: null });
@@ -293,11 +296,11 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       select count(*)::text as count from fixtures where id = ${meetinglessFixtureId}`;
     expect(Number(count)).toBe(1);
     expect(await attempt(sql`
-      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-      values (${meetinglessFixtureId}, ${personId}, 'player', ${`p-${randomUUID().slice(0, 8)}`})`,
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+      values (${meetinglessFixtureId}, 'home', ${personId}, 'player', ${`p-${randomUUID().slice(0, 8)}`})`,
     )).toEqual({
       accepted: false, code: FK_VIOLATION,
-      constraint: "fixture_video_participants_fixture_id_fkey",
+      constraint: "fixture_video_participants_fixture_id_side_fkey",
     });
   });
 
@@ -400,6 +403,360 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       constraint: "online_chess_audit_actor_user_id_fkey",
     });
   });
+
+  // ─── V448 (D16): one meeting per PLAYER ──────────────────────────────────────────────────────────────────────────────
+  describe("V448: a meeting per player (fixture, side)", () => {
+    const meeting = (tx: typeof sql, side: string | null, o: { fixture?: string; meetingId?: string } = {}) => tx`
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      values (${o.fixture ?? fixtureId}, ${side}, ${orgId}, ${o.meetingId ?? `mtg-${randomUUID().slice(0, 8)}`},
+              (select home_entrant_id from fixtures where id = ${o.fixture ?? fixtureId}),
+              (select away_entrant_id from fixtures where id = ${o.fixture ?? fixtureId}))`;
+    const participant = (tx: typeof sql, side: string, o: { preset?: string; reported?: string | null; reportedAt?: Date | null } = {}) => tx`
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, camera_reported, camera_reported_at)
+      values (${fixtureId}, ${side}, ${o.preset === "arbiter" ? null : personId}, ${o.preset ?? "player"}, ${`p-v448-${randomUUID().slice(0, 8)}`},
+              ${o.reported ?? null}, ${o.reportedAt ?? null})`;
+
+    it("a meeting names the side it is for: home and away are accepted, anything else is refused, and so is none (each counted)", async () => {
+      let checked = 0;
+      for (const side of ["home", "away"]) {
+        // On the OTHER side's row of the seeded fixture: the seeded one already holds 'home'.
+        const got = side === "away" ? await rolledBack((tx) => meeting(tx, "away")) : await rolledBack((tx) => meeting(tx, "home", { fixture: meetinglessFixtureId }));
+        expect(got, side).toEqual({ accepted: true });
+        checked += 1;
+      }
+      for (const side of ["white", "HOME", "", "both"]) {
+        expect(await rolledBack((tx) => meeting(tx, side, { fixture: meetinglessFixtureId })), JSON.stringify(side)).toMatchObject({
+          accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_meetings_side_check",
+        });
+        checked += 1;
+      }
+      expect(await rolledBack((tx) => meeting(tx, null, { fixture: meetinglessFixtureId })), "no side").toMatchObject({ accepted: false, code: "23502" });
+      checked += 1;
+      expect(checked).toBe(7);
+    });
+
+    it("both sides of one fixture can hold a meeting; each meeting id stays unique across them", async () => {
+      expect(await rolledBack(async (tx) => {
+        await meeting(tx, "away", { meetingId: "mtg-the-other-side" });
+        const [{ count }] = await tx<{ count: string }[]>`select count(*)::text as count from fixture_video_meetings where fixture_id = ${fixtureId}`;
+        expect(Number(count), "premise: two rows for one fixture").toBe(2);
+      })).toEqual({ accepted: true });
+      const [mine] = await sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${fixtureId} and side = 'home'`;
+      expect(await rolledBack((tx) => meeting(tx, "away", { meetingId: mine!.meeting_id })), "the same vendor room for both sides").toMatchObject({
+        accepted: false, code: "23505", constraint: "fixture_video_meetings_meeting_id_key",
+      });
+    });
+
+    it("a participant is on a meeting that exists: the other side's row is not enough", async () => {
+      // 'home' has a meeting (beforeAll), 'away' has none.
+      expect(await rolledBack((tx) => participant(tx, "home")), "the pair").toEqual({ accepted: true });
+      expect(await rolledBack((tx) => participant(tx, "away"))).toMatchObject({
+        accepted: false, code: FK_VIOLATION, constraint: "fixture_video_participants_fixture_id_side_fkey",
+      });
+      expect(await rolledBack(async (tx) => {
+        await meeting(tx, "away");
+        await participant(tx, "away");
+      }), "and once away has its row").toEqual({ accepted: true });
+    });
+
+    it("deleting a side's meeting takes that side's participants and faults with it, and leaves the other side's", async () => {
+      expect(await rolledBack(async (tx) => {
+        await meeting(tx, "away");
+        await participant(tx, "away");
+        await participant(tx, "home");
+        await tx`insert into fixture_video_guard_faults (fixture_id, side, person_id, started_at) values (${fixtureId}, 'away', ${personId}, now())`;
+        await tx`delete from fixture_video_meetings where fixture_id = ${fixtureId} and side = 'away'`;
+        const rows = await tx<{ side: string; n: number }[]>`
+          select side, count(*)::int as n from (
+            select side from fixture_video_participants where fixture_id = ${fixtureId}
+            union all select side from fixture_video_guard_faults where fixture_id = ${fixtureId}) x group by side`;
+        expect(rows.map((r) => r.side), "the away side is gone from both tables").not.toContain("away");
+        expect(rows.find((r) => r.side === "home")!.n, "premise: the home side's rows are still there").toBeGreaterThan(0);
+      })).toEqual({ accepted: true });
+    });
+
+    it("the open-fault rule is per meeting: one person can hold an open fault on each side, never two on the same", async () => {
+      expect(await rolledBack(async (tx) => {
+        await meeting(tx, "away");
+        await tx`insert into fixture_video_guard_faults (fixture_id, side, person_id, started_at) values (${fixtureId}, 'home', ${personId}, now())`;
+        await tx`insert into fixture_video_guard_faults (fixture_id, side, person_id, started_at) values (${fixtureId}, 'away', ${personId}, now())`;
+      })).toEqual({ accepted: true });
+    });
+
+    describe("the opponent's pill: camera_reported and camera_reported_at on the player's participant row", () => {
+      const T = new Date("2026-10-15T10:00:00Z");
+
+      it("a participant starts with no report", async () => {
+        const pid = `p-rep-${randomUUID().slice(0, 8)}`;
+        await sql`
+          insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+          values (${fixtureId}, 'home', ${personId}, 'player', ${pid})`;
+        const [row] = await sql<{ camera_reported: string | null; camera_reported_at: Date | null }[]>`
+          select camera_reported, camera_reported_at from fixture_video_participants where participant_id = ${pid}`;
+        expect(row).toEqual({ camera_reported: null, camera_reported_at: null });
+      });
+
+      it("only live and off are reports; the state and its stamp move together; the pairs are accepted", async () => {
+        expect(await rolledBack((tx) => participant(tx, "home", { reported: "live", reportedAt: T })), "live").toEqual({ accepted: true });
+        expect(await rolledBack((tx) => participant(tx, "home", { reported: "off", reportedAt: T })), "off").toEqual({ accepted: true });
+        let checked = 0;
+        for (const state of ["unknown", "on", "LIVE", ""]) {
+          expect(await rolledBack((tx) => participant(tx, "home", { reported: state, reportedAt: T })), JSON.stringify(state)).toMatchObject({
+            accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_participants_camera_reported_check",
+          });
+          checked += 1;
+        }
+        expect(await rolledBack((tx) => participant(tx, "home", { reported: "live", reportedAt: null })), "a state with no stamp").toMatchObject({
+          accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_participants_camera_report_pair_check",
+        });
+        expect(await rolledBack((tx) => participant(tx, "home", { reported: null, reportedAt: T })), "a stamp with no state").toMatchObject({
+          accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_participants_camera_report_pair_check",
+        });
+        checked += 2;
+        expect(checked).toBe(6);
+      });
+
+      it("an arbiter's row never carries a camera report (it has no camera to report)", async () => {
+        expect(await rolledBack((tx) => participant(tx, "home", { preset: "arbiter", reported: "live", reportedAt: T }))).toMatchObject({
+          accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_participants_camera_reported_player_check",
+        });
+      });
+    });
+
+    // ── The delta's own guard (§5.6.7, M6) ───────────────────────────────────────────────────────────────────────────
+    // No harness here runs a Flyway migration from a test (v380-age-band-backfill.test.ts says so), so the real delta
+    // file is read off disk and executed against a disposable SCRATCH SCHEMA holding the V439/V442/V446 shape of the
+    // three tables. The replica is checked, not trusted: after the delta the scratch tables must have exactly the shape
+    // the live (migrated) database has, so a replica that drifted from history, or a delta that does not land where
+    // Flyway's run does, fails the comparison.
+    describe("the delta's guard", () => {
+      const DELTA = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..", "db", "migration", "deltas", "V448__video_meeting_per_player.sql");
+      const delta = (): string => readFileSync(DELTA, "utf8");
+      /** V439 + V442 + V446, the three tables as they were before V448. */
+      const OLD_SHAPE = `
+        create table fixture_video_meetings (
+          fixture_id uuid primary key references fixtures(id) on delete cascade,
+          org_id     uuid not null references organizations(id) on delete cascade,
+          provider   text not null default 'realtimekit' check (provider in ('realtimekit')),
+          meeting_id text not null unique,
+          home_entrant_id uuid not null,
+          away_entrant_id uuid not null,
+          created_at timestamptz not null default now(),
+          ended_at   timestamptz null,
+          camera_evidence_at timestamptz null,
+          constraint fixture_video_meetings_camera_evidence_check check (camera_evidence_at is null or ended_at is not null)
+        );
+        create index fixture_video_meetings_org_idx on fixture_video_meetings (org_id);
+        create table fixture_video_participants (
+          id uuid primary key default gen_random_uuid(),
+          fixture_id uuid not null references fixture_video_meetings(fixture_id) on delete cascade,
+          person_id uuid null references persons(id) on delete set null,
+          preset text not null check (preset in ('player', 'arbiter')),
+          participant_id text not null,
+          last_publisher_seen_at timestamptz null,
+          created_at timestamptz not null default now(),
+          unique (fixture_id, participant_id),
+          user_id uuid null references users(id) on delete set null,
+          removed_at timestamptz null,
+          seat_read_at timestamptz null,
+          seat_reads integer not null default 0 check (seat_reads >= 0),
+          seat_read_state text null,
+          seat_read_since timestamptz null,
+          constraint fixture_video_participants_user_check check (user_id is null or preset = 'arbiter'),
+          constraint fixture_video_participants_removed_check check (removed_at is null or preset = 'arbiter'),
+          constraint fixture_video_participants_seat_read_check check (
+            seat_reads > 0 or (seat_read_at is null and seat_read_state is null and seat_read_since is null)),
+          constraint fixture_video_participants_seat_read_state_check check (
+            (seat_read_state is null and seat_read_since is null)
+            or (seat_read_state is not null and seat_read_state in ('starting', 'unreadable') and seat_read_since is not null))
+        );
+        create index fixture_video_participants_person_idx on fixture_video_participants (fixture_id, person_id);
+        create index fixture_video_participants_arbiter_open_idx
+          on fixture_video_participants (fixture_id) where preset = 'arbiter' and removed_at is null;
+        create table fixture_video_guard_faults (
+          id uuid primary key default gen_random_uuid(),
+          fixture_id uuid not null references fixture_video_meetings(fixture_id) on delete cascade,
+          person_id uuid not null references persons(id) on delete cascade,
+          started_at timestamptz not null,
+          ended_at timestamptz null,
+          constraint fixture_video_guard_faults_interval_check check (ended_at is null or ended_at >= started_at)
+        );
+        create unique index fixture_video_guard_faults_open_idx
+          on fixture_video_guard_faults (fixture_id, person_id) where ended_at is null;`;
+      const TABLES = ["fixture_video_meetings", "fixture_video_participants", "fixture_video_guard_faults"] as const;
+
+      /** Every column, constraint and index of a table, as one sorted list of words: its shape. */
+      async function shapeOf(tx: typeof sql, schema: string, table: string): Promise<string[]> {
+        const cols = await tx<{ d: string }[]>`
+          select a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || (case when a.attnotnull then ' not null' else '' end)
+                 || coalesce(' default ' || pg_get_expr(d.adbin, d.adrelid), '') as d
+            from pg_attribute a
+            join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
+            left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+           where n.nspname = ${schema} and c.relname = ${table} and a.attnum > 0 and not a.attisdropped`;
+        const cons = await tx<{ d: string }[]>`
+          select 'constraint ' || k.conname || ' ' || pg_get_constraintdef(k.oid) as d
+            from pg_constraint k
+            join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = ${schema} and c.relname = ${table}`;
+        const idx = await tx<{ d: string }[]>`
+          select 'index ' || replace(indexdef, ${`${schema}.`}, '') as d from pg_indexes where schemaname = ${schema} and tablename = ${table}`;
+        return [...cols, ...cons, ...idx].map((r) => r.d).sort();
+      }
+
+      const seedOld = async (tx: typeof sql, o: { ended: boolean }) => {
+        const [f] = await tx<{ home: string; away: string }[]>`select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`;
+        await tx`
+          insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id, ended_at)
+          values (${fixtureId}, ${orgId}, ${`old-${randomUUID().slice(0, 8)}`}, ${f!.home}, ${f!.away}, ${o.ended ? new Date() : null})`;
+        await tx`
+          insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+          values (${fixtureId}, ${personId}, 'player', ${`old-p-${randomUUID().slice(0, 8)}`})`;
+        await tx`insert into fixture_video_guard_faults (fixture_id, person_id, started_at) values (${fixtureId}, ${personId}, now())`;
+      };
+
+      /** Runs `body` in a transaction whose search path puts a fresh schema (holding the OLD shape) ahead of the live one;
+       *  always rolled back. */
+      async function onOldShape<T>(body: (tx: typeof sql, live: string, scratch: string) => Promise<T>): Promise<T> {
+        let out: { value: T } | undefined;
+        try {
+          await sql.begin(async (tx0) => {
+            const tx = tx0 as unknown as typeof sql;
+            const [{ live }] = await tx<{ live: string }[]>`select current_schema() as live`;
+            const scratch = `v448_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+            await tx.unsafe(`create schema "${scratch}"`);
+            await tx.unsafe(`set local search_path to "${scratch}", "${live}"`);
+            await tx.unsafe(OLD_SHAPE);
+            out = { value: await body(tx, live, scratch) };
+            throw ROLLBACK;
+          });
+        } catch (err) {
+          if (err !== ROLLBACK) throw err;
+        }
+        if (!out) throw new Error("onOldShape: body did not run");
+        return out.value;
+      }
+
+      it("the file opens with the lock and then the guard, before anything is dropped, written or altered", () => {
+        const body = delta().replace(/--[^\n]*/g, "").trim();
+        expect(body.startsWith("lock table fixture_video_meetings in access exclusive mode;"), "the first statement").toBe(true);
+        const afterLock = body.slice(body.indexOf(";") + 1).trimStart();
+        expect(afterLock.startsWith("do "), "the second statement is the guard block").toBe(true);
+        const guardEnd = body.indexOf("raise exception");
+        expect(guardEnd, "the guard raises").toBeGreaterThan(0);
+        for (const destructive of [/\bdelete from\b/i, /\balter table\b/i, /\bdrop\b/i, /\bcreate\b/i]) {
+          const at = body.search(destructive);
+          expect(at, String(destructive)).toBeGreaterThan(guardEnd);
+        }
+      });
+
+      it("against a database with an UNENDED meeting it raises, naming the script to run first, and the old shape is untouched", async () => {
+        const got = await onOldShape(async (tx) => {
+          await seedOld(tx, { ended: false });
+          // A savepoint: the failed delta must not poison the transaction the checks below read in.
+          const refused = await tx.savepoint(async (sp) => (sp as unknown as typeof sql).unsafe(delta())).then(
+            () => null,
+            (err: { code?: string; message?: string }) => ({ code: err.code, message: err.message }),
+          );
+          const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings`;
+          const [{ side }] = await tx<{ side: number }[]>`
+            select count(*)::int as side from information_schema.columns
+             where table_schema = ((current_schemas(false))[1]) and table_name = 'fixture_video_meetings' and column_name = 'side'`;
+          return { refused, rows: n, sideColumns: side };
+        });
+        expect(got.refused, "it raised").not.toBeNull();
+        expect(got.refused!.message).toMatch(/chess-end-shared-meetings/);
+        expect(got.rows, "nothing was dropped: the unended row is still there").toBe(1);
+        expect(got.sideColumns, "and nothing was altered").toBe(0);
+      });
+
+      it("with ONLY ended meetings it applies: the shared rows go, and the three tables end up exactly as the migrated database has them", async () => {
+        const got = await onOldShape(async (tx, live, scratch) => {
+          await seedOld(tx, { ended: true });
+          const before = await tx<{ n: number }[]>`select (select count(*) from fixture_video_meetings)::int + (select count(*) from fixture_video_participants)::int + (select count(*) from fixture_video_guard_faults)::int as n`;
+          await tx.unsafe(delta());
+          const after = await tx<{ n: number }[]>`select (select count(*) from fixture_video_meetings)::int + (select count(*) from fixture_video_participants)::int + (select count(*) from fixture_video_guard_faults)::int as n`;
+          const applied: Record<string, string[]> = {};
+          for (const t of TABLES) applied[t] = await shapeOf(tx, scratch, t);
+          await tx.unsafe(`set local search_path to "${live}"`);
+          const migrated: Record<string, string[]> = {};
+          for (const t of TABLES) migrated[t] = await shapeOf(tx, live, t);
+          return { before: before[0]!.n, after: after[0]!.n, applied, migrated };
+        });
+        expect(got.before, "premise: one meeting, one participant, one fault to drop").toBe(3);
+        expect(got.after, "greenfield: the shared rows are gone").toBe(0);
+        let compared = 0;
+        for (const t of TABLES) {
+          expect(got.applied[t]!.length, `${t}: something was compared`).toBeGreaterThan(5);
+          expect(got.applied[t], t).toEqual(got.migrated[t]);
+          compared += got.applied[t]!.length;
+        }
+        expect(compared).toBeGreaterThan(40);
+      });
+
+      it("a seat claim still in flight when the delta starts is SEEN: the delta waits for it on the table lock, then the guard raises (and had it rolled back, the delta applies)", async () => {
+        // Committed scratch schema (a second connection has to SEE the table), dropped in the finally.
+        const scratch = `v448_lock_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+        const [{ live }] = await sql<{ live: string }[]>`select current_schema() as live`;
+        const [f] = await sql<{ home: string; away: string }[]>`select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`;
+        const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+        const outcomeWhen = async (claim: "commits" | "rolls back"): Promise<string> => {
+          let release!: () => void;
+          const released = new Promise<void>((done) => (release = done));
+          let inserted!: () => void;
+          const insertedRow = new Promise<void>((done) => (inserted = done));
+          // The claim: inserts an UNENDED meeting row and holds its transaction open.
+          const claimTx = sql
+            .begin(async (tx) => {
+              await tx.unsafe(`set local search_path to "${scratch}", "${live}"`);
+              await tx`
+                insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+                values (${fixtureId}, ${orgId}, ${`claim-${randomUUID().slice(0, 8)}`}, ${f!.home}, ${f!.away})`;
+              inserted();
+              await released;
+              if (claim === "rolls back") throw ROLLBACK;
+            })
+            .catch((err: unknown) => {
+              if (err !== ROLLBACK) throw err;
+            });
+          await insertedRow;
+          // The delta starts while the claim is in flight. Its guard cannot see an uncommitted row, so only the table
+          // lock taken BEFORE the guard makes it wait for the claim and then see it.
+          let settled = false;
+          const deltaTx = sql
+            .begin(async (tx) => {
+              await tx.unsafe(`set local search_path to "${scratch}", "${live}"`);
+              await tx.unsafe(delta());
+            })
+            .then(
+              () => "applied",
+              (err: { message?: string }) => err.message ?? "error",
+            )
+            .finally(() => void (settled = true));
+          await sleep(400);
+          expect(settled, "the delta is waiting on the claim, not racing past it").toBe(false);
+          release();
+          await claimTx;
+          return deltaTx;
+        };
+        await sql.unsafe(`create schema "${scratch}"`);
+        try {
+          await sql.begin(async (tx) => {
+            await tx.unsafe(`set local search_path to "${scratch}", "${live}"`);
+            await tx.unsafe(OLD_SHAPE);
+          });
+          expect(await outcomeWhen("commits"), "the committed claim is an unended row the guard now sees").toMatch(/chess-end-shared-meetings/);
+          const [{ n }] = await sql.unsafe<{ n: number }[]>(`select count(*)::int as n from "${scratch}".fixture_video_meetings`);
+          expect(n, "and the claim's row is still there: nothing was dropped").toBe(1);
+          await sql.unsafe(`delete from "${scratch}".fixture_video_meetings`);
+          expect(await outcomeWhen("rolls back"), "the pair: a claim that rolled back leaves nothing to guard against").toBe("applied");
+        } finally {
+          await sql.unsafe(`drop schema if exists "${scratch}" cascade`);
+        }
+      });
+    });
+  });
+
   // CI's RLS guard (scripts/check-rls.ts, and rls-coverage.test.ts beside it) exempts a table by NAME, in
   // scripts/rls-exempt.ts. That name is a claim that no app_user connection can reach the table. These cases make the
   // claim the DATABASE's: a sealed table has no policy AND no grant, so an app_user query on it is refused (42501),
