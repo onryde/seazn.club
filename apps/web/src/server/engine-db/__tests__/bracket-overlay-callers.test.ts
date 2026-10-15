@@ -18,6 +18,12 @@
 // seeding stays a plumbing witness of the readers. The badminton describe at the end drives the REAL producer: the
 // writer's own stored override, through the pad, the fold, the freeze and a live correction. Task 14 also adds a
 // 13th site (`fixture-override-guards.ts`, a division save re-checking every unstarted match's own format).
+//
+// W2c batch-5 fix (review Q1): the 16th site, `public-site/stage-format-lines.ts` - the stage chip and the hub line, which
+// resolve the cfg of a STAGE (no fixture) and so take no match override BY CONSTRUCTION. Its row says `override: false`; its
+// case drives the real entry and asserts the bracket overlay reached it and that the call carried `rules_override: null`.
+// The line itself cannot witness the overlay (`describeDeciders` lays `bracketDeciders` over its cfg again), so the case
+// reads what the RESOLVER returned there, through the spy.
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -53,6 +59,7 @@ import { loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { draftPostsForDecidedFixture } from "@/server/usecases/org-posts";
 import { computePlayerStats } from "@/server/usecases/player-stats";
 import { fixtureConfigPanel, resnapshotFixtureConfig } from "@/server/usecases/admin-fixture-config";
+import { stageFormatLines } from "@/server/public-site/stage-format-lines";
 import { patchDivision } from "@/server/usecases/divisions";
 import { writeFixtureRulesOverride } from "@/server/usecases/fixture-rules";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
@@ -116,6 +123,19 @@ function expectOverrideArg(): number {
   for (const st of stacks) DRIVEN.add(callSite(st));
   return calls.length;
 }
+/** The sites a case drove WITHOUT an override, because the site has no fixture row to take one from (`override: false`
+ *  in SITES): a stage's own line. Each call must carry exactly the null override - a fixture's override reaching a stage
+ *  line would be a stage that plays one match's format. */
+const DRIVEN_NO_OVERRIDE = new Set<string>();
+function expectNoOverrideArg(): number {
+  const calls = spy.mock.calls;
+  expect(calls.length, "the entry never called resolveFixtureCfg").toBeGreaterThan(0);
+  for (const c of calls) expect(c[0], JSON.stringify(c[0])).toEqual({ config_snapshot: null, rules_override: null });
+  const stacks = STACKS.slice(-calls.length);
+  expect(stacks, "one stack per call since the last clear").toHaveLength(calls.length);
+  for (const st of stacks) DRIVEN_NO_OVERRIDE.add(callSite(st));
+  return calls.length;
+}
 /** …and a call of `kind` handed back a LIVE cfg with the override merged (the fixture had no frozen snapshot). */
 function expectOverrideOut(kind: string): void {
   const calls = seen();
@@ -128,7 +148,7 @@ const CALL = /\bresolveFixtureCfg\(/g;
  *  rather than…" in prose. */
 const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 /** One row per production call site; `case` names the test that drives it. */
-const SITES: readonly { file: string; count: number; case: string }[] = [
+const SITES: readonly { file: string; count: number; case: string; override?: false }[] = [
   { file: "apps/web/src/server/engine-db/fold.ts", count: 1, case: "fold.ts loadFoldInputs" },
   // W2c Task 15 (X-SR-7): the second is the refusal's format line — the rules that stand, named for the refused pad
   // (rules-version.test.ts pins it against the describer over `loadFixturePadCfg`'s cfg).
@@ -147,10 +167,15 @@ const SITES: readonly { file: string; count: number; case: string }[] = [
   // W2c Task 15 fix round 1 (I-1): a format save re-resolves every unfrozen match before and after it writes, and bumps
   // the version of each whose format moved — so a pad open before kickoff is refused rather than frozen under.
   { file: "apps/web/src/server/engine-db/rules-version.ts", count: 1, case: "rules-version.ts unfrozenRules" },
+  // W2c Task 16 (batch-5 review Q1): the stage chip and the hub line resolve the cfg of a STAGE - a fixture-less call with
+  // `config_snapshot: null, rules_override: null` - so the overlay is the whole of what reaches it. `override: false`.
+  { file: "apps/web/src/server/public-site/stage-format-lines.ts", count: 1, case: "stage-format-lines.ts stageFormatLines", override: false },
 ];
+/** The ledger's total, which the source scan and the driven set must both reach. */
+const SITE_TOTAL = SITES.reduce((n, s) => n + s.count, 0);
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 15 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 16 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -169,7 +194,8 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(15);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(16);
+    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(16);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -439,22 +465,74 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(r!.v, "the save moved the match's format: its version moved").toBe(1);
   });
 
-  // M3 (review): the ledger above pins the 15 sites in the SOURCE; this pins that the cases DROVE all 15 with the
-  // override. Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
+  it.skipIf(!HAS_DB)("stage-format-lines.ts stageFormatLines: a knockout chip gets the bracket overlay over the division's drawn tie board, and the call carries NO match override", async () => {
+    // Carrom: the one sport whose bracket overlay is observable on a stage (`tieBoard`: 'extra' in a bracket, whatever the
+    // division plays). The division plays 'draw'; the stage names no rules of its own, so the overlay is the ONLY source
+    // of 'extra' - and the chip's WORDS cannot tell (`describeDeciders` lays the overlay over its cfg again), so the
+    // resolver's own answer is read through the spy.
+    const carrom = builtinModules.find((m) => m.key === "carrom")!;
+    const s = await seedBracket({
+      sport: "carrom",
+      variant: "icf",
+      stageKind: "knockout",
+      entrants: 2,
+      divisionConfig: { ...(carrom.variants.icf as Record<string, unknown>), tieBoard: "draw" },
+      stageRules: "division",
+    });
+    const [div] = await sql<{ config: { tieBoard?: string } }[]>`select config from divisions where id = ${s.divisionId}`;
+    expect(div!.config.tieBoard, "premise: the division plays a drawn tie board").toBe("draw");
+    const stages = await sql<{ id: string; name: string; seq: number; kind: string; rules: unknown }[]>`
+      select id, name, seq, kind, config -> 'rules' as rules from stages where division_id = ${s.divisionId}`;
+    expect(stages, "premise: one knockout stage with no rules of its own").toHaveLength(1);
+    expect(stages[0]!.rules ?? null, "premise: the stage names no rules").toBeNull();
+
+    spy.mockClear();
+    const lines = stageFormatLines("carrom", carrom, div!.config, stages);
+    const calls = seen();
+    expect(calls.length, JSON.stringify(calls)).toBe(1); // one stage, one resolution
+    expect(calls[0]!.kind).toBe("knockout");
+    expect(calls[0]!.out?.tieBoard, "the resolver laid the bracket's extra board over the division's draw").toBe("extra");
+    expect(expectNoOverrideArg()).toBe(1);
+    // …and the chip says it (the words come from the same cfg).
+    expect(lines.flatMap((l) => l.line.map((c) => c.key)), JSON.stringify(lines)).toContain("format.rules.decider.extraBoard");
+
+    // The negative pair: the same division's TABLE stage never gets the overlay, so its resolution keeps the division's draw.
+    spy.mockClear();
+    stageFormatLines("carrom", carrom, div!.config, [{ ...stages[0]!, kind: "league" }]);
+    const league = seen();
+    expect(league.length).toBe(1);
+    expect(league[0]!.kind).toBe("league");
+    expect(league[0]!.out?.tieBoard, "no overlay on a table stage").toBe("draw");
+  });
+
+  // M3 (review): the ledger above pins the 16 sites in the SOURCE; this pins that the cases DROVE all 16 - 15 with the
+  // override and the stage line without one (its row says `override: false`). Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 15 call sites was driven with the override, per the spy's caller frames", () => {
-    const byFile = new Map<string, number>();
-    for (const site of DRIVEN) {
-      const file = site.replace(/:\d+:\d+$/, "");
-      byFile.set(file, (byFile.get(file) ?? 0) + 1);
-    }
-    const missing = SITES.filter((s) => (byFile.get(s.file) ?? 0) !== s.count).map(
-      (s) => `${s.file}: ${byFile.get(s.file) ?? 0} of ${s.count} driven`,
+  it.skipIf(!HAS_DB)("every one of the 16 call sites was driven (15 with the override, the stage line without), per the spy's caller frames", () => {
+    const tally = (driven: ReadonlySet<string>) => {
+      const byFile = new Map<string, number>();
+      for (const site of driven) {
+        const file = site.replace(/:\d+:\d+$/, "");
+        byFile.set(file, (byFile.get(file) ?? 0) + 1);
+      }
+      return byFile;
+    };
+    const withOverride = tally(DRIVEN);
+    const withoutOverride = tally(DRIVEN_NO_OVERRIDE);
+    const missing = SITES.filter((s) => ((s.override === false ? withoutOverride : withOverride).get(s.file) ?? 0) !== s.count).map(
+      (s) =>
+        `${s.file}: ${(s.override === false ? withoutOverride : withOverride).get(s.file) ?? 0} of ${s.count} driven ${s.override === false ? "without" : "with"} the override`,
     );
-    expect(missing, `NOT DRIVEN: ${missing.join("; ")} (driven: ${JSON.stringify([...DRIVEN].sort())})`).toEqual([]);
-    expect([...byFile.keys()].sort(), "and nothing outside the ledger").toEqual(SITES.map((s) => s.file).sort());
-    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(15);
+    expect(missing, `NOT DRIVEN: ${missing.join("; ")} (driven: ${JSON.stringify([...DRIVEN, ...DRIVEN_NO_OVERRIDE].sort())})`).toEqual([]);
+    expect([...withOverride.keys()].sort(), "with the override: exactly the sites that take one").toEqual(
+      SITES.filter((s) => s.override !== false).map((s) => s.file).sort(),
+    );
+    expect([...withoutOverride.keys()].sort(), "without: exactly the sites that cannot").toEqual(
+      SITES.filter((s) => s.override === false).map((s) => s.file).sort(),
+    );
+    expect(DRIVEN.size + DRIVEN_NO_OVERRIDE.size, "anti-vacuity: the sites checked").toBe(SITE_TOTAL);
+    expect(SITE_TOTAL).toBe(16);
   });
 });
 
