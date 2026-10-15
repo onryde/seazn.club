@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { goldenPath, readCorpus, SPORT_DIRS } from "./golden.ts";
 import { migrateGoldenForfeits, type MigratableEvent } from "./golden-forfeit-migration.ts";
+import { FORFEIT_REASONS } from "../core/types.ts";
 
 const stream = (...events: MigratableEvent[]) => ({ config: "default", seed: 1, events, states: ["{}"], outcome: "null" });
 const forfeit = (by: string, reason: string): MigratableEvent => ({ type: "core.forfeit", payload: { by, reason } });
@@ -60,6 +61,19 @@ describe("golden forfeit migration (ruling 102 Q1, PF-3; ruling 113)", () => {
     const out = migrateGoldenForfeits([voidedFirst, voidedPlay, voidedAfter]);
     expect(out.streams.map((s) => reasonsOf(s.events))).toEqual([["walkover"], ["walkover"], ["retired"]]);
     expect([out.examined, out.rewritten]).toEqual([3, 3]);
+  });
+
+  it("GF-1: a closed-vocabulary reason the ruling never yields (disqualified, withdrew) is a deliberate record, not pre-W2b free text — kept after play and after a bare start alike; free text beside it is still rewritten", () => {
+    const GOAL: MigratableEvent = { type: "football.goal", payload: { by: "H" } };
+    const kept = ["disqualified", "withdrew"] as const;
+    // the guard on the list: both really are words of the closed vocabulary, so this is not a typed-in pair that rots
+    for (const reason of kept) expect(FORFEIT_REASONS as readonly string[]).toContain(reason);
+    const input = kept.flatMap((reason) => [stream(START, GOAL, forfeit("A", reason)), stream(START, forfeit("H", reason))]);
+    const out = migrateGoldenForfeits([...input, stream(START, GOAL, forfeit("A", "no-show"))]);
+    expect(out.streams.slice(0, 4).map((s) => reasonsOf(s.events))).toEqual([["disqualified"], ["disqualified"], ["withdrew"], ["withdrew"]]);
+    expect(JSON.stringify(out.streams.slice(0, 4))).toBe(JSON.stringify(input));
+    expect(reasonsOf(out.streams[4]!.events)).toEqual(["retired"]);
+    expect([out.examined, out.rewritten]).toEqual([5, 1]);
   });
 
   it("`by` is never rewritten and `both` is never introduced — every forfeit of a mixed set", () => {

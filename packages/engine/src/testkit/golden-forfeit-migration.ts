@@ -12,6 +12,7 @@
 // per-sport table, and with `--write` rewrites the corpora in place.
 import { pathToFileURL } from "node:url";
 import { playRecorded } from "../core/events.ts";
+import { FORFEIT_REASONS } from "../core/types.ts";
 import { readCorpus, SPORT_DIRS, writeCorpus, type GoldenEvent } from "./golden.ts";
 import { makeEnvelope } from "./helpers.ts";
 
@@ -25,6 +26,11 @@ function forfeitSide(payload: unknown): string {
   if (typeof by !== "string") throw new Error(`golden forfeit migration: a core.forfeit names no side: ${JSON.stringify(payload)}`);
   return by;
 }
+
+/** The closed-vocabulary reasons the ruling never yields — `disqualified`, `withdrew`. They were never pre-W2b free
+ *  text: the golden floor (GF-1) records them deliberately, a forfeit of that reason after play or after a bare start
+ *  alike, so the migration leaves them exactly as recorded. (`walkover` and `retired` are the two the rule produces.) */
+const KEPT_REASONS: ReadonlySet<string> = new Set(FORFEIT_REASONS.filter((reason) => reason !== "walkover" && reason !== "retired"));
 
 /** The ruled reason for the forfeit at `index` (ruling 113): walkover unless something was played before it — the
  *  fold's own reading, `playRecorded`. Voids are resolved over the PREFIX — a void recorded after the forfeit cannot
@@ -55,7 +61,7 @@ export function migrateGoldenForfeits<S extends { readonly events: readonly Migr
         throw new Error("golden forfeit migration: a double walkover after play has no W2b reason");
       }
       const payload = event.payload as Record<string, unknown>;
-      if (payload.reason === reason) return event;
+      if (payload.reason === reason || (typeof payload.reason === "string" && KEPT_REASONS.has(payload.reason))) return event;
       rewritten++;
       return { ...event, payload: { ...payload, reason } };
     });
