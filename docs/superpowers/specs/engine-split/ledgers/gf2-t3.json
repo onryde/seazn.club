@@ -1,6 +1,6 @@
 {
  "batch": "gf2-t3",
- "note": "Test-id ledger for GF-2 T3 (the golden floor requires the kernel overlay: overlay tokens, the settle and expunge stories, floor batches, the retired exemption and claims, the format-2 probe, the apps/web readers; owner rulings 2026-10-15), built against base 05fd17c32 (the GF-2 T2 head). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T3 adds 71 test ids, retitles 16 and retires 1 (6290 -> 6344 collected), all under packages/engine/src/testkit. Scope: the matrix and scripts roots are not collected because T3 changes no file under tools/matrix or scripts; apps/web changes two test bodies (outcome-readers.test.ts, timeline.test.ts) and no title (no id moves), re-run green: 100 passed, 41 skipped for want of Postgres.",
+ "note": "Test-id ledger for GF-2 T3 (the golden floor requires the kernel overlay: overlay tokens, the settle and expunge stories, floor batches, the retired exemption and claims, the format-2 probe, the apps/web readers; owner rulings 2026-10-15), built against base 05fd17c32 (the GF-2 T2 head). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T3 adds 63 new test ids (55 from the build plus 9 from the review fixes, less 1 the review replaced: 71 after-only ids at the build included the 16 retitled tests), retitles 16 and retires 1 (6290 -> 6352 collected), all under packages/engine/src/testkit. Scope: the matrix and scripts roots are not collected because T3 changes no file under tools/matrix or scripts; apps/web changes two test files (outcome-readers.test.ts, timeline.test.ts) and no existing title (no id moves; outcome-readers.test.ts gains one test, outside the engine collection root), re-run green: 48 passed in the two files.",
  "entries": [
   {
    "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › every claim row names real core types, a reason, and applies to at least one sport",
@@ -369,14 +369,54 @@
    "reason": "GF-2 T3 mutation pass: both overlay readers refuse the same malformed shapes (one shape check)"
   },
   {
-   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › the static defaults are the kernel defaults overlayDefaults writes (one authority), for every column but the squads",
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › over the committed corpora: every column a stream records is read (swept, counted), and the transitions agree with expandOverlay's dense form",
    "fate": "added",
    "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
   },
   {
-   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › over the committed corpora: every column a stream records is read (swept, counted), and the transitions agree with expandOverlay's dense form",
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › the static defaults are what a REAL fold of an empty ledger holds in every column but the squads — read off the fold, not off overlayDefaults, which spreads them",
    "fate": "added",
-   "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
+   "reason": "GF-2 T3 review fix: replaces the old static-defaults test (retired, below) which compared a table with its own spread; this one reads the defaults off a real fold of an empty ledger in all 11 sports"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › overlayDefaults is the static defaults plus the squads digest of the team sheets, and nothing else",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: the half of the old static-defaults test that was true: overlayDefaults is the table plus the squads digest"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › only the fold's own refusal reads as 'did not take effect': any other throw (a defect in a module) surfaces, it is not swallowed into a story that did not fit",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: readsAs now catches only EngineError; a non-EngineError throw must surface"
+  },
+  {
+   "id": "src/testkit/golden-policy.test.ts › GOLDEN-POLICY.md — what the guard cannot see names what the engine says it cannot › the sports with an abandonPolicy knob are the ones the policy names, every recorded config says 'replay', and 'award' makes the module answer an outcome after an abandon",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: the owed award-policy coverage names football, hockey and icehockey, derived from the parsed configs"
+  },
+  {
+   "id": "src/testkit/golden-policy.test.ts › GOLDEN-POLICY.md — what the guard cannot see names what the engine says it cannot › under the recorded configs only cricket's module answers an outcome after an abandon (the sentence the policy rests on), swept over every sport",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: the sentence the policy rests on, swept over every sport and every recorded config"
+  },
+  {
+   "id": "src/testkit/golden-policy.test.ts › GOLDEN-POLICY.md — what the guard cannot see names what the engine says it cannot › the widening-a-refusal bullet names both refusals by the code the kernel throws, and the kernel still throws them",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: widening a kernel refusal moves no golden; the policy names X-AB-4 and the settle admission by code"
+  },
+  {
+   "id": "src/testkit/golden-budget.test.ts › sweepBudget — a sweep's time budget is stated from the work, so it moves with the registry › one more sport costs exactly one sport's work more, for every kind, and the default is the whole registry",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: sweep budgets are sports x per-sport cost, not flat literals"
+  },
+  {
+   "id": "src/testkit/golden-budget.test.ts › sweepBudget — a sweep's time budget is stated from the work, so it moves with the registry › the kinds are ordered by cost (reading a corpus < probing it < rebuilding its floor) and every budget leaves room above a bare vitest default",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: ordering of the three kinds of sweep work"
+  },
+  {
+   "id": "src/testkit/golden-budget.test.ts › sweepBudget — a sweep's time budget is stated from the work, so it moves with the registry › refuses a count that is not a sport count, never reads it as free",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: a zero, negative, fractional or NaN sport count is refused"
   }
  ]
 }
