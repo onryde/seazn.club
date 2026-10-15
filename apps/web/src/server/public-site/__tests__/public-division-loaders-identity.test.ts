@@ -153,7 +153,13 @@ async function readPublicDivisionDetailBefore(division: PublicDivision) {
              select a.payload ->> 'reason' from score_events a
               where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
                 and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)
-              order by a.seq desc limit 1) end) as abandon_reason
+              order by a.seq desc limit 1) end) as abandon_reason,
+           -- X-AB-5 (61d735712), carried the same way: an active (non-voided) core.abandon on an 'abandoned' row, the
+           -- table's "held for settle" probe (hasActiveAbandonSql without the expunge gate), written out by hand.
+           (public_fixtures_v.status = 'abandoned' and exists (
+             select 1 from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon
     from public_fixtures_v where division_id = ${division.id}
     order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixtureBefore));
   const fixtures = await withCourtVenueNames(rawFixtures);
@@ -231,7 +237,12 @@ async function embedDivisionDataBefore(divisionId: string) {
              (public_fixtures_v.status = 'abandoned' and exists (
              select 1 from score_events a
               where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'expunge' = 'true'
-                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged,
+             -- X-AB-5 (61d735712): the same carry as readPublicDivisionDetailBefore.
+             (public_fixtures_v.status = 'abandoned' and exists (
+               select 1 from score_events a
+                where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
+                  and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`
       .then((rows) => rows.map(isoBefore))
