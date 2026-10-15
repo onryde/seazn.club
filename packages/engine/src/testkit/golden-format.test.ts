@@ -14,6 +14,7 @@ import {
   extendFloor,
 } from "./golden-floor-streams.ts";
 import {
+  CURRENT_FORMAT,
   GUARDED_WRITE_MODES,
   buildCorpus,
   REFORMAT_GOLDEN,
@@ -63,11 +64,12 @@ const formatOneRecordable = (key: string): { corpus: GoldenCorpus; setAside: Gol
 // ------------------------------------------------------------------------------------------------ the format marker
 
 describe("corpusFormat", () => {
-  it("absent is 1, 1 and 2 are themselves, anything else is refused (a typo cannot read as format 1)", () => {
+  it("absent is 1, 1, 2 and 3 are themselves, anything else is refused (a typo cannot read as format 1)", () => {
     expect(corpusFormat({})).toBe(1);
     expect(corpusFormat({ format: 1 })).toBe(1);
     expect(corpusFormat({ format: 2 })).toBe(2);
-    for (const bad of [0, 3, "2", null, true]) {
+    expect(corpusFormat({ format: 3 })).toBe(3);
+    for (const bad of [0, 4, "2", null, true]) {
       expect(() => corpusFormat({ format: bad as never }), JSON.stringify(bad)).toThrow(/unknown golden corpus format/);
     }
   });
@@ -80,11 +82,12 @@ describe("corpusFormat", () => {
       const corpus = readCorpus(key);
       const format = corpusFormat(corpus);
       formats.add(format);
-      expect("format" in corpus, key).toBe(format === 2);
+      expect("format" in corpus, key).toBe(format >= 2);
       for (const stream of corpus.streams) {
         const label = `${key} ${stream.config}#${stream.seed}`;
-        expect("summaries" in stream, label).toBe(format === 2);
-        expect("overlay" in stream, label).toBe(format === 2);
+        expect("summaries" in stream, label).toBe(format >= 2);
+        expect("overlay" in stream, label).toBe(format >= 2);
+        expect("playerStats" in stream, label).toBe(format === 3);
         streams++;
       }
       checked++;
@@ -110,7 +113,7 @@ describe("corpusFormat", () => {
       expect(one.streams.length, key).toBe(committed.streams.length);
       one.streams.forEach((was, i) => {
         const now = committed.streams[i]!;
-        expect(Object.keys(was), `${key} #${i}`).toEqual(Object.keys(now).filter((k) => k !== "summaries" && k !== "overlay"));
+        expect(Object.keys(was), `${key} #${i}`).toEqual(Object.keys(now).filter((k) => k !== "summaries" && k !== "overlay" && k !== "playerStats"));
         expect(JSON.stringify(was.states), `${key} #${i}`).toBe(JSON.stringify(now.states));
       });
       checked++;
@@ -222,7 +225,7 @@ const reformatted = new Map<string, GoldenCorpus>();
 const reformattedOf = (key: string): GoldenCorpus => {
   let corpus = reformatted.get(key);
   if (corpus === undefined) {
-    corpus = reformatCorpus(sport(key), formatOneOf(key));
+    corpus = reformatCorpus(sport(key), formatOneOf(key), 2);
     reformatted.set(key, corpus);
   }
   return corpus;
@@ -255,7 +258,7 @@ describe("reformatCorpus — adds the format-2 fields and moves nothing the corp
       });
       expect(after.streams.length).toBeGreaterThan(0);
       // idempotent: a second run reproduces the file byte for byte (and verifies the corpus on the way — see the refusals below)
-      const again = reformatCorpus(module, after);
+      const again = reformatCorpus(module, after, 2);
       expect(bytesOf(again)).toBe(bytesOf(after));
       // the written file is the committed one plus the new fields: strictly longer, and every old byte is still there
       expect(bytesOf(after).length).toBeGreaterThan(bytesOf(before).length);
@@ -281,7 +284,7 @@ describe("reformatCorpus — adds the format-2 fields and moves nothing the corp
 
 describe("reformatAll — all sports or none: one refusal writes nothing", () => {
   it("every sport reformats: one plan entry per module, each the same corpus reformatCorpus gives on its own", () => {
-    const plan = reformatAll([sport("generic")], formatOneOf);
+    const plan = reformatAll([sport("generic")], formatOneOf, 2);
     expect(plan.length).toBe(1);
     expect(plan[0]!.module.key).toBe("generic");
     expect(bytesOf(plan[0]!.after)).toBe(bytesOf(reformattedOf("generic")));
@@ -293,7 +296,7 @@ describe("reformatAll — all sports or none: one refusal writes nothing", () =>
     const read = (key: string): GoldenCorpus => (key === "carrom" ? tampered(formatOneOf(key)) : formatOneOf(key));
     let thrown: Error | undefined;
     try {
-      reformatAll([sport("generic"), sport("carrom")], read);
+      reformatAll([sport("generic"), sport("carrom")], read, 2);
     } catch (error) {
       thrown = error as Error;
     }
@@ -305,11 +308,11 @@ describe("reformatAll — all sports or none: one refusal writes nothing", () =>
 
   it("every refusing sport is named, not only the first", () => {
     const tampered = (c: GoldenCorpus): GoldenCorpus => ({ ...c, streams: [{ ...c.streams[0]!, outcome: `{"kind":"draw"}` }, ...c.streams.slice(1)] });
-    expect(() => reformatAll([sport("carrom"), sport("volleyball")], (key) => tampered(formatOneOf(key)))).toThrow(/2 of 2 sport\(s\) refused[\s\S]*carrom config=[\s\S]*volleyball config=/);
+    expect(() => reformatAll([sport("carrom"), sport("volleyball")], (key) => tampered(formatOneOf(key)), 2)).toThrow(/2 of 2 sport\(s\) refused[\s\S]*carrom config=[\s\S]*volleyball config=/);
   }, 120_000);
 
   it("an empty module list is refused (a reformat of nothing proves nothing)", () => {
-    expect(() => reformatAll([], formatOneOf)).toThrow(/no sport to reformat/);
+    expect(() => reformatAll([], formatOneOf, 2)).toThrow(/no sport to reformat/);
   });
 });
 
@@ -326,22 +329,22 @@ describe("reformatCorpus — it is NEVER a re-baseline: it refuses when anything
     const events = [ev("core.start"), ev("core.abandon", { reason: "rain" }), ev("core.settle", { winner: home.entrantId, method: "organiser" })];
     const legacy: GoldenStream = { config: cfgName, seed: 99_999, events, ...storedFields(recomputeStream(module, raw, events, undefined, 1)) };
     expect(legacy.outcome, "precondition: format 1 recorded the module's bare outcome").toBe("null");
-    expect(() => reformatCorpus(module, withStream(legacy))).toThrow(/generic config=\w+ seed=99999 outcome: recorded null, replayed .*settled_organiser/s);
-    expect(() => reformatCorpus(module, withStream(legacy))).toThrow(/re-baseline/);
+    expect(() => reformatCorpus(module, withStream(legacy), 2)).toThrow(/generic config=\w+ seed=99999 outcome: recorded null, replayed .*settled_organiser/s);
+    expect(() => reformatCorpus(module, withStream(legacy), 2)).toThrow(/re-baseline/);
   });
 
   it("a stored state, outcome, summary or deltas that no longer replays: refused, naming the field", () => {
-    expect(() => reformatCorpus(module, tamperFirst({ outcome: `{"kind":"draw"}` }))).toThrow(/outcome: recorded/);
-    expect(() => reformatCorpus(module, tamperFirst({ summary: `{"x":1}` }))).toThrow(/summary: recorded/);
-    expect(() => reformatCorpus(module, tamperFirst({ deltas: `{"league":[9,9],"knockout":null}` }))).toThrow(/deltas: recorded/);
+    expect(() => reformatCorpus(module, tamperFirst({ outcome: `{"kind":"draw"}` }), 2)).toThrow(/outcome: recorded/);
+    expect(() => reformatCorpus(module, tamperFirst({ summary: `{"x":1}` }), 2)).toThrow(/summary: recorded/);
+    expect(() => reformatCorpus(module, tamperFirst({ deltas: `{"league":[9,9],"knockout":null}` }), 2)).toThrow(/deltas: recorded/);
     const states = [...corpus1.streams[0]!.states];
     states[states.length - 1] = `{"tampered":true}`;
-    expect(() => reformatCorpus(module, tamperFirst({ states }))).toThrow(/state after event/);
+    expect(() => reformatCorpus(module, tamperFirst({ states }), 2)).toThrow(/state after event/);
   });
 
   it("a format-1 corpus that already carries a format-2 field is a hybrid: refused (absence can only mean format 1)", () => {
-    expect(() => reformatCorpus(module, tamperFirst({ summaries: [] }))).toThrow(/format-1 stream carries summaries\/overlay/);
-    expect(() => reformatCorpus(module, tamperFirst({ overlay: "{}" }))).toThrow(/format-1 stream carries summaries\/overlay/);
+    expect(() => reformatCorpus(module, tamperFirst({ summaries: [] }), 2)).toThrow(/format-1 stream carries summaries\/overlay/);
+    expect(() => reformatCorpus(module, tamperFirst({ overlay: "{}" }), 2)).toThrow(/format-1 stream carries summaries\/overlay/);
   });
 
   it("a format-2 corpus whose recorded summaries or overlay are stale is NOT a no-op: refused, never repaired", () => {
@@ -350,14 +353,14 @@ describe("reformatCorpus — it is NEVER a re-baseline: it refuses when anything
     const stale = (patch: Partial<GoldenStream>): GoldenCorpus => ({ ...good, streams: [{ ...first, ...patch }, ...good.streams.slice(1)] });
     const flipped = [...first.summaries!];
     flipped[0] = "#0000000000000000";
-    expect(() => reformatCorpus(module, stale({ summaries: flipped }))).toThrow(/summary after event 0/);
-    expect(() => reformatCorpus(module, stale({ overlay: `{"stoppage":[[0,{"eventId":"e-0"}]]}` }))).toThrow(/overlay/);
+    expect(() => reformatCorpus(module, stale({ summaries: flipped }), 2)).toThrow(/summary after event 0/);
+    expect(() => reformatCorpus(module, stale({ overlay: `{"stoppage":[[0,{"eventId":"e-0"}]]}` }), 2)).toThrow(/overlay/);
     const { summaries: _dropped, ...withoutSummaries } = first;
-    expect(() => reformatCorpus(module, { ...good, streams: [withoutSummaries as GoldenStream, ...good.streams.slice(1)] })).toThrow(/must record both summaries and overlay/);
+    expect(() => reformatCorpus(module, { ...good, streams: [withoutSummaries as GoldenStream, ...good.streams.slice(1)] }, 2)).toThrow(/must record both summaries and overlay/);
   });
 
   it("an emptied corpus (no streams) is refused: a reformat of nothing proves nothing", () => {
-    expect(() => reformatCorpus(module, { ...corpus1, streams: [] })).toThrow(/no streams/);
+    expect(() => reformatCorpus(module, { ...corpus1, streams: [] }, 2)).toThrow(/no streams/);
   });
 });
 
@@ -427,15 +430,15 @@ describe("verifyStream under format 2 — each recorded field is compared, and a
 });
 
 describe("buildCorpus (UPDATE_GOLDEN, a corpus from nothing) writes the current format", () => {
-  it("generic: a format-2 corpus, format before streams, every stream verified, no dense overlay stored", () => {
+  it("generic: a current-format corpus (CURRENT_FORMAT), format before streams, every stream verified, no dense overlay stored", () => {
     // single sport: generation costs seconds per module and this checks the wiring, which is sport-independent
     const module = sport("generic");
     const corpus = buildCorpus(module);
-    expect(corpusFormat(corpus)).toBe(2);
+    expect(corpusFormat(corpus)).toBe(CURRENT_FORMAT);
     expect(Object.keys(corpus).slice(-2)).toEqual(["format", "streams"]);
     expect(corpus.streams.length).toBeGreaterThan(0);
     for (const stream of corpus.streams) {
-      expect(Object.keys(stream), `${stream.config}#${stream.seed}`).toEqual(expect.arrayContaining(["summaries", "overlay"]));
+      expect(Object.keys(stream), `${stream.config}#${stream.seed}`).toEqual(expect.arrayContaining(["summaries", "overlay", ...(CURRENT_FORMAT === 3 ? ["playerStats"] : [])]));
       expect(Object.keys(stream)).not.toContain("dense");
       expect(verifyStream(module, corpus, stream), `${stream.config}#${stream.seed}`).toEqual([]);
     }
@@ -492,7 +495,7 @@ describe("extendCorpus and extendFloor append in the corpus's format", () => {
       expect(appended.length, `${key} format ${corpusFormat(base)}: nothing appended, so this proves nothing`).toBeGreaterThan(0);
       const fresh = corpus.streams.slice(trimmed.streams.length);
       for (const stream of fresh) {
-        expect("summaries" in stream && "overlay" in stream, `format ${corpusFormat(base)}`).toBe(corpusFormat(base) === 2);
+        expect("summaries" in stream && "overlay" in stream, `format ${corpusFormat(base)}`).toBe(corpusFormat(base) >= 2);
         expect(Object.keys(stream).includes("dense"), "the dense overlay is never stored").toBe(false);
         expect(verifyStream(module, corpus, stream), `${stream.config}#${stream.seed}`).toEqual([]);
       }
@@ -566,6 +569,6 @@ describe("corpusStateDiff — the new fields are part of the reviewed diff", () 
     const dropped: GoldenCorpus = { ...before1 };
     const diff = corpusStateDiff(after2, dropped, module);
     expect(diff.streamsDropped).toBe(after2.streams.length);
-    expect(formatCorpusStateDiff(diff)).toContain("FORMAT-2 FIELDS DROPPED");
+    expect(formatCorpusStateDiff(diff)).toContain("RECORDED FIELDS DROPPED");
   });
 });

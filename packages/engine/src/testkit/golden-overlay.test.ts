@@ -615,7 +615,7 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
           `${module.key} ${stream.config}#${stream.seed}`,
         ).toEqual([]);
         // a corpus already in format 2 also holds the summaries and the overlay: they are what this recorder produces, to the byte
-        if (corpusFormat(committed) === 2) {
+        if (corpusFormat(committed) >= 2) {
           expect(committed.streams[index]!.summaries, `${module.key} ${stream.config}#${stream.seed} summaries`).toEqual(rec.summaries);
           expect(committed.streams[index]!.overlay, `${module.key} ${stream.config}#${stream.seed} overlay`).toBe(rec.overlay);
           recorded++;
@@ -676,7 +676,7 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
       expect(points, `${module.key} change points`).toBeGreaterThan(0);
       expect(interesting, `${module.key}: streams with a stoppage, a squad change or a decider`).toBeGreaterThan(0);
       expect(customLineups, `${module.key}: streams recorded with non-default team sheets (the floor's bench streams) — zero checked is a failure`).toBeGreaterThan(0);
-      if (corpusFormat(committed) === 2) expect(recorded, `${module.key}: a format-2 corpus's own fields were compared`).toBe(streams);
+      if (corpusFormat(committed) >= 2) expect(recorded, `${module.key}: a format-2 corpus's own fields were compared`).toBe(streams);
       totals.streams += streams;
       totals.steps += steps;
       totals.changePoints += points;

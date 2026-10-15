@@ -1,5 +1,5 @@
-// GF-2 T1 — REFORMAT_GOLDEN: record the kernel overlay in a corpus that does not hold it yet (format 1 -> format 2).
-// Design: docs/superpowers/specs/engine-split/gf2-kernel-overlay-design.md §3 (last bullet).
+// GF-2 T1/T4 — REFORMAT_GOLDEN: record the fields a corpus does not hold yet (format 1 -> 2 adds the kernel overlay, 2 -> 3 the final
+// player stats). Design: docs/superpowers/specs/engine-split/gf2-kernel-overlay-design.md §3 (last bullet) and §7 (T4).
 //
 // A reformat is NOT a re-baseline, and the whole of this file is the difference. `rebaselineCorpus` recomputes the derived half
 // of a corpus and the diff IS the behaviour change; `reformatCorpus` only ADDS fields, so the diff must contain no behaviour
@@ -15,41 +15,62 @@ import {
   recomputeStream,
   storedFields,
   verifyStream,
+  type CorpusFormat,
   type GoldenCorpus,
   type GoldenStream,
+  type ReplayedStream,
 } from "./golden.ts";
 
-/** A corpus's streams in format 2, or an Error naming everything that would have to change first.
+/** A corpus brought up to format `target` (2 or 3), or an Error naming everything that would have to change first.
  *
- *  - A format-1 corpus gains `format: 2` (written just before `streams`, which stays the last key) and, appended to every
- *    stream, `summaries` and `overlay`. Every other byte is the input's: the streams are spread, never rebuilt.
- *  - A format-2 corpus is returned as it is, after the same verification: a second run is a no-op, and a corpus whose recorded
- *    fields no longer replay is an error to repair with `REBASELINE_GOLDEN`, never a "reformat" that quietly rewrites them.
+ *  - A corpus in an earlier format gains `format: <target>` (written just before `streams`, which stays the last key) and, appended
+ *    to every stream, the fields of the formats it skips: `summaries` and `overlay` going 1 -> 2, `playerStats` going 2 -> 3 (so
+ *    1 -> 3 appends all three, in that order). Every other byte is the input's: the streams are spread, never rebuilt.
+ *  - A corpus already in `target` is returned as it is, after the same verification: a second run is a no-op, and a corpus whose
+ *    recorded fields no longer replay is an error to repair with `REBASELINE_GOLDEN`, never a "reformat" that quietly rewrites them.
+ *  - A corpus in a LATER format than `target` is refused: a corpus never goes back to an earlier format.
  *  - An empty corpus is refused: a reformat of nothing proves nothing. */
-export function reformatCorpus(module: AnySportModule, existing: GoldenCorpus): GoldenCorpus {
+export function reformatCorpus(module: AnySportModule, existing: GoldenCorpus, target: CorpusFormat): GoldenCorpus {
   if (existing.streams.length === 0) {
     throw new Error(`REFORMAT_GOLDEN refuses ${module.key}: the corpus has no streams, so there is nothing to reformat or to verify`);
   }
   const format = corpusFormat(existing);
+  if (format > target) {
+    throw new Error(
+      `REFORMAT_GOLDEN refuses ${module.key}: the corpus is in format ${format} and cannot be reformatted to format ${target} — a corpus never goes back to an earlier format`,
+    );
+  }
+  if (target === 1) {
+    throw new Error(`REFORMAT_GOLDEN refuses ${module.key}: format 1 is the format before the first reformat, so there is nothing to reformat to`);
+  }
   const problems: string[] = [];
   const streams: GoldenStream[] = [];
 
   for (const stream of existing.streams) {
     const raw = existing.configs[stream.config];
-    if (format === 2) {
+    if (format === target) {
       problems.push(...verifyStream(module, existing, stream));
       streams.push(stream);
       continue;
     }
-    // Format 1: the CURRENT engine, recording under format 2, must still reproduce every field the corpus holds — states,
-    // and the outcome, summary and deltas which format 2 records as the EFFECTIVE values. A hybrid (a format-1 corpus that
-    // already holds a format-2 field) is a verifyStream finding of its own.
-    const recomputed = recomputeStream(module, raw, stream.events, stream.lineups, 2);
-    const legacyView = { states: recomputed.states, outcome: recomputed.outcome, summary: recomputed.summary, deltas: recomputed.deltas };
-    const found = verifyStream(module, existing, stream, legacyView);
-    problems.push(...found);
-    const { summaries, overlay } = storedFields(recomputed);
-    streams.push({ ...stream, summaries: summaries!, overlay: overlay! });
+    // An earlier format: the CURRENT engine, recording under `target`, must still reproduce every field the corpus holds — states,
+    // and the outcome, summary and deltas which format 2 records as the EFFECTIVE values (and, from format 2, the summaries and
+    // overlay). The view handed to verifyStream is the corpus's OWN format's: a hybrid (a corpus that already holds a later
+    // format's field) is a verifyStream finding of its own.
+    const recomputed = recomputeStream(module, raw, stream.events, stream.lineups, target);
+    const ownView: ReplayedStream =
+      format === 1
+        ? { states: recomputed.states, outcome: recomputed.outcome, summary: recomputed.summary, deltas: recomputed.deltas }
+        : { states: recomputed.states, outcome: recomputed.outcome, summary: recomputed.summary, deltas: recomputed.deltas, summaries: recomputed.summaries, overlay: recomputed.overlay };
+    problems.push(...verifyStream(module, existing, stream, ownView));
+    const fresh = storedFields(recomputed);
+    const added: Partial<GoldenStream> = {};
+    if (format < 2) {
+      added.summaries = fresh.summaries!;
+      added.overlay = fresh.overlay!;
+    }
+    if (format < 3 && target === 3) added.playerStats = fresh.playerStats!;
+    streams.push({ ...stream, ...added });
   }
 
   if (problems.length > 0) {
@@ -59,18 +80,18 @@ export function reformatCorpus(module: AnySportModule, existing: GoldenCorpus): 
         problems.join("\n  "),
     );
   }
-  if (format === 2) return existing;
-  return withFormat2(existing, streams);
+  if (format === target) return existing;
+  return withFormat(existing, target, streams);
 }
 
-/** The corpus with `format: 2` just before `streams` and its streams replaced. Built key by key so the order is explicit:
+/** The corpus with `format: <format>` just before `streams` and its streams replaced. Built key by key so the order is explicit:
  *  `streams` stays the LAST key (an EXTEND's byte-prefix check depends on it), and the rest keep the order they had. */
-function withFormat2(corpus: GoldenCorpus, streams: GoldenStream[]): GoldenCorpus {
+function withFormat(corpus: GoldenCorpus, format: CorpusFormat, streams: GoldenStream[]): GoldenCorpus {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(corpus)) {
     if (key !== "streams" && key !== "format") out[key] = value;
   }
-  out.format = 2;
+  if (format !== 1) out.format = format;
   out.streams = streams;
   return out as unknown as GoldenCorpus;
 }
@@ -88,6 +109,7 @@ export interface ReformatPlanned {
 export function reformatAll(
   modules: readonly AnySportModule[],
   read: (key: string) => GoldenCorpus,
+  target: CorpusFormat,
 ): ReformatPlanned[] {
   if (modules.length === 0) throw new Error("REFORMAT_GOLDEN refuses: no sport to reformat, and a reformat of nothing proves nothing");
   const planned: ReformatPlanned[] = [];
@@ -95,7 +117,7 @@ export function reformatAll(
   for (const module of modules) {
     const before = read(module.key);
     try {
-      planned.push({ module, before, after: reformatCorpus(module, before) });
+      planned.push({ module, before, after: reformatCorpus(module, before, target) });
     } catch (error) {
       refusals.push(error instanceof Error ? error.message : String(error));
     }
@@ -106,11 +128,21 @@ export function reformatAll(
   return planned;
 }
 
-/** The inverse of the field-adding half of `reformatCorpus`: the corpus as FORMAT 1 (no `format` marker; no `summaries`, no
- *  `overlay`), every other key and byte in place. A corpus already in format 1 comes back equal. It exists so a test can state
- *  what a reformat does to "a format-1 corpus" without caring which format the committed files are in today, and it is not a
- *  downgrade path: nothing writes its result. */
+/** The corpus as FORMAT 1 (no `format` marker; no `summaries`, no `overlay`, no `playerStats`), every other key and byte in place. A
+ *  corpus already in format 1 comes back equal. It exists so a test can state what a reformat does to "a format-1 corpus" without
+ *  caring which format the committed files are in today, and it is not a downgrade path: nothing writes its result. */
 export function asFormatOne(corpus: GoldenCorpus): GoldenCorpus {
   const { format: _format, ...rest } = corpus;
-  return { ...rest, streams: corpus.streams.map(({ summaries: _summaries, overlay: _overlay, ...old }) => old) };
+  return {
+    ...rest,
+    streams: corpus.streams.map(({ summaries: _summaries, overlay: _overlay, playerStats: _playerStats, ...old }) => old),
+  };
+}
+
+/** The corpus as FORMAT 2 (the kernel fields, no `playerStats`), `format: 2` just before `streams`. The committed files are in
+ *  format 2 or 3 depending on where the history stands; a test that states what a 2 -> 3 reformat does reads them through this.
+ *  A corpus that is not yet in format 2 has no summaries or overlay to keep, and is refused. Not a downgrade path either. */
+export function asFormatTwo(corpus: GoldenCorpus): GoldenCorpus {
+  if (corpusFormat(corpus) < 2) throw new Error(`asFormatTwo: the ${corpus.key} corpus is in format 1 and has no kernel fields to keep`);
+  return withFormat(corpus, 2, corpus.streams.map(({ playerStats: _playerStats, ...kept }) => kept));
 }
