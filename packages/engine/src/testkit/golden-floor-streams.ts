@@ -26,7 +26,7 @@ import type { LineupPair } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles, lineupOffers, outcomeToken, outcomeTokenOf, recordedTokens, type FloorToken } from "./golden-floor.ts";
+import { eventToken, floorHoles, lineupOffers, outcomeToken, outcomeTokenOf, type FloorToken } from "./golden-floor.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -42,14 +42,14 @@ const WALK_MAX = 120;
 const ev = (type: string, payload: unknown = {}): GoldenEvent => ({ type, payload });
 const voidOf = (index: number): GoldenEvent => ({ type: "core.void", payload: {}, voids: `e-${index}` });
 
-interface Ctx {
+export interface Ctx {
   readonly module: AnySportModule;
   readonly corpus: GoldenCorpus;
   readonly cfgNames: readonly string[];
   readonly holes: ReadonlySet<FloorToken>;
 }
 
-interface Built {
+export interface Built {
   readonly config: string;
   readonly seed: number;
   readonly lineups?: LineupPair;
@@ -316,14 +316,14 @@ function buildForfeit(ctx: Ctx, story: ForfeitStory): Built | null {
 
 // ------------------------------------------------------------------------------------------------------ driver
 
-interface Scenario {
+export interface Scenario {
   readonly id: string;
   /** The tokens this scenario exists to supply; it runs only while one of them is a hole. */
   serves(ctx: Ctx): FloorToken[];
   build(ctx: Ctx): Built | null;
 }
 
-const SCENARIOS: readonly Scenario[] = [
+export const SCENARIOS: readonly Scenario[] = [
   {
     id: "undo",
     serves: () => [eventToken("core.void")],
@@ -359,12 +359,12 @@ export interface FloorExtension {
 
 /** Appends the streams that close a sport's floor holes. Existing streams, configs and keys are carried over untouched;
  *  an unchanged corpus comes back unchanged (a second call appends nothing). */
-export function extendFloor(module: AnySportModule, existing: GoldenCorpus): FloorExtension {
+export function extendFloor(module: AnySportModule, existing: GoldenCorpus, scenarios: readonly Scenario[] = SCENARIOS): FloorExtension {
   const corpus: GoldenCorpus = { ...existing, configs: { ...existing.configs }, streams: [...existing.streams] };
   const appended: string[] = [];
   const cfgNames = Object.keys(corpus.configs);
   let holes = new Set(floorHoles(module, corpus));
-  for (const scenario of SCENARIOS) {
+  for (const scenario of scenarios) {
     const ctx: Ctx = { module, corpus, cfgNames, holes };
     if (!scenario.serves(ctx).some((t) => holes.has(t))) continue;
     const built = scenario.build(ctx);
@@ -388,9 +388,4 @@ export function extendFloor(module: AnySportModule, existing: GoldenCorpus): Flo
     appended.push(`${scenario.id} ${built.config}:${built.seed}`);
   }
   return { corpus, appended, stillMissing: [...holes] };
-}
-
-/** The tokens a built stream records, for the unit tests: a stream's story is what it records, not what it meant. */
-export function tokensOfStream(stream: GoldenStream): FloorToken[] {
-  return [...recordedTokens({ key: "", version: "", recordedBy: "testkit/golden.ts", params: { minEvents: 0, maxEvents: 0 }, configs: {}, streams: [stream] })];
 }

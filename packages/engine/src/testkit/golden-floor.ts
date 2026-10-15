@@ -279,13 +279,17 @@ export const NATURAL_OUTCOMES: Readonly<Record<string, Readonly<Record<string, s
 
 // ---------------------------------------------------------------------------------------------------- exemptions
 
+/** The harness function that turns a recorded ledger into a stream's recorded half. Injectable so the settle exemption's
+ *  staleness is testable against a harness that records the kernel's overlays — the future the exemption waits for. */
+export type Recorder = typeof recomputeStream;
+
 export interface FloorExemption {
   readonly token: FloorToken;
   /** `"all"`, or the sports the exemption covers. */
   readonly sports: "all" | readonly string[];
   readonly reason: string;
   /** null while the exemption still holds for this sport; otherwise WHY it has gone stale. */
-  stale(module: AnySportModule, corpus: GoldenCorpus): string | null;
+  stale(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder): string | null;
 }
 
 /** The one thing the harness cannot yet record faithfully: a settlement. `recomputeStream` stores `module.outcome(state)`,
@@ -300,9 +304,9 @@ export const FLOOR_EXEMPTIONS: readonly FloorExemption[] = [
     reason:
       "the corpus records the module's bare outcome (recomputeStream), and a settlement is laid over it by outcomeOf — a settle stream would record " +
       "a draw/null where the effective outcome is a win; recording outcomeOf/summaryOf is the later kernel-overlay task",
-    stale(module, corpus) {
+    stale(module, corpus, record) {
       if (recordedTokens(corpus).has(eventToken("core.settle"))) return "the corpus records core.settle: delete the exemption";
-      const probe = settleProbe(module, corpus);
+      const probe = settleProbe(module, corpus, record);
       if (typeof probe === "string") return `the probe that proves the harness cannot record a settle could not run: ${probe}`;
       return probe.recorded === probe.effective
         ? `the harness now records the effective outcome (${probe.recorded}): record core.settle and delete the exemption`
@@ -312,7 +316,7 @@ export const FLOOR_EXEMPTIONS: readonly FloorExemption[] = [
 ];
 
 /** The recorded outcome of [start, abandon, settle] against the outcome the kernel reads from the same ledger. */
-export function settleProbe(module: AnySportModule, corpus: GoldenCorpus): { recorded: string; effective: string } | string {
+export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = recomputeStream): { recorded: string; effective: string } | string {
   const [name, raw] = Object.entries(corpus.configs)[0] ?? [];
   if (name === undefined) return "the corpus records no config";
   const cfg = module.configSchema.parse(raw) as unknown;
@@ -323,7 +327,7 @@ export function settleProbe(module: AnySportModule, corpus: GoldenCorpus): { rec
     { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } },
   ];
   try {
-    const recorded = recomputeStream(module, raw, events, lineups).outcome;
+    const recorded = record(module, raw, events, lineups).outcome;
     const envelopes: EventEnvelope[] = events.map((e, i) => makeEnvelope(i, e));
     const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, envelopes, { strictFromSeq: 0 });
     return { recorded, effective: JSON.stringify(outcomeOf(module as never, folded as never) ?? null) };
@@ -408,11 +412,11 @@ export function floorHoles(module: AnySportModule, corpus: GoldenCorpus): FloorT
 }
 
 /** Exemptions that no longer hold for this sport (each entry's own `stale`), named. */
-export function staleFloorExemptions(module: AnySportModule, corpus: GoldenCorpus): string[] {
+export function staleFloorExemptions(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder): string[] {
   const out: string[] = [];
   for (const e of FLOOR_EXEMPTIONS) {
     if (!exemptionApplies(e, module.key)) continue;
-    const why = e.stale(module, corpus);
+    const why = e.stale(module, corpus, record);
     if (why !== null) out.push(`${module.key} ${e.token}: ${why}`);
   }
   return out;

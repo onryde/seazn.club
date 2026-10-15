@@ -1,7 +1,7 @@
 // The golden floor (GF-1) — see golden-floor.ts. Every expected set here is read off the engine's own declarations
 // (CORE_EVENT_SCHEMAS, FORFEIT_REASONS, forfeitAdmission, supportsDraws, the lineup reducer), never typed in.
 import { describe, expect, it } from "vitest";
-import { CORE_EVENT_SCHEMAS } from "../core/events.ts";
+import { CORE_EVENT_SCHEMAS, foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
 import { DEFAULT_LINEUP_POLICY } from "../core/lineup.ts";
 import { FORFEIT_REASONS } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -27,7 +27,7 @@ import {
   staleNaturalOutcomes,
   unrequiredObservedOutcomes,
 } from "./golden-floor.ts";
-import { defaultLineupPair } from "./helpers.ts";
+import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 
 const corpora = new Map(builtinModules.map((m) => [m.key, readCorpus(m.key)] as const));
@@ -149,6 +149,35 @@ describe("golden floor — the requirement is derived from the engine, per sport
       }
     });
     expect(accounted).toBe(builtinModules.length * CORE_TYPES.length);
+  });
+
+  it("a lineup type is required exactly when the REAL reducer accepts it under a recorded config's policy, impossible (with the reducer's own refusal) otherwise", () => {
+    let required = 0;
+    let impossible = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const req = floorRequirement(module, corpus);
+      const offers = lineupOffers(module, corpus);
+      expect(offers.length, `${key} offers`).toBeGreaterThan(0);
+      for (const type of LINEUP_TYPES) {
+        const token = eventToken(type);
+        const acceptedBy = offers.filter((o) => o.plan.accepted.includes(type));
+        if (acceptedBy.length > 0) {
+          expect(req.required.has(token), `${key} ${type} is accepted by ${acceptedBy[0]!.cfgName}`).toBe(true);
+          expect(req.impossible.has(token), `${key} ${type}`).toBe(false);
+          required++;
+        } else {
+          expect(req.required.has(token), `${key} ${type} is refused everywhere`).toBe(false);
+          // the reason is the reducer's own code, per config, never a typed sentence
+          expect(req.impossible.get(token), `${key} ${type}`).toMatch(/^\S+: \S+/);
+          for (const o of offers) expect(req.impossible.get(token), `${key} ${type}`).toContain(`${o.cfgName}: ${o.plan.refused[type]}`);
+          impossible++;
+        }
+      }
+    });
+    // anti-vacuity: both branches ran (cricket/football/volleyball accept a replacement, singles sports refuse it)
+    expect(required).toBeGreaterThan(builtinModules.length * 3);
+    expect(impossible).toBeGreaterThan(0);
   });
 
   it("the forfeit outcomes are the kernel's FORFEIT_REASONS, admitted by forfeitAdmission in a state the generator reaches", () => {
@@ -294,6 +323,38 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
       stale++;
     });
     expect(stale).toBe(builtinModules.length);
+  });
+
+  it("the settle exemption goes STALE the day the harness records the effective outcome (a harness that does, injected)", () => {
+    // The harness today stores `module.outcome(state)`. A harness that recorded what the kernel READS (`outcomeOf` over the
+    // folded ledger, a settlement laid over it) is the future the exemption waits for; inject one, and the row must go
+    // stale for every sport, naming that the settle streams can now land. The expected effective outcome is the kernel's own.
+    let stale = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const overlayRecorder: typeof recomputeStream = (m, raw, events, lineups) => {
+        const cfg = m.configSchema.parse(raw) as unknown;
+        const folded = foldMatchWithStoppage(m as never, cfg as never, lineups!, events.map((e, i) => makeEnvelope(i, e)), { strictFromSeq: 0 });
+        return { ...recomputeStream(m, raw, events, lineups), outcome: JSON.stringify(outcomeOf(m as never, folded as never) ?? null) };
+      };
+      // the real harness: the exemption holds
+      expect(staleFloorExemptions(module, corpus), key).toEqual([]);
+      // an overlay-recording harness: it is stale, and says why
+      const messages = staleFloorExemptions(module, corpus, overlayRecorder);
+      expect(messages.length, key).toBe(1);
+      expect(messages[0], key).toMatch(/the harness now records the effective outcome/);
+      stale++;
+    });
+    expect(stale).toBe(builtinModules.length);
+  });
+
+  it("the settle exemption goes STALE when its probe cannot run (a recorder that throws), never silently holds", () => {
+    const module = builtinModules[0]!;
+    const broken: typeof recomputeStream = () => {
+      throw new Error("recorder exploded");
+    };
+    const messages = staleFloorExemptions(module, corpusOf(module.key), broken);
+    expect(messages.join("\n")).toMatch(/probe that proves the harness cannot record a settle could not run: recorder exploded/);
   });
 
   it("NATURAL_OUTCOMES is not stale: every row names a registered sport and a token its corpus records", () => {
