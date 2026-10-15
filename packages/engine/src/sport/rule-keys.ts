@@ -31,7 +31,8 @@ export const stageTopKeysFor = (m: AnySportModule, kind: StageKind | null, varia
 /** First segments of every declared key, whatever its scope. */
 export const sportTopKeys = (m: AnySportModule): ReadonlySet<string> => new Set(Object.keys(m.ruleKeys ?? {}).map(topOf));
 /** The WHOLE deciders (`decider: true`) a stage of this kind and variant carries — what the knockout preselection
- *  switches on and the "no decider" notice checks (spec §4.2, X-SR-6). */
+ *  switches on (spec §4.2, X-SR-6). The "no decider" notice that will check them (`deciders-off-notice.tsx`) is owed
+ *  by W2c Task 17 and does not exist yet. */
 export const deciderKeysFor = (m: AnySportModule, kind: StageKind | null, variant: string | null): readonly string[] =>
   Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.decider === true && ruleKeyApplies(f, kind, variant)).map(([k]) => k);
 

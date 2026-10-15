@@ -692,12 +692,14 @@ export const PackStream = z.strictObject({
    * pack declares no fixtures. Without it a consumer of a multi-stage
    * division cannot answer three questions at all: which streams feed which
    * `expected.tables` row, which pool a fixture sat in, and — the one with
-   * teeth — which stage's `shootout` / `extraTime` overlay the fixture folds
-   * under (`apps/web/src/server/engine-db/stage-cfg.ts:9`, the two keys and
-   * only those two). The third is not a missing check but a WRONG one: a
-   * groups+knockout division whose knockout stage turns `shootout` on folds
-   * its knockout fixtures under the division cfg instead, and the validator
-   * then reports a divergence the pack never committed.
+   * teeth — which stage's format the fixture folds under: its kind's preset
+   * and its `config.rules`, composed by the product's
+   * `apps/web/src/lib/stage-decider-off.ts` (since D3, W2c Task 13b, nothing
+   * at a stage config's top level is read). The third is not a missing check
+   * but a WRONG one: a groups+knockout division whose knockout stage turns
+   * `shootout` on in its rules folds its knockout fixtures under the division
+   * cfg instead, and the validator then reports a divergence the pack never
+   * committed.
    *
    * Additive on purpose, and landed BEFORE the B06 freeze rather than
    * escalated after it. Cross-checked below against the stages the stream's

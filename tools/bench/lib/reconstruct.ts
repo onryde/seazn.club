@@ -122,9 +122,10 @@ const CORE_START: PackEvent = { type: "core.start", payload: {} };
  * one question two ways.
  *
  * This was the ONE seam that did not get carried across, and it was not
- * theoretical. Stage 0 folds every stream under the stage-scoped cfg (then
- * the two top-level decider keys, `shootout` and `extraTime`) while the
- * generators folded under the division cfg alone. A division enabling extra
+ * theoretical. Stage 0 folded every stream under the stage-scoped cfg (at the
+ * time, the two top-level decider keys `shootout` and `extraTime`; since D3 a
+ * stage's rules and its kind's preset, nothing at the config's top level)
+ * while the generators folded under the division cfg alone. A division enabling extra
  * time whose knockout stage turns it OFF therefore generated `ET_HT`/`ET_FT`
  * markers that the validator then refused as `ALREADY_DECIDED`, because under
  * the overlay the match was already a draw at full time. The `stageRef` doc

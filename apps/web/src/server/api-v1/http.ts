@@ -349,7 +349,8 @@ const pathText = (path: readonly PropertyKey[]): string =>
   path.map((p, i) => (typeof p === "number" ? `[${p}]` : i === 0 ? String(p) : `.${String(p)}`)).join("");
 
 /**
- * The first top-level stage decider (`shootout` / `extraTime` refused `STAGE_DECIDER_MOVED`, schemas.ts) in a refusal,
+ * The first top-level stage decider (any whole decider a sport declares, `TOP_LEVEL_STAGE_DECIDERS`, refused
+ * `STAGE_DECIDER_MOVED` by schemas.ts) in a refusal,
  * walked through union arms (POST /stages takes one stage or a list): the field as sent and a sentence naming it and the
  * place it goes — `config.rules.<key>` on a stage, `rules.<key>` in the stage PUT's body. Null for any other refusal.
  */

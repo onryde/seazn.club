@@ -734,8 +734,10 @@ export interface RuleKeyFact {
    *  round 1, ruling). Pinned to the engine's own constant by the module's test. Absent = a missing key is off. */
   readonly whenAbsent?: number;
   /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
-   *  super over, chess tie-break games, carrom's tie board). The knockout preselection and its "no decider" notice
-   *  read it through `deciderKeysFor` (spec §4.2, X-SR-6). Stage keys, except football ET, a bounded match key.
+   *  super over, chess tie-break games, carrom's tie board). The knockout preselection reads it through
+   *  `deciderKeysFor` (spec §4.2, X-SR-6); the "no decider" notice that will read it the same way
+   *  (`deciders-off-notice.tsx`) is owed by W2c Task 17 and does not exist yet. Stage keys, except football ET, a
+   *  bounded match key.
    *  A decider need not be a boolean or an `{enabled}` object: chess's is the ordered rung LIST `tiebreakRungs`
    *  (BG-KO-1, BG-KO-3), whose off state is the EMPTY list (a drawn game is held for the organiser), and a list that
    *  is merely absent is "every rung", not off. */
