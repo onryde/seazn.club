@@ -32,7 +32,10 @@ import "server-only";
 // the stream open FLAG_SETTLE_HOLD_MS past the tick (board-api settlingRead).
 // We still never declare a flag from our own arithmetic: if Lichess still says
 // `started` FLAG_UNSETTLED_HOLD_MS after the flag, the board is HELD for the
-// organiser (`clock_flag_unsettled`) with the evidence — never given up silently.
+// organiser (`clock_flag_unsettled`) with the evidence. And if the settling read
+// cannot even be MADE (429, 5xx, both tokens refused), Lichess is not asked, so
+// that is no evidence of its answer — but after FLAG_UNASKED_HOLD_MS the board is
+// held too (`provider_error`, "could not ask Lichess"): never given up silently.
 //
 // Who writes what on the bridge row: T9 pending → ready; T10 ready → live
 // (first accepted move); THIS FILE ready/live → finished (+ finished_at). T12
@@ -72,6 +75,13 @@ export const FLAG_SETTLE_HOLD_MS = 9_000;
  *  its clock ran out — the board is held for the organiser (`clock_flag_unsettled`), with the evidence. */
 export const FLAG_UNSETTLED_HOLD_MS = 60_000;
 
+/** T17B fix 2, D20 re-review n1 (controller ruling): the first line says the side to move is at zero, and the SETTLING
+ *  read — the one that lets Lichess flag it — cannot be made (throttled, down, both tokens refused). Lichess was never
+ *  asked, so `clock_flag_unsettled` would be a lie; but the 5-minute sweep's no-truth count resets on every first line
+ *  it reads, so without this the board stays live and silent for an hour or more and the organiser never hears. This
+ *  long after the flag, the board is held `provider_error` with that said plainly. 15 minutes: three sweep passes. */
+export const FLAG_UNASKED_HOLD_MS = 15 * 60_000;
+
 export type ReconcileDeps = {
   now?: Date;
   /** `holdMs`: the settling read (D11) — the stream held open that long past its first line. */
@@ -105,6 +115,10 @@ export type ReconcileOutcome = {
 };
 
 type Colour = "white" | "black";
+
+/** D20: how the settling read of this reconcile went — `made` (or none was due), `skipped` (the caller's per-pass cap
+ *  refused it), `unasked` (it was tried and could not be made: Lichess never answered it). */
+type Settling = "made" | "skipped" | "unasked";
 
 /** Terminal = any status but `created`/`started` (spec §3.5). A Record over
  *  the whole union, so a status added to LICHESS_STATUSES does not compile
@@ -376,25 +390,27 @@ export async function reconcile(
   let truth = await readTruth(game, deps);
   // D11: the side to move at zero, the game `started` — on any trigger, read once more with the stream held open past
   // lila's CheckOnline tick, the one read on which Lichess flags it (see the header). A read that cannot be made keeps
-  // the first. D20 (review I1), two exceptions, both the 5-minute sweep's:
+  // the first. D20 (review I1), three cases where this read's first line is NOT evidence that Lichess left a flag
+  // unsettled (so no clock_flag_unsettled hold is placed from it):
   //   (a) a board ALREADY held clock_flag_unsettled is read by the sweep with no hold — it is still at zero, and would
   //       cost ~9 s of every pass until the organiser acts. The organiser and the room's clock-zero reports carry it.
-  //   (b) the caller's `settle` refuses (the per-pass cap): no settling read, and no unsettled-flag hold from this read.
-  //   (c) (D20 review I1) the settling read could not be MADE (429, 5xx, both tokens refused: `none`): Lichess was never
-  //       asked, so what it "still reported" is the first line's, not a settled-or-not answer — no hold either. Held on
-  //       that, the row would never be retried (exception (a) skips the sweep's settling read on a held row).
-  let mayHoldUnsettled = true;
+  //   (b) the caller's `settle` refuses (the per-pass cap): no settling read — the next pass makes it.
+  //   (c) the settling read could not be MADE (429, 5xx, both tokens refused: `none`): Lichess was never asked, so what
+  //       it "still reported" is the first line's, not a settled-or-not answer. Held on that, the row would never be
+  //       retried (exception (a) skips the sweep's settling read on a held row). Only (c) is a read we TRIED and could
+  //       not make, so only (c) can age into a hold of its own: `unasked`, below (D20 re-review n1).
+  let settling: Settling = "made";
   if (truth.source === "stream" && flagDue(truth.game) && !(trigger === "sweep" && heldUnsettled(b))) {
     if (deps.settle === undefined || deps.settle()) {
       const again = await readTruth(game, deps, FLAG_SETTLE_HOLD_MS);
       if (again.source !== "none") truth = again;
-      mayHoldUnsettled = again.source !== "none";
+      settling = again.source !== "none" ? "made" : "unasked";
     } else {
-      mayHoldUnsettled = false;
+      settling = "skipped";
     }
   }
 
-  if (truth.source === "stream") return applyStream(game, truth, deps, mayHoldUnsettled);
+  if (truth.source === "stream") return applyStream(game, truth, deps, settling);
   if (truth.source === "export") return applyExport(game, truth, deps);
   if (truth.revoked.length > 0) await holdRevoked(game, truth.revoked);
   return null;
@@ -554,11 +570,10 @@ function clocksAt(b: BridgeRow, g: BoardGameFull, ply: number, adopted: number, 
     : { whiteMs: g.whiteMs, blackMs: asOfMove(g.blackMs, b.black_ms), lastMoveAt: last };
 }
 
-/** T17B fix 2, D11 (b): the evidence for a flag Lichess has not settled — the side to move at zero, the game still
- *  `started`, FLAG_UNSETTLED_HOLD_MS or more after that side's clock ran out — or null. The flag's instant is the
- *  row's own (V442: each clock as at `last_move_at`), so a read that adopted plies (the row's clocks are an earlier
- *  move's) waits for the next read. */
-function unsettledFlagEvidence(g: Game, lichess: BoardGameFull, adopted: number, at: Date, boundMs: number): string | null {
+/** The instant the side to move's clock ran out, from the ROW's own clocks (V442: each clock as at `last_move_at`) — or
+ *  null when this read is not a flag candidate or a read that adopted plies (the row's clocks are an earlier move's, so
+ *  it waits for the next read). */
+function flagInstant(g: Game, lichess: BoardGameFull, adopted: number): { mover: Colour; flagAt: number } | null {
   if (!flagDue(lichess) || adopted > 0) return null;
   const b = g.bridge;
   if (b.last_move_at === null) return null;
@@ -568,12 +583,34 @@ function unsettledFlagEvidence(g: Game, lichess: BoardGameFull, adopted: number,
     // V442 writes both clocks with every move from ply 2; the flag's instant is then the move itself (the earliest).
     log.warn({ fixtureId: g.fixture.fixtureId, gameId: g.gameId, mover }, "lichess reconcile: a running clock with no stored time");
   }
-  const flagAt = b.last_move_at.getTime() + Math.max(0, asOfMove ?? 0);
-  const past = at.getTime() - flagAt;
+  return { mover, flagAt: b.last_move_at.getTime() + Math.max(0, asOfMove ?? 0) };
+}
+
+/** T17B fix 2, D11 (b): the evidence for a flag Lichess has not settled — the side to move at zero, the game still
+ *  `started`, FLAG_UNSETTLED_HOLD_MS or more after that side's clock ran out — or null. */
+function unsettledFlagEvidence(g: Game, lichess: BoardGameFull, adopted: number, at: Date, boundMs: number): string | null {
+  const f = flagInstant(g, lichess, adopted);
+  if (f === null) return null;
+  const past = at.getTime() - f.flagAt;
   if (past < boundMs) return null;
   return (
-    `lichess game ${g.gameId}: ${mover}'s clock ran out at ${new Date(flagAt).toISOString()}; Lichess still reported ` +
-    `"started" with ${mover} at 0 on the read at ${at.toISOString()}, ${Math.round(past / 1000)} s later — the flag is not settled`
+    `lichess game ${g.gameId}: ${f.mover}'s clock ran out at ${new Date(f.flagAt).toISOString()}; Lichess still reported ` +
+    `"started" with ${f.mover} at 0 on the read at ${at.toISOString()}, ${Math.round(past / 1000)} s later — the flag is not settled`
+  );
+}
+
+/** D20 re-review n1: the same flag candidate, but the settling read could not be made — FLAG_UNASKED_HOLD_MS or more
+ *  after the clock ran out. The words say what is known (the first line's zero, a read that failed), not that Lichess
+ *  declined to flag: it was never asked. */
+function unaskedFlagEvidence(g: Game, lichess: BoardGameFull, adopted: number, at: Date): string | null {
+  const f = flagInstant(g, lichess, adopted);
+  if (f === null) return null;
+  const past = at.getTime() - f.flagAt;
+  if (past < FLAG_UNASKED_HOLD_MS) return null;
+  return (
+    `lichess game ${g.gameId}: ${f.mover}'s clock ran out at ${new Date(f.flagAt).toISOString()}; the read at ` +
+    `${at.toISOString()} could not ask Lichess whether it flagged — ${Math.round(past / 60_000)} min after the clock ran out, ` +
+    `the settling read was refused or unreachable, so the flag is neither settled nor refused`
   );
 }
 
@@ -581,8 +618,8 @@ async function applyStream(
   g: Game,
   t: Extract<Truth, { source: "stream" }>,
   deps: ReconcileDeps,
-  /** D20 (b): false when the settling read was skipped — such a read is no evidence Lichess failed to flag. */
-  mayHoldUnsettled: boolean,
+  /** D20: a read whose settling read was skipped or could not be made is no evidence Lichess failed to flag. */
+  settling: Settling,
 ): Promise<ReconcileOutcome> {
   const fixtureId = g.fixture.fixtureId;
   const lichess = t.game;
@@ -699,11 +736,16 @@ async function applyStream(
   if (!IS_TERMINAL[lichess.status]) {
     if (t.revoked.length > 0) return out({ result: await holdRevoked(g, t.revoked), adopted: applied });
     // D11 (b): never give up on a flag silently — past the bound, the organiser decides, with the evidence.
-    const unsettled = mayHoldUnsettled
-      ? unsettledFlagEvidence(g, lichess, adopted, t.at, deps.flagUnsettledAfterMs ?? FLAG_UNSETTLED_HOLD_MS)
-      : null;
-    const held = unsettled === null ? null : await holdForOrganiser({ fixtureId, reason: "clock_flag_unsettled", detail: unsettled });
-    return out({ result: held, adopted: applied });
+    if (settling === "made") {
+      const unsettled = unsettledFlagEvidence(g, lichess, adopted, t.at, deps.flagUnsettledAfterMs ?? FLAG_UNSETTLED_HOLD_MS);
+      const held = unsettled === null ? null : await holdForOrganiser({ fixtureId, reason: "clock_flag_unsettled", detail: unsettled });
+      return out({ result: held, adopted: applied });
+    }
+    // D20 re-review n1: tried and could not be made, for long enough — the organiser hears of it (and the read that
+    // finally gets through, or the game's end, replaces the hold: RECONCILED_WHILE_HELD). `skipped` waits for the next pass.
+    const unasked = settling === "unasked" ? unaskedFlagEvidence(g, lichess, adopted, t.at) : null;
+    const heldUnasked = unasked === null ? null : await holdForOrganiser({ fixtureId, reason: "provider_error", detail: unasked });
+    return out({ result: heldUnasked, adopted: applied });
   }
   return settle(g, snapshot, t.at, deps, applied, "stream");
 }

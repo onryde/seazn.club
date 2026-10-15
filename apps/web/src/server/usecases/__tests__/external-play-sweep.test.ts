@@ -68,13 +68,14 @@ import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { openRound } from "../external-play/open-round";
 import { act } from "../external-play/play";
-import { FLAG_SETTLE_HOLD_MS, FLAG_UNSETTLED_HOLD_MS, reconcile } from "../external-play/reconcile";
+import { FLAG_SETTLE_HOLD_MS, FLAG_UNASKED_HOLD_MS, FLAG_UNSETTLED_HOLD_MS, reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
 import { organiserOverrideVideo } from "../external-play/preflight";
 import {
   ARBITER_PARTICIPANT_TTL_MS,
   CAMERA_EVIDENCE_AFTER_MS,
   CAMERA_EVIDENCE_GIVE_UP_MS,
+  SWEEP_BACKOFF_CAP_MS,
   SWEEP_CADENCE_MS,
   SWEEP_MOVE_BUDGET,
   SWEEP_NO_TRUTH_HOLD_AFTER,
@@ -2567,6 +2568,62 @@ describe.runIf(HAS_DB)("D20 — flag-due boards cannot starve the pass (review I
     await sweep(f.boards, { now: new Date(pass1.getTime() + SWEEP_CADENCE_MS) });
     expect(lichess.holds.length, "pass 2: the cap").toBe(CAP);
     expect(lichess.holds[0]!.gameId, "pass 2: the deferred board's settling read comes first").toBe(deferredGame);
+  });
+
+  // D20 re-review n1: the first line is readable and says White is at zero; the settling read is refused EVERY pass
+  // (Lichess throttles the long stream while the short one answers). The sweep's no-truth count resets on every first
+  // line it reads, so before this the board stayed live and silent for as long as that lasted — an hour in this probe.
+  it("n1: a flag-due board whose settling read fails on every pass is HELD provider_error once the flag is 15 min old — counted once, no earlier — and recovery closes it (12 passes, counted)", async () => {
+    const f = await flagDueBoards(1, 60_000);
+    const [b, g] = [f.boards[0]!, f.games[0]!];
+    const answers = lichess.onStream;
+    let holdMs = 0;
+    lichess.charge = (h) => { holdMs = h; };
+    // The first line answers; any read that holds the stream open is throttled.
+    lichess.onStream = (c) => (holdMs > 0 ? { status: 429, body: "Too many requests" } : answers(c));
+    try {
+      const PASSES = 12;
+      // The first pass whose flag is 15 min old, by the declared figures: flag = catch-up + 60 s; passes at catch-up + k * cadence.
+      const firstHold = Math.ceil((FLAG_UNASKED_HOLD_MS + (f.flagAt - f.caughtUpAt.getTime())) / SWEEP_CADENCE_MS);
+      expect(firstHold, "premise: the figures put the first hold at pass 4 (15 min + 1 min after the catch-up, 5 min apart)").toBe(4);
+      const seen: { status: string | undefined; reason: string | null | undefined; held: number; read: number }[] = [];
+      for (let k = 1; k <= PASSES; k++) {
+        const r = await sweep(b, { now: new Date(f.caughtUpAt.getTime() + k * SWEEP_CADENCE_MS) });
+        expect(r.failed, `pass ${k}: nothing failed`).toBe(0);
+        const s = await bridgeOf(b.fixtureId);
+        seen.push({ status: s?.status, reason: s?.needs_reason, held: r.heldForOrganiser, read: r.reconciled });
+      }
+      expect(seen.length, "anti-vacuity: 12 passes").toBe(PASSES);
+      seen.forEach((p, i) => {
+        const k = i + 1;
+        // Before the bound: read every pass, live, nothing said. At the bound: held, counted once. After: the back-off
+        // for a held board (sweep.ts, controller ruling C3) may skip a pass — a held row is still read, never held twice.
+        if (k < firstHold) expect(p, `pass ${k}`).toEqual({ status: "live", reason: null, held: 0, read: 1 });
+        else {
+          expect([p.status, p.reason], `pass ${k}`).toEqual(["needs_organiser", "provider_error"]);
+          expect(p.held, `pass ${k}: the hold is counted once, at the pass that placed it`).toBe(k === firstHold ? 1 : 0);
+        }
+      });
+      const reads = seen.reduce((n, p) => n + p.read, 0);
+      expect(reads, "premise: the board was read past its hold (the back-off still reaches it)").toBeGreaterThan(firstHold);
+      expect(lichess.holds.length, "premise: every read tried the settling read — and was refused").toBe(reads);
+      const [row] = await sql<{ last_error: string | null }[]>`select last_error from fixture_external_play where fixture_id = ${b.fixtureId}`;
+      expect(row!.last_error, "the organiser reads what happened").toMatch(/could not ask Lichess/i);
+      // Recovery: an hour on (the back-off's cap), Lichess answers the held stream again and has flagged White. The hold
+      // is replaced by the result, and the sweep's first job closes the bridge on the next pass.
+      lichess.charge = null;
+      lichess.onStream = answers;
+      world.get(g)!.settles = true;
+      const at = f.caughtUpAt.getTime() + PASSES * SWEEP_CADENCE_MS + SWEEP_BACKOFF_CAP_MS;
+      const rec = await sweep(b, { now: new Date(at) });
+      expect(rec.reconciled, "the held board was due, and read").toBe(1);
+      const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${b.fixtureId}`;
+      expect(fx!.status, "Lichess's own flag, written").toBe("decided");
+      await sweep(b, { now: new Date(at + SWEEP_CADENCE_MS) });
+      expect(await bridgeOf(b.fixtureId), "closed").toEqual({ status: "finished", needs_reason: null });
+    } finally {
+      lichess.charge = null;
+    }
   });
 
   it("the budget split (c): reconcile stops starting reads at its slice, so the retry and the teardown run in a pass whose reads would have spent it all; the next pass reads the rest", async () => {
