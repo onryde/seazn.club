@@ -7442,8 +7442,8 @@ async function w2cStageRulesEverySportChecks(owner: Session): Promise<void> {
 
   const failures: string[] = [];
   let saved = 0;
-  for (const [n, m] of (builtinModules as readonly AnySportModule[]).entries()) {
-    const variant = Object.keys(m.variants)[0]!;
+  for (const [n, m] of builtinModules.entries()) {
+    const variant = Object.keys(m.variants)[0];
     const base = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
     const key = [...stageTopKeysFor(m, "league", variant)].find((k) => base[k] !== undefined);
     if (key === undefined) {
@@ -7464,7 +7464,7 @@ async function w2cStageRulesEverySportChecks(owner: Session): Promise<void> {
 
   // Hockey, the sport whose league stage the old gate could not reach: a fourth-quarter result stands on abandon.
   const hk = builtinModules.find((m) => m.key === "hockey") as AnySportModule;
-  const hkVariant = Object.keys(hk.variants)[0]!;
+  const hkVariant = Object.keys(hk.variants)[0];
   const hockeyStage = await stageFor(hk, hkVariant, "league", 100);
   const q4 = await v1(owner, `/api/v1/stages/${hockeyStage.stageId}/rules`, "PUT", { rules: { abandonPolicy: "q4_stands" } });
   const q4Rules = (q4.json.data as { rules?: { abandonPolicy?: unknown } } | undefined)?.rules;
@@ -7477,7 +7477,7 @@ async function w2cStageRulesEverySportChecks(owner: Session): Promise<void> {
   // Chess (the boardgame sport), a knockout: an explicit empty rung list is a value the merge stores, and a SECOND save
   // that leaves it out keeps it (carry I2) - made over HTTP below, not assumed.
   const bg = builtinModules.find((m) => m.key === "boardgame") as AnySportModule;
-  const bgVariant = Object.keys(bg.variants)[0]!;
+  const bgVariant = Object.keys(bg.variants)[0];
   const chessStage = await stageFor(bg, bgVariant, "knockout", 101);
   const empty = await v1(owner, `/api/v1/stages/${chessStage.stageId}/rules`, "PUT", { rules: { tiebreakRungs: [] } });
   const emptyRules = (empty.json.data as { rules?: { tiebreakRungs?: unknown } } | undefined)?.rules;
