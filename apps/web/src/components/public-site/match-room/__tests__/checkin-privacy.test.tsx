@@ -167,3 +167,28 @@ describe("the arbiter's watch-only line — the same rule as the check-in's (T17
     expect(src.split('f.t("arbiter.watchOnly")').length - 1, "header (desktop) and body (below lg)").toBe(2);
   });
 });
+
+// D16 review M2: the division page's entry line to the arbiter panel said "Watch BOTH players' cameras" after the panel became one
+// camera at a time (§5.6.4). Ruled text, typed from the rulebook (one at a time, and the flags), not read back from the dictionary.
+const ARBITER_ENTRY_RULED = {
+  en: "Watch one player's camera at a time and review each board's flags.",
+  es: "Mira la cámara de un jugador a la vez y revisa las señales de cada tablero.",
+  fr: "Regardez la caméra d'un joueur à la fois et examinez les signalements de chaque échiquier.",
+  nl: "Bekijk de camera van één speler tegelijk en beoordeel de meldingen per bord.",
+} as const satisfies Record<Locale, string>;
+
+describe("the division page's arbiter entry line says what the panel does now: one player's camera at a time (D16 review M2)", () => {
+  it("is the ruled line in every locale, and never promises both cameras - counted", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      expect(DICTS[locale]["arbiter.entry.body"], locale).toBe(ARBITER_ENTRY_RULED[locale]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+  });
+
+  it("is the line the division page draws - counted from the page's source", () => {
+    const src = readFileSync(join(__dirname, "..", "..", "..", "..", "app", "o", "[orgSlug]", "c", "[compSlug]", "d", "[divSlug]", "page.tsx"), "utf8");
+    expect(src.split('t(dict, "arbiter.entry.body")').length - 1).toBe(1);
+  });
+});

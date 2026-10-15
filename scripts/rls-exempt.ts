@@ -71,7 +71,7 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   // six are sealed and that app_user holds no privilege on them.
   // The organiser's "Open round" stamp; the authority for a window that can forfeit a player.
   "stage_round_opens",
-  // One RealtimeKit meeting per fixture (meeting ids); the room and the arbiter panel get a projection.
+  // One RealtimeKit meeting per player, keyed (fixture, side) (D16, V448: meeting ids); the room and the arbiter panel get a projection.
   "fixture_video_meetings",
   // Camera and out-of-band flags; the organiser reads and closes them through use-cases on the privileged client.
   "fixture_play_flags",

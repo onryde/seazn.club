@@ -1,6 +1,7 @@
 // T15 — the arbiter panel's view of one opened round (chess design §5.3:
 // "An arbiter, when assigned, joins receive-only and sees both players' tiles
-// for a chosen fixture, plus that fixture's flags").
+// for a chosen fixture, plus that fixture's flags" - amended by D16, §5.6.4: one
+// player's tile at a time, a switch between the two, plus that fixture's flags).
 //
 // Shared by the server loader (usecases/external-play/arbiter.ts) and the
 // client panel (components/v2/arbiter-panel.tsx), so it imports nothing that

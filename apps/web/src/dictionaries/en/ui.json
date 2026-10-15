@@ -6308,7 +6308,7 @@
   "arbiter.empty.body": "Boards appear here once you open a round from the run sheet. Flags are recorded whether or not anyone is watching.",
   "arbiter.emptyBoards": "This round has no boards to watch.",
   "arbiter.entry.link": "Arbiter panel",
-  "arbiter.entry.body": "Watch both players' cameras and review each board's flags.",
+  "arbiter.entry.body": "Watch one player's camera at a time and review each board's flags.",
   "externalPlay.room.state.revoked.title": "Your Lichess link was revoked, so we can't play your moves.",
   "externalPlay.room.state.revoked.body": "Your organiser has been told and will decide what happens next.",
   "externalPlay.room.state.revoked.relink": "Link Lichess again",

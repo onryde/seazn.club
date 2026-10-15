@@ -6308,7 +6308,7 @@
   "arbiter.empty.body": "Les échiquiers apparaissent ici dès que vous ouvrez une ronde depuis la feuille de ronde. Les signalements sont enregistrés, que quelqu'un observe ou non.",
   "arbiter.emptyBoards": "Cette ronde n'a aucun échiquier à observer.",
   "arbiter.entry.link": "Panneau d'arbitre",
-  "arbiter.entry.body": "Regardez les caméras des deux joueurs et examinez les signalements de chaque échiquier.",
+  "arbiter.entry.body": "Regardez la caméra d'un joueur à la fois et examinez les signalements de chaque échiquier.",
   "externalPlay.room.state.revoked.title": "Votre lien Lichess a été révoqué, nous ne pouvons donc pas jouer vos coups.",
   "externalPlay.room.state.revoked.body": "Votre organisateur a été prévenu et décidera de la suite.",
   "externalPlay.room.state.revoked.relink": "Relier Lichess à nouveau",

@@ -6308,7 +6308,7 @@
   "arbiter.empty.body": "Los tableros aparecen aquí cuando abres una ronda desde la hoja de ronda. Las señales se registran tanto si alguien observa como si no.",
   "arbiter.emptyBoards": "Esta ronda no tiene tableros que observar.",
   "arbiter.entry.link": "Panel del árbitro",
-  "arbiter.entry.body": "Mira las cámaras de ambos jugadores y revisa las señales de cada tablero.",
+  "arbiter.entry.body": "Mira la cámara de un jugador a la vez y revisa las señales de cada tablero.",
   "externalPlay.room.state.revoked.title": "Se ha revocado tu vínculo con Lichess, así que no podemos enviar tus jugadas.",
   "externalPlay.room.state.revoked.body": "Tu organizador ha sido avisado y decidirá qué pasa a continuación.",
   "externalPlay.room.state.revoked.relink": "Vincular Lichess de nuevo",
