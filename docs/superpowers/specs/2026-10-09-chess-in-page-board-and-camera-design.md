@@ -309,9 +309,10 @@ a deterrent product with no mandatory observer, and no more.
 
 **Measured 2026-10-09** (`evidence/…/rtk-peer-report.log`, one participant, synthetic
 camera, 4 min on / 3 min off / 2 min on):
-- **Not live.** During the session the report stayed frozen at its join snapshot for all
-  nine minutes: one sample, `duration` 0, and no `video_off` event even 2.5 minutes into
-  the camera being off. It cannot be an in-match signal.
+- **Not live** (superseded by the 2026-10-14 amendment below, which measured it live on stg).
+  During the session the report stayed frozen at its join snapshot for all nine minutes: one
+  sample, `duration` 0, and no `video_off` event even 2.5 minutes into the camera being off.
+  It cannot be an in-match signal.
 - **Final about 70 s after the player leaves:** 51 samples at a ~7 s cadence, `left_at`,
   `duration`, and every event.
 - **Camera-off shows as a GAP, not as `no_video_fraction`.** The three minutes off were a
@@ -338,6 +339,54 @@ the server answering the claims in between from a cache; the server waits 15 s f
 peer's join, then refuses). Samples are never required.
 **Residual, accepted:** the report is client-uploaded SDK telemetry, so a tampered client
 could forge it; this closes the honest-browser gap, not a determined forger.
+
+**Amended 2026-10-15 (D21 and D21-fix-3: the seat inside the vendor's call budget).** Four
+rules in `preflight.ts` change what the gate spends and how a claim that the budget cut short
+recovers. None of them changes what the gate proves. Find each by its symbol.
+- **Cache first, token last.** A claim asks the evidence cache (`judgeSeat`,
+  `claimEvidenceRead`) before it spends anything, and refreshes the participant's token only
+  when its answer must carry one. A `camera_starting` answer to a browser that sent the
+  participant it already holds (`heldParticipantId`) carries no token; a seat, a refused
+  camera, and an answer to a browser that holds none do carry one. The id is a hint about
+  what to save, never an authority: it is compared with the caller's own participant on file,
+  so naming another one changes nothing for the caller. The minting claim carries the token
+  it minted and reads nothing.
+- **The game creation step (T9) trusts a recent pass.** Before it creates the game,
+  `createGameIfReady` asks the seat again for both players (`recheck`). Nobody joins with that
+  answer, so no token is minted or refreshed for it, and a pass read ON within
+  `SEAT_RECHECK_TRUST_MS` (10 s) stands without a vendor call, provided no later read has
+  left a not-yet verdict outstanding (`seat_reads = 0`). The cost, accepted: a camera that
+  goes dark inside those 10 s is seated into a game it should not have started. The sweep's
+  camera evidence catches it afterwards from the peer reports (`camera_lost`, a flag the
+  organiser decides on), exactly as it catches a camera that goes dark one second after the
+  game is created, which no re-verify can prevent. That evidence is judged over the match,
+  which starts at the first move, so a camera that is dark only before the first move is not
+  judged, here or anywhere.
+- **A stranded board is created by the sweep.** A re-verify the budget cannot afford answers
+  "not ready" and writes nothing: no `last_error`, no claim. Both players are then seated and
+  no game exists, and a seated player never claims again. The mint-retry job has a second arm
+  for exactly that board (`retryCandidates` and `mintRetry` in `sweep.ts`): pending, no error
+  on file, no live claim, both check-ins counted, the later one at least
+  `STRANDED_CREATE_AFTER_MS` (10 s) old. It creates the game on its next pass, so the recovery
+  is bounded by the five-minute cadence, not immediate. Two creates racing are safe: the claim
+  is one conditional statement and the loser is told it lost.
+- **An optional camera asks again for its token** (owner decision, 2026-10-15: an Optional
+  player the budget deferred gets the tile later, without a reload). Under `optional`, a
+  player whose meeting, participant or token the budget deferred is seated with no tile, and
+  the seat answer says so explicitly (`cameraRetry: true`). The room then asks the camera route,
+  `POST /fixtures/{id}/external-play/room/camera` (`requestRoomCamera` in `room.ts`, which
+  calls `cameraTokenForSeat` in `preflight.ts`), on a 2, 4, 8 and 16 second back-off and then
+  every 30 seconds, until it holds a token, the policy leaves `optional`, or the game is over
+  (`cameraRetryDue`). The route answers the token and nothing else: it stamps no check-in,
+  publishes no lobby and asks for no game, because those belong to the seat claim. It judges
+  the seat by the seat's own rules (`seatPlayer`), so a stranger, a closed window and an
+  abandoned board are refused, and a refusal is final. The server says whether to ask again
+  (`retry`); the room never infers it from a missing token. Only an `optional` camera that met
+  a budget deferral ever retries. `off` has no camera, the D11 override is the way round a
+  vendor that may be broken, a vendor outage is final (every tab retrying would hammer a
+  vendor that is down), and `required` has its own door, since its camera refusals carry the
+  token. A per-seat rate limit on this route and on the seat claim is owed by the D22 review
+  (its I2) and is built before D16's code; this section does not give its number.
 
 ### 5.3 What each person sees
 - **A player sees their own tile only** (D7). Local preview; no subscription to the
@@ -371,7 +420,7 @@ tournament.
 The audit row (`online_chess_audit`: who overrode, when, and their note) is a **staff record
 read by SQL only**; no screen shows it (ruling, final review M-8, 2026-10-14).
 
-### 5.6 One meeting per player (amended 2026-10-14, owner ruling "1 per-player", T17B fix 2 D16; revised after the 10-14 review and the 10-15 re-review)
+### 5.6 One meeting per player (amended 2026-10-14, owner ruling "1 per-player", T17B fix 2 D16; revised after the 10-14 review and the 10-15 re-reviews 1 and 2)
 
 **This replaces the shared meeting.** Each board now has TWO RealtimeKit meetings, one per
 player. A player's meeting holds that player and, when one is watching, an arbiter. Nobody
@@ -403,20 +452,41 @@ an organiser's card can swap it after a player has arrived. Nothing reads a meet
 colour; the colour only LABELS (`arbiter.ts:283-286` and `:539-542` map white/black from
 `whiteSide` for the label alone).
 
-- Every statement on `fixture_video_meetings`, `fixture_video_participants` and
-  `fixture_video_guard_faults` names the side, and every `RETURNING` consumer iterates
-  over its rows. No `const [row]` / `[m]` / `gone[0]` destructuring on a meeting query.
-- One kind of statement names the side without saying it: a statement keyed by
-  `participant_id`, which is the seat gate's evidence stamp and its V446 read cache
-  (`preflight.ts:279-281`, `:308-310` and `:348-391`; the `seat_read_*` columns). The vendor
-  issues a participant id inside exactly one meeting, and `unique (fixture_id,
-  participant_id)` (V439) already says so, so the id identifies the row. Those columns stay
-  per participant and do not change.
-- **A source-guard test** walks the server tree and fails on any SQL that reads or joins
-  one of the three tables by `fixture_id` without either `side` or a `participant_id`. It
-  reports how many statements it checked and how many passed on each key. Zero checked is a
-  failure, and so is zero passed on either key: a guard that has stopped seeing one kind of
-  statement has gone vacuous on it.
+- Every fixture-keyed reference in a statement on `fixture_video_meetings`,
+  `fixture_video_participants` and `fixture_video_guard_faults` names the side (the one
+  exemption is stated next), and every `RETURNING` consumer iterates over its rows. No
+  `const [row]` / `[m]` / `gone[0]` destructuring on a meeting query.
+- One kind of REFERENCE names the side without saying it: a reference to
+  `fixture_video_participants` keyed by `participant_id`. Those are the seat gate's evidence
+  stamp and its V446 read cache (`judgeSeat`'s `last_publisher_seen_at` update, and
+  `claimEvidenceRead`, `recordEvidence` and `cachedEvidence`, all in `preflight.ts`; the
+  `seat_read_*` columns). The vendor issues a participant id inside exactly one meeting, and
+  `unique (fixture_id, participant_id)` (V439) already says so, so the id identifies the
+  participant row. Those columns stay per participant and do not change.
+- **That exemption stops at the participant row.** A statement keyed by `participant_id` that
+  also joins `fixture_video_meetings` or `fixture_video_guard_faults` is not exempt for that
+  join: the id picks the participant row and says nothing about which of the fixture's two
+  meeting rows the join lands on. Two statements do exactly this today: `leaveAsArbiter`'s
+  lookup (its join to the meeting is on `fixture_id` alone) and `reportCameraFault`'s
+  ownership check (the same join). With two rows per fixture each returns two rows per
+  participant, and the `const [row]` after it takes either one. Each such join carries
+  `side` in its own `on` (the participant row gains `side`, so the join is on
+  `(fixture_id, side)`).
+- **A source-guard test** walks the server tree and judges each TABLE REFERENCE that reaches
+  `fixture_video_meetings`, `fixture_video_participants` or `fixture_video_guard_faults` by
+  `fixture_id` (a `from`, `join`, `update`, `insert into` or `delete from` naming one of
+  them), not each statement. A reference passes when its own predicate or `on` names `side`,
+  or names `participant_id` (a participants reference only). A key elsewhere in the same
+  statement does not count for it. Rows reached some other way, by a meeting's unique
+  `meeting_id` or a participant row's own primary key (the arbiter revoke's `where id = …`),
+  are not fixture-keyed reads and are not counted. It reports how many references it checked
+  and how many passed on each key. Zero checked is a failure, and so is zero passed on either
+  key: a guard that has stopped seeing one kind of reference has gone vacuous on it.
+  A reference that means BOTH sides on purpose does not name one, so the test lists each such
+  statement with its reason, and a listed entry that no longer matches a statement fails.
+  Today's are `fixturesSeating` (`seated.ts`: a player seated on either side), the stale-meeting
+  deletes in `openRound` and `retireStaleMeeting` (both rows go), and `endRoomAtResult` (ends
+  every unended row, each in its own try).
 
 **Schema** (a new delta after V446, D21's call-budget delta; numbered at the time):
 - `fixture_video_meetings` gains `side text not null check (side in ('home','away'))`. Its
@@ -441,11 +511,13 @@ colour; the colour only LABELS (`arbiter.ts:283-286` and `:539-542` map white/bl
   It does not try to split them, and nothing is backfilled. See §5.6.7 for the deploy step
   that must run BEFORE the drop, and for the guard the delta carries itself.
 
-#### 5.6.2 The call sites, each once (the review's I1, re-pinned on 66102c507)
+#### 5.6.2 The call sites, each once (the review's I1, re-pinned on 6faa729c0)
 
-Line numbers below are at `66102c507`. D20 and D21 (the sweep work and the call budget) moved
-most of them since the first pin (`124ff0b0f`), so the build re-pins each site before it
-edits it.
+Find each site by its symbol. The line numbers below are at `6faa729c0` and are only a hint:
+D20, D21 and D21-fix-3 (the sweep work, the call budget, and the seat's token and re-verify
+changes) have moved them twice since the first pin (`124ff0b0f`, then `66102c507`), most of
+all in `preflight.ts`, `room.ts` and `sweep.ts`. The build re-pins each site before it edits
+it.
 
 | Site | Today | Per side |
 |---|---|---|
@@ -454,29 +526,32 @@ edits it.
 | `realtimekit.ts:393-420` the insert (`on conflict (fixture_id)`) and the lost-race re-read | one row per fixture | `on conflict (fixture_id, side)`; the re-read is by side too |
 | `realtimekit.ts:333-351` `retireStaleMeeting` | ends `gone[0]` only (`:341`) | iterates: ends every retired row at the vendor |
 | `realtimekit.ts:721-743` `endMeeting` | stamps `removed_at` on every arbiter row of the FIXTURE | stamps only the arbiter rows of ITS `(fixture_id, side)` |
-| `preflight.ts:193,277` seat claim → `ensureMeeting` | the board's meeting | the CALLER's side (`player.side`, from `loadSides` at `:145-146`) |
-| `preflight.ts:429-449` `issuePlayerToken`'s R2-2 locked mint check (`in (…)` at `:438`) | `em.entrant_id in (home, away)`, any side | pinned to the row's OWN side (§5.6.5, the review's I3) |
-| `preflight.ts:279-281,308-310` evidence stamp `last_publisher_seen_at`; `:348-391` the V446 seat-read cache | by participant id | unchanged (a participant id is one meeting's; §5.6.1) |
-| `preflight.ts:464-474` `storedPlayerParticipant`, and `room.ts:429` `ownParticipantId` | by fixture + person | by `(fixture_id, side)` + person |
-| `room.ts:286-303,411-426` `opponentParticipant` → `opponentPresence` | names the opponent's participant in the shared meeting | REMOVED: the snapshot carries `opponentCamera` (§5.6.3) |
-| `room.ts:648-678` `reportCameraFault` (its select `:656-661`) | joins by fixture | the caller's own `(fixture_id, side)` |
+| `preflight.ts` `seatPlayer`'s optional branch (`:223`) and `verifyRequiredSeat` (`:334`) → `ensureMeeting` | the board's meeting | the CALLER's side (`player.side`, from `loadSides` at `:173-174`) |
+| `preflight.ts` `playerParticipant`'s R2-2 locked mint check (`:535-548`, the `in (…)` at `:544`). D21-fix-3 moved it here from `issuePlayerToken`, which now only wraps it (`:560-563`) | `em.entrant_id in (home, away)`, any side | pinned to the row's OWN side (§5.6.5, the review's I3) |
+| `preflight.ts` `judgeSeat`'s evidence stamp `last_publisher_seen_at` (`:420-423`); `claimEvidenceRead`, `recordEvidence` and `cachedEvidence`, the V446 seat-read cache (`:448-502`) | by participant id | unchanged (a participant id is one meeting's; §5.6.1) |
+| `preflight.ts` `storedPlayerParticipant` (`:575-585`), and `room.ts` `ownParticipantId` in `compose` (`:432`) | by fixture + person | by `(fixture_id, side)` + person |
+| `preflight.ts` `cameraTokenForSeat` (`:277-285`), called by `room.ts` `requestRoomCamera` (`:584-587`) behind `POST …/room/camera` (D21-fix-3, §5.2) | the optional camera's token door; it reaches the meeting only through `seatPlayer` | unchanged in shape. It takes the caller's side from `seatPlayer` and has no statement of its own to key; a test drives it once per side |
+| `create-game.ts` the two `seatPlayer(… recheck: true)` calls (`:220-223`) | re-verify each player against the board's meeting | each player against their OWN side's meeting, through `seatPlayer`. A player with no participant on file answers `camera_required` and nothing is minted |
+| `sweep.ts` `retryCandidates` arm 2 and `mintRetry` (`:547-614`; the stranded board, §5.2) | reads no video table | unchanged. The create it calls reaches both meetings through the row above |
+| `room.ts` `opponentParticipant` (`:296-306`) → the pill's `opponentPresence` in `compose` (`:421-429`) | names the opponent's participant in the shared meeting | REMOVED: the snapshot carries `opponentCamera` (§5.6.3) |
+| `room.ts` `reportCameraFault` (`:677-707`; its select `:685-690`, joined to the meeting on `fixture_id` alone at `:688`) | joins by fixture | the caller's own `(fixture_id, side)`; the join carries `side` (§5.6.1) |
 | the new `camera-report` usecase (§5.6.3), and the snapshot's read of it | does not exist | stamps the caller's `storedPlayerParticipant` row, and reads the opponent's the same way, both by `(fixture_id, side)` + person |
 | `room-end.ts:28-48` `endRoomAtResult` | `const [room]` (`:30`): ends ONE meeting | ends every unended row of the fixture, each in its own try |
 | `open-round.ts:348-358,379-385` stale-meeting delete on a fresh window / D17 re-arm; the vendor ends at `:405-419` | deletes by fixture | unchanged as a delete (both rows go), but the vendor ends iterate every returned row |
 | `seated.ts:45-47` `fixturesSeating` | any player participant on the fixture | unchanged (keyed by person, true on either side) |
 | `guard-faults.ts:34-79` | keyed `(fixture_id, person_id)` | `(fixture_id, side, person_id)` |
-| `sweep.ts:586-598` `teardownCandidates` | per row | unchanged: already per row, so each side is retried on its own |
-| `sweep.ts:911-928` `cameraCandidates` | per row | per row = per `(fixture, side)` (§5.6.6) |
-| `sweep.ts:934-958` `readCameraEvidence`'s player lookup | both sides' players over ONE meeting | only THIS row's side's player (§5.6.6) |
-| `sweep.ts:1040-1059` `settleCamera` (the stamp at `:1042-1045`) | stamps `where fixture_id` (both rows) | stamps `(fixture_id, side)` |
-| `sweep.ts:1175-1188` `arbiterCandidates` | joins meetings by fixture (2 × 2 rows) | joins `(fixture_id, side)` |
-| `sweep.ts:1197-1205` `arbiterRevoke` | may remove from the WRONG meeting | removes from its own row's meeting |
+| `sweep.ts` `teardownCandidates` (`:638-650`) | per row | unchanged: already per row, so each side is retried on its own |
+| `sweep.ts` `cameraCandidates` (`:963-980`) | per row | per row = per `(fixture, side)` (§5.6.6) |
+| `sweep.ts` `readCameraEvidence`'s player lookup (`:998-1010`) | both sides' players over ONE meeting | only THIS row's side's player (§5.6.6) |
+| `sweep.ts` `settleCamera` (`:1092-1111`; the stamp at `:1094-1097`) | stamps `where fixture_id` (both rows) | stamps `(fixture_id, side)` |
+| `sweep.ts` `arbiterCandidates` (`:1227-1240`) | joins meetings by fixture (2 × 2 rows) | joins `(fixture_id, side)` |
+| `sweep.ts` `arbiterRevoke` (`:1249-1257`) | may remove from the WRONG meeting | removes from its own row's meeting |
 | `arbiter.ts:237-259` `boardRows` | `left join … on m.fixture_id = f.id` (`:253`): lists each board TWICE | a per-board aggregate (§5.6.4) |
 | `arbiter.ts:346-351` `cameraReport`; `:324` and `:390` `flagView` → `cameraMatchWindow` | read the board's one `evidenceAt` and `meetingEndedAt` | follow the aggregate's rules (§5.6.4): no vacuous "settled", and a flag's window is its own player's row |
 | `arbiter.ts:486-537` `joinAsArbiter` → `ensureMeeting` (`:524`) | creates the meeting if missing | joins only an EXISTING side's meeting and names the side in its request; an arbiter never creates one (§5.6.4) |
 | `arbiter.ts:539-557` the players query and the `white` / `black` lists | both players' participant ids, by fixture and person | the joined side's players only, as one list; the response shape changes (§5.6.4) |
 | `arbiter.ts:563-594` `mintArbiter` + its rollback (`:576-592`) | one meeting | one `(fixture_id, side)` per mint |
-| `arbiter.ts:607-644` `leaveAsArbiter` (its join at `:616-622`) | the join can pick the other meeting's id, then 404 → stamped removed while still live | joins `(fixture_id, side)` |
+| `arbiter.ts:607-644` `leaveAsArbiter` (its join at `:616-622`, on `fixture_id` alone at `:620`) | the join can pick the other meeting's id, then 404 → stamped removed while still live | joins `(fixture_id, side)`; the source guard (§5.6.1) fails on the old join |
 
 `lib/arbiter-view.ts`, `match-window.ts` and `match-camera-off.ts` only NAME the tables in
 comments. `match-window.ts`'s `meetingEndedAt` is a single value: correct per meeting once the
@@ -507,26 +582,35 @@ to D16, built together with its one consumer, this pill; no seam ships without a
 `camera-fault`, with the body `{ state: "live" | "off", heartbeat: boolean }`.
 - **Identity** is `camera-fault`'s: the caller must be one of the board's two players, and
   the row stamped is the caller's `storedPlayerParticipant` on their own side, in a meeting
-  still open (`preflight.ts:464-474`). That function is the one rule for which participant is
-  a person's, and it matters here: `(fixture_id, person_id)` is deliberately not unique
-  (V439), so the stamp and the snapshot's read of the same row must go through it. Anything
-  else is the room's one 404. The server stamps `camera_reported` and `camera_reported_at` on
+  still open (`storedPlayerParticipant` in `preflight.ts`, `:575-585`). That function is the
+  one rule for which participant is a person's, and it matters here: `(fixture_id,
+  person_id)` is deliberately not unique (V439), so the stamp and the snapshot's read of the
+  same row must go through it. Anything else is the room's one 404. The server stamps `camera_reported` and `camera_reported_at` on
   that row, on the server's clock.
-- **A change writes; a heartbeat only refreshes.** A report with `heartbeat: false` always
+- **A change writes; a heartbeat mostly refreshes.** A report with `heartbeat: false` always
   writes its state and pings the opponent's room (rate-limited per seat, as `camera-fault`
-  does). A report with `heartbeat: true` is applied only when it names the state already
-  stored, or when nothing is stored yet: it refreshes `camera_reported_at` and pings nobody.
-  A heartbeat that names a different state is ignored. That is what makes a reordered pair
-  harmless: a `live` heartbeat that was in flight when the camera went off lands after the
-  `off` change and is dropped, so a stale "live" cannot be stranded.
+  does). A report with `heartbeat: true` is judged against the stored row, in four cases:
+  - it names the state already stored: it refreshes `camera_reported_at` and pings nobody;
+  - nothing is stored yet: it writes the state and the stamp, and pings nobody;
+  - it names a different state and the stored row is still fresh (younger than
+    `CAMERA_REPORT_STALE_MS`): it is ignored, and the stamp is untouched. That is what makes a
+    reordered pair harmless: a `live` heartbeat that was in flight when the camera went off
+    lands after the `off` change, finds a row the change has just made fresh, and is dropped,
+    so a stale "live" cannot be stranded;
+  - it names a different state and the stored row is no longer fresh: it is applied as a change
+    is. "No longer fresh" is the pill's own test for "unknown", one definition for both. Without
+    this case, when the tab that made the deciding change closes, the surviving tab's
+    heartbeats would be ignored for ever, the stored state would go stale at 75 s, and the pill
+    would read "unknown" until the camera next changed.
 - **Its own rate limit.** `CAMERA_FAULT_PING_LIMIT` (`rate-limit.ts:142`) throttles the
   lobby ping only. The route gets its own, `CAMERA_REPORT_LIMIT`: 12 a minute per fixture and
   person (a tab sends about two a minute, and a flapping camera a burst of changes), fail-open
   like its neighbours so a Redis blip never blanks the pill. Past it the answer is 429, and the
   client drops a heartbeat (the next comes in 30 s) or retries a change after its wait.
 - **Registered where its neighbours are**: `NEVER_KEY_ROUTES` in `key-scopes.ts` (beside the
-  `camera-fault` entry, `:364`), so no API key reaches it, and `openapi.ts` (the
-  `camera-fault` entry at `:212` is the pattern).
+  `camera-fault` entry, `:364`, which D21-fix-3's `room/camera` entry at `:365` also sits
+  beside), so no API key reaches it, and `openapi.ts` (the `camera-fault` entry at `:213` is
+  the pattern).
 
 **The client.** A tab reports its camera's CURRENT state on every change, and again every
 `CAMERA_REPORT_HEARTBEAT_MS` (30 s) in BOTH states, so a camera that stays off stays fresh
@@ -535,21 +619,28 @@ exactly as one that stays live does.
   queue has (`camera-session.ts`, the "Delivering a stamp" header and `:90-112`): a failed
   change is sent again after a wait and then dropped.
 - A report is a change until the server has acknowledged that state, and a heartbeat after.
-  A lost change is therefore resent as a change; leaving it to the heartbeat would never
-  deliver it, because a heartbeat cannot flip a state.
+  A lost change is therefore resent as a change; leaving it to the heartbeat would not
+  deliver it in time, because a heartbeat flips a stored state only once the row is no longer
+  fresh (the last case above), by which time the pill already reads "unknown".
 - `CameraStatus` (`camera-session.ts:46`) maps: `live` → `live`; `off`, `failed` and
   `gave_up` → `off`; `joining`, `recovering` and `idle` send nothing, because they are
   transitions, and `recovering` is OUR guard's re-join, which is never the player's "off".
 - **Two tabs of one player** share one row: the most recent CHANGE from either tab decides
-  what is stored, and the other tab's heartbeats agree with it or are ignored, so the pill
-  does not flap between two tabs. The price is that a player with one tab live and another
-  off reads as whichever changed last. That is accepted for a pill that only informs; an "any
-  tab live wins" rule would need a row per tab.
+  what is stored, and while the row is fresh the other tab's heartbeats agree with it or are
+  ignored, so the pill does not flap between two tabs. The price is that a player with one tab
+  live and another off reads as whichever changed last. When the tab that made the deciding
+  change closes, its heartbeats stop: the row goes stale 75 s after its last one, the pill
+  reads "unknown", and the surviving tab's next heartbeat (at most 30 s later) is applied. So
+  the pill shows the closed tab's last state for up to 75 s after the close, which is wrong
+  while the surviving tab disagrees, and "unknown" for at most one heartbeat after that. That
+  is accepted for a pill that only informs; an "any tab live wins" rule would need a row per
+  tab.
 
 **The snapshot.** `opponentPresence: { participantId } | null` (`room-snapshot.ts:143`)
 becomes `opponentCamera: "live" | "off" | "unknown" | null`.
-- **`null` (no pill) keeps every condition the pill has today**, in `room.ts:418-426`'s
-  order and ahead of the new reading: the camera policy is `off`; an organiser has let the
+- **`null` (no pill) keeps every condition the pill has today**, in the order of the
+  `opponentPresence` expression in `room.ts`'s `compose` (`:421-429`) and ahead of the new
+  reading: the camera policy is `off`; an organiser has let the
   board play without video (D11); the game is over; the viewer cannot act (`!canAct`: no
   playable game, a frozen seat, a linked account that is not the game's); the opponent has no
   person on file; and OUR guard holds an open fault on the opponent's seat (our re-join, never
@@ -594,8 +685,13 @@ peer-report evidence before play, the arbiter's live view, and the sweep's peer-
 evidence after the match (`camera_lost`). A client-claimed signal is exactly what §5.2 and
 §10 reject as a safeguard. A **source-guard test** pins it: `camera_reported` and
 `camera_reported_at` are named in exactly two files, the report's usecase (which writes them)
-and the room snapshot (which reads them). It reports how many files it scanned, and zero is
-a failure.
+and `usecases/external-play/room.ts` (whose snapshot composer reads them). Its scope is every
+non-test `.ts` and `.tsx` file under `apps/web/src`, except generated files and the OpenAPI
+document with the files that build it (they describe the wire, not the column); the migration
+deltas live under `db/`, outside the tree it walks. The two allowed files are named in the
+test. It reports how many files it scanned, and zero is a failure. It also checks that each
+of the two allowed files really names one of the columns, so a rename that leaves the
+allow-list pointing at files that no longer hold them cannot pass by finding nothing.
 
 #### 5.6.4 The arbiter: one player's camera at a time (the review's C2)
 
@@ -669,7 +765,7 @@ D16 changes both:
    does not await.
 3. **A failed DELETE does not block the join.** The arbiter's view is not held hostage to a
    vendor error. The leftover participant is receive-only; the sweep removes it
-   (`arbiterRevoke`, `sweep.ts:1197`) and the teardown kicks it with the room.
+   (`arbiterRevoke`, `sweep.ts:1249`) and the teardown kicks it with the room.
 
 So the claim is exactly this: **on the happy path an arbiter holds at most ONE live
 participant.** The test proves that order and nothing more; a second test proves a failed
@@ -726,7 +822,7 @@ folding them into one board-wide value.
 - **A flag's window is its own player's row.** `flagView` (`arbiter.ts:367`) hands
   `cameraMatchWindow` (`arbiter.ts:390`) a `meetingEndedAt`. `match-window.ts` requires the
   panel and the sweep to share ONE window, and the sweep judged each player over their OWN
-  row's end (`cameraCandidates`, `sweep.ts:911`). So the panel passes the flagged person's
+  row's end (`cameraCandidates`, `sweep.ts:963`). So the panel passes the flagged person's
   side's `endedAt` (found through `loadSides`, as `nameOf` is), never "the later of both". A
   flag whose player's row is gone is judged on the game's end alone.
 
@@ -752,26 +848,35 @@ folding them into one board-wide value.
   first arrival. The opponent's claim touches the other row only.
 - The seat evidence (§5.2 amended: the current peer's `media_permission` and `video_on`)
   is read from the player's own meeting. Nothing else about the gate changes.
-- **The invariant.** The mint's locked statement (`preflight.ts:434-441`, the refusal at
-  `:442`) pins the person to THIS row's side entrant:
+- **The invariant.** The mint's locked statement (in `playerParticipant`, `preflight.ts`
+  `:535-548`; the refusal at `:548`) pins the person to THIS row's side entrant:
   `em.entrant_id = case m.side when 'home' then f.home_entrant_id else f.away_entrant_id end`.
-  Today's `in (f.home_entrant_id, f.away_entrant_id)` (`:438`) accepts either side.
+  Today's `in (f.home_entrant_id, f.away_entrant_id)` (`:544`) accepts either side.
 - **Two guards, two different races; neither covers the other** (the re-review's N3, which
-  corrects the first draft of this section).
-  - The ordered `samePair` compare (`:436`) refuses any change of pairing between the mint
-    and the lock, a swapped-sides re-pair (the same two entrants, home and away exchanged)
-    included, because the stamp is compared in order. A swap gives a side label to the OTHER
-    entrant, and the person claiming under the new label belongs to that entrant, so the
-    side pin PASSES there. `samePair` is the only guard that refuses it.
+  corrects the first draft of this section, and re-review 2's F1, which corrects the next).
+  - The ordered `samePair` compare (`:542`) refuses any change of pairing between the mint and
+    the lock, because the row's stamp no longer equals the fixture's entrants. It is the only
+    guard that refuses a re-pair that leaves the claimant's own entrant on their own side and
+    changes the OTHER side's entrant: the claimant is still on the board under the same
+    label, so the side pin passes, and only the stamp differs.
   - The side pin refuses a person who has moved to the OTHER entrant by a roster edit, with
     the pairing untouched, so the stamp is unchanged and `samePair` is true. The pin is the
     only guard that refuses it.
+  - A swapped-sides re-pair (the same two entrants, home and away exchanged) is refused by
+    BOTH, so it proves neither. The claim holds the side it read before the swap, and the lock
+    selects that side's row, which still carries the pre-swap stamp, so `samePair` is false.
+    After the swap `case m.side` resolves that same side to the OTHER entrant, whom the
+    claimant does not belong to, so the pin refuses too. The previous draft said the pin
+    passes there; it does not.
 
-  So a swapped-sides test cannot kill the pin: a mutant that restores `in (home, away)`
-  stays green under it. The tests owed (§5.6.8) are one per race, and one mutant per guard,
-  taken one at a time: drop `samePair`; restore `in (home, away)`; flip the `case` arms. The
-  roster-move test makes its edit from inside the fake `addParticipant`, which runs between
-  the side read and the lock.
+  So a swapped-sides test cannot kill either guard: a mutant that drops `samePair` and one
+  that restores `in (home, away)` both stay green under it. The tests owed (§5.6.8) are one
+  per race, each asserting WHICH predicate refused rather than only the shared
+  `VIDEO_MEETING_REPLACED` code: at the moment of the edit the test reads the lock's inputs
+  in SQL and asserts that the other guard would have passed, so a refusal can only be the
+  guard under test. One mutant per guard is run, taken one at a time: drop `samePair`;
+  restore `in (home, away)`; flip the `case` arms. Both edits are made from inside the fake
+  `addParticipant`, which runs between the side read and the lock.
 - A player's meeting id or token never reaches the opponent's browser. Tokens are minted per
   participant with the API key. The snapshot carries only the viewer's own
   `seat.participant` and, after §5.6.3, no opponent participant id at all.
@@ -785,9 +890,9 @@ folding them into one board-wide value.
 - on `ensureMeeting`'s replace of another pairing's meeting.
 
 Each row is ended in its own try. A vendor failure on one leaves that row unended, and the
-sweep's per-row teardown (`sweep.ts:586-598`) retries it alone. `endMeeting` stamps
-`removed_at` only on the arbiter rows of ITS `(fixture_id, side)`, so an arbiter still
-watching the other meeting is never recorded as removed while it is live. A board's camera
+sweep's per-row teardown (`teardownCandidates` in `sweep.ts`, `:638-650`) retries it alone.
+`endMeeting` stamps `removed_at` only on the arbiter rows of ITS `(fixture_id, side)`, so an
+arbiter still watching the other meeting is never recorded as removed while it is live. A board's camera
 room is over only when both rows are ended.
 
 **What a half-ended board shows.** This happens only at a result or at T+20, and it is
@@ -859,61 +964,128 @@ camera."**
 - An organiser who plays on the board cannot watch it: `arbiter.ts:497-499` refuses with
   `ARBITER_PLAYS_THIS_BOARD`, and the sweep revokes such a watch.
 
-#### 5.6.8 The RealtimeKit budget (m2, the re-review's M5)
+#### 5.6.8 The RealtimeKit budget (m2, the re-review's M5; restated after D21-fix-3 and D22)
 
-These are vendor calls per board per round, counted from the call sites at `66102c507`.
-Every RealtimeKit REST call, the new ones included, now spends from the platform's call
-budget (D21, `video/budget.ts`): a token bucket of 900 calls per five minutes (a burst of 300
-plus 2 a second, 75% of the account's 1,200). Over budget a call is DEFERRED, never refused:
-it is not made, and each caller reads that as "ask again", never as "no camera" and never
-as an outage. D16 adds calls, so it consumes that budget, and each new call site keeps the
-deferral rule:
+These are vendor calls per board per round, counted from the call sites at `6faa729c0`
+(find them by symbol; the line numbers are a hint). Every RealtimeKit REST call, the new ones
+included, spends from the platform's call budget (D21, `video/budget.ts`): a token bucket of
+900 calls per five minutes (a burst of 300 plus 2 a second, 75% of the account's 1,200). Over
+budget a call is DEFERRED, never refused: it is not made, and each caller reads that as "ask
+again", never as "no camera" and never as an outage. D16 adds calls, so it consumes that
+budget, and each new call site keeps the deferral rule:
 - the second meeting's create and its participant (a seat claim): under `required` the seat
-  answers `camera_starting` and the room asks again; under `optional` the player is seated
-  with no tile for now (`preflight.ts:197-206` and `:321-327`);
+  answers `camera_starting` and the room asks again (`verifyRequiredSeat`'s deferral catch,
+  `preflight.ts:359-366`); under `optional` the player is seated with no tile for now, and the
+  room asks the camera route for the token on its back-off (`seatPlayer`'s optional branch,
+  `:228-235`, and §5.2);
 - the second teardown: `endMeeting` throws, the row stays unended, and the sweep retries that
   row alone (§5.6.6);
-- the second evidence read: a deferred read leaves the row unsettled for the next pass, and
-  is not a failure (`sweep.ts:1093-1095`);
+- the second evidence read: a deferred read leaves the row unsettled for the next pass, and is
+  not a failure (`cameraEvidence`'s rethrow, `sweep.ts:1144-1148`, which `each` counts as
+  deferred, `:242-249`);
+- the stranded-board create (§5.2): its re-verify spends from the same bucket, and a deferral
+  writes nothing, so the board stays a candidate for the next pass;
 - the arbiter's join, switch and leave: §5.6.4.
 
-`k` is the number of seat claims of one player that READ the vendor: the first, plus each
-re-ask the back-off lets through (1, 2, 4, 8 s, `CAMERA_EVIDENCE_BACKOFF_MS`). A claim inside
-the back-off is answered from the cache and reads nothing (D21).
+**What one seat claim costs the vendor** (policy `required`; `verifyRequiredSeat`,
+`playerParticipant` and `judgeSeat` in `preflight.ts`):
+- The minting claim, a player's first (no participant on file): 1 call to add the participant,
+  which returns its token, plus 1 if it also creates the meeting it joins. It reads nothing,
+  because nobody can have joined with a token that did not exist yet.
+- A later claim the back-off lets through to the vendor (a reading claim): 3 calls, the live
+  session, its participants and the peer report (fewer when there is no session or the
+  participant is not in it). Plus 1 to refresh the participant's token when the answer must
+  carry one: the claim that seats the player, a refused camera, or a browser that holds no
+  token. A `camera_starting` answer to a browser that holds its token carries none, so the
+  polling claims on the way cost the 3.
+- A later claim inside the back-off (1, 2, 4, 8 s, `CAMERA_EVIDENCE_BACKOFF_MS`): 0. It is
+  answered from the cache (the V446 `seat_read_*` columns).
+- T9's re-verify before creating the game: 0 when the player's pass was read within
+  `SEAT_RECHECK_TRUST_MS`; otherwise up to 3 reads, and never a token.
+
+`k` is the number of a player's claims that READ the vendor (the minting claim is not one);
+the last of them seats the player.
 
 | | Shared meeting (today) | One per player |
 |---|---|---|
-| Meeting create | 1 | 2 |
-| Per player: 4 per reading claim (the participant's token, added on the first claim and refreshed on later ones, plus three reads: the live session, its participants, the peer report) | 2 × 4k | 2 × 4k, unchanged |
+| Meeting create | 1 (the first arrival's claim) | 2 (each player's minting claim, inside the check-in burst) |
+| Per player: the mint 1, `k` reads of 3, and the token handed with the seat 1 | 2 × (3k + 2) | 2 × (3k + 2), unchanged |
 | Teardown (kick-all + INACTIVE, per meeting) | 2 | 4 |
-| Evidence after the match: the sessions list, then per player the peer ids and one peer report | 1 + 2 × 2 = 5 | 2 × (1 + 2) = 6 |
+| Evidence after the match: per meeting the sessions list, then per player the peer ids and one peer report | 1 + 2 × 2 = 5 | 2 × (1 + 2) = 6 |
 | Arbiter pane: add 1, kick 1, delete 1 (a pane watched to the result costs 1) | up to 3 | up to 3 per pane shown; a switch is a leave (2) and a join (1) |
 | The pill and its heartbeat | 0 (client signalling) | 0 (our own database) |
 
-- At k = 2 and no arbiter, that is 24 calls per board today and 28 with a meeting per player:
-  **+4 per board**. At 30 boards that is +120, and at 50 boards +200, spread over the round
-  and the games.
-- The dominant term is NOT this change: it is the seat claim's `4k`, and the table's player
-  row does not move. Before D21 a `camera_starting` wait that re-asked once a second could
-  reach `k ≈ 20`, which D21's own figure puts at about 6,000 calls in five minutes with 50
-  boards checking in at once. D21 bounded it (the back-off above, the cache, and
-  `CAMERA_EVIDENCE_MAX_POLLS`, 5 reads) and put every call under the bucket. The seat gate's
-  spend is D21's to own; this table counts only what D16 changes, and counts a claim at the
-  reading price.
+- At k = 2, no arbiter, and T9's re-verify inside the trust window, that is 1 + 16 + 2 + 5 = 24
+  calls per board today and 2 + 16 + 4 + 6 = 28 with a meeting per player: **+4 per board**
+  (create +1, teardown +2, evidence +1). The 24 is not a guess: D22's clean 20-board run made
+  486 calls, 24.3 a board. At 30 boards the delta is +120, and at 50 boards +200. The create's
+  +1 lands in the check-in burst, the stretch where the bucket is busiest; the teardown's +2
+  and the evidence's +1 come after the games.
+- The dominant term is NOT this change: it is the players' own claims, 16 of the 24, and the
+  table's player row does not move. Before D21 a `camera_starting` wait that re-asked once a
+  second could reach `k ≈ 20`, which D21's own figure puts at about 6,000 calls in five
+  minutes with 50 boards checking in at once. D21 bounded it (the back-off above, the cache,
+  and `CAMERA_EVIDENCE_MAX_POLLS`, 5 reads) and put every call under the bucket. D21-fix-3
+  then stopped spending the token before the cache (D22 found 75% of the calls were token
+  refreshes) and stopped T9's re-verify spending a token and three reads per player. The seat
+  gate's spend is D21's to own; this table counts what D16 changes.
+
+**What the budget can carry: OWNER-OPEN, and not fixed.** D21 bounds what the platform
+spends; it does not make the platform carry any number of boards. A board that the bucket
+cannot afford is created late, not refused. D22's load test (`e2e/load/chess-30-boards.load.ts`:
+node-fetch players against the production build and the fixture servers, metered, a fresh
+database per run, a 60 s arrival) measured, after D21-fix-3 (`6faa729c0`):
+- 20 Required boards: 486 calls, 0 deferrals, arrival-to-seated p95 7.9 s, every board
+  created its game, none stranded.
+- 30 Required boards arriving in 60 s: 873 and 898 calls in the busiest five minutes (the cap
+  is 900), 454 and 591 seat deferrals in the two runs, arrival-to-seated p95 223 s and 274 s.
+  Every game was created, but late: up to about 290 s after both players were seated, once
+  the bucket had recovered (the sweep that creates a stranded board runs every five minutes
+  in production). 0 wrong refusals.
+- 10 Required + 10 Optional + 10 Off: 311 calls, 0 deferrals. 30 Required + 10 Optional: 7 of
+  the 20 optional seats were seated with no token, all 7 got their tile without a reload, from
+  14.1 s (median) to 60.1 s (longest) after the seat.
+
+So about 24 Required boards arriving within a minute is the clean ceiling the runs support.
+That figure is read between two measured points (20 clean, 30 not), not measured as a
+number. Two things make it worse than the bucket's arithmetic: under starvation a player's
+cost rises (14.6 and 16.1 calls a player in the two 30-board runs against 8.7 clean, partly
+because a deferral that lands between a read's three calls throws away the ones already
+made), and the sweep's stranded-board create loses the race for tokens to the players' polls.
+It also re-reads both cameras in effect, up to six calls, because the grace before it acts
+and the trust window are both 10 s.
+
+D22's proposals, none built or decided: reserve a lane so a create for a board with both
+players seated may take tokens the players' reads may not; take a read's three tokens all at
+once, so a deferral cannot land mid-read; and have a seated player whose game has not
+appeared re-claim on a back-off, so a stranded board waits for a player's next ask and not
+for the cron. The owner's choice is to accept the ceiling, build some of those, raise the
+budget, or stagger a round's opening. This spec does not claim the ceiling is closed.
+
+D16 puts 4 more calls on a board of about 24, about a sixth. The ceiling can only fall; by how
+much is for the load re-run to say, not for this arithmetic, because the cost per player is
+not constant near the cap.
 
 **Tests owed** (with the build), each against the RealtimeKit fixture server
 (`e2e/realtimekit-fixture-server.ts`, which models several meetings and counts calls), each
 counted:
 - The two players' participants are in DIFFERENT meeting ids. Drive the real seat claim
   twice. A player's meeting never contains the opponent, whichever player arrives first.
-- I3's invariant (§5.6.5), as two tests and three mutants, because the two guards cover
-  different races:
-  - a re-pair with the same two entrants and the SIDES SWAPPED, landing during the mint, is
-    refused (`VIDEO_MEETING_REPLACED`) and stores nothing. It kills a mutant that drops
-    `samePair`, and cannot kill the pin;
+- I3's invariant (§5.6.5), as two tests that each kill one guard, one extra that kills
+  neither, and three mutants, because the two guards cover different races:
+  - a re-pair that replaces the OTHER side's entrant while the claimant's own entrant stays
+    on their own side, landing during the mint, is refused (`VIDEO_MEETING_REPLACED`) and
+    stores nothing. At the moment of the edit the test asserts in SQL that the row's stamp now
+    differs from the fixture's entrants and that the claimant still belongs to the entrant on
+    their side, so the pin would pass. It kills a mutant that drops `samePair`;
   - a roster edit that moves the person to the OTHER entrant, with the pairing untouched,
-    during the mint, is refused and stores nothing. It kills a mutant that restores
+    during the mint, is refused and stores nothing. At the moment of the edit the test asserts
+    in SQL that the stamp equals the fixture's entrants (`samePair` would pass) and that the
+    claimant no longer belongs to the entrant on their side. It kills a mutant that restores
     `in (home, away)`, and one that flips the `case` arms;
+  - a re-pair with the same two entrants and the SIDES SWAPPED, landing during the mint, is
+    refused and stores nothing, as an extra. Both guards refuse it (§5.6.5), so it earns no
+    kill credit and is not counted in the mutants below;
   - each test shows it reached the guard: the fake `addParticipant` was called once, and the
     refusal is the lock's. Three mutants are run one at a time, and the count killed is
     reported (3 of 3).
@@ -943,16 +1115,25 @@ counted:
     failure;
   - `off` held by heartbeats for three times `CAMERA_REPORT_STALE_MS` still reads `off`;
   - a reordered pair, a late `live` heartbeat landing after an `off` change, leaves `off`;
-  - a change pings and a heartbeat does not; a heartbeat for a state that is not stored
-    writes nothing;
+  - a heartbeat is judged against the stored row, in four cases (§5.6.3): it agrees with the
+    stored state, so it refreshes the stamp and pings nobody; nothing is stored, so it writes
+    the state and the stamp and pings nobody; it differs and the row is fresh, so nothing is
+    written and the stamp is untouched; it differs and the row is no longer fresh, so it is
+    applied as a change (the state flips, the stamp moves, the opponent's room is pinged);
+  - the tab that made the deciding `off` is gone and a `live` tab remains: its `live`
+    heartbeat is ignored while the stored `off` is fresh, and applied once the row is no longer
+    fresh, with the instants either side of the pill's own staleness boundary both checked, so
+    the heartbeat and the pill cannot disagree about when a row went stale;
+  - a change pings and a heartbeat that only refreshes does not;
   - each of the seven `CameraStatus` values sends what §5.6.3 says (seven checked);
   - someone else's seat is refused with the room's one 404;
   - the real producer through the real consumer: a camera session's report queue, the real
     route, the opponent's real snapshot and the pill, not a fixture at either end;
   - a room read makes zero vendor calls (counted at the fixture server).
-- The source guards report their counts: §5.6.1's (a mutant that drops `side` from one
-  statement goes red) and §5.6.3's (a mutant that reads `camera_reported` from the seat gate
-  goes red).
+- The source guards report their counts: §5.6.1's (two mutants, each run alone: one that
+  drops `side` from a statement, and one that reverts `leaveAsArbiter`'s join, or
+  `reportCameraFault`'s, to `fixture_id` alone while its `participant_id` condition stays; both
+  go red) and §5.6.3's (a mutant that reads `camera_reported` from the seat gate goes red).
 - A mutant that collapses the two meetings back into one goes red.
 - Shape (b): a switch sends its DELETE and gets the answer BEFORE the next join is sent, and
   holds one participant at a time on that path; a failed DELETE does not stop the join.
@@ -963,7 +1144,13 @@ counted:
   comes from the table and the actual from the fixture server's own counter, so neither is
   read off the code under test. D22's load run (`e2e/load/chess-30-boards.load.ts`) is then
   re-run with a meeting per player, and reports the busiest five minutes against the bucket,
-  the deferrals and any stranded board.
+  the deferrals and any stranded board. At 20 Required boards it must again show 0 deferrals
+  and no stranded board, at about 566 calls: the measured 486 plus 4 a board. The fixture
+  server's counter against the table's formula for each board's actual `k` is the check; a
+  count off by more than the claims the back-off let through means the table is wrong, and it
+  is corrected here before the build is called done. At 30 Required boards the run is
+  RECORDED and no fix is claimed: the run is red there at HEAD already (D22; §5.6.8, "What
+  the budget can carry"), and the number goes to the owner.
 - The vendor title carries the side, and `online-chess-privacy.test.tsx` pins the new
   literal.
 
@@ -1109,9 +1296,15 @@ retired. Variants other than standard.
 - ~~The arbiter's simultaneous two-pane view~~ — CLOSED by owner ruling (2026-10-14): the
   arbiter sees ONE player's camera at a time with a white/black switch (§5.6.4 shape (b)); the
   iframe-per-pane shape (a) is dropped, so no stg measurement is owed for it.
-- ~~The seat gate's RealtimeKit spend~~ — CLOSED by D21: a `camera_starting` wait that
-  re-asked once a second could reach about 6,000 calls per 5 minutes at 50 boards, against
-  the global 1,200. The re-ask now backs off (1, 2, 4, 8 s), a cached verdict answers the
-  claims in between, and every call spends from a platform bucket of 900 per 5 minutes, over
-  which a call is deferred rather than refused (§5.6.8). D16 adds +4 calls per board and
-  consumes the same bucket; its load re-run is listed with the tests owed.
+- The seat gate's RealtimeKit spend — BOUNDED by D21; capacity OWNER-OPEN (D22). A
+  `camera_starting` wait that re-asked once a second could reach about 6,000 calls per 5
+  minutes at 50 boards, against the global 1,200. The re-ask now backs off (1, 2, 4, 8 s), a
+  cached verdict answers the claims in between, and every call spends from a platform bucket
+  of 900 per 5 minutes, over which a call is deferred rather than refused (§5.6.8). That
+  bounds the spend; it does not make the platform carry any number of boards. D22 measured 20
+  Required boards clean (486 calls, 0 deferrals) and 30 arriving in a minute not (873 to 898
+  calls in the busiest five minutes, arrival-to-seated p95 223 to 274 s, every game created
+  late). About 24 Required boards a minute is the ceiling the runs support. The owner has
+  not decided whether to accept it or to build the reserved lane, the all-or-nothing read and
+  the client re-claim net, raise the budget, or stagger a round's opening. D16 adds +4 calls
+  per board and consumes the same bucket; its load re-run is listed with the tests owed.
