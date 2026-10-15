@@ -19,6 +19,15 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   // Dd: the `recording_finalised` event's per-video facts (Cloudflare's own size/duration/dimensions/status)
   "sizeBytes", "durationSeconds", "width", "height", "videoState", "errorReasonCode",
   "bitrateKbps", "fps", "droppedFrames", "cpuPct", "memMb", "encoderSpeed",
+  // R2002: the rest of the Machine's beat, so a sample's raw keeps the WHOLE body (ruling 13) — the two R1 facts the
+  // list had missed, and the R2 compositor's ten (compositor spec §5.3; C14, C15 and C17 read them over time). Enum
+  // words, counts and booleans; `input`/`output` are link states on the beat, and as containers they keep only the
+  // keys this list names (a composed session's input keeps its protocol and bare url, never its stream id or passphrase).
+  "egressBytes", "measuredLatencyMs",
+  "programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps",
+  "rung", "scoreStale",
+  // …and its final beat's why (owner 2026-10-15): an enum word and compositor-redacted text (cut at `?` like any string).
+  "exitReason", "exitDetail",
   "usedMinutes", "limitMinutes", "reservedMinutes", "headroomMinutes", "deleted", "deferred", "count",
   // effects / http
   "ok", "result", "httpStatus", "latencyMs", "retryAfterSeconds", "requestId", "errorCode", "operation", "provider", "method", "pathTemplate",

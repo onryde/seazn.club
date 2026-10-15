@@ -233,6 +233,26 @@ describe("relay request schemas refuse what they must", () => {
     expect(S.CreateStreamSession.safeParse({}).success).toBe(false);
   });
 
+  it("R2002: the relay-job.v1 shapes are EXPORTED as types, each exactly its schema's z.infer; a value written against each parses unchanged", () => {
+    expectTypeOf<S.RelayHeartbeat>().toEqualTypeOf<z.infer<typeof S.RelayHeartbeat>>();
+    expectTypeOf<S.RelayJobSession>().toEqualTypeOf<z.infer<typeof S.RelayJobSession>>();
+    expectTypeOf<S.RelayJobInput>().toEqualTypeOf<z.infer<typeof S.RelayJobInput>>();
+    expectTypeOf<S.RelayJobOutput>().toEqualTypeOf<z.infer<typeof S.RelayJobOutput>>();
+    // The session outlives its fixture (V410 `on delete set null`), so the type admits a null fixtureId.
+    expectTypeOf<null>().toExtend<S.RelayJobSession["fixtureId"]>();
+    const samples: [string, { parse(v: unknown): unknown }, unknown][] = [
+      ["RelayHeartbeat", S.RelayHeartbeat, { state: "stopped", exitReason: "fatal", inputKicks: 0 } satisfies S.RelayHeartbeat],
+      ["RelayJobInput", S.RelayJobInput, { protocol: "srt", url: "srt://live.example.test:778", streamId: "placeholder-stream", passphrase: "placeholder-passphrase" } satisfies S.RelayJobInput],
+      ["RelayJobOutput", S.RelayJobOutput, { width: 1280, height: 720, fps: 30, videoKbps: 4000 } satisfies S.RelayJobOutput],
+    ];
+    let checked = 0;
+    for (const [name, schema, value] of samples) {
+      expect(schema.parse(value), name).toEqual(value);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("RelayHeartbeat: the minimal beat passes, every A29 encoder fact is optional, nothing unknown rides along", () => {
     expect(S.RelayHeartbeat.safeParse({ state: "starting" }).success).toBe(true);
     const full = {

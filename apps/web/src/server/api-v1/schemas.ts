@@ -1680,11 +1680,97 @@ export const RelayHeartbeat = z
     encoderSpeed: z.number().nonnegative().nullable().optional(),
     cpuPct: z.number().nonnegative().nullable().optional(),
     memMb: z.number().nonnegative().nullable().optional(),
+    // R2002 (compositor spec 2026-10-14 §5.3): what the R2 compositor reports beside the R1 facts — its supervisor's
+    // HealthReport (C06), as C07's `heartbeat_wire` writes it. All OPTIONAL and nullable for the A29 reason: the
+    // compositor omits what it has not measured, and a present 0 is a MEASURED zero. Stored as sent — in
+    // `last_heartbeat` whole, and in each sample's `raw` through sanitise's allowlist (every key below is on it).
+    programmePhase: z.enum(["waiting", "live", "frozen", "reconnecting"]).nullish(),
+    input: z.enum(["connecting", "connected", "backoff"]).nullish(),
+    output: z.enum(["connecting", "connected", "backoff"]).nullish(),
+    graphics: z.enum(["starting", "ready", "restarting", "failed"]).nullish(),
+    inputKicks: z.number().int().min(0).nullish(),
+    inputKickAlert: z.boolean().nullish(),
+    pipelineRebuilds: z.number().int().min(0).nullish(),
+    sinkSwaps: z.number().int().min(0).nullish(),
+    rung: z.enum(["full", "overlay_half_rate", "fast_preset"]).nullish(),
+    scoreStale: z.boolean().nullish(),
+    // The FINAL beat's why (owner, 2026-10-15): C06's `ExitReason`, snake_case. A record of what the Machine said, kept
+    // in the two beat stores only — never the runner's exit columns (A5: those are persisted from the OBSERVED exit), and
+    // nothing here reacts to it (R2003 owns what a stopped beat does). exitDetail is compositor-redacted human text,
+    // never parsed.
+    exitReason: z.enum(["ended", "deadline", "signalled", "session_gone", "refused", "fatal"]).nullish(),
+    exitDetail: z.string().max(200).nullish(),
   })
   .strict();
 export type RelayHeartbeat = z.infer<typeof RelayHeartbeat>;
 export const RelayHeartbeatReply = z.object({ desiredState: z.enum(["live", "ending"]) });
 export type RelayHeartbeatReply = z.infer<typeof RelayHeartbeatReply>;
+
+/** R2002: a composed session's camera — Cloudflare Input A slot 0's SRT PLAYBACK (spec §5.3; R2004 serves it). The
+ *  url is bare `srt://host:port` — the guard below, not a comment: the stream id and passphrase are credentials and
+ *  travel as their own fields, never in a query a log line would keep. */
+export const RelayJobInput = z
+  .object({
+    protocol: z.literal("srt"),
+    url: z.string().regex(/^srt:\/\/[^\s/?#@]+:\d+$/),
+    streamId: z.string(),
+    passphrase: z.string(),
+  })
+  .strict();
+export type RelayJobInput = z.infer<typeof RelayJobInput>;
+/** R2002: a composed session's programme encode (compositor ADR 0005; R2004's `relayOutputProfile`). */
+export const RelayJobOutput = z
+  .object({
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    fps: z.number().int().positive(),
+    videoKbps: z.number().int().positive(),
+  })
+  .strict();
+export type RelayJobOutput = z.infer<typeof RelayJobOutput>;
+
+/** The `delay=` values an overlay URL carries, or null for a URL that does not parse. */
+function overlayUrlDelays(url: string): string[] | null {
+  try {
+    return new URL(url).searchParams.getAll("delay");
+  } catch {
+    return null;
+  }
+}
+
+/** R2002 — GET /api/internal/relay/sessions/{sid}: the facts a Machine boots from (design §6.3; compositor spec
+ *  2026-10-14 §5.3), the `data` of the house `{ ok, data }` envelope. `sessionFactsForJob` returns this shape.
+ *  STRICT: docs/contracts/relay-job.v1.json publishes it as `$defs.session` and the compositor vendors that file (C07).
+ *  The four composed-only keys are R2004's to serve; a passthrough session, and a composed one until R2004 ships,
+ *  carries none of them. `fixtureId` is null once the fixture is deleted mid-session (V410 `on delete set null`; the
+ *  session outlives it — domain/session.ts).
+ *
+ *  ONE rule JSON Schema cannot state (the contract states it in prose): an overlayUrl carries `delay=` EXACTLY ONCE, equal
+ *  to overlayDelayMs. Two authorities for one number must agree; the compositor refuses a session where the URL's is
+ *  absent, repeated or different (C07, owner 2026-10-15), so the server refuses to describe one. */
+export const RelayJobSession = z
+  .object({
+    sessionId: z.string().uuid(),
+    fixtureId: z.string().uuid().nullable(),
+    mode: StreamMode,
+    themeId: z.string().nullable(),
+    overlayDelayMs: z.number().int().min(0),
+    maxDurationMinutes: z.number().int().positive(),
+    target: z.object({ url: z.string(), streamKey: z.string() }).strict(),
+    pageToken: z.string(),
+    // Composed only — R2004 serves them; absent for passthrough.
+    input: RelayJobInput.optional(),
+    output: RelayJobOutput.optional(),
+    heartbeatIntervalMs: z.number().int().positive().optional(),
+    overlayUrl: z.url().optional(),
+  })
+  .strict()
+  .refine((s) => {
+    if (s.overlayUrl === undefined) return true;
+    const delays = overlayUrlDelays(s.overlayUrl);
+    return delays !== null && delays.length === 1 && delays[0] === String(s.overlayDelayMs);
+  }, { path: ["overlayUrl"], message: "overlayUrl must carry delay=<overlayDelayMs> exactly once" });
+export type RelayJobSession = z.infer<typeof RelayJobSession>;
 
 /** D4a (P5) i18n pattern ref for a not-yet-filled slot — {key, params}, never
  *  a prebuilt string. Named rather than inlined because THREE published

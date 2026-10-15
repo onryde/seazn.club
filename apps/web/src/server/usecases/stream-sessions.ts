@@ -18,7 +18,7 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
+import type { CreateStreamSession, RelayHeartbeat, RelayJobSession, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { checkDestination } from "@/lib/stream-destinations";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
@@ -2193,7 +2193,9 @@ async function sampleBeat(sessionId: string, orgId: string, body: RelayHeartbeat
   }
 }
 
-export async function sessionFactsForJob(sessionId: string, token: string, deps: SessionDeps) {
+/** R2002: the `data` of GET /api/internal/relay/sessions/{sid}, typed as the relay-job.v1 contract's session (STRICT:
+ *  a key this returns that the contract does not declare is a tsc error here, and C07 refuses it on the wire). */
+export async function sessionFactsForJob(sessionId: string, token: string, deps: SessionDeps): Promise<RelayJobSession> {
   const s = await jobSession(sessionId, token, deps);
   const row = (await readRow(sessionId))!;
   const target = (await sql.begin((tx) => readTargetSecret(tx, s.orgId, row.target_id))) as { url: string; streamKey: string };
