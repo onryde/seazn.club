@@ -32721,7 +32721,7 @@
     },
     "/api/v1/fixtures/{id}/events": {
       "post": {
-        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer",
+        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved)",
         "tags": [
           "scoring"
         ],
@@ -32759,6 +32759,12 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
+                  },
+                  "engine_epoch": {
+                    "description": "Fold epoch of the client's engine for this fixture's sport (engine-split D26/D31). Native clients send it; the web pad does not.",
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
                   }
                 },
                 "required": [
@@ -33099,6 +33105,62 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client engine out of date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "sport": {
+                          "type": "string",
+                          "description": "On ENGINE_OUTDATED (426): the fixture's sport — the one whose fold epoch moved"
+                        },
+                        "required": {
+                          "type": "integer",
+                          "description": "On ENGINE_OUTDATED (426): the server's fold epoch for that sport; the client must send at least this"
+                        },
+                        "got": {
+                          "type": "integer",
+                          "description": "On ENGINE_OUTDATED (426): the engine_epoch the request carried"
                         }
                       },
                       "additionalProperties": true

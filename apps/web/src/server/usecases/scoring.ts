@@ -12,7 +12,8 @@ import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
-import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
+import { foldEpochOf } from "@seazn/engine/sport";
+import { appendEvent, replayOutcomeFor, resolveModule } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
 import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
@@ -180,15 +181,33 @@ export async function scoreEvent(
 
   await rateLimit(`scorev1:${fixtureId}`, SCORING_LIMIT);
 
-  // Non-null only when a device link's keyed RETRY meets the carried-forward
+  // `replay` is non-null only when a device link's keyed RETRY meets the carried-forward
   // refusal and the ledger already holds that key (scorer sheets §4.3, review
   // I1): the retry gets the original answer, exactly as the catch below would
   // have given it had the refusal not stood in front of appendEvent.
-  const carriedReplay = await assertEntitledToScore(auth, fixtureId, input);
+  const { replay: carriedReplay, sport } = await assertEntitledToScore(auth, fixtureId, input);
   if (carriedReplay) {
     await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
     if (cacheKey) await cacheSet(cacheKey, carriedReplay, IDEM_TTL_SECONDS);
     return carriedReplay;
+  }
+
+  // Engine-split D15/D26/D31: a client whose fold epoch for this sport is BEHIND the server's would fold the ledger it
+  // writes to differently, so a NEW write from it is refused. It sits here, and nowhere earlier, on purpose:
+  //   - after the cache replay above and after assertEntitledToScore: authorisation, entitlement and phase refusals
+  //     outrank it (an outdated phone that may not write at all learns that, not "update"), and a retry the cache
+  //     already answered is a replay, not a write;
+  //   - after a DURABLE replay lookup (assertEngineEpoch): a retry of a key the ledger already holds answers 201
+  //     whether the cache is warm or cold, even though the epoch has moved since that first write was accepted.
+  // `core.void` is included: an outdated phone's undo would void against a ledger it folds differently.
+  const clientEpoch = input.engine_epoch;
+  if (clientEpoch !== undefined && sport !== null) {
+    const replayed = await assertEngineEpoch(auth.orgId, fixtureId, sport, clientEpoch, input.idempotency_key);
+    if (replayed) {
+      await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
+      if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
+      return replayed;
+    }
   }
   if (input.type === "core.void") await assertUndoTarget(auth, fixtureId, input);
 
@@ -469,7 +488,7 @@ async function assertEntitledToScore(
   auth: AuthCtx,
   fixtureId: string,
   input: AppendEventRequest,
-): Promise<ScoreOutcome | null> {
+): Promise<{ replay: ScoreOutcome | null; sport: FixtureSport | null }> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
@@ -496,7 +515,8 @@ async function assertEntitledToScore(
     assertNotFrozen(frozen, row.competition_id);
     return row;
   });
-  if (!ctx) return null;
+  if (!ctx) return { replay: null, sport: null };
+  const sport: FixtureSport = { key: ctx.sport_key, moduleVersion: ctx.module_version };
 
   // Doc 12 §1: scoring opens only after the explicit start action
   // (division_started). A published-but-unstarted timetable stays read-only.
@@ -552,7 +572,7 @@ async function assertEntitledToScore(
         // Ask the ledger first. Only a settled, carried fixture pays for it.
         if (input.idempotency_key) {
           const replayed = await replayOutcomeFor(auth.orgId, fixtureId, input.idempotency_key);
-          if (replayed) return replayed;
+          if (replayed) return { replay: replayed, sport };
         }
         throw new HttpError(403, RESULT_CARRIED_FORWARD_MESSAGE, RESULT_CARRIED_FORWARD);
       }
@@ -595,7 +615,50 @@ async function assertEntitledToScore(
   if (requiresDlsEntitlement(input.type, ctx.config, input.payload)) {
     await requireFeature(auth.orgId, "cricket.dls");
   }
-  return null;
+  return { replay: null, sport };
+}
+
+/** The fixture's sport as its division pins it: what `assertEntitledToScore` already loaded, handed on for the epoch gate. */
+interface FixtureSport {
+  key: string;
+  moduleVersion: string;
+}
+
+/**
+ * The server minimum-epoch gate (engine-split D15, D26, D31; spec §5.6). Refuses a write carrying an `engine_epoch` LOWER than
+ * `foldEpochOf(sport)` — 426 ENGINE_OUTDATED, `{ sport, required, got }` — and returns null when the write may proceed.
+ * Higher is accepted on purpose (owner, 2026-10-15: a phone ahead of the server is a supported release-discipline state), and
+ * so is an absent epoch (D31; the caller asks only when one is present — that one `!== undefined` test is the sole guard).
+ *
+ * Returns a ScoreOutcome ONLY for a retry of a key the ledger already holds: it must be asked before the refusal, so an
+ * accepted write retried after the epoch moved gets its original answer instead of an "update the app" it cannot act on.
+ * The lookup is the one the 23505 catch in `scoreEvent` uses (`replayOutcomeFor`), and it costs a query only when the phone is
+ * actually behind. A refusal writes nothing and caches nothing, so the key is not burned.
+ *
+ * THE SPORT IS RESOLVED FIRST. `foldEpochOf` throws a plain Error for a sport it has no epoch for (engine `fold-epoch.ts`), which
+ * the v1 kernel would answer as a 500; the registry throws EngineError("MODULE_NOT_FOUND") — a 422 — for the same unknown
+ * sport or a pinned version this build no longer ships, so an unknown sport can never reach `foldEpochOf`.
+ */
+async function assertEngineEpoch(
+  orgId: string,
+  fixtureId: string,
+  sport: FixtureSport,
+  got: number,
+  idempotencyKey: string | undefined,
+): Promise<ScoreOutcome | null> {
+  const sportKey = resolveModule(sport.key, sport.moduleVersion).key;
+  const required = foldEpochOf(sportKey);
+  if (got >= required) return null;
+  if (idempotencyKey) {
+    const replayed = await replayOutcomeFor(orgId, fixtureId, idempotencyKey);
+    if (replayed) return replayed;
+  }
+  throw new HttpError(
+    426,
+    `This app's scoring rules for ${sportKey} are out of date — update the app to keep scoring`,
+    "ENGINE_OUTDATED",
+    { sport: sportKey, required, got },
+  );
 }
 
 /**
