@@ -1962,6 +1962,30 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
     expect(ended).toEqual([m]);
   });
 
+  // D16 review M6: the test above seeds ONE row. A board has a meeting per player, so a settled board has two rows to end,
+  // each on its own turn - a teardown that reached only one would leave the other player's room live and unnoticed.
+  it("D16: a board settled by a WITHDRAWAL with BOTH sides seated ends BOTH players' meetings - two rows, two rooms, each its own kick and deactivate", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const home = await meetingFor(b);
+    const { meetingId: away } = await ensureMeeting(b.fixtureId, "away", RTK);
+    rtk.calls = [];
+    expect(away, "premise: a room each, not one shared room").not.toBe(home);
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
+    const { ended, end } = recordingEnd();
+    const report = await sweep(b, { now: b.at(5), endMeeting: end });
+    expect([...ended].sort(), "both rooms, once each").toEqual([home, away].sort());
+    expect(report.meetingsEnded).toBe(2);
+    for (const m of [home, away]) {
+      expect(rtk.calls.filter((c) => c.path === `/meetings/${m}/active-session/kick-all`), `kick of ${m}`).toHaveLength(1);
+      expect(rtk.calls.filter((c) => c.method === "PATCH" && c.path === `/meetings/${m}`), `deactivate of ${m}`).toHaveLength(1);
+    }
+    const rows = await sql<{ side: string; ended_at: Date | null }[]>`
+      select side, ended_at from fixture_video_meetings where fixture_id = ${b.fixtureId} order by side`;
+    expect(rows.map((r) => [r.side, r.ended_at !== null]), "both rows stamped").toEqual([["away", true], ["home", true]]);
+    const again = await sweep(b, { now: b.at(6), endMeeting: end });
+    expect([again.meetingsEnded, ended.length], "idempotent: nothing is ended twice").toEqual([0, 2]);
+  });
+
   it("both seated but no game ever made (the create never landed) — past T+20 nothing can be played: ended", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     const m = await meetingFor(b);
