@@ -593,5 +593,20 @@
         "name": "every reaching sport, both orientations"
       }
     ]
+  },
+  {
+    "id": "t16b-profile-away-line-not-exchanged",
+    "file": "apps/web/src/server/public-site/public-player-matches.ts",
+    "find": "const exchanged = sidesExchanged(stored.state);",
+    "replace": "const exchanged = stored.state;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ],
+        "name": "player profile"
+      }
+    ]
   }
 ]

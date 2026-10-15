@@ -41,6 +41,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { getPublicDivision, getPublicFixture } from "@/server/public-site/data";
+import { readPlayerMatchLines, scoreLineFor } from "@/server/public-site/public-player-matches";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 import { seedDecidersScene } from "@/server/public-site/__tests__/_stage-rules-scene";
 
@@ -178,6 +179,37 @@ function expectEverySurface(label: string, got: Reading, figures: readonly [stri
 const standingsOf = async (sc: Scene) =>
   (await getStandings(sc.s.auth, sc.s.leagueStageId)).rows as { entrantId: string; metrics?: Record<string, number> }[];
 
+/** The first fixture played to a score (a Start and one real sport event, the module's own generator draws it) and then retired
+ *  by the away side: ruling 112, so a match played - the one case the stage rule's award leaves to the sport's own credit.
+ *  Null when the sport draws no play event under this variant. */
+async function playThenRetire(sc: Scene, spec: SceneSpec): Promise<string | null> {
+  const id = sc.rows[0]!.id;
+  const f = await fixtureRow(id);
+  await post(sc.s.auth, id, "core.start");
+  const lineups = await withTenant(sc.s.auth.orgId, (tx) => loadLineupPair(tx, id, f.home_entrant_id!, f.away_entrant_id!));
+  const cfg = sc.m.configSchema.parse(sc.m.variants[spec.variant]);
+  const e = onePlayEvent(sc.m, cfg, lineups, [makeEnvelope(1, { type: "core.start", payload: {} })]);
+  if (e === null) return null;
+  await post(sc.s.auth, id, e.type, e.payload);
+  await walkover(sc, id, "away", "retired");
+  return id;
+}
+
+/** The headline the ENGINE reads for a walkover (the sport's own, or under the rule's `award`), side order home-first: with
+ *  `offender` "A" (the away side did not turn up) it is the WINNER's own-side-first reading, with "H" the OFFENDER's. */
+function engineHeadline(spec: SceneSpec, offender: "A" | "H", award: readonly [number, number] | null): string {
+  const m = moduleOf(spec.sport);
+  const cfg = m.configSchema.parse(m.variants[spec.variant]);
+  const folded = foldMatchWithStoppage(
+    m as never,
+    cfg as never,
+    defaultLineupPair(m.positions),
+    [makeEnvelope(1, { type: "core.forfeit", payload: { by: offender, reason: "walkover" } })],
+    award === null ? undefined : { forfeitAward: award },
+  );
+  return (summaryOf(m as never, folded as never) as { headline: string }).headline;
+}
+
 describe("the scene table names exactly the sports the award reaches (anti-vacuity)", () => {
   it("one row per reaching sport, the registry's own declaration", () => {
     const reaching = builtinModules.filter((m) => pointsRuleAwardReachesTable(m)).map((m) => m.key).sort();
@@ -308,20 +340,8 @@ describe.skipIf(!HAS_DB)("the sequence around an unplayed walkover (X-WO-1 B)", 
       const award = awardFor(spec);
       const rule = await scene(spec, award);
       const twin = await scene(spec, null);
-      const play = async (sc: Scene) => {
-        const id = sc.rows[0]!.id;
-        const f = await fixtureRow(id);
-        await post(sc.s.auth, id, "core.start");
-        const lineups = await withTenant(sc.s.auth.orgId, (tx) => loadLineupPair(tx, id, f.home_entrant_id!, f.away_entrant_id!));
-        const cfg = sc.m.configSchema.parse(sc.m.variants[spec.variant]);
-        const e = onePlayEvent(sc.m, cfg, lineups, [makeEnvelope(1, { type: "core.start", payload: {} })]);
-        if (e === null) return null;
-        await post(sc.s.auth, id, e.type, e.payload);
-        await walkover(sc, id, "away", "retired");
-        return id;
-      };
-      const ruleId = await play(rule);
-      const twinId = await play(twin);
+      const ruleId = await playThenRetire(rule, spec);
+      const twinId = await playThenRetire(twin, spec);
       if (ruleId === null || twinId === null) {
         skipped++;
         continue;
@@ -410,6 +430,90 @@ describe.skipIf(!HAS_DB)("a withdrawal cascade through a TABLE stage under a rul
       checked++;
     }
     expect(checked, "scenes checked (2 seats + the twin, per sport)").toBe(SCENES.length * 3);
+  }, 900_000);
+});
+
+describe.skipIf(!HAS_DB)("the player profile's own-side score line under a rule award (X-WO-1 B)", () => {
+  /** A roster player on each of `entrantIds` (the person appears for the entrant's side of every fixture it plays). */
+  async function rosterPlayers(sc: Scene, entrantIds: readonly string[]): Promise<string[]> {
+    const ids: string[] = [];
+    for (const entrantId of entrantIds) {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name) values (${sc.s.orgId}, ${"Profile Player " + randomUUID().slice(0, 6)}) returning id`;
+      await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantId}, ${id}, ${sc.s.orgId})`;
+      ids.push(id);
+    }
+    return ids;
+  }
+  const profileOf = async (sc: Scene, personId: string) => {
+    const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${sc.s.divisionId}`;
+    return readPlayerMatchLines(sql, { personId, competitionId, orgSlug: sc.s.orgSlug, compSlug: sc.s.compSlug, locale: "en" });
+  };
+
+  it("scoreLineFor over the STORED rows of an unplayed walkover: home reads the headline, away reads it mirrored - the winner's own figure first, both orientations; the twin keeps the division's", async () => {
+    let checked = 0;
+    for (const spec of SCENES) {
+      const award = awardFor(spec);
+      const m = moduleOf(spec.sport);
+      const rule = await scene(spec, award);
+      const twin = await scene(spec, null);
+      for (const [name, sc, offered] of [["rule", rule, award], ["twin", twin, null]] as const) {
+        const winnerLine = engineHeadline(spec, "A", offered);
+        const offenderLine = engineHeadline(spec, "H", offered);
+        expect(winnerLine, `${spec.sport}/${name}: premise - the two orientations read differently`).not.toBe(offenderLine);
+        // Home turns up on the first fixture (away does not), away turns up on the second (home does not).
+        for (const [row, absent] of [[sc.rows[0]!, "away"], [sc.rows[1]!, "home"]] as const) {
+          await walkover(sc, row.id, absent);
+          const [stored] = await sql<{ summary: { headline: string }; state: unknown; outcome: unknown }[]>`
+            select ms.summary, ms.state, f.outcome from fixtures f join match_states ms on ms.fixture_id = f.id where f.id = ${row.id}`;
+          expect(stored, `${spec.sport}/${name}: the walkover stored a match state`).toBeDefined();
+          const winnerEntrant = absent === "away" ? row.home : row.away;
+          for (const entrant of [row.home, row.away]) {
+            const line = scoreLineFor(stored!, entrant, row.home, m);
+            expect(line, `${spec.sport}/${name}/${absent} absent: ${entrant === winnerEntrant ? "the winner" : "the offender"}'s own-side line`).toBe(entrant === winnerEntrant ? winnerLine : offenderLine);
+            checked++;
+          }
+        }
+      }
+      // The rule moved the winner's reading (the right answer is not the division's constant).
+      expect(engineHeadline(spec, "A", award), `${spec.sport}: premise - the rule's winner line is not the division's`).not.toBe(engineHeadline(spec, "A", null));
+    }
+    expect(checked, "sport x scene x fixture x seat readings").toBe(SCENES.length * 2 * 2 * 2);
+  }, 900_000);
+
+  it("through the loader: an unplayed walkover is no appearance (X-PS-1), so the profile never shows the award; a retirement AFTER play is one - both seats, the sport's own credit under the rule, the away line the home line mirrored", async () => {
+    let checked = 0;
+    for (const spec of SCENES) {
+      const award = awardFor(spec);
+      const lineByScene: Record<string, string[]> = {};
+      for (const [name, offered] of [["rule", award], ["twin", null]] as const) {
+        const sc = await scene(spec, offered);
+        const first = sc.rows[0]!;
+        const [home, away] = await rosterPlayers(sc, [first.home, first.away]);
+        // Two walkovers on fixtures of each side's OTHER games: nothing played, so the person was not in a match.
+        const homesOther = sc.rows.find((r) => r.id !== first.id && (r.home === first.home || r.away === first.home))!;
+        const awaysOther = sc.rows.find((r) => r.id !== first.id && (r.home === first.away || r.away === first.away))!;
+        await walkover(sc, homesOther.id, homesOther.home === first.home ? "away" : "home");
+        await walkover(sc, awaysOther.id, awaysOther.home === first.away ? "away" : "home");
+        // The first fixture: played, then retired by the away side.
+        const playedId = await playThenRetire(sc, spec);
+        expect(playedId, `${spec.sport}/${name}: the sport draws a play event`).toBe(first.id);
+        const [homeLines, awayLines] = [await profileOf(sc, home!), await profileOf(sc, away!)];
+        expect(homeLines.map((l) => l.fixtureId), `${spec.sport}/${name}: the home player's profile holds the played match only - no walkover`).toEqual([first.id]);
+        expect(awayLines.map((l) => l.fixtureId), `${spec.sport}/${name}: the away player's profile holds the played match only - no walkover`).toEqual([first.id]);
+        const stored = await read(sc, first.id);
+        // Home reads the stored headline; away reads it mirrored (its own side first).
+        expect(homeLines[0]!.line, `${spec.sport}/${name}: the home seat reads the headline`).toBe(stored.console.headline);
+        const mirrored = stored.console.lines.slice().reverse();
+        expect(awayLines[0]!.line, `${spec.sport}/${name}: the away seat reads it mirrored`).toBe(`${mirrored[0]} — ${mirrored[1]}`);
+        expect(stored.console.lines[0], `${spec.sport}/${name}: premise - the two seats read differently`).not.toBe(stored.console.lines[1]);
+        lineByScene[name] = [homeLines[0]!.line, awayLines[0]!.line];
+        checked++;
+      }
+      // The positive pair: a match played then retired reads the same under the rule and without one (P-3 "A").
+      expect(lineByScene.rule, `${spec.sport}: the rule's award never reaches a played match's profile line`).toEqual(lineByScene.twin);
+    }
+    expect(checked, "sport x scene").toBe(SCENES.length * 2);
   }, 900_000);
 });
 
