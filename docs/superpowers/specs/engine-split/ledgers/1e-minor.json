@@ -1,0 +1,156 @@
+{
+ "batch": "1e-M",
+ "note": "Test-id ledger for the engine-split task 1e-M (the fold version split into MAJOR and MINOR, D34), built against base 115b7b573 (main after 1e). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection). No existing test id changed or was retired: 30 tests are added (5 in src/sport/fold-epoch.test.ts, 14 in test/fold-epoch-guard.test.ts, 11 in test/fold-epoch-guard-cli.test.ts). Existing tests whose bodies changed keep their titles: the report-line regexes of the CLI tests moved to the new line format, one real-corpus sweep and one toEqual learned the new row fields, and the table differential test now rewrites both tables.",
+ "entries": [
+  {
+   "id": "src/sport/fold-epoch.test.ts › FOLD_MINOR › answers each sport's own minor, and a sport it does not know is refused instead of answered a default",
+   "fate": "added",
+   "reason": "1e-M: FOLD_MINOR / foldMinorOf: same guarantees as the major (registry key set, non-negative integers, own keys only, frozen, exported on ./sport), swept over every registered sport and counted"
+  },
+  {
+   "id": "src/sport/fold-epoch.test.ts › FOLD_MINOR › does not answer from the Object prototype: constructor, toString and __proto__ are not sports",
+   "fate": "added",
+   "reason": "1e-M: FOLD_MINOR / foldMinorOf: same guarantees as the major (registry key set, non-negative integers, own keys only, frozen, exported on ./sport), swept over every registered sport and counted"
+  },
+  {
+   "id": "src/sport/fold-epoch.test.ts › FOLD_MINOR › has exactly one non-negative integer minor per registered sport (11), the same sports as FOLD_EPOCH",
+   "fate": "added",
+   "reason": "1e-M: FOLD_MINOR / foldMinorOf: same guarantees as the major (registry key set, non-negative integers, own keys only, frozen, exported on ./sport), swept over every registered sport and counted"
+  },
+  {
+   "id": "src/sport/fold-epoch.test.ts › FOLD_MINOR › is exported from the ./sport subpath beside FOLD_EPOCH (the same table, not a copy), and the two accessors are different functions",
+   "fate": "added",
+   "reason": "1e-M: FOLD_MINOR / foldMinorOf: same guarantees as the major (registry key set, non-negative integers, own keys only, frozen, exported on ./sport), swept over every registered sport and counted"
+  },
+  {
+   "id": "src/sport/fold-epoch.test.ts › FOLD_MINOR › is frozen: the table a server holds for the life of the process cannot be edited, added to or emptied",
+   "fate": "added",
+   "reason": "1e-M: FOLD_MINOR / foldMinorOf: same guarantees as the major (registry key set, non-negative integers, own keys only, frozen, exported on ./sport), swept over every registered sport and counted"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › a BASELINE table whose FOLD_MINOR is malformed is refused too, and says it is the baseline's",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › a change a phone computes, with only the minor bumped, is still red and says the MAJOR is owed (and that the minor does not stand in); the major bump, with the minor reset, is green",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › a config object changed with every result the same (the laundering route) owes the MAJOR whatever the minor does",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › a deltas-only change (every state, outcome and summary the same) owes a MINOR: red unbumped naming FOLD_MINOR and its number, green with the minor bump, green with the major bump",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › a tree whose table has no FOLD_MINOR, declares one for other sports than FOLD_EPOCH's, or holds a minor that is not a non-negative integer, is refused (exit 2), never judged",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › both kinds in one sport owe the major; and a stream REMOVED, with only the minor bumped, owes it too",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › every sport's report line shows its own minor on both sides, as the table declares it (counted)",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › the PR that introduces FOLD_MINOR (the baseline's table has none) reads as minor 0 for every sport: green when nothing moved, minor owed for a deltas-only change, settled by the minor",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › the engine at the repository root gives the same verdicts for a deltas-only change (the file is named as that repository spells it)",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › the pair only goes up: a minor that fell, a major that fell with the minor up, are red; a major up with the minor reset to 0 is green",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the pair (major, minor) in a real git history (D34) › two sports, one owing a minor and one a major: each judged by its own pair; a bump in the other sport settles neither",
+   "fate": "added",
+   "reason": "1e-M: the (major, minor) pair against real git history (deltas-only owes a minor, a phone-computed change a major, the pair never goes down, the introducing PR, refusals of a malformed FOLD_MINOR, the engine at the repo root)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: over every registered sport's real golden corpus › for every sport and each recorded result: a minor bump alone settles a deltas-only move and NEVER a move a phone computes; a major bump settles both",
+   "fate": "added",
+   "reason": "1e-M: the pair rule over every registered sport and each of the four recorded results (a minor bump settles only a deltas-only move), counted"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a baseline whose table has no FOLD_MINOR is minor 0 for every sport: the introducing change owes nothing unless it moves a delta",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a change a phone computes (a state, the outcome or the summary) owes a MAJOR: a minor bump, however large, does not settle it, and says so",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a deltas-only change (states, outcome and summary the same) owes a MINOR: red unbumped, counted as deltas-only and not as a changed fold, and the reason names FOLD_MINOR and the number",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a minor on its own, with nothing changed, is not a violation; a minor that fell is, whatever the streams did",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a minor that fell while deltas moved is red twice over: it went down, and a rise is still owed (one above the baseline's)",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a sport a side's FOLD_MINOR does not name reads as minor 0, like a side with no FOLD_MINOR at all (the CLI refuses such a table before this is asked)",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a stream removed, re-recorded or recorded against a changed config object owes the MAJOR whatever the minor does (the laundering route stays closed)",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › a stream that differs in its standings deltas AND in a state, outcome or summary is one changed fold, not also a deltas-only one",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › accounts every matched stream exactly once: unchanged + changed + deltas-only",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › both kinds in one sport owe the MAJOR: the minor bump that would settle the deltas does not settle the other stream, the major bump settles both",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › is settled by a minor bump, by any rise of it, or by a major bump with the minor unchanged or reset to 0",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › the pair only goes up lexicographically: a major that fell is red even when the minor rose, and a major that rose may reset the minor to 0",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › the pair (major, minor): a change only the server computes owes a MINOR, a change a phone computes owes a MAJOR › two sports, one owing a minor and one a major: each is judged by its own pair, and a bump in the other sport settles neither",
+   "fate": "added",
+   "reason": "1e-M: the pure pair rule (deltas-only owes a minor; states, outcome, summary, removal or a changed config object owe a major; a minor bump never settles a major; the pair only goes up; a baseline without FOLD_MINOR is minor 0)"
+  }
+ ]
+}

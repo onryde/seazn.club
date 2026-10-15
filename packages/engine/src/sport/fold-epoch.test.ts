@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { readCorpus, SPORT_DIRS } from "../testkit/golden.ts";
-import { FOLD_EPOCH, foldEpochOf } from "./fold-epoch.ts";
+import { FOLD_EPOCH, FOLD_MINOR, foldEpochOf, foldMinorOf } from "./fold-epoch.ts";
 import * as sportSubpath from "./index.ts";
 
 // FOLD_EPOCH is frozen (and `as const` at the type level): the server holds it for the life of the process. The differential test
@@ -18,6 +18,7 @@ import * as sportSubpath from "./index.ts";
 // loads from anywhere) with a different number for every sport, to prove foldEpochOf reads the table and not a constant: today
 // every entry is 1, so a function that answered 1 for any known sport would pass every other assertion here.
 const table = FOLD_EPOCH as unknown as Record<string, number>;
+const minors = FOLD_MINOR as unknown as Record<string, number>;
 const SOURCE = fileURLToPath(new URL("./fold-epoch.ts", import.meta.url));
 
 describe("FOLD_EPOCH", () => {
@@ -36,26 +37,40 @@ describe("FOLD_EPOCH", () => {
   it("answers each registered sport's own entry: a copy of the file with a different number per sport answers each its own", async () => {
     const keys = builtinModules.map((m) => m.key);
     expect(keys.length).toBeGreaterThan(1);
-    const want = new Map(keys.map((k, i) => [k, 10 + 3 * i]));
+    const wantEpoch = new Map(keys.map((k, i) => [k, 10 + 3 * i]));
+    const wantMinor = new Map(keys.map((k, i) => [k, 100 + 7 * i]));
     let source = readFileSync(SOURCE, "utf8");
-    for (const [k, n] of want) {
-      const entry = new RegExp(`\\b${k}: \\d+`, "g");
-      expect(source.match(entry), `${k} has one entry in the file`).toHaveLength(1);
-      source = source.replace(entry, `${k}: ${n}`);
+    // each table is rewritten inside its own literal (both name every sport), and every sport has exactly one entry in each
+    for (const [name, want] of [["FOLD_EPOCH", wantEpoch], ["FOLD_MINOR", wantMinor]] as const) {
+      const from = source.indexOf(`export const ${name} =`);
+      const to = source.indexOf("} as const", from);
+      expect(from, `${name} is declared`).toBeGreaterThanOrEqual(0);
+      expect(to, `${name}'s literal ends`).toBeGreaterThan(from);
+      let literal = source.slice(from, to);
+      for (const [k, n] of want) {
+        const entry = new RegExp(`\\b${k}: \\d+`, "g");
+        expect(literal.match(entry), `${k} has one entry in ${name}`).toHaveLength(1);
+        literal = literal.replace(entry, `${k}: ${n}`);
+      }
+      source = source.slice(0, from) + literal + source.slice(to);
     }
     const dir = mkdtempSync(join(tmpdir(), "fold-epoch-copy-"));
     try {
       const file = join(dir, "fold-epoch.mts");
       writeFileSync(file, source);
-      const copy = (await import(pathToFileURL(file).href)) as { foldEpochOf: (sport: string) => number; FOLD_EPOCH: Record<string, number> };
+      const copy = (await import(pathToFileURL(file).href)) as { foldEpochOf: (sport: string) => number; foldMinorOf: (sport: string) => number; FOLD_EPOCH: Record<string, number> };
       let swept = 0;
-      for (const [k, n] of want) {
-        expect(copy.foldEpochOf(k), `${k} in the copy`).toBe(n);
+      for (const k of keys) {
+        expect(copy.foldEpochOf(k), `${k} (major) in the copy`).toBe(wantEpoch.get(k));
+        expect(copy.foldMinorOf(k), `${k} (minor) in the copy`).toBe(wantMinor.get(k));
         expect(foldEpochOf(k), `${k} in the real table is untouched`).toBe(table[k]);
+        expect(foldMinorOf(k), `${k} in the real minor table is untouched`).toBe(minors[k]);
         swept++;
       }
       expect(swept).toBe(keys.length);
-      expect(new Set(want.values()).size, "every sport got its own number").toBe(keys.length);
+      expect(new Set(wantEpoch.values()).size, "every sport got its own major").toBe(keys.length);
+      expect(new Set(wantMinor.values()).size, "every sport got its own minor").toBe(keys.length);
+      expect([...wantEpoch.values()].filter((n) => [...wantMinor.values()].includes(n)), "no major equals a minor, so a function reading the other table is visible").toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -106,7 +121,7 @@ describe("FOLD_EPOCH", () => {
     // it read the real file: it declares the table and the accessor, and has far more than a handful of nodes
     expect(nodes).toBeGreaterThan(50);
     const declared = sf.statements.flatMap((st) => (ts.isVariableStatement(st) ? st.declarationList.declarations.map((d) => d.name.getText(sf)) : ts.isFunctionDeclaration(st) ? [st.name?.text ?? ""] : []));
-    expect(declared).toEqual(expect.arrayContaining(["FOLD_EPOCH", "foldEpochOf"]));
+    expect(declared).toEqual(expect.arrayContaining(["FOLD_EPOCH", "foldEpochOf", "FOLD_MINOR", "foldMinorOf"]));
     expect(found).toEqual([]);
   });
 
@@ -129,5 +144,63 @@ describe("FOLD_EPOCH", () => {
     });
     expect(swept).toBe(Object.keys(FOLD_EPOCH).length);
     expect(streams).toBeGreaterThanOrEqual(swept);
+  });
+});
+
+// FOLD_MINOR (engine-split D34): the second half of the pair. A MAJOR says a phone must update (what it computes moved: FOLD_EPOCH, which
+// the server's gate compares); a MINOR says only what the server computes moved (the standings deltas), which needs no app update. The table
+// has the same guarantees as FOLD_EPOCH: registry-derived key set, frozen, own keys only, and the file imports nothing.
+describe("FOLD_MINOR", () => {
+  it(`has exactly one non-negative integer minor per registered sport (${builtinModules.length}), the same sports as FOLD_EPOCH`, () => {
+    const registered = builtinModules.map((m) => m.key);
+    expect(registered.length).toBeGreaterThan(0);
+    expect(Object.keys(FOLD_MINOR).sort()).toEqual([...registered].sort());
+    expect(Object.keys(FOLD_MINOR).sort()).toEqual(Object.keys(FOLD_EPOCH).sort());
+    const swept = forEachSport(({ key }) => {
+      const minor = minors[key];
+      expect(Number.isInteger(minor) && (minor as number) >= 0, `${key} has minor ${String(minor)}`).toBe(true);
+    });
+    expect(swept).toBe(registered.length);
+    expect(swept).toBe(Object.keys(FOLD_MINOR).length);
+  });
+
+  it("answers each sport's own minor, and a sport it does not know is refused instead of answered a default", () => {
+    let swept = 0;
+    forEachSport(({ key }) => {
+      expect(foldMinorOf(key), key).toBe(minors[key]);
+      swept++;
+    });
+    expect(swept).toBe(builtinModules.length);
+    const first = builtinModules[0]!.key;
+    expect(() => foldMinorOf("quidditch")).toThrow(/no FOLD_MINOR for sport "quidditch"/);
+    expect(() => foldMinorOf("")).toThrow(/no FOLD_MINOR/);
+    expect(() => foldMinorOf(first.toUpperCase())).toThrow(/no FOLD_MINOR/);
+  });
+
+  it("does not answer from the Object prototype: constructor, toString and __proto__ are not sports", () => {
+    const inherited = Object.getOwnPropertyNames(Object.prototype);
+    expect(inherited.length).toBeGreaterThan(0);
+    expect(inherited).toContain("constructor");
+    for (const name of inherited) {
+      expect(() => foldMinorOf(name), `foldMinorOf("${name}")`).toThrow(/no FOLD_MINOR/);
+    }
+  });
+
+  it("is frozen: the table a server holds for the life of the process cannot be edited, added to or emptied", () => {
+    const first = builtinModules[0]!.key;
+    const before = { ...minors };
+    expect(Object.isFrozen(FOLD_MINOR)).toBe(true);
+    expect(() => { minors[first] = 99; }).toThrow(TypeError);
+    expect(() => { minors.quidditch = 0; }).toThrow(TypeError);
+    expect(() => { delete minors[first]; }).toThrow(TypeError);
+    expect({ ...minors }).toEqual(before);
+    expect(foldMinorOf(first)).toBe(before[first]);
+  });
+
+  it("is exported from the ./sport subpath beside FOLD_EPOCH (the same table, not a copy), and the two accessors are different functions", () => {
+    expect(sportSubpath.FOLD_MINOR).toBe(FOLD_MINOR);
+    expect(sportSubpath.foldMinorOf).toBe(foldMinorOf);
+    expect(sportSubpath.foldMinorOf).not.toBe(sportSubpath.foldEpochOf);
+    expect(sportSubpath.foldMinorOf(builtinModules[0]!.key)).toBe(minors[builtinModules[0]!.key]);
   });
 });

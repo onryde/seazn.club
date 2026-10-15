@@ -106,15 +106,38 @@ Prose in a comment enforced none of this, so the harness now does.
    A re-baseline that moves an event is a re-record wearing a re-baseline's
    name.
 
-## A re-baseline that changes a fold must raise that sport's FOLD_EPOCH
+## A re-baseline that changes a fold must raise that sport's version
 
-A corpus change that alters what an existing stream folds to (any state, the
-outcome, the summary or the deltas), or that removes or re-records a stream,
-must raise that sport's entry in `src/sport/fold-epoch.ts` (`FOLD_EPOCH`) **in
-the same PR**. Native clients send their epoch, and the server (batch 1f)
-refuses one lower than its own, so an outdated phone is stopped instead of
-folding differently from the server. Appended streams (`EXTEND_GOLDEN`) need no
-bump; an epoch never goes down.
+A sport's version is a **pair** in `src/sport/fold-epoch.ts`: the **major**
+(`FOLD_EPOCH`, read with `foldEpochOf`) and the **minor** (`FOLD_MINOR`, read
+with `foldMinorOf`). A corpus change owes one of them, in the **same PR**,
+depending on who computes what moved:
+
+| What moved (the stream's events, lineups and raw config object are unchanged) | Owes |
+|---|---|
+| a state, the outcome or the summary: a phone computes and renders these | **major** |
+| a stream was removed, or re-recorded (its events, lineups or raw config object changed) | **major** |
+| only the standings `deltas` (states, outcome and summary byte for byte the same): the server computes these | **minor** |
+| both kinds in one sport | **major** (the strongest class owed decides) |
+| streams only appended (`EXTEND_GOLDEN`) | nothing |
+
+The **major is the one the server gates on** (batch 1f): native clients send
+theirs, and the server refuses one below its own for the fixture's sport, so a
+major bump **locks out every older phone of that sport** until the app updates.
+The **minor is informational**: nothing refuses a phone for it and no app
+update is needed; it records that output only the server computes moved (the
+shapes that really are deltas-only are listed below). Anything ambiguous is a
+major. A deltas-only change need not be paid with a major bump, unless the same
+PR owes a manual major.
+
+The pair only goes up, lexicographically. A major that rose may leave the minor
+anywhere (resetting it to 0 is the usual thing); a major that fell, or a minor
+that fell while the major held, is red; and **a minor bump never settles a
+change owed as a major** (a stream's states moved and only the minor was raised:
+red, "major owed"). A baseline that has no `FOLD_MINOR` (the PR that introduced
+it) is a minor of 0 for every sport. A change outside the corpora's reach that
+alters what a phone computes (see "What the guard cannot see") owes a major by
+hand.
 
 `scripts/fold-epoch-guard.ts` enforces it in CI (the `gates` job). It compares
 the PR **as a whole** with the branch it merges into: CI runs it with
@@ -126,33 +149,60 @@ commit's own parent it is red, which is the point of the second commit.
 
 A stream's **input** is its raw config object (the one it names in the corpus's
 `configs`), its events and its lineups, and changing any of the three counts as
-re-recording the stream. The config is in that set on purpose: after a module's
-default changes (a `cap` of 30 becoming 31), `REBASELINE_GOLDEN=1` stays red,
-because it splices the recorded config back in, and the way to a green suite is
-to write the old value (`cap: 30`) into every recorded config that lacked it.
-Every replay then folds to the same result and not one event or output moves,
-but a phone that still holds the old default plays a different rule. The guard
-sees the edited config and demands the bump.
+re-recording the stream, which owes a **major**. The config is in that set on
+purpose, because **every module embeds its config in its state**: changing an
+existing default VALUE (a `cap` of 30 becoming 31, a `pointsMap` of `2/0`
+becoming `3/0`) moves states, and so is a **major**, never a minor.
+`REBASELINE_GOLDEN=1` cannot land it: it splices the recorded config back in, and
+the golden replay reds on the recorded config (`cfg.pointsMap.*[0]: recorded 2,
+replayed 3`; for a `cap`, the recorded set scores no longer exist). The way to a
+green suite is to write the old value (`cap: 30`) into every recorded config that
+lacked it. Every replay then folds to the same result and not one event or output
+moves, but a phone that still holds the old default plays a different rule. The
+guard sees the edited config and demands the **major**; a minor bump does not
+launder it.
+
+What really is deltas-only, each shape walked through the real tooling
+(re-baseline, then the plain golden replay green, then the guard):
+
+- **Code of `standingsDelta` or `supportsDraws`**, which only the server calls
+  (a phone must not compute or render them: `src/sport/fold-epoch.ts` says so,
+  and if one ever does, D34 is to be revisited).
+- **Credit on a metric that is not displayed**, for example the set kernels'
+  `points_won` credited by a forfeit (`kernel.ts`, forfeit credit): the standings
+  deltas move, no state, outcome or summary does. A credit the summary reads
+  (football's `goalCredit` reaches an award's summary) is a **major**.
+- **A default that only ADDS a key**, for example a new `"2-1"` entry in a
+  `pointsMap` default: the recorded config is a subset of the replayed one, so
+  the replay stays green, and only the `deltas` of the streams that score a
+  `2-1` result change.
+
+A division's own config, set by an organiser, is input and never owes a version
+change; only a module's code and its defaults do.
 
 To check before pushing (from any directory; it also reads uncommitted work, so
 re-baseline into a clean tree, bump, and run it):
 
     pnpm --filter @onryde/seazn-engine fold-epoch:check --against origin/main
 
-It prints one line per sport (epoch before -> after; streams matched, changed,
-removed, added) and `N sports checked, M streams compared`. Exit codes: `0` every
-sport is in order (or the base has no `fold-epoch.ts` yet: the PR that
-introduces it); `1` a sport's results moved without its epoch rising, an epoch
-fell, or a corpus and an epoch entry do not pair up; `2` refused, nothing judged
-(the ref is not a commit, which is what a shallow clone or a root commit gives;
-git could not list or read the base; a table or corpus that does not load; a
-run that compared no stream); `3` the guard itself crashed.
+It prints one line per sport (major and minor before -> after; streams matched,
+changed, deltas-only, removed, added) and `N sports checked, M streams
+compared`; a violation line says `major owed` or `minor owed` and names the
+exact entry to raise, for example `raise FOLD_MINOR.badminton to 1` or
+`raise FOLD_EPOCH.badminton to 2`. Exit codes: `0` every sport is in order (or
+the base has no `fold-epoch.ts` yet: the PR that introduces it); `1` a sport's
+results moved without the half that is owed rising, the pair fell, or a corpus
+and an epoch entry do not pair up; `2` refused, nothing judged (the ref is not
+a commit, which is what a shallow clone or a root commit gives; git could not
+list or read the base; a table or corpus that does not load, including a tree
+whose `FOLD_MINOR` is missing or names other sports than `FOLD_EPOCH`; a run
+that compared no stream); `3` the guard itself crashed.
 
 ## What the guard cannot see
 
 The epoch guard compares corpora, so it is only as wide as they are. It judges
 the **module layer** of the **exercised paths**, and a change outside that owes
-a **manual bump of every sport it reaches** (raise each sport's `FOLD_EPOCH` by
+a **manual MAJOR bump of every sport it reaches** (raise each sport's `FOLD_EPOCH` by
 hand in the same PR; no tool will tell you):
 
 - **The kernel overlays.** The harness records `module.outcome(finalState)`,
@@ -184,8 +234,8 @@ hand in the same PR; no tool will tell you):
     ablation, not from the `onLineup` declaration: `uncoveredUnpinned` ablates every
     recorded `core.*` event and reds on any that moves nothing yet is named by no
     `OVERLAY_CLAIMS` class (the declaration alone had missed football's position).
-  A change to how any of these folds therefore owes a **manual bump of every sport
-  it reaches**: raise each sport's `FOLD_EPOCH` (the MAJOR) by hand in the same PR,
+  A change to how any of these folds therefore owes a **manual MAJOR bump of every
+  sport it reaches**: raise each sport's `FOLD_EPOCH` (the MAJOR) by hand in the same PR,
   exactly like the overlays above. Nothing here is a closed gap; the floor only
   makes the open one visible and keeps it from widening unnoticed.
   `forfeit-credit.ts`: walkover credit is pinned only where a corpus has a forfeit
@@ -196,7 +246,7 @@ hand in the same PR; no tool will tell you):
   decided), so a void that stopped clearing them fails to fold. What stays
   unrecorded is the kernel's own flags beside module state (an abandon in force,
   a level withdrawal, the stoppage a suspend opened); changing how those clear
-  owes the same manual bump.
+  owes the same manual MAJOR bump.
 - **`core.settle`.** The one kernel type no corpus holds, by exemption: a
   settlement lives beside module state, the harness records the module's bare
   outcome, and a stream carrying one would record a value that is wrong the
@@ -206,6 +256,13 @@ hand in the same PR; no tool will tell you):
 - **Unexercised branches** of a module: a field no stream writes is invisible to
   a byte-exact comparison (see below), so a rule that fires only there moves
   nothing.
+- **Mid-match summaries.** The corpus records `module.summary(finalState)` only
+  (`golden.ts` `recomputeStream`), but the pad recomputes the summary live after
+  every event. A change to what a summary shows before the match is decided moves
+  no golden, and a phone renders it: a manual **major**.
+- **Player-statistics folds** (`src/stats/stats.ts`, in the phone closure). No
+  corpus records them, and whether a phone renders them is unverified: a change
+  to how they fold owes a manual **major**.
 
 Which `core.*` events and outcome kinds each corpus holds is no longer a gap to
 read off a table: it is a floor a test enforces (next section). Holding an event
@@ -264,7 +321,7 @@ cannot run, fails by name. `finalize`, `abandon` and `forfeit` are probed beside
 them as controls and answer "pinned" in all eleven. Recording the kernel overlay
 in the corpus and comparing it in the guard would pin all of these; that rewrites
 `fold-epoch-guard.ts` and is a separate piece of work (GF-2). Until it lands, the
-list under "What the guard cannot see" is the list of manual bumps.
+list under "What the guard cannot see" is the list of manual MAJOR bumps.
 
 **Anti-vacuity.** Every sweep reports how many sports, tokens and holes it
 checked; zero is a failure; the empty-corpus case is tested first (an emptied
@@ -288,7 +345,7 @@ so a generator walk a later `EXTEND_GOLDEN` appends after the floor changes neit
 the reproduction nor the keep-rule. Floor
 streams have `seed >= FLOOR_SEED_STRIDE` (100000); the epoch guard keys a stream
 by `config#seed`, so a floor stream is a plain **added** stream, never a changed
-one, and a floor append owes no `FOLD_EPOCH` bump. The existing streams are not
+one, and a floor append owes no version bump (neither `FOLD_EPOCH` nor `FOLD_MINOR`). The existing streams are not
 touched; `golden.test.ts` asserts the prefix.
 
 ## How the comparison actually works
