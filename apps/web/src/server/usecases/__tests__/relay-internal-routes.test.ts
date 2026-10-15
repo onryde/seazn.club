@@ -1055,6 +1055,32 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     expect(checked).toBe(2);
   });
 
+  it("F-007 race through the facts route: the Machine read as stopped before its exit is recorded (appendix M2, 90/320 ms) keeps the SAME Machine playing — and with no beat it is lost AT the composed window (torn down, the ONE retry)", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    s.runner.setObserved(m1, "stopped", null, "unrecorded");
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId), "no claim").toMatchObject({ state: "live", runner_state: "playing", machine_id: m1 });
+    await advance(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED - 1);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId), "one second short").toMatchObject({ state: "live", runner_state: "playing", machine_id: m1 });
+    expect(s.runner.destroyed).toEqual([]);
+    await advance(s.sessionId, 1);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.destroyed, "lost at the window: torn down").toEqual([m1]);
+    expect(s.runner.created, "then the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
+  });
+
+  it("the reviewer's trace through the facts route: first seen mid-restart of a refusal (starting, restarting, exit 78) — failed machine_refused at once, torn down, no retry", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    s.runner.setObserved(m1, "pending", { exitCode: RELAY_EXIT_REFUSED, oomKilled: false, requestedStop: false }, { since: new Date(), count: 1 });
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status, "the read that failed it answers gone").toBe(410);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_refused" });
+    expect(s.runner.destroyed).toEqual([m1]);
+    expect(s.runner.created).toHaveLength(1);
+  });
+
   it("F-007 result 2 (Fly restarts exit 78 too): a refused final beat FAILS the session and issues the teardown ONCE; while the DELETE is still out and Fly keeps restarting the refusal, every later read leaves it failed — no create, no retry, no second destroy", async () => {
     const s = await playingSession();
     const m1 = (await row(s.sessionId)).machine_id!;

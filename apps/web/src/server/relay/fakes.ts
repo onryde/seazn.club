@@ -291,9 +291,12 @@ export class FakeRecorder implements ProviderCallRecorder {
   }
 }
 
-type FakeObserved = Pick<RunnerObservation, "state" | "exit"> & { restart?: { since: Date; count: number } };
+type FakeRestart = { since: Date; count: number } | "unrecorded";
+type FakeObserved = Pick<RunnerObservation, "state" | "exit"> & { restart?: FakeRestart };
 const observation = (o: FakeObserved): RunnerObservation =>
-  ({ state: o.state, exit: o.exit, restarting: o.restart !== undefined, restartingSince: o.restart?.since ?? null, restartCount: o.restart?.count ?? null });
+  o.restart === "unrecorded"
+    ? { state: o.state, exit: o.exit, restarting: null, restartingSince: null, restartCount: null }
+    : { state: o.state, exit: o.exit, restarting: o.restart !== undefined, restartingSince: o.restart?.since ?? null, restartCount: o.restart?.count ?? null };
 
 export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
@@ -385,8 +388,9 @@ export class FakeRunner implements RunnerProvider {
 
   /** Test controls. */
   /** `restart` (F-007): the provider is restarting this runner in place since `since` — what runner-fly.ts reads off
-   *  Fly's latest exit event. Absent: not restarting. */
-  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null, restart?: { since: Date; count: number }): void {
+   *  Fly's latest exit event; `"unrecorded"` — down before the provider recorded the exit (`restarting: null`). Absent:
+   *  not restarting. */
+  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null, restart?: FakeRestart): void {
     this.observed.set(runnerId, { state, exit, restart });
     if (state === "destroyed") this.alive.delete(runnerId);
   }

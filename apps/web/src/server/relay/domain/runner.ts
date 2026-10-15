@@ -53,8 +53,9 @@ export type RunnerTrigger =
   // every stopped beat before R2003, and the one other producer (a legacy runner's beat, no exit reason).
   | { type: "callback_stopped"; refused?: true; endReason?: RunnerEndReason }
   // R2003 / F-007: `restarting` — the provider is restarting this Machine in place (ports.ts RunnerObservation), since
-  // `restartingSince`. Optional: absent is every observation before F-007, read as "not restarting" (today's rule).
-  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null; restarting?: boolean; restartingSince?: Date | null }
+  // `restartingSince`; `null` — down, but the provider has not recorded that exit yet (no claim). Optional: absent is
+  // every observation before F-007, read as "not restarting" (today's rule) — so absent and null are NOT the same.
+  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null; restarting?: boolean | null; restartingSince?: Date | null }
   | { type: "stale_beat" } | { type: "deadline" }
   // Capture QR v2 §5.3: the stop's reason. Optional on purpose: the teardown producers (a timeout or a credit refusal
   // tearing a Machine down before `fail`) drop the stop's ending, or keep the session's own reason (M2), so for them the
@@ -228,13 +229,19 @@ function observedFrom(active: "booting" | "playing"): Cell {
         // F-007 result 2: Fly restarts exit 78 like any crash, so a refusal is never waited out — the session fails and
         // the Machine is torn down NOW, restarting or not (the refused beat's own path, with the observed exit kept).
         if (refusedExit(t.exit ?? null)) return refusedNow(withExit(r, t));
+        // F-007 race: read down before the provider recorded the exit — restart or loss is not knowable yet. No claim:
+        // the stale window (composed, or the boot allowance) decides if no beat and no recorded exit follow.
+        if (t.restarting === null) return stay(r);
         // F-007 result 1: mid-restart the Machine reads `stopped` for ~110 ms. Only the restarting flag tells that from
         // a loss; past RUNNER_RESTART_STUCK_SECONDS it is a loss after all.
         return restartInFlight(t, now) ? stay(withExit(r, t)) : toLost(r, t);
       // gone without our stop: retry or fail. A restarting flag does not exempt it — a destroyed Machine is not coming back.
       case "destroyed": return afterLostDestroyed(withExit(r, t));
-      // `starting` mid-restart (~1.3 s): still the same Machine — unless the restart is stuck past its bound.
-      case "pending": return t.restarting === true && !restartInFlight(t, now) ? toLost(r, t) : stay(withExit(r, t));
+      // `starting` mid-restart (~1.3 s): still the same Machine — unless the restart is stuck past its bound, or it is
+      // restarting a REFUSAL (the stopped instant fell between two polls; a refusal is never waited out).
+      case "pending":
+        if (refusedExit(t.exit ?? null)) return refusedNow(withExit(r, t));
+        return t.restarting === true && !restartInFlight(t, now) ? toLost(r, t) : stay(withExit(r, t));
       default: return stay(withExit(r, t));                           // running / stopping / destroying / unknown: no claim
     }
   };

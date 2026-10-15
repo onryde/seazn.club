@@ -557,6 +557,16 @@ export function restartFrom(events: readonly MachineEvent[]): { restarting: bool
   return { restarting: true, since: newest.timestamp === undefined ? null : new Date(newest.timestamp), count: restartCount };
 }
 
+/** F-007 race (appendix, M2): Fly answers `stopped` up to 320 ms BEFORE the exit event of that stop is written. Until it
+ *  is, the newest exit is the PREVIOUS run's, older than the `start` that followed it — so it says nothing about this stop.
+ *  Recorded = some exit event is newer than the newest `start` (no start at all: any exit). */
+export function exitRecorded(events: readonly MachineEvent[]): boolean {
+  const newest = newestExit(events);
+  if (!newest) return false;
+  const at = newest.timestamp ?? -Infinity;
+  return !events.some((e) => e.type === "start" && (e.timestamp ?? -Infinity) > at);
+}
+
 function safeJson(text: string): unknown {
   try { return JSON.parse(text); } catch { return undefined; }
 }

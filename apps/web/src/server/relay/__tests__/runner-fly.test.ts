@@ -321,6 +321,41 @@ describe("FlyRunner", () => {
     expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: null, restarting: false, restartingSince: null, restartCount: null });
   });
 
+  it("F-007 race (appendix M2, exits 78): `stopped` polled BEFORE its exit event is recorded — the newest exit is older than the newest start — is reported UNRECORDED (restarting null, exit null): never the stale previous exit, never \"not restarting\"", async () => {
+    const at = (hms: string) => Date.parse(`2026-10-15T${hms}Z`);
+    const REFUSED = { exitCode: 78, oomKilled: false, requestedStop: false };
+    const ev = {
+      launch: { id: "e0", type: "launch", status: "created", source: "user", timestamp: at("18:12:20.900"), request: null },
+      start0: { id: "e1", type: "start", status: "started", source: "flyd", timestamp: at("18:12:23.672"), request: null },
+      exit1: { id: "e2", type: "exit", status: "stopped", source: "flyd", timestamp: at("18:12:34.003"),
+        request: { exit_event: { exit_code: 78, oom_killed: false, requested_stop: false, restarting: true }, restart_count: 1 } },
+      restart1: { id: "e3", type: "restart", status: "starting", source: "flyd", timestamp: at("18:12:34.119"), request: null },
+      start1: { id: "e4", type: "start", status: "started", source: "flyd", timestamp: at("18:12:35.429"), request: null },
+      exit2: { id: "e5", type: "exit", status: "stopped", source: "flyd", timestamp: at("18:12:46.087"),
+        request: { exit_event: { exit_code: 78, oom_killed: false, requested_stop: false, restarting: true }, restart_count: 2 } },
+    };
+    let machineState = "stopped";
+    let events: unknown[] = [];
+    const s = scripted((url) => (url.endsWith("/events") ? { status: 200, body: events } : { status: 200, body: { id: "m_78", name: NAME, state: machineState } }));
+    const runner = new FlyRunner({ client: s.client, image: "img" });
+    const UNRECORDED = { state: "stopped", exit: null, restarting: null, restartingSince: null, restartCount: null };
+    // 18:12:33.913 — stopped, 90 ms before the FIRST exit event: no exit at all after the start
+    events = [ev.start0, ev.launch];
+    expect(await runner.observe("m_78")).toEqual(UNRECORDED);
+    // 18:12:34.113 — starting; the exit is in now
+    machineState = "starting"; events = [ev.restart1, ev.exit1, ev.start0, ev.launch];
+    expect(await runner.observe("m_78")).toEqual({ state: "pending", exit: REFUSED, restarting: true, restartingSince: new Date(ev.exit1.timestamp), restartCount: 1 });
+    // 18:12:45.767 — stopped, 320 ms before the SECOND exit event: the newest exit (#1) is older than the newest start
+    machineState = "stopped"; events = [ev.start1, ev.restart1, ev.exit1, ev.start0, ev.launch];
+    expect(await runner.observe("m_78")).toEqual(UNRECORDED);
+    // failed reads the same way
+    machineState = "failed";
+    expect(await runner.observe("m_78")).toEqual({ ...UNRECORDED, state: "failed" });
+    // 18:12:46.098 — the second exit recorded, Fly still says stopped: restarting, with that exit
+    machineState = "stopped"; events = [ev.exit2, ev.start1, ev.restart1, ev.exit1, ev.start0, ev.launch];
+    expect(await runner.observe("m_78")).toEqual({ state: "stopped", exit: REFUSED, restarting: true, restartingSince: new Date(ev.exit2.timestamp), restartCount: 2 });
+  });
+
   it("create is idempotent per session through the client: a 503 on the POST is followed by a metadata lookup that finds the Machine — no second POST", async () => {
     const s = scripted((_url, init) => {
       if (init.method === "POST") return { status: 503, body: { error: "unavailable" } };

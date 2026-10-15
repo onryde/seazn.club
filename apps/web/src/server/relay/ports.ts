@@ -154,11 +154,13 @@ export interface RunnerListing { runnerId: string; sessionId: string | null; nam
 /** The lifecycle's observed input (plan §"Fly machine lifecycle"): the adapter's fromFlyState mapping, never Fly's spelling. */
 /** `restarting` (R2003, F-007): the provider is restarting this runner IN PLACE after a crash — its latest exit was one
  *  the provider will restart, and it is not running again yet. Neutral on purpose (ADR 0007): each adapter derives it from
- *  its own evidence (runner-fly.ts reads Fly's exit event). `restartingSince` is that exit's instant (null when not
- *  restarting, or when the provider gave none); `restartCount` the provider's count, when it reports one. */
+ *  its own evidence (runner-fly.ts reads Fly's exit event). `null` — UNRECORDED: the runner reads down (stopped/failed)
+ *  but the provider has not recorded that exit yet (F-007 measured `stopped` 90–320 ms before its exit event), so it may
+ *  be restarting or lost; `exit` is then null, never the previous run's. `restartingSince` is the exit's instant (null
+ *  when not restarting, or when the provider gave none); `restartCount` the provider's count, when it reports one. */
 export interface RunnerObservation {
   state: ObservedRunnerState; exit: ExitInfo | null;   // both types from domain/runner.ts
-  restarting: boolean; restartingSince: Date | null; restartCount: number | null;
+  restarting: boolean | null; restartingSince: Date | null; restartCount: number | null;
 }
 export interface RunnerProvider {
   /** m1 (Task 12 fix round 1): how long a runner created just before a `list()` may still be MISSING from it — the

@@ -304,6 +304,14 @@ describe("FakeRunner", () => {
     await runner.stop("never-created", { signal: "SIGINT", timeoutSeconds: 10 });
     expect(runner.stops.at(-1)).toEqual({ runnerId: "never-created", signal: "SIGINT", timeoutSeconds: 10 });
     expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null, restarting: false, restartingSince: null, restartCount: null });
+    // F-007: the fake reports what the Fly adapter reports — a restart in flight, and the UNRECORDED stop (restarting
+    // null) as its own answer, not as a restart with no instant (which the domain would wait out differently)
+    const restarting = await runner.create({ ...spec, sessionId: "s_restart" });
+    const since = new Date(1_000);
+    runner.setObserved(restarting.runnerId, "stopped", { exitCode: 1, oomKilled: false, requestedStop: false }, { since, count: 1 });
+    expect(await runner.observe(restarting.runnerId)).toEqual({ state: "stopped", exit: { exitCode: 1, oomKilled: false, requestedStop: false }, restarting: true, restartingSince: since, restartCount: 1 });
+    runner.setObserved(restarting.runnerId, "stopped", null, "unrecorded");
+    expect(await runner.observe(restarting.runnerId)).toEqual({ state: "stopped", exit: null, restarting: null, restartingSince: null, restartCount: null });
     runner.failNextCreate(true);
     await expect(runner.create({ ...spec, sessionId: "s3" })).rejects.toMatchObject({ retryable: true });
     expect((await runner.create({ ...spec, sessionId: "s4" })).runnerId).toMatch(/^fake-machine-/);   // ONE create fails, not every one after
