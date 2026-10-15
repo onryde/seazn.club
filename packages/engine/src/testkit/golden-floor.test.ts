@@ -1,7 +1,7 @@
 // The golden floor (GF-1) — see golden-floor.ts. Every expected set here is read off the engine's own declarations
 // (CORE_EVENT_SCHEMAS, FORFEIT_REASONS, forfeitAdmission, supportsDraws, the lineup reducer), never typed in.
 import { describe, expect, it } from "vitest";
-import { CORE_EVENT_SCHEMAS, foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
+import { CORE_EVENT_SCHEMAS } from "../core/events.ts";
 import { OUTCOME_KINDS, isLevelOutcome } from "../core/types.ts";
 import { DEFAULT_LINEUP_POLICY, type LineupRejectionReason } from "../core/lineup.ts";
 import { FORFEIT_REASONS } from "../core/types.ts";
@@ -43,7 +43,7 @@ import {
   type FloorExemption,
   type Recorder,
 } from "./golden-floor.ts";
-import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
+import { defaultLineupPair } from "./helpers.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 
 const corpora = new Map(builtinModules.map((m) => [m.key, readCorpus(m.key)] as const));
@@ -231,10 +231,11 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
       for (const t of ["overlay:stoppage:set", "overlay:stoppage:cleared", "overlay:squads:set", "overlay:settlement:set", "overlay:settlement:cleared", "overlay:expunged:set", "overlay:expunged:cleared"] as const) {
         expect(req.required.has(t), `${key} ${t}`).toBe(true);
       }
-      expect(req.required.has("overlay:squads:cleared" as never), `${key}: a squads clear cannot be read off a stream`).toBe(false);
+      expect(req.required.has("overlay:squads:cleared"), `${key}: a squads clear cannot be read off a stream`).toBe(false);
       const level = LEVEL_OUTCOME_TOKENS.some((k) => req.required.has(outcomeToken(k)));
       for (const t of ["overlay:levelWithdrawal:set", "overlay:levelWithdrawal:cleared"] as const) expect(req.required.has(t), `${key} ${t} iff a level outcome is required`).toBe(level);
-      (level ? withLevel++ : withoutLevel++);
+      if (level) withLevel++;
+      else withoutLevel++;
       sports++;
     });
     expect(sports).toBe(builtinModules.length);
