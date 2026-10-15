@@ -14,7 +14,7 @@
 // max_retries RUNNER_INPLACE_RESTARTS (R2003, ADR 0004: a crashed compositor is
 // restarted IN PLACE, the same Machine and the same attempt — never a second
 // Machine, so never two compositors on one stream key), stop_config { SIGTERM,
-// the grace } (R2004 PR 0, coordinator decision I4: a stop the PLATFORM starts),
+// the grace } (R2004 PR 0, coordinator decision I4: a stop that names no signal),
 // the deterministic attempt-carrying name and the session metadata (the client's
 // idempotency), and RELAY_DEADLINE_AT (the Machine-side hard stop). The adapter is tested through a
 // FlyClient whose fetch is scripted — the retry/redaction claims are the client's
@@ -188,8 +188,9 @@ describe("FlyRunner", () => {
         auto_destroy: true,
         // R2003 (ADR 0004 / 0007): Fly restarts a crashed compositor in place, at most RUNNER_INPLACE_RESTARTS times
         restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
-        // R2004 PR 0 (coordinator decision I4): a stop FLY starts (deploy, `fly machine stop`, host work) arrives as SIGTERM
-        // — C06 drains at once — and waits the whole grace before SIGKILL, not Fly's 5 s kill_timeout. The timeout is the
+        // R2004 PR 0 (coordinator decision I4): a stop that names no signal arrives as SIGTERM — C06 drains at once — and
+        // waits the whole grace before SIGKILL, not Fly's 5 s kill_timeout (measured for a signal-less API stop, F-008; a
+        // deploy / `fly machine stop` / host work per docs, unmeasured). The timeout is the
         // spelling that round-trips (live probe 2026-10-15: 20_000_000_000 ns is accepted and read back as "20s").
         stop_config: { signal: "SIGTERM", timeout: `${RUNNER_STOP_GRACE_SECONDS}s` },
         env: { SESSION_ID: SPEC.sessionId, JOB_TOKEN: "jwt-SECRET", APP_URL: "https://seazn.club", RELAY_DEADLINE_AT: "2026-09-14T15:00:00.000Z" },

@@ -407,8 +407,9 @@ describe("R2004 PR 0 — the stop grace and the two stop signals", () => {
   });
 
   it("our stop is SIGINT and the platform's is SIGTERM — never the same signal (coordinator decision I4, 2026-10-15)", () => {
-    // C06 holds the Final scene on SIGINT (our stop) and drains at once on SIGTERM (a host-initiated stop). One signal for
-    // both would show "Stream ended" on a deploy and kill it mid-hold, or never show the Final card on ours.
+    // C06 holds the Final scene on SIGINT (our stop) and drains at once on SIGTERM (a stop that names no signal — a host
+    // stop, per docs; measured only for the API, F-008). One signal for both would show "Stream ended" on a host stop and
+    // kill it mid-hold, or never show the Final card on ours.
     expect(config.RUNNER_STOP_SIGNAL).toBe("SIGINT");
     expect(config.RUNNER_PLATFORM_STOP_SIGNAL).toBe("SIGTERM");
     expect(config.RUNNER_PLATFORM_STOP_SIGNAL).not.toBe(config.RUNNER_STOP_SIGNAL);

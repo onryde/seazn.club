@@ -9,8 +9,9 @@
 // and whether a destroyed Machine's name is reusable — and (leg 5, R2004 PR 0)
 // which `stop_config.timeout` form round-trips and whether a stop's explicit
 // signal beats `stop_config.signal`. Costs a minute or two of a shared-cpu-1x.
-// FLY_RELAY_APP picks the app (default seazn-relay); R2004 PR 0 ran it on the
-// empty spike app, `FLY_RELAY_APP=seazn-relay-spike`.
+// FLY_RELAY_APP names the app and is REQUIRED — no default (PR #971 review I1): unset,
+// the file skips loudly; the retired shared `seazn-relay` throws (`_live-fly-gate.ts`).
+// R2004 PR 0 ran it on the empty spike app, `FLY_RELAY_APP=seazn-relay-spike`.
 //
 // EVERY Machine it creates is destroyed in the same run and CONFIRMED gone by a
 // re-read, and `afterAll` sweeps the whole app by this run's tag — a test that
@@ -24,6 +25,7 @@ import { FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitIn
 // second key — this file's whole point is that a 409 on the SAME name is what makes a create
 // idempotent. A test file may import the domain; one authority per fact.
 import { machineNameFor } from "../domain/runner";
+import { liveFlyGate } from "./_live-fly-gate";
 
 /** The token from the environment, or from `apps/web/.env.local`, which is
  *  where it lands. Reading it HERE is what lets the run command below stay free
@@ -52,10 +54,12 @@ function flyToken(): string | undefined {
 // FILE directly, so the list could not stop it anyway. The two live legs (this one
 // and runner-fly.live.test.ts) are the token's only readers, and BOTH now read
 // nothing unless asked to — the sibling carries the same gate for the same reason.
-const WANTS_LIVE = process.env.RELAY_LIVE_FLY === "1";
-const TOKEN = WANTS_LIVE ? flyToken() : undefined;
-const ENABLED = !!TOKEN && WANTS_LIVE;
-if (!ENABLED) console.log("SKIP  fly-client live lifecycle test (needs FLY_API_TOKEN in apps/web/.env.local or the environment and RELAY_LIVE_FLY=1; the app FLY_RELAY_APP in org seazn-club must exist)");
+// PR #971 review I1: the app is named explicitly too, never defaulted, and never the retired one — the gate reads the
+// flag, then the app, then (only then) the token, and THROWS at collect on `seazn-relay`.
+const GATE = liveFlyGate(process.env, flyToken);
+const TOKEN = GATE.enabled ? GATE.token : undefined;
+const ENABLED = GATE.enabled;
+if (!GATE.enabled) console.log(`SKIP  fly-client live lifecycle test — ${GATE.reason} (needs RELAY_LIVE_FLY=1, FLY_RELAY_APP naming an app in org seazn-club, and FLY_API_TOKEN in the environment or apps/web/.env.local)`);
 
 const image = "registry-1.docker.io/library/alpine:3.20";
 const region = process.env.FLY_RELAY_REGION ?? "lhr";
@@ -64,7 +68,7 @@ const seen: string[] = [];
 const note = (s: string) => { seen.push(s); console.log("LIVE  " + s); };
 
 describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", () => {
-  const app = process.env.FLY_RELAY_APP ?? "seazn-relay";
+  const app = GATE.enabled ? GATE.app : "(live leg disabled)";   // read by nothing while skipped
   // `waitMachine` is a LONG POLL: its per-request budget has to exceed the
   // `timeout` seconds it asks Fly to hold the connection for, or the client's
   // own AbortSignal fires first and the wait reads as a timeout. The live leg
@@ -96,10 +100,20 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
       if (state !== "destroyed" && state !== "destroying") residue.push(`${id}=${state}`);
     }
     note(residue.length === 0 ? `sweep: all ${created.length} tagged Machine(s) confirmed gone` : `LEAK — NOT confirmed destroyed: ${residue.join(", ")}`);
+    // PR #971 review I1: and the app's OWN listing, read after the sweep, holds nothing of this run's that is not on its
+    // way out — the per-id re-read above proves the ids this run knew; this proves there is none it did not know.
+    const relisted = await sweeper.listMachines().catch(() => undefined);
+    const leftInApp = (relisted ?? [])
+      .filter((m) => m.name.startsWith(`relay-${tag}`) || (m.config?.metadata?.[SESSION_METADATA_KEY] ?? "").startsWith(tag))
+      .filter((m) => m.state !== "destroyed" && m.state !== "destroying")
+      .map((m) => `${m.id}=${m.state}`);
+    note(relisted === undefined ? "re-list FAILED — 0 left is unproven" : `re-list: ${relisted.length} Machine(s) in ${app}, ${leftInApp.length} of this run's left`);
     console.log("LIVE  summary\n  " + seen.join("\n  "));
     // review I1: the residue was PRINTED and never asserted, so a leak exited 0 and
     // read "3 passed". Carry C1's confirmation is now the gate's, not a human's.
     expect(residue).toEqual([]);
+    expect(relisted, "the post-sweep listing of the app was read").toBeDefined();
+    expect(leftInApp).toEqual([]);
   }, 300_000);
 
   const create = (session: string, attempt: number, cmd: string[]) => client.createMachine({
@@ -225,7 +239,8 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
   //   (a) the timeout form. The docs type `stop_config.timeout` as an integer of nanoseconds. Which form reads back as sent?
   //   (b) precedence. Our stop names SIGINT; the Machine's stop_config names the platform's SIGTERM. If stop_config won, our
   //       own stop would arrive as SIGTERM and the compositor's Final card would never show; and a stop that names NO
-  //       signal (every stop Fly itself starts) must get stop_config's.
+  //       signal must get stop_config's. Only the API's signal-less `POST /stop {}` is driven here — a deploy, `fly
+  //       machine stop` and host maintenance are documented to stop this way and are NOT measured by this leg.
   // The shell traps INT → exit 3 and TERM → exit 4, so the exit code names the signal that ARRIVED. No auto_destroy: the
   // stopped Machine stays readable for its exit event, and the leg (then the tag sweep) destroys it.
   // First run 2026-10-15 (seazn-relay-spike): ns → read back "20s"; "20s" → "20s"; explicit SIGINT → exit 3; {} → exit 4.
@@ -241,41 +256,52 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
         ...({ init: { cmd: ["sh", "-c", TRAP] }, auto_destroy: false, stop_config: stopConfig } as object),
       },
     });
-    const ns = await probe(`${tag}-e`, { signal: "SIGTERM", timeout: GRACE_S * 1_000_000_000 });
-    alive.push(ns.id); created.push(ns.id);
-    const str = await probe(`${tag}-f`, { signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
-    alive.push(str.id); created.push(str.id);
-    for (const m of [ns, str]) await client.waitMachine(m.id, "started", 60);
-    const readBack = async (id: string) => ((await client.getMachine(id))?.config as { stop_config?: unknown } | undefined)?.stop_config;
-    const nsBack = await readBack(ns.id);
-    const strBack = await readBack(str.id);
-    note(`stop_config read back: sent ${GRACE_S * 1_000_000_000} ns → ${JSON.stringify(nsBack)}; sent "${flyDuration(GRACE_S)}" → ${JSON.stringify(strBack)}`);
-    expect(strBack, "the form web sends reads back exactly as sent").toEqual({ signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
-    // The docs' unit, proven: 20e9 ns IS what Fly means by "20s" — so "20s" is twenty seconds, not twenty of anything else.
-    expect(nsBack, "nanoseconds are accepted and normalised to the string form").toEqual({ signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
+    // PR #971 review I1: these two loop forever with auto_destroy OFF, so nothing but a destroy ends them. The leg's own
+    // `finally` force-destroys whichever is still alive the moment the leg fails, and does not wait for `afterAll`.
+    const probes: string[] = [];
+    try {
+      const ns = await probe(`${tag}-e`, { signal: "SIGTERM", timeout: GRACE_S * 1_000_000_000 });
+      alive.push(ns.id); created.push(ns.id); probes.push(ns.id);
+      const str = await probe(`${tag}-f`, { signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
+      alive.push(str.id); created.push(str.id); probes.push(str.id);
+      for (const m of [ns, str]) await client.waitMachine(m.id, "started", 60);
+      const readBack = async (id: string) => ((await client.getMachine(id))?.config as { stop_config?: unknown } | undefined)?.stop_config;
+      const nsBack = await readBack(ns.id);
+      const strBack = await readBack(str.id);
+      note(`stop_config read back: sent ${GRACE_S * 1_000_000_000} ns → ${JSON.stringify(nsBack)}; sent "${flyDuration(GRACE_S)}" → ${JSON.stringify(strBack)}`);
+      expect(strBack, "the form web sends reads back exactly as sent").toEqual({ signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
+      // The docs' unit, proven: 20e9 ns IS what Fly means by "20s" — so "20s" is twenty seconds, not twenty of anything else.
+      expect(nsBack, "nanoseconds are accepted and normalised to the string form").toEqual({ signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
 
-    await new Promise((r) => setTimeout(r, 2_000));   // the shell's traps are installed before the first signal lands
-    // Ours, through the production client: an explicit SIGINT.
-    await client.stopMachine(str.id, { signal: "SIGINT", timeoutSeconds: GRACE_S });
-    // The platform's shape: a stop naming no signal. The client cannot send one (its signal is required on purpose), so
-    // this one call goes out raw. The token rides in the header only, never a log line.
-    const bare = await fetch(`${FLY_MACHINES_BASE}/apps/${encodeURIComponent(app)}/machines/${encodeURIComponent(ns.id)}/stop`, {
-      method: "POST", headers: { authorization: `Bearer ${TOKEN!}`, "content-type": "application/json" }, body: "{}",
-    });
-    note(`signal-less stop → HTTP ${bare.status}`);
-    expect(bare.status).toBe(200);
-    for (const m of [str, ns]) await client.waitMachine(m.id, "stopped", 60);
-    const exitOf = async (id: string) => exitInfoFrom(await client.machineEvents(id));
-    const explicit = await exitOf(str.id);
-    const implicit = await exitOf(ns.id);
-    note(`explicit SIGINT stop → ${JSON.stringify(explicit)}; signal-less stop → ${JSON.stringify(implicit)}`);
-    expect(explicit, "our explicit SIGINT beat stop_config's SIGTERM: the INT trap ran").toEqual({ exitCode: 3, oomKilled: false, requestedStop: true });
-    expect(implicit, "a stop naming no signal got stop_config's SIGTERM: the TERM trap ran").toEqual({ exitCode: 4, oomKilled: false, requestedStop: true });
+      await new Promise((r) => setTimeout(r, 2_000));   // the shell's traps are installed before the first signal lands
+      // Ours, through the production client: an explicit SIGINT.
+      await client.stopMachine(str.id, { signal: "SIGINT", timeoutSeconds: GRACE_S });
+      // The platform's shape: a stop naming no signal. The client cannot send one (its signal is required on purpose), so
+      // this one call goes out raw. The token rides in the header only, never a log line.
+      const bare = await fetch(`${FLY_MACHINES_BASE}/apps/${encodeURIComponent(app)}/machines/${encodeURIComponent(ns.id)}/stop`, {
+        method: "POST", headers: { authorization: `Bearer ${TOKEN!}`, "content-type": "application/json" }, body: "{}",
+      });
+      note(`signal-less stop → HTTP ${bare.status}`);
+      expect(bare.status).toBe(200);
+      for (const m of [str, ns]) await client.waitMachine(m.id, "stopped", 60);
+      const exitOf = async (id: string) => exitInfoFrom(await client.machineEvents(id));
+      const explicit = await exitOf(str.id);
+      const implicit = await exitOf(ns.id);
+      note(`explicit SIGINT stop → ${JSON.stringify(explicit)}; signal-less stop → ${JSON.stringify(implicit)}`);
+      expect(explicit, "our explicit SIGINT beat stop_config's SIGTERM: the INT trap ran").toEqual({ exitCode: 3, oomKilled: false, requestedStop: true });
+      expect(implicit, "a stop naming no signal got stop_config's SIGTERM: the TERM trap ran").toEqual({ exitCode: 4, oomKilled: false, requestedStop: true });
 
-    for (const m of [ns, str]) {
-      await client.destroyMachine(m.id, { force: true });
-      expect(["destroyed", "destroying"]).toContain((await client.getMachine(m.id))?.state);
-      alive.splice(alive.indexOf(m.id), 1);
+      for (const m of [ns, str]) {
+        await client.destroyMachine(m.id, { force: true });
+        expect(["destroyed", "destroying"]).toContain((await client.getMachine(m.id))?.state);
+        alive.splice(alive.indexOf(m.id), 1);
+      }
+    } finally {
+      // Only a FAILED leg reaches here with a probe still alive (the happy path above destroyed and un-listed both).
+      // Best-effort on purpose: a throw here would mask the leg's own failure, and `afterAll` CONFIRMS each id anyway.
+      const left = probes.filter((id) => alive.includes(id));
+      for (const id of left) await sweeper.destroyMachine(id, { force: true }).catch(() => undefined);
+      if (left.length > 0) note(`leg 5 failed with ${left.length} probe(s) alive — force-destroyed in its finally: ${left.join(", ")}`);
     }
   }, 240_000);
 });

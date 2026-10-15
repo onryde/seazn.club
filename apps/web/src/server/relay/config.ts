@@ -144,8 +144,8 @@ export const ENDING_TIMEOUT_SECONDS = 300;
  *  played is timed by STALE_HEARTBEAT_SECONDS_COMPOSED. A passthrough session has no Machine and owes no beat at all. */
 export const STALE_HEARTBEAT_SECONDS = 90;
 /** How long a stopped runner gets between the stop signal and the forced kill (Fly: the stop `timeout`, seconds before
- *  SIGKILL — and, since R2004 PR 0, the create's `stop_config.timeout`, so a stop the PLATFORM starts gets it too, not
- *  Fly's 5 s `kill_timeout` default). R1's figure was 10 (§7.2 + R0-memo.md:279: SIGINT → ffmpeg exit 0 in 114 ms; the
+ *  SIGKILL — and, since R2004 PR 0, the create's `stop_config.timeout`, so a stop that names no timeout gets it too, not
+ *  Fly's 5 s `kill_timeout` default; measured only for a signal-less API stop, F-008 — see RUNNER_PLATFORM_STOP_SIGNAL). R1's figure was 10 (§7.2 + R0-memo.md:279: SIGINT → ffmpeg exit 0 in 114 ms; the
  *  supervisor's flush budget is ≤ 10 s). OWNER RULING D15 (2026-10-16, spec 2026-10-15-overlay-templates-and-scenes,
  *  PR #969): 20, for the R2 compositor's budget — the Final hold 10 s (spec §4.2 `FINAL_HOLD_MS`) + the drain 7 s
  *  (compositor `config.rs` `drain_timeout_ms`) + 3 s headroom (that field's doc line: "grace − 3 s") = 20 s.
@@ -169,10 +169,12 @@ export const RUNNER_RESTART_STUCK_SECONDS = 10;
  *  scene, then drain". Always sent EXPLICITLY: Fly falls back to the Machine's `stop_config.signal` (below) for a stop that
  *  names none (measured, fly-client.live.test.ts leg 5). */
 export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
-/** Coordinator decision I4 (2026-10-15): the signal a stop the HOST starts arrives with — a deploy, `fly machine stop`,
- *  host maintenance — which the compositor reads as "drain at once, no Final card". Never RUNNER_STOP_SIGNAL: Fly's default
- *  for both is SIGINT (`kill_signal`), so without this a host stop would show "Stream ended" and be killed mid-hold.
- *  runner-fly.ts sends it as the create's `stop_config.signal` (the Fly spelling lives there, ADR 0007). */
+/** Coordinator decision I4 (2026-10-15): the signal a stop that names none arrives with — which the compositor reads as
+ *  "drain at once, no Final card". Never RUNNER_STOP_SIGNAL: Fly's default for both is SIGINT (`kill_signal`), so without
+ *  this a host stop would show "Stream ended" and be killed mid-hold. runner-fly.ts sends it as the create's
+ *  `stop_config.signal` (the Fly spelling lives there, ADR 0007). What is MEASURED (compositor F-008, 2026-10-15): a
+ *  signal-less API `POST /stop {}` gets it. That a deploy, `fly machine stop` or host maintenance is such a stop is the
+ *  docs' word (`kill_signal` / `kill_timeout` cover those stops) — UNMEASURED, and owed a probe before anyone relies on it. */
 export const RUNNER_PLATFORM_STOP_SIGNAL = "SIGTERM" as const;
 /** Compositor spec §5.3; served as `heartbeatIntervalMs` (R2004); R2003's composed stale rule is 3× this. Defined
  *  HERE only (R2002): R2003 and R2004 import it. */

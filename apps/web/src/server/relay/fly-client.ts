@@ -94,10 +94,17 @@ export type WaitResult = z.infer<typeof WaitResultSchema>;
  *  (R2004 PR 0 live probe, 2026-10-15, app seazn-relay-spike): `timeout: 20_000_000_000` came back from both the create
  *  response and a GET as `"20s"`, while `"20s"` came back as `"20s"`. Only the string round-trips, so it is the one form
  *  sent, and fly-client.live.test.ts leg 5 re-reads it. Whole seconds ≥ 1 only: a grace that is not one is a config bug,
- *  and "0s" / "NaNs" / "1.5s" would reach Fly as a kill sooner than the grace or a 400 — refused here, by name. */
+ *  and "0s" / "NaNs" / "1.5s" would reach Fly as a kill sooner than the grace or a 400 — refused here, by name.
+ *  And ≤ FLY_MAX_KILL_TIMEOUT_SECONDS (PR #971 review m4), Fly's documented ceiling — a longer grace would be capped or
+ *  refused on the wire, so it is refused here, which for the create's stop_config means at runner-fly.ts's module load. */
 export type FlyDuration = `${number}s`;
+/** docs.fly.io/reference/configuration, `kill_timeout` (re-pinned 2026-10-15): "The default is 5 seconds … You can set it
+ *  up to a maximum of 300 seconds (5 minutes)." The ceiling for both durations flyDuration spells. */
+export const FLY_MAX_KILL_TIMEOUT_SECONDS = 300;
 export function flyDuration(seconds: number): FlyDuration {
-  if (!Number.isSafeInteger(seconds) || seconds < 1) throw new RangeError(`fly: a duration is a whole number of seconds ≥ 1, not ${seconds}`);
+  if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > FLY_MAX_KILL_TIMEOUT_SECONDS) {
+    throw new RangeError(`fly: a duration is a whole number of seconds in 1..${FLY_MAX_KILL_TIMEOUT_SECONDS}, not ${seconds}`);
+  }
   return `${seconds}s`;
 }
 
@@ -109,7 +116,8 @@ export interface MachineCreateInput {
     // stays for the client's own live probes, whose throwaway Machines must not be restarted. Never "always".
     auto_destroy: true; restart: { policy: "no" } | { policy: "on-failure"; max_retries: number }; env: Record<string, string>;
     /** R2004 PR 0 (docs.fly.io/machines/api/machines-resource, "Machine `config` object properties"): the signal and the
-     *  wait before SIGKILL for a stop that does not name its own — every stop Fly itself starts. Both default to nil, and
+     *  wait before SIGKILL for a stop that does not name its own (measured for a signal-less API stop, F-008; a deploy's,
+     *  `fly machine stop`'s or host work's is per docs, unmeasured). Both default to nil, and
      *  then Fly uses SIGINT with a 5 s timeout (`kill_signal` / `kill_timeout`, docs.fly.io/reference/configuration).
      *  Optional: the client's own live probes create without it; the adapter always sends it (runner-fly.test.ts). */
     stop_config?: { signal: "SIGINT" | "SIGTERM"; timeout: FlyDuration };
