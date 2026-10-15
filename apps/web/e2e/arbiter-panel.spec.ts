@@ -1076,15 +1076,17 @@ test.describe("arbiter panel", () => {
       let hit = 0;
       for (const colour of ["white", "black"] as const) {
         const el = switchButton(page, colour);
+        // A person scrolls to a control before touching it; elementFromPoint answers null for a point below the fold.
+        await el.scrollIntoViewIfNeeded();
         const box = (await el.boundingBox())!;
         expect(box.height, `${colour}: tall enough at ${width}`).toBeGreaterThanOrEqual(44);
         expect(box.width, `${colour}: wide enough at ${width}`).toBeGreaterThanOrEqual(44);
-        const owns = await el.evaluate((node) => {
+        const probe = await el.evaluate((node) => {
           const r = node.getBoundingClientRect();
           const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-          return top !== null && node.contains(top);
+          return { owns: top !== null && node.contains(top), covered: top === null ? "nothing" : top.outerHTML.slice(0, 160), at: [r.left + r.width / 2, r.top + r.height / 2, window.innerWidth, window.innerHeight] };
         });
-        expect(owns, `${colour}: elementFromPoint at its centre is the button`).toBe(true);
+        expect(probe.owns, `${colour}: elementFromPoint at its centre is the button (found ${probe.covered} at ${probe.at.join(",")})`).toBe(true);
         hit += 1;
       }
       expect(hit).toBe(2);
@@ -1188,7 +1190,8 @@ test.describe("arbiter panel", () => {
     expect(reasonId, "described by its reason").toBeTruthy();
     await expect(page.locator(`[id="${reasonId}"]`)).toHaveText(uiEn["arbiter.switch.none"]!);
     await expect(white()).not.toHaveAttribute("aria-disabled", "true");
-    await black().click();
+    // Playwright treats aria-disabled as "not enabled" and waits for ever; a person can press it, and the press must do nothing.
+    await black().click({ force: true });
     await page.waitForTimeout(700);
     expect(log, "a press on a side with no room joins nothing and leaves nothing").toEqual(["POST home", "minted e2e-home-1"]);
     await expect(white()).toHaveAttribute("aria-pressed", "true");

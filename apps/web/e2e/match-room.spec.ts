@@ -19,7 +19,7 @@
  */
 import { test, expect, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { Chess } from "chess.js";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { SOUND_SIGNATURE } from "../src/components/public-site/match-room/room-sound-synth";
@@ -92,10 +92,19 @@ test.afterEach(() => {
   expect(consoleErrors, "the room's browser console stays quiet").toEqual([]);
 });
 
+/** D16 (§5.6.3): a camera that has a seat reports its state to the server. Several tests below STAGE a seat answer (a
+ *  participant id and a token the SDK will refuse) that names no participant on file, and the server's one answer for a
+ *  seat in no meeting is the room's 404 - which Chrome logs as a console error naming no URL but this one. That 404 is the
+ *  staging's, not the room's: a production seat answer always names the participant it just stored. The D16 pill test
+ *  below stores its participants and takes NO exemption, so a 404 there fails it. */
+function isStagedSeatReport404(m: import("@playwright/test").ConsoleMessage): boolean {
+  return /^Failed to load resource: the server responded with a status of 404/.test(m.text()) && /\/external-play\/room\/camera-report/.test(m.location().url);
+}
+
 async function openRoom(ctx: BrowserContext, room: SeededRoom, token: string, width = 1280): Promise<Page> {
   const page = await ctx.newPage();
   page.on("console", (m) => {
-    if (m.type() === "error" && !SITE_WIDE.has(m.text())) consoleErrors.push(m.text().slice(0, 300));
+    if (m.type() === "error" && !SITE_WIDE.has(m.text()) && !isStagedSeatReport404(m)) consoleErrors.push(m.text().slice(0, 300));
   });
   page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message.slice(0, 300)}`));
   await page.setViewportSize({ width, height: 900 });
@@ -602,19 +611,13 @@ test("T17B fix 2, D12: the live room under a camera policy — clocks, board, ca
   const p = await openRoom(ctx, room, room.white.token);
   await boardReady(p);
   expect(await screenOf(p)).toBe("live");
-  // The owner's room had a LIVE camera and the opponent's pill; no browser here can make a RealtimeKit peer, so both
-  // are staged (controller hypothesis: a real <video>'s intrinsic width, 1280 px, unconstrained). A 1280x720 canvas
-  // stream goes into the tile's OWN <video>, unhidden as a stream unhides it; the pill's own markup (the component,
-  // classes, read from presence-pill.tsx — Playwright's own JSX transform cannot render the component) goes into
-  // the strip, "on camera", for the opponent's long name.
-  const pillSrc = readFileSync(new URL("../src/components/public-site/match-room/presence-pill.tsx", import.meta.url), "utf8");
-  const classes = [...pillSrc.matchAll(/className="([^"]+)"/g)].map((m) => m[1]!);
-  expect(classes, "the pill's two literal class lists").toHaveLength(2);
-  const pill =
-    `<span data-testid="room-presence-pill" data-state="live" class="${classes[0]}">` +
-    `<span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full bg-[#15803d]"></span>` +
-    `<span class="${classes[1]}">${uiEn["externalPlay.room.presence.live"]!.replace("{name}", room.black.name.split(" ")[0]!)}</span></span>`;
-  const intrinsic = await p.getByTestId("room-own-tile").evaluate(async (tile, html) => {
+  // The owner's room had a LIVE camera; no browser here can make a RealtimeKit peer, so the camera is staged (controller
+  // hypothesis: a real <video>'s intrinsic width, 1280 px, unconstrained): a 1280x720 canvas stream goes into the tile's OWN
+  // <video>, unhidden as a stream unhides it. The opponent's pill is REAL since D16 (it is a field of the snapshot, the
+  // opponent's own report relayed): nobody has reported, so it is the "unknown" pill - the longest of the three texts, so the
+  // widest the pill ever gets beside a 43-character name.
+  await expect(p.getByTestId("room-presence-pill"), "the real pill, the empty-case state").toHaveAttribute("data-state", "unknown");
+  const intrinsic = await p.getByTestId("room-own-tile").evaluate(async (tile) => {
     const canvas = Object.assign(document.createElement("canvas"), { width: 1280, height: 720 });
     canvas.getContext("2d")!.fillRect(0, 0, 1280, 720);
     const video = tile.querySelector("video")!;
@@ -622,9 +625,8 @@ test("T17B fix 2, D12: the live room under a camera policy — clocks, board, ca
     video.srcObject = canvas.captureStream(5);
     await video.play().catch(() => {});
     await new Promise((r) => (video.videoWidth > 0 ? r(null) : video.addEventListener("loadedmetadata", r, { once: true })));
-    tile.parentElement!.insertAdjacentHTML("beforeend", html);
     return video.videoWidth;
-  }, pill);
+  });
   expect(intrinsic, "the staged stream is the wide one").toBe(1280);
   // The right column's parts are there to be measured (the premise of the sweep).
   for (const id of ["room-clock-opponent", "room-clock-you", "room-tile-strip", "room-controls", "room-camera-notice", "room-presence-pill"]) {
@@ -2850,4 +2852,171 @@ test("T17B fix 2, D21-fix-3 (owner decision): an optional camera seated with NO 
   expect(asks3, "a final answer is final").toBe(1);
   await ctx3.unrouteAll({ behavior: "ignoreErrors" });
   await ctx3.close();
+});
+
+
+// ─── D16 (design §5.6.3) - the opponent's pill is the OTHER browser's own camera report ─────────────────────────────
+//
+// Each player is in a meeting of their own, so nothing of the opponent is visible from here: the pill is the opponent's
+// browser's word, relayed by the server. This drives it through its REAL producer and consumer - a real camera session in
+// one browser reports through the real route, the real server stores it on that player's own seat, and the other browser's
+// real room reads it back into its pill. What cannot be real on this runner is the vendor: the RealtimeKit ports are closed
+// here and no browser can make a RealtimeKit peer, so (as the D12 and D21-fix-3 tests do) the room/seat answer is rewritten
+// to hand the camera a token the SDK will refuse - which is a real `failed` camera, and a `failed` camera reports `off` -
+// and the two players' rooms and participants are the rows a check-in leaves, written by SQL. A `live` report needs a live
+// peer; it is proven where the session is a unit (camera-session-report.test.ts) and at the route (external-play-camera-report).
+//
+// Typed from the ruling, never from the code: a report is a heartbeat every 30 s, and a report older than 75 s is unknown.
+const RULED_HEARTBEAT_S = 30;
+const RULED_STALE_S = 75;
+
+test("D16: the opponent's pill is the OTHER browser's own camera report - a real session reports, the server relays it to the other room, a heartbeat keeps it fresh, silence makes it unknown - and the report lands on the reporter's own seat only", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  const room = await seedMatchRoom(page.request, { names: [longName(), longName()], cameraPolicy: "required" });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: 300_000, blackMs: 296_000 });
+  expect(room.whiteSide, "premise: the round is open, so the colours are known").not.toBeNull();
+  const sideOf = { white: room.whiteSide!, black: room.whiteSide === "home" ? "away" : "home" } as const;
+
+  // What a check-in leaves: both players checked in, a room each (per player, §5.6.1) and their participant. The meeting
+  // ids are not real vendor ids.
+  await withDb(async (sql) => {
+    for (const colour of ["white", "black"] as const) {
+      const who = room[colour];
+      const side = sideOf[colour];
+      await sql`
+        insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
+        select f.id, ${who.personId}, f.org_id, 'in', now() from fixtures f where f.id = ${room.fixtureId}`;
+      const m = await sql`
+        insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+        select f.id, ${side}, f.org_id, ${`e2e-mtg-${side}-${room.fixtureId.slice(0, 8)}`}, f.home_entrant_id, f.away_entrant_id
+          from fixtures f where f.id = ${room.fixtureId}`;
+      expect(m.count, `a room for ${colour}`).toBe(1);
+      const p = await sql`
+        insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+        values (${room.fixtureId}, ${side}, ${who.personId}, 'player', ${`e2e-part-${colour}`})`;
+      expect(p.count, `a participant for ${colour}`).toBe(1);
+    }
+  });
+  const reported = (colour: "white" | "black") =>
+    withDb(async (sql) => {
+      const [r] = await sql<{ state: string | null; at: Date | null }[]>`
+        select camera_reported as state, camera_reported_at as at from fixture_video_participants
+         where fixture_id = ${room.fixtureId} and side = ${sideOf[colour]} and preset = 'player'`;
+      return r!;
+    });
+
+  // WHITE is the reporter: its seat answer is rewritten to carry a token the SDK refuses (as D21-fix-3's third ask does).
+  const ctxWhite = await cold(browser);
+  await ctxWhite.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const read = await route.fetch({ method: "GET" });
+      const snapshot = ((await read.json()) as { data: unknown }).data;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: { snapshot, seat: { seated: true, participant: { participantId: "e2e-part-white", authToken: "e2e-rtk-refused" } }, create: null },
+          requestId: "e2e",
+        }),
+      });
+    },
+  );
+  // BLACK is the reader only: its seat is seated with no tile, so its camera never starts and reports nothing.
+  const ctxBlack = await cold(browser);
+  await ctxBlack.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const read = await route.fetch({ method: "GET" });
+      const snapshot = ((await read.json()) as { data: unknown }).data;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, data: { snapshot, seat: { seated: true, participant: null }, create: null }, requestId: "e2e" }),
+      });
+    },
+  );
+
+  const black = await openRoom(ctxBlack, room, room.black.token);
+  await boardReady(black);
+  const blackPill = black.getByTestId("room-presence-pill");
+  const whiteFirst = room.white.name.split(" ")[0]!;
+  // Premise (the empty case): nobody has reported, so the pill is the empty ring - never "off" and never hidden.
+  await expect(blackPill, "before any report: unknown").toHaveAttribute("data-state", "unknown");
+  await expect(blackPill).toHaveText(fill("externalPlay.room.presence.unknown", { name: whiteFirst }));
+  expect((await reported("white")).state, "premise: nothing stored").toBeNull();
+
+  // White's page: its camera session fails to join the refused token - a real `failed` camera - and reports `off`.
+  const wire: { state: string; heartbeat: boolean; at: number }[] = [];
+  const white = await ctxWhite.newPage();
+  white.on("console", (m) => {
+    if (m.type() === "error" && !SITE_WIDE.has(m.text())) consoleErrors.push(m.text().slice(0, 300));
+  });
+  white.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message.slice(0, 300)}`));
+  white.on("request", (r) => {
+    if (r.method() === "POST" && /\/external-play\/room\/camera-report/.test(r.url())) {
+      const b = r.postDataJSON() as { state: string; heartbeat: boolean };
+      wire.push({ state: b.state, heartbeat: b.heartbeat, at: Date.now() });
+    }
+  });
+  await white.setViewportSize({ width: 1280, height: 900 });
+  expect((await white.goto(`${room.roomPath}?t=${encodeURIComponent(room.white.token)}`))?.status()).toBe(200);
+  await expect(white.getByTestId("match-room")).toBeVisible();
+
+  // THE CHANGE: one report on the wire from the page, stored on WHITE's seat, and black's room reads it into its pill.
+  await expect.poll(() => wire.length, { timeout: 30_000, message: "white's camera session sent its report" }).toBeGreaterThanOrEqual(1);
+  expect(wire[0], "the first report is a CHANGE, and a failed camera is off").toMatchObject({ state: "off", heartbeat: false });
+  await expect(blackPill, "black's room shows white's own report").toHaveAttribute("data-state", "off", { timeout: 20_000 });
+  await expect(blackPill).toHaveText(fill("externalPlay.room.presence.off", { name: whiteFirst }));
+  const first = await reported("white");
+  expect(first.state, "stored on the reporter's own seat").toBe("off");
+  expect((await reported("black")).state, "and not on the OTHER player's seat: black reported nothing").toBeNull();
+  // The reader's own pill is the READER's opponent: white's room shows black, who has reported nothing.
+  await expect(white.getByTestId("room-presence-pill"), "white's pill is black's word, not white's own").toHaveAttribute("data-state", "unknown");
+
+  // THE HEARTBEAT: the same state again, ~30 s later, a heartbeat on the wire that refreshes the stored stamp and changes
+  // nothing the other room sees.
+  await expect
+    .poll(() => wire.length, { timeout: (RULED_HEARTBEAT_S + 20) * 1000, message: "a second report, the heartbeat, came" })
+    .toBeGreaterThanOrEqual(2);
+  expect(wire[1], "the repeat of an acknowledged state is a heartbeat").toMatchObject({ state: "off", heartbeat: true });
+  const gap = (wire[1]!.at - wire[0]!.at) / 1000;
+  expect(gap, "…about every 30 s").toBeGreaterThanOrEqual(RULED_HEARTBEAT_S - 3);
+  expect(gap).toBeLessThan(RULED_HEARTBEAT_S + 12);
+  await expect
+    .poll(async () => ((await reported("white")).at?.getTime() ?? 0) > first.at!.getTime(), { timeout: 10_000, message: "the heartbeat refreshed the stored stamp" })
+    .toBe(true);
+  expect((await reported("white")).state, "and changed no state").toBe("off");
+  await expect(blackPill).toHaveAttribute("data-state", "off");
+
+  // The pill fits at every width (the room's full bar), with 43-character names; captured when asked for.
+  expect(await noSidewaysScroll(black, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(black, "d16-pill-off");
+
+  // SILENCE: white's browser goes (no more heartbeats), and the report ages. Just inside the ruled stale line the pill still
+  // shows it; just past it, unknown - never "off" for a camera nobody has heard from.
+  await ctxWhite.close();
+  await withDb((sql) => sql`
+    update fixture_video_participants set camera_reported_at = now() - make_interval(secs => ${RULED_STALE_S - 15})
+     where fixture_id = ${room.fixtureId} and side = ${sideOf.white} and preset = 'player'`);
+  await black.waitForTimeout(7_000); // two polls
+  await expect(blackPill, `${RULED_STALE_S - 15} s old (and ~7 s older by the time two polls have passed): still fresh`).toHaveAttribute("data-state", "off");
+  await withDb((sql) => sql`
+    update fixture_video_participants set camera_reported_at = now() - make_interval(secs => ${RULED_STALE_S + 3})
+     where fixture_id = ${room.fixtureId} and side = ${sideOf.white} and preset = 'player'`);
+  await expect(blackPill, `${RULED_STALE_S + 3} s old: unknown`).toHaveAttribute("data-state", "unknown", { timeout: 20_000 });
+  await expect(blackPill).toHaveText(fill("externalPlay.room.presence.unknown", { name: whiteFirst }));
+  expect(await noSidewaysScroll(black, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(black, "d16-pill-unknown");
+
+  // The SDK refused white's token, as staged: that console error is the proof the camera was tried; nothing else is allowed.
+  expect(consoleErrors.some((e) => /^Invalid auth token provided\. /.test(e)), "the camera joined with the staged token").toBe(true);
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
+  await ctxBlack.close();
 });
