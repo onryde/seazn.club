@@ -31,7 +31,7 @@ import {
   OVERLAY_MOMENT_HOLD_MS,
 } from "../src/components/overlay/moment-timing";
 import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
-import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
+import { POLL_MS, SETTLED_POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "../src/components/public-site/live-score-data";
 import { OVERLAY_KEY_PARAM } from "../src/lib/realtime-purpose";
 import { watchFixtureRealtime } from "./realtime-propagation-kit";
@@ -44,6 +44,7 @@ import {
   seedCricketOverlayFixture,
   seedCricketOverlayFreshOver,
   seedOverlayFixture,
+  seedUndoOverlayFixture,
   sendEvent,
   setRigPlan,
   signInAs,
@@ -701,6 +702,157 @@ test.describe("the overlay puts the right score on air", () => {
       await page.context().close();
     }
   });
+});
+
+// ===========================================================================
+// OWNER BUG 2026-10-15 — the end card stayed on air after an UNDO.
+//
+// Live proof of concept: the match was decided, the overlay put up its
+// Result card, the scorer undid the deciding point — and the card stayed.
+// The server had reopened the fixture (status back to in_play); the page had
+// stopped listening the moment a poll brought `decided` (`useLiveFixture`'s
+// `live` predicate), so it never heard about the undo.
+//
+// NO RELOAD anywhere in this test, and that is the whole point: OBS keeps one
+// browser source open for the broadcast, and a reload would hide the defect
+// by refetching. The sequence is the test — decide → undo → re-decide → undo
+// — in two sports whose deciding writes differ in shape (a badminton rally,
+// a cricket innings summary).
+//
+// BOTH transports died at `decided`, so each is held to its own budget, and
+// each step RECORDS which transport carried it rather than assuming one. On
+// CI's stub Supabase host the overlay stays on the poll. A card-up step is
+// polled from an OPEN fixture (every POLL_MS); a card-down step from a
+// SETTLED one (every SETTLED_POLL_MS, the bounded post-match window) — both
+// budgets derived from the hook's own constants (AGENTS.md #20). Where a
+// private channel really SUBSCRIBES (a server with the ES256 signing key) and
+// stayed subscribed across the whole step, the step must land well under
+// POLL_MS: the channel survived `decided`. A step that neither transport
+// delivers within the slowest path's budget fails, naming the transport.
+// ===========================================================================
+
+const SLACK_MS = 15_000;
+/** Poll path, from an open fixture (the card goes up). */
+const OPEN_POLL_STEP_MS = POLL_MS + SLACK_MS;
+/** Poll path, from a settled fixture (the card comes down). */
+const SETTLED_POLL_STEP_MS = SETTLED_POLL_MS + SLACK_MS;
+/** Realtime path: a push, not a poll. */
+const REALTIME_STEP_MS = POLL_MS / 2;
+
+const UNDO_CASES = [
+  {
+    // `short`: to 11, best of three — 21 unanswered rallies leave home one rally from the match.
+    sportKey: "badminton",
+    variantKey: "short",
+    entrantKind: "individual" as const,
+    approach: async (request: Page["request"], r: OverlayRig) => {
+      for (let i = 0; i < 21; i++) await sendEvent(request, r.fixtureId, "badminton.rally", { wonBy: r.homeEntrantId });
+    },
+    decide: (request: Page["request"], r: OverlayRig) =>
+      sendEvent(request, r.fixtureId, "badminton.rally", { wonBy: r.homeEntrantId }),
+  },
+  {
+    // A T20 whose chase falls short in its full quota: the second innings' summary decides it.
+    sportKey: "cricket",
+    variantKey: "t20",
+    entrantKind: "team" as const,
+    approach: async (request: Page["request"], r: OverlayRig) => {
+      await sendEvent(request, r.fixtureId, "cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 });
+    },
+    decide: (request: Page["request"], r: OverlayRig) =>
+      sendEvent(request, r.fixtureId, "cricket.innings.summary", { runs: 100, wickets: 6, legalBalls: 120 }),
+  },
+];
+
+test.describe("an undo of the deciding write takes the end card down on the OPEN page", () => {
+  for (const c of UNDO_CASES) {
+    test(`${c.sportKey}: decide → card up → undo → down → re-decide → up → undo → down, never reloaded`, async ({
+      browser,
+    }) => {
+      test.setTimeout(120_000 + 2 * OPEN_POLL_STEP_MS + 2 * SETTLED_POLL_STEP_MS);
+      const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+      const ownerPage = await owner.newPage();
+      const page = await anonPage(browser);
+      try {
+        const r = await seedUndoOverlayFixture(ownerPage, {
+          sportKey: c.sportKey,
+          variantKey: c.variantKey,
+          entrantKind: c.entrantKind,
+          prefix: `ovlu${c.sportKey.slice(0, 2)}`,
+        });
+        await c.approach(ownerPage.request, r);
+
+        await page.goto(`/overlay/fixtures/${r.fixtureId}`);
+        const root = page.getByTestId("ovl-root");
+        await expect(root).toHaveCount(1);
+        const card = page.getByTestId("ovl-slate");
+        await expect(card, "empty case first: an in-play match carries no end card").toHaveCount(0);
+        let reloads = 0;
+        page.on("framenavigated", (frame) => {
+          if (frame === page.mainFrame()) reloads++;
+        });
+        // Give a real channel its chance to subscribe before the first write, so a step is not sent mid-handshake.
+        // `waitForFunction(fn, arg, options)`: options is the THIRD argument (see the private-realtime test). Whether
+        // it subscribed is NOT taken from here — every step reads the transport itself, below.
+        await page
+          .waitForFunction(
+            () => document.querySelector('[data-testid="ovl-root"]')?.getAttribute("data-transport") === "realtime",
+            undefined,
+            { timeout: 8_000 },
+          )
+          .catch(() => {});
+        const transport = async (): Promise<"realtime" | "poll"> => {
+          const t = await root.getAttribute("data-transport");
+          expect(["realtime", "poll"], `data-transport is one of the two transports, got ${t}`).toContain(t);
+          return t as "realtime" | "poll";
+        };
+        const paths: string[] = [];
+
+        const cardIs = async (up: boolean, step: string) => {
+          // The slowest path this step can legitimately take: the poll, at the rate of the tier the page is in.
+          const pollBudget = up ? OPEN_POLL_STEP_MS : SETTLED_POLL_STEP_MS;
+          const before = await transport();
+          const t0 = Date.now();
+          const delivered = up
+            ? expect(card).toHaveAttribute("data-slate-state", "ended", { timeout: pollBudget })
+            : expect(card).toHaveCount(0, { timeout: pollBudget });
+          await delivered.catch(async (e: unknown) => {
+            throw new Error(
+              `${c.sportKey} ${step}: NEITHER transport delivered within ${pollBudget}ms (the poll budget) — the page ` +
+                `was on "${before}" when the write was sent and on "${await transport()}" after; the end card should be ` +
+                `${up ? "UP" : "DOWN"}.\n${String(e)}`,
+            );
+          });
+          const elapsed = Date.now() - t0;
+          const after = await transport();
+          // The path that ran: realtime only if the channel was subscribed for the WHOLE step; otherwise the poll did it.
+          const path = before === "realtime" && after === "realtime" ? "realtime" : "poll";
+          const budget = path === "realtime" ? REALTIME_STEP_MS : pollBudget;
+          paths.push(path);
+          test.info().annotations.push({ type: "step", description: `${c.sportKey} ${step}: ${path} ${elapsed}ms (budget ${budget}ms)` });
+          expect(elapsed, `${c.sportKey} ${step}: delivered over ${path} in ${elapsed}ms, over its ${budget}ms budget`).toBeLessThanOrEqual(budget);
+        };
+        const undo = (eventId: string) => sendEvent(ownerPage.request, r.fixtureId, "core.void", { event_id: eventId });
+
+        const first = await c.decide(ownerPage.request, r);
+        await cardIs(true, "after the deciding write");
+        await undo(first);
+        await cardIs(false, "after the undo");
+        const second = await c.decide(ownerPage.request, r);
+        await cardIs(true, "after re-deciding");
+        await undo(second);
+        await cardIs(false, "after the second undo");
+
+        expect(reloads, "the OBS page was never reloaded — every change arrived over its own transport").toBe(0);
+        // Anti-vacuity: four steps, each with its path recorded.
+        expect(paths, "every step recorded the transport that carried it").toHaveLength(4);
+        test.info().annotations.push({ type: "transport", description: `${c.sportKey}: ${paths.join(", ")}` });
+      } finally {
+        await owner.close();
+        await page.context().close();
+      }
+    });
+  }
 });
 
 // ===========================================================================

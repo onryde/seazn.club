@@ -5,6 +5,7 @@ import "server-only";
 // stale. Consulted by the device-link scoring path (usecases/scoring.ts) and by
 // the scan page to choose its View-only screen — one predicate, two askers.
 import type { Tx } from "@/lib/db";
+import { SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 
 export const RESULT_CARRIED_FORWARD = "RESULT_CARRIED_FORWARD";
 export const RESULT_CARRIED_FORWARD_MESSAGE =
@@ -36,7 +37,7 @@ export function isCarriedForward(f: CarriedForwardFacts): boolean {
  *  scheduled or in-play fixture whose feed target an organiser filled by hand
  *  is still the umpire's to score (Review Focus 2), and finalized/cancelled
  *  keep their own refusals (append-event.ts LOCKED_FIXTURE_STATUSES). */
-export const SETTLED_OPEN_STATUSES: ReadonlySet<string> = new Set(["decided", "forfeited", "abandoned"]);
+export const SETTLED_OPEN_STATUSES: ReadonlySet<string> = SETTLED_FIXTURE_STATUSES;
 
 export async function carriedForwardFacts(
   tx: Tx,

@@ -16,6 +16,7 @@ import {
   type ScoreSummary,
   type StageKind,
 } from "@seazn/engine/core";
+import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
@@ -116,11 +117,13 @@ interface EventRow {
   voids_event_id: string | null;
 }
 
-// Terminal DB statuses that lock the ledger against further appends. Exported
+// Terminal DB statuses that lock the ledger against further appends. Re-exported
 // because the V347 config-snapshot escape hatch must refuse on exactly this
 // set — rewriting the cfg a FINALIZED result was computed under is the very
 // thing the snapshot exists to prevent, so the two guards may not drift apart.
-export const LOCKED_FIXTURE_STATUSES: ReadonlySet<string> = new Set(["finalized", "cancelled"]);
+// The set itself lives in client-safe `lib/fixture-status.ts`, so the public
+// live-fixture transport reads the same lock instead of a copy of it.
+export { LOCKED_FIXTURE_STATUSES };
 const LOCKED = LOCKED_FIXTURE_STATUSES;
 /** The shape of `entrants.id` (a Postgres uuid) — the C17/D-R7 winner lookup runs only on it (review N2). */
 const ENTRANT_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
