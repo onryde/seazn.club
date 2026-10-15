@@ -26,10 +26,13 @@ export function PresencePill({ name, state, t }: { name: string; state: Presence
     <span
       data-testid="room-presence-pill"
       data-state={state}
-      className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-full border border-[#e7e3f3] bg-white px-3 md:flex-none md:px-3.5"
+      className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-full border border-[#e7e3f3] bg-white px-3 py-1.5 md:flex-none md:px-3.5 md:py-0"
     >
       <span aria-hidden className={DOT[state]} />
-      <span className={`min-w-0 truncate text-[13px] md:text-sm ${state === "unknown" ? "text-[#5f5a78]" : ""}`}>
+      {/* D16: the words are the whole point of the pill ("camera off", "camera status unknown"), so on a phone, where they
+          sit beside the tile in about 140 px, they wrap to a second line instead of being cut to "Maximiliana · came…". From
+          md up there is room and a very long name still truncates. */}
+      <span className={`min-w-0 text-[13px] leading-4 [overflow-wrap:anywhere] md:truncate md:text-sm ${state === "unknown" ? "text-[#5f5a78]" : ""}`}>
         {t(COPY[state], { name: firstName(name) })}
       </span>
     </span>

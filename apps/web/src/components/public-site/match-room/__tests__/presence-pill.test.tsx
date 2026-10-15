@@ -53,10 +53,14 @@ describe("PresencePill", () => {
     expect(checked, "anti-vacuity: every state").toBe(STATES.length);
   });
 
-  it("a name with no space is used whole; a long one truncates on a min-w-0 chain", () => {
+  it("a name with no space is used whole; on a phone the words WRAP (the state is the point of the pill), from md a long one truncates, all on a min-w-0 chain", () => {
     const html = renderToStaticMarkup(<PresencePill name="Magnus" state="live" t={t} />);
     expect(html).toContain('(name=Magnus)');
     expect(html).toMatch(/min-w-0/);
-    expect(html).toMatch(/truncate/);
+    // Anchored on a space before it: `max-md:truncate` would also contain "md:truncate", and a phone truncating is the defect.
+    expect(html, "from md, truncation").toMatch(/\smd:truncate\b/);
+    expect(html, "never on a phone: the words wrap").not.toMatch(/max-md:truncate/);
+    expect(html, "a bare truncate (every width) would cut the state off on a phone").not.toMatch(/\struncate\b/);
+    expect(html, "a single long word still breaks inside the pill").toContain("[overflow-wrap:anywhere]");
   });
 });

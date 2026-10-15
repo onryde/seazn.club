@@ -3015,6 +3015,16 @@ test("D16: the opponent's pill is the OTHER browser's own camera report - a real
   expect(await noSidewaysScroll(black, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(black, "d16-pill-unknown");
 
+  // The third state. A `live` report needs a live RealtimeKit peer, which no browser here can be, so this one report is WRITTEN
+  // (staged, by SQL, as a fresh stamp); what is real is the consumer - the server's room read and black's pill.
+  await withDb((sql) => sql`
+    update fixture_video_participants set camera_reported = 'live', camera_reported_at = now()
+     where fixture_id = ${room.fixtureId} and side = ${sideOf.white} and preset = 'player'`);
+  await expect(blackPill, "a fresh live report").toHaveAttribute("data-state", "live", { timeout: 20_000 });
+  await expect(blackPill).toHaveText(fill("externalPlay.room.presence.live", { name: whiteFirst }));
+  expect(await noSidewaysScroll(black, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(black, "d16-pill-live");
+
   // The SDK refused white's token, as staged: that console error is the proof the camera was tried; nothing else is allowed.
   expect(consoleErrors.some((e) => /^Invalid auth token provided\. /.test(e)), "the camera joined with the staged token").toBe(true);
   consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
