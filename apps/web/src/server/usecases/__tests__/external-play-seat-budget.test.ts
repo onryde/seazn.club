@@ -420,13 +420,19 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
     expect(checked, "anti-vacuity: every request of the first claim").toBe(FIRST_CLAIM.length);
   });
 
-  it("sweep, a LATER claim: a refusal of each of its four requests answers camera_starting, and the retry seats the player", async () => {
+  it("sweep, a LATER claim: a refusal of each of its four requests answers camera_starting - counted in the log, once - and the retry seats the player", async () => {
+    // D22: the load test counts the platform's deferrals from this line (a deferral is otherwise invisible: the request
+    // is never made, the player is told "starting"), so a claim the budget refused leaves exactly one, and a granted one none.
+    const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    const deferrals = () => info.mock.calls.filter((c) => /RealtimeKit call budget spent; the seat answered camera_starting/.test(String(c[1]))).length;
     let checked = 0;
     for (const step of LATER_CLAIM) {
       const s = await seed();
       const { after } = await joinWith(s, "on");
+      const before = deferrals();
       const gate = refusingRequest(step.n);
       const got = await claim(s, new Date(after), "home", metered(gate.budget));
+      expect(deferrals() - before, `refused: ${step.what} - logged once`).toBe(1);
       expect(reasonOf(got), `refused: ${step.what}`).toBe("camera_starting");
       expect(!!tokenOf(got), `refused: ${step.what} — token`).toBe(step.token);
       expect(gate.asked()).toBe(step.n);
@@ -434,6 +440,7 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
       expect(await sql`select 1 from fixture_video_participants where fixture_id = ${s.fixtureId} and last_publisher_seen_at is not null`, `${step.what}: nothing stamped`).toHaveLength(0);
       const retry = await claim(s, new Date(after + 1_000), "home", grantAll);
       expect(reasonOf(retry), `${step.what}: the camera was on all along`).toBe("seated");
+      expect(deferrals() - before, `${step.what}: the granted retry logged nothing more`).toBe(1);
       checked += 1;
     }
     expect(checked, "anti-vacuity: every request of a later claim").toBe(LATER_CLAIM.length);

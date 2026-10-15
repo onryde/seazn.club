@@ -319,7 +319,12 @@ async function verifyRequiredSeat(
     return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required", participant };
   } catch (err) {
     // D21: the call budget refused a request. The token we hold (if any) rides along so the caller's camera stays joined.
-    if (err instanceof RealtimeKitDeferred) return { seated: false, reason: "camera_starting", participant };
+    if (err instanceof RealtimeKitDeferred) {
+      // The only trace a deferral leaves: the request was never made and the player is told "starting". One line a
+      // claim, so how often the platform's call budget holds a check-in back can be counted (D22).
+      log.info({ fixtureId: a.fixtureId }, "seat: RealtimeKit call budget spent; the seat answered camera_starting, the player asks again");
+      return { seated: false, reason: "camera_starting", participant };
+    }
     throw err;
   }
 }
