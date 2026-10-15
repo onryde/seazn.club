@@ -163,6 +163,10 @@ const REST = [
   "src/server/public-site/__tests__/double-walkover-score-lines.test.ts",
   "src/server/public-site/__tests__/match-centre-forfeit.test.ts",
   "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts",
+  // No-cache errors (#956): a public 404 or 5xx is never stored by a CDN or a browser, and a not-found read is not cached.
+  // Neither begins with "c", so both belong here rather than in C_GLOBBED.
+  "src/server/public-site/__tests__/error-no-store.test.ts",
+  "src/server/public-site/__tests__/public-not-found-uncached.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
