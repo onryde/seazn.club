@@ -114,25 +114,49 @@ describe("the new families print the numbers the sport's own config carries", ()
     expect(text(describeMatchRules("hockey", hockey, c))).toBe("1 × 60 min");
   });
 
-  it("cricket: overs a side (balls / balls per over); a Test has no overs and says its innings", () => {
+  it("cricket: overs a side where an over is the standard length, balls where it is not (the Hundred's 5-ball sets are not a T20's 20 overs); a Test has no overs and says its innings", () => {
     const cricket = mod("cricket");
+    // The standard over is what a variant that declares no over length plays: the engine's own default, read off t20.
+    expect((cricket.variants.t20 as Record<string, unknown>).ballsPerOver, "premise: t20 declares no over length of its own").toBeUndefined();
+    const standard = (divisionCfg(cricket, "t20") as { ballsPerOver: number }).ballsPerOver;
     let overs = 0;
+    let balls = 0;
+    const lines = new Map<string, string>();
     for (const v of Object.keys(cricket.variants)) {
       const c = divisionCfg(cricket, v) as { ballsPerInnings: number | null; ballsPerOver: number; inningsPerSide: number; maxOversPerBowler?: number };
       const line = text(describeMatchRules("cricket", cricket, c));
+      lines.set(v, line);
       if (c.ballsPerInnings === null) {
         expect(line, v).not.toMatch(/overs a side|balls a side/);
         expect(line, v).toMatch(wordNumber(c.inningsPerSide));
         expect(line, v).toMatch(/innings a side/);
       } else {
-        expect(line, v).toMatch(new RegExp(`${c.ballsPerInnings / c.ballsPerOver} overs a side`));
         expect(line, v).not.toMatch(/innings a side/);
-        overs++;
+        if (c.ballsPerOver === standard) {
+          expect(line, v).toMatch(new RegExp(`${c.ballsPerInnings / c.ballsPerOver} overs a side`));
+          overs++;
+        } else {
+          expect(line, v).toMatch(new RegExp(`${c.ballsPerInnings} balls a side`));
+          expect(line, v).not.toMatch(/overs a side/);
+          balls++;
+        }
       }
-      if (c.maxOversPerBowler !== undefined) expect(line, v).toMatch(new RegExp(`max ${c.maxOversPerBowler} overs a bowler`));
-      else expect(line, v).not.toMatch(/a bowler/);
+      if (c.maxOversPerBowler !== undefined) {
+        // The cap is the declared overs in the variant's OWN over: 4 five-ball sets are 20 balls, not "4 overs" of a T20.
+        if (c.ballsPerOver === standard) expect(line, v).toMatch(new RegExp(`max ${c.maxOversPerBowler} overs a bowler`));
+        else {
+          expect(line, v).toMatch(new RegExp(`max ${c.maxOversPerBowler * c.ballsPerOver} balls a bowler`));
+          expect(line, v).not.toMatch(/overs a bowler/);
+        }
+      } else expect(line, v).not.toMatch(/a bowler/);
     }
-    expect(overs, "three limited-overs variants").toBe(3);
+    expect(overs, "t20 and odi play standard overs").toBe(2);
+    expect(balls, "the hundred plays five-ball sets").toBe(1);
+    // The right answer differs from the wrong one's constant: the hundred's 100 balls is 20 five-ball sets = the same
+    // NUMBER of overs as a T20, and must still not read as one.
+    const hundred = divisionCfg(cricket, "hundred") as { ballsPerInnings: number; ballsPerOver: number };
+    expect(hundred.ballsPerInnings / hundred.ballsPerOver, "premise: the same count of 'overs' as t20").toBe((divisionCfg(cricket, "t20") as { ballsPerInnings: number }).ballsPerInnings / standard);
+    expect(lines.get("hundred")).not.toBe(lines.get("t20"));
     // Overs that do not divide evenly are balls, never "16.6666 overs".
     expect(text(describeMatchRules("cricket", cricket, { ...divisionCfg(cricket, "t20"), ballsPerInnings: 100 }))).toMatch(/100 balls a side/);
   });
@@ -636,6 +660,27 @@ describe("guards - what the describers refuse to say, and the doubles they must 
     expect(rulesDifferFromDivision("badminton", legacy, { bestOf: 3, setTo: 15, points: 1 }, { bestOf: 3, setTo: 15, points: 2 })).toBe(false);
     expect(rulesDifferFromDivision("badminton", null, { bestOf: 1 }, { bestOf: 3 })).toBe(true);
     expect(rulesDifferFromDivision("badminton", null, { bestOf: 3 }, { bestOf: 3 })).toBe(false);
+  });
+
+  it("a number that is not finite is no number: Infinity and NaN never become a count, a length or a cap (a schema that lets them through is the witness)", () => {
+    // The real schemas refuse non-finite numbers, so only a permissive double can reach `positive()` with one.
+    // It fills the one default the cricket describer reads (the real schema's over length), like the real schema does.
+    const overLength = (divisionCfg(mod("cricket"), "t20") as { ballsPerOver: number }).ballsPerOver;
+    const permissive = (base: AnySportModule, defaults: Record<string, unknown> = {}) =>
+      ({ ...base, configSchema: { safeParse: (v: unknown) => ({ success: true, data: { ...defaults, ...(v as object) } }) } }) as unknown as AnySportModule;
+    const football = permissive(mod("football"));
+    const cricket = permissive(mod("cricket"), { ballsPerOver: overLength });
+    const checks: [string, unknown][] = [];
+    for (const bad of [Number.POSITIVE_INFINITY, Number.NaN, Number.NEGATIVE_INFINITY]) {
+      expect(describeMatchRules("football", football, { halves: 2, halfMinutes: bad }), `halfMinutes ${bad}`).toBeNull();
+      expect(describeMatchRules("football", football, { halves: bad, halfMinutes: 45 }), `halves ${bad}`).toBeNull();
+      expect(describeMatchRules("cricket", cricket, { ballsPerInnings: bad, ballsPerOver: 6 }), `balls ${bad}`).toBeNull();
+      expect(text(describeMatchRules("cricket", cricket, { ballsPerInnings: 120, ballsPerOver: 6, maxOversPerBowler: bad })), `bowler ${bad}`).toBe("20 overs a side");
+      checks.push(["football", bad]);
+    }
+    // The control: the same doubles say a finite value, so the nulls above are the guard, not the double.
+    expect(text(describeMatchRules("football", football, { halves: 2, halfMinutes: 45 }))).toBe("2 halves of 45 min");
+    expect(checks.length, "anti-vacuity").toBe(3);
   });
 
   it("effectiveRulesLine: the abandon policy of a stage over a division whose own config was refused is still said (it differs from nothing)", () => {

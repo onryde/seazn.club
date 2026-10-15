@@ -214,23 +214,37 @@ function describePeriods(c: Record<string, unknown>): RulesLineT | null {
   return [{ key: "format.rules.period.count", params: { count, minutes } }];
 }
 
-/** Cricket: the overs a side bats (balls / balls per over; balls that do not make whole overs are said as balls, never
- *  "16.6666 overs"), the innings a side where it is not one (a Test has no overs - its innings are the format), and a
- *  bowler's cap. */
-function describeInnings(c: Record<string, unknown>): RulesLineT | null {
+/** The over length a config plays when it says nothing about it: the module's own schema default (cricket's six balls),
+ *  read by parsing the config WITHOUT its `ballsPerOver`. Never typed here: a sport that changes its standard over moves
+ *  this with it. Undefined when the schema refuses the stripped config (then no over is called standard). */
+function standardOverLength(module_: AnySportModule, c: Record<string, unknown>): number | undefined {
+  const stripped = Object.fromEntries(Object.entries(c).filter(([key]) => key !== "ballsPerOver"));
+  const parsed = module_.configSchema.safeParse(stripped);
+  return parsed.success ? positive((parsed.data as Record<string, unknown>).ballsPerOver) : undefined;
+}
+
+/** Cricket: the overs a side bats (balls / balls per over), the innings a side where it is not one (a Test has no
+ *  overs - its innings are the format), and a bowler's cap. "Overs" is said only where an over is the standard length:
+ *  the Hundred's five-ball sets make 100 balls "20 overs", which reads as a T20, so a non-standard over (and a bowler's
+ *  cap in it) is said in BALLS, as are balls that do not make whole overs - never "16.6666 overs". */
+function describeInnings(module_: AnySportModule, c: Record<string, unknown>): RulesLineT | null {
   const balls = positive(c.ballsPerInnings);
   const perOver = positive(c.ballsPerOver);
   const innings = positive(c.inningsPerSide);
+  const standardOver = perOver !== undefined && perOver === standardOverLength(module_, c);
   const out: RulesLineT = [];
   if (balls !== undefined) {
-    if (perOver !== undefined && balls % perOver === 0) out.push({ key: "format.rules.cricket.oversASide", params: { overs: balls / perOver } });
+    if (standardOver && balls % perOver === 0) out.push({ key: "format.rules.cricket.oversASide", params: { overs: balls / perOver } });
     else out.push({ key: "format.rules.cricket.ballsASide", params: { balls } });
     if (innings !== undefined && innings > 1) out.push({ key: "format.rules.cricket.inningsASide", params: { n: innings } });
   } else if (innings !== undefined) {
     out.push({ key: "format.rules.cricket.inningsASide", params: { n: innings } });
   }
   const bowler = positive(c.maxOversPerBowler);
-  if (bowler !== undefined) out.push({ key: "format.rules.cricket.maxOversBowler", params: { overs: bowler } });
+  if (bowler !== undefined) {
+    if (perOver !== undefined && !standardOver) out.push({ key: "format.rules.cricket.maxBallsBowler", params: { balls: bowler * perOver } });
+    else out.push({ key: "format.rules.cricket.maxOversBowler", params: { overs: bowler } });
+  }
   return out.length > 0 ? out : null;
 }
 
@@ -320,7 +334,7 @@ const DESCRIBERS: Record<RuleFamily, Describer> = {
     return bestOf === undefined ? null : describeNested(c, bestOf);
   },
   period: (_k, _m, c) => describePeriods(c),
-  innings: (_k, _m, c) => describeInnings(c),
+  innings: (_k, m, c) => describeInnings(m, c),
   boards: (_k, _m, c) => describeBoards(c),
   board: (_k, m, c) => describeBoardGame(m, c),
   score: (_k, _m, c) => describeScore(c),

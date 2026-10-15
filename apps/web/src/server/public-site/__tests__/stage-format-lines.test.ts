@@ -29,6 +29,8 @@ const stage = (id: string, seq: number, kind: string, rules?: unknown, points_ru
   ...(points_rule === undefined ? {} : { points_rule }),
 });
 const words = (l: { line: unknown }) => rulesLineText(enPublic as never, l.line as never);
+/** A walkover's two point figures are joined by a NON-BREAKING dash (U+2011), so a wrapped line never splits them. */
+const NB = String.fromCharCode(0x2011);
 
 /** The numbers a preset carries that the engine bounds for a match (`matchBound`) - what a spectator reads. */
 function numbersOf(preset: Record<string, unknown>, m: AnySportModule): number[] {
@@ -148,11 +150,22 @@ describe("stage format line - a stage's deciders reach its line (batch 4 M4, clo
 describe("stage format line - a stage's own points rule (X-PT-1, public half)", () => {
   const football = mod("football");
   const division = divisionCfg(football, "11-a-side");
-  const points = { base: { win: 4, draw: 2, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [5, 0] } };
+  // The rule's award score (7-0) is NOT the division's (football's own `awardScore.goals`), and the headline reads the
+  // division's: the line must not say it (X-WO-1 part B is Task 16b).
+  const points = { base: { win: 4, draw: 2, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [7, 0] } };
 
   it("a stage with its own points and the division's format gets the points sentence alone", () => {
     const [line] = stageFormatLines("football", football, division, [stage("s1", 1, "league", undefined, points)]);
-    expect(words(line!)).toBe("Win 4, draw 2, loss 0, walkover 2–0, walkover scored 5–0");
+    expect(words(line!)).toBe(`Win 4, draw 2, loss 0, walkover pays 2${NB}0 points`);
+  });
+
+  it("a points rule's walkover AWARD score (7-0) is never said on the public line - the headline reads the division's award, and the base points still are", () => {
+    const [line] = stageFormatLines("football", football, division, [stage("s1", 1, "league", undefined, points)]);
+    const text = words(line!);
+    expect(text, "the positive pair: the base points are there").toMatch(/^Win 4, draw 2, loss 0/);
+    expect(text).not.toMatch(/walkover scored/i);
+    expect(text).not.toMatch(/\b7\b/);
+    expect(line!.line.map((c) => c.key)).not.toContain("format.points.forfeitScore");
   });
 
   it("points ride AFTER the format and the deciders when the stage differs too (4 is not the division's win of 3)", () => {
@@ -165,7 +178,6 @@ describe("stage format line - a stage's own points rule (X-PT-1, public half)", 
       "format.rules.decider.penalties",
       "format.points.base",
       "format.points.forfeit",
-      "format.points.forfeitScore",
     ]);
   });
 
