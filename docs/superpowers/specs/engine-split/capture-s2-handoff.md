@@ -159,21 +159,23 @@ rules instead needs an epoch per division or fixture, which does not exist.
 
 ## 4. Known limits of the epoch guard (do not rely on it for more than it does)
 
-- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Those pin the **module layer** only. The golden
-  floor (#962, `src/testkit/golden-floor.test.ts`) now makes every sport's corpus record every `core.*` event the kernel accepts, bar
-  `core.settle`, and every outcome kind the module can produce. Recording is not pinning: pause/resume (`core.suspend` / `core.resume`),
-  notes, awards and any lineup change a module does not read are recorded but move no golden (the floor's `OVERLAY_CLAIMS` list names
-  them and goes red the day one starts to). `core.settle` (the floor's one exemption) is not recorded at all. A change to how any of these
-  folds owes a MANUAL MAJOR of every sport it reaches. GF-2 (record the kernel overlay so the guard can compare it) is the follow-up, and
-  until it lands that list is the list of manual bumps.
-- **Kernel overlays are not pinned**: the kernel's `outcomeOf` / `summaryOf` (settlement, expunge, withdrawal over a held level
-  result), stoppage, and `forfeit-credit.ts`. A rule change there moves no golden and does NOT force a bump: it owes a MANUAL MAJOR of
-  every sport it reaches. See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
+- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Since GF-2 they are **format 2**: besides the
+  module's states they record the **effective** outcome and summary (`outcomeOf` / `summaryOf`: a settlement, an expunge, a withdrawal
+  over a held level result laid over the module's answer), a summary digest after every event, and the kernel overlay beside module
+  state (stoppage, squads, settlement, expunged, levelWithdrawal, a pending decider). The golden floor (`src/testkit/golden-floor.test.ts`)
+  makes every sport's corpus record every `core.*` event the kernel accepts, including `core.settle`, every outcome kind the module can
+  produce, and each overlay fact leaving its kernel default and coming back. So a change to how the kernel computes any of those moves a
+  golden and owes a bump the guard now announces; it is no longer a manual MAJOR. A pause, a lineup change a module does not read,
+  mid-match summaries and the kernel's side of an undo were on this list and are off it.
+- **Still not pinned, and so still a MANUAL MAJOR of every sport it reaches:** a note and an award (the floor's `OVERLAY_CLAIMS` names
+  them and goes red the day one starts to move a golden), `forfeit-credit.ts` where no corpus has a forfeit that reaches it, a path no
+  stream exercises (for example the expunge of an `abandonPolicy: "award"` football match: no recorded config), and the
+  player-statistics folds (`src/stats/stats.ts`). See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
 - A harness-only rewrite of a corpus (a state string that moves without changing its meaning) is a MAJOR bump and locks out every
   older phone of that sport; the guard cannot tell it from a real change. A deltas-only
   change is a MINOR bump (D34) and locks nobody out.
-- Also invisible to both halves, and so owed a MANUAL MAJOR: mid-match summaries (the corpus records `summary(finalState)` only; the pad
-  recomputes it after every event) and player-statistics folds (`src/stats/stats.ts`). See `GOLDEN-POLICY.md`, "What the guard cannot see".
+- Also invisible to both halves, and so owed a MANUAL MAJOR: player-statistics folds (`src/stats/stats.ts`). See `GOLDEN-POLICY.md`,
+  "What the guard cannot see".
 
 ## 5. Checklist for S2
 

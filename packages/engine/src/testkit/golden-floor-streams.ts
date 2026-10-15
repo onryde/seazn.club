@@ -425,7 +425,7 @@ const FORFEIT_STORIES: Readonly<Record<string, ForfeitStory>> = {
 function buildForfeit(ctx: Ctx, story: ForfeitStory): Built | null {
   // The withdrawal story carries lineup changes when the floor still wants them, in the config whose policy accepts the
   // most types (cricket's `mutable`, football's `concussed`, volleyball's libero default).
-  const wantsLineup = story.lineup === true && [...ctx.holes].some((t) => t.startsWith("event:core.lineup."));
+  const wantsLineup = story.lineup === true && [...ctx.holes].some((t) => t.startsWith("event:core.lineup.") || t === overlayToken("squads", "set"));
   const offers = wantsLineup ? lineupOffers(ctx.module, ctx.corpus) : [];
   const best = offers.reduce<(typeof offers)[number] | null>((a, o) => (a === null || o.plan.accepted.length > a.plan.accepted.length ? o : a), null);
   const cfgNames = best === null ? ctx.cfgNames : [best.cfgName];
@@ -453,8 +453,9 @@ function buildForfeit(ctx: Ctx, story: ForfeitStory): Built | null {
 // ------------------------------------------------------------------------------------------------------- settle
 
 /** The kernel's reading of `events`, asserted fact by fact: the story below is only kept when the FOLD says each step took
- *  effect (never because the builder believes it did). Null = a step did not take effect or a ledger refused. */
-function readsAs(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], expect: { settled?: boolean; withdrawn?: boolean; expunged?: boolean }): boolean {
+ *  effect (never because the builder believes it did). False = a step did not take effect, or the ledger is refused. A fact the
+ *  caller does not name is not asked. */
+export function readsAs(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], expect: { settled?: boolean; withdrawn?: boolean; expunged?: boolean }): boolean {
   try {
     const folded = foldKernel(ctx, cfg, lineups, events);
     return (
@@ -581,6 +582,8 @@ export const SCENARIOS: readonly Scenario[] = [
     serves: () => [
       ...["core.suspend", "core.resume", "core.note", "core.award", "core.finalize"].map(eventToken),
       ...NATURAL_PREFERENCE.map(outcomeToken),
+      overlayToken("stoppage", "set"),
+      overlayToken("stoppage", "cleared"),
     ],
     build: buildStoppage,
   },
@@ -591,7 +594,7 @@ export const SCENARIOS: readonly Scenario[] = [
   { id: "disqualified", serves: () => [outcomeToken("award:disqualified")], build: (c) => buildForfeit(c, FORFEIT_STORIES.disqualified!) },
   {
     id: "withdrew",
-    serves: (c) => [outcomeToken("award:withdrew"), ...[...c.holes].filter((t) => t.startsWith("event:core.lineup."))],
+    serves: (c) => [outcomeToken("award:withdrew"), overlayToken("squads", "set"), ...[...c.holes].filter((t) => t.startsWith("event:core.lineup."))],
     build: (c) => buildForfeit(c, FORFEIT_STORIES.withdrew!),
   },
   // GF-2 T3. APPENDED, never inserted: a floor batch is reproduced by running the scenarios in this order, and a stream an

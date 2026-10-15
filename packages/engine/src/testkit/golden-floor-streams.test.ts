@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, type GoldenCorpus, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles as holesOf, floorRequirement, overlayToken, undoToken } from "./golden-floor.ts";
+import { eventToken, floorHoles as holesOf, floorRequirement, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
 import {
   corpusBefore,
   expungeStrike,
@@ -15,6 +15,7 @@ import {
   FLOOR_SEED_STRIDE,
   isFloorStream as isFloor,
   kernelStrikes,
+  readsAs,
   reproduceFloorBatch,
   SCENARIOS,
   SPLICED_KERNEL,
@@ -596,5 +597,107 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
     expect(strike.inForce(ctx, cfg, lineups, [start, strike.event, { type: "core.void", payload: {}, voids: "e-1" }])).toBe(false);
     // a PLAIN abandon (no flag) is not an expunge
     expect(strike.inForce(ctx, cfg, lineups, [start, { type: "core.abandon", payload: { reason: "rain" } }])).toBe(false);
+  });
+});
+
+describe("readsAs — a story step is kept only when the kernel's own fold says it took effect", () => {
+  const module = builtinModules.find((m) => m.key === "football")!;
+  const corpus = readCorpus("football");
+  // the committed level-route settle stream: [walk to a level result] withdrew, void, settle, void, settle
+  const stream = corpus.streams.find((s) => s.seed >= 9 * FLOOR_SEED_STRIDE && s.seed < 10 * FLOOR_SEED_STRIDE)!;
+  const cfg = module.configSchema.parse(corpus.configs[stream.config]) as unknown;
+  const lineups = defaultLineupPair(resolvePositions(module, cfg));
+  const ctx: Ctx = { module, corpus, cfgNames: [stream.config], holes: new Set() };
+  const n = stream.events.findIndex((e) => e.type === "core.forfeit");
+  const at = (count: number) => stream.events.slice(0, count);
+  const START = { type: "core.start", payload: {} };
+
+  it("precondition: the stream is the level route (a withdrawal at n, its void, a settle, its void, a settle)", () => {
+    expect(n).toBeGreaterThan(0);
+    expect(stream.events.slice(n).map((e) => e.type)).toEqual(["core.forfeit", "core.void", "core.settle", "core.void", "core.settle"]);
+  });
+
+  it("settled: true only while a settle stands, false before it and after its void", () => {
+    expect(readsAs(ctx, cfg, lineups, at(n + 3), { settled: true })).toBe(true);
+    expect(readsAs(ctx, cfg, lineups, at(n + 3), { settled: false })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, at(n + 2), { settled: false })).toBe(true);
+    expect(readsAs(ctx, cfg, lineups, at(n + 2), { settled: true })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, at(n + 4), { settled: false })).toBe(true);
+  });
+
+  it("withdrawn: true only while the withdrawal laid over the level result stands", () => {
+    expect(readsAs(ctx, cfg, lineups, at(n + 1), { withdrawn: true })).toBe(true);
+    expect(readsAs(ctx, cfg, lineups, at(n + 1), { withdrawn: false })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, at(n), { withdrawn: false })).toBe(true);
+    expect(readsAs(ctx, cfg, lineups, at(n), { withdrawn: true })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, at(n + 2), { withdrawn: false })).toBe(true);
+  });
+
+  it("expunged: true only while an expunging abandon stands, and a PLAIN abandon is not one", () => {
+    const expunge = [START, expungeStrike().event];
+    expect(readsAs(ctx, cfg, lineups, expunge, { expunged: true })).toBe(true);
+    expect(readsAs(ctx, cfg, lineups, expunge, { expunged: false })).toBe(false);
+    const plain = [START, { type: "core.abandon", payload: { reason: "rain" } }];
+    expect(readsAs(ctx, cfg, lineups, plain, { expunged: false })).toBe(true);
+    expect(readsAs(ctx, cfg, lineups, plain, { expunged: true })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, [...expunge, { type: "core.void", payload: {}, voids: "e-1" }], { expunged: false })).toBe(true);
+  });
+
+  it("every fact asked must hold (one wrong fact among right ones fails), and a fact not asked is not judged", () => {
+    expect(readsAs(ctx, cfg, lineups, at(n + 3), { settled: true, withdrawn: false, expunged: false })).toBe(true);
+    expect(readsAs(ctx, cfg, lineups, at(n + 3), { settled: true, withdrawn: true })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, at(n + 3), { settled: true, expunged: true })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, at(n + 3), { settled: false, withdrawn: false, expunged: false })).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, at(n + 3), {})).toBe(true);
+  });
+
+  it("a ledger the fold REFUSES reads as nothing at all, whatever was asked (a settle over a match still live)", () => {
+    const refused = [START, { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } }];
+    expect(readsAs(ctx, cfg, lineups, refused, {})).toBe(false);
+    expect(readsAs(ctx, cfg, lineups, refused, { settled: true })).toBe(false);
+  });
+});
+
+describe("every overlay, undo and settle token the floor can require is SERVED by some scenario (a token no scenario serves can never be extended)", () => {
+  it("swept per sport: the required overlay:*, undo:* and event:core.settle tokens", () => {
+    let checked = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = readCorpus(key);
+      const required = [...floorRequirement(module, corpus).required.keys()].filter((t) => t.startsWith("overlay:") || t.startsWith("undo:") || t === eventToken("core.settle"));
+      const ctx: Ctx = { module, corpus, cfgNames: Object.keys(corpus.configs), holes: new Set(required) };
+      const served = new Set(SCENARIOS.flatMap((x) => x.serves(ctx)));
+      for (const token of required) {
+        expect(served.has(token), `${key}: ${token}`).toBe(true);
+        checked++;
+      }
+    });
+    // five overlay facts + undo tokens + settle, per sport (squads and stoppage are served by the older stories)
+    expect(checked).toBeGreaterThan(builtinModules.length * 8);
+  });
+});
+
+describe("the withdrawal story carries lineup changes whenever the squads still owe a move (GF-2 T3)", () => {
+  it("with overlay:squads:set the only hole, the story is built WITH lineup changes; with no hole it is not", () => {
+    let withLineup = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = readCorpus(key);
+      const withdrew = SCENARIOS.find((x) => x.id === "withdrew")!;
+      const ctxFor = (holes: Set<FloorToken>): Ctx => ({ module, corpus, cfgNames: Object.keys(corpus.configs), holes });
+      const owed = withdrew.build(ctxFor(new Set([overlayToken("squads", "set")])));
+      const none = withdrew.build(ctxFor(new Set([])));
+      expect(none, `${key}: the story is built`).not.toBeNull();
+      expect(owed, `${key}: and with a squads hole`).not.toBeNull();
+      const lineupEvents = (b: Built | null): number => (b?.events ?? []).filter((e) => e.type.startsWith("core.lineup.")).length;
+      expect(lineupEvents(none), `${key}: nothing owes a lineup change, so none is spliced`).toBe(0);
+      expect(lineupEvents(owed), `${key}: squads owed, so the story carries them`).toBeGreaterThan(0);
+      withLineup++;
+    });
+    expect(withLineup).toBe(builtinModules.length);
+  }, 60_000);
+
+  it("the withdrawal story serves overlay:squads:set and the stoppage story serves both stoppage tokens", () => {
+    const ctx: Ctx = { module: builtinModules[0]!, corpus: readCorpus(builtinModules[0]!.key), cfgNames: [], holes: new Set() };
+    expect(SCENARIOS.find((x) => x.id === "withdrew")!.serves(ctx)).toContain(overlayToken("squads", "set"));
+    expect(SCENARIOS.find((x) => x.id === "stoppage")!.serves(ctx)).toEqual(expect.arrayContaining([overlayToken("stoppage", "set"), overlayToken("stoppage", "cleared")]));
   });
 });
