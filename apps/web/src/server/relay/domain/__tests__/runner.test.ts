@@ -1146,6 +1146,35 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     expect(viaBeat).toMatchObject({ next: { state: "lost", crashes: { count: RUNNER_CRASH_CAP - 1 } }, signal: { type: "failed", reason: "machine_refused" } });
   });
 
+  // The roads above refuse BEFORE anything is counted. These two reach the tally first, so only crashExitSeen's own
+  // refusal guard keeps exit 78 out of the count there.
+  it("a refusal is never counted on the roads that DO count: one short of the cap, an observed `destroyed` exit 78 fails machine_refused with the count unmoved, and a LOST runner (the refusal's teardown out, Fly restarting it again) reading a NEWER exit 78 signals nothing and counts nothing", () => {
+    let checked = 0;
+    const counted = tally({ count: RUNNER_CRASH_CAP - 1, exits: RUNNER_CRASH_CAP - 1, exitAt: crashAt(1) });
+    for (const from of ["playing", "booting"] as const) {
+      const destroyed = stepRunner(R({ ...inState(from), crashes: counted }), crashExit("destroyed", crashAt(5), RUNNER_INPLACE_RESTARTS, false, REFUSED_EXIT), crashAt(5));
+      expect(destroyed, from).toMatchObject({ next: { state: "destroyed", crashes: { count: RUNNER_CRASH_CAP - 1 } }, signal: { type: "failed", reason: "machine_refused" } });
+      checked++;
+    }
+    const lost = stepRunner(R({ ...inState("lost"), crashes: counted }), crashExit("pending", crashAt(5), 1, true, REFUSED_EXIT), crashAt(5));
+    expect(lost).toMatchObject({ next: { state: "lost", crashes: { count: RUNNER_CRASH_CAP - 1 } }, signal: null });
+    checked++;
+    expect(checked).toBe(3);
+  });
+
+  it("Fly restarting an exit is crash evidence on its own: an exit Fly is RESTARTING whose exit_event carries no code counts one crash (Fly restarts only a failure); the same codeless exit NOT restarting counts nothing (the differential)", () => {
+    const CODELESS: ExitInfo = { exitCode: null, oomKilled: null, requestedStop: null };
+    let checked = 0;
+    for (const state of ["stopped", "pending"] as const) {
+      const restarting = stepRunner(inState("playing"), crashExit(state, crashAt(1), null, true, CODELESS), crashAt(1));
+      expect(restarting.next.crashes, `${state}, restarting`).toEqual({ count: 1, beats: 0, exits: 1, exitAt: crashAt(1) });
+      const notRestarting = stepRunner(inState("playing"), crashExit(state, crashAt(1), null, false, CODELESS), crashAt(1));
+      expect(notRestarting.next.crashes, `${state}, not restarting`).toEqual(CRASHES_NONE);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("the provider's restart count is a FLOOR: first sight of a crash Fly already restarted twice counts 2 (F-007: restart_count k on restarting exit k), re-reading it stays 2, its own late beat stays 2; after the window refills, a newer exit with count 1 is the 3rd and caps", () => {
     let r = inState("playing");
     r = stepRunner(r, crashExit("pending", crashAt(1), 2), crashAt(1)).next;
