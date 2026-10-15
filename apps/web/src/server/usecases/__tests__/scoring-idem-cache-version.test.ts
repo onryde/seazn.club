@@ -81,6 +81,6 @@ describe.skipIf(!HAS_DB)("scoreEvent — an answer cached before event_id existe
 
     expect(retry.event_id, "the retry's answer must name the row, not replay a pre-event_id answer").toBe(row!.id);
     // Pinned by name, so the prefix cannot drift back without this failing.
-    expect(cache.reads.filter((k) => k.includes(key))).toEqual([`idemv2:${fixtureId}:${key}`]);
+    expect(cache.reads.filter((k) => k.includes(key))).toEqual([`idemv3:${fixtureId}:${key}`]);
   });
 });

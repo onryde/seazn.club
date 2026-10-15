@@ -1387,6 +1387,8 @@ export function FixtureConsole({
                   // the pad and the block can never disagree about whether this is a bracket or who is asking.
                   stageKind={stageKind}
                   canOrganise={canOrganise}
+                  // W2c Task 15 (X-SR-7): the version the page loaded the cfg with — this pad's taps send it.
+                  rulesVersion={scorePadV2.rulesVersion}
                   onEvents={handlePadEvents}
                   // R7/C1 — this console mounts the one ledger itself, below.
                   hideActivity

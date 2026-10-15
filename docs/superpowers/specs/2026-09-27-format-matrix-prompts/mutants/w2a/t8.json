@@ -566,8 +566,8 @@
   {
     "id": "pipeline-reason-drop",
     "file": "apps/web/src/components/v2/scorepad/pipeline.ts",
-    "find": ", ...(r.reason ? { reason: r.reason } : {}) };",
-    "replace": " };",
+    "find": "    ...(r.reason ? { reason: r.reason } : {}),\n",
+    "replace": "",
     "killers": [
       {
         "cwd": "apps/web",

@@ -6523,5 +6523,10 @@
   "settings.credits.stream.kind.packRefund": "Paquete reembolsado",
   "settings.credits.stream.kind.staffAdjust": "Ajustado por el soporte de Seazn",
   "settings.credits.stream.kind.expired": "Créditos gratis sin usar caducados",
-  "settings.credits.stream.kind.other": "Otro cambio"
+  "settings.credits.stream.kind.other": "Otro cambio",
+  "rules.err.fixtureRulesChanged": "Se corrigió el formato del partido: {format}. Esta anotación no se registró: revisa el marcador y vuelve a registrarla.",
+  "rules.err.fixtureRulesChangedNoLine": "Se corrigió el formato del partido. Esta anotación no se registró: revisa el marcador y vuelve a registrarla.",
+  "scorepad.refusal.rulesChanged": "No se registró: se corrigió el formato del partido. El marcador ya sigue el nuevo formato; revisa el resultado y vuelve a anotarlo.",
+  "pad.rulesChanged": "El organizador corrigió el formato de este partido. A partir de ahora se puntúa con él.",
+  "pad.rulesChangedDismiss": "Entendido"
 }

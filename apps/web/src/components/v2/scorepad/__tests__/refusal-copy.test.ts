@@ -201,10 +201,15 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
     // `lib/next-match-started.ts`, so the literal lives there.
     const nextMatch = read("src/lib/next-match-started.ts");
     const fedSeats = read("src/server/engine-db/fed-seats.ts");
+    // W2c Task 15: the append path throws FIXTURE_RULES_CHANGED itself, under its rule-errors status (the code is also
+    // NAMED in scoring.ts's replay lookup, which is not a throw: this branch is asked first so it is credited right).
+    const appendEvent = read("src/server/engine-db/append-event.ts");
 
     for (const code of Object.keys(REFUSAL_KEY)) {
       const producer = http.includes(`return "${code}"`)
         ? "http.ts statusCode()"
+        : new RegExp(`RULE_ERROR_STATUS\\.${code},`).test(appendEvent) && appendEvent.includes(`"${code}",`)
+          ? "append-event.ts rules-version refusal"
         : scoring.includes(`"${code}"`)
           ? "scoring.ts explicit refusal"
           : carried.includes(`export const ${code} = "${code}"`) && new RegExp(`HttpError\\([^)]*, ${code}\\)`).test(scoring)

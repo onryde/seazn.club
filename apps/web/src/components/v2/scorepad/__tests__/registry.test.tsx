@@ -309,6 +309,7 @@ describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/
   const genericConfig = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
   it("a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin", () => {
+    const onRulesChanged = () => {};
     const island = renderIsland(ScorePad, {
       fixtureId: "fx-1",
       sportKey: "generic",
@@ -321,6 +322,8 @@ describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/
       identity: { recordedBy: "user-1", deviceLinkId: null },
       entitlements: {},
       stageKind: "knockout",
+      rulesVersion: 4,
+      onRulesChanged,
       canOrganise: false,
     });
     const [output] = island.tree();
@@ -329,6 +332,10 @@ describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/
     // value that differs from either default, so a dropped prop cannot pass.
     expect((output?.props as { stageKind?: unknown }).stageKind).toBe("knockout");
     expect((output?.props as { canOrganise?: unknown }).canOrganise).toBe(false);
+    // W2c Task 15 (X-SR-7): the rules version reaches the host verbatim — a dropped prop would send no version at all.
+    expect((output?.props as { rulesVersion?: unknown }).rulesVersion).toBe(4);
+    // …and the device chrome's hook onto the pad's reload, by identity (the chrome's own writes follow it).
+    expect((output?.props as { onRulesChanged?: unknown }).onRulesChanged).toBe(onRulesChanged);
     // Fix round 1 (I2): each side's ENTRANT name reaches the host keyed by side, for the tie-break's "who advances".
     expect((output?.props as { entrantNames?: unknown }).entrantNames).toEqual({ home: "Riverside Chess Club", away: "Summit Knights" });
     expect((output?.props as { skin?: unknown }).skin).toBe(FAKE_V3_SKIN);

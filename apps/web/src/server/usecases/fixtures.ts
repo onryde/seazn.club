@@ -25,6 +25,8 @@ import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
 import type { Lineup } from "@seazn/engine/core";
 import { log } from "@/server/logger";
+import type { Dict } from "@/lib/i18n-constants";
+import { formatLineOf } from "@/server/engine-db/rules-version";
 
 /** Doc 13 §7: a device link reads fixture state/events ONLY — every other
  *  fixture surface (detail, lineups, schedule) is 403 for dl_ tokens. */
@@ -114,12 +116,34 @@ export async function fixtureFeedsNextMatch(auth: AuthCtx, fixtureId: string): P
 export async function loadFixturePadCfg(
   auth: AuthCtx,
   fixtureId: string,
-): Promise<{ cfg: unknown; stageKind: string | null }> {
+): Promise<{ cfg: unknown; stageKind: string | null; rulesVersion: number }> {
+  const { cfg, stageKind, rulesVersion } = await readPadRules(auth, fixtureId);
+  return { cfg, stageKind, rulesVersion };
+}
+
+/**
+ * W2c Task 15 (X-SR-7, owner P-1 "A") — `GET /api/v1/fixtures/{id}/rules`: the rules a match plays by NOW, as an open
+ * scoring pad reloads them after a correction (409 FIXTURE_RULES_CHANGED, or an answer carrying a newer
+ * `rules_version`). The same read as `loadFixturePadCfg` — the cfg the fold uses and the version an append is checked
+ * against come from ONE select, so a pad can never hold a cfg from one correction and a version from the next — plus
+ * the format line in the reader's language (`dict`, the public namespace), null when the describer has none to say.
+ */
+export async function getFixtureRules(
+  auth: AuthCtx,
+  fixtureId: string,
+  dict: Dict,
+): Promise<{ cfg: unknown; rules_version: number; format_line: string | null }> {
+  const { cfg, rulesVersion, sportKey, sportModule } = await readPadRules(auth, fixtureId);
+  return { cfg, rules_version: rulesVersion, format_line: formatLineOf(sportKey, sportModule, cfg, dict) };
+}
+
+async function readPadRules(auth: AuthCtx, fixtureId: string) {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<
       {
         config_snapshot: unknown;
         rules_override: unknown;
+        rules_version: number;
         division_config: unknown;
         sport_key: string;
         module_version: string;
@@ -127,8 +151,8 @@ export async function loadFixturePadCfg(
         stage_kind: string | null;
       }[]
     >`
-      select f.config_snapshot, f.rules_override, d.config as division_config, d.sport_key, d.module_version,
-             s.config as stage_config, s.kind as stage_kind
+      select f.config_snapshot, f.rules_override, f.rules_version, d.config as division_config, d.sport_key,
+             d.module_version, s.config as stage_config, s.kind as stage_kind
         from fixtures f
         join divisions d on d.id = f.division_id
         left join stages s on s.id = f.stage_id
@@ -138,13 +162,9 @@ export async function loadFixturePadCfg(
     if (!row) throw new HttpError(404, "fixture not found");
     // W2a: the stage KIND too — a bracket fixture's pad must see the sport's deciders (chess's tie-break) the
     // fold will apply, and the pad itself needs the kind (Task 12 threads `stageKind` on to it).
-    const cfg = resolveFixtureCfg(
-      row,
-      row.division_config,
-      { kind: row.stage_kind, config: row.stage_config },
-      resolveModule(row.sport_key, row.module_version),
-    );
-    return { cfg, stageKind: row.stage_kind };
+    const sportModule = resolveModule(row.sport_key, row.module_version);
+    const cfg = resolveFixtureCfg(row, row.division_config, { kind: row.stage_kind, config: row.stage_config }, sportModule);
+    return { cfg, stageKind: row.stage_kind, rulesVersion: row.rules_version, sportKey: row.sport_key, sportModule };
   });
 }
 

@@ -104,21 +104,24 @@ export async function putStageRules(
     assertNotFrozen(frozen, first.competition_id);
 
     // The division advisory lock every sibling stage writer takes
-    // (`stages.ts` replaceStages/deleteStage, overrideStandings, issueChallenge)
-    // — and this endpoint needs it for a reason of its own. Without it the
-    // lock-predicate read below races the freeze in `append-event.ts`, which
-    // resolves cfg and then snapshots under a FIXTURE-scoped lock: the two
-    // never serialise against each other. A scorer reads the old cfg, this PUT
-    // sees no snapshot and commits 200, and the fixture then freezes the OLD
-    // format while the stage is permanently locked — the organiser is told the
-    // save worked, the pad disagrees, and there is no retry that fixes it.
-    // Taken BEFORE the read it guards, so the predicate and the write are one
-    // atomic decision.
-    //
+    // (`stages.ts` replaceStages/deleteStage, overrideStandings, issueChallenge).
     // It pairs with `patchDivision`'s lock on the SAME key (divisions.ts, "division:<id>", taken before it reads the
     // division's config): a division config or variant save and a stage rules save serialise on it, so the division
     // config this save validates against, and the variant its allowlist reads, are the ones that stand when it commits.
+    //
+    // It does NOT serialise this save against the format freeze (W2c Task 2 I-1; this comment claimed it did until W2c
+    // Task 15): the freeze in `append-event.ts` resolves the cfg and snapshots it under a FIXTURE-scoped lock and never
+    // takes `division:`. A scorer read the old cfg, this PUT saw no snapshot and committed 200, and the match then froze
+    // the OLD format while the stage was locked for good — the organiser told the save worked, the pad disagreeing, and no
+    // retry that fixes it. The lock that closes it is the next one.
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + first.division_id}))`;
+    // W2c Task 15 (Task 2 I-1) — the format freeze's lock, EXCLUSIVE: the append takes it SHARED while the match it
+    // writes is unsnapshotted, before it resolves the cfg. A first tap in flight therefore commits its snapshot before
+    // the lock-predicate read below runs (it sees the stage started: 409), and a first tap that arrives after waits for
+    // this save to commit (it freezes the NEW rules). Taken BEFORE the read it guards, so the predicate and the write are
+    // one atomic decision. Global order: `division:` → stage seats → `fixture:` → `division-config:` → rows; a holder of
+    // this X lock takes no stage-seat or fixture lock after it.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division-config:" + first.division_id}))`;
 
     // SECOND read, UNDER the lock: everything that is validated against - the division's config and variant, the stage's
     // kind and name, and the rules it stores now. (Read before the lock, a division save committing in between would

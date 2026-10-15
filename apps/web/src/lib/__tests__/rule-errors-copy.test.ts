@@ -100,6 +100,9 @@ describe("the server's English is the en dictionary", () => {
       ["POINTS_RULE_INEXPRESSIBLE", { keys: ["otWin", "otLoss"] }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: say(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [say(POINTS_SPLIT_LABEL_KEYS.otWin), say(POINTS_SPLIT_LABEL_KEYS.otLoss)].join(", ") }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: "Match 3" })],
       ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: "Match 3" })],
+      // W2c Task 15: the corrected format as the describer says it; none when the describer has no line for it.
+      ["FIXTURE_RULES_CHANGED", { format: "Best of 5 games" }, say(RULE_ERROR_KEYS.FIXTURE_RULES_CHANGED, { format: "Best of 5 games" })],
+      ["FIXTURE_RULES_CHANGED", {}, say(RULE_ERROR_SUPPORT_KEYS.fixtureRulesChangedNoLine)],
     ];
     const seen = new Set<string>();
     for (const [code, p, want] of table) {
@@ -138,6 +141,10 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: 3 }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: null }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.thisMatch) })],
       ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { fixture_id: "f", fixture_no: 3, field: "extraTime" }, sayEs(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
+      // W2c Task 15: `extra.format` is the server's (en) line — never spliced into the reader's sentence; the reader's own
+      // line arrives with the reload (GET /fixtures/{id}/rules).
+      ["FIXTURE_RULES_CHANGED", { rules_version: 1, format: "Best of 5 games" }, sayEs(RULE_ERROR_SUPPORT_KEYS.fixtureRulesChangedNoLine)],
+      ["FIXTURE_RULES_CHANGED", { rules_version: 1, format: null }, sayEs(RULE_ERROR_SUPPORT_KEYS.fixtureRulesChangedNoLine)],
     ];
     const seen = new Set<string>();
     let localized = 0;

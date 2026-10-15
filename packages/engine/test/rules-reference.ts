@@ -41,9 +41,7 @@ export const CHECKER_FILES: readonly string[] = [
  *  this map to be EMPTY. A row not named here must already be proved.
  *  W2c's rows: the value names the first W2c task that proves the row (plan Appendix A). The orchestrator's batch-end
  *  proof commit deletes the entry and fills the row's `proved by`; W2c Task 23 requires the map empty. */
-export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
-  ["X-SR-7", "W2c Task 15"],
-]);
+export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([]);
 
 /** Rule rows write every engine path as `packages/engine/...`, in the monorepo and in the engine's own repo alike: the prefix is
  *  part of the row's text, not of the checkout. Rows whose path starts with it are the ENGINE's to check (test/rules-reference.test.ts);

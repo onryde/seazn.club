@@ -130,7 +130,9 @@ const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").re
 /** One row per production call site; `case` names the test that drives it. */
 const SITES: readonly { file: string; count: number; case: string }[] = [
   { file: "apps/web/src/server/engine-db/fold.ts", count: 1, case: "fold.ts loadFoldInputs" },
-  { file: "apps/web/src/server/engine-db/append-event.ts", count: 1, case: "append-event.ts appendEvent" },
+  // W2c Task 15 (X-SR-7): the second is the refusal's format line — the rules that stand, named for the refused pad
+  // (rules-version.test.ts pins it against the describer over `loadFixturePadCfg`'s cfg).
+  { file: "apps/web/src/server/engine-db/append-event.ts", count: 2, case: "append-event.ts appendEvent" },
   { file: "apps/web/src/server/engine-db/competition.ts", count: 2, case: "competition.ts loadStageInputs" },
   { file: "apps/web/src/server/public-site/match-centre-load.ts", count: 1, case: "match-centre-load.ts loadMatchCentre" },
   { file: "apps/web/src/server/usecases/fixtures.ts", count: 1, case: "fixtures.ts loadFixturePadCfg" },
@@ -145,7 +147,7 @@ const SITES: readonly { file: string; count: number; case: string }[] = [
 ];
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 13 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 14 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -164,7 +166,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(13);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(14);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -195,6 +197,23 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(row!.config_snapshot.tiebreak).toBe(true);
     // Spec §4.4: at the first event the override is frozen with everything else.
     expect(row!.config_snapshot.bestOf, "W2c: the override was frozen at the first event").toBe(OVERRIDE.bestOf);
+  });
+
+  it.skipIf(!HAS_DB)("append-event.ts appendEvent: the X-SR-7 refusal names the format the match plays now, overlay and override in", async () => {
+    // W2c Task 15: a pad's tap under an old rules version is refused with the rules that stand — read through the same
+    // resolver, so a bracket match's refusal names its deciders and its own format, not the bare division's.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    await seedOverride({ fixtureId: id });
+    await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    // A correction's bump (`refreezeFixture` is the one writer; the version is what this case needs).
+    await sql`update fixtures set rules_version = rules_version + 1 where id = ${id}`;
+    spy.mockClear();
+    await expect(
+      appendEvent(s.auth.orgId, id, 1, { type: "core.start", payload: {}, rulesVersion: 0 }),
+    ).rejects.toMatchObject({ code: "FIXTURE_RULES_CHANGED" });
+    expect(expectOverrideArg(), "the refusal is the only resolver call: it comes before anything else reads the cfg").toBe(1);
+    expectOverlay("knockout");
   });
 
   it.skipIf(!HAS_DB)("competition.ts loadStageInputs: both knockout calls (a decided game, a seeded bye) get the overlay", async () => {
@@ -402,11 +421,11 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expectOverrideArg();
   });
 
-  // M3 (review): the ledger above pins the 13 sites in the SOURCE; this pins that the cases DROVE all 13 with the
+  // M3 (review): the ledger above pins the 14 sites in the SOURCE; this pins that the cases DROVE all 14 with the
   // override. Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 13 call sites was driven with the override, per the spy's caller frames", () => {
+  it.skipIf(!HAS_DB)("every one of the 14 call sites was driven with the override, per the spy's caller frames", () => {
     const byFile = new Map<string, number>();
     for (const site of DRIVEN) {
       const file = site.replace(/:\d+:\d+$/, "");
@@ -417,7 +436,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     );
     expect(missing, `NOT DRIVEN: ${missing.join("; ")} (driven: ${JSON.stringify([...DRIVEN].sort())})`).toEqual([]);
     expect([...byFile.keys()].sort(), "and nothing outside the ledger").toEqual(SITES.map((s) => s.file).sort());
-    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(13);
+    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(14);
   });
 });
 

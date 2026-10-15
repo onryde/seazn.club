@@ -267,7 +267,8 @@ export default async function ScorePadPage({
   // device-link refusal does not apply to it.
   // W2a: `{ cfg, stageKind }` — the cfg drives the pad; the stage kind rides the bootstrap to it (Task 12: a bracket
   // offers no level result). Never discarded: a kind read and dropped is the inert seam (addendum 4).
-  const { cfg: padCfg, stageKind } = await loadFixturePadCfg(read, fixture.id);
+  // W2c Task 15 (X-SR-7): the rules version, read in the SAME select as the cfg — the version this pad's taps send.
+  const { cfg: padCfg, stageKind, rulesVersion } = await loadFixturePadCfg(read, fixture.id);
   // R7 B2 — per-config catalog (see the fixture console page). Still the raw
   // DIVISION config, deliberately: the catalog's inputs are teamSize /
   // playersPerSide / goalkeeper, which no sport in scope can override per
@@ -335,6 +336,7 @@ export default async function ScorePadPage({
     initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
     identity: { recordedBy: link.issued_by, deviceLinkId: link.id },
     stageKind,
+    rulesVersion,
   });
 
   return (
@@ -386,6 +388,8 @@ export default async function ScorePadPage({
         }))}
         scorePadV2={scorePadV2}
         initialViewOnly={screen.screen === "view_only" ? screen.reason : null}
+        // W2c Task 15 (X-SR-7): the chrome's own writes send the version the pad was loaded with.
+        rulesVersion={rulesVersion}
         />,
         )}
       </div>

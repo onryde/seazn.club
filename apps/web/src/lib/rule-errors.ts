@@ -25,6 +25,10 @@ export const RULE_ERROR_STATUS = {
    *  plays in (a decider the match shortened, now shorter than the match's; `fixture-override-guards.ts`). The sibling of
    *  FIXTURE_HAS_OWN_FORMAT: that one is a delete taking the format away, this one a save invalidating it. */
   FIXTURE_OWN_FORMAT_NO_LONGER_FITS: 409,
+  /** W2c Task 15 (X-SR-7, owner P-1 "A") — a scoring pad's tap sent under rules the match no longer plays by: the pad's
+   *  `rules_version` is not the match's (`append-event.ts`, refused before any insert). The pad reloads the rules and
+   *  the scorer taps again under them. */
+  FIXTURE_RULES_CHANGED: 409,
 } as const;
 
 /** X-SR-5 (owner P-4 "A") — why a correction does not fit the recorded play when the engine's fold did NOT refuse it:
@@ -49,6 +53,7 @@ export const RULE_ERROR_KEYS = {
   POINTS_RULE_INEXPRESSIBLE: "rules.err.pointsRuleInexpressible",
   FIXTURE_HAS_OWN_FORMAT: "rules.err.fixtureHasOwnFormat",
   FIXTURE_OWN_FORMAT_NO_LONGER_FITS: "rules.err.fixtureOwnFormatNoLongerFits",
+  FIXTURE_RULES_CHANGED: "rules.err.fixtureRulesChanged",
 } as const satisfies Record<RuleErrorCode, MessageKey>;
 
 /** Why a match's format is locked (`FIXTURE_FORMAT_LOCKED`'s `extra.reason`): FINISHED (finalized or cancelled), or
@@ -68,6 +73,9 @@ export const RULE_ERROR_SUPPORT_KEYS = {
   matchSays: "rules.err.matchSays",
   /** POINTS_RULE_INEXPRESSIBLE's reason: "this division scores {fields} separately". */
   pointsSplit: "rules.err.pointsSplit",
+  /** FIXTURE_RULES_CHANGED when the describer has no line for the corrected format (or the reader's client does not
+   *  have it in the reader's language): "the format was corrected", without naming it. */
+  fixtureRulesChangedNoLine: "rules.err.fixtureRulesChangedNoLine",
 } as const satisfies Record<string, MessageKey>;
 
 /**
@@ -143,6 +151,8 @@ export interface RuleErrorParams {
   lock?: FixtureLockReason;
   /** POINTS_RULE_INEXPRESSIBLE: the division's split keys (`pointsRuleExpressible`), named by their labels. */
   keys?: readonly string[];
+  /** FIXTURE_RULES_CHANGED: the corrected format as the public describer says it, in the sentence's language. */
+  format?: string;
 }
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -172,6 +182,10 @@ function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
     case "DIVISION_TABLE_RULES_LOCKED":
     case "DIVISION_FORMAT_LOCKED":
       return m(RULE_ERROR_KEYS[code], { stage: p.stage ?? "" });
+    case "FIXTURE_RULES_CHANGED":
+      return p.format !== undefined
+        ? m(RULE_ERROR_KEYS.FIXTURE_RULES_CHANGED, { format: p.format })
+        : m(RULE_ERROR_SUPPORT_KEYS.fixtureRulesChangedNoLine);
   }
 }
 
@@ -220,5 +234,9 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
       return sentence(code, { match }, m);
     case "STAGE_FORMAT_LOCKED":
       return typeof x.stage_name === "string" ? sentence(code, { stage: x.stage_name }, m) : null;
+    case "FIXTURE_RULES_CHANGED":
+      // `extra.format` is the SERVER's line (en): never spliced into another language's sentence. The reader's own line
+      // comes with the reload (`GET /fixtures/{id}/rules`, `format_line`), which the pad's banner says.
+      return sentence(code, {}, m);
   }
 }

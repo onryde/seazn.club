@@ -1078,9 +1078,11 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
     FIXTURE_HAS_OWN_FORMAT: 409,
     // Task 11 (controller ruling): a stage or division save that would leave an unstarted match's own format unable to fit.
     FIXTURE_OWN_FORMAT_NO_LONGER_FITS: 409,
+    // Task 15 (X-SR-7, brief): a pad's tap sent under rules the match no longer plays.
+    FIXTURE_RULES_CHANGED: 409,
   };
-  it("declares exactly the nine codes, each with its status", () => {
-    expect(Object.keys(SPEC).length).toBe(9);
+  it("declares exactly the ten codes, each with its status", () => {
+    expect(Object.keys(SPEC).length).toBe(10);
     expect(RULE_ERROR_STATUS).toEqual(SPEC);
   });
   it("every code has an English sentence, and the stage codes name the stage", () => {
@@ -1106,6 +1108,12 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
     );
     expect(ruleErrorMessage("FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { match: "Match 3" })).toBe(
       "Match 3 has its own format that no longer fits — set it back to its stage's format first.",
+    );
+    expect(ruleErrorMessage("FIXTURE_RULES_CHANGED", { format: "Best of 5, 21 points" })).toBe(
+      "The match's format was corrected: Best of 5, 21 points. This entry was not recorded — check the score, then record it again.",
+    );
+    expect(ruleErrorMessage("FIXTURE_RULES_CHANGED", {})).toBe(
+      "The match's format was corrected. This entry was not recorded — check the score, then record it again.",
     );
   });
 });

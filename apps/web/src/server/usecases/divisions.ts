@@ -832,6 +832,17 @@ export async function patchDivision(
     if (touchesFormat) {
       await tx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
     }
+    // W2c Task 15 (Task 2 I-1) — the format freeze's lock, EXCLUSIVE. An unstarted match freezes its format on its first
+    // append (`append-event.ts`), which resolves the division config and snapshots it under a FIXTURE lock — never this
+    // division's — so without this a variant or config save and a first tap interleave: the save reads no started stage
+    // and commits, while the tap snapshots the OLD config, and the stage the save just reshaped is now locked to a format
+    // it no longer declares. The append takes this key SHARED (only while unsnapshotted), so first taps never wait on each
+    // other, only on a format save — and a format save waits for every in-flight first tap to commit before it reads
+    // whether a stage has started. Global order: `division:` → stage seats → `fixture:` → `division-config:` → rows. A
+    // holder of this X lock takes no stage-seat or fixture lock after it.
+    if (formatEdit) {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division-config:" + id}))`;
+    }
     // The camera block below takes a row lock (`for no key update of d`), so it comes AFTER the advisory locks (N1's
     // order: advisory locks first, rows last). When it runs, withTenant's prelude (`cameraGate`) has already taken
     // `division:`; taking it again above, in the same transaction, never waits.

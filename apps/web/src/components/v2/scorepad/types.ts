@@ -109,6 +109,14 @@ export interface PendingEvent {
    *  it as `undefined` must never throw, only degrade to that older,
    *  same-mount-only behaviour. */
   voidTargetSeq?: number;
+  /**
+   * W2c Task 15 (X-SR-7, owner P-1 "A") — the match's rules version the pad folded under when this tap was MADE, sent
+   * as `rules_version` (pipeline.ts's body builder). Captured at submit and never re-stamped: a tap queued offline under
+   * one format and replayed after a correction must be REFUSED (FIXTURE_RULES_CHANGED), never applied under rules the
+   * scorer did not see when they tapped. Absent when the pad was loaded with no version (a mount that sends none), and
+   * for records persisted before this field — sent as no field at all, which the server never checks.
+   */
+  rulesVersion?: number;
   /** ScoringPad v3 R1 chassis soft-commit (spec §2.3, task 4) — epoch-ms
    *  deadline before which this entry, though already durably enqueued and
    *  already folded into the optimistic state, must NOT be sent. Set only
@@ -232,6 +240,11 @@ export interface AppendSuccess {
   state_summary: unknown;
   outcome: unknown;
   status: string;
+  /** W2c Task 15 (X-SR-7) — the match's rules version the server checked this write against (on a replay, the version
+   *  now). Higher than the pad's ⇒ the format was corrected: the pad reloads it before its next tap. Optional: a server
+   *  that predates it, or an answer cached before it, sends none, and the pad then learns of a correction from its
+   *  next tap's refusal instead. */
+  rules_version?: number;
   /** The id of the row the server wrote (on an idempotent replay, the row the
    *  original write created). `use-pad-pipeline.ts`'s ack stamps it as the
    *  ledger entry's id, so a void written ELSEWHERE — the device chrome's
@@ -277,6 +290,8 @@ export type SendOutcome =
       /** LEVEL_RESULT_IN_BRACKET only (W2a review M-1): which refusal it is — a generic draw or a finalize of a
        *  fixture that still needs a decision — so the pad's copy can tell them apart (`refusal-copy.ts`). */
       reason?: string;
+      /** FIXTURE_RULES_CHANGED only (W2c Task 15): the match's rules version the refusal named. */
+      rulesVersion?: number;
     }
   | {
       kind: "stayed-queued";

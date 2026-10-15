@@ -633,7 +633,10 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
     // for clockAt. The behavioural witness is bracket-finish.spec.ts (a generic bracket shows no Draw on the pad).
     const src = readFileSync(fileURLToPath(new URL("../pad-host.tsx", import.meta.url)), "utf8");
     expect(src).toContain("      stageKind: props.stageKind,\n      canOrganise: props.canOrganise,\n      entrantNames: props.entrantNames,\n");
-    expect(src).toContain("[props.cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state,");
+    // W2c Task 15 (X-SR-7): the view's cfg is the pipeline's — the loaded one, or the rules it reloaded after a
+    // correction — so the board and the fold read one format (rules-version-transport.test.ts drives the reload).
+    expect(src).toContain("const cfg = pipeline.cfg;");
+    expect(src).toContain("[cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state,");
   });
 
   it("D-P1: the organiser keeps Draw in every stage kind while live; its dock holds no double forfeit (W2b D15)", () => {

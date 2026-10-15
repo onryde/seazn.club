@@ -47,8 +47,8 @@
   {
     "id": "awaiting-entry-stale",
     "file": "packages/engine/test/rules-reference.test.ts",
-    "find": "[\"X-SR-7\", \"W2c Task 15\"],",
-    "replace": "[\"X-SR-7\", \"W2c Task 15\"], [\"X-ZZ-9\", \"Task 99\"],",
+    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([",
+    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([[\"X-ZZ-9\", \"Task 99\"]",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -182,8 +182,8 @@
   {
     "id": "awaiting-row-claims-proof",
     "file": "packages/engine/test/rules-reference.test.ts",
-    "find": "[\"X-SR-7\", \"W2c Task 15\"],",
-    "replace": "[\"X-SR-7\", \"W2c Task 15\"], [\"BG-KO-2\", \"Task 12\"],",
+    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([",
+    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([[\"BG-KO-2\", \"Task 12\"]",
     "killers": [
       {
         "cwd": "packages/engine",

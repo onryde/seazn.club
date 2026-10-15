@@ -1321,6 +1321,16 @@ export const FixtureRulesResult = z.object({
   ),
 });
 
+/** W2c Task 15 (X-SR-7, owner P-1) — the rules a match plays by NOW, as a scoring pad reloads them after a correction:
+ *  the cfg the engine folds its ledger under, its rules version, and its format line in the reader's language (null
+ *  when there is no line to say for this sport or cfg). */
+export const FixtureCurrentRules = z.object({
+  cfg: z.unknown(),
+  rules_version: z.number().int().min(0),
+  format_line: z.string().nullable(),
+});
+export type FixtureCurrentRules = z.infer<typeof FixtureCurrentRules>;
+
 export const AddFixture = z
   .object({
     home_entrant_id: Uuid,
@@ -2293,6 +2303,10 @@ export const AppendEventRequest = z.object({
     .describe(
       "Fold epoch of the client's engine for this fixture's sport (engine-split D26/D31). Native clients send it; the web pad does not.",
     ),
+  /** W2c Task 15 (X-SR-7, owner P-1) — the match's rules version the sender scores under (`GET /fixtures/{id}/rules`,
+   *  or the last accepted answer's). Sent, it must be the match's: a correction since refuses the tap, 409
+   *  FIXTURE_RULES_CHANGED, before anything is written. Omitted, it is never checked (a console, an integration). */
+  rules_version: z.number().int().min(0).optional(),
 });
 export type AppendEventRequest = z.infer<typeof AppendEventRequest>;
 
@@ -2381,6 +2395,9 @@ export const AppendEventResponse = z.object({
    *  `core.void`'s `event_id` names. Lets a client hold the event under the
    *  server's id from the moment it lands. */
   event_id: Uuid,
+  /** W2c Task 15 (X-SR-7) — the match's rules version this answer saw (on a replay, the version now). Higher than the
+   *  one the client sent ⇒ the format was corrected: reload it (`GET /fixtures/{id}/rules`) before the next append. */
+  rules_version: z.number().int().min(0),
 });
 
 export const FixtureState = z.object({

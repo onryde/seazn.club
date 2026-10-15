@@ -6523,5 +6523,10 @@
   "settings.credits.stream.kind.packRefund": "Pakket terugbetaald",
   "settings.credits.stream.kind.staffAdjust": "Aangepast door Seazn-support",
   "settings.credits.stream.kind.expired": "Ongebruikte gratis credits vervallen",
-  "settings.credits.stream.kind.other": "Andere wijziging"
+  "settings.credits.stream.kind.other": "Andere wijziging",
+  "rules.err.fixtureRulesChanged": "Het wedstrijdformat is gecorrigeerd: {format}. Deze invoer is niet vastgelegd — controleer de stand en leg hem opnieuw vast.",
+  "rules.err.fixtureRulesChangedNoLine": "Het wedstrijdformat is gecorrigeerd. Deze invoer is niet vastgelegd — controleer de stand en leg hem opnieuw vast.",
+  "scorepad.refusal.rulesChanged": "Niet vastgelegd — het wedstrijdformat is gecorrigeerd. Het scorebord volgt nu het nieuwe format; controleer de stand en leg het opnieuw vast.",
+  "pad.rulesChanged": "De organisator heeft het format van deze wedstrijd gecorrigeerd. De score volgt dat format vanaf nu.",
+  "pad.rulesChangedDismiss": "Begrepen"
 }

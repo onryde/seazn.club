@@ -5614,3 +5614,68 @@ test("R2008 free-gaps: the never-live FAILED card fits and Try again stays reach
   expect(checked, "anti-vacuity: both locales x both tellings").toBe(NL_LOCALES.length * NL_VARIANTS.length);
   expect(sentences.size, "four different sentences were shown").toBe(4);
 });
+
+test("rules-changed banner (W2c T15, X-SR-7): an open remote pad after a correction says the new format above the board, no horizontal scroll", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // Badminton `short`: the P5 rig (best of 3 → 5). Person names carry `projectTag()` (the badminton test's reason above).
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Rules Banner ${TAG}-${projectTag()}`,
+    sportKey: "badminton",
+    variantKey: "short",
+    entrantKind: "individual",
+    home: [{ fullName: `Mobile RB Home ${TAG}-${projectTag()}` }],
+    away: [{ fullName: `Mobile RB Away ${TAG}-${projectTag()}` }],
+    emitCoreStart: true,
+  });
+  const link = await apiJson<{ secret: string }>(request, `/api/v1/fixtures/${fx.fixtureId}/device-links`, "POST", {
+    label: `mobile rules banner ${projectTag()}`,
+  });
+  expect(link.status, JSON.stringify(link.error)).toBe(201);
+  const ctx = await browser.newContext({ viewport: projectViewport() ?? undefined, storageState: await consentedAnonymousState() });
+  try {
+    const page = await ctx.newPage();
+    await page.goto(`/score/${link.data!.secret}`, { waitUntil: "load" });
+    const scorebug = page.locator('[data-role="v3-scorebug"]');
+    await expect(scorebug).toBeVisible({ timeout: 20_000 });
+
+    const fix = await apiJson(request, `/api/v1/fixtures/${fx.fixtureId}/rules`, "PUT", { rules: { bestOf: 5 } });
+    expect(fix.status, JSON.stringify(fix.error)).toBe(200);
+    const rules = await apiJson<{ format_line: string | null }>(request, `/api/v1/fixtures/${fx.fixtureId}/rules`);
+    const line = rules.data?.format_line;
+    expect(line, "premise: badminton's format line exists").toBeTruthy();
+
+    // The stale tap: refused, and the pad raises the banner (the hold, then the wire: `HOLD_MS` is CI-pinned short).
+    await scorebug.locator(".grid > button").first().click();
+    const banner = page.getByTestId("pad-rules-changed");
+    await expect(banner).toBeVisible({ timeout: 45_000 });
+    await expect(banner).toContainText(line!);
+    // Above the board at every width: the banner sits in the host's unordered band, before the tiles.
+    const [b, tiles] = await Promise.all([banner.boundingBox(), page.locator('[data-role="v3-tiles"]').boundingBox()]);
+    expect(b, "the banner has a box").not.toBeNull();
+    expect(tiles, "the board has a box").not.toBeNull();
+    expect(b!.y + b!.height, "the banner ends above the board").toBeLessThanOrEqual(tiles!.y);
+    // The format line wraps inside the banner rather than clipping it, and the dismiss keeps its own column.
+    const o = await overflowingIn(page, '[data-testid="pad-rules-changed"]', "*", "the rules-changed banner is missing");
+    expect(o.clipped, "nothing clipped inside the banner").toEqual([]);
+    await expectNoHorizontalScroll(page);
+    // Only for a per-screen visual verdict: a crop from the scorebug to the top of the board into W2A_SHOTS_DIR (the switch
+    // bracket-finish.spec.ts uses). Unset in CI, where it does nothing.
+    const dir = process.env.W2A_SHOTS_DIR;
+    if (dir) {
+      const width = page.viewportSize()!.width;
+      const sy = await page.evaluate(() => window.scrollY);
+      const sb = (await scorebug.boundingBox())!;
+      const top = Math.max(0, sb.y + sy - 8);
+      await page.screenshot({
+        path: `${dir}/t15-rules-banner-${width}.png`,
+        fullPage: true,
+        clip: { x: 0, y: top, width, height: tiles!.y + sy + 120 - top },
+      });
+    }
+  } finally {
+    await ctx.close();
+  }
+});

@@ -1,7 +1,10 @@
+import { getDictionary } from "@/lib/i18n";
+import { resolveLocale } from "@/lib/resolve-locale";
 import { v1, parseBody } from "@/server/api-v1/http";
-import { requireResourceAuth } from "@/server/api-v1/auth";
+import { requireFixtureActor, requireResourceAuth } from "@/server/api-v1/auth";
 import { PutFixtureRules } from "@/server/api-v1/schemas";
 import { writeFixtureRulesOverride } from "@/server/usecases/fixture-rules";
+import { getFixtureRules } from "@/server/usecases/fixtures";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -17,5 +20,20 @@ export async function PUT(req: Request, { params }: Ctx) {
     const body = await parseBody(req, PutFixtureRules);
     const auth = await requireResourceAuth(req, "fixture", id, "write");
     return writeFixtureRulesOverride(auth, [id], body.rules);
+  });
+}
+
+/**
+ * W2c Task 15 (X-SR-7, owner P-1 "A") — the rules the match plays by NOW: what an open scoring pad reloads after a
+ * correction refused its tap (409 FIXTURE_RULES_CHANGED) or an answer told it the version moved. The cfg its fold uses,
+ * the version its next tap must send, and the format line in the READER's language (the locale the pad's own page
+ * resolves: cookie, account, then the proxy's Accept-Language). Organiser or the match's device link, as
+ * GET /fixtures/{id}/state — the scorer's pad is the reader.
+ */
+export async function GET(req: Request, { params }: Ctx) {
+  return v1(async () => {
+    const { id } = await params;
+    const auth = await requireFixtureActor(req, id, "read");
+    return getFixtureRules(auth, id, await getDictionary(await resolveLocale(), "public"));
   });
 }

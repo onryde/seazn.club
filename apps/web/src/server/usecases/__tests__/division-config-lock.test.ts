@@ -121,6 +121,22 @@ describe.skipIf(!HAS_DB)("division-config: the first event and a division format
     await expect(run.p).resolves.toMatchObject({ seq: 2 });
   });
 
+  it("two first events never wait on each other: one proceeds while another, in flight on a sibling, holds the lock SHARED", async () => {
+    const b = await league();
+    const [f1, f2] = b.fixtureIds;
+    let run!: Awaited<ReturnType<typeof launchBehind>>;
+    await withTenant(b.auth.orgId, async (holder) => {
+      // The sibling's first event, in flight: the append's own transaction body, not yet committed.
+      await appendEventInTx(holder, b.auth.orgId, f1!, 0, { type: "core.start", payload: {} });
+      run = await launchBehind(holder, "the second first event finishes on its own", () =>
+        scoreEvent(b.auth, f2!, { expected_seq: 0, type: "core.start", payload: {} }),
+      );
+    });
+    expect(run.settled, "it finished while the sibling's first event was in flight").toBe(true);
+    expect(run.waiters).toBe(0);
+    await expect(run.p).resolves.toMatchObject({ seq: 1 });
+  });
+
   it("I-1, the save side (EXCLUSIVE): a division save waits for a first event in flight, then refuses the change by the stage it would split", async () => {
     const b = await league();
     const [f1] = b.fixtureIds;
@@ -222,7 +238,10 @@ describe.skipIf(!HAS_DB)("batch-3 carry: a walkover awarded by scoring waits for
     const cfg = (await loadFixturePadCfg(s.auth, parentId)).cfg as { bestOf: number };
     expect(cfg.bestOf, "the tie resolves the saved format").toBe(5);
     // The expectation is the engine's own walkover fold under the format the tie now resolves, never the write's.
-    const lineups = await withTenant(s.auth.orgId, (tx) => loadLineupPair(tx, parentId, tie.outcome!.winner!, w1));
+    // Each side on its own seat, as the product folds it (`awarded-state.ts`): her seat is the one the winner is not on.
+    const winner = tie.outcome!.winner!;
+    const [home, away] = tie.home_entrant_id === winner ? [winner, w1] : [w1, winner];
+    const lineups = await withTenant(s.auth.orgId, (tx) => loadLineupPair(tx, parentId, home, away));
     const want = awardedMatchState(moduleOf("badminton"), cfg, lineups, tie.outcome as never, {
       fixtureId: parentId,
       recordedAt: new Date().toISOString(),

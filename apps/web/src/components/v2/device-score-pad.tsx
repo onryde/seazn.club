@@ -33,6 +33,8 @@ import { scoringErrorText } from "@/lib/scoring-vocab";
 // bootstrap-resolution failure (fidelity.ts's own doc) means "no pad
 // renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
+import { RulesChangedBanner } from "@/components/v2/scorepad/v3/rules-changed-banner";
+import { rulesVersionOf, type FixtureRulesResult } from "@/components/v2/scorepad/transport";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { deadLinkKey, VIEW_ONLY_COPY, type ViewOnlyReason } from "@/lib/scan-screen";
 import { officialLabelKey } from "@/lib/official-label";
@@ -97,6 +99,10 @@ interface Props {
    *  for a reason the scan page already knows at load. `null`/absent opens
    *  live; a refused write can still move a live screen here (`viewOnly`). */
   initialViewOnly?: ViewOnlyReason | null;
+  /** W2c Task 15 (X-SR-7, owner P-1 "A") — the match's rules version, read with the pad's cfg (`loadFixturePadCfg`).
+   *  This chrome's own writes ("Void my last entry", Start) send it, like the inner pad's taps: after a correction
+   *  they are refused, never applied under rules the scorer did not see. Absent: sent as nothing (never checked). */
+  rulesVersion?: number;
 }
 
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
@@ -133,6 +139,7 @@ export function DeviceScorePad({
   initialEvents,
   scorePadV2 = null,
   initialViewOnly = null,
+  rulesVersion: loadedRulesVersion,
 }: Props) {
   const msg = useMsg();
   // Design audit 1.5: formatting only (a refusal's list of reasons) — English outside a provider.
@@ -161,6 +168,13 @@ export function DeviceScorePad({
     setViewOnly(initialViewOnly);
   }
   const [busy, setBusy] = useState(false);
+  /** W2c Task 15 — the rules version this chrome's writes send: the loaded one, raised when the inner pad reloads the
+   *  rules after a correction (`onRulesChanged`) or when this chrome's own write is refused for one (below). */
+  const [rulesVersion, setRulesVersion] = useState(loadedRulesVersion);
+  /** W2c Task 15 — the rules this chrome reloaded after ITS OWN write was refused: handed to the inner pad as its
+   *  cfg and version (the pad then folds under them), and said in the banner until the scorer dismisses it. */
+  const [chromeRules, setChromeRules] = useState<{ cfg: unknown; rulesVersion: number; formatLine: string | null } | null>(null);
+  const [chromeRulesShown, setChromeRulesShown] = useState(false);
   /** True while an opportunistic post-pad-event `resync()` is in flight.
    *  Separate from `busy` on purpose: `busy` means "a send of MINE is
    *  running" and its own `finally` clears it, so reusing it here would let a
@@ -307,6 +321,33 @@ export function DeviceScorePad({
     handlePadEvents();
   }, [handlePadEvents]);
 
+  /** W2c Task 15 (X-SR-7): this chrome's write was refused for the rules — read the rules that stand, move this chrome
+   *  and the inner pad onto them, and say so. Best-effort: a failed read leaves the refusal line as the only word (the
+   *  next write is refused again and asks again). */
+  const followCorrection = useCallback(async () => {
+    try {
+      const read = await authed<FixtureRulesResult>(`/api/v1/fixtures/${fixture.id}/rules`);
+      const version = rulesVersionOf(read.rules_version);
+      if (version === undefined) return;
+      setRulesVersion((prev) => (prev === undefined || version > prev ? version : prev));
+      setChromeRules({
+        cfg: read.cfg,
+        rulesVersion: version,
+        formatLine: typeof read.format_line === "string" && read.format_line.length > 0 ? read.format_line : null,
+      });
+      setChromeRulesShown(true);
+    } catch {
+      // Kept as is: the refusal line already says the entry was not recorded.
+    }
+  }, [authed, fixture.id]);
+
+  /** W2c Task 15 — the inner pad reloaded the rules after its own tap was refused: this chrome's writes follow it,
+   *  and the pad's own banner is the one that speaks (this chrome's would repeat it). */
+  const handlePadRulesChanged = useCallback((version: number) => {
+    setRulesVersion((prev) => (prev === undefined || version > prev ? version : prev));
+    setChromeRulesShown(false);
+  }, []);
+
   const send: SendEvent = useCallback(
     async (type, payload) => {
       setError(null);
@@ -324,6 +365,7 @@ export function DeviceScorePad({
                 type,
                 payload,
                 idempotency_key: idempotencyKey,
+                rules_version: rulesVersion,
               },
             });
             break;
@@ -346,6 +388,12 @@ export function DeviceScorePad({
           // Scorer sheets §4.5 — the chrome's own write (Start, "Void my last
           // entry") refused because the result moved the competition on.
           enterCarriedForward();
+        } else if (err instanceof ApiV1Error && err.code === "FIXTURE_RULES_CHANGED") {
+          // W2c Task 15 (X-SR-7): the organiser corrected the format since this screen loaded. Nothing was written;
+          // say so in the pad's own words, move onto the corrected rules, and re-read the match.
+          setError(msg("scorepad.refusal.rulesChanged"));
+          await followCorrection();
+          await resync().catch(() => undefined);
         } else if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
           await resync().catch(() => undefined);
           setError(msg("device.seqConflict"));
@@ -370,7 +418,7 @@ export function DeviceScorePad({
         setBusy(false);
       }
     },
-    [authed, fixture.id, live.last_seq, resync, enterCarriedForward, msg, locale],
+    [authed, fixture.id, live.last_seq, resync, enterCarriedForward, msg, locale, rulesVersion, followCorrection],
   );
 
   // G1 — this pad's own freshness floor (`useTabReturn`, whose doc carries the
@@ -405,8 +453,8 @@ export function DeviceScorePad({
   // conditional return without breaking React's Rules of Hooks.
   const padSpecForMount = useMemo(
     () =>
-      resolvePadSpecForMount(sport.key, scorePadV2?.moduleVersion ?? "", scorePadV2?.resolvedConfig ?? sport.config),
-    [scorePadV2, sport.key, sport.config],
+      resolvePadSpecForMount(sport.key, scorePadV2?.moduleVersion ?? "", chromeRules?.cfg ?? scorePadV2?.resolvedConfig ?? sport.config),
+    [scorePadV2, sport.key, sport.config, chromeRules],
   );
 
   // STABLE IDENTITY, and the whole point of the memo (2026-09-22). This object
@@ -712,12 +760,19 @@ export function DeviceScorePad({
           predicate `fixture-console.tsx` shares. */}
       {canAct && started && scorePadV2 && scoring && shouldMountPad({ decided, padSpec: padSpecForMount }) && home && away && (
         <section className="card p-4">
+          {/* W2c Task 15: this chrome's own write was refused for a correction — the same banner the pad shows for its
+           *  taps, above the pad. Once the pad reloads on its own, its banner speaks instead. */}
+          {chromeRules !== null && chromeRulesShown && (
+            <div className="mb-3">
+              <RulesChangedBanner formatLine={chromeRules.formatLine} onDismiss={() => setChromeRulesShown(false)} />
+            </div>
+          )}
           <ScoringErrorBoundary>
             <ScorePad
               fixtureId={fixture.id}
               sportKey={sport.key}
               moduleVersion={scorePadV2.moduleVersion}
-              resolvedConfig={scorePadV2.resolvedConfig}
+              resolvedConfig={chromeRules?.cfg ?? scorePadV2.resolvedConfig}
               home={home}
               away={away}
               initialEvents={padSeed}
@@ -725,6 +780,9 @@ export function DeviceScorePad({
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
               stageKind={scorePadV2.stageKind}
+              // W2c Task 15: the rules this chrome reloaded, when it did; else what the page loaded the pad with.
+              rulesVersion={chromeRules?.rulesVersion ?? scorePadV2.rulesVersion}
+              onRulesChanged={handlePadRulesChanged}
               // A device link is never an organiser: settle, forfeit and abandon are refused to it (X-ST-2, D-O1).
               canOrganise={false}
               onEvents={handlePadEvents}

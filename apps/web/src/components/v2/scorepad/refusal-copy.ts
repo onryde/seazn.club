@@ -72,6 +72,10 @@ export const REFUSAL_KEY: Readonly<Record<string, MessageKey>> = {
   // too (`transport.ts`'s CHROME_TERMINAL_CODES), which leaves the pad; this
   // is the pad's own banner for the moment before it does.
   RESULT_CARRIED_FORWARD: "scorepad.refusal.carriedForward",
+  // W2c Task 15 (X-SR-7, owner P-1 "A") — a tap made under rules the organiser has since corrected
+  // (`engine-db/append-event.ts`). The pad has reloaded the rules by the time this shows; the scorer retakes the tap
+  // under them (`v3/rules-changed-banner.tsx` says what they now are).
+  FIXTURE_RULES_CHANGED: "scorepad.refusal.rulesChanged",
 };
 
 /** The one sentence that is true of every refusal, known code or not. */

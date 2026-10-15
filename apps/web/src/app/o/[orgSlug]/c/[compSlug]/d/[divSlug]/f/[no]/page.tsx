@@ -84,7 +84,8 @@ export default async function FixturePage({
       // Loop-F tidy 2: the held block's no-choice sentence on a line that feeds no next match (a final, third place).
       fixtureFeedsNextMatch(auth, id),
     ]);
-  const { cfg: padCfg, stageKind } = padLoad;
+  // W2c Task 15 (X-SR-7): the rules version rides the bootstrap to the console's pad, read with the cfg.
+  const { cfg: padCfg, stageKind, rulesVersion } = padLoad;
   const [competition, planKey] = await Promise.all([
     getCompetition(auth, division.competition_id),
     orgPlanKey(auth.orgId),
@@ -209,6 +210,7 @@ export default async function FixturePage({
     initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
     identity: { recordedBy: auth.userId, deviceLinkId: null },
     stageKind,
+    rulesVersion,
   });
 
   return (

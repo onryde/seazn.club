@@ -604,7 +604,7 @@
     "files": [
      "src/server/usecases/__tests__/division-locks.test.ts"
     ],
-    "name": "declares exactly the nine codes"
+    "name": "declares exactly the ten codes"
    },
    {
     "cwd": "apps/web",

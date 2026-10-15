@@ -107,8 +107,8 @@
   {
     "id": "append-kind-dropped",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "resolveFixtureCfg(fixture, division.config, stage, sportModule)",
-    "replace": "resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule)",
+    "find": "const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule)",
+    "replace": "const cfg = resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule)",
     "killers": [
       {
         "cwd": "apps/web",

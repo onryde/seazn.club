@@ -6523,5 +6523,10 @@
   "settings.credits.stream.kind.packRefund": "Pack refunded",
   "settings.credits.stream.kind.staffAdjust": "Adjusted by Seazn support",
   "settings.credits.stream.kind.expired": "Unused free credits expired",
-  "settings.credits.stream.kind.other": "Other change"
+  "settings.credits.stream.kind.other": "Other change",
+  "rules.err.fixtureRulesChanged": "The match's format was corrected: {format}. This entry was not recorded — check the score, then record it again.",
+  "rules.err.fixtureRulesChangedNoLine": "The match's format was corrected. This entry was not recorded — check the score, then record it again.",
+  "scorepad.refusal.rulesChanged": "Not recorded — the match's format was corrected. The pad now follows the new format; check the score, then retake it.",
+  "pad.rulesChanged": "The organiser corrected this match's format. Scoring follows it from now on.",
+  "pad.rulesChangedDismiss": "Got it"
 }

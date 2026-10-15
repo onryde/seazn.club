@@ -29,6 +29,10 @@ import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { isCascadeOnlyForfeitReason } from "@/lib/forfeit-phase-refusal";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { HttpError } from "@/lib/errors";
+import { getDictionary } from "@/lib/i18n";
+import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
+import { formatLineOf } from "./rules-version";
 import { log } from "@/server/logger";
 
 // What a caller supplies; persistence stamps id/seq/recordedAt (spec 03 §2 —
@@ -49,6 +53,11 @@ export interface AppendInput {
   voids?: string;
   id?: string;
   recordedAt?: string;
+  /** W2c Task 15 (X-SR-7, D14, P-1) — the rules version the SENDER folds under: the two scoring pads send it with
+   *  every append (`scorepad/pipeline.ts`'s body builder, the device chrome). A sent value that is not the fixture's
+   *  `rules_version` is refused FIXTURE_RULES_CHANGED before anything is written. Absent is never checked: the console
+   *  chrome, the americano panel, the withdrawal cascade, finalize, the settle and the importer never send it. */
+  rulesVersion?: number;
   /** W2b PF-2 — which server writer is appending. Set ONLY by the withdrawal cascade (`withdrawal.ts`, through
    *  `scoreEvent`'s internal options, never a request field): `reason: "withdrew"` and `core.abandon{expunge:true}`
    *  are cascade-only events, refused from every other writer — the console, a device link, the API, the importer. */
@@ -72,6 +81,9 @@ export interface AppendResult {
    *  public documents changed (a name became a "Winner of …" seat), so
    *  `scoreEvent` publishes them with the fixtures a decision advanced into. */
   released: string[];
+  /** W2c Task 15 (X-SR-7) — the fixture's `rules_version` this write was checked against and folded under: every
+   *  accepted answer carries it, so an open pad learns of a correction from its next ack. */
+  rulesVersion: number;
   /** F9 (R3.5 review) — carried through so `appendEvent` can log an accepted
    *  event AFTER `withTenant` has committed, instead of `appendEventInTx`
    *  logging it itself before the fixtures update, the pg_notify, and the
@@ -97,6 +109,8 @@ interface FixtureRow {
   config_snapshot: unknown;
   /** W2c (V443) — this match's own format override; resolved last, frozen with the rest at the first event. */
   rules_override: unknown;
+  /** W2c (V443) — how many times a correction re-froze this match's format (Task 15: a pad sends the one it loaded). */
+  rules_version: number;
   /** W2b D19 — the feed graph: a double walkover needs a next match to send nobody to. */
   winner_to_fixture: string | null;
   loser_to_fixture: string | null;
@@ -285,7 +299,7 @@ export async function appendEventInTx(
 
   const [fixture] = await tx<FixtureRow[]>`
     select id, division_id, stage_id, home_entrant_id, away_entrant_id, status, outcome,
-           config_snapshot, rules_override, winner_to_fixture, loser_to_fixture
+           config_snapshot, rules_override, rules_version, winner_to_fixture, loser_to_fixture
     from fixtures where id = ${fixtureId}
   `;
   if (!fixture) {
@@ -303,6 +317,18 @@ export async function appendEventInTx(
     });
   }
 
+  // W2c Task 15 (Task 2 I-1, orchestrator ruling): the FIRST event of a match freezes the division's LIVE config (the
+  // snapshot below). A division or stage format save holds `division-config:<division>` EXCLUSIVE from before its
+  // refusal read to its commit (`divisions.ts` patchDivision, `stage-rules.ts` putStageRules); the first freeze takes it
+  // SHARED here — after this fixture's lock, before the division read — so the two serialise: the event waits for the
+  // save and freezes what it committed, or the save waits for the event and its refusal read sees the stage started.
+  // Without it one stage could play two formats. Only a match with nothing frozen asks: a started one reads its own
+  // snapshot and never waits on a save. Lock order: division: → stage-seats → fixture: → division-config: (an exclusive
+  // holder takes no stage-seats or fixture lock after it; a shared holder takes no division lock after it).
+  if (!hasFrozenCfg(fixture.config_snapshot)) {
+    await tx`select pg_advisory_xact_lock_shared(hashtext(${"division-config:" + fixture.division_id}))`;
+  }
+
   const [division] = await tx<DivisionRow[]>`
     select config, sport_key, module_version from divisions where id = ${fixture.division_id}
   `;
@@ -315,6 +341,27 @@ export async function appendEventInTx(
   const [stage] = await tx<StageRow[]>`
     select kind, config from stages where id = ${fixture.stage_id}
   `;
+
+  // W2c Task 15 (X-SR-7, D14, P-1): a tap sent under rules this match no longer plays is never applied under the new
+  // ones. Asked only when the sender sent a version (the scoring pads; every server writer sends none), and `!==`, not
+  // `<`: a version from anywhere else is as wrong as an old one. BEFORE the seq check on purpose — a stale queued tap
+  // behind a stale seq would otherwise be a SEQ_CONFLICT, which the pad renegotiates and RESENDS under the new rules.
+  // The answer names the rules that stand (the version, and the format line in the server's English: the pad says it
+  // in the reader's language off GET /rules).
+  if (input.rulesVersion !== undefined && input.rulesVersion !== fixture.rules_version) {
+    const format = formatLineOf(
+      division.sport_key,
+      sportModule,
+      resolveFixtureCfg(fixture, division.config, stage, sportModule),
+      await getDictionary("en", "public"),
+    );
+    throw new HttpError(
+      RULE_ERROR_STATUS.FIXTURE_RULES_CHANGED,
+      ruleErrorMessage("FIXTURE_RULES_CHANGED", { format: format ?? undefined }),
+      "FIXTURE_RULES_CHANGED",
+      { rules_version: fixture.rules_version, format },
+    );
+  }
 
   // Optimistic concurrency: the client's expectedSeq must equal the current
   // ledger tip. Gapless seq is assigned here, under the lock (doc 07 note 3).
@@ -642,6 +689,7 @@ export async function appendEventInTx(
       outcome,
       status,
       released,
+      rulesVersion: fixture.rules_version,
       sportKey: division.sport_key,
     },
     firstResult,

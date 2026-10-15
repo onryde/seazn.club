@@ -7240,6 +7240,7 @@ async function w2cStageRulesSuite(): Promise<void> {
   await w2cStagePresetChecks(owner);
   await w2cStageOffAndReseedChecks(owner);
   await w2cStagePointsWalkoverChecks(owner);
+  await w2cRulesVersionChecks(owner);
 }
 
 /**
@@ -7599,6 +7600,49 @@ async function w2cSeedStartedPool(owner: Session): Promise<{ divisionId: string;
   // an unstarted division.
   check("w2c seed: Pool A's first match started through the v1 events API (201)", started.status === 201);
   return { divisionId: div.id, fixtureId, unstartedId };
+}
+
+/**
+ * W2c Task 15 (X-SR-7, owner P-1 "A") — over real HTTP: an open pad's tap after a correction. A started badminton
+ * `short` match reads its rules (`GET /fixtures/{id}/rules`, version 0), the organiser corrects it (`PUT …/rules`,
+ * version 1), and a tap still sent under version 0 is refused 409 FIXTURE_RULES_CHANGED naming the version that stands —
+ * with the ledger's tip unmoved, so nothing was written. The same tap under version 1 lands and its answer carries 1.
+ */
+async function w2cRulesVersionChecks(owner: Session): Promise<void> {
+  const { fixtureId } = await w2cSeedStartedPool(owner);
+  const before = await v1(owner, `/api/v1/fixtures/${fixtureId}/rules`);
+  const loaded = before.json.data as { rules_version?: number; cfg?: { bestOf?: unknown }; format_line?: unknown } | undefined;
+  const put = await v1(owner, `/api/v1/fixtures/${fixtureId}/rules`, "PUT", { rules: { bestOf: 5 } });
+  const tip = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`)).last_seq;
+  const tap = { expected_seq: tip, type: "badminton.game.summary", payload: { home: 11, away: 5 } };
+  const stale = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", { ...tap, rules_version: loaded?.rules_version ?? 0 });
+  const tipAfter = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`)).last_seq;
+  const refused =
+    before.status === 200 &&
+    loaded?.rules_version === 0 &&
+    put.status === 200 &&
+    stale.status === 409 &&
+    stale.json.error?.code === "FIXTURE_RULES_CHANGED" &&
+    (stale.json.error as { rules_version?: unknown } | undefined)?.rules_version === 1 &&
+    tipAfter === tip;
+  check(
+    "w2c: a stale rules version is refused and writes nothing" +
+      (refused
+        ? ""
+        : ` — GET ${before.status} v${String(loaded?.rules_version)}, PUT ${put.status}, POST ${stale.status} ${JSON.stringify(stale.json.error ?? stale.json.data)}, tip ${tip}→${tipAfter}`),
+    refused,
+  );
+  const fresh = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", { ...tap, rules_version: 1 });
+  const now = await v1(owner, `/api/v1/fixtures/${fixtureId}/rules`);
+  const landed =
+    fresh.status === 201 &&
+    (fresh.json.data as { rules_version?: unknown } | undefined)?.rules_version === 1 &&
+    (now.json.data as { cfg?: { bestOf?: unknown } } | undefined)?.cfg?.bestOf === 5;
+  check(
+    "w2c: the same tap under the current rules version lands, and the rules read back corrected" +
+      (landed ? "" : ` — POST ${fresh.status} ${JSON.stringify(fresh.json.error ?? fresh.json.data)}, GET cfg ${JSON.stringify(now.json.data)}`),
+    landed,
+  );
 }
 
 interface ActiveSuspensionOut {
