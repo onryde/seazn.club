@@ -24,7 +24,7 @@ vi.mock("next/cache", () => ({
 }));
 
 import { pointsRuleAwardReachesTable } from "@seazn/engine/competition";
-import { foldMatchWithStoppage } from "@seazn/engine/core";
+import { foldMatchWithStoppage, summaryOf } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
@@ -34,6 +34,7 @@ import { fixtureRow, post, tip } from "./helpers/w2b-rig";
 import { getFixtureState, listFixtureHeadlines, loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { putStageRules } from "@/server/usecases/stage-rules";
 import { startDivision } from "@/server/usecases/schedule";
+import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import { createStages, generateStageFixtures, getStandings } from "@/server/usecases/stages";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
@@ -73,6 +74,20 @@ function defaultWinnerFigure(spec: SceneSpec): number {
   const folded = foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), [makeEnvelope(1, { type: "core.forfeit", payload: { by: "A", reason: "walkover" } })]);
   return m.forfeitCredit(cfg, folded.state, "walkover", "away").perSide[0][m.awardScoreKeys!.for]!;
 }
+
+/** The division's OWN reading of the same forfeit (home turned up): the side lines of the engine's no-offer fold, and the
+ *  winner's credit on the sport's score key - the figures a stage with no rule award must keep on every surface and in the
+ *  table. Read from the engine, never typed here. */
+function divisionReadingFor(spec: SceneSpec, reason: "walkover" | "withdrew" = "walkover"): { lines: string[]; winnerFor: number } {
+  const m = moduleOf(spec.sport);
+  const cfg = m.configSchema.parse(m.variants[spec.variant]);
+  const folded = foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), [makeEnvelope(1, { type: "core.forfeit", payload: { by: "A", reason } })]);
+  return {
+    lines: summaryOf(m as never, folded as never).perSide.map((p) => p.line),
+    winnerFor: m.forfeitCredit(cfg, folded.state, reason, "away").perSide[0][m.awardScoreKeys!.for]!,
+  };
+}
+const divisionLinesFor = (spec: SceneSpec): string[] => divisionReadingFor(spec).lines;
 
 /** The organiser's award: never the sport's default (so the headline can tell the rule from the division), and the side
  *  that did not turn up is not nil (so the orientation can be told). */
@@ -195,7 +210,10 @@ describe.skipIf(!HAS_DB)("an unplayed walkover under a stage award reads the RUL
       expect((await loadFixturePadCfg(twin.s.auth, twin.rows[2]!.id)).forfeitAward, `${spec.sport}: no rule award, none carried`).toBeUndefined();
       // Premise: the division's own reading is a different thing (the right answer is not the wrong one's constant).
       expect(old.console.lines, `${spec.sport}: premise - the twin's headline is not the rule's`).not.toEqual([String(w), String(l)]);
-      // The positive pair: the same stage WITHOUT a rule award keeps the division's reading on every surface.
+      // The positive pair: the same stage WITHOUT a rule award keeps the division's OWN reading on every surface - the
+      // engine's no-offer fold of this walkover, pinned to a figure rather than only to the other surfaces.
+      expect(old.console.lines, `${spec.sport}: the twin keeps the division's own figure`).toEqual(divisionLinesFor(spec));
+      expect(divisionLinesFor(spec), `${spec.sport}: the division's reading is two non-empty lines`).toSatisfy((l: string[]) => l.length === 2 && l.every((x) => x !== ""));
       expect(old.page.lines).toEqual(old.console.lines);
       expect(old.hub).toEqual(old.console.lines);
       expect(old.division.lines).toEqual(old.console.lines);
@@ -331,6 +349,68 @@ describe.skipIf(!HAS_DB)("the sequence around an unplayed walkover (X-WO-1 B)", 
     await expect(putStageRules(rule.s.auth, rule.s.leagueStageId, { points: ruleFor([award[0] + 1, award[1]]) })).rejects.toMatchObject({ code: "STAGE_FORMAT_LOCKED" });
     expect(await read(rule, id), "the refused save moved nothing").toEqual(before);
   }, 300_000);
+});
+
+describe.skipIf(!HAS_DB)("a withdrawal cascade through a TABLE stage under a rule award (X-WO-1 B)", () => {
+  /** A four-entrant league (Pool): the withdrawer's other two games are decided first - walkovers her opponents do not turn
+   *  up for - so the table policy AWARDS her pending line (played >= half) instead of expunging it (engine `withdrawTableEntrant`).
+   *  `departedSeat` is the seat she holds on the pending line. */
+  async function withdrawn(spec: SceneSpec, award: readonly [number, number] | null, departedSeat: "home" | "away") {
+    const sc = await scene(spec, award);
+    const line = sc.rows[0]!;
+    const departed = departedSeat === "home" ? line.home : line.away;
+    const hers = sc.rows.filter((r) => r.id !== line.id && (r.home === departed || r.away === departed));
+    expect(hers, `${spec.sport}: rig - the withdrawer has two other games`).toHaveLength(2);
+    for (const r of hers) await walkover(sc, r.id, r.home === departed ? "away" : "home");
+    const out = await withdrawEntrantCascade(sc.s.auth, departed);
+    // (The scene's Cup walks her seat over too: the count is the Pool line's and the Cup's, so the Pool line is read directly.)
+    expect([out.policy, out.voided], `${spec.sport}: rig - the table policy AWARDS (played >= half), it does not expunge`).toEqual(["walkover", 0]);
+    const after = await fixtureRow(line.id);
+    expect([after.status, (after.outcome as { kind?: string; reason?: string } | null)?.kind], `${spec.sport}: rig - the line is an award, not a void`).toEqual(["forfeited", "award"]);
+    const ledger = await sql<{ type: string; payload: unknown }[]>`select type, payload from score_events where fixture_id = ${line.id} order by seq`;
+    expect(ledger, `${spec.sport}: rig - the cascade wrote the withdrawal as the console writes a forfeit`).toEqual([
+      { type: "core.forfeit", payload: { by: departed, reason: "withdrew" } },
+    ]);
+    const opponent = departedSeat === "home" ? line.away : line.home;
+    return { sc, line, departed, opponent };
+  }
+
+  it("every reaching sport, both seats: the withdrawn line reads the rule's number on every surface and the table credits it; the twin without an award keeps the division's", async () => {
+    let checked = 0;
+    for (const spec of SCENES) {
+      const award = awardFor(spec);
+      const [w, l] = award;
+      const division = divisionReadingFor(spec, "withdrew");
+      // Premise: the division's own figure is not the rule's, so the right answer is not the wrong one's constant.
+      expect(division.lines, `${spec.sport}: premise - the division's reading is not the rule's`).not.toEqual([String(w), String(l)]);
+      expect(division.lines, `${spec.sport}: premise - nor the other orientation`).not.toEqual([String(l), String(w)]);
+      for (const seat of ["home", "away"] as const) {
+        const { sc, line, departed, opponent } = await withdrawn(spec, award, seat);
+        const keys = sc.m.awardScoreKeys!;
+        // The seat she does not hold turned up: the home side wins when she held the away seat.
+        expectEverySurface(`${spec.sport} withdrawn ${seat}`, await read(sc, line.id), [String(w), String(l)], seat === "away");
+        // The table: her two walkover wins (the rule's number each) plus the withdrawn line, which the opponent wins under it.
+        const st = await standingsOf(sc);
+        const her = st.find((r) => r.entrantId === departed)!;
+        const him = st.find((r) => r.entrantId === opponent)!;
+        expect([her.metrics?.[keys.for], her.metrics?.[keys.against]], `${spec.sport}/${seat}: the withdrawer: two wins and one withdrawal under the rule`).toEqual([2 * w + l, 2 * l + w]);
+        expect([him.metrics?.[keys.for], him.metrics?.[keys.against], him.metrics?.[keys.diff]], `${spec.sport}/${seat}: the opponent's credit for the withdrawn line`).toEqual([w, l, w - l]);
+        checked++;
+      }
+      // The positive pair: the same cascade with NO award keeps the division's own reading, on the headline and in the table.
+      // (She holds the away seat, so the home side turned up: the orientation `divisionReadingFor` reads.)
+      const { sc: twin, line, opponent } = await withdrawn(spec, null, "away");
+      const got = await read(twin, line.id);
+      expect(got.console.lines, `${spec.sport}: the twin keeps the division's figure on the console`).toEqual(division.lines);
+      expect(got.page.lines).toEqual(division.lines);
+      expect(got.hub).toEqual(division.lines);
+      expect(got.division.lines).toEqual(division.lines);
+      const him = (await standingsOf(twin)).find((r) => r.entrantId === opponent)!;
+      expect(him.metrics?.[twin.m.awardScoreKeys!.for], `${spec.sport}: the twin's table keeps the division's credit`).toBe(division.winnerFor);
+      checked++;
+    }
+    expect(checked, "scenes checked (2 seats + the twin, per sport)").toBe(SCENES.length * 3);
+  }, 900_000);
 });
 
 describe.skipIf(!HAS_DB)("a rule change before kickoff moves what an unplayed match will resolve to (rules_version)", () => {
