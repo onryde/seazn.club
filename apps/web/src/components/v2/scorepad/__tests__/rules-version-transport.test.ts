@@ -20,6 +20,7 @@ import { defaultLineupPair } from "@seazn/engine/testkit";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { resolveModuleClient } from "../module-client";
 import type { AppendCallResult, AppendEventBody } from "../pipeline";
+import { releaseHeld } from "../queue";
 import type { QueueStore } from "../queue-store";
 import {
   TERMINAL_CONFLICT_CODES,
@@ -183,6 +184,24 @@ describe("X-SR-7 the remote pad's tap carries the rules version (the real tap pa
     expect(api.posts[0]!.headers.Authorization).toBe("Bearer dl_secret");
     expect(api.posts[0]!.body).toMatchObject({ expected_seq: 1, type: "badminton.game.summary", rules_version: 3 });
     expect(pad.current.rulesChanged, "an ack at the pad's own version is no news").toBeNull();
+  });
+
+  it("a HELD tap — the soft commit every real v3 tap makes (`submitHeld`) — carries the version it was held under", async () => {
+    // `submit` above is the chrome-less path; the v3 skins dispatch through `submitHeld` (the hold, then the drain), a
+    // second capture site of its own. Held for a minute so only the explicit release below can send it.
+    const api = apiFetch(() => ({ status: 201, body: { ok: true, data: { seq: 2, state_summary: null, outcome: null, status: "in_play", event_id: "r-2", rules_version: 3 } } }));
+    const pad = mount(params({ rulesVersion: 3, transport: deviceLinkTransport("dl_secret", { fetchFn: api.fn }) }));
+    await settle();
+    const held = await pad.current.submitHeld("badminton.game.summary", GAME, 60_000, () => undefined);
+    expect(held, "premise: the tap was held").not.toBeNull();
+    await settle();
+    expect(api.posts.length, "held, not yet sent").toBe(0);
+    await releaseHeld(pad.current.queueStore, held!.heldId);
+    await pad.current.retryDrain();
+    await settle();
+    expect(api.posts.length, "the released tap reached the wire").toBe(1);
+    expect(api.posts[0]!.body).toMatchObject({ expected_seq: 1, type: "badminton.game.summary", rules_version: 3 });
+    pad.unmount();
   });
 
   it("the empty case: a pad loaded with no version sends no field at all (never checked)", async () => {
