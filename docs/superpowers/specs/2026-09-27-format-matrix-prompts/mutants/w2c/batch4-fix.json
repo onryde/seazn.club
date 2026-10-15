@@ -362,5 +362,20 @@
     "name": "the product's top-level decider set is a file plain node can load"
    }
   ]
+ },
+ {
+  "id": "b4-n1-patch-lock-after-row-reads",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "    if (touchesFormat) {\n      await tx`select pg_advisory_xact_lock(hashtext(${\"division:\" + id}))`;\n    }\n    if (patch.youth !== undefined || patch.player_name_display !== undefined || patch.age_max !== undefined) {\n      [maskingBefore] = await tx<{ youth: boolean; player_name_display: string | null }[]>`\n        select youth, player_name_display from divisions where id = ${id} for no key update`;\n    }\n    if (patch.show_seeds !== undefined) {\n      const [stored] = await tx<{ show_seeds: boolean }[]>`\n        select show_seeds from divisions where id = ${id} for no key update`;\n      seedsBefore = stored?.show_seeds;\n    }\n",
+  "replace": "    if (patch.youth !== undefined || patch.player_name_display !== undefined || patch.age_max !== undefined) {\n      [maskingBefore] = await tx<{ youth: boolean; player_name_display: string | null }[]>`\n        select youth, player_name_display from divisions where id = ${id} for no key update`;\n    }\n    if (patch.show_seeds !== undefined) {\n      const [stored] = await tx<{ show_seeds: boolean }[]>`\n        select show_seeds from divisions where id = ${id} for no key update`;\n      seedsBefore = stored?.show_seeds;\n    }\n    if (touchesFormat) {\n      await tx`select pg_advisory_xact_lock(hashtext(${\"division:\" + id}))`;\n    }\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "on a COMPLETED division, racing a patch that names a masking field and a format field: both finish, no 40P01"
+   }
+  ]
  }
 ]
