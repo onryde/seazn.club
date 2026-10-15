@@ -189,7 +189,7 @@
     "find": "        if (refusesEverything(prop)) continue;\n",
     "replace": "",
     "killers": [
-      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the examples that fail are exactly the named pre-existing ones" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "every published request example parses against its own schema" },
       { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes. examples are real stage bodies" }
     ]
   },
@@ -199,7 +199,7 @@
     "find": "      if (Array.isArray(s.prefixItems)) return (s.prefixItems as unknown[]).map((item) => exampleOf(item, depth + 1));\n",
     "replace": "",
     "killers": [
-      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the examples that fail are exactly the named pre-existing ones" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "every published request example parses against its own schema" },
       { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes. examples are real stage bodies" }
     ]
   },

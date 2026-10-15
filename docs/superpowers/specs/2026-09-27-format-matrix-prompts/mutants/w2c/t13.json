@@ -69,7 +69,7 @@
  {
   "id": "t13-gate-create",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "if (cfg?.points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(cfg.points));",
+  "find": "if (points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(points));",
   "replace": "",
   "killers": [
    {
@@ -247,7 +247,7 @@
  {
   "id": "t13-create-door",
   "file": "apps/web/src/server/usecases/stage-defaults.ts",
-  "find": "if (config.points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(config.points));",
+  "find": "if (points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(points));",
   "replace": "",
   "killers": [
    {
@@ -695,7 +695,7 @@
  {
   "id": "t13-fr1-template-door",
   "file": "apps/web/src/server/usecases/stage-defaults.ts",
-  "find": "if (config.points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(config.points));",
+  "find": "if (points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(points));",
   "replace": "",
   "killers": [
    {
