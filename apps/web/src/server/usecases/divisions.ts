@@ -819,6 +819,22 @@ export async function patchDivision(
     // W2c batch-3 I1: the walkovers no event records, read before a format write (`award-rewrite.ts`); none otherwise.
     let held: HeldAward[] = [];
     const effective: Record<string, unknown> = { ...patch };
+    // Batch 4 re-review N1: ONE lock order everywhere — the division advisory lock FIRST, then any row lock on `divisions`.
+    // The stage writers (`insertStageBatch`, which `createStages` and `replaceStages` share) take the advisory lock and
+    // only then reopen a completed division (`update divisions`, a row lock); this save used to read the row `for no key
+    // update` (the two reads below) and take the advisory lock after it, so on a completed division the two each held
+    // what the other wanted and Postgres broke the tie with 40P01. Taken here, before the first row lock, whenever the
+    // body can touch the format or the stages (a format edit or tiebreakers, both below). Not taken unconditionally: the
+    // lock is also held by the schedule build, a restore and every stage generator, and a plain Save (a rename, the
+    // registration hub's `age_max` re-send) has no need to queue behind one of them.
+    const formatEdit = patch.variant_key !== undefined || patch.config !== undefined;
+    const touchesFormat = formatEdit || patch.tiebreakers !== undefined;
+    if (touchesFormat) {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
+    }
+    // The camera block below takes a row lock (`for no key update of d`), so it comes AFTER the advisory locks (N1's
+    // order: advisory locks first, rows last). When it runs, withTenant's prelude (`cameraGate`) has already taken
+    // `division:`; taking it again above, in the same transaction, never waits.
     if (cameraPolicyNamed) {
       // The stored value this write replaces, under the same `for no key
       // update` the masking/seeds reads below use, plus the competition floor
@@ -988,12 +1004,10 @@ export async function patchDivision(
     //   3. tiebreakers join the lock — they were never locked before W2c (Q3).
     // An unparseable config is 422 whether or not anything has started: the old "409 beats 422 while locked" order
     // belonged to the division-wide lock, which is gone.
-    const formatEdit = patch.variant_key !== undefined || patch.config !== undefined;
-    if (formatEdit || patch.tiebreakers !== undefined) {
-      // The division advisory lock every format writer takes (`stage-rules.ts`, `fixture-rules.ts`): a format edit
-      // re-writes the walkovers no event records (batch-3 I1, below), and a per-match correction of one of them must
-      // not interleave with it.
-      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
+    if (touchesFormat) {
+      // Under the division advisory lock every format writer takes (`stage-rules.ts`, `fixture-rules.ts`), taken at the
+      // top of this transaction (N1): a format edit re-writes the walkovers no event records (batch-3 I1, below), and a
+      // per-match correction of one of them must not interleave with it.
       const [current] = await tx<
         {
           sport_key: string;
