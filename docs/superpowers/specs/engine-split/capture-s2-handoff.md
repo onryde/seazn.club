@@ -51,18 +51,23 @@ engine) are not. Anything posted to `events` is, including `core.void`: an outda
 void against a ledger it folds differently. The web pad sends no epoch and is never refused. Server-internal writes (the
 withdrawal cascade) carry none and are never refused.
 
-**Ordering guarantees.** Tests are in `apps/web/src/server/usecases/__tests__/scoring-engine-epoch.test.ts` (case numbers below); the one
+**Ordering guarantees.** Tests are in `apps/web/src/server/usecases/__tests__/scoring-engine-epoch.test.ts` (case numbers below); a
 guarantee NOT pinned by a test is marked.
 
 1. A retry the idempotency cache already answered returns `201` with the original answer before anything else is looked at (case 7,
    cache warm).
-2. **Authorisation, entitlement and phase refusals outrank the 426.** A device link that may not write the event gets `403`, not 426
-   (case 13, tested). A division not started (`422 WRONG_PHASE`), a frozen competition and the plan gates are raised by the same
-   `assertEntitledToScore` that runs BEFORE the epoch check, so they win by code order; **no test pins those three**. An outdated
-   phone that may not write at all is told that, not "update".
+2. **Authorisation, entitlement and DIVISION-phase refusals outrank the 426.** All three are raised by `assertEntitledToScore`, which
+   runs before the epoch check; an outdated phone that may not write at all is told that, not "update". Tested: a device link that may
+   not write the event gets `403` (case 13); a division not yet started (`setup` / `scheduled`) gets `WRONG_PHASE` (case 13b); a frozen
+   (over-quota) competition gets the `402` paywall (case 13c). The `cricket.dls` plan gate sits in the same function and wins the same
+   way by code order; **no test pins that one**.
+   **Ledger-level refusals do NOT outrank it.** A stale `expected_seq` (`SEQ_CONFLICT`), a fixture already decided, and an event the
+   sport module rejects come from `appendEvent`, which runs AFTER the gate: a behind phone sees `426` first (case 13d, stale seq;
+   the other two are by code order, unpinned). That is consistent with the terminal rule in §3: nothing such a phone sends can be written.
 3. **An already-accepted key stays 201 after a bump** (case 7, cache warm AND cold). If the phone is behind but the ledger already
    holds that `idempotency_key` for this fixture, the server answers `201` with the ORIGINAL event. A lost ack's retry never turns
-   into an "update the app" it cannot act on.
+   into an "update the app" it cannot act on. The lookup is scoped to the fixture: a key accepted on fixture A never answers a NEW
+   write on fixture B (case 15; the same key on B at the current epoch is a new write there).
 4. **A refusal burns nothing** (cases 4, 6, 8). It writes no row and caches nothing under the key: the same key K resent after the
    app updated is a new write, accepted exactly once. Two refusals in a row are two 426s and zero rows.
 5. Only the moved sport is refused; every other sport at its own epoch still writes (cases 5, 9).
@@ -94,13 +99,15 @@ before they update. There is no grace window, so this ordering is the only prote
 
 **What the app does on a 426 (engine-split owner).**
 
-- Show a clear "Update required" screen with a store link, in the app's own 4 locales. Map the CODE `ENGINE_OUTDATED`, like
-  `refusal-copy.ts`; the server message is English-only.
-- Treat it as **terminal**: never a retry loop. A resend is refused identically, and each refusal spends a slot of the fixture's
-  shared write bucket, starving the other devices on that fixture. (The web pad's `transport.ts` already classifies every
-  non-408/429, non-409 4xx as permanent; the native queue needs the same rule, or one outdated phone wedges its own queue head.)
-- **Keep the unsent events queued. Never drop them.** After the update, resend them (same `idempotency_key`s; guarantee 3 and 4 make
-  that safe). That recovery assumes the updated app folds the same ledger, which is what the epoch exists to ensure.
+- Show a clear "Update required" screen with a store link, in the app's own 4 locales. **The app must NOT render the server's
+  `error.message`**: it is English-only prose. Map the CODE `ENGINE_OUTDATED` to the app's own localised copy, exactly as the web pad's
+  `refusal-copy.ts` maps codes and never falls through to server prose. `sport`, `required` and `got` are safe to show or log.
+- Treat it as **terminal**: STOP, show the update prompt, and do not auto-retry until the app is updated. A resend is refused
+  identically, and each refusal spends a slot of the fixture's shared write bucket (`scorev1:<fixture>`, 10 per second, shared by
+  every device scoring that match), starving the other devices on that fixture. (The web pad's `transport.ts` already classifies
+  every non-408/429, non-409 4xx as permanent; the native queue needs the same rule, or one outdated phone wedges its own queue head.)
+- **Keep the unsent events queued. Never drop them**, and do not resend them automatically before the app is updated. After the
+  update, resend them (same `idempotency_key`s; guarantees 3 and 4 make that safe). That recovery assumes the updated app folds the same ledger, which is what the epoch exists to ensure.
 - Only the bumped sport is affected: the app keeps scoring other sports.
 
 **Major / minor (engine-split owner; IN FLIGHT, not merged).** On branch `feat/engine-split-1e-minor` the fold version splits in two:

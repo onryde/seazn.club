@@ -130,9 +130,17 @@ describe.skipIf(!HAS_DB)("replayOutcomeFor", () => {
       payload: {},
       idempotencyKey: key,
     });
+    // Fixture b has a ledger of its own. Without one the lookup's fold returns
+    // null by itself ("no ledger"), so a query that dropped its `fixture_id`
+    // filter would still answer null here and this test would pass on the leak
+    // (engine-split 1f-1 review: the mutant survived 30/30).
+    await appendEvent(auth.orgId, b.fixtureId, 0, { type: "core.start", payload: {} });
     // The index permits this (it is scoped per fixture), so the LOOKUP has to
     // be scoped too. A query on idempotency_key alone would hand fixture b
     // fixture a's outcome — a wrong score, silently.
     expect(await replayOutcomeFor(auth.orgId, b.fixtureId, key)).toBeNull();
+    // The positive pair: the lookup works on b, so the null above is "no such
+    // key on b", not "nothing works" — a is answered with its own event.
+    expect((await replayOutcomeFor(auth.orgId, a.fixtureId, key))!.seq).toBe(1);
   });
 });

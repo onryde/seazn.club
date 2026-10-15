@@ -481,9 +481,11 @@ export const __assertUndoTargetForTests = assertUndoTarget;
 // every module, at every band. `cricket.dls` is untouched: it is a SEPARATE
 // gate keyed on the event's payload + the division's config, not on fidelity.
 // Unknown fixtures fall through — appendEvent owns that error.
-// Returns null, except for a device link's keyed RETRY on a carried-forward
-// fixture, where it returns the ledger's replay of the original write (review
-// I1; see the device-link block).
+// Returns `{ replay, sport }`. `replay` is null, except for a device link's keyed
+// RETRY on a carried-forward fixture, where it is the ledger's replay of the
+// original write (review I1; see the device-link block). `sport` is the fixture's
+// sport as its division pins it, handed on to the engine-epoch gate; null for an
+// unknown fixture (appendEvent owns that error).
 async function assertEntitledToScore(
   auth: AuthCtx,
   fixtureId: string,

@@ -21,8 +21,11 @@ import { builtinModules } from "@seazn/engine/sports";
 import { foldEpochOf } from "@seazn/engine/sport";
 import { forEachSportAsync } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
+import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { EngineError } from "@seazn/engine/core";
+import { divisionScoringClosed } from "@/lib/division-phase";
 import { v1 } from "@/server/api-v1/http";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -78,7 +81,7 @@ afterAll(async () => {
   await c?.end();
 });
 
-interface Seeded { auth: AuthCtx; fixtureId: string; divisionId: string; entrants: [string, string] }
+interface Seeded { auth: AuthCtx; fixtureId: string; fixtureIds: string[]; divisionId: string; entrants: [string, string] }
 
 /** A started division of `sport` with a seated fixture, through the usecases. The variant is the sport's FIRST declared
  *  one — an engine declaration, never a guessed key. */
@@ -91,7 +94,7 @@ async function seed(sport: string): Promise<Seeded> {
   const fixtureId = s.fixtureIds[0]!;
   const [row] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
     select home_entrant_id, away_entrant_id from fixtures where id = ${fixtureId}`;
-  return { auth: s.auth, fixtureId, divisionId: s.divisionId, entrants: [row!.home_entrant_id, row!.away_entrant_id] };
+  return { auth: s.auth, fixtureId, fixtureIds: s.fixtureIds, divisionId: s.divisionId, entrants: [row!.home_entrant_id, row!.away_entrant_id] };
 }
 
 const start = (s: Seeded, extra: Record<string, unknown> = {}) =>
@@ -307,6 +310,39 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     expect(await rows(s.fixtureId)).toBe(2);
   });
 
+  it("11b. the void gate sits BEFORE the undo-target checks: a behind phone's undo of a voided / missing / malformed target is a 426, not an UNDO_* 409", async () => {
+    const s = await seed(BADMINTON);
+    const started = await start(s);
+    const voided = await scoreEvent(s.auth, s.fixtureId, {
+      expected_seq: 1,
+      type: "core.void",
+      payload: { event_id: started.event_id },
+    });
+    expect(voided.seq, "premise: the target is already undone").toBe(2);
+    bump.set(BADMINTON, 1);
+
+    // [what the undo points at, the UNDO_* code the target check answers when it is reached]
+    const targets: [string, unknown, string][] = [
+      ["already voided", started.event_id, "UNDO_ALREADY_VOIDED"],
+      ["missing", randomUUID(), "UNDO_TARGET_MISSING"],
+      ["malformed", "not-a-uuid", "UNDO_NOOP"],
+    ];
+    let checked = 0;
+    for (const [what, eventId, undoCode] of targets) {
+      const undo = (extra: Record<string, unknown>) =>
+        scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.void", payload: { event_id: eventId }, ...extra });
+      // The control that makes the 426 below mean something: with no epoch the SAME undo reaches the target check and is refused by it.
+      const control = await refusal(undo({}));
+      expect([what, control.status, control.code], `${what}: control`).toEqual([what, 409, undoCode]);
+      const behind = await refusal(undo({ engine_epoch: realEpoch(BADMINTON) }));
+      expect([what, behind.status, behind.code], `${what}: behind phone`).toEqual([what, 426, "ENGINE_OUTDATED"]);
+      checked++;
+    }
+    expect(checked, "every undo-target refusal was checked").toBe(targets.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(await rows(s.fixtureId), "no undo wrote anything").toBe(2);
+  });
+
   it("12. an unregistered sport is a typed MODULE_NOT_FOUND (422), never a plain Error / 500 from foldEpochOf", async () => {
     const s = await seed(BADMINTON);
     const key = `epoch-unknown-${randomUUID().slice(0, 8)}`;
@@ -329,7 +365,10 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     }
   });
 
-  it("12b. a division pinned to a module version this build does not ship is MODULE_NOT_FOUND too", async () => {
+  // NOT a witness for the gate: with the gate deleted, appendEvent raises the same MODULE_NOT_FOUND for the same division, so this
+  // passes either way (review 1f-1). Case 12 is the witness (the real foldEpochOf would throw a PLAIN Error there). Kept as a pin
+  // of the door's behaviour for an unshipped pinned version, whoever raises it.
+  it("12b. (appendEvent's own behaviour, not the gate's) a division pinned to an unshipped module version is MODULE_NOT_FOUND", async () => {
     const s = await seed(BADMINTON);
     await sql`update divisions set module_version = '0.0.0-unshipped' where id = ${s.divisionId}`;
     const err = await start(s, { engine_epoch: foldEpochOf(BADMINTON) }).catch((e: unknown) => e);
@@ -353,6 +392,76 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     expect(err.code).not.toBe("ENGINE_OUTDATED");
   });
 
+  it("13b. the division phase outranks the epoch: a behind phone on a division not yet started gets WRONG_PHASE, not 426", async () => {
+    const s = await seed(BADMINTON);
+    const original = await sql<{ status: string }[]>`select status from divisions where id = ${s.divisionId}`;
+    const startedStatus = original[0]!.status;
+    bump.set(BADMINTON, 1);
+    const behind = () => start(s, { engine_epoch: realEpoch(BADMINTON) }).catch((e: unknown) => e);
+    // The positive pair: on the STARTED division the same behind write is the 426, so the refusals below are not the epoch gate being broken.
+    const live = await behind();
+    expect((live as HttpError).status, "premise: started division, behind phone").toBe(426);
+
+    let checked = 0;
+    for (const closed of ["setup", "scheduled"]) {
+      expect(divisionScoringClosed(closed), `premise: ${closed} is a scoring-closed phase`).toBe(true);
+      await sql`update divisions set status = ${closed} where id = ${s.divisionId}`;
+      try {
+        const noEpoch = await start(s).catch((e: unknown) => e);
+        expect(EngineError.is(noEpoch, "WRONG_PHASE"), `${closed}: the control, with no epoch`).toBe(true);
+        const err = await behind();
+        expect(EngineError.is(err, "WRONG_PHASE"), `${closed}: a behind phone is told the division is closed, got ${String(err)}`).toBe(true);
+        expect(err).not.toBeInstanceOf(HttpError);
+        checked++;
+      } finally {
+        await sql`update divisions set status = ${startedStatus} where id = ${s.divisionId}`;
+      }
+    }
+    expect(checked, "both scoring-closed phases were checked").toBe(2);
+    expect(await rows(s.fixtureId)).toBe(0);
+  });
+
+  it("13c. a frozen (over-quota) competition outranks the epoch: a behind phone gets the 402 paywall, not 426", async () => {
+    const s = await seed(BADMINTON);
+    bump.set(BADMINTON, 1);
+    const behind = () => refusal(start(s, { engine_epoch: realEpoch(BADMINTON) }));
+    // The positive pair, BEFORE the freeze: the same behind write on the same fixture is the 426.
+    expect((await behind()).status, "premise: not frozen, behind phone").toBe(426);
+
+    // Over quota = a DOWNGRADE, so it is raw SQL (createCompetition enforces the quota itself): `limit` fillers created AFTER the
+    // seeded competition, which has no events, make it the least recently active and so the one that freezes (event-import-freeze.test.ts).
+    await setOrgPlan(s.auth.orgId, "community");
+    await invalidateOrgEntitlements(s.auth.orgId);
+    const limit = await getLimit(s.auth.orgId, "competitions.max_active");
+    expect(limit, "premise: the community plan has a competitions ceiling").not.toBeNull();
+    for (let i = 0; i < (limit as number); i++) {
+      const suffix = randomUUID().slice(0, 8);
+      await sql`
+        insert into competitions (org_id, name, slug, status)
+        values (${s.auth.orgId}, ${"Filler " + suffix}, ${"filler-" + suffix}, 'draft')`;
+    }
+    const control = await refusal(start(s));
+    expect(control, "the control: with no epoch the frozen competition refuses").toBeInstanceOf(PaymentRequiredError);
+    const err = await behind();
+    expect(err, "a behind phone gets the freeze, not the epoch refusal").toBeInstanceOf(PaymentRequiredError);
+    expect([err.status, err.code]).toEqual([402, control.code]);
+    expect(await rows(s.fixtureId)).toBe(0);
+  });
+
+  it("13d. ledger-level refusals come AFTER the gate: a behind phone with a stale expected_seq is told to update (426), not SEQ_CONFLICT", async () => {
+    const s = await seed(BADMINTON);
+    await start(s);
+    bump.set(BADMINTON, 1);
+    const stale = (extra: Record<string, unknown>) =>
+      scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {}, ...extra }).catch((e: unknown) => e);
+    // The control: at the current epoch the same stale write reaches appendEvent and is refused by it.
+    const control = await stale({ engine_epoch: foldEpochOf(BADMINTON) });
+    expect(EngineError.is(control, "SEQ_CONFLICT"), `control, got ${String(control)}`).toBe(true);
+    const behind = await stale({ engine_epoch: realEpoch(BADMINTON) });
+    expect((behind as HttpError).status).toBe(426);
+    expect(await rows(s.fixtureId)).toBe(1);
+  });
+
   it("14. a fixture that does not exist answers appendEvent's own refusal, with or without an engine_epoch (no sport to compare)", async () => {
     const s = await seed(BADMINTON);
     const missing = randomUUID();
@@ -371,5 +480,48 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
       (without as Error).constructor.name,
       (without as Error).message,
     ]);
+  });
+
+  it("15. the durable replay is FIXTURE-scoped: a key accepted on fixture A never answers a behind phone's NEW write on fixture B", async () => {
+    // Same seed, same org: seedBracket makes a fresh org per call and RLS would mask a cross-org probe (review 1f-1).
+    const s = await seed(BADMINTON);
+    const fixtureA = s.fixtureId;
+    const fixtureB = s.fixtureIds[1];
+    expect(fixtureB, "premise: the bracket seats a second fixture").toBeDefined();
+    expect(fixtureB).not.toBe(fixtureA);
+    const phoneEpoch = foldEpochOf(BADMINTON);
+    const key = `epoch-${randomUUID()}`;
+
+    const onA = await scoreEvent(s.auth, fixtureA, { expected_seq: 0, type: "core.start", payload: {}, engine_epoch: phoneEpoch, idempotency_key: key });
+    expect(onA.seq).toBe(1);
+    // B has a ledger of its own (a fixture with NO events makes the lookup's fold return null and hides a leaked row).
+    await scoreEvent(s.auth, fixtureB!, { expected_seq: 0, type: "core.start", payload: {} });
+    expect(await rows(fixtureB!), "premise: fixture B holds an event").toBe(1);
+
+    bump.set(BADMINTON, 1);
+    const err = await refusal(
+      scoreEvent(s.auth, fixtureB!, {
+        expected_seq: 1,
+        type: "core.note",
+        payload: { text: "a NEW write from the now-outdated phone, on the other fixture" },
+        engine_epoch: phoneEpoch,
+        idempotency_key: key,
+      }),
+    );
+    expect(err.status, "a NEW write on B is refused; fixture A's event is not B's answer").toBe(426);
+    expect(await rows(fixtureB!), "nothing was written to B").toBe(1);
+    expect(await rows(fixtureA), "A is untouched").toBe(1);
+
+    // The positive pair: the same key K at the current epoch IS a new write on B (the unique index is per fixture), and it is B's own event.
+    const okB = await scoreEvent(s.auth, fixtureB!, {
+      expected_seq: 1,
+      type: "core.note",
+      payload: { text: "the same key, on B, after the app updated" },
+      engine_epoch: foldEpochOf(BADMINTON),
+      idempotency_key: key,
+    });
+    expect(okB.seq).toBe(2);
+    expect(okB.event_id).not.toBe(onA.event_id);
+    expect(await rows(fixtureB!)).toBe(2);
   });
 });
