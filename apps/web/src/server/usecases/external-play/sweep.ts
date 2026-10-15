@@ -36,6 +36,7 @@ import { concurrentConnections, matchCameraOff, type CompleteCoverage } from "@/
 import { cameraMatchWindow, matchGuardFaults } from "@/server/external-play/video/match-window";
 import {
   RealtimeKitDeferred,
+  RealtimeKitError,
   endMeeting,
   fetchVideoOffCoverage,
   listMeetingSessions,
@@ -695,6 +696,42 @@ async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<Sweep
   if (!meetingIsDone(pass, c)) return;
   await end(c.meetingId);
   pass.report.meetingsEnded++;
+}
+
+// Job 3b: a room whose meeting row went with its fixture (D16 fix-2, review residual 2; V449).
+//
+// A meeting row is the only thing that tracks an ACTIVE vendor room, and it cascades away with its fixture (a stage deleted,
+// Rebuild fixtures, a Swiss round reshaped to a smaller field, the undo of a generation, or anything wider). V449's trigger
+// parks each un-ended room in `video_rooms_to_end` in the deleting transaction; this ends it at the vendor and clears the
+// parking only AFTER the end succeeded, so a refused end (a failure, or the call budget) keeps its row and the next pass asks
+// again - the same "the row outlives the room" rule retireStaleMeeting keeps. Why the sweep and not the deleting call: a
+// vendor call cannot sit in the transaction that deletes, and the four writes run under the tenant role, which cannot read
+// the sealed meetings table to collect the rooms first. The cost is latency, one sweep tick (the cron fires every minute) -
+// the rooms are of boards that no longer exist, so nobody is waiting on them - and calls: kick-all and the INACTIVE patch,
+// two per parked room, through the same budget (D21) as every other teardown. A room RealtimeKit itself says is not there
+// (its documented not-found) is already gone: its parking is cleared without a count.
+
+type ParkedRoom = { fixtureId: string; side: string; meetingId: string };
+
+async function parkedRoomCandidates(pass: Pass): Promise<ParkedRoom[]> {
+  const scope = pass.orgIds === undefined ? sql`` : sql`and r.org_id in ${sql(pass.orgIds as string[])}`;
+  return sql<ParkedRoom[]>`
+    select r.fixture_id as "fixtureId", r.side, r.meeting_id as "meetingId"
+      from video_rooms_to_end r
+     where true ${scope}
+     order by r.created_at, r.meeting_id`;
+}
+
+async function endParkedRoom(pass: Pass, c: ParkedRoom, end: NonNullable<SweepDeps["endMeeting"]>): Promise<void> {
+  let ended = true;
+  try {
+    await end(c.meetingId);
+  } catch (err) {
+    if (!(err instanceof RealtimeKitError && err.code === "not_found")) throw err;
+    ended = false;
+  }
+  await sql`delete from video_rooms_to_end where meeting_id = ${c.meetingId}`;
+  if (ended) pass.report.meetingsEnded++;
 }
 
 // ─── Job 4: the reconcile sweep (spec §3.5, §4; T11 review M3, M4) ─────────
@@ -1362,6 +1399,7 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   // torn down in it.
   const end = deps.endMeeting ?? ((m) => endMeeting(m));
   await each(pass, "teardown", await teardownCandidates(pass), (c) => teardown(pass, c, end));
+  await each(pass, "teardown", await parkedRoomCandidates(pass), (c) => endParkedRoom(pass, c, end));
   // After the teardown: a room ended in THIS pass is not readable for 2 minutes.
   const rtk = deps.realtimeKit ?? {};
   await each(pass, "camera_evidence", await cameraCandidates(pass), (c) => cameraEvidence(pass, c, rtk));

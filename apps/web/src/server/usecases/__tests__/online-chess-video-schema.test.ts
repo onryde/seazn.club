@@ -732,15 +732,15 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
   // scripts/rls-exempt.ts. That name is a claim that no app_user connection can reach the table. These cases make the
   // claim the DATABASE's: a sealed table has no policy AND no grant, so an app_user query on it is refused (42501),
   // never silently empty.
-  describe("sealed tables (V439, V442, V446, V447): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
+  describe("sealed tables (V439, V442, V446, V447, V449): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
     /** Typed from the migrations' own words (V439: "Sealed like V410's tables … no app_user policy"; stage_round_opens
      *  and V442's guard faults enable + force with no policy), never read from the catalogue. */
     const SEALED = [
       "fixture_play_flags", "fixture_seat_asks", "fixture_video_guard_faults", "fixture_video_meetings",
-      "fixture_video_participants", "online_chess_audit", "realtimekit_call_budget", "stage_round_opens",
+      "fixture_video_participants", "online_chess_audit", "realtimekit_call_budget", "stage_round_opens", "video_rooms_to_end",
     ];
-    /** The four with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). */
-    const WITH_ORG_ID = ["fixture_play_flags", "fixture_video_meetings", "online_chess_audit", "stage_round_opens"];
+    /** The five with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). */
+    const WITH_ORG_ID = ["fixture_play_flags", "fixture_video_meetings", "online_chess_audit", "stage_round_opens", "video_rooms_to_end"];
     const ANY_PRIVILEGE = "select, insert, update, delete, truncate, references, trigger";
 
     it("each is sealed: enabled AND forced, zero policies, and app_user holds no privilege on it", async () => {
@@ -771,7 +771,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       expect(t).toEqual({ granted: true, policies: 1 });
     });
 
-    it("the four with org_id are exempt by name, so the RLS guard reads them as sealed rather than as missing a policy", () => {
+    it("the five with org_id are exempt by name, so the RLS guard reads them as sealed rather than as missing a policy", () => {
       expect(WITH_ORG_ID.filter((t) => SUPERUSER_ONLY.has(t))).toEqual(WITH_ORG_ID);
     });
   });

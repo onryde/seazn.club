@@ -496,6 +496,18 @@ colour; the colour only LABELS (`arbiter.ts:283-286` and `:539-542` map white/bl
   mention of a video table that is not one of those five reference shapes (`lock table`, `using`, a
   plain string), so a shape it cannot read is never skipped.
 
+**A room whose meeting row cascades away with its fixture (D16 fix-2, V449).** A meeting row is the only
+thing that tracks an ACTIVE vendor room, and it goes with its fixture: a stage delete, Rebuild fixtures, a
+Swiss round reshaped to a smaller field, the undo of a generation, and every wider delete (division,
+competition, organisation) leave up to two rooms per board active with live player tokens. The delete cannot
+end them (no vendor call in its transaction; the writes run under the tenant role, which cannot read the
+sealed meetings table to collect them first), so a trigger on `fixture_video_meetings` (`after delete ... when
+old.ended_at is null`, security definer) parks each un-ended room in the sealed `video_rooms_to_end` (no
+foreign keys: the fixture is gone and the organisation may be going), in the deleting transaction, whatever
+statement or cascade deleted it. The sweep (job 3b) ends each parked room and deletes the parking only after
+the end succeeded, so a refused end is asked again; the vendor's documented not-found counts as gone. Latency
+is one sweep tick; cost is the two teardown calls per room through the D21 budget.
+
 **Schema** (a new delta after V446, D21's call-budget delta; numbered at the time):
 - `fixture_video_meetings` gains `side text not null check (side in ('home','away'))`. Its
   key becomes `(fixture_id, side)`; `meeting_id` stays unique.

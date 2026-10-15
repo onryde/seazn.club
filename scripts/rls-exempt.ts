@@ -73,6 +73,9 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "stage_round_opens",
   // One RealtimeKit meeting per player, keyed (fixture, side) (D16, V448: meeting ids); the room and the arbiter panel get a projection.
   "fixture_video_meetings",
+  // Rooms whose meeting row cascaded away with its fixture (D16 fix-2, V449): the vendor room is still ACTIVE, so the sweep ends it.
+  // Written by a security-definer trigger, read and deleted by the sweep on the privileged client; no tenant ever sees a row.
+  "video_rooms_to_end",
   // Camera and out-of-band flags; the organiser reads and closes them through use-cases on the privileged client.
   "fixture_play_flags",
   // Video-override audit (D11): who overrode an outage, and on which fixture. An org must not be able to edit its own

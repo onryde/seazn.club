@@ -2649,9 +2649,18 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     ]);
     // The row names no pairing, so nothing reuses the room: the next retire (a claim, or the sweep) takes it.
     const ended: string[] = [];
-    const report = await sweepExternalPlay({ orgIds: [r.orgId], serialise: false, endMeeting: async (id) => void ended.push(id) });
+    const report = await sweepExternalPlay({
+      orgIds: [r.orgId],
+      serialise: false,
+      // The real endMeeting stamps the row after the vendor calls (a row stamped ended parks nothing when its delete follows - V449).
+      endMeeting: async (id) => {
+        ended.push(id);
+        await sql`update fixture_video_meetings set ended_at = now() where meeting_id = ${id} and ended_at is null`;
+      },
+    });
     expect([ended, report.meetingsEnded]).toEqual([[meetingId], 1]);
     expect(await sql`select meeting_id from fixture_video_meetings where fixture_id = ${a.fixtureId}`).toEqual([]);
+    expect(await sql`select meeting_id from video_rooms_to_end where org_id = ${r.orgId}`, "the retire's delete of an ended row parks nothing").toEqual([]);
   });
 
   // D16 review G1 (was D21-fix m3): a refused end KEEPS the row now, so the log is no longer the only trace - but it is still
