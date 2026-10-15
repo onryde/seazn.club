@@ -48,9 +48,10 @@ export type RunnerTrigger =
   // construction — T5-b downgrades a create it could not settle to `retryable: false`, so an ambiguous outcome can
   // never arrive with the domain's licence to create attempt + 1 under a different name.
   | { type: "create_failed"; retryable: boolean; outcomeUnknown: boolean } | { type: "callback_playing" }
-  // R2003: `refused` — the compositor's final beat said its run was refused (`stoppedBeatTrigger`). Optional on purpose:
-  // absent is every stopped beat before R2003, and the one other producer (a legacy runner's beat, no exit reason).
-  | { type: "callback_stopped"; refused?: true }
+  // R2003: what the compositor's final beat said (`stoppedBeatTrigger`). `refused` — its run was refused; `endReason` —
+  // it ENDED the run (I2, PR #967 review), and the session ends with this reason. Both optional on purpose: absent is
+  // every stopped beat before R2003, and the one other producer (a legacy runner's beat, no exit reason).
+  | { type: "callback_stopped"; refused?: true; endReason?: RunnerEndReason }
   | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null } | { type: "stale_beat" } | { type: "deadline" }
   // Capture QR v2 §5.3: the stop's reason. Optional on purpose: the teardown producers (a timeout or a credit refusal
   // tearing a Machine down before `fail`) drop the stop's ending, or keep the session's own reason (M2), so for them the
@@ -84,7 +85,11 @@ export type BeatExitReason = (typeof BEAT_EXIT_REASONS)[number];
 
 /** R2003 (controller ruling, 2026-10-15): what a COMPOSED runner's stopped beat asks of the lifecycle, by the reason it
  *  gave. null = RECORD ONLY: the beat is in its two stores (last_heartbeat, the sample) and the lifecycle hears nothing.
- *  - none given (a legacy runner), `ended`, `deadline` → `callback_stopped`, exactly as before R2003.
+ *  - none given (a legacy runner) → `callback_stopped`, exactly as before R2003 (lost → destroyed → the ONE retry).
+ *  - `ended` / `deadline` → `callback_stopped` carrying an end reason: the session ENDS (`stopped` / `max_duration`) and
+ *    is never retried (I2, orchestrator decision on the PR #967 review). A deadline retry would boot a Machine past
+ *    RELAY_DEADLINE_AT — the wall clock's own instant, hence max_duration — and an unsolicited `ended` is the
+ *    compositor's to make.
  *  - `fatal`, `signalled` → record only. Fly restarts a crashed compositor IN PLACE (`on-failure`, RUNNER_INPLACE_RESTARTS)
  *    and the restarted process beats again on the SAME attempt; if it does not, the composed stale window takes it
  *    `lost` → force_destroy → destroyed → the ONE retry. A stop here force-destroyed the Machine Fly was restarting and
@@ -93,7 +98,9 @@ export type BeatExitReason = (typeof BEAT_EXIT_REASONS)[number];
  *  - `refused` → `callback_stopped` marked refused: the exit-78 outcome, failed(machine_refused), never a retry. */
 export function stoppedBeatTrigger(exitReason: BeatExitReason | null | undefined): RunnerTrigger | null {
   switch (exitReason) {
-    case undefined: case null: case "ended": case "deadline": return { type: "callback_stopped" };
+    case undefined: case null: return { type: "callback_stopped" };
+    case "ended": return { type: "callback_stopped", endReason: "stopped" };
+    case "deadline": return { type: "callback_stopped", endReason: "max_duration" };
     case "refused": return { type: "callback_stopped", refused: true };
     case "fatal": case "signalled": case "session_gone": return null;
   }
@@ -157,7 +164,13 @@ const toLost = (r: Runner, t: RunnerTrigger): RunnerStep => ({ next: { ...withEx
  *  restart into the same refusal is torn down. The session is terminal by the time `lost × destroy_ok` confirms the
  *  destroy, so C27 drops the retry that cell signals. No exit is written: a beat never writes the exit facts (A5). */
 const refusedByBeat = (r: Runner): RunnerStep => ({ next: { ...r, state: "lost" }, effects: [FORCE_DESTROY], signal: { type: "failed", reason: "machine_refused" } });
-const stoppedWhileActive: Cell = (r, t) => (t.type === "callback_stopped" && t.refused ? refusedByBeat(r) : toLost(r, t));
+/** booting/playing × a stopped beat: refused → fail now; an end reason → the session-ending teardown (`lostTornDown`, the
+ *  F17 shape: destroyed + force_destroy + completed — nothing after a completed session can retry); otherwise today's lost. */
+const stoppedWhileActive: Cell = (r, t) =>
+  t.type !== "callback_stopped" ? toLost(r, t)
+  : t.refused ? refusedByBeat(r)
+  : t.endReason !== undefined ? lostTornDown(r, t.endReason)
+  : toLost(r, t);
 /** Fix round 3, ruling (a): a `lost` runner's teardown has not been SEEN to land. Re-issue it and stay — `destroyed` means
  *  confirmed gone, and only destroy_ok / observed destroyed confirm it (invariant 1: a retry only after that). */
 const reissueDestroy = (r: Runner): RunnerStep => ({ next: r, effects: [FORCE_DESTROY], signal: null });

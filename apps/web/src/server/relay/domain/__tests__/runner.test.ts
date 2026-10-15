@@ -59,7 +59,9 @@ const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap
       ...(["stopped", "failed", "destroyed"] as const).map((state) => ({ type: "observed" as const, state, exit: REFUSED_EXIT })),
     ]
   // R2003: both flavours of a stopped beat — a plain one, and the final beat that said its run was refused
-  : t === "callback_stopped" ? [{ type: "callback_stopped" }, { type: "callback_stopped", refused: true }]
+  : t === "callback_stopped" ? [{ type: "callback_stopped" }, { type: "callback_stopped", refused: true },
+      // I2 (PR #967 review): the beat that ENDS the session, with each reason it can carry
+      { type: "callback_stopped", endReason: "stopped" }, { type: "callback_stopped", endReason: "max_duration" }]
   : t === "create_failed" ? [
       { type: "create_failed", retryable: true, outcomeUnknown: false },
       { type: "create_failed", retryable: false, outcomeUnknown: false },
@@ -531,11 +533,13 @@ const observe = (w: Sim, at: number, state: (typeof OBSERVED_STATES)[number], ex
   feed(w, { type: "runner", trigger: { type: "observed", state, exit } }, at);
 
 describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each reason asks of the lifecycle", () => {
-  // The oracle is the controller's ruling (2026-10-15), typed here — never read off the function under test.
-  type Routed = "callback_stopped" | "refused" | "record_only";
+  // The oracle is the controller's ruling (2026-10-15) and the orchestrator's I2 decision (PR #967 review: an `ended` or
+  // `deadline` beat ENDS the session — no retry), typed here — never read off the function under test.
+  type Routed = "callback_stopped" | "ends:stopped" | "ends:max_duration" | "refused" | "record_only";
   const RULED: Record<BeatExitReason | "absent" | "null", Routed> = {
     absent: "callback_stopped", null: "callback_stopped",      // a legacy runner's beat: today's behaviour, unchanged
-    ended: "callback_stopped", deadline: "callback_stopped",   // the normal ends
+    ended: "ends:stopped",                                     // the compositor finished: a normal stop, respected
+    deadline: "ends:max_duration",                             // RELAY_DEADLINE_AT is the wall clock's own instant
     fatal: "record_only", signalled: "record_only",            // on-failure ≤ RUNNER_INPLACE_RESTARTS, then lost → destroyed → the ONE retry decides
     session_gone: "record_only",
     refused: "refused",                                        // the exit-78 outcome: failed, never a retry
@@ -549,7 +553,11 @@ describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each
     let checked = 0;
     for (const [label, input] of [["absent", undefined], ["null", null], ...BEAT_EXIT_REASONS.map((r) => [r, r] as const)] as const) {
       const t = stoppedBeatTrigger(input);
-      const got: Routed = t === null ? "record_only" : t.type === "callback_stopped" && t.refused === true ? "refused" : "callback_stopped";
+      const got: Routed = t === null ? "record_only"
+        : t.type !== "callback_stopped" ? (() => { throw new Error(`${label}: ${t.type} is not a stopped beat's trigger`); })()
+        : t.refused === true ? "refused"
+        : t.endReason !== undefined ? `ends:${t.endReason}` as Routed
+        : "callback_stopped";
       expect(got, label).toBe(RULED[label]);
       if (t !== null) expect(t.type, label).toBe("callback_stopped");
       checked++;
@@ -568,6 +576,38 @@ describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each
     // stopping: our own stop is ending the session — any final beat is the teardown finishing, refused included
     expect(stepRunner(inState("stopping"), { type: "callback_stopped", refused: true }, T0).next.state).toBe("exited");
     expect(checked).toBe(2);
+  });
+  it("I2: ended / deadline from booting AND playing END the session — the runner is torn down (destroyed + force_destroy, the F17 session-ending shape) and the signal is completed with the reason; the plain stopped beat beside it is today's lost with NO signal", () => {
+    let checked = 0;
+    for (const from of ["booting", "playing"] as const) {
+      for (const endReason of ["stopped", "max_duration"] as const) {
+        const ends = stepRunner(inState(from), { type: "callback_stopped", endReason }, T0);
+        expect(ends, `${from} ${endReason}`).toEqual({ next: { ...inState(from), state: "destroyed" }, effects: [{ type: "force_destroy" }], signal: { type: "completed", endReason } });
+        checked++;
+      }
+    }
+    // stopping: our own stop chose the reason already — the beat is the teardown finishing (exited), whatever it says
+    expect(stepRunner(inState("stopping"), { type: "callback_stopped", endReason: "max_duration" }, T0)).toMatchObject({ next: { state: "exited" }, signal: null });
+    expect(checked).toBe(4);
+  });
+  it("I2 through decide: an ended beat COMPLETES a live session `stopped` and a deadline beat a warming one `max_duration` — no retry_runner, no create, and the teardown's later confirmation changes nothing", () => {
+    let checked = 0;
+    for (const [label, s, reason, endReason] of [
+      ["playing, live, ended", liveComposed(), "ended", "stopped"],
+      ["booting, warming, ended", liveComposed({ state: "warming", startedAt: null, runner: inState("booting") }), "ended", "stopped"],
+      ["playing, live, deadline", liveComposed(), "deadline", "max_duration"],
+      ["booting, warming, deadline", liveComposed({ state: "warming", startedAt: null, runner: inState("booting") }), "deadline", "max_duration"],
+    ] as const) {
+      const w = sim(s);
+      finalBeat(w, 1, reason);
+      expect(w.s, label).toMatchObject({ state: "completed", desiredState: "ending", endReason, failReason: null, runner: { state: "destroyed", attempt: 1 } });
+      feed(w, { type: "runner", trigger: { type: "destroy_ok" } }, 2);
+      expect(w.s, label).toMatchObject({ state: "completed", endReason, runner: { state: "destroyed", attempt: 1 } });
+      expect(w.creates, `${label}: no create`).toEqual([]);
+      expect(w.effects, label).not.toContain("retry_runner");
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
   it("refused through decide: the session FAILS machine_refused at once, and the teardown's confirmation spends NO retry (C27 drops the signal on a terminal row)", () => {
     for (const [label, s] of [["playing, live", liveComposed()], ["booting, warming", liveComposed({ state: "warming", startedAt: null, runner: inState("booting") })]] as const) {

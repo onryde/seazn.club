@@ -2161,7 +2161,8 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && !isTerminal(cur.state) && (cur.runner.state === "booting" || cur.runner.state === "playing")
       ? { type: "runner", trigger: { type: "callback_playing" } } : null), deps)) ?? s;
   }
-  // R2003: a COMPOSED stopped beat is routed by its exit reason (stoppedBeatTrigger). null = record only — a fatal or
+  // R2003: a COMPOSED stopped beat is routed by its exit reason (stoppedBeatTrigger): `ended` / `deadline` end the
+  // session (I2), `refused` fails it, no reason is today's lost → retry. null = record only — a fatal or
   // signalled run is Fly's to restart in place on the SAME attempt (runner-fly.ts, on-failure), and if the restarted
   // process never beats, the composed stale window takes the runner lost → destroyed → the one retry. A record-only beat
   // applies nothing (the lifecycle has no trigger for it); its reason stays in last_heartbeat and the sample, and it never

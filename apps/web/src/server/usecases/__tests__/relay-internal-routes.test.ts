@@ -836,6 +836,13 @@ async function ageBeat(sid: string, secs: number): Promise<void> {
   await sql`update fixture_stream_sessions set heartbeat_at = now() - make_interval(secs => ${secs}),
                 beat_window_at = now() - make_interval(secs => ${secs}) where id = ${sid}`;
 }
+/** Move the clock FORWARD by `secs`: every beat-window anchor the row holds gets that much older, and nothing else. Unlike
+ *  `ageBeat` (which says "the last beat was `secs` ago"), a beat written between two advances keeps its own instant — so
+ *  a test built on this one fails if a beat stops moving the window. */
+async function advance(sid: string, secs: number): Promise<void> {
+  await sql`update fixture_stream_sessions set heartbeat_at = heartbeat_at - make_interval(secs => ${secs}),
+                beat_window_at = beat_window_at - make_interval(secs => ${secs}) where id = ${sid}`;
+}
 /** A composed session whose runner has PLAYED: one playing beat through the route. */
 async function playingSession() {
   const s = await session();
@@ -848,14 +855,17 @@ const stoppedBeat = (reason: BeatExitReason | "absent" | "null") =>
 
 describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartbeat route", () => {
   // The oracle is the ruling, typed — never read off stoppedBeatTrigger. The empty case (no reason, and null) first.
-  type Routed = "stop" | "record" | "refused";
+  // I2 (orchestrator decision, PR #967 review): `ended` and `deadline` END the session — a deadline retry is pointless,
+  // and an unsolicited `ended` is the compositor's to make. Only a stopped beat that gives NO reason keeps today's retry.
+  type Routed = "retry" | "ends:stopped" | "ends:max_duration" | "record" | "refused";
   const RULED: Record<BeatExitReason | "absent" | "null", Routed> = {
-    absent: "stop", null: "stop", ended: "stop", deadline: "stop",
+    absent: "retry", null: "retry",
+    ended: "ends:stopped", deadline: "ends:max_duration",
     fatal: "record", signalled: "record", session_gone: "record",
     refused: "refused",
   };
 
-  it("every reason, from a PLAYING runner and from a BOOTING one: a stop tears the Machine down and boots the ONE retry; fatal / signalled / session_gone leave it exactly as it was; refused FAILS the session machine_refused with no retry (count reported)", async () => {
+  it("every reason, from a PLAYING runner and from a BOOTING one: no reason tears the Machine down and boots the ONE retry; ended / deadline END the session (stopped / max_duration, no retry); fatal / signalled / session_gone leave it exactly as it was; refused FAILS it machine_refused with no retry (count reported)", async () => {
     expect(Object.keys(RULED).sort()).toEqual([...BEAT_EXIT_REASONS, "absent", "null"].sort());
     let checked = 0;
     for (const from of ["playing", "booting"] as const) {
@@ -868,7 +878,14 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
         expect(res.status, label).toBe(200);
         const after = await row(s.sessionId);
         expect(await lastHeartbeat(s.sessionId), `${label}: recorded whatever the route`).toMatchObject({ state: "stopped" });
-        if (routed === "stop") {
+        if (routed === "ends:stopped" || routed === "ends:max_duration") {
+          const endReason = routed === "ends:stopped" ? "stopped" : "max_duration";
+          expect(after, label).toMatchObject({ state: "completed", end_reason: endReason, fail_reason: null, desired_state: "ending", runner_state: "destroyed" });
+          expect(s.runner.created, `${label}: never a retry`).toHaveLength(1);
+          expect(s.runner.destroyed, `${label}: its Machine is torn down`).toEqual([before.machine_id]);
+          expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `${label}: over`).toBe(410);
+          expect(s.runner.created, `${label}: still no retry after the next read`).toHaveLength(1);
+        } else if (routed === "retry") {
           expect(s.runner.created, `${label}: the ONE retry`).toHaveLength(RUNNER_MAX_ATTEMPTS);
           expect(s.runner.destroyed, label).toEqual([before.machine_id]);
           expect(after, label).toMatchObject({ state: before.state, runner_state: "booting", fail_reason: null });
@@ -950,10 +967,54 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     await ageBeat(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED);
     const ended = await read();
     expect(ended.status).toBe(410);
-    // no exit was observed for attempt 2 (its beats never write one, A5): the domain's no-exit reason
-    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: failReasonFromExit(null) });
+    // no exit was observed for attempt 2 (its beats never write one, A5): the plan's failure path for a runner that
+    // vanished without an exit is machine_crash (T10-c) — pinned as the literal, never read off the code under test
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash" });
     expect(s.runner.created, "no third Machine, ever").toHaveLength(RUNNER_MAX_ATTEMPTS);
     expect(s.runner.destroyed).toEqual([m1, r2.machine_id]);
+  });
+
+  // M2 (PR #967 review): the in-place restart through the ROUTE. Every beat the route receives writes heartbeat_at (the
+  // window's anchor), so the restarted process's `starting` beats are what hold the window off — never the fatal beat.
+  // The clock moves the way production's does: each step ages the anchors by the time since the last beat.
+  it("M2: after a fatal final beat, the restarted process's `starting` beats — each one less than the composed window after the last — keep the SAME Machine past T + STALE_HEARTBEAT_SECONDS_COMPOSED, and its playing beat finds it playing; no create, no destroy", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    const gap = STALE_HEARTBEAT_SECONDS_COMPOSED - BEAT_S;   // inside the window, every time
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    s.runner.setObserved(m1, "pending");                      // Fly: restarting
+    let elapsed = 0, held = 0;
+    for (let i = 0; i < 3; i++) {
+      await advance(s.sessionId, gap);
+      elapsed += gap;
+      expect((await postBeat(s.sessionId, { state: "starting" }, { token: s.jobToken })).status, `starting beat ${i}`).toBe(200);
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `read after beat ${i}`).toBe(200);
+      expect(await row(s.sessionId), `T+${elapsed}`).toMatchObject({ state: "live", runner_state: "playing", machine_id: m1 });
+      held++;
+    }
+    expect(elapsed, "premise: held off PAST the window measured from the fatal beat").toBeGreaterThan(STALE_HEARTBEAT_SECONDS_COMPOSED);
+    expect(held).toBe(3);
+    s.runner.setObserved(m1, "running");
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "playing", machine_id: m1 });
+    expect(s.runner.created, "the restart was the same attempt").toHaveLength(1);
+    expect(s.runner.destroyed).toEqual([]);
+  });
+
+  it("M2, its pair: after the fatal beat the restart sends NOTHING — alive one second short of the composed window, lost AT it (torn down, then the ONE retry)", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    s.runner.setObserved(m1, "pending");
+    await advance(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED - 1);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId), "one second short").toMatchObject({ state: "live", runner_state: "playing", machine_id: m1 });
+    expect(s.runner.destroyed).toEqual([]);
+    await advance(s.sessionId, 1);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.destroyed, "lost at the window: torn down").toEqual([m1]);
+    expect(s.runner.created, "then the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "booting" });
   });
 
   it("exit 78 observed through the facts route fails the session machine_refused with NO retry; its positive pair (exit 1) takes the ONE retry", async () => {

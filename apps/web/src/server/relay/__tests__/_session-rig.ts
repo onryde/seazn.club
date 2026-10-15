@@ -20,11 +20,12 @@ import type { RelayDrivers } from "../drivers";
 import { openStreamCodeTok } from "../secret-columns";
 
 /** A real users row. staff_audit_log.actor_id is `not null references users(id)` (V103) and
- *  seedOrg's AuthCtx carries userId: null (_rig.ts) — so every staff credit write needs one. */
+ *  seedOrg's AuthCtx carries userId: null (_rig.ts) — so every staff credit write needs one. The email carries the FULL
+ *  uuid: an 8-hex-char slice collided on users_email_key in a long-lived test database (R2003 review). */
 export async function rigUser(): Promise<string> {
   const [{ id }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified)
-    values (${`stream-rig-${randomUUID().slice(0, 8)}@test.local`}, 'Stream Rig', true)
+    values (${`stream-rig-${randomUUID()}@test.local`}, 'Stream Rig', true)
     returning id`;
   return id;
 }
