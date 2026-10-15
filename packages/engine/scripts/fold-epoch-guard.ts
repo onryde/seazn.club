@@ -9,7 +9,10 @@
 //
 // THE RULE, per sport (epochViolations is pure and carries it):
 //   - A stream's identity is `config#seed` (unique in every corpus: a duplicate is a refusal).
-//   - MATCHED: the identity is on both sides and the stream's INPUT is equal (its events, and the lineups it was recorded against).
+//   - A stream's INPUT is everything its replay starts from: the RAW config object it names in the corpus's `configs`, its events, and the
+//     lineups it was recorded against. The replay re-parses that config, so a module's default can change and the old value be written
+//     into the recorded configs, leaving every event and result byte for byte the same: that is a rule change, and it owes the bump.
+//   - MATCHED: the identity is on both sides and the stream's INPUT is equal.
 //   - CHANGED: a matched stream whose states, outcome, summary or deltas differ. Mid-match states count: a phone renders them.
 //   - REMOVED: a baseline stream with no matching identity, or whose input differs (it was RE-RECORDED, so the old input is no longer
 //     pinned). ADDED: the same, from the current side. A re-recorded stream is removed AND added.
@@ -29,11 +32,13 @@
 //
 // Prints one line per sport (epoch before -> after, matched/changed/removed/added) and `fold-epoch: N sports checked, M streams compared`.
 // Exit codes, each with one meaning (the one convention, D8):
-//   0  every sport is in order; or the baseline has no src/sport/fold-epoch.ts yet (the PR that introduces it: nothing to compare);
+//   0  every sport is in order; or the baseline has the corpora but neither src/sport/fold-epoch.ts nor this guard (the PR that introduces
+//      them: nothing to compare);
 //   1  a negative signal: at least one sport's results moved without a bump, or an epoch fell;
 //   2  refused, nothing judged: usage, a ref that is not a commit (shallow clone, root commit), no git to ask, a table or corpus that is
-//      missing, does not load or is malformed, a table that declares no sport, a duplicate stream identity, or a run that compared no stream
-//      (a pass over nothing proves nothing);
+//      missing, does not load or is malformed, a table that declares no sport, a duplicate stream identity, a stream that names no config of
+//      its corpus, a baseline git cannot read, a baseline that lacks the table but already has this guard or holds no corpus (a moved table, a
+//      renamed engine directory), or a run that compared no stream (a pass over nothing proves nothing);
 //   3  a crash in the guard itself (an unexpected error is not a verdict; a bare uncaught exception would exit 1, which reads as one).
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -95,20 +100,24 @@ const sortKeys = (_key: string, v: unknown): unknown =>
 const canonical = (v: unknown): string => JSON.stringify(v ?? null, sortKeys);
 /** Whether two streams ask for the same fold: the same events and the same lineups. The recorder writes keys in one order, so the plain
  *  text of the two is equal in practice and settles it; only when the text differs is the order-insensitive form asked. */
-const sameInput = (a: GoldenStream, b: GoldenStream): boolean => {
-  const x: unknown = [a.events, a.lineups ?? null];
-  const y: unknown = [b.events, b.lineups ?? null];
-  return JSON.stringify(x) === JSON.stringify(y) || canonical(x) === canonical(y);
-};
+const sameInput = (x: unknown, y: unknown): boolean => JSON.stringify(x) === JSON.stringify(y) || canonical(x) === canonical(y);
+/** What a stream's replay starts from (see THE RULE): its raw config object, its events and its lineups. */
+const inputOf = (s: GoldenStream, corpus: GoldenCorpus): unknown => [get(corpus.configs, s.config) ?? null, s.events, s.lineups ?? null];
 const outputsDiffer = (a: GoldenStream, b: GoldenStream): boolean =>
   a.outcome !== b.outcome || a.summary !== b.summary || a.deltas !== b.deltas || a.states.length !== b.states.length || a.states.some((state, i) => state !== b.states[i]);
 
-function indexStreams(corpus: GoldenCorpus | undefined, side: "baseline" | "current", sport: string): Map<string, GoldenStream> {
-  const byId = new Map<string, GoldenStream>();
-  for (const s of corpus?.streams ?? []) {
-    const id = `${s.config}#${s.seed}`;
+interface Indexed {
+  stream: GoldenStream;
+  input: unknown;
+}
+
+function indexStreams(corpus: GoldenCorpus | undefined, side: "baseline" | "current", sport: string): Map<string, Indexed> {
+  const byId = new Map<string, Indexed>();
+  if (corpus === undefined) return byId;
+  for (const stream of corpus.streams) {
+    const id = `${stream.config}#${stream.seed}`;
     if (byId.has(id)) throw new GuardRefusal(`duplicate stream identity "${id}" in the ${side} corpus of ${sport}: config#seed must name exactly one stream`);
-    byId.set(id, s);
+    byId.set(id, { stream, input: inputOf(stream, corpus) });
   }
   return byId;
 }
@@ -129,12 +138,12 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
   for (const [id, b] of bStreams) {
     const a = aStreams.get(id);
     if (a === undefined) removed++;
-    else if (!sameInput(a, b)) {
-      removed++; // re-recorded: the old input is no longer pinned ...
+    else if (!sameInput(a.input, b.input)) {
+      removed++; // re-recorded (its events, lineups or config differ): the old input is no longer pinned ...
       added++; //   ... and a new one is
     } else {
       matched++;
-      if (outputsDiffer(a, b)) changed++;
+      if (outputsDiffer(a.stream, b.stream)) changed++;
     }
   }
   for (const id of aStreams.keys()) if (!bStreams.has(id)) added++;
@@ -184,6 +193,7 @@ export function epochViolations(before: Side | null, after: Side): Violation[] {
 
 const TABLE = "src/sport/fold-epoch.ts";
 const SPORTS_DIR = "src/sports";
+const GUARD_FILE = "scripts/fold-epoch-guard.ts";
 const CORPUS_SUFFIX = ".golden.json";
 const ENGINE_DIR = fileURLToPath(new URL("..", import.meta.url));
 const USAGE = "usage: fold-epoch-guard.ts --against <ref>";
@@ -249,17 +259,18 @@ function blobs(commit: string, ref: string, names: string[]): string[] {
 
 /** The engine's table and corpora as `commit` held them. Paths are repo-root-relative to git and engine-relative to the rest of the guard
  *  (`git rev-parse --show-prefix` is "packages/engine/" in the monorepo and "" in the engine's own repo). */
-function commitSnapshot(commit: string, ref: string): Snapshot {
+function commitSnapshot(commit: string, ref: string): Snapshot & { hasGuard: boolean } {
   const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim();
-  const ls = git(["ls-tree", "-r", "-z", "--name-only", "--full-name", commit, "--", TABLE, SPORTS_DIR]); // pathspecs are relative to cwd, the names printed are not
+  const ls = git(["ls-tree", "-r", "-z", "--name-only", "--full-name", commit, "--", TABLE, SPORTS_DIR, GUARD_FILE]); // pathspecs are relative to cwd, the names printed are not
   if (ls.status !== 0) throw new GuardRefusal(`git ls-tree ${ref} failed: ${ls.stderr.trim()}`);
   const full = ls.stdout.split("\0").filter((n) => n !== "");
   const hasTable = full.includes(`${prefix}${TABLE}`);
+  const hasGuard = full.includes(`${prefix}${GUARD_FILE}`);
   const corpusNames = full.filter((n) => n.endsWith(CORPUS_SUFFIX)).sort();
   const wanted = [...(hasTable ? [`${prefix}${TABLE}`] : []), ...corpusNames];
   const texts = wanted.length === 0 ? [] : blobs(commit, ref, wanted);
   const table = hasTable ? (texts.shift() as string) : null;
-  return { at: ` at ${ref}`, table, corpora: corpusNames.map((n, i) => ({ rel: n.slice(prefix.length), text: texts[i] as string })) };
+  return { at: ` at ${ref}`, table, hasGuard, corpora: corpusNames.map((n, i) => ({ rel: n.slice(prefix.length), text: texts[i] as string })) };
 }
 
 /** The baseline's FOLD_EPOCH is whatever its own commit declared: its source is imported from a temp file. */
@@ -293,7 +304,10 @@ function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
   } catch (e) {
     throw new GuardRefusal(`${label} is not valid JSON: ${messageOf(e)}`);
   }
-  if (!isObject(v) || typeof v.key !== "string" || !Array.isArray(v.streams)) throw new GuardRefusal(`${label} is not a golden corpus (it needs a string key and a streams array)`);
+  if (!isObject(v) || typeof v.key !== "string" || !isObject(v.configs) || !Array.isArray(v.streams)) {
+    throw new GuardRefusal(`${label} is not a golden corpus (it needs a string key, a configs object and a streams array)`);
+  }
+  const configs = v.configs;
   if (v.key !== sport) throw new GuardRefusal(`${label} names sport "${v.key}", but its file name says "${sport}"`);
   v.streams.forEach((s: unknown, i: number) => {
     const ok =
@@ -301,6 +315,9 @@ function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
       Array.isArray(s.states) && s.states.every((x: unknown) => typeof x === "string") &&
       typeof s.outcome === "string" && typeof s.summary === "string" && typeof s.deltas === "string";
     if (!ok) throw new GuardRefusal(`${label}: stream #${i} is malformed (it needs config, seed, events, states, outcome, summary and deltas)`);
+    // the config is part of the stream's input (THE RULE): one that names nothing would compare as an empty input on both sides
+    const config = (s as { config: string }).config;
+    if (!own(configs, config)) throw new GuardRefusal(`${label}: stream #${i} names config "${config}", which is not one of the corpus's configs`);
   });
   return v as unknown as GoldenCorpus;
 }
@@ -352,8 +369,18 @@ export async function main(argv: string[]): Promise<number> {
     if (after === null) throw new GuardRefusal(`${TABLE} is missing from the working tree: a deleted table must not read as "no epochs"`);
 
     const commit = resolveCommit(ref);
-    const before = await readSide(commitSnapshot(commit, ref));
+    const baseline = commitSnapshot(commit, ref);
+    const before = await readSide(baseline);
     if (before === null) {
+      // The ONE pass without a comparison: the PR that introduces the table, onto a base that has the corpora and neither the table nor this
+      // guard. A base that already has the guard, or holds no corpus where this tree has them, is a table that MOVED or an engine directory
+      // that was RENAMED, and passing it would let any unbumped fold change through by moving the file in the same PR.
+      if (baseline.hasGuard) {
+        throw new GuardRefusal(`no ${TABLE} at ${ref}, but the baseline already has ${GUARD_FILE}: the table was moved or renamed, and a fold change cannot be judged against a baseline that has no table at the path this tree reads`);
+      }
+      if (baseline.corpora.length === 0) {
+        throw new GuardRefusal(`no ${TABLE} at ${ref}, and the baseline holds no golden corpus under ${SPORTS_DIR}: the engine directory was moved or renamed, and there is nothing to hold this tree to`);
+      }
       out(`fold-epoch: no ${TABLE} at ${ref}: nothing to compare yet (the tree holds ${Object.keys(after.epochs).length} sports, ${countStreams(after)} streams)`);
       return 0;
     }

@@ -8,7 +8,7 @@
 // reads files and git only), so a Stryker related-mode run of a sport file does not run these spawns. Expected counts (sports, streams)
 // are read from the corpora on disk by this file, never from the guard's own output.
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,7 @@ const SPORTS_DIR = "src/sports";
 const EPOCH_FILE = "src/sport/fold-epoch.ts";
 const GUARD = "scripts/fold-epoch-guard.ts";
 
-interface Corpus { key: string; streams: Array<Record<string, unknown>> }
+interface Corpus { key: string; configs: Record<string, Record<string, unknown>>; streams: Array<Record<string, unknown>> }
 
 /** Every corpus file under src/sports, relative to it (`setbased/badminton.golden.json`). */
 const CORPORA = (readdirSync(join(ENGINE, SPORTS_DIR), { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json")).sort();
@@ -184,6 +184,33 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([LAST]);
+  });
+
+  spawnIt(10)("a rule change laundered through the recorded configs (a default written out explicitly) is red: the config is part of a stream's input", () => {
+    // The reviewer's reproduction. Badminton's default cap moves 30 -> 31 in the module; a REBASELINE then stays red, because the recorded
+    // config is spliced back, and the way to green is to write `cap: 30` into every corpus config that lacked it. Every replay folds to the
+    // same result: not one event, state, outcome, summary or delta below moves. The same with the points map.
+    expect(KEYS).toContain("badminton");
+    for (const [knob, value] of [["cap", 30], ["pointsMap", { "*": [2, 0] }]] as const) {
+      const launder = (): number => {
+        let edited = 0;
+        editCorpus(mono, "badminton", (c) => { for (const cfg of Object.values(c.configs)) if (!(knob in cfg)) { cfg[knob] = value; edited++; } });
+        return edited;
+      };
+      atBase(mono);
+      expect(launder(), `${knob}: configs that lacked it`).toBeGreaterThan(0);
+      commit(mono, `${knob} written out explicitly`);
+      const red = guard(mono);
+      expect(red.status, knob).toBe(1);
+      expect(violated(red.stdout), knob).toEqual(["badminton"]);
+      expect(lineOf(red.stdout, "badminton"), knob).toMatch(/changed 0 removed [1-9]\d* added [1-9]\d* - VIOLATION/);
+
+      atBase(mono);
+      launder();
+      setEpoch(mono, "badminton", 2);
+      commit(mono, `${knob} written out explicitly, with the bump`);
+      expect(guard(mono).status, `${knob} with the bump`).toBe(0);
+    }
   });
 
   spawnIt(5)("a corpus stream removed without a bump is red; with the bump it is green; an added stream needs no bump", () => {
@@ -356,15 +383,47 @@ describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on t
     }
   });
 
-  spawnIt(4)("the introducing PR has no table at HEAD^1: nothing to compare yet, exit 0, and it says so (and still counts what it holds)", () => {
+  spawnIt(4)("the introducing PR has no table and no guard at HEAD^1: nothing to compare yet, exit 0, and it says so (and still counts what it holds)", () => {
     atBase(mono);
-    git(mono.top, "rm", "-q", join(mono.eng, EPOCH_FILE));
-    commit(mono, "main before the table");
+    git(mono.top, "rm", "-q", join(mono.eng, EPOCH_FILE), join(mono.eng, GUARD));
+    commit(mono, "main before the table and the guard");
     git(mono.top, "checkout", "-q", "base", "--", ".");
     commit(mono, "the PR that introduces FOLD_EPOCH");
     const r = guard(mono);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     expect(r.stdout).toContain(`fold-epoch: no ${EPOCH_FILE} at HEAD^1: nothing to compare yet (the tree holds ${realSports} sports, ${realStreams} streams)`);
+  });
+});
+
+describe("fold-epoch-guard CLI: the introducing-PR pass cannot be reopened by moving the table or the engine", () => {
+  spawnIt(6)("a table moved to another path, with the guard taught the new path and a fold changed without a bump, is refused: the baseline already has the guard", () => {
+    atBase(mono);
+    const moved = "src/sport/epoch/fold-epoch.ts";
+    mkdirSync(join(mono.eng, "src/sport/epoch"), { recursive: true });
+    renameSync(join(mono.eng, EPOCH_FILE), join(mono.eng, moved));
+    const guardFile = join(mono.eng, GUARD);
+    const text = readFileSync(guardFile, "utf8");
+    const taught = text.replace(`const TABLE = "${EPOCH_FILE}";`, `const TABLE = "${moved}";`);
+    expect(taught, "the copied guard names its table in one constant").not.toBe(text);
+    writeFileSync(guardFile, taught);
+    moveOutcome(mono, FIRST);
+    commit(mono, "table moved, a fold changed, no bump");
+    const r = guard(mono);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(/no src\/sport\/epoch\/fold-epoch\.ts at HEAD\^1, but the baseline already has scripts\/fold-epoch-guard\.ts/);
+  });
+
+  spawnIt(6)("the engine directory renamed, with a fold changed without a bump, is refused: the baseline holds no corpus at the new path", () => {
+    atBase(mono);
+    git(mono.top, "mv", "packages/engine", "packages/engine2");
+    const renamed: Repo = { top: mono.top, eng: join(mono.top, "packages/engine2") };
+    moveOutcome(renamed, FIRST);
+    commit(renamed, "engine renamed, a fold changed, no bump");
+    const r = guard(renamed);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(/holds no golden corpus under src\/sports/);
   });
 });
 
@@ -465,13 +524,37 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
     expect(r.stderr).toMatch(/src\/sport\/fold-epoch\.ts at HEAD\^1 declares no sport/);
   });
 
-  spawnIt(4)("a stream that lacks a recorded result is refused as malformed, and so is a second corpus for one sport", () => {
+  spawnIt(7)("a stream whose config is not one of the corpus's configs (an own key, not an inherited name), or a corpus with no configs object, is refused", () => {
+    for (const name of ["nope", "constructor", "toString"]) {
+      atBase(mono);
+      editCorpus(mono, FIRST, (c) => { c.streams[0]!.config = name; });
+      commit(mono, `stream names config ${name}`);
+      const r = guard(mono);
+      expect(r.status, name).toBe(2);
+      expect(r.stdout, name).toBe("");
+      expect(r.stderr, name).toMatch(new RegExp(`stream #0 names config "${name}", which is not one of the corpus's configs`));
+    }
+    atBase(mono);
+    editCorpus(mono, FIRST, (c) => { delete (c as Partial<Corpus>).configs; });
+    commit(mono, "corpus without configs");
+    const none = guard(mono);
+    expect(none.status).toBe(2);
+    expect(none.stderr).toMatch(/is not a golden corpus \(it needs a string key, a configs object and a streams array\)/);
+  });
+
+  spawnIt(8)("a stream that lacks a recorded result, or whose seed is a string, is refused as malformed, and so is a second corpus for one sport", () => {
     atBase(mono);
     editCorpus(mono, FIRST, (c) => { delete c.streams[0]!.deltas; });
     commit(mono, "stream without deltas");
     const malformed = guard(mono);
     expect(malformed.status).toBe(2);
     expect(malformed.stderr).toMatch(/stream #0 is malformed/);
+    atBase(mono);
+    editCorpus(mono, FIRST, (c) => { c.streams[0]!.seed = "1"; });
+    commit(mono, "stream whose seed is a string");
+    const seed = guard(mono);
+    expect(seed.status).toBe(2);
+    expect(seed.stderr).toMatch(/stream #0 is malformed/);
     atBase(mono);
     mkdirSync(join(mono.eng, SPORTS_DIR, "zz"), { recursive: true });
     cpSync(corpusPath(mono, FIRST), join(mono.eng, SPORTS_DIR, "zz", `${FIRST}.golden.json`));

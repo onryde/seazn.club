@@ -5,10 +5,11 @@
 //
 // THIS FILE IMPORTS NOTHING, and a test holds it so. The guard reads the BASELINE's copy of it out of git (`ls-tree` + `cat-file --batch`)
 // into a temp file and imports that, where no relative import resolves; a copy with an import would not load there.
-export const FOLD_EPOCH = {
+// Frozen: the server holds this one object for the life of its process, and nothing may edit, add to or empty it.
+export const FOLD_EPOCH = Object.freeze({
   football: 1, cricket: 1, boardgame: 1, carrom: 1, generic: 1, volleyball: 1,
   badminton: 1, tabletennis: 1, tennis: 1, icehockey: 1, hockey: 1,
-} as const satisfies Readonly<Record<string, number>>;
+} as const satisfies Readonly<Record<string, number>>);
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 export function foldEpochOf(sport: string): number {
   // Own keys only: a plain lookup answers "constructor" or "toString" with a function from Object.prototype.

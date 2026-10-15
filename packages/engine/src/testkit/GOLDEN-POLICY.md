@@ -124,6 +124,16 @@ the first clause above true: the corpus still goes in a commit of its own, the
 bump may follow in the next commit, and the PR is green. Run against the corpus
 commit's own parent it is red, which is the point of the second commit.
 
+A stream's **input** is its raw config object (the one it names in the corpus's
+`configs`), its events and its lineups, and changing any of the three counts as
+re-recording the stream. The config is in that set on purpose: after a module's
+default changes (a `cap` of 30 becoming 31), `REBASELINE_GOLDEN=1` stays red,
+because it splices the recorded config back in, and the way to a green suite is
+to write the old value (`cap: 30`) into every recorded config that lacked it.
+Every replay then folds to the same result and not one event or output moves,
+but a phone that still holds the old default plays a different rule. The guard
+sees the edited config and demands the bump.
+
 To check before pushing (from any directory; it also reads uncommitted work, so
 re-baseline into a clean tree, bump, and run it):
 
@@ -137,6 +147,41 @@ fell, or a corpus and an epoch entry do not pair up; `2` refused, nothing judged
 (the ref is not a commit, which is what a shallow clone or a root commit gives;
 git could not list or read the base; a table or corpus that does not load; a
 run that compared no stream); `3` the guard itself crashed.
+
+## What the guard cannot see
+
+The epoch guard compares corpora, so it is only as wide as they are. It judges
+the **module layer** of the **exercised paths**, and a change outside that owes
+a **manual bump of every sport it reaches** (raise each sport's `FOLD_EPOCH` by
+hand in the same PR; no tool will tell you):
+
+- **The kernel overlays.** The harness records `module.outcome(finalState)`,
+  `module.summary(finalState)` and `module.standingsDelta` (`golden.ts`
+  `recomputeStream`). It does not record the kernel's `outcomeOf` / `summaryOf`
+  (`core/events.ts`), which put a settlement, an expunge, or a withdrawal over a
+  held level result on top of the module's answer. A change to how those combine
+  moves no golden.
+- **Stoppage, and `forfeit-credit.ts`.** Stoppage time is folded from
+  `core.suspend` / `core.resume` (`core/time.ts`), which no corpus holds (below).
+  Walkover credit is pinned only where a corpus has a forfeit that reaches it.
+- **The `core.*` events absent from the corpora.** Measured at `ece4d8146`
+  across the eleven corpora: `core.start` and `core.forfeit` are in all eleven,
+  `core.abandon` in six (carrom, cricket, football, generic, icehockey,
+  tabletennis), and `core.void`, `core.note`, `core.finalize`, `core.award`,
+  `core.suspend`, `core.resume` and `core.settle` in none. The coverage
+  yardsticks above count PadSpec tier types, which have no `core.*`, so they
+  report full coverage while these are unrecorded. All but `settle` are written
+  by a phone or a device link, and **undo (`core.void`) is the commonest of
+  them**: a change to how an undo, a pause or a withdrawal folds changes what an
+  old phone shows and owes a bump nothing will ask for.
+- **Unexercised branches** of a module: a field no stream writes is invisible to
+  a byte-exact comparison (see below), so a rule that fires only there moves
+  nothing.
+
+The per-sport table of what each corpus holds, and which outcome kinds it lacks,
+is in `docs/superpowers/specs/engine-split/reviews/1e.md` ("Corpus coverage per
+sport"). Closing the gap, with a golden floor per sport, is an open decision and
+not something this guard does.
 
 ## How the comparison actually works
 

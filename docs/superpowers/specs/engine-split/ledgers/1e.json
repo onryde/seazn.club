@@ -1,6 +1,6 @@
 {
   "batch": "1e",
-  "note": "Test-id ledger for the engine-split Phase 1 batch 1e, built against the batch base 4e72944b2 (main after 1c). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection: its titles embed the checkout absolute path). Task 1e-1 (FOLD_EPOCH): no existing test id changed; six tests are added in the new src/sport/fold-epoch.test.ts. Task 1e-2 (the epoch guard, 7cf004038): 74 tests added - 35 in test/fold-epoch-guard.test.ts, 34 in test/fold-epoch-guard-cli.test.ts, 4 in tools/matrix/__tests__/ci-wiring.test.ts, and 1 in src/sport/fold-epoch.test.ts (the 1e-1 review fix: fold-epoch.ts imports nothing). 1e-2 review fixes add 4 more tests (2 in each guard test file). Whole-batch parity after the 1e-2 review fixes: before-only 0, after-only 84, both 11324 (engine 5894 + matrix 5202 + scripts 228 before; engine 5974 + matrix 5206 + scripts 228 after), unaccounted 0.",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1e, built against the batch base 4e72944b2 (main after 1c). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection: its titles embed the checkout absolute path). Task 1e-1 (FOLD_EPOCH): no existing test id changed; six tests are added in the new src/sport/fold-epoch.test.ts. Task 1e-2 (the epoch guard, 7cf004038): 74 tests added - 35 in test/fold-epoch-guard.test.ts, 34 in test/fold-epoch-guard-cli.test.ts, 4 in tools/matrix/__tests__/ci-wiring.test.ts, and 1 in src/sport/fold-epoch.test.ts (the 1e-1 review fix: fold-epoch.ts imports nothing). 1e-2 review fixes add 4 more tests (2 in each guard test file). The batch review then adds 11 (config in a stream's input, moved table / renamed engine, frozen table) and rewords 3 titles. Whole-batch parity after the batch review fixes: before-only 0, after-only 95, both 11324 (engine 5894 + matrix 5202 + scripts 228 before; engine 5985 + matrix 5206 + scripts 228 after), unaccounted 0.",
   "entries": [
     {
       "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › has exactly one positive integer epoch per registered sport (11, never zero)",
@@ -8,9 +8,9 @@
       "reason": "1e-1: one positive-integer epoch per registered sport, the key set taken from the registry (builtinModules) and the sweep counted"
     },
     {
-      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › answers each registered sport's own entry, and moving one entry moves only that sport",
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › answers each registered sport's own entry: a copy of the file with a different number per sport answers each its own",
       "fate": "added",
-      "reason": "1e-1: foldEpochOf reads the table (a moved entry moves only its own sport), swept over every registered sport"
+      "reason": "1e-1: foldEpochOf reads the table (a moved entry moves only its own sport), swept over every registered sport (title reworded in the 1e batch review)"
     },
     {
       "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › refuses a sport it does not know instead of answering a default",
@@ -118,9 +118,9 @@
       "reason": "1e-2 guard CLI: the merge commit, shallow clone and root commit CI's checkout can give: a ref that does not exist, and a ref that looks like a flag, are refused"
     },
     {
-      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on the merge commit refs/pull/N/merge, fetch-depth 0) › the introducing PR has no table at HEAD^1: nothing to compare yet, exit 0, and it says so (and still counts what it holds)",
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on the merge commit refs/pull/N/merge, fetch-depth 0) › the introducing PR has no table and no guard at HEAD^1: nothing to compare yet, exit 0, and it says so (and still counts what it holds)",
       "fate": "added",
-      "reason": "1e-2 guard CLI: the merge commit, shallow clone and root commit CI's checkout can give: the introducing PR has no table at HEAD^1: nothing to compare yet, exit 0, and it says so (and still counts what it holds)"
+      "reason": "1e-2 guard CLI: the merge commit, shallow clone and root commit CI's checkout can give: the introducing PR has no table at HEAD^1: nothing to compare yet, exit 0, and it says so (and still counts what it holds) (title reworded in the 1e batch review)"
     },
     {
       "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a baseline with a table but no corpus proves nothing about any stream: refused, not green",
@@ -163,9 +163,9 @@
       "reason": "1e-2 guard CLI: a run that compared nothing or read something untrustworthy is refused (exit 2): a baseline table that declares no sport is refused too, and says it is the baseline's"
     },
     {
-      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a stream that lacks a recorded result is refused as malformed, and so is a second corpus for one sport",
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a stream that lacks a recorded result, or whose seed is a string, is refused as malformed, and so is a second corpus for one sport",
       "fate": "added",
-      "reason": "1e-2 guard CLI: a run that compared nothing or read something untrustworthy is refused (exit 2): a stream that lacks a recorded result is refused as malformed, and so is a second corpus for one sport"
+      "reason": "1e-2 guard CLI: a run that compared nothing or read something untrustworthy is refused (exit 2): a stream that lacks a recorded result is refused as malformed, and so is a second corpus for one sport (title reworded in the 1e batch review)"
     },
     {
       "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › every corpus deleted in the tree is red for every sport (an entry with no corpus), not a crash and not a pass",
@@ -421,6 +421,61 @@
       "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › across sports › a sport has a baseline when the baseline holds its epoch OR its corpus, and has none only when it holds neither (the 'N sports checked' count)",
       "fate": "added",
       "reason": "1e-2 review: guard rule (pure compareSides / epochViolations): a sport has a baseline when the baseline holds its epoch OR its corpus, and has none only when it holds neither (the 'N sports checked' count)"
+    },
+    {
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real git history › a rule change laundered through the recorded configs (a default written out explicitly) is red: the config is part of a stream's input",
+      "fate": "added",
+      "reason": "1e batch review M1: a rule change laundered through the recorded configs is red (real git history): a rule change laundered through the recorded configs (a default written out explicitly) is red: the config is part of a stream's input"
+    },
+    {
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the introducing-PR pass cannot be reopened by moving the table or the engine › a table moved to another path, with the guard taught the new path and a fold changed without a bump, is refused: the baseline already has the guard",
+      "fate": "added",
+      "reason": "1e batch review m1: a moved table or a renamed engine directory cannot reopen the introducing-PR pass: a table moved to another path, with the guard taught the new path and a fold changed without a bump, is refused: the baseline already has the guard"
+    },
+    {
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: the introducing-PR pass cannot be reopened by moving the table or the engine › the engine directory renamed, with a fold changed without a bump, is refused: the baseline holds no corpus at the new path",
+      "fate": "added",
+      "reason": "1e batch review m1: a moved table or a renamed engine directory cannot reopen the introducing-PR pass: the engine directory renamed, with a fold changed without a bump, is refused: the baseline holds no corpus at the new path"
+    },
+    {
+      "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a stream whose config is not one of the corpus's configs (an own key, not an inherited name), or a corpus with no configs object, is refused",
+      "fate": "added",
+      "reason": "1e batch review M1: a stream naming a config the corpus lacks (or inherits) is refused: a stream whose config is not one of the corpus's configs (an own key, not an inherited name), or a corpus with no configs object, is refused"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › a stream's input is its raw config object as well as its events and lineups › a default written out explicitly in a config the results do not show is a re-record of every stream replayed against it: removed and added, a bump owed",
+      "fate": "added",
+      "reason": "1e batch review M1: a stream's input includes its raw config object (pure rule): a default written out explicitly in a config the results do not show is a re-record of every stream replayed against it: removed and added, a bump owed"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › a stream's input is its raw config object as well as its events and lineups › a config value that changed is the same, and so is one that was removed",
+      "fate": "added",
+      "reason": "1e batch review M1: a stream's input includes its raw config object (pure rule): a config value that changed is the same, and so is one that was removed"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › a stream's input is its raw config object as well as its events and lineups › only the streams that name the changed config are re-recorded: the others still match",
+      "fate": "added",
+      "reason": "1e batch review M1: a stream's input includes its raw config object (pure rule): only the streams that name the changed config are re-recorded: the others still match"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › a stream's input is its raw config object as well as its events and lineups › a config written with its keys in another order is the same config",
+      "fate": "added",
+      "reason": "1e batch review M1: a stream's input includes its raw config object (pure rule): a config written with its keys in another order is the same config"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: the rule › a stream's input is its raw config object as well as its events and lineups › a config no stream is replayed against may change freely (nothing folds through it)",
+      "fate": "added",
+      "reason": "1e batch review M1: a stream's input includes its raw config object (pure rule): a config no stream is replayed against may change freely (nothing folds through it)"
+    },
+    {
+      "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: over every registered sport's real golden corpus › names the sport whose recorded config changed, though not one event or result did, and is satisfied by that sport's bump alone",
+      "fate": "added",
+      "reason": "1e batch review M1: every registered sport's real corpus, a changed recorded config is named, counted: names the sport whose recorded config changed, though not one event or result did, and is satisfied by that sport's bump alone"
+    },
+    {
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › is frozen: the table a server holds for the life of the process cannot be edited, added to or emptied",
+      "fate": "added",
+      "reason": "1e batch review n1: FOLD_EPOCH is frozen: is frozen: the table a server holds for the life of the process cannot be edited, added to or emptied"
     }
   ]
 }

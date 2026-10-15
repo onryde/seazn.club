@@ -1,8 +1,10 @@
 // FOLD_EPOCH (engine-split D26, Task 1e-1). The sport list is the registry's own (builtinModules, walked with forEachSport,
 // which refuses an empty registry); no expected key set is typed into this file. Every sweep reports how many it visited
 // and a count of zero fails (TEST-STRATEGY rule 2).
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
@@ -11,10 +13,12 @@ import { readCorpus, SPORT_DIRS } from "../testkit/golden.ts";
 import { FOLD_EPOCH, foldEpochOf } from "./fold-epoch.ts";
 import * as sportSubpath from "./index.ts";
 
-// FOLD_EPOCH is `as const` (readonly) at the type level only. The differential test below moves one entry on the live
-// object, synchronously and restored in a finally, to prove foldEpochOf reads the table and not a constant: today every
-// entry is 1, so a function that answered 1 for any known sport would pass every other assertion here.
+// FOLD_EPOCH is frozen (and `as const` at the type level): the server holds it for the life of the process. The differential test
+// below therefore cannot move an entry on the live object; it imports a TEMPORARY COPY of the file (which imports nothing, so it
+// loads from anywhere) with a different number for every sport, to prove foldEpochOf reads the table and not a constant: today
+// every entry is 1, so a function that answered 1 for any known sport would pass every other assertion here.
 const table = FOLD_EPOCH as unknown as Record<string, number>;
+const SOURCE = fileURLToPath(new URL("./fold-epoch.ts", import.meta.url));
 
 describe("FOLD_EPOCH", () => {
   it(`has exactly one positive integer epoch per registered sport (${builtinModules.length}, never zero)`, () => {
@@ -29,23 +33,43 @@ describe("FOLD_EPOCH", () => {
     expect(swept).toBe(Object.keys(FOLD_EPOCH).length);
   });
 
-  it("answers each registered sport's own entry, and moving one entry moves only that sport", () => {
-    const original = { ...table };
-    const swept = forEachSport(({ key }) => {
-      expect(foldEpochOf(key), `${key} unmoved`).toBe(original[key]);
-      const moved = (original[key] as number) + 6;
-      table[key] = moved;
-      try {
-        expect(foldEpochOf(key), `${key} moved`).toBe(moved);
-        for (const other of Object.keys(original)) {
-          if (other !== key) expect(foldEpochOf(other), `${other} while ${key} moved`).toBe(original[other]);
-        }
-      } finally {
-        table[key] = original[key] as number;
+  it("answers each registered sport's own entry: a copy of the file with a different number per sport answers each its own", async () => {
+    const keys = builtinModules.map((m) => m.key);
+    expect(keys.length).toBeGreaterThan(1);
+    const want = new Map(keys.map((k, i) => [k, 10 + 3 * i]));
+    let source = readFileSync(SOURCE, "utf8");
+    for (const [k, n] of want) {
+      const entry = new RegExp(`\\b${k}: \\d+`, "g");
+      expect(source.match(entry), `${k} has one entry in the file`).toHaveLength(1);
+      source = source.replace(entry, `${k}: ${n}`);
+    }
+    const dir = mkdtempSync(join(tmpdir(), "fold-epoch-copy-"));
+    try {
+      const file = join(dir, "fold-epoch.mts");
+      writeFileSync(file, source);
+      const copy = (await import(pathToFileURL(file).href)) as { foldEpochOf: (sport: string) => number; FOLD_EPOCH: Record<string, number> };
+      let swept = 0;
+      for (const [k, n] of want) {
+        expect(copy.foldEpochOf(k), `${k} in the copy`).toBe(n);
+        expect(foldEpochOf(k), `${k} in the real table is untouched`).toBe(table[k]);
+        swept++;
       }
-    });
-    expect(swept).toBe(Object.keys(original).length);
-    expect({ ...table }).toEqual(original);
+      expect(swept).toBe(keys.length);
+      expect(new Set(want.values()).size, "every sport got its own number").toBe(keys.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is frozen: the table a server holds for the life of the process cannot be edited, added to or emptied", () => {
+    const first = builtinModules[0]!.key;
+    const before = { ...table };
+    expect(Object.isFrozen(FOLD_EPOCH)).toBe(true);
+    expect(() => { table[first] = 99; }).toThrow(TypeError);
+    expect(() => { table.quidditch = 1; }).toThrow(TypeError);
+    expect(() => { delete table[first]; }).toThrow(TypeError);
+    expect({ ...table }).toEqual(before);
+    expect(foldEpochOf(first)).toBe(before[first]);
   });
 
   it("refuses a sport it does not know instead of answering a default", () => {

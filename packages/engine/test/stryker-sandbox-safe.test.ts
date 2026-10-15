@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { treeBudget } from "./tree-budget.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -88,6 +89,11 @@ function layoutTestsReachingSrc(engineDir: string): { scanned: number; importers
   return { scanned: files.length, importers: importers.map((f) => relative(engineDir, f)), offenders: offenders.map((f) => relative(engineDir, f)) };
 }
 
+// The two tests on the REAL package each walk every test file's import closure (a test file's closure is read again for each file that
+// reaches it), twice over: one pass to find the importers, one to find the offenders. Measured under load that took 7.8 s against vitest's
+// 5 s default (AGENTS class 20), so the budget is derived from the number of test files it walks, as the tree-wide tests' is.
+const REAL_SCAN_MS = treeBudget(testFiles(ENGINE).length, 2);
+
 // spelled in two halves so THIS file's text holds no `from "eslint"` of its own (the scan reads every test file, this one included)
 const E = ["es", "lint"].join("");
 // created when the tests start, not at module load: a run that selects none of this file's tests (`-t`, `vitest related`, the parity
@@ -113,7 +119,7 @@ describe("no engine test that loads ESLint reaches src/ (Stryker's related set r
     // anti-vacuity: pack-proof.test.ts is the ESLint test that is meant to exist; a scan that stops finding it has stopped looking
     expect(r.loadsEslint).toContain("test/pack-proof.test.ts");
     expect(r.offenders).toEqual([]);
-  });
+  }, REAL_SCAN_MS);
 
   it("publish-manifest.test.ts reaches src/ (it is a related test for the registry) and loads no ESLint: the case that failed the dry run", () => {
     const file = join(ENGINE, "test/publish-manifest.test.ts");
@@ -171,7 +177,7 @@ describe("no engine test that reads the checkout layout reaches src/ (test/layou
     // anti-vacuity: stryker-outputs-ignored.test.ts is a layout importer that is meant to exist; a scan that stops finding one has stopped looking
     expect(r.importers).toContain("test/stryker-outputs-ignored.test.ts");
     expect(r.offenders).toEqual([]);
-  });
+  }, REAL_SCAN_MS);
 
   it("catches a layout importer that reaches src/ directly, through a helper, through an index, and by a dynamic import", () => {
     const dir = tree({

@@ -13,8 +13,9 @@ import { treeBudget } from "./tree-budget.ts";
 
 const stream = (config: string, seed: number, over: Partial<GoldenStream> = {}): GoldenStream =>
   ({ config, seed, events: [{ seq: 1 }], states: ["s1"], outcome: "A", summary: "{}", deltas: "[]", ...over }) as unknown as GoldenStream;
-const corpus = (streams: GoldenStream[], key = "badminton"): GoldenCorpus =>
-  ({ key, version: "1.0.0", configs: {}, streams, recordedBy: "test", params: {} }) as unknown as GoldenCorpus;
+/** A corpus whose `configs` holds one (empty) raw config object per config name its streams use, unless `configs` says otherwise. */
+const corpus = (streams: GoldenStream[], key = "badminton", configs: Record<string, unknown> = Object.fromEntries(streams.map((s) => [s.config, {}]))): GoldenCorpus =>
+  ({ key, version: "1.0.0", configs, streams, recordedBy: "test", params: {} }) as unknown as GoldenCorpus;
 const side = (epoch: number, streams: GoldenStream[]): Side => ({ epochs: { badminton: epoch }, corpora: { badminton: corpus(streams) } });
 const sports = (v: ReturnType<typeof epochViolations>) => v.map((x) => x.sport);
 
@@ -97,6 +98,39 @@ describe("fold-epoch guard: the rule", () => {
     expect(epochViolations(before, after)).toEqual([
       { sport: "badminton", matched: 2, changed: 1, removed: 1, added: 1, before: 1, after: 1, reason: expect.stringMatching(/1 stream\(s\) fold differently.*1 stream\(s\) removed or re-recorded.*did not rise \(1 -> 1\)/) },
     ]);
+  });
+  describe("a stream's input is its raw config object as well as its events and lineups", () => {
+    const streams = [stream("std", 1), stream("std", 2), stream("other", 1)];
+    const withConfigs = (epoch: number, configs: Record<string, unknown>, s = streams): Side => ({ epochs: { badminton: epoch }, corpora: { badminton: corpus(s, "badminton", configs) } });
+    const base = { std: { setTo: 21 }, other: { setTo: 11 } };
+    it("a default written out explicitly in a config the results do not show is a re-record of every stream replayed against it: removed and added, a bump owed", () => {
+      // the rule change a module makes to a default (cap 30 -> 31), with the old value written into the recorded configs so every replay still
+      // folds to the same result: nothing in events, states, outcome, summary or deltas moved
+      const v = epochViolations(withConfigs(1, base), withConfigs(1, { ...base, std: { setTo: 21, cap: 30 } }));
+      expect(v).toHaveLength(1);
+      const std = streams.filter((x) => x.config === "std").length;
+      expect(v[0]).toMatchObject({ sport: "badminton", matched: streams.length - std, changed: 0, removed: std, added: std });
+      expect(v[0]!.reason).toMatch(new RegExp(`${std} stream\\(s\\) removed or re-recorded`));
+      expect(epochViolations(withConfigs(1, base), withConfigs(2, { ...base, std: { setTo: 21, cap: 30 } }))).toEqual([]);
+    });
+    it("a config value that changed is the same, and so is one that was removed", () => {
+      for (const after of [{ ...base, std: { setTo: 25 } }, { ...base, std: {} }]) {
+        expect(epochViolations(withConfigs(1, base), withConfigs(1, after)).map((x) => [x.sport, x.removed, x.added])).toEqual([["badminton", 2, 2]]);
+      }
+    });
+    it("only the streams that name the changed config are re-recorded: the others still match", () => {
+      const [row] = compareSides(withConfigs(1, base), withConfigs(1, { ...base, other: { setTo: 15 } }));
+      expect(row).toMatchObject({ matched: 2, removed: 1, added: 1 });
+    });
+    it("a config written with its keys in another order is the same config", () => {
+      const nested = { std: { setTo: 21, pointsMap: { "*": [2, 0], x: [1, 1] } }, other: base.other };
+      const shuffled = { other: base.other, std: { pointsMap: { x: [1, 1], "*": [2, 0] }, setTo: 21 } };
+      expect(epochViolations(withConfigs(1, nested), withConfigs(1, shuffled))).toEqual([]);
+    });
+    it("a config no stream is replayed against may change freely (nothing folds through it)", () => {
+      const spare = { ...base, unused: { cap: 1 } };
+      expect(epochViolations(withConfigs(1, spare), withConfigs(1, { ...spare, unused: { cap: 2 } }))).toEqual([]);
+    });
   });
   it("tells the author what to do: which entry in which file, and the number to set (one above the baseline's, not just 'bump it')", () => {
     const v = epochViolations(side(3, [stream("std", 1)]), side(3, [stream("std", 1, { outcome: "B" })]));
@@ -248,6 +282,22 @@ describe("fold-epoch guard: over every registered sport's real golden corpus", (
     });
     expect(checked).toBe(builtinModules.length * FIELDS.length);
   }, budget(FIELDS.length * 2));
+
+  it("names the sport whose recorded config changed, though not one event or result did, and is satisfied by that sport's bump alone", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      const name = c.streams[0]!.config;
+      const used = c.streams.filter((s) => s.config === name).length;
+      const edited: GoldenCorpus = { ...c, configs: { ...c.configs, [name]: { ...(c.configs[name] as object), launderedDefault: 30 } } };
+      const v = epochViolations(only(key, c), only(key, edited));
+      expect(v.map((x) => x.sport), `${key}: config "${name}" changed`).toEqual([key]);
+      expect(v[0], key).toMatchObject({ matched: c.streams.length - used, changed: 0, removed: used, added: used });
+      expect(epochViolations(only(key, c), only(key, edited, 2)), `${key}: config changed and bumped`).toEqual([]);
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+  }, budget(2));
 
   it("names the sport whose stream was removed, and does not name it for an added stream", () => {
     let checked = 0;
