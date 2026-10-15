@@ -349,11 +349,13 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // sport ledger, so it is not part of the resolved cfg `stageScopedCfg`
   // produces and no fixture froze it. Its walkover award IS a fold input since
   // W2c Task 16b: `stageForfeitAward` reads `forfeit.awardScore` off the stage
-  // and every fold of a ledger offers it (`FoldOptions.forfeitAward`), for the
-  // sports whose table it reaches. That is safe for the reason below, not
-  // because the rule stays out of the fold: the stage lock means no fixture
-  // of the stage holds a ledger when the award can still change, so no two
-  // folds of one ledger ever read two awards. Since W2c Task 13 the rule
+  // and every server-side read and write fold offers it
+  // (`FoldOptions.forfeitAward`), except the append-event `before` folds, the
+  // event-import dry run and the pad's client fold, for the sports whose table
+  // it reaches. That is safe for the reason below, not because the rule stays
+  // out of the fold: the stage lock means no fixture of the stage holds a
+  // ledger when the award can still change, so no two folds that offer it ever
+  // read two different awards of one ledger. Since W2c Task 13 the rule
   // IS editable after fixtures exist — `PUT /stages/{id}/rules`' points arm
   // — but only until the stage STARTS: the first frozen config snapshot or
   // score event in that stage locks it (STAGE_FORMAT_LOCKED, the monotonic
