@@ -53,7 +53,9 @@ describe("extendFloor — the golden floor's append path", () => {
       floorStreams += added.length;
     });
     expect(floorStreams).toBeGreaterThan(builtinModules.length * 4);
-  });
+    // Every sport's scenarios, including cricket's search for a tied match (a few hundred seeds): 1.1 s plain, 4.7 s under
+    // the CI coverage run, so it carries an explicit budget rather than the 5 s default.
+  }, 30_000);
 
   it("every committed floor stream, taken in order, closes a hole the streams before it left open (no noise kept)", () => {
     // The keep-rule: a scenario's stream is appended only when it reduces the holes.
