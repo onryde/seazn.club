@@ -35,7 +35,7 @@ describe("rulesLineText", () => {
     ];
     expect(rulesLineText(enPublic, lowerFirst)).toBe("Extra time (2 × 15 min), penalties (5 each)");
     expect(rulesLineText(enPublic, [lowerFirst[1]!, lowerFirst[0]!])).toBe("Penalties (5 each), extra time (2 × 15 min)");
-    expect(rulesLineText(enPublic, [{ key: "format.rules.period.halves", params: { m: 45 } }, lowerFirst[0]!])).toBe(
+    expect(rulesLineText(enPublic, [{ key: "format.rules.period.halves", params: { minutes: 45 } }, lowerFirst[0]!])).toBe(
       "2 halves of 45 min, extra time (2 × 15 min)",
     );
     // The same in a locale whose first letter is an accented capital candidate.

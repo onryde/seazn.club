@@ -544,7 +544,9 @@ export async function loadMatchCentre(
   // (`ctx.locale`), exactly as the preset name it replaces is — through the
   // PUBLIC dictionary, where the describer's keys live so the hub can resolve
   // the same clauses client-side — and joined by the one `rulesLineText`.
-  const rulesLine = effectiveRulesLine(ctx.division.sportKey, sportModule, rawCfg, configRows.division?.config);
+  // The stage's KIND rides along so a bracket match's line says how a tied match ENDS (W2c Task 16: the deciders), as
+  // its stage's chip does - and a table match's does not.
+  const rulesLine = effectiveRulesLine(ctx.division.sportKey, sportModule, rawCfg, configRows.division?.config, configRows.stage?.kind);
   const formatLabel =
     rulesLine === null
       ? ctx.division.formatLabel

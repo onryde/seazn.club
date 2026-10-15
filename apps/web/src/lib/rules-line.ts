@@ -22,6 +22,13 @@ export interface RulesClause {
 
 export const RULES_LINE_JOINER = ", ";
 
+/**
+ * The line as one sentence. Clauses are written to sit ANYWHERE in a line ("walkover 2–0", "penalties (5 each)",
+ * "level matches wait for the organiser"), so they begin lowercase; the joiner capitalises the sentence's first
+ * letter, once. A clause that leads with a digit or a capital ("2 halves of 45 min", "Best of 3") is left as it is, and
+ * nothing past the first letter is touched.
+ */
 export function rulesLineText(dict: Dict, line: readonly RulesClause[]): string {
-  return line.map((clause) => t(dict, clause.key, clause.params)).join(RULES_LINE_JOINER);
+  const text = line.map((clause) => t(dict, clause.key, clause.params)).join(RULES_LINE_JOINER);
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

@@ -51,9 +51,9 @@ describe("stage format line - a stage's deciders reach its line (batch 4 M4, clo
     // What the rulebook says each one's knockout reads like (the only typed table here): cricket's super over, chess's
     // rung list, carrom's extra board; the goal sports' numbers are read back off the engine's own preset below.
     const READS: Record<string, RegExp> = {
-      cricket: /super over/,
-      boardgame: /rapid tie-break.*blitz tie-break.*Armageddon/,
-      carrom: /extra board/,
+      cricket: /super over/i,
+      boardgame: /rapid tie-break.*blitz tie-break.*Armageddon/i,
+      carrom: /extra board/i,
     };
     let checked = 0;
     let numbered = 0;
@@ -94,13 +94,15 @@ describe("stage format line - a stage's deciders reach its line (batch 4 M4, clo
     expect(words(line!)).toBe("Level matches wait for the organiser");
   });
 
-  it("chess knockout with no stored rules says every rung (BG-KO-1); the organiser's list says its order; [] says none", () => {
+  it("chess knockout with no stored rules says every rung (BG-KO-1); a list the organiser set says the format it differs by, then its order; [] says none", () => {
     const chess = mod("boardgame");
     const division = divisionCfg(chess, "classical");
     const rungs = (rules: unknown) => words(stageFormatLines("boardgame", chess, division, [stage("s1", 1, "knockout", rules)])[0]!);
     expect(rungs(undefined)).toBe("Rapid tie-break, blitz tie-break, Armageddon");
-    expect(rungs({ tiebreakRungs: ["armageddon", "rapid"] })).toBe("Armageddon, rapid tie-break");
-    expect(rungs({ tiebreakRungs: [] })).toBe("Level matches wait for the organiser");
+    // A list the stage sets is a rule that DIFFERS from its division, so the line is the format first (the same rule as
+    // every other sport: a differing stage never reads as the division's preset), then the rungs in the stage's order.
+    expect(rungs({ tiebreakRungs: ["armageddon", "rapid"] })).toBe("Classical time control, Armageddon, rapid tie-break");
+    expect(rungs({ tiebreakRungs: [] })).toBe("Classical time control, level matches wait for the organiser");
   });
 
   it("the sequence: a table stage first (the empty case), then other kinds, in stage order, each under its own name", () => {
@@ -112,7 +114,7 @@ describe("stage format line - a stage's deciders reach its line (batch 4 M4, clo
     const lines = stageFormatLines("hockey", hockey, division, [
       stage("k", 3, "knockout", preset, undefined, "Playoffs"),
       stage("l", 1, "league", undefined, undefined, "Pool play"),
-      stage("g", 2, "group", { periods: { minutes: 12 } }, undefined, longName),
+      stage("g", 2, "group", { periods: { count: 4, minutes: 12 } }, undefined, longName),
     ]);
     expect(lines.map((l) => l.stageId), "the league (nothing differs) has no line").toEqual(["g", "k"]);
     expect(lines.map((l) => l.stageName)).toEqual([longName, "Playoffs"]);
