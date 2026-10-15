@@ -21,6 +21,8 @@ const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
   "packages/engine/src/testkit/conformance.ts": { calls: 5, reason: "testkit: module-level conformance, no settle in its streams" },
   "packages/engine/src/testkit/simulation.ts": { calls: 3, reason: "testkit: simulation folds without settle" },
   "packages/engine/src/testkit/scenarios.ts": { calls: 6, reason: "testkit: scenario builder; `played.state` comes from decidedStream, which drives module.apply with the module's own generated events — never a kernel-owned type" },
+  "packages/engine/src/testkit/golden-floor.ts": { calls: 1, reason: "golden floor (GF-1): the module-level outcome of a generator walk, to learn which outcome kinds a module can produce; no walk carries core.settle" },
+  "packages/engine/src/testkit/golden-floor-streams.ts": { calls: 1, reason: "golden floor (GF-1): the one bare read (`moduleOutcome`) of the module's outcome, as golden.ts records it; floor streams carry no core.settle (exempt, guarded in golden-floor.test.ts and by the corpus scan below)" },
   "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the frozen corpus records the MODULE's outcome (GOLDEN-POLICY: the per-sport back-compat tripwire); no corpus stream carries core.settle — guarded below, not assumed" },
 };
 const stripComments = (text: string): string => text.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "");
@@ -100,6 +102,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       "packages/engine/src/sports/cricket/scorecard.ts",
       "packages/engine/src/sports/generic/generic.ts",
       "packages/engine/src/testkit/after-start-events.ts",
+      // GF-1: the golden floor's `settleProbe` folds a settled ledger and reads its EFFECTIVE outcome through outcomeOf,
+      // to prove the settle exemption is still needed (the harness records the module's bare outcome instead).
+      "packages/engine/src/testkit/golden-floor.ts",
       "packages/engine/src/testkit/play-event.ts",
       "tools/matrix/lib/fold.ts",
       "tools/matrix/lib/model/ledger-fold.ts",
