@@ -3,7 +3,7 @@
 // REFORMAT is the one write mode that is NOT a re-baseline: it adds the two format-2 fields to every stream and proves, as it
 // goes, that nothing the corpus already holds would move. Everything below states a rule of that and then tries to break it.
 // No committed corpus is written by any test here; reformatted corpora are built in memory.
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -204,9 +204,14 @@ describe("reformatCorpus — it is NEVER a re-baseline: it refuses when anything
 
 describe("verifyStream under format 2 — each recorded field is compared, and a missing one is a failure", () => {
   const module = sport("carrom"); // single sport: the message wiring is sport-independent; the registry sweep above covers every sport
-  const corpus = reformattedOf("carrom");
-  // a stream that has a non-trivial overlay (a stoppage or a squad change) so the overlay tamper below moves something real
-  const stream = corpus.streams.find((s) => s.overlay !== "{}" && Object.keys(JSON.parse(s.overlay!) as object).some((k) => k !== "outcome"))!;
+  let corpus!: GoldenCorpus;
+  let stream!: GoldenStream;
+  // built in beforeAll, not at collection: a broken reformat must red the NAMED tests below, not fail the whole file to collect
+  beforeAll(() => {
+    corpus = reformattedOf("carrom");
+    // a stream that has a non-trivial overlay (a stoppage or a squad change) so the overlay tamper below moves something real
+    stream = corpus.streams.find((s) => s.overlay !== "{}" && Object.keys(JSON.parse(s.overlay!) as object).some((k) => k !== "outcome"))!;
+  });
   const verify = (patch: Partial<GoldenStream>, replayed?: Parameters<typeof verifyStream>[3]) => verifyStream(module, corpus, { ...stream, ...patch }, replayed);
 
   it("passes untouched (the control: the tamper cases below are not redded by something else)", () => {
@@ -240,6 +245,9 @@ describe("verifyStream under format 2 — each recorded field is compared, and a
     expect(verify({ summaries: stream.summaries!.slice(1) }).join("\n")).toMatch(/summary digests recorded for \d+ events/);
     const four = recomputeStream(module, corpus.configs[stream.config], stream.events, stream.lineups, 1);
     expect(verify({}, four).join("\n")).toMatch(/the replay produced no summaries\/overlay/);
+    // a replay that produced the fields but the wrong number of digests (reachable only by injection: both derive from the events)
+    const short = { ...four, summaries: [] as string[], overlay: "{}" };
+    expect(verify({}, short).join("\n")).toMatch(/summaries: recorded \d+ digests, the replay produced 0/);
   });
 
   it("a format-1 corpus stream that holds a format-2 field is refused", () => {
@@ -338,7 +346,10 @@ describe("extendCorpus and extendFloor append in the corpus's format", () => {
 describe("corpusStateDiff — the new fields are part of the reviewed diff", () => {
   const module = sport("generic");
   const before1 = readCorpus("generic");
-  const after2 = reformattedOf("generic");
+  let after2!: GoldenCorpus;
+  beforeAll(() => {
+    after2 = reformattedOf("generic");
+  });
 
   it("a reformat moves nothing and says how many streams were newly recorded", () => {
     const diff = corpusStateDiff(before1, after2, module);
@@ -364,6 +375,16 @@ describe("corpusStateDiff — the new fields are part of the reviewed diff", () 
     expect(text).toContain("summaries=[1]");
     expect(text).toMatch(/overlay=\[/);
     expect(diff.streamsRecorded).toBe(0);
+  });
+
+  it("an overlay whose text moved but no column did (a key-order change inside a value) is still a move, named as such", () => {
+    const first = after2.streams[0]!;
+    const reordered = (overlay: string): string => JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(overlay) as object).reverse()));
+    // needs two columns to reorder: the first generic stream holds an outcome and a squad/stoppage move, or we build one
+    const base: GoldenCorpus = { ...after2, streams: [{ ...first, overlay: `{"outcome":[[0,null]],"stoppage":[[0,null]]}` }, ...after2.streams.slice(1)] };
+    const swapped: GoldenCorpus = { ...base, streams: [{ ...base.streams[0]!, overlay: reordered(base.streams[0]!.overlay!) }, ...base.streams.slice(1)] };
+    expect(swapped.streams[0]!.overlay).not.toBe(base.streams[0]!.overlay);
+    expect(corpusStateDiff(base, swapped, module).streams[0]!.overlayKeysMoved).toEqual(["(key order)"]);
   });
 
   it("fields that VANISH (format 2 -> 1) are flagged, never reported as nothing moved", () => {

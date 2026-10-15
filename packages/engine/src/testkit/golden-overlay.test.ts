@@ -127,6 +127,7 @@ describe("compactOverlay / expandOverlay — change points, losslessly (pure)", 
     expect(() => expandOverlay(`[1]`, 3, initial)).toThrow(/object/);
     expect(() => expandOverlay(`{"outcome":[[1]]}`, 3, initial)).toThrow(/malformed pair/);
     expect(() => expandOverlay(`{"outcome":[["1",null]]}`, 3, initial)).toThrow(/step 1/);
+    expect(() => expandOverlay(`{"outcome":[[1.5,null]]}`, 3, initial)).toThrow(/step 1\.5/);
   });
 });
 

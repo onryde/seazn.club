@@ -17,13 +17,14 @@ this exists to stop. It does not fix anything — it deletes the evidence, and i
 deletes it silently, because a regenerated corpus is green against the code that
 broke it by construction.
 
-## The three write modes
+## The write modes
 
 | env | what it writes | when |
 | --- | --- | --- |
 | `UPDATE_GOLDEN=1` | re-records **everything** from the generator | a corpus being built from nothing. Almost never. |
 | `REBASELINE_GOLDEN=1` | the same recorded **events**, with states / outcome / summary / deltas recomputed | an **intended** fold change. The commit diff is then the behaviour change itself. |
 | `EXTEND_GOLDEN=1` | **appends** streams covering uncovered fidelity-tier types and optional fields, then the streams the **golden floor** owes (next section but one), each written in the canonical **slim** form (see "Per-step digests") | a coverage gap. Never touches an existing stream. |
+| `REFORMAT_GOLDEN=1` | adds the **format-2** fields (`summaries`, `overlay`) to every stream and `format: 2` to the corpus (see "Corpus format 2"); every field, event and config the corpus already holds stays byte for byte | a corpus that does not yet record the kernel overlay (GF-2). **Never a re-baseline:** it replays every stream against the bytes it already holds and refuses to run if one field would change. |
 
 Only the appended stream is slimmed, never the corpus as a whole: the existing
 streams have to survive byte for byte, and re-slimming an already-slim stream is
@@ -47,9 +48,11 @@ leave a red red, it cannot turn a red green.
 
 Prose in a comment enforced none of this, so the harness now does.
 
-1. **Isolated in its own commit.** `UPDATE_GOLDEN=1` and `REBASELINE_GOLDEN=1`
-   both refuse to run unless every dirty path in the working tree is one of the
-   corpus files the run is about to rewrite. The refusal names the offending
+1. **Isolated in its own commit.** `UPDATE_GOLDEN=1`, `REBASELINE_GOLDEN=1` and
+   `REFORMAT_GOLDEN=1` (`GUARDED_WRITE_MODES`) all refuse to run unless every
+   dirty path in the working tree is one of the corpus files the run is about to
+   rewrite. (`EXTEND_GOLDEN=1` is not on the list: it only appends, and the
+   prefix it must leave alone is asserted byte for byte.) The refusal names the offending
    paths. Outside a git checkout the run **fails closed** — with no diff there
    is nothing to review, so the run cannot satisfy the clause it is gated on.
    The check is `corpusWriteVerdict`, a pure function over a
@@ -105,6 +108,44 @@ Prose in a comment enforced none of this, so the harness now does.
    array is unchanged, and `corpusStateDiff.eventsMoved` says so independently.
    A re-baseline that moves an event is a re-record wearing a re-baseline's
    name.
+
+## Corpus format 2 (GF-2)
+
+A phone computes more than the module: the kernel lays a settlement, an expunge and
+a withdrawal over a held level result on the module's answer (`outcomeOf` /
+`summaryOf`, `core/events.ts`) and keeps a stoppage, the squads and a pending
+decider beside module state. A **format 2** corpus records those. The format is
+the corpus's `format` key (`2`, written just before `streams`, which stays the last
+key); **absent means format 1**, every corpus written before GF-2. `recomputeStream`
+takes the format as its fifth argument (default 1: the harness-internal callers that
+pair no corpus with a recomputation keep asking the question they were written for;
+every caller that does pair one passes `corpusFormat(corpus)`).
+
+| field | format 1 | format 2 |
+|---|---|---|
+| `states`, `events`, `lineups`, `configs` | as ever | unchanged |
+| `outcome`, `summary`, `deltas` | the **module's** (`module.outcome(final)`, `module.summary(final)`, `standingsDelta` of that outcome) | the **effective** values (`outcomeOf`, `summaryOf`, `standingsDelta` of `outcomeOf`, as the server stores and feeds them; owner ruling Q3, 2026-10-15). Byte-identical to format 1 on every stream that holds no settle, expunge or withdrawal over a level result |
+| `summaries` | absent | per step, `#` + 16 hex of SHA-256 of `JSON.stringify(summaryOf(fold of events[0..i]))`: the headline the pad shows after each event, not only the last (never slimmed: all digests) |
+| `overlay` | absent | one JSON string: per column (`outcome`, `stoppage`, `settlement`, `expunged`, `levelWithdrawal`, `decider`, `squads`), the `[step, value]` change points of the kernel's per-step facts. A value is recorded only where it differs from the step before (step -1 is the kernel default), a column that never moves is omitted, and a value returning to the default is a change point. Squads are digests. `expandOverlay` carries the points forward to the dense per-step form |
+
+Both new fields are REQUIRED under format 2 and forbidden under format 1, so absence
+can only mean format 1. The recorder reads the kernel fold's own keys, and a test
+fails by name if the kernel ever returns a fact the recorder does not (a new key is
+recorded or argued away, never silently left out).
+
+`REFORMAT_GOLDEN=1` is the only way a corpus goes from format 1 to 2. It adds the two
+fields and changes nothing else, and it checks that rather than assuming it: every
+stream is replayed under the current engine against the bytes the corpus already
+holds, and one disagreement (a state, an effective outcome, a summary, the deltas)
+refuses the whole run: that is a re-baseline, to land on its own first. A second run
+is a no-op, and a format-2 corpus whose recorded fields no longer replay is refused,
+never "repaired". `rebaselineCorpus`, `extendCorpus` and `extendFloor` keep the
+corpus's format.
+
+**What this does not do yet (GF-2 T1).** Recording the overlay is not comparing it:
+until the epoch guard compares `summaries` and `overlay` (T2) and the floor and the
+unpinned-class probes move onto the new recorder (T3), the lists under "What the
+guard cannot see" below still stand, and every manual major they name is still owed.
 
 ## A re-baseline that changes a fold must raise that sport's version
 
