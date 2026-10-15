@@ -216,10 +216,15 @@ const notFit = (id: string, reason: string) =>
 async function assertAwardFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<void> {
   if (!isScoredAward(row.outcome)) throw lockedRefusal(row.id, "decided");
   const award = await loadAward(tx, row.id);
-  const verdict = awardFit(award.module, award.cfg, corrected, award.lineups, award.outcome, {
-    fixtureId: row.id,
-    recordedAt: new Date().toISOString(),
-  });
+  const verdict = awardFit(
+    award.module,
+    award.cfg,
+    corrected,
+    award.lineups,
+    award.outcome,
+    { fixtureId: row.id, recordedAt: new Date().toISOString() },
+    award.forfeitAward,
+  );
   if (verdict.ok) return;
   throw verdict.code === "FIXTURE_FORMAT_LOCKED" ? lockedRefusal(row.id, "decided") : notFit(row.id, verdict.reason);
 }

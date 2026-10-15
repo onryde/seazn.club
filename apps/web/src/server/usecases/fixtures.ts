@@ -21,9 +21,10 @@ import { subjectToScorerCapabilityGates } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
 import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./discipline";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
+import { stageForfeitAward } from "@/server/engine-db/fixture-cfg";
 import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
-import type { Lineup } from "@seazn/engine/core";
+import type { ForfeitAward, Lineup } from "@seazn/engine/core";
 import { log } from "@/server/logger";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatLineOf } from "@/server/engine-db/rules-version";
@@ -117,9 +118,11 @@ export async function fixtureFeedsNextMatch(auth: AuthCtx, fixtureId: string): P
 export async function loadFixturePadCfg(
   auth: AuthCtx,
   fixtureId: string,
-): Promise<{ cfg: unknown; stageKind: string | null; rulesVersion: number }> {
-  const { cfg, stageKind, rulesVersion } = await readPadRules(auth, fixtureId);
-  return { cfg, stageKind, rulesVersion };
+): Promise<{ cfg: unknown; stageKind: string | null; rulesVersion: number; forfeitAward?: ForfeitAward }> {
+  const { cfg, stageKind, rulesVersion, forfeitAward } = await readPadRules(auth, fixtureId);
+  // W2c Task 16b (X-WO-1 B): the stage points rule's walkover award rides beside the cfg (it is not part of it), so the
+  // console's forfeit dialog previews the number the table will carry. Absent: the stage has none that reaches this sport.
+  return { cfg, stageKind, rulesVersion, ...(forfeitAward === undefined ? {} : { forfeitAward }) };
 }
 
 /**
@@ -164,9 +167,11 @@ async function readPadRules(auth: AuthCtx, fixtureId: string) {
     // W2a: the stage KIND too — a bracket fixture's pad must see the sport's deciders (chess's tie-break) the
     // fold will apply, and the pad itself needs the kind (Task 12 threads `stageKind` on to it).
     const sportModule = resolveModule(row.sport_key, row.module_version);
-    const cfg = resolveFixtureCfg(row, row.division_config, { kind: row.stage_kind, config: row.stage_config }, sportModule);
+    const stage = { kind: row.stage_kind, config: row.stage_config };
+    const cfg = resolveFixtureCfg(row, row.division_config, stage, sportModule);
     return {
       cfg,
+      forfeitAward: stageForfeitAward(stage, sportModule),
       stageKind: row.stage_kind,
       rulesVersion: row.rules_version,
       sportKey: row.sport_key,

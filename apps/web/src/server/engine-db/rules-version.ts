@@ -14,7 +14,7 @@ import type { Tx } from "@/lib/db";
 import type { Dict } from "@/lib/i18n-constants";
 import { rulesLineText } from "@/lib/rules-line";
 import { matchRulesLine } from "@/server/public-site/describe-rules";
-import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
+import { hasFrozenCfg, resolveFixtureCfg, stageForfeitAward } from "./fixture-cfg";
 import { resolveModule } from "./registry";
 
 /**
@@ -112,7 +112,10 @@ async function resolvedNow(tx: Tx, where: postgres.PendingQuery<postgres.Row[]>)
   for (const r of rows) {
     if (hasFrozenCfg(r.config_snapshot)) continue;
     const m = resolveModule(r.sport_key, r.module_version);
-    out.set(r.id, canonicalJson(resolveFixtureCfg(r, r.division_config, { kind: r.stage_kind, config: r.stage_config }, m)));
+    const stage = { kind: r.stage_kind, config: r.stage_config };
+    // W2c Task 16b: what a walkover of this match credits is part of what it resolves to - the stage rule's award is not in
+    // the cfg (`stageForfeitAward`), so a save that moves only the award moves this too.
+    out.set(r.id, canonicalJson({ cfg: resolveFixtureCfg(r, r.division_config, stage, m), forfeitAward: stageForfeitAward(stage, m) ?? null }));
   }
   return out;
 }

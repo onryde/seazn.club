@@ -7,6 +7,7 @@ import {
   outcomeOf,
   summaryOf,
   type EventEnvelope,
+  type ForfeitAward,
   type LineupPair,
   type MatchOutcome,
   type ScoreSummary,
@@ -16,7 +17,7 @@ import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { FORMAT_FIT_REASONS } from "@/lib/rule-errors";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
-import { resolveFixtureCfg } from "./fixture-cfg";
+import { resolveFixtureCfg, stageForfeitAward } from "./fixture-cfg";
 import { foldFrom, loadFoldInputs } from "./fold";
 
 type Tx = postgres.TransactionSql;
@@ -55,6 +56,11 @@ export class AwardFoldMismatch extends Error {
  * summary reads the credit from its own `forfeitCredit` (football's `displayedGoals`, the set kernel's
  * `displayedSets`, …), and the state is the walkover's in every detail (its phase, its method). The fold's decision
  * must BE the stored award, or the score would describe a different result: that is refused, not written.
+ *
+ * `forfeitAward` (W2c Task 16b): the award the fixture's stage points rule offers (`stageForfeitAward`). An award no event
+ * records sits in a bracket stage, which holds no points rule (RULE_NOT_SETTABLE `points`), so no door writes one with an
+ * award today - the input is carried so that the row is still the fold the table's rule would credit if one ever did
+ * (`__tests__/forfeit-award-callers.test.ts` reaches it with a rule written by raw SQL).
  */
 export function awardedMatchState(
   module: AnySportModule,
@@ -62,6 +68,7 @@ export function awardedMatchState(
   lineups: LineupPair,
   outcome: MatchOutcome,
   at: { fixtureId: string; recordedAt: string },
+  forfeitAward?: ForfeitAward,
 ): { state: unknown; summary: ScoreSummary } {
   if (outcome.kind !== "award") {
     throw new Error(`awardedMatchState: a "${outcome.kind}" is no award, and only an award is decided without play`);
@@ -78,7 +85,8 @@ export function awardedMatchState(
     recordedAt: at.recordedAt,
     recordedBy: null,
   };
-  const folded = foldMatchWithStoppage(module, cfg as never, lineups, [forfeit]);
+  // W2c Task 16b: the stage rule's walkover award (a walkover nobody played is the case it exists for), when the stage has one.
+  const folded = foldMatchWithStoppage(module, cfg as never, lineups, [forfeit], forfeitAward === undefined ? undefined : { forfeitAward });
   const decided = outcomeOf(module, folded);
   if (!isDeepStrictEqual(decided, outcome)) throw new AwardFoldMismatch(decided, outcome);
   return { state: folded.state, summary: summaryOf(module, folded) };
@@ -118,9 +126,10 @@ export function awardFoldsUnder(
   lineups: LineupPair,
   outcome: MatchOutcome,
   at: { fixtureId: string; recordedAt: string },
+  forfeitAward?: ForfeitAward,
 ): { ok: true; state: ReturnType<typeof awardedMatchState> } | { ok: false; reason: string } {
   try {
-    return { ok: true, state: awardedMatchState(module, cfg, lineups, outcome, at) };
+    return { ok: true, state: awardedMatchState(module, cfg, lineups, outcome, at, forfeitAward) };
   } catch (err) {
     if (EngineError.is(err)) return { ok: false, reason: err.message };
     if (err instanceof AwardFoldMismatch) return { ok: false, reason: FORMAT_FIT_REASONS.result };
@@ -135,16 +144,17 @@ export function awardFit(
   lineups: LineupPair,
   outcome: MatchOutcome,
   at: { fixtureId: string; recordedAt: string },
+  forfeitAward?: ForfeitAward,
 ): AwardFitVerdict {
   if (!isScoredAward(outcome)) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
   let was;
   try {
-    was = awardedMatchState(module, currentCfg, lineups, outcome, at);
+    was = awardedMatchState(module, currentCfg, lineups, outcome, at, forfeitAward);
   } catch (err) {
     if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
     throw err;
   }
-  const now = awardFoldsUnder(module, correctedCfg, lineups, outcome, at);
+  const now = awardFoldsUnder(module, correctedCfg, lineups, outcome, at, forfeitAward);
   if (!now.ok) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: now.reason };
   if (now.state.summary.headline !== was.summary.headline)
     return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: FORMAT_FIT_REASONS.score };
@@ -185,10 +195,14 @@ export async function writeAwardedMatchState(
   if (award.ledger.standing > 0) {
     throw new Error(`writeAwardedMatchState: ${fixtureId} holds ${award.ledger.standing} recorded event(s) no void took back, and an award recorded without an event never overwrites play`);
   }
-  const { state, summary } = awardedMatchState(award.module, award.cfg, award.lineups, award.outcome, {
-    fixtureId,
-    recordedAt: new Date().toISOString(),
-  });
+  const { state, summary } = awardedMatchState(
+    award.module,
+    award.cfg,
+    award.lineups,
+    award.outcome,
+    { fixtureId, recordedAt: new Date().toISOString() },
+    award.forfeitAward,
+  );
   const written = await tx`
     insert into match_states (fixture_id, last_seq, state, summary)
     values (${fixtureId}, ${award.ledger.tip}, ${tx.json(state as never)}, ${tx.json(summary as never)})
@@ -207,7 +221,15 @@ export async function writeAwardedMatchState(
 export async function loadAward(
   tx: Tx,
   fixtureId: string,
-): Promise<{ module: AnySportModule; cfg: unknown; lineups: LineupPair; outcome: MatchOutcome; ledger: { tip: number; standing: number } }> {
+): Promise<{
+  module: AnySportModule;
+  cfg: unknown;
+  lineups: LineupPair;
+  outcome: MatchOutcome;
+  ledger: { tip: number; standing: number };
+  /** W2c Task 16b - the walkover award the fixture's stage rule offers (`stageForfeitAward`); absent for none. */
+  forfeitAward?: ForfeitAward;
+}> {
   const [fixture] = await tx<
     {
       division_id: string;
@@ -236,7 +258,8 @@ export async function loadAward(
   const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   const ledger = await ledgerOf(tx, fixtureId);
   const lineups = await loadLineupPair(tx, fixtureId, home, away);
-  return { module: sportModule, cfg, lineups, outcome: fixture.outcome, ledger };
+  const forfeitAward = stageForfeitAward(stage, sportModule);
+  return { module: sportModule, cfg, lineups, outcome: fixture.outcome, ledger, ...(forfeitAward === undefined ? {} : { forfeitAward }) };
 }
 
 /**

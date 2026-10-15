@@ -22,7 +22,7 @@ import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
-import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
+import { hasFrozenCfg, resolveFixtureCfg, stageForfeitAward } from "./fixture-cfg";
 import { lockStageSeatsForVoid, releaseFedSeats } from "./fed-seats";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
@@ -545,8 +545,13 @@ export async function appendEventInTx(
 
   const folded = (() => {
     try {
+      // W2c Task 16b: the stage rule's walkover award is offered to the write fold too, so the summary stored below is the
+      // one every read of this ledger folds (`fold.ts` offers the same value): a forfeit with nothing played reads the
+      // rule's number, one after play the sport's own credit.
+      const forfeitAward = stageForfeitAward(stage, sportModule);
       return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {
         strictFromSeq: candidate.seq,
+        ...(forfeitAward === undefined ? {} : { forfeitAward }),
       });
     } catch (error) {
       // IDs, types and codes only. The payload carries striker/nonStriker/

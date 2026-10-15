@@ -1,6 +1,6 @@
 import "server-only";
 import type postgres from "postgres";
-import type { MatchOutcome } from "@seazn/engine/core";
+import type { ForfeitAward, MatchOutcome } from "@seazn/engine/core";
 import { canonicalJson } from "@/lib/canonical-json";
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -27,6 +27,8 @@ export interface HeldAward {
   id: string;
   fixtureNo: number | null;
   cfg: unknown;
+  /** W2c Task 16b - the walkover award its stage's points rule offers it NOW (`loadAward`), part of what the award resolves to. */
+  forfeitAward?: ForfeitAward;
 }
 
 /** The scored awards in `scope` that no standing event records, each with the cfg it folds under NOW. Read before the
@@ -39,7 +41,8 @@ export async function heldAwards(tx: Tx, scope: FixtureScope): Promise<HeldAward
   const out: HeldAward[] = [];
   for (const r of rows) {
     if (!isScoredAward(r.outcome) || (await ledgerOf(tx, r.id)).standing > 0) continue;
-    out.push({ id: r.id, fixtureNo: r.fixture_no, cfg: (await loadAward(tx, r.id)).cfg });
+    const award = await loadAward(tx, r.id);
+    out.push({ id: r.id, fixtureNo: r.fixture_no, cfg: award.cfg, ...(award.forfeitAward === undefined ? {} : { forfeitAward: award.forfeitAward }) });
   }
   return out;
 }
@@ -51,8 +54,8 @@ export async function rewriteHeldAwards(tx: Tx, held: readonly HeldAward[]): Pro
   const rewritten: string[] = [];
   for (const h of held) {
     const now = await loadAward(tx, h.id);
-    if (canonicalJson(now.cfg) === canonicalJson(h.cfg)) continue;
-    const fold = awardFoldsUnder(now.module, now.cfg, now.lineups, now.outcome, { fixtureId: h.id, recordedAt: new Date().toISOString() });
+    if (canonicalJson({ cfg: now.cfg, award: now.forfeitAward ?? null }) === canonicalJson({ cfg: h.cfg, award: h.forfeitAward ?? null })) continue;
+    const fold = awardFoldsUnder(now.module, now.cfg, now.lineups, now.outcome, { fixtureId: h.id, recordedAt: new Date().toISOString() }, now.forfeitAward);
     if (!fold.ok) throw saveRefusal(h, fold.reason);
     await writeAwardedMatchState(tx, h.id, { rewrite: true });
     rewritten.push(h.id);

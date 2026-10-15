@@ -1,4 +1,7 @@
 import "server-only";
+import { PointsRule, forfeitAwardOffer } from "@seazn/engine/competition";
+import type { ForfeitAward } from "@seazn/engine/core";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { liveStageCfg, type DeciderOffSource } from "@/lib/stage-decider-off";
 
 /** The fixture's stage, as every caller already reads it: its kind (the overlay's switch) and its config (the
@@ -173,4 +176,30 @@ export function liveCfg(divisionCfg: unknown, stage: FixtureStageSource | null |
  */
 export function hasFrozenCfg(snapshot: unknown): boolean {
   return snapshot !== null && snapshot !== undefined;
+}
+
+/**
+ * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the walkover score the fixture's STAGE offers a fold: its points rule's
+ * `forfeit.awardScore` (winner first), and only where that award reaches the sport's table (`forfeitAwardOffer`, the
+ * engine's one place). `undefined` for a stage with no points rule, a rule with no award, a sport the award never reaches,
+ * and a stored rule `PointsRule` will not read (asked with `safeParse`, never `parse`: this feeds a fold, which must not be
+ * made stricter than the table's own read of the same rule).
+ *
+ * It is NOT part of the cfg (`resolveFixtureCfg`): the cfg is frozen into `config_snapshot` at the first event and the
+ * award replaces the sport's credit only for a forfeit with NOTHING PLAYED, a fact the ledger knows and a cfg cannot (an
+ * unconditional overlay would move the credit of a forfeit after play too). It travels beside the cfg as its own fold
+ * input (`FoldOptions.forfeitAward`), and the kernel decides per forfeit whether it applies. Every production fold of a
+ * fixture's ledger offers it (pinned in `__tests__/forfeit-award-callers.test.ts`).
+ *
+ * It needs no snapshot: the stage's rule cannot change once any match of the stage has an event or a frozen cfg
+ * (`putStageRules` refuses STAGE_FORMAT_LOCKED), so the value read at the first event is the value for the stage's life.
+ */
+export function stageForfeitAward(
+  stage: FixtureStageSource | null | undefined,
+  module: Pick<AnySportModule, "awardScoreKeys">,
+): ForfeitAward | undefined {
+  const raw = stage?.config?.points;
+  if (raw === undefined || raw === null) return undefined;
+  const rule = PointsRule.safeParse(raw);
+  return rule.success ? forfeitAwardOffer(rule.data, module) : undefined;
 }

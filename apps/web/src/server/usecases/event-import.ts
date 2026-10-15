@@ -305,6 +305,8 @@ async function runStream(
         fixture.home_entrant_id!,
         fixture.away_entrant_id!,
       );
+      // W2c Task 16b: this dry run reads only whether the stream folds and whether it decides (`outcomeOf`) - neither depends
+      // on the stage rule's walkover award (a score), so it is the one fold of a ledger that does not offer it.
       return foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, { strictFromSeq: 1 });
     });
   } catch (err) {

@@ -7,6 +7,7 @@ import {
   summaryOf,
   resolveVoids,
   type EventEnvelope,
+  type ForfeitAward,
   type LineupPair,
   type MatchOutcome,
   type ScoreSummary,
@@ -14,7 +15,7 @@ import {
 import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
-import { resolveFixtureCfg } from "./fixture-cfg";
+import { resolveFixtureCfg, stageForfeitAward } from "./fixture-cfg";
 
 type Tx = postgres.TransactionSql;
 
@@ -43,6 +44,11 @@ export interface FoldInputs {
   /** W2a — the fixture's stage kind (null when it has no stage row): the status rule holds a level result in a
    *  bracket kind as `needs_decision` (append-event.ts `nextStatus`), and the replay must say what the write said. */
   stageKind: string | null;
+  /** W2c Task 16b (X-WO-1 B) - the stage points rule's walkover award, winner first, when the fixture's stage has one
+   *  that reaches this sport's table (`stageForfeitAward`). Offered to the fold, which applies it to a forfeit with
+   *  nothing played alone (`FoldOptions.forfeitAward`), so the headline reads the number the table credits. Absent: no
+   *  stage rule award. */
+  forfeitAward?: ForfeitAward;
 }
 
 export interface FoldedFixture {
@@ -166,7 +172,16 @@ export async function loadFoldInputs(
     select kind, config from stages where id = ${fixture.stage_id}
   `;
   const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
-  return { sportKey: division.sport_key, module: sportModule, cfg, lineups, envelopes, stageKind: stage?.kind ?? null };
+  const forfeitAward = stageForfeitAward(stage, sportModule);
+  return {
+    sportKey: division.sport_key,
+    module: sportModule,
+    cfg,
+    lineups,
+    envelopes,
+    stageKind: stage?.kind ?? null,
+    ...(forfeitAward === undefined ? {} : { forfeitAward }),
+  };
 }
 
 /** The pure half: the fold itself, over inputs already loaded. */
@@ -174,7 +189,7 @@ export function foldFrom(fixtureId: string, inputs: FoldInputs): FoldedFixture {
   const { module: sportModule, cfg, lineups, envelopes } = inputs;
   // W2a finding 1: a settle lives beside module state, so the outcome is
   // outcomeOf over the whole fold, never the module's outcome of its state.
-  const folded = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes);
+  const folded = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, inputs.forfeitAward === undefined ? undefined : { forfeitAward: inputs.forfeitAward });
   const state = folded.state;
   return {
     fixtureId,
