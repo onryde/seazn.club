@@ -53,6 +53,7 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
     const op = (buildOpenApiDocument().paths as Record<string, Record<string, Op>>)["/api/v1/divisions/{id}/stages"]!.put!;
     for (const claim of [
       "A matched slot also keeps its own `points`",
+      "or sends `points: null`, which drops it",
       "402 PAYMENT_REQUIRED",
       "409 for a `seq` the body names twice",
       "POINTS_RULE_INEXPRESSIBLE",
@@ -105,6 +106,7 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
     const op = opOf("/divisions/{id}/stages", "post");
     for (const claim of [
       "`config.points`",
+      "`config.points: null` means no points for this slot",
       "RULE_NOT_SETTABLE (`field` `points`)",
       "`points.forfeit.awardScore`",
       "422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys)",

@@ -17,7 +17,7 @@ import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { DEPARTED_STATUSES } from "./entrants";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
-import { validatedStageConfig } from "./stage-defaults";
+import { sentPoints, validatedStageConfig } from "./stage-defaults";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -459,7 +459,9 @@ export async function assertStageBatchGates(
   // + circular-H2H + carry-over are the Pro layer.
   for (const s of inputs) {
     const cfg = s.config as { points?: unknown; h2h_scope?: string } | undefined;
-    if (cfg?.points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(cfg.points));
+    // M6: a null `points` is "no points for this slot" (`sentPoints`): nothing to gate.
+    const points = sentPoints(cfg);
+    if (points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(points));
     if (cfg?.h2h_scope === "overall") {
       await requireFeature(auth.orgId, "tiebreakers.custom");
     }

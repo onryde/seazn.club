@@ -23,6 +23,20 @@ import { refuseStagePoints, refuseUnsettableKeys, setsBestOf, stageRulesProblem,
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
+/**
+ * Batch 4 review M6 (ruling M6) — `config.points: null` in a stage input is "no points for this slot": the same word the
+ * stage PUT uses (`{points: null}` removes the rule), and no rule to validate, gate, store or carry. Before, the API's
+ * schema let the null through (`points: z.unknown()`) and `PointsRule.parse(null)` threw a raw ZodError at the batch gates,
+ * which with R-T13-1's carry left an Apply no way to clear a slot's carried points. The one reading of the sent value:
+ * `undefined` for absent AND null (nothing to ask), the value otherwise. `replaceStages` carries a slot's stored points only
+ * when the body says nothing (`stageConfigsAtCreate`: `sent.points === undefined`), so a null drops the carry.
+ */
+export const sentPoints = (config: Record<string, unknown> | undefined): unknown => config?.points ?? undefined;
+
+/** `config` as the door stores it: a null `points` is not stored (the stage PUT deletes the key, never stores a null). */
+const withoutNullPoints = (config: Record<string, unknown>): Record<string, unknown> =>
+  config.points === null ? Object.fromEntries(Object.entries(config).filter(([k]) => k !== "points")) : config;
+
 /** W2c Task 13b (R-13b-1; D3) — every whole decider any sport declares, refused at a stage config's TOP level. The
  *  engine-derived set lives in `lib/top-level-stage-deciders.ts`, shared with the API schema's named refusals, so the
  *  door and the zod layer refuse the same keys. */
@@ -73,9 +87,10 @@ export function validatedStageConfig(
   kind: StageKind,
   variant: string | null,
   divisionConfig: unknown,
-  config: Record<string, unknown>,
+  sentConfig: Record<string, unknown>,
   carried: Record<string, unknown> | null = null,
 ): Record<string, unknown> {
+  const config = withoutNullPoints(sentConfig);
   // Fix round 2 (review gap hunt): the API's schema refuses a top-level decider, but an internal caller reaches this
   // door with no schema in front of it, so the door refuses it too, by name, before anything is merged or written.
   // Task 13b: every decider the engine declares, not the two the retired top-level overlay read.
@@ -91,6 +106,7 @@ export function validatedStageConfig(
     const problem = stageRulesProblem(module, divisionConfig, out.rules, setsBestOf(sent));
     if (problem !== null) throw stageSaveRefusal(problem, sportKey);
   }
-  if (config.points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(config.points));
+  const points = sentPoints(config);
+  if (points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(points));
   return out;
 }
