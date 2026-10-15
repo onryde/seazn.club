@@ -1,6 +1,9 @@
 // FOLD_EPOCH (engine-split D26, Task 1e-1). The sport list is the registry's own (builtinModules, walked with forEachSport,
 // which refuses an empty registry); no expected key set is typed into this file. Every sweep reports how many it visited
 // and a count of zero fails (TEST-STRATEGY rule 2).
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
@@ -61,6 +64,26 @@ describe("FOLD_EPOCH", () => {
     for (const name of inherited) {
       expect(() => foldEpochOf(name), `foldEpochOf("${name}")`).toThrow(/no FOLD_EPOCH/);
     }
+  });
+
+  it("imports nothing at all, so the guard can load the baseline's copy of it from git into a temp file (parsed, not grepped)", () => {
+    const file = fileURLToPath(new URL("./fold-epoch.ts", import.meta.url));
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const found: string[] = [];
+    let nodes = 0;
+    const visit = (n: ts.Node): void => {
+      nodes++;
+      const isCall = ts.isCallExpression(n);
+      if (ts.isImportDeclaration(n) || ts.isImportEqualsDeclaration(n) || ts.isImportTypeNode(n) || (ts.isExportDeclaration(n) && n.moduleSpecifier !== undefined)) found.push(n.getText(sf));
+      else if (isCall && (n.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(n.expression) && n.expression.text === "require"))) found.push(n.getText(sf));
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    // it read the real file: it declares the table and the accessor, and has far more than a handful of nodes
+    expect(nodes).toBeGreaterThan(50);
+    const declared = sf.statements.flatMap((st) => (ts.isVariableStatement(st) ? st.declarationList.declarations.map((d) => d.name.getText(sf)) : ts.isFunctionDeclaration(st) ? [st.name?.text ?? ""] : []));
+    expect(declared).toEqual(expect.arrayContaining(["FOLD_EPOCH", "foldEpochOf"]));
+    expect(found).toEqual([]);
   });
 
   it("is exported from the ./sport subpath, which is where a phone and the server's gate import it (the same table, not a copy)", () => {
