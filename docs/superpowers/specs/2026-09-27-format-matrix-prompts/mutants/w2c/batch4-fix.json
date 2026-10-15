@@ -392,5 +392,20 @@
     "name": "every property of a patch is load-bearing on its own"
    }
   ]
+ },
+ {
+  "id": "b4-n3-stage-read-takes-no-row-lock",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "variant_key, config from divisions where id = ${divisionId}\n    for no key update`;",
+  "replace": "variant_key, config from divisions where id = ${divisionId}`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
+    ],
+    "name": "on a COMPLETED division, racing a rename that also names a masking field: both finish, no 40P01"
+   }
+  ]
  }
 ]
