@@ -10,7 +10,7 @@
 // written in, and a reshaped file reds a pin rather than parsing into something vacuous. Every pin is held to a failing input (MUTANTS below:
 // the workflow text with that one property broken, which the pin must name).
 //
-// Single-sport reason: no sport is involved - this is a CI-wiring file; the scratch tables are the real one with one or two sports edited.
+// Single-sport reason: no sport is involved - this is a CI-wiring file; the scratch tables are synthetic (every epoch 1, one or two sports raised), because the live epochs change with each bump.
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -118,7 +118,7 @@ function pins(text: string): string[] {
 
   // what it runs
   check("it resolves the previous release tag from HEAD^, over v*.*.* tags only", step.run.includes("git describe --tags --abbrev=0 --match 'v*.*.*' HEAD^"));
-  check("it fetches the v* tags and their history first (the checkout is one commit deep; a refspec takes one wildcard)", step.run.includes("git fetch --quiet --unshallow origin '+refs/tags/v*:refs/tags/v*'") && step.run.includes("git fetch --quiet origin '+refs/tags/v*:refs/tags/v*'"));
+  check("it fetches the v* tags and their history first (the checkout is one commit deep; a refspec takes one wildcard)", step.run.includes("git fetch --quiet --filter=blob:none --unshallow origin '+refs/tags/v*:refs/tags/v*'") && step.run.includes("git fetch --quiet --filter=blob:none origin '+refs/tags/v*:refs/tags/v*'"));
   check("it runs the engine's script under strip-types, from the previous tag to HEAD, annotating and summarising",
     step.run.includes(`node --experimental-strip-types ${SCRIPT} --from "$prev" --to HEAD --annotate --summary "$GITHUB_STEP_SUMMARY"`));
   check("the first release (no previous tag) is reported, not an error", /if \[ -z "\$prev" \]; then[\s\S]*exit 0\s*fi/.test(step.run));
@@ -169,8 +169,10 @@ describe("prod.yml: the release-time epoch report is wired so that it can only i
     ["moved after the deploy", moveStepBefore("- name: Report machine count"), /before every step that migrates/],
     ["describe over every tag", swap("--match 'v*.*.*'", "--match 'v*'"), /resolves the previous release tag/],
     ["describe from HEAD, not HEAD^", swap("'v*.*.*' HEAD^", "'v*.*.*' HEAD"), /resolves the previous release tag/],
-    ["no tag fetch", swap("          else\n            git fetch --quiet origin '+refs/tags/v*:refs/tags/v*'\n", "          else\n            true\n"), /fetches the v\* tags/],
-    ["no unshallow of the one-commit-deep checkout", swap("git fetch --quiet --unshallow origin", "git fetch --quiet origin"), /fetches the v\* tags/],
+    ["no tag fetch", swap("          else\n            git fetch --quiet --filter=blob:none origin '+refs/tags/v*:refs/tags/v*'\n", "          else\n            true\n"), /fetches the v\* tags/],
+    ["the shallow fetch pulls every blob (a minute or more on the real repository)", swap("git fetch --quiet --filter=blob:none --unshallow origin", "git fetch --quiet --unshallow origin"), /fetches the v\* tags/],
+    ["the full-history fetch pulls every blob", swap("git fetch --quiet --filter=blob:none origin", "git fetch --quiet origin"), /fetches the v\* tags/],
+    ["no unshallow of the one-commit-deep checkout", swap("git fetch --quiet --filter=blob:none --unshallow origin", "git fetch --quiet --filter=blob:none origin"), /fetches the v\* tags/],
     ["no --annotate", swap(" --annotate --summary", " --summary"), /runs the engine's script/],
     ["no --summary", swap(' --annotate --summary "$GITHUB_STEP_SUMMARY"', " --annotate"), /runs the engine's script/],
     ["the script path wrong", swap("node --experimental-strip-types packages/engine/scripts/release-epoch-report.ts", "node --experimental-strip-types packages/engine/scripts/release-epoch-report.mjs"), /exactly one step runs the report/],
@@ -209,22 +211,27 @@ function git(cwd: string, ...args: string[]): string {
 
 let scratch = "";
 let origin = "";
-const REAL_TABLE = readFileSync(path.join(ROOT, TABLE), "utf8");
 /** The sports there are, from the golden corpora on disk (the epoch guard holds them equal to the table's keys). */
-const SPORTS = (readdirSync(path.join(ROOT, "packages/engine/src/sports"), { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json")).length;
+const SPORT_KEYS = (readdirSync(path.join(ROOT, "packages/engine/src/sports"), { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json")).map((f) => path.basename(f, ".golden.json")).sort();
+const SPORTS = SPORT_KEYS.length;
 
-/** A table with one sport's epoch edited (the real table's first `sport: n`, inside the FOLD_EPOCH literal). */
-const withEpoch = (sport: string, n: number): string => {
-  const out = REAL_TABLE.replace(new RegExp(`\\b${sport}: \\d+`), `${sport}: ${n}`);
-  if (out === REAL_TABLE && n !== 1) throw new Error(`${sport} has no entry in the table`);
-  return out;
+/** A table source shaped the way src/sport/fold-epoch.ts writes its own, over the registry's sports, every epoch 1 unless `over` says. SYNTHETIC on
+ *  purpose: a copy of the live table holds whatever its epochs are today, and the first real epoch bump would make these releases compare equal
+ *  tables (or throw). The real table's source is read by packages/engine/test/release-epoch-report.test.ts. */
+const tableOf = (over: Record<string, number> = {}): string => {
+  for (const k of Object.keys(over)) if (!SPORT_KEYS.includes(k)) throw new Error(`${k} is not a sport (the corpora on disk name ${SPORT_KEYS.join(", ")})`);
+  const epochs = { ...Object.fromEntries(SPORT_KEYS.map((k) => [k, 1])), ...over };
+  return `export const FOLD_EPOCH = Object.freeze({ ${Object.entries(epochs).map(([k, n]) => `${k}: ${n}`).join(", ")} } as const satisfies Readonly<Record<string, number>>);\n`;
 };
+const BASE_TABLE = tableOf();
 
 beforeAll(() => {
   scratch = mkdtempSync(path.join(tmpdir(), "prod-release-epoch-"));
   origin = path.join(scratch, "origin");
   mkdirSync(origin);
   git(origin, "init", "-q", "-b", "main");
+  git(origin, "config", "uploadpack.allowFilter", "true"); // a file:// origin refuses --filter unless told otherwise; GitHub's servers allow it
+  git(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
   for (const k of [["gc.auto", "0"], ["maintenance.auto", "false"]]) git(origin, "config", k[0], k[1]);
   for (const f of FILES) {
     mkdirSync(path.dirname(path.join(origin, f)), { recursive: true });
@@ -242,12 +249,12 @@ beforeAll(() => {
     if (tag !== undefined) git(origin, "tag", tag);
   };
   commit("first release, before fold-epoch.ts existed", null, "v1.0.0");
-  commit("fold-epoch.ts arrives", REAL_TABLE, "v1.0.1");
-  commit("an ordinary merge", REAL_TABLE + "\n");
+  commit("fold-epoch.ts arrives", BASE_TABLE, "v1.0.1");
+  commit("an ordinary merge", BASE_TABLE + "\n");
   git(origin, "tag", "v9"); //                                   not a release tag: `v*.*.*` must not match it, and `v*` would
   git(origin, "tag", "not-a-release");
-  commit("football's rule changes", withEpoch("football", 2), "v1.0.2");
-  commit("tennis and badminton change", withEpoch("football", 2).replace(/\btennis: \d+/, "tennis: 2").replace(/\bbadminton: \d+/, "badminton: 4"), "v1.0.3-beta");
+  commit("football's rule changes", tableOf({ football: 2 }), "v1.0.2");
+  commit("tennis and badminton change", tableOf({ football: 2, tennis: 2, badminton: 4 }), "v1.0.3-beta");
 }, 60_000);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -275,7 +282,8 @@ describe("prod.yml: the epoch-report step, run against a checkout shaped like a 
   it("the rig has the tags and tables it claims (a rig with none would pass every scenario below for the wrong reason)", () => {
     expect(git(origin, "tag", "--list").split("\n").sort()).toEqual(["not-a-release", "v1.0.0", "v1.0.1", "v1.0.2", "v1.0.3-beta", "v9"]);
     expect(SPORTS).toBeGreaterThan(1);
-    expect(withEpoch("football", 2)).not.toBe(REAL_TABLE);
+    expect(tableOf({ football: 2 })).not.toBe(BASE_TABLE);
+    for (const sport of ["football", "tennis", "badminton"]) expect(SPORT_KEYS, `the scenarios below raise ${sport}`).toContain(sport);
   });
 
   it("deploying v1.0.2 names the sport its tag raised since v1.0.1, skipping the untagged merge and the non-release tags between them", () => {
@@ -288,6 +296,9 @@ describe("prod.yml: the epoch-report step, run against a checkout shaped like a 
       `::warning::${raisedLine("football", 1, 2)}`,
     ]);
     expect(r.summary).toBe(`### Engine fold epoch: v1.0.1 -> HEAD\n\n- ${raisedLine("football", 1, 2)}\n- ${r.lines[1]}\n`);
+    // the history came without its blobs (a full unshallow of this repository is a minute or more), and v1.0.1's table was fetched on demand
+    expect(git(dir, "config", "--get", "remote.origin.partialclonefilter"), "the fetch carried --filter=blob:none").toBe("blob:none");
+    expect(git(dir, "rev-parse", "--is-shallow-repository"), "and unshallowed the checkout").toBe("false");
   }, spawnBudget(4));
 
   it("deploying v1.0.3-beta (a prerelease tag) names every sport that rose since v1.0.2, one ::warning:: each", () => {
@@ -326,6 +337,7 @@ describe("prod.yml: the epoch-report step, run against a checkout shaped like a 
     const r = runStep(dir, "v1.0.2");
     expect(r.status, r.stderr).toBe(0);
     expect(r.lines[0]).toBe(raisedLine("football", 1, 2));
+    expect(git(dir, "config", "--get", "remote.origin.partialclonefilter"), "the non-shallow fetch carried --filter=blob:none too").toBe("blob:none");
   }, spawnBudget(4));
 
   it("a failing script surfaces as a failing step (which continue-on-error then keeps from failing the job), not as a silent pass", () => {

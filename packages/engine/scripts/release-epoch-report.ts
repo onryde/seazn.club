@@ -13,7 +13,8 @@
 //   - FOLD_MINOR changed (the table may declare one; a ref that does not reads as minor 0 for every sport): information, "no app update needed"
 // A comparison that cannot be made says which of five ways it could not (ReportStatus), in one line: the baseline has no table (older tags
 // predate fold-epoch.ts: not a warning), the target has none, a ref git cannot read, a table that does not parse, or two tables with no sport
-// in common (a run that compared nothing is never a clean pass, same rule as the guard).
+// in common (a run that compared nothing is never a clean pass, same rule as the guard). A table with a sport key outside [a-z0-9_-] is
+// unparseable too: a key is printed at the start of a line, and GitHub reads `::error::...` from the start of any line.
 //
 // THE CLI reads the table from `git` at each ref (rev-parse, ls-tree, cat-file, all relative to this engine's directory, so it works with the
 // engine at packages/engine or at a repository root) and EVALUATES it the way the guard evaluates its baseline: the source text is written to a
@@ -173,6 +174,12 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const shown = (v: unknown): string => (typeof v === "string" ? JSON.stringify(v) : String(v));
 const unparseable = (reason: string): SideRead => ({ kind: "unparseable", reason: oneLine(reason) });
+/** What a sport key may be. A key is printed at the START of a report line, and GitHub reads a workflow command (`::error::...`) from the start of
+ *  any stdout line, so a key with a newline in it would write one into the log. Every key in a table a ref declares is held to this before anything
+ *  is printed, and shown JSON-escaped in the reason that refuses it. The registry's own keys (football, tabletennis, icehockey ...) all match. */
+const SPORT_KEY = /^[a-z0-9_-]+$/;
+const badKey = (table: "FOLD_EPOCH" | "FOLD_MINOR", sport: string): string =>
+  `${table} has the sport key ${JSON.stringify(sport)}, and a sport key is lower-case letters, digits, "_" or "-"`;
 
 /** What a table's source declares. The source is TypeScript: it is written to a temp .mts and imported under strip-types, so it is evaluated as
  *  its own commit wrote it and a relative import (which cannot resolve there) makes it unparseable. A source that does not load or is not a
@@ -193,12 +200,14 @@ export async function readTables(source: string): Promise<SideRead> {
     const entries = Object.entries(epochs);
     if (entries.length === 0) return unparseable("it declares no sport");
     for (const [sport, epoch] of entries) {
+      if (!SPORT_KEY.test(sport)) return unparseable(badKey("FOLD_EPOCH", sport));
       if (!Number.isInteger(epoch) || (epoch as number) < 1) return unparseable(`FOLD_EPOCH.${sport} is ${shown(epoch)}, and an epoch is a positive integer`);
     }
     let minors: Record<string, number> | null = null;
     if ("FOLD_MINOR" in mod) {
       if (!isObject(mod.FOLD_MINOR)) return unparseable("FOLD_MINOR is not an object");
       for (const [sport, minor] of Object.entries(mod.FOLD_MINOR)) {
+        if (!SPORT_KEY.test(sport)) return unparseable(badKey("FOLD_MINOR", sport));
         if (!Number.isInteger(minor) || (minor as number) < 0) return unparseable(`FOLD_MINOR.${sport} is ${shown(minor)}, and a minor is a non-negative integer`);
       }
       minors = { ...(mod.FOLD_MINOR as Record<string, number>) };

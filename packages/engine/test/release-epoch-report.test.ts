@@ -3,8 +3,10 @@
 // is exercised in-process on small sources; the CLI around them (git, refs, exit codes, the step summary) is spawned against real git
 // history in release-epoch-report-cli.test.ts, and prod.yml's step in scripts/__tests__/prod-release-epoch-workflow.test.ts.
 //
-// Expected values come from the engine's own declarations (the real FOLD_EPOCH, the registry) and from the wording the owner approved on
-// 2026-10-15, never from the report under test. Every sweep reports how many sports it visited and zero is a failure (TEST-STRATEGY 2).
+// Expected values come from the engine's own declarations (the registry, and the KEY SET of the real FOLD_EPOCH) and from the wording the owner
+// approved on 2026-10-15, never from the report under test. The epoch VALUES in every fixture are synthetic (all 1, then edited by the case): the
+// live table's values change with each epoch bump, and a fixture built from them reds on the first real one. Only the test that reads the real
+// table's source reads its values. Every sweep reports how many sports it visited and zero is a failure (TEST-STRATEGY 2).
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,17 +26,18 @@ import { forEachSport } from "../src/testkit/for-each-sport.ts";
 
 const REFS = { from: "v1.0.7-beta", to: "v1.0.8-beta" } as const;
 const table = (epochs: Record<string, number>, minors: Record<string, number> | null = null): SideRead => ({ kind: "table", tables: { epochs, minors } });
-/** The real table, as a fresh mutable copy. */
-const real = (): Record<string, number> => ({ ...FOLD_EPOCH });
-const BASE = table(real());
+/** The sports there are (the live table's KEY SET only: its values change with every epoch bump, and a fixture built from them goes red on the
+ *  first real bump), and a fresh synthetic table over them with every epoch at 1. */
+const KEYS = Object.keys(FOLD_EPOCH);
+const synth = (): Record<string, number> => Object.fromEntries(KEYS.map((k) => [k, 1]));
+const BASE = table(synth());
 const run = (from: SideRead, to: SideRead): Report => reportEpochChanges(from, to, REFS);
 /** The line the owner approved for a raised epoch (2026-10-15). */
 const raisedLine = (sport: string, a: number, b: number): string =>
   `${sport}: FOLD_EPOCH ${a} -> ${b} — capture apps older than this engine will be refused for ${sport} (426 ENGINE_OUTDATED)`;
 const minorLine = (sport: string, a: number, b: number): string =>
   `${sport}: FOLD_MINOR ${a} -> ${b} — no app update needed (older capture apps are not refused for a minor change)`;
-const withEpoch = (over: Record<string, number>): Record<string, number> => ({ ...real(), ...over });
-const KEYS = Object.keys(FOLD_EPOCH);
+const withEpoch = (over: Record<string, number>): Record<string, number> => ({ ...synth(), ...over });
 
 describe("release-epoch-report: the fixture is the real registry's", () => {
   it("every registered sport has a FOLD_EPOCH entry, and the table names no other (a sweep over a different set would test nothing real)", () => {
@@ -93,8 +96,8 @@ describe("release-epoch-report: a raised epoch locks out older capture apps", ()
   it("names every sport that rose, in alphabetical order whatever order either table lists them (the registry's own order is wave order)", () => {
     // tennis is listed BEFORE badminton on both sides, and the real table lists them the other way round
     const first = (epochs: Record<string, number>): Record<string, number> => ({ tennis: epochs.tennis!, badminton: epochs.badminton!, ...epochs });
-    const r = run(table(first(real())), table(first(withEpoch({ tennis: 2, badminton: 2 }))));
-    expect(Object.keys(first(real()))[0]).toBe("tennis");
+    const r = run(table(first(synth())), table(first(withEpoch({ tennis: 2, badminton: 2 }))));
+    expect(Object.keys(first(synth()))[0]).toBe("tennis");
     expect(r.raised.map((c) => c.sport)).toEqual(["badminton", "tennis"]);
     expect(r.lines.slice(0, 2)).toEqual([raisedLine("badminton", 1, 2), raisedLine("tennis", 1, 2)]);
     expect(r.warnings).toEqual([raisedLine("badminton", 1, 2), raisedLine("tennis", 1, 2)]);
@@ -121,7 +124,7 @@ describe("release-epoch-report: a raised epoch locks out older capture apps", ()
 
 describe("release-epoch-report: sports added and removed", () => {
   it("lists a sport added at the target with its epoch, and does not warn", () => {
-    const r = run(BASE, table({ ...real(), curling: 1 }));
+    const r = run(BASE, table({ ...synth(), curling: 1 }));
     expect(r.added).toEqual([{ sport: "curling", epoch: 1 }]);
     expect(r.removed).toEqual([]);
     expect(r.lines[0]).toBe("curling: sport added (FOLD_EPOCH 1)");
@@ -131,7 +134,7 @@ describe("release-epoch-report: sports added and removed", () => {
 
   it("lists a sport removed at the target with the epoch it had, every sport swept", () => {
     const visited = forEachSport(({ key }) => {
-      const without = real();
+      const without = synth();
       delete without[key];
       const r = run(BASE, table(without));
       expect(r.removed, key).toEqual([{ sport: key, epoch: 1 }]);
@@ -167,7 +170,7 @@ describe("release-epoch-report: sports added and removed", () => {
 
 describe("release-epoch-report: FOLD_MINOR is information, never a lock-out", () => {
   it("a minor-only change is listed as 'no app update needed' and is not a warning", () => {
-    const r = run(table(real(), { football: 0 }), table(real(), { football: 1 }));
+    const r = run(table(synth(), { football: 0 }), table(synth(), { football: 1 }));
     expect(r.status).toBe("compared");
     expect(r.raised).toEqual([]);
     expect(r.minor).toEqual([{ sport: "football", from: 0, to: 1 }]);
@@ -177,37 +180,37 @@ describe("release-epoch-report: FOLD_MINOR is information, never a lock-out", ()
   });
 
   it("a sport absent from a table that declares FOLD_MINOR has minor 0 (the guard's reading of a table before FOLD_MINOR)", () => {
-    const r = run(table(real(), {}), table(real(), { tennis: 2 }));
+    const r = run(table(synth(), {}), table(synth(), { tennis: 2 }));
     expect(r.minor).toEqual([{ sport: "tennis", from: 0, to: 2 }]);
   });
 
   it("FOLD_MINOR at the target only reads the baseline's minors as 0", () => {
-    const r = run(BASE, table(real(), { badminton: 3, football: 0 }));
+    const r = run(BASE, table(synth(), { badminton: 3, football: 0 }));
     expect(r.minor).toEqual([{ sport: "badminton", from: 0, to: 3 }]);
     expect(r.lines[0]).toBe(minorLine("badminton", 0, 3));
   });
 
   it("FOLD_MINOR at the baseline only reads the target's minors as 0", () => {
-    const r = run(table(real(), { hockey: 4 }), BASE);
+    const r = run(table(synth(), { hockey: 4 }), BASE);
     expect(r.minor).toEqual([{ sport: "hockey", from: 4, to: 0 }]);
   });
 
   it("FOLD_MINOR at neither ref reports no minor change, and the same minors at both report none either", () => {
     expect(run(BASE, BASE).minor).toEqual([]);
-    expect(run(table(real(), { football: 2 }), table(real(), { football: 2 })).minor).toEqual([]);
+    expect(run(table(synth(), { football: 2 }), table(synth(), { football: 2 })).minor).toEqual([]);
   });
 
   it("a major rise and a minor change in the same sport are both reported, the warning only for the major", () => {
-    const r = run(table(real(), { icehockey: 1 }), table(withEpoch({ icehockey: 2 }), { icehockey: 0 }));
+    const r = run(table(synth(), { icehockey: 1 }), table(withEpoch({ icehockey: 2 }), { icehockey: 0 }));
     expect(r.raised).toEqual([{ sport: "icehockey", from: 1, to: 2 }]);
     expect(r.minor).toEqual([{ sport: "icehockey", from: 1, to: 0 }]);
     expect(r.warnings).toEqual([raisedLine("icehockey", 1, 2)]);
   });
 
   it("does not report a minor for a sport that is only on one side", () => {
-    const to = real();
+    const to = synth();
     delete to.generic;
-    const r = run(table(real(), { generic: 5 }), table(to, {}));
+    const r = run(table(synth(), { generic: 5 }), table(to, {}));
     expect(r.minor).toEqual([]);
     expect(r.removed).toEqual([{ sport: "generic", epoch: 1 }]);
   });
@@ -378,6 +381,44 @@ describe("release-epoch-report: reading a table's source", () => {
     for (const bad of ["-1", "1.5", "NaN", '"0"', "undefined"]) {
       expect(await reasonOf(`export const FOLD_EPOCH = { a: 1 };\nexport const FOLD_MINOR = { a: ${bad} };\n`), bad).toMatch(/^FOLD_MINOR\.a is .*, and a minor is a non-negative integer$/);
     }
+  });
+
+  it("a sport key outside lower-case letters, digits, '_' and '-' is unparseable, in FOLD_EPOCH and in FOLD_MINOR, and the key is shown ESCAPED", async () => {
+    // a key is printed at the start of a report line, and GitHub reads a workflow command (`::error::...`) from the start of ANY stdout line:
+    // a key with a newline in it would write one into the log. The reason shows it as a JSON string, so it stays on one line.
+    const KEY_RULE = /^FOLD_(EPOCH|MINOR) has the sport key (".*"), and a sport key is lower-case letters, digits, "_" or "-"$/;
+    const bad = ["football\n::error::pwned", "Football", "foot ball", "", "a:b", "a.b", "a/b", "ünï"];
+    for (const key of bad) {
+      const literal = JSON.stringify(key);
+      for (const source of [
+        `export const FOLD_EPOCH = { ${literal}: 1, tennis: 1 };\n`,
+        `export const FOLD_EPOCH = { tennis: 1 };\nexport const FOLD_MINOR = { ${literal}: 0 };\n`,
+      ]) {
+        const r = await reasonOf(source);
+        expect(r, literal).toMatch(KEY_RULE);
+        expect(r, literal).not.toContain("\n");
+        expect(r.includes(literal), literal).toBe(true);
+      }
+    }
+    expect(bad).toHaveLength(8);
+    // the key is judged before its value, so a bad key with a bad value is still named as a bad key and not echoed raw in the value's message
+    expect(await reasonOf(`export const FOLD_EPOCH = { "x\\n::error::y": 0 };\n`)).toMatch(KEY_RULE);
+  });
+
+  it("keys made of lower-case letters, digits, '_' and '-' are sports (the registry's own keys among them)", async () => {
+    const side = await readTables(`export const FOLD_EPOCH = { a: 1, "b-2": 1, c_d: 1, "9": 1 };\nexport const FOLD_MINOR = { a: 0, "b-2": 0 };\n`);
+    expect(side.kind).toBe("table");
+    for (const k of KEYS) expect(/^[a-z0-9_-]+$/.test(k), `registry key ${k}`).toBe(true);
+  });
+
+  it("a report built from a table with a hostile key has no line a workflow command could start on", async () => {
+    const hostile = await readTables(`export const FOLD_EPOCH = { "football\\n::error::pwned": 1, tennis: 1 };\n`);
+    expect(hostile.kind).toBe("unparseable");
+    const r = run(hostile, BASE);
+    expect(r.status).toBe("unparseable");
+    const everything = [...r.lines, ...r.warnings, summaryMarkdown(r, REFS)].join("\n").split("\n");
+    expect(everything.length).toBeGreaterThan(2);
+    expect(everything.filter((l) => /^::(?!warning::)/.test(l))).toEqual([]);
   });
 
   it("never throws for a source it cannot read, and it leaves no temporary directory behind", async () => {

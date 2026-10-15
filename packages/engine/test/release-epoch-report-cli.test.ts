@@ -4,10 +4,11 @@
 // not there each end in one line and exit 0 (a report must never fail a deploy), that `--annotate` and `--summary` write what GitHub reads,
 // and that a flag mistake is exit 2 and a crash exit 3.
 //
-// The scratch repositories hold the REAL script, the REAL src/sport/fold-epoch.ts and its helper, copied from this tree; a "release" is a
-// tagged commit that edits that table the way a rule change does. The expected sport count is the golden corpora on disk, which the epoch
-// guard holds equal to the table, never the report's own output. Nothing here imports src/ (the spawned script reads files and git only), so
-// a Stryker related-mode run of a sport file does not run these spawns.
+// The scratch repositories hold the REAL script and its helper, copied from this tree, and a SYNTHETIC src/sport/fold-epoch.ts per release
+// (every epoch 1, edited the way a rule change edits it): the live table's epochs move with every bump, and a fixture copied from them would
+// compare equal tables, or throw, from the first real one. The sports are the golden corpora on disk, which the epoch guard holds equal to the
+// table's keys, and the expected sport count is that, never the report's own output. Nothing here imports src/ (the spawned script reads files
+// and git only), so a Stryker related-mode run of a sport file does not run these spawns.
 //
 // Single-sport reason: the registry sweep is release-epoch-report.test.ts; this file proves wiring (refs, git, flags, exit codes), for which
 // football, badminton and tennis stand in for "a sport".
@@ -25,7 +26,6 @@ const TABLE = "src/sport/fold-epoch.ts";
 /** The files a scratch checkout always holds: the real script and the helper it imports, and the real package.json (type: module). */
 const FILES = [SCRIPT, "scripts/lib/main-module.ts", "package.json"];
 const KEYS = (readdirSync(join(ENGINE, "src/sports"), { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json")).map((f) => basename(f, ".golden.json")).sort();
-const REAL_TABLE = readFileSync(join(ENGINE, TABLE), "utf8");
 
 /** The line the owner approved for a raised epoch (2026-10-15). */
 const raisedLine = (sport: string, a: number, b: number): string =>
@@ -35,29 +35,33 @@ const tally = (n: number, from: string, to: string, c: { raised?: number; lowere
 
 // ------------------------------------------------------------------------------------------------------------- the tables of the tags
 
-/** The real table with `edit` applied; an edit that changes nothing is a broken rig, not a scenario. */
-function edited(edit: (t: string) => string): string {
-  const out = edit(REAL_TABLE);
-  if (out === REAL_TABLE) throw new Error("a table edit changed nothing: the scratch tags would all hold the real table");
-  return out;
+/** A table source shaped the way src/sport/fold-epoch.ts writes its own (frozen, `as const satisfies`) over the registry's sports (KEYS: the golden
+ *  corpora on disk), every epoch 1 unless `over` says, `drop` removed and `add` appended. SYNTHETIC on purpose: a fixture copied from the live
+ *  table would hold whatever its epochs are today, and the first real epoch bump would make every scenario below compare equal tables or throw.
+ *  The real table's own source is read by release-epoch-report.test.ts. */
+function tableSource(over: Record<string, number> = {}, drop: string[] = [], add: Record<string, number> = {}): string {
+  for (const k of [...Object.keys(over), ...drop]) if (!KEYS.includes(k)) throw new Error(`${k} is not a sport (the corpora on disk name ${KEYS.join(", ")})`);
+  const epochs = { ...Object.fromEntries(KEYS.filter((k) => !drop.includes(k)).map((k) => [k, 1])), ...over, ...add };
+  return `export const FOLD_EPOCH = Object.freeze({ ${Object.entries(epochs).map(([k, n]) => `${k}: ${n}`).join(", ")} } as const satisfies Readonly<Record<string, number>>);\n`;
 }
-const setEpoch = (sport: string, n: number) => (t: string): string => t.replace(new RegExp(`\\b${sport}: \\d+`), `${sport}: ${n}`);
-const minorTable = (minors: Record<string, number>): string =>
-  `\nexport const FOLD_MINOR = Object.freeze({ ${KEYS.map((k) => `${k}: ${minors[k] ?? 0}`).join(", ")} } as const);\n`;
+const minorSource = (minors: Record<string, number>): string =>
+  `export const FOLD_MINOR = Object.freeze({ ${KEYS.map((k) => `${k}: ${minors[k] ?? 0}`).join(", ")} } as const satisfies Readonly<Record<string, number>>);\n`;
+const BASE_TABLE = tableSource();
 
 interface Release { tag: string; table: string | null }
 /** One tagged commit each, in order. Every tag differs from the one before it in exactly the way its name says. */
 const RELEASES: Release[] = [
   { tag: "v0.9.0", table: null }, //                                                                  no src/sport/fold-epoch.ts yet
-  { tag: "v1.0.0", table: REAL_TABLE }, //                                                            the table as the tree has it
-  { tag: "v1.0.1", table: edited(setEpoch("football", 2)) }, //                                        football raised
-  { tag: "v1.0.2", table: edited((t) => setEpoch("tennis", 2)(setEpoch("badminton", 3)(setEpoch("football", 2)(t)))) }, // badminton and tennis raised on top of v1.0.1
-  { tag: "v1.0.3", table: edited(setEpoch("football", 2)) + minorTable({}) }, //                       v1.0.1's epochs, and FOLD_MINOR introduced with every minor 0
-  { tag: "v1.0.4", table: edited(setEpoch("football", 2)) + minorTable({ football: 1 }) }, //         football's minor 0 -> 1
-  { tag: "v1.0.5", table: edited((t) => setEpoch("football", 2)(t).replace("carrom: 1,", "curling: 1,")) }, // v1.0.1's epochs, carrom gone, curling new
-  { tag: "v1.0.6", table: "export const FOLD_EPOCH = {{{\n" }, //                                      does not load
+  { tag: "v1.0.0", table: BASE_TABLE }, //                                                            every epoch 1
+  { tag: "v1.0.1", table: tableSource({ football: 2 }) }, //                                          football raised
+  { tag: "v1.0.2", table: tableSource({ football: 2, badminton: 3, tennis: 2 }) }, //                 badminton and tennis raised on top of v1.0.1
+  { tag: "v1.0.3", table: tableSource({ football: 2 }) + minorSource({}) }, //                         v1.0.1's epochs, and FOLD_MINOR introduced with every minor 0
+  { tag: "v1.0.4", table: tableSource({ football: 2 }) + minorSource({ football: 1 }) }, //           football's minor 0 -> 1
+  { tag: "v1.0.5", table: tableSource({ football: 2 }, ["carrom"], { curling: 1 }) }, //              v1.0.1's epochs, carrom gone, curling new
+  { tag: "v1.0.6", table: "export const FOLD_EPOCH = {{{\n" }, //                                    does not load
+  { tag: "v1.0.6-injection", table: 'export const FOLD_EPOCH = { "football\\n::error::pwned": 1, tennis: 1 };\n' }, // a sport key with a newline and a workflow command in it
   { tag: "v1.0.7", table: null }, //                                                                   the table deleted
-  { tag: "v1.0.8", table: REAL_TABLE }, //                                                             restored (HEAD of the scratch repository)
+  { tag: "v1.0.8", table: BASE_TABLE }, //                                                             every epoch 1 again (HEAD of the scratch repository)
 ];
 
 // ------------------------------------------------------------------------------------------------------------------ the scratch repos
@@ -124,13 +128,15 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const spawnIt = (n: number) => (name: string, fn: () => void) => it(name, fn, spawnBudget(n));
 
 describe("release-epoch-report CLI: the scratch repositories are the real tree's", () => {
-  it("hold the real script and the real table of every sport, and one tag per release, counted (a rig with none would pass every red test below for the wrong reason)", () => {
+  it("hold the real script byte for byte and a synthetic table of every sport, and one tag per release, counted (a rig with none would pass every red test below for the wrong reason)", () => {
     expect(KEYS.length).toBeGreaterThan(1);
     expect(new Set(KEYS).size).toBe(KEYS.length);
     for (const repo of [mono, rooted]) {
       expect(git(repo.top, "tag", "--list").split("\n").sort()).toEqual(RELEASES.map((r) => r.tag).sort());
-      expect(git(repo.top, "show", `v1.0.0:${repo.eng === repo.top ? "" : "packages/engine/"}${TABLE}`)).toBe(REAL_TABLE.trimEnd());
+      expect(git(repo.top, "show", `v1.0.0:${repo.eng === repo.top ? "" : "packages/engine/"}${TABLE}`)).toBe(BASE_TABLE.trimEnd());
+      expect(readFileSync(join(repo.eng, SCRIPT), "utf8"), `${repo.eng}: the script under test is the real one`).toBe(readFileSync(join(ENGINE, SCRIPT), "utf8"));
     }
+    expect(BASE_TABLE.match(/\b[a-z]+: 1\b/g)).toHaveLength(KEYS.length); // one epoch per sport, every one 1
     // every release but the first differs from the one before it
     for (let i = 1; i < RELEASES.length; i++) expect(RELEASES[i]!.table, RELEASES[i]!.tag).not.toBe(RELEASES[i - 1]!.table);
     expect(RELEASES.filter((r) => r.table === null).length).toBeGreaterThanOrEqual(2);
@@ -166,16 +172,16 @@ describe("release-epoch-report CLI: a release that raises an epoch", () => {
 
   spawnIt(3)("reads each table AT its ref and never the working tree: an uncommitted edit of the table changes nothing", () => {
     const file = join(mono.eng, TABLE);
-    writeFileSync(file, edited(setEpoch("football", 9)));
+    writeFileSync(file, tableSource({ football: 9 }));
     try {
       const r = report(mono, "v1.0.0", "v1.0.1");
       expect(r.lines).toEqual([raisedLine("football", 1, 2), tally(KEYS.length, "v1.0.0", "v1.0.1", { raised: 1 })]);
-      // HEAD is the last commit, v1.0.8 (the real table, football 1), not the football 9 in the working tree
+      // HEAD is the last commit, v1.0.8 (every epoch 1), not the football 9 in the working tree
       expect(report(mono, "v1.0.0", "HEAD").lines).toEqual([tally(KEYS.length, "v1.0.0", "HEAD")]);
     } finally {
       git(mono.top, "checkout", "-q", "--", ".");
     }
-    expect(readFileSync(file, "utf8")).toBe(REAL_TABLE);
+    expect(readFileSync(file, "utf8")).toBe(BASE_TABLE);
   });
 
   spawnIt(2)("a tag and HEAD are refs like any other: v1.0.1 -> HEAD is football 2 -> 1, which is LOWERED, not raised, and warned about", () => {
@@ -256,6 +262,19 @@ describe("release-epoch-report CLI: a comparison that cannot be made is one line
     }
   });
 
+  spawnIt(3)("a table whose sport key carries a newline and a workflow command is unparseable, and no line of the output can start one", () => {
+    for (const [from, to] of [["v1.0.0", "v1.0.6-injection"], ["v1.0.6-injection", "v1.0.0"]] as const) {
+      const r = report(mono, from, to, "--annotate");
+      expect(r.status, r.stderr).toBe(0);
+      const at = from === "v1.0.0" ? to : from;
+      expect(r.lines).toHaveLength(2);
+      expect(r.lines[0]).toBe(`FOLD_EPOCH at ${at} could not be parsed (FOLD_EPOCH has the sport key "football\\n::error::pwned", and a sport key is lower-case letters, digits, "_" or "-"); nothing to compare`);
+      expect(r.lines[1]).toBe(`::warning::${r.lines[0]}`);
+      // the one thing GitHub would act on: a command that is not ours, from the start of a line
+      expect(r.stdout.split("\n").filter((l) => /^::(?!warning::)/.test(l))).toEqual([]);
+    }
+  });
+
   spawnIt(2)("a ref that is not a commit is a warning naming it", () => {
     const r = report(mono, "v9.9.9", "v1.0.1", "--annotate");
     expect(r.status, r.stderr).toBe(0);
@@ -282,7 +301,7 @@ describe("release-epoch-report CLI: a comparison that cannot be made is one line
     const clone = join(scratch, "damaged");
     git(scratch, "clone", "-q", `file://${mono.top}`, clone);
     for (const [key, value] of NO_AUTO_PACK) git(clone, "config", key, value);
-    writeFileSync(join(clone, "packages/engine", TABLE), edited(setEpoch("football", 5)));
+    writeFileSync(join(clone, "packages/engine", TABLE), tableSource({ football: 5 }));
     git(clone, "add", "-A");
     git(clone, "commit", "-q", "-m", "v2.0.0");
     git(clone, "tag", "v2.0.0");

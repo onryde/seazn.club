@@ -82,16 +82,18 @@ jobs:
       # It INFORMS and can never gate or hold up the deploy: continue-on-error, a timeout, and a script that exits 0 for every table and ref
       # it reads (a baseline from before src/sport/fold-epoch.ts, a table that does not parse). The checkout above is one commit deep and holds
       # only this tag, so the v* tags and their history are fetched first (without touching the checked-out commit, which is what deploys; a
-      # refspec takes ONE wildcard, so it cannot say v*.*.*, and `git describe --match` narrows it again).
+      # refspec takes ONE wildcard, so it cannot say v*.*.*, and `git describe --match` narrows it again). --filter=blob:none leaves the
+      # history's file contents behind (measured on this repository: 62-85 s to unshallow with them, 7 s without); the one table the report
+      # reads from the previous tag is fetched on demand.
       # scripts/__tests__/prod-release-epoch-workflow.test.ts pins all of this and runs this shell against a checkout of the same shape.
       - name: Report FOLD_EPOCH bumps since the previous release (non-blocking)
         continue-on-error: true
         timeout-minutes: 3
         run: |
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            git fetch --quiet --unshallow origin '+refs/tags/v*:refs/tags/v*'
+            git fetch --quiet --filter=blob:none --unshallow origin '+refs/tags/v*:refs/tags/v*'
           else
-            git fetch --quiet origin '+refs/tags/v*:refs/tags/v*'
+            git fetch --quiet --filter=blob:none origin '+refs/tags/v*:refs/tags/v*'
           fi
           prev="$(git describe --tags --abbrev=0 --match 'v*.*.*' HEAD^ 2>/dev/null || true)"
           if [ -z "$prev" ]; then
