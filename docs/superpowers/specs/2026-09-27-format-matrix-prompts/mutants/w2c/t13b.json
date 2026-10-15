@@ -190,7 +190,7 @@
     "replace": "",
     "killers": [
       { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the examples that fail are exactly the named pre-existing ones" },
-      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes.s examples are real stage bodies" }
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes. examples are real stage bodies" }
     ]
   },
   {
@@ -200,7 +200,7 @@
     "replace": "",
     "killers": [
       { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the examples that fail are exactly the named pre-existing ones" },
-      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes.s examples are real stage bodies" }
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes. examples are real stage bodies" }
     ]
   },
   {
