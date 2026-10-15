@@ -22,7 +22,7 @@ import { Screen } from "../room-shell";
 import { Checkin } from "../checkin";
 import { OwnTile } from "../own-tile";
 import { HANDOVER_CEILING_MS, HANDOVER_COVER_MS } from "../camera-handover";
-import { initialRoomState, type RoomState } from "../room-state";
+import { initialRoomState, roomReducer, type RoomState } from "../room-state";
 import type { RoomSnapshot } from "../room-snapshot";
 import type { CameraTestView } from "../camera-test";
 import type { RoomScreen } from "../room-screen";
@@ -446,8 +446,6 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
     return handoverOf(island);
   }
 
-  /** Seat failures counted from the state the cover was born in (edge-triggered: only a NEW failure ends it). */
-  const withSeatFailure = (p: P): P => ({ ...p, state: { ...p.state, seatFailures: p.state.seatFailures + 1 } });
   const meetingSeat = { seated: true, participant: { authToken: "t", participantId: "p1" } } as unknown as RoomState["seat"];
   const ENDS: { name: string; by: string; change: (p: P) => P }[] = [
     { name: "the camera failed", by: "failed", change: (p) => withCamera(p, "failed") },
@@ -455,8 +453,6 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
     // (a) nothing in flight: the claim answered or failed, no poll, and no camera on its way.
     { name: "nothing is in flight (claim cleared, no poll, camera idle, no meeting)", by: "idle", change: (p) => ({ ...p, busy: false }) },
     { name: "nothing is in flight, the camera is off", by: "idle", change: (p) => ({ ...withCamera(p, "off"), busy: false }) },
-    // (b) a seat claim failed, while something else (a live camera) is still in flight — (a) says "keep", (b) ends it.
-    { name: "a seat claim failed (camera live, so nothing else ends it)", by: "seat", change: (p) => withSeatFailure(withCamera(p, "live")) },
     ...screensWhere("ends").map((k) => ({ name: `the screen became ${k}`, by: "left", change: (p: P) => withScreen(p, k) })),
     { name: "the seat's camera_starting poll budget ran out", by: "budget", change: (p) => ({ ...p, startBudgetSpent: true }) },
   ];
@@ -476,7 +472,6 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
     { name: "claim answered camera_starting, the room is polling", change: (p) => ({ ...p, busy: false, checkingCamera: true }) },
     ...screensWhere("keeps").map((k) => ({ name: `the screen is ${k}`, change: (p: P) => withScreen(p, k) })),
     { name: "the budget is not spent", change: (p) => ({ ...p, startBudgetSpent: false }) },
-    { name: "an old seat failure is not a new one (the counter, unchanged)", change: (p) => ({ ...p, state: { ...p.state } }) },
   ];
 
   it("each end stops it, from the picture and from the words alone, and reports how — and each keep leaves it standing (counted)", async () => {
@@ -509,24 +504,62 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
     expect(screensWhere("ends").length + screensWhere("keeps").length, "every screen kind is classified").toBe(Object.keys(SCREEN_VERDICT).length);
   });
 
-  it("a seat failure from BEFORE the hand-over is not an end (edge-triggered: only a NEW failure ends the cover) — and one after it is", async () => {
-    vi.useFakeTimers();
-    const cam = stubCamera();
-    stubDocumentCanvas(cam.track);
-    const failedBefore = { ...stateOf(snap({ game: ENDS_GAME as never })), seatFailures: 1 };
-    const base = withCamera(coverProps(failedBefore), "live");
-    const island = renderIsland(Screen, base);
-    await liveCheckin(island, cam);
-    handoverOf(island)!.register(video());
-    testOf(island)!.onHandOver();
+  // D23-fix-3 (reviewer's ruling on D23-fix-2 (b)): there is no failure counter. The cover ends when NOTHING is in flight,
+  // and a failed call is read through what it leaves, not counted. Both halves are driven through the REAL reducer.
+  const failedSeatCall = (s: RoomState): RoomState => {
+    const sent = roomReducer(s, { type: "seat_sent" });
+    expect(sent.pending, "premise: the call is out").toEqual({ kind: "seat" });
+    const failed = roomReducer(sent, { type: "seat_failed", status: 500 });
+    expect(failed.pending, "premise: the call failed and is no longer pending").toBeNull();
+    return failed;
+  };
+  const STARTING_SEAT = { seated: false, reason: "camera_starting", participant: { authToken: "t", participantId: "p1" } } as unknown as RoomState["seat"];
+
+  it("the FIRST claim failing (no seat, no poll, camera idle) ends the cover at once as 'idle' — and the pair: the same cover with the claim still out stands", async () => {
+    const { island, base } = await covered("covering");
+    expect(handoverOf(island)!.view.status, "premise: covered, the first claim out (busy)").toBe("covering");
+    vi.mocked(Sentry.addBreadcrumb).mockClear();
+    const failed = { ...base, busy: false, state: failedSeatCall(base.state) };
+    expect([failed.state.seat, failed.checkingCamera], "premise: nothing answered, nothing polling").toEqual([null, undefined]);
+    island.rerender(failed);
     await settle();
-    island.rerender(base);
-    await settle();
-    expect(handoverOf(island)!.view.status, "an old failure, a camera live: the cover stands").toBe("covering");
-    island.rerender({ ...base, state: { ...base.state, seatFailures: 2 } });
-    await settle();
-    expect(handoverOf(island)!.view, "a NEW failure ends it").toEqual({ status: "over", frame: null, by: "seat" });
-    expect(vi.mocked(Sentry.addBreadcrumb).mock.calls.map((c) => c[0]!.data?.by), "reported once").toEqual(["seat"]);
+    expect(handoverOf(island)!.view, "ended").toEqual({ status: "over", frame: null, by: "idle" });
+    expect(vi.mocked(Sentry.addBreadcrumb).mock.calls.map((c) => c[0]!.data?.by), "reported once, as idle").toEqual(["idle"]);
+  });
+
+  // "off" is in the list on purpose: with the camera joining, recovering or live (or idle with the meeting's token in hand)
+  // `cameraComing` already keeps the cover, so only a camera that is OFF shows that the room's own polling is a keep by itself.
+  it("ONE failed camera_starting poll does NOT end the cover while the room is still polling — whatever the camera's state (counted); the budget ends it, not the failure", async () => {
+    let checked = 0;
+    for (const cameraStatus of ["idle", "joining", "recovering", "live", "off"]) {
+      for (const phase of ["covering", "connecting"] as const) {
+        const { island, base } = await covered(phase);
+        vi.mocked(Sentry.addBreadcrumb).mockClear();
+        // The claim was answered camera_starting (the room polls), then a poll failed (a 5xx / a dropped connection).
+        const answered = roomReducer(roomReducer(base.state, { type: "seat_sent" }), {
+          type: "seat_answered",
+          answer: { snapshot: base.state.snap, seat: STARTING_SEAT } as never,
+          receivedAt: T0,
+        });
+        const polling = withCamera({ ...base, busy: false, state: answered, checkingCamera: true }, cameraStatus);
+        island.rerender(polling);
+        await settle();
+        expect(handoverOf(island)!.view.status, `${cameraStatus}/${phase}: answered camera_starting, polling`).toBe(phase);
+        const failedPoll = { ...polling, state: failedSeatCall(answered) };
+        expect([failedPoll.state.seat, failedPoll.checkingCamera, failedPoll.busy], "premise: the poll failed, the room still polls").toEqual([STARTING_SEAT, true, false]);
+        island.rerender(failedPoll);
+        await settle();
+        expect(handoverOf(island)!.view.status, `${cameraStatus}/${phase}: one failed poll does not end the cover`).toBe(phase);
+        expect(Sentry.addBreadcrumb, `${cameraStatus}/${phase}: nothing reported`).not.toHaveBeenCalled();
+        // The polls run out (the room's own bound): THAT ends it, as ever.
+        island.rerender({ ...failedPoll, startBudgetSpent: true, checkingCamera: false });
+        await settle();
+        expect(handoverOf(island)!.view, `${cameraStatus}/${phase}: the spent budget ends it`).toEqual({ status: "over", frame: null, by: "budget" });
+        island.unmount();
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 5 camera states x 2 phases").toBe(10);
   });
 
   it("a camera that failed with NO hand-over in progress reports nothing and covers nothing (the empty case)", async () => {

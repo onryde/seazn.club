@@ -457,16 +457,6 @@ export function Screen({
     else if (startBudgetSpent) endHandover("budget");
     else if (nothingInFlight) endHandover("idle");
   }, [handoverActive, camera.status, screen.kind, startBudgetSpent, nothingInFlight, endHandover]);
-  // D23-fix-2 (b): a seat claim FAILED while the cover was up (a dropped connection, a 5xx): the check-in did not go
-  // through, so the words about connecting are not the news. Edge-triggered on the reducer's counter — a failure from
-  // before the hand-over is not its end — and independent of (a): a live camera would otherwise keep it standing.
-  const seatFailures = state.seatFailures;
-  const failuresSeen = useRef(seatFailures);
-  useEffect(() => {
-    if (failuresSeen.current === seatFailures) return;
-    failuresSeen.current = seatFailures;
-    if (handoverActive) endHandover("seat");
-  }, [seatFailures, handoverActive, endHandover]);
   // T17B fix 2, D13: the side to move's clock at zero, the game not over — the board and every action lock.
   const flagFallen = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
   // D24 (re-review I2): the flag is read off the SERVER's numbers, but while the player's own MOVE is in flight their face

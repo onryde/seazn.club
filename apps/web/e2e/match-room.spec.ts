@@ -1902,6 +1902,9 @@ test("T17B fix 2, D23-fix: a camera that FAILS ends the cover at once — the wo
     await expect(frozen, "the cover is gone long before the picture's bound: the camera failed").toHaveCount(0, { timeout: 3_000 });
     expect(Date.now() - clicked, "well inside the picture's bound").toBeLessThan(HANDOVER_COVER_MS - 2_000);
     await expect(p.getByTestId("room-own-tile-announce"), "and the live region is emptied").toHaveText("");
+    // The route handler above awaits route.fetch: closing the context under one in flight ends it with "Response has been
+    // disposed" (1 whole-file run in 3, D23 re-review 2). Drop the route first, ignoring the handlers still running.
+    await p.unrouteAll({ behavior: "ignoreErrors" });
     await ctx.close();
     // The SDK refuses the opaque token composed above: expected here, and only here.
     consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
@@ -1955,6 +1958,63 @@ test("T17B fix 2, D23-fix-2: a seat claim that FAILS ends the cover at once — 
     await expect(frozen, "nothing resurfaces").toHaveCount(0);
     await ctx.close();
     // The failed claim is this test's own 500: the browser logs it, expected here and only here.
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Failed to load resource: the server responded with a status of 500/.test(e)));
+  } finally {
+    await camBrowser.close();
+  }
+});
+
+test("T17B fix 2, D23-fix-3: ONE failed camera_starting poll does NOT end the cover — the room is still polling, so the words stand and the next poll goes out", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, {
+    names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
+    cameraPolicy: "required",
+  });
+  const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+  try {
+    const ctx = await cold(camBrowser);
+    await ctx.grantPermissions(["camera"]);
+    const p = await openRoom(ctx, room, room.white.token);
+    const cta = p.getByTestId("room-checkin-cta");
+    await p.getByTestId("room-checkin-test-cta").click();
+    await expect(cta, "the preview painted a frame: Check in opens").toBeEnabled({ timeout: 10_000 });
+    // Every claim is answered camera_starting with NO participant (the SDK neither joins nor fails: what ends the wait
+    // is the room's own poll budget) — except the second, the first POLL, which is a 500. A 500 on a poll is what a
+    // flaky connection does; the camera check is still running, and so is the cover.
+    let claims = 0;
+    let failedAt = 0;
+    await p.route(
+      (u) => /\/external-play\/room$/.test(u.pathname),
+      async (route: Route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        claims += 1;
+        if (claims === 2) {
+          failedAt = Date.now();
+          return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "E2E_FLAKE" }, requestId: "e2e" }) });
+        }
+        const read = await route.fetch({ method: "GET" });
+        const snapshot = ((await read.json()) as { data: unknown }).data;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: null }, create: null }, requestId: "e2e" }),
+        });
+      },
+    );
+    const frozen = p.getByTestId("room-own-tile-frozen");
+    const words = uiEn["externalPlay.room.checkin.connecting"]!;
+    await cta.click();
+    await expect(frozen, "premise: the cover is up").toBeVisible({ timeout: 2_000 });
+    await expect.poll(() => failedAt, { message: "premise: the first poll failed", timeout: 6_000 }).toBeGreaterThan(0);
+    // The poll AFTER the failed one is the proof the room carried on; by then the failure is over a second old.
+    await expect.poll(() => claims, { message: "premise: the room polled on after the failure", timeout: 6_000 }).toBeGreaterThanOrEqual(3);
+    expect(Date.now() - failedAt, "premise: the failure is behind us").toBeGreaterThan(900);
+    await expect(frozen, "the cover stands: one failed poll is not the end of the camera check").toBeVisible();
+    await expect(p.getByTestId("room-own-tile-announce"), "and still speaks").toHaveText(words);
+    await expect(cta, "the check-in still reads that it is checking").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
+    await p.unrouteAll({ behavior: "ignoreErrors" });
+    await ctx.close();
+    // The poll's 500 is this test's own: the browser logs it, expected here and only here.
     consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Failed to load resource: the server responded with a status of 500/.test(e)));
   } finally {
     await camBrowser.close();

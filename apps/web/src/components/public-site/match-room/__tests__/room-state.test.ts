@@ -286,42 +286,35 @@ describe("seat round trip", () => {
   });
 });
 
-// D23-fix-2 (b): a seat claim that FAILED is an event the screen must be able to see — the cover over the tile ends on it —
-// but nothing on the state said so (a 5xx changes nothing but `pending`). `seatFailures` counts them.
-describe("seatFailures: how many seat claims have failed", () => {
-  const sent = () => roomReducer(initialRoomState(snap(), T0), { type: "seat_sent" });
+// D23-fix-3: the reducer no longer COUNTS failed seat calls (D23-fix-2 (b) did, and ended the cover on every one — a single
+// 500 on a camera_starting poll ended it while the camera check was still running). What a failed call leaves is what the
+// room reads to keep going: the seat answer as it was (so a camera_starting seat is still being polled) and nothing pending.
+describe("a failed seat call: the seat answer stands, nothing is pending, no counter moves", () => {
+  const STARTING = { seated: false, reason: "camera_starting", participant: { authToken: "t", participantId: "p1" } } as never;
+  const startingState = () =>
+    roomReducer(roomReducer(initialRoomState(snap(), T0), { type: "seat_sent" }), {
+      type: "seat_answered",
+      answer: { snapshot: snap(), seat: STARTING, create: null },
+      receivedAt: T0,
+    });
 
-  it("starts at 0 (the empty case), and each failed claim adds one — whatever the status (0, 404, 409, 5xx), counted", () => {
-    expect(initialRoomState(snap(), T0).seatFailures, "the empty case").toBe(0);
+  it("a 5xx or a dropped connection on a poll leaves the camera_starting seat as it was and the claim free to go again (counted)", () => {
     let checked = 0;
-    for (const status of [0, 401, 404, 409, 429, 500, 503]) {
-      let s = sent();
-      s = roomReducer(s, { type: "seat_failed", status });
-      expect(s.seatFailures, `first failure (${status})`).toBe(1);
-      s = roomReducer(roomReducer(s, { type: "seat_sent" }), { type: "seat_failed", status });
-      expect(s.seatFailures, `a second failure (${status})`).toBe(2);
+    for (const status of [0, 500, 502, 503, 429]) {
+      const polled = roomReducer(startingState(), { type: "seat_sent" });
+      expect(polled.pending, `premise: the poll is out (${status})`).toEqual({ kind: "seat" });
+      const failed = roomReducer(polled, { type: "seat_failed", status });
+      expect(failed.seat, `the poll's seat answer stands (${status})`).toEqual(STARTING);
+      expect(failed.pending, `nothing pending: the next poll can go (${status})`).toBeNull();
+      expect("seatFailures" in failed, "no failure counter (the cover is not ended by a count of failures)").toBe(false);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: statuses").toBe(7);
+    expect(checked, "anti-vacuity: statuses").toBe(5);
   });
 
-  it("nothing else moves it: a seat sent, a seat answered, a failed act, a failed read, a snapshot", () => {
-    const answer = { snapshot: snap(), seat: { seated: true, participant: null } } as never;
-    const events: RoomEvent[] = [
-      { type: "seat_sent" },
-      { type: "seat_answered", answer, receivedAt: T0 },
-      { type: "act_failed", status: 500 },
-      { type: "fetch_failed", status: 500 },
-      { type: "snapshot", snap: snap(), receivedAt: T0 + 1 },
-    ];
-    let s = initialRoomState(snap(), T0);
-    let checked = 0;
-    for (const e of events) {
-      s = roomReducer(s, e);
-      expect(s.seatFailures, e.type).toBe(0);
-      checked += 1;
-    }
-    expect(checked).toBe(events.length);
+  it("the first claim failing leaves no seat at all (the empty case): the cover's end is then 'nothing in flight'", () => {
+    const failed = roomReducer(roomReducer(initialRoomState(snap(), T0), { type: "seat_sent" }), { type: "seat_failed", status: 500 });
+    expect([failed.seat, failed.pending]).toEqual([null, null]);
   });
 });
 
