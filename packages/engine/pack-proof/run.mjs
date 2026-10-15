@@ -25,6 +25,7 @@ import {
   assertOutsideRepo,
   assertPhoneRuleGreen,
   assertSameSet,
+  DATA_EXPORTS,
   checkTarballExports,
   declaredAppRoutes,
   devBundleModules,
@@ -156,7 +157,9 @@ async function buildAndPack(ctx) {
   // against the workspace's own export list, so a broken build says so before it is packed.
   const distFiles = new Set(existsSync(path.join(ENGINE, "dist")) ? listFiles(path.join(ENGINE, "dist")).map((f) => `dist/${f}`) : []);
   if (distFiles.size === 0) throw new Error("dist/ is missing or empty after build:dist");
-  const distChecked = checkTarballExports({ manifest: { exports: enginePkg.publishConfig.exports }, files: distFiles, expectedKeys: Object.keys(enginePkg.exports), where: "dist/" });
+  // the data exports (the phone pin) are package-root files, not dist/ ones: present in the workspace, they are what `files` will pack
+  const dataFiles = [...DATA_EXPORTS.values()].filter((f) => existsSync(path.join(ENGINE, f)));
+  const distChecked = checkTarballExports({ manifest: { exports: enginePkg.publishConfig.exports }, files: new Set([...distFiles, ...dataFiles]), expectedKeys: Object.keys(enginePkg.exports), where: "dist/ and the package root" });
   info(`dist: ${distFiles.size} files, ${distChecked} export targets present`);
 
   const destination = path.join(scratchRoot, "tarball");
@@ -228,6 +231,13 @@ async function nodeFixture(ctx) {
   const imported = printedList(coreOut, "SPECIFIERS", "node: strip.ts core");
   // ... and the tarball's own export list is the oracle: what strip.ts read from the INSTALLED package must be the same set
   assertSameSet("node: specifiers imported from the zod-only install", imported, ctx.tarball.specifiers.filter((x) => x !== "@seazn/engine/testkit"));
+  // The data exports (the phone pin) are not modules: read through the installed package's exports map with a JSON import attribute, and
+  // equal to the workspace's own file. A package that exported the key but shipped another file, or none, fails here.
+  const printedData = JSON.parse(/^DATA (\{.*\})$/m.exec(coreOut)?.[1] ?? "null");
+  const workspaceData = Object.fromEntries([...DATA_EXPORTS].map(([key, file]) => [`@seazn/engine/${key.slice(2)}`, readJson(path.join(ENGINE, file))]));
+  if (JSON.stringify(printedData) !== JSON.stringify(workspaceData)) throw new Error(`node: the data exports read from the installed package differ from the workspace's files:\n${coreOut}`);
+  const dataChecked = requireChecked("node: data exports", Object.keys(workspaceData).length);
+  info(`node: ${dataChecked} data export(s) read from the installed package, equal to the workspace's file (${Object.keys(workspaceData).join(", ")})`);
 
   // 2. + fast-check and vitest: the testkit imported, and every builtin sport folded for real from the packed build.
   const pins = enginePins();
@@ -258,7 +268,7 @@ async function nodeFixture(ctx) {
   assertSameSet("node: rules rows per file parsed from the tarball vs the workspace", Object.entries(byFile).map(([f, n]) => `${f}:${n}`), wsByFile);
   if (total !== wsRows.length) throw new Error(`node: rules.mjs parsed ${total} rows from the tarball, the workspace parses ${wsRows.length}`);
   info(`node: ${total} rules rows parsed from the installed testkit over ${wsByFile.length} rules files`);
-  return specifiersAndSports + requireChecked("node: rules.mjs", total);
+  return specifiersAndSports + dataChecked + requireChecked("node: rules.mjs", total);
 }
 
 async function nextFixture(ctx) {

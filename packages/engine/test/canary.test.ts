@@ -214,8 +214,10 @@ describe("checkCanaryTarball (what must not reach the registry)", () => {
     const r = gate(makeTarball(goodManifest(), [...files, "dist/core/extra.js"]));
     // every leaf of publishConfig.exports (a `types` and a `default` per subpath; the `*` pattern counts once) is a target that was judged
     expect(r.exportTargets).toBe(leaf(pkg.publishConfig.exports).length);
-    expect(r.exportTargets).toBeGreaterThanOrEqual(expectedKeys.length * 2);
-    expect(r.distFiles).toBeGreaterThanOrEqual(files.length);
+    const dataKeys = expectedKeys.filter((k) => typeof pkg.publishConfig.exports[k] === "string"); // plain-string exports: one target each
+    expect(dataKeys.length, "the engine declares a data export, so the arithmetic below covers it").toBeGreaterThan(0);
+    expect(r.exportTargets).toBeGreaterThanOrEqual((expectedKeys.length - dataKeys.length) * 2 + dataKeys.length);
+    expect(r.distFiles).toBeGreaterThanOrEqual(files.filter((f) => f.startsWith("dist/")).length); // the data exports are package-root files, not dist/ ones
     expect(r.files).toBeGreaterThan(r.distFiles); // package.json too
   });
 
@@ -251,7 +253,9 @@ describe("checkCanaryTarball (what must not reach the registry)", () => {
 
   it("refuses a tarball whose exports have every right key and nothing to check under them: zero targets judged is a failure, not a pass", () => {
     const hollow = goodManifest();
-    hollow.exports = Object.fromEntries(expectedKeys.map((k) => [k, {}])); // 22 keys, each an empty conditions object: no leaf for checkTarballExports to count
+    // every module key an empty conditions object: no leaf for checkTarballExports to count. A data export (a plain string, valid) must not
+    // make up for them: one target judged in all is still no module judged.
+    hollow.exports = Object.fromEntries(expectedKeys.map((k) => [k, typeof pkg.publishConfig.exports[k] === "string" ? pkg.publishConfig.exports[k] : {}]));
     const tgz = makeTarball(hollow, distFilesOf(pkg.publishConfig.exports));
     expect(() => gate(tgz)).toThrow(/checked nothing/);
     const r = run(["check", tgz, VERSION]);

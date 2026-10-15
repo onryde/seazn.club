@@ -19,6 +19,7 @@ import {
   assertPhoneRuleGreen,
   assertSameSet,
   checkTarballExports,
+  DATA_EXPORTS,
   declaredAppRoutes,
   devBundleModules,
   distTwin,
@@ -41,7 +42,7 @@ const REPO = resolve(ENGINE, "..", "..");
 const PROOF = join(ENGINE, "pack-proof");
 const pkg = JSON.parse(readFileSync(join(ENGINE, "package.json"), "utf8")) as {
   exports: Record<string, string>;
-  publishConfig: { exports: Record<string, Record<string, string>> };
+  publishConfig: { exports: Record<string, string | Record<string, string>> };
   scripts: Record<string, string>;
 };
 const FIXTURES = ["next", "node", "rn", "types"];
@@ -91,18 +92,51 @@ describe("requireChecked: zero checked is a failure", () => {
 const sportDirs = readdirSync(join(ENGINE, "src", "sports"), { withFileTypes: true })
   .filter((d) => d.isDirectory() && existsSync(join(ENGINE, "src", "sports", d.name, "index.ts")))
   .map((d) => d.name);
-const targetsOf = (exp: Record<string, Record<string, string>>) => Object.values(exp).flatMap((c) => Object.values(c));
-const filesFor = (exp: Record<string, Record<string, string>>) =>
+type Exports = Record<string, string | Record<string, string>>;
+const targetsOf = (exp: Exports) => Object.values(exp).flatMap((c) => (typeof c === "string" ? [c] : Object.values(c)));
+const filesFor = (exp: Exports) =>
   new Set(targetsOf(exp).flatMap((t) => (t.includes("*") ? sportDirs.map((d) => t.replace("*", d).slice(2)) : [t.slice(2)])));
 const keys = Object.keys(pkg.exports);
+// what the engine DECLARES: a data export is a plain string in the published manifest, a module is a conditions object
+const dataKeys = Object.keys(pkg.publishConfig.exports).filter((k) => typeof pkg.publishConfig.exports[k] === "string");
+const moduleKeys = keys.filter((k) => !dataKeys.includes(k));
+const declaredTargets = Object.values(pkg.publishConfig.exports).reduce((n, v) => n + (typeof v === "string" ? 1 : Object.keys(v).length), 0);
 
 describe("checkTarballExports", () => {
   const packed = pkg.publishConfig.exports;
 
-  it("passes the engine's own publishConfig.exports and counts every target (two conditions per declared export)", () => {
+  it("passes the engine's own publishConfig.exports and counts every target (two conditions per module export, one per data export)", () => {
     expect(sportDirs.length).toBeGreaterThan(0);
-    expect(keys.length).toBeGreaterThan(0);
-    expect(checkTarballExports({ manifest: { exports: packed }, files: filesFor(packed), expectedKeys: keys })).toBe(keys.length * 2);
+    expect(moduleKeys.length).toBeGreaterThan(10);
+    expect(dataKeys, "the engine declares its phone pin as a data export").toEqual(["./phone-subpaths.json"]);
+    expect(declaredTargets).toBe(moduleKeys.length * 2 + dataKeys.length);
+    expect(checkTarballExports({ manifest: { exports: packed }, files: filesFor(packed), expectedKeys: keys })).toBe(declaredTargets);
+  });
+
+  it("holds the data exports to their file: present in the tarball, named exactly, and only as a plain string", () => {
+    const key = "./phone-subpaths.json";
+    expect([...DATA_EXPORTS.keys()]).toEqual([key]);
+    const files = filesFor(packed);
+    // present: the control for the three refusals below
+    expect(files.has("phone-subpaths.json")).toBe(true);
+    expect(checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toBe(declaredTargets);
+    // the tarball lacks the file: a dangling data export, named
+    const without = new Set(files);
+    without.delete("phone-subpaths.json");
+    expect(() => checkTarballExports({ manifest: { exports: packed }, files: without, expectedKeys: keys })).toThrow(/exports\["\.\/phone-subpaths\.json"\]: "\.\/phone-subpaths\.json" is not in the tarball \(a dangling export\)/);
+    expect(() => checkTarballExports({ manifest: { exports: packed }, files: without, expectedKeys: keys, where: "dist/" })).toThrow(/is not in dist\//);
+    // named any other way: the wrong file, a path under dist/, a conditions object
+    for (const bad of ["./other.json", "./dist/phone-subpaths.json", { default: "./phone-subpaths.json" }]) {
+      expect(() => checkTarballExports({ manifest: { exports: { ...packed, [key]: bad } }, files, expectedKeys: keys }), JSON.stringify(bad)).toThrow(/expected the plain string "\.\/phone-subpaths\.json"/);
+    }
+    // the key itself is part of the compared key set
+    const gone = Object.fromEntries(Object.entries(packed).filter(([k]) => k !== key));
+    expect(() => checkTarballExports({ manifest: { exports: gone }, files, expectedKeys: keys })).toThrow(/missing \[\.\/phone-subpaths\.json\]/);
+    // a valid data export makes up for no module: every module key empty is "checked nothing" even though one data target is judged
+    const hollow = Object.fromEntries(Object.entries(packed).map(([k, v]) => [k, typeof v === "string" ? v : {}]));
+    expect(() => checkTarballExports({ manifest: { exports: hollow }, files, expectedKeys: keys })).toThrow(/module exports: 0 checked - a fixture that checked nothing/);
+    // and a data export does not excuse a module: the workspace's own exports still point at source
+    expect(() => checkTarballExports({ manifest: { exports: pkg.exports }, files, expectedKeys: keys })).toThrow(/points at source/);
   });
 
   it("refuses what `npm pack` ships: the workspace exports, pointing at ./src/*.ts", () => {
@@ -139,7 +173,7 @@ describe("checkTarballExports", () => {
     expect(() => checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toThrow(/pattern .* matches no file/);
     files.add("dist/sports/a/b/index.js");
     files.add("dist/sports/a/b/index.d.ts");
-    expect(checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toBe(keys.length * 2);
+    expect(checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toBe(declaredTargets);
   });
 
   it("refuses a manifest whose export keys differ from the workspace's, either way", () => {
@@ -480,9 +514,10 @@ describe("runFixtures: every fixture runs, and only a positive count passes", ()
 
 describe("exportSpecifiers: the proof imports every key and every sport directory", () => {
   const srcDirs = sourceSportDirs(ENGINE);
-  const nonPattern = keys.filter((k) => !k.includes("*"));
+  // the data exports hold no module, so they are not specifiers a fixture can import
+  const nonPattern = moduleKeys.filter((k) => !k.includes("*"));
 
-  it("lists each non-pattern export key plus each sport directory with an index (the engine's own declarations, counted)", () => {
+  it("lists each non-pattern module export plus each sport directory with an index, and no data export (the engine's own declarations, counted)", () => {
     const got = exportSpecifiers({ manifest: { exports: pkg.publishConfig.exports }, sportDirs: srcDirs });
     expect(srcDirs.length).toBeGreaterThan(0);
     expect(nonPattern.length).toBeGreaterThan(0);
@@ -490,8 +525,10 @@ describe("exportSpecifiers: the proof imports every key and every sport director
     expect(new Set(got).size).toBe(got.length);
     for (const k of nonPattern) expect(got, k).toContain(`@seazn/engine/${k.slice(2)}`);
     for (const d of srcDirs) expect(got, d).toContain(`@seazn/engine/sports/${d}`);
-    // the pattern itself is never a specifier
+    // the pattern itself is never a specifier, and neither is the data file
     expect(got.some((x) => x.includes("*"))).toBe(false);
+    expect(got.some((x) => x.endsWith(".json")), "a data export is not importable as a module").toBe(false);
+    expect(keys.length - got.length, "keys not listed: the pattern and the data exports, the pattern expanded to its directories").toBe(1 + dataKeys.length - srcDirs.length);
   });
 
   it("refuses a pattern it cannot expand, a `*` with no directory, an empty manifest, and a key that is not a subpath", () => {
@@ -505,6 +542,49 @@ describe("exportSpecifiers: the proof imports every key and every sport director
 
   it("honours the alias name, and expands the pattern in the directories' order", () => {
     expect(exportSpecifiers({ manifest: { exports: { "./core": {}, "./sports/*": {} } }, sportDirs: ["x", "y"], name: "pkg" })).toEqual(["pkg/core", "pkg/sports/x", "pkg/sports/y"]);
+  });
+});
+
+// pack-proof/node/strip.ts is the consumer that imports every export of the INSTALLED package. A data export (a plain string, like the
+// phone pin) is not a module: `import()` of it without a JSON attribute throws, so strip.ts must tell the two apart by the installed
+// manifest, and read the data with the attribute. Run here, for real, against a small fake install - no network, no pnpm.
+describe("pack-proof/node/strip.ts: a data export is read as data, not imported as a module", () => {
+  it("imports each module export and sport directory, skips the data export in that list, and prints the data it read through the exports map", () => {
+    const t = scratch();
+    try {
+      const install = join(t, "node_modules", "@seazn", "engine");
+      const write = (rel: string, content: string) => {
+        mkdirSync(dirname(join(install, rel)), { recursive: true });
+        writeFileSync(join(install, rel), content);
+      };
+      write("package.json", JSON.stringify({
+        name: "@seazn/engine",
+        type: "module",
+        exports: {
+          "./core": { default: "./dist/core/index.js" },
+          "./sports": { default: "./dist/sports/index.js" },
+          "./sports/*": { default: "./dist/sports/*/index.js" },
+          "./testkit": { default: "./dist/testkit/index.js" },
+          "./pin.json": "./pin.json",
+        },
+      }));
+      write("pin.json", JSON.stringify({ subpaths: ["./core"], closure: { modules: ["src/core/index.ts"] } }));
+      write("dist/core/index.js", "export const core = 1;\n");
+      write("dist/sports/index.js", "export const builtinModules = [{ key: 'x' }];\n");
+      write("dist/sports/x/index.js", "export const x = 1;\n");
+      write("dist/testkit/index.js", "export const kit = 1;\n");
+      writeFileSync(join(t, "package.json"), JSON.stringify({ type: "module" }));
+      // strip.ts finds the install from ITS OWN location, so it runs from a copy beside the fake one
+      writeFileSync(join(t, "strip.ts"), readFileSync(join(PROOF, "node", "strip.ts"), "utf8"));
+      const real = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "strip.ts", "core"], { cwd: t, encoding: "utf8", timeout: 60_000 });
+      expect(real.status, real.stdout + real.stderr).toBe(0);
+      const specifiers = /^SPECIFIERS (\[.*\])$/m.exec(real.stdout)?.[1];
+      expect(JSON.parse(specifiers ?? "null"), "the modules imported: core and sports, then the sport directories").toEqual(["@seazn/engine/core", "@seazn/engine/sports", "@seazn/engine/sports/x"]);
+      const data = /^DATA (\{.*\})$/m.exec(real.stdout)?.[1];
+      expect(JSON.parse(data ?? "null"), "the data export, read through the installed exports map").toEqual({ "@seazn/engine/pin.json": { subpaths: ["./core"], closure: { modules: ["src/core/index.ts"] } } });
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
   });
 });
 

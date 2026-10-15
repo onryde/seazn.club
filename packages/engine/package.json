@@ -30,11 +30,13 @@
     "./scheduling/rest-floor": "./src/scheduling/rest-floor.ts",
     "./scheduling/swiss": "./src/scheduling/swiss.ts",
     "./scheduling/tz": "./src/scheduling/tz.ts",
-    "./testkit": "./src/testkit/index.ts"
+    "./testkit": "./src/testkit/index.ts",
+    "./phone-subpaths.json": "./phone-subpaths.json"
   },
   "files": [
     "dist",
-    "rules"
+    "rules",
+    "phone-subpaths.json"
   ],
   "sideEffects": false,
   "publishConfig": {
@@ -123,7 +125,8 @@
       "./testkit": {
         "types": "./dist/testkit/index.d.ts",
         "default": "./dist/testkit/index.js"
-      }
+      },
+      "./phone-subpaths.json": "./phone-subpaths.json"
     }
   },
   "scripts": {

@@ -24,7 +24,10 @@ const sportDirs = readdirSync(new URL("dist/sports/", pkgDir), { withFileTypes: 
   .filter((d) => d.isDirectory() && existsSync(new URL(`dist/sports/${d.name}/index.js`, pkgDir)))
   .map((d) => d.name)
   .sort();
-const keys = Object.keys(manifest.exports).filter((k) => !k.includes("*"));
+// A plain-string export is a data file (the phone pin), not a module: it is read with a JSON import attribute in `core` mode, below.
+const isData = (k: string) => typeof manifest.exports[k] === "string";
+const keys = Object.keys(manifest.exports).filter((k) => !k.includes("*") && !isData(k));
+const dataKeys = Object.keys(manifest.exports).filter(isData);
 
 const specifiers =
   mode === "testkit"
@@ -33,6 +36,13 @@ const specifiers =
 if (specifiers.length === 0) process.exit(1);
 for (const specifier of specifiers) await import(specifier);
 console.log(`SPECIFIERS ${JSON.stringify(specifiers)}`);
+
+// the data exports, read through the installed package's `exports` map; run.mjs holds their content against the workspace's files
+const data: Record<string, unknown> = {};
+if (mode === "core") {
+  for (const k of dataKeys) data[`@seazn/engine/${k.slice(2)}`] = (await import(`@seazn/engine/${k.slice(2)}`, { with: { type: "json" } })).default;
+}
+console.log(`DATA ${JSON.stringify(data)}`);
 
 const { builtinModules } = await import("@seazn/engine/sports");
 if (builtinModules.length === 0) process.exit(1);

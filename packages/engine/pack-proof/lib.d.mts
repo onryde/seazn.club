@@ -2,6 +2,7 @@
 // Exactly the exports the .mjs has.
 export declare function assertOutsideRepo(dir: string, repoRoot: string): void;
 export declare function requireChecked(name: string, n: unknown): number;
+export declare const DATA_EXPORTS: ReadonlyMap<string, string>;
 export declare function checkTarballExports(input: {
   manifest: { exports?: unknown };
   files: ReadonlySet<string>;

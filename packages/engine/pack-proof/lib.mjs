@@ -31,6 +31,11 @@ function leaves(value, at) {
   throw new Error(`${at}: an export target must be a string or a conditions object, got ${JSON.stringify(value)}`);
 }
 
+/** The data files the package exports as themselves (engine-split 1c review, m6): export key -> the file at the package root that `files`
+ *  ships and the key must name exactly. They are not modules: they live outside dist/ and `import "<name>/<key>"` of one is not a module
+ *  load, so the proof checks them here, and `exportSpecifiers` leaves them out of what the fixtures import. */
+export const DATA_EXPORTS = new Map([["./phone-subpaths.json", "phone-subpaths.json"]]);
+
 /** What a registry consumer gets from the packed manifest. `manifest` is the tarball's own package.json, `files` the set of
  *  paths in the tarball relative to the package root (no `package/` prefix), `expectedKeys` the workspace's export subpaths,
  *  `where` what `files` is, for the message (run.mjs also calls this on the emitted dist/ BEFORE packing, where an empty dist/
@@ -38,7 +43,8 @@ function leaves(value, at) {
  *
  *  Throws on: no exports; a key set that differs from the workspace's; any target under `src/` or any `.ts` that is not a
  *  `.d.ts` (what `npm pack` ships when publishConfig.exports is not applied); any target the tarball does not contain; a `*`
- *  pattern that matches no file. Returns the number of export targets checked (every leaf string, a `*` pattern counting once). */
+ *  pattern that matches no file; a data export (DATA_EXPORTS) that is not exactly its file's plain path or whose file is not in `files`.
+ *  Returns the number of export targets checked (every leaf string, a `*` pattern counting once, a data export once). */
 export function checkTarballExports({ manifest, files, expectedKeys, where = "the tarball" }) {
   const exp = manifest.exports;
   if (exp === null || typeof exp !== "object" || Object.keys(exp).length === 0) throw new Error("the packed package.json has no exports");
@@ -51,7 +57,8 @@ export function checkTarballExports({ manifest, files, expectedKeys, where = "th
     throw new Error(`the packed exports differ from the workspace's: missing [${missing.join(", ")}], extra [${extra.join(", ")}]`);
   }
   let checked = 0;
-  for (const [at, target] of Object.entries(exp).flatMap(([key, value]) => leaves(value, `exports[${JSON.stringify(key)}]`))) {
+  const modules = Object.fromEntries(Object.entries(exp).filter(([key]) => !DATA_EXPORTS.has(key)));
+  for (const [at, target] of Object.entries(modules).flatMap(([key, value]) => leaves(value, `exports[${JSON.stringify(key)}]`))) {
     if (!target.startsWith("./")) throw new Error(`${at}: "${target}" is not a ./ path`);
     const rel = target.slice(2);
     if (SRC_SEGMENT.test(rel) || TS_SOURCE.test(rel)) throw new Error(`${at}: "${target}" points at source, which the tarball does not ship (was it packed by npm instead of pnpm?)`);
@@ -63,6 +70,15 @@ export function checkTarballExports({ manifest, files, expectedKeys, where = "th
     } else if (!files.has(rel)) {
       throw new Error(`${at}: "${target}" is not in ${where} (a dangling export)`);
     }
+    checked++;
+  }
+  // the data exports below must not make up for modules that were never judged: zero module targets is a failure on its own
+  requireChecked("module exports", checked);
+  for (const [key, data] of DATA_EXPORTS) {
+    if (!(key in exp)) continue; // a missing key is the key-set comparison's to report, above
+    // a data export names its file, as a plain string, and the tarball holds it
+    if (exp[key] !== `./${data}`) throw new Error(`exports[${JSON.stringify(key)}]: expected the plain string "./${data}", got ${JSON.stringify(exp[key])}`);
+    if (!files.has(data)) throw new Error(`exports[${JSON.stringify(key)}]: "./${data}" is not in ${where} (a dangling export)`);
     checked++;
   }
   return checked;
@@ -206,8 +222,8 @@ export async function runFixtures(names, fixtures, ctx, log) {
 
 // --------------------------------------------------------------------------------------------- what the proof must cover
 
-/** The specifiers a consumer can import: every non-pattern key of the PACKED manifest's `exports`, plus the `./sports/*` pattern
- *  expanded over `sportDirs`. `name` is the alias the fixtures install under. Throws on a pattern it has no expansion for, on a
+/** The specifiers a consumer can import: every non-pattern key of the PACKED manifest's `exports` (but the data exports, which hold no
+ *  module), plus the `./sports/*` pattern expanded over `sportDirs`. `name` is the alias the fixtures install under. Throws on a pattern it has no expansion for, on a
  *  `*` with no directory to expand over, and on an empty result (a proof that imports nothing proves nothing). */
 export function exportSpecifiers({ manifest, sportDirs, name = "@seazn/engine" }) {
   const exp = manifest.exports;
@@ -215,7 +231,9 @@ export function exportSpecifiers({ manifest, sportDirs, name = "@seazn/engine" }
   const out = [];
   for (const key of Object.keys(exp)) {
     if (!key.startsWith("./")) throw new Error(`export key "${key}" is not a ./ subpath`);
-    if (!key.includes("*")) {
+    if (DATA_EXPORTS.has(key)) {
+      continue; // a data file: there is no module in it for a fixture to import
+    } else if (!key.includes("*")) {
       out.push(`${name}/${key.slice(2)}`);
     } else if (key === "./sports/*") {
       if (sportDirs.length === 0) throw new Error("./sports/* has no sport directory to expand over");
