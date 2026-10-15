@@ -44,7 +44,7 @@ import {
   WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
-import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { composedUnavailable, disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { OutputState, ProviderCallRecorder, RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
@@ -112,6 +112,26 @@ afterAll(() => {
   if (POOL_APP.saved === undefined) delete process.env.PGAPPNAME;
   else process.env.PGAPPNAME = POOL_APP.saved;
 });
+
+// R2001: a composed start is refused 503 composed_unavailable while RELAY_IMAGE is unset (drivers.ts `composedUnavailable`).
+// This file's composed cases run on the fake runner, which needs no image, so the file names one of its own — put back
+// afterwards the KEK's way. The R2001 cases unset it for themselves (`withoutImage`).
+const TEST_IMAGE = "registry.fly.io/seazn-relay:usecase-test";
+const savedImage = process.env.RELAY_IMAGE;
+beforeAll(() => { process.env.RELAY_IMAGE = TEST_IMAGE; });
+afterAll(() => {
+  if (savedImage === undefined) delete process.env.RELAY_IMAGE;
+  else process.env.RELAY_IMAGE = savedImage;
+});
+/** Runs `body` with RELAY_IMAGE unset, then puts this file's image back — whatever `body` threw. */
+async function withoutImage<T>(body: () => Promise<T>): Promise<T> {
+  delete process.env.RELAY_IMAGE;
+  try {
+    return await body();
+  } finally {
+    process.env.RELAY_IMAGE = TEST_IMAGE;
+  }
+}
 
 
 /** The exit an OOM-killed Machine reports (Fly's event shape, C1). Its expected fail reason is DERIVED from the
@@ -1046,13 +1066,41 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
   const effectRows = async (sid: string, type: string) => (await sql<{ result: string }[]>`
     select result from fixture_stream_events where session_id = ${sid} and kind = 'effect' and type = ${type} order by seq`).map((x) => x.result);
 
-  it("n1 (a): a LIVE deployment that cannot name its environment (no ENV_NAME) refuses the create before the port is called — made nothing: the session fails with the domain's made-nothing reason at once; no create call, no force_destroy, no retry", async () => {
+  /** I1 (review of PR #965): R2001's entry gate refuses a composed start on a live deployment whose runner could not be
+   *  built, so the made-nothing path below is reached only when the configuration changes AFTER admission (a secret
+   *  removed between the entry gate and the runner create). This hands the create an ingest whose Cloudflare call — after
+   *  the gate, before the runner is asked — applies `drift`, and records what the gate answers on either side of it. */
+  const driftAtLiveInput = (r: { ingest: FakeIngest }, drift: () => void) => {
+    const gate: boolean[] = [];
+    const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      createLiveInput: async (spec: Parameters<FakeIngest["createLiveInput"]>[0]) => {
+        gate.push(composedUnavailable());
+        drift();
+        gate.push(composedUnavailable());
+        return r.ingest.createLiveInput(spec);
+      },
+    });
+    return { ingest, gate };
+  };
+  const LIVE_RUNNER_ENV = { FLY_API_TOKEN: "fly-tok", FLY_RELAY_APP: "seazn-relay-stg", ENV_NAME: "stg" };
+
+  it("n1 (a): a LIVE deployment that cannot name its environment (no ENV_NAME) refuses the create before the port is called — made nothing: the session fails with the domain's made-nothing reason at once; no create call, no force_destroy, no retry (I1: ENV_NAME goes AFTER admission; the entry gate refuses it up front)", async () => {
     const r = await rig({ credits: 1 });
-    const keep = { RELAY_DRIVERS: process.env.RELAY_DRIVERS, ENV_NAME: process.env.ENV_NAME };
+    const keep = {
+      RELAY_DRIVERS: process.env.RELAY_DRIVERS, ENV_NAME: process.env.ENV_NAME, FLY_API_TOKEN: process.env.FLY_API_TOKEN,
+      FLY_RELAY_APP: process.env.FLY_RELAY_APP,
+      CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_STREAM_TOKEN: process.env.CLOUDFLARE_STREAM_TOKEN,
+    };
     try {
       process.env.RELAY_DRIVERS = "live";          // only relayEnvironment() reads it here: the rig injects its own drivers
-      delete process.env.ENV_NAME;
-      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+      // R2001 + I1: on a live deployment composed is admitted only when the relay is up (both Cloudflare secrets), RELAY_IMAGE
+      // is set (this file's own) and the live runner could be built (token, app, ENV_NAME). Named here, never left to a
+      // developer's .env.local: CI carries no Cloudflare secret. ENV_NAME goes AFTER admission, inside the create's own
+      // Cloudflare call, so the runner create meets the ENV_NAME refusal this case is about.
+      Object.assign(process.env, { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok", ...LIVE_RUNNER_ENV });
+      const { ingest, gate } = driftAtLiveInput(r, () => { delete process.env.ENV_NAME; });
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), { ...r.deps, drivers: { ...r.deps.drivers, ingest } });
+      expect(gate, "the entry gate admitted it; after the drift it would refuse").toEqual([false, true]);
       expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: madeNothingReason(), runner_state: "destroyed", runner_retries: 0, machine_id: null });
       expect(madeNothingReason(), "the differential: the unknown path's last-attempt reason").not.toBe(failReasonFromExit(null));
       expect(r.runner.created).toEqual([]);                      // refused BEFORE the port: nothing was ever asked for
@@ -1066,18 +1114,20 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     }
   });
 
-  it("n1 (b): the REAL lazy runner on the retired shared Fly app refuses on first use — through drivers.ts, the port, and the usecase: made nothing, not one request to Fly, the session fails with the domain's made-nothing reason", async () => {
+  it("n1 (b): the REAL lazy runner on the retired shared Fly app refuses on first use — through drivers.ts, the port, and the usecase: made nothing, not one request to Fly, the session fails with the domain's made-nothing reason (I1: the app turns retired AFTER admission; the entry gate refuses it up front)", async () => {
     const r = await rig({ credits: 1 });
     const keys = ["RELAY_DRIVERS", "FLY_API_TOKEN", "RELAY_IMAGE", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_STREAM_TOKEN", "FLY_RELAY_APP", "ENV_NAME"];
     const keep = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     const fetchSpy = vi.fn(async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
     try {
-      Object.assign(process.env, { RELAY_DRIVERS: "live", FLY_API_TOKEN: "fly-tok", RELAY_IMAGE: "registry.fly.io/seazn-relay:abc", CLOUDFLARE_ACCOUNT_ID: "acct",
-        CLOUDFLARE_STREAM_TOKEN: "tok", FLY_RELAY_APP: FLY_RELAY_APP_RETIRED_DEFAULT, ENV_NAME: "stg" });
+      Object.assign(process.env, { RELAY_DRIVERS: "live", RELAY_IMAGE: "registry.fly.io/seazn-relay:abc", CLOUDFLARE_ACCOUNT_ID: "acct",
+        CLOUDFLARE_STREAM_TOKEN: "tok", ...LIVE_RUNNER_ENV });
       vi.stubGlobal("fetch", fetchSpy);
       setRelayDriversForTest(null);
-      const deps: SessionDeps = { ...r.deps, drivers: { ingest: r.ingest, runner: relayDrivers().runner } };   // the production runner binding
+      const { ingest, gate } = driftAtLiveInput(r, () => { process.env.FLY_RELAY_APP = FLY_RELAY_APP_RETIRED_DEFAULT; });
+      const deps: SessionDeps = { ...r.deps, drivers: { ingest, runner: relayDrivers().runner } };   // the production runner binding
       const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), deps);
+      expect(gate, "the entry gate admitted it; after the drift it would refuse").toEqual([false, true]);
       expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: madeNothingReason(), runner_state: "destroyed", runner_retries: 0, machine_id: null });
       expect(fetchSpy, "a refused configuration reached Fly").not.toHaveBeenCalled();
       expect(await runnerHistory(sessionId)).toEqual(["none-create_started->creating", "creating-create_failed->destroyed"]);
@@ -1085,6 +1135,40 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     } finally {
       vi.unstubAllGlobals();
       setRelayDriversForTest(null);
+      for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+
+  it("I1: a LIVE deployment whose runner could not be built — no FLY_API_TOKEN, no FLY_RELAY_APP, no ENV_NAME, each ALONE — is refused 503 composed_unavailable at the ENTRY: no session row, no Cloudflare input, no runner create; with all three the same start is admitted", async () => {
+    const r = await rig({ credits: 3 });
+    const keys = ["RELAY_DRIVERS", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_STREAM_TOKEN", ...Object.keys(LIVE_RUNNER_ENV)];
+    const keep = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const sessions = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`)[0]!.n;
+    try {
+      Object.assign(process.env, { RELAY_DRIVERS: "live", CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok" });
+      const before = await sessions();
+      let refused = 0;
+      for (const missing of Object.keys(LIVE_RUNNER_ENV)) {
+        Object.assign(process.env, LIVE_RUNNER_ENV);
+        delete process.env[missing];
+        const { ingest, gate } = driftAtLiveInput(r, () => {});
+        await expect(createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), { ...r.deps, drivers: { ...r.deps.drivers, ingest } }), missing)
+          .rejects.toMatchObject({ status: 503, code: "composed_unavailable" });
+        expect(gate, `${missing}: no Cloudflare input was asked for`).toEqual([]);
+        expect(await sessions(), `${missing}: no session row`).toBe(before);
+        expect(r.runner.created, `${missing}: no runner create`).toHaveLength(0);
+        refused++;
+      }
+      expect(refused, "anti-vacuity: one refusal per runner variable").toBe(Object.keys(LIVE_RUNNER_ENV).length);
+      // The positive pair: all three present — the same start is admitted, its input asked for and its runner created.
+      Object.assign(process.env, LIVE_RUNNER_ENV);
+      const { ingest, gate } = driftAtLiveInput(r, () => {});
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), { ...r.deps, drivers: { ...r.deps.drivers, ingest } });
+      expect(sessionId).toBeTruthy();
+      expect(gate, "the input is asked for, and the gate stayed open").toEqual([false, false]);
+      expect(await sessions()).toBe(before + 1);
+      expect(r.runner.created).toHaveLength(1);
+    } finally {
       for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     }
   });
@@ -2327,6 +2411,59 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     // The positive pair: the same org, the same fixture, on the rig's drivers.
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect(sessionId).toBeTruthy();
+  });
+
+  // R2001 (the composed hazard): a composed start on a deployment with no compositor image was ADMITTED — its row written,
+  // its Cloudflare input opened, provisioning begun — and failed only at FlyRunner's constructor. It is refused now at
+  // startBroadcast's entry, beside R5's disabled check and with R5's guarantees: before the expiry, the destination doors,
+  // the monthly grant, the storage read, any row and any provider call.
+  it("R2001: composed with no RELAY_IMAGE → 503 composed_unavailable at startBroadcast's ENTRY — admit is never asked, no session row, input, credit or runner is created (no ledger row — not even this month's free grant), no provider call of any kind, no runner create; a second call answers the same; with the image the same start is admitted and every count moves", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, monthly: true, recorder: rec });
+    const count = async (table: "fixture_stream_sessions" | "org_stream_credits") =>
+      (await sql<{ n: number }[]>`select count(*)::int as n from ${sql(table)} where org_id = ${r.auth.orgId}`)[0]!.n;
+    const settle = () => new Promise((res) => setImmediate(res));   // the fake's recorder writes on a microtask
+    const before = { sessions: await count("fixture_stream_sessions"), credits: await count("org_stream_credits") };
+    const spy = vi.mocked(admit);
+    await settle();
+    spy.mockClear();
+    rec.calls.length = 0;
+    let refused = 0;
+    await withoutImage(async () => {
+      for (const call of ["first", "second"]) {
+        await expect(createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps), call)
+          .rejects.toMatchObject({ status: 503, code: "composed_unavailable" });
+        await settle();
+        expect(await count("fixture_stream_sessions"), `${call}: no session row`).toBe(before.sessions);
+        expect(await count("org_stream_credits"), `${call}: no ledger row — not even this month's free grant`).toBe(before.credits);
+        expect(rec.calls.map((c) => c.operation), `${call}: no provider call — not even the storage read`).toEqual([]);
+        expect(r.runner.created, `${call}: no runner create`).toHaveLength(0);
+        expect(spy, `${call}: refused before admission is asked`).not.toHaveBeenCalled();
+        refused++;
+      }
+    });
+    expect(refused).toBe(2);
+    // The positive pair: the same org, fixture and body with the image set — every count the refusal held still moves.
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    await settle();
+    expect(sessionId).toBeTruthy();
+    expect(await count("fixture_stream_sessions")).toBe(before.sessions + 1);
+    expect(await count("org_stream_credits"), "this month's free grant is made now").toBeGreaterThan(before.credits);
+    expect(rec.calls.map((c) => c.operation)).toEqual(expect.arrayContaining(["storageUsage", "createLiveInput"]));
+    expect(spy.mock.calls.length, "the W5 probe, the M1 probe and the admission (A23's three asks)").toBe(3);
+    expect(spy.mock.calls.every(([i]) => i.mode === "composed" && i.composedUnavailable === false), "every ask carries the mode and the availability read at entry").toBe(true);
+    expect(r.runner.created).toHaveLength(1);
+  });
+
+  it("R2001: a passthrough start is untouched by a missing RELAY_IMAGE — admitted, no runner call, and admission is handed composedUnavailable false (the fact is asked only for a composed start)", async () => {
+    const r = await rig({ credits: 1 });
+    const spy = vi.mocked(admit);
+    spy.mockClear();
+    const { sessionId } = await withoutImage(() => createSession(r.auth, r.fixtureId, body(r.target.id), r.deps));
+    expect((await r.row(sessionId)).state).toBe("warming");
+    expect(r.runner.created).toHaveLength(0);
+    expect(spy.mock.calls.length).toBe(3);
+    expect(spy.mock.calls.map(([i]) => [i.mode, i.composedUnavailable])).toEqual([["passthrough", false], ["passthrough", false], ["passthrough", false]]);
   });
 
   // M10 (Task 14b review): a session left up from before a deployment lost its relay (the old fake default in production,

@@ -5615,6 +5615,7 @@
   "stream.error.active_session": "Ya hay una emisión en curso para este partido.",
   "stream.error.storage_exhausted": "El almacenamiento de grabaciones está lleno. Inténtalo más tarde.",
   "stream.error.ingest_unavailable": "El servicio de emisión no está disponible. Inténtalo en un minuto.",
+  "stream.error.composed_unavailable": "La emisión con la superposición del marcador aún no está disponible. Emite en directo solo con la cámara.",
   "stream.error.unknown": "No se pudo iniciar. Inténtalo de nuevo.",
   "stream.error.stop": "La emisión no se detuvo. Revisa tu conexión y vuelve a pulsar Detener emisión.",
   "stream.error.cancel": "La emisión no se canceló. Revisa tu conexión y vuelve a pulsar Cancelar.",

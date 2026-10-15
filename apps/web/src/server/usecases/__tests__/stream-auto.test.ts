@@ -192,6 +192,13 @@ describe("autoStartRefusalOf — the mapper from startBroadcast's refusals to th
     expect(checked).toBe(2);
   });
 
+  it("R2001, an assumption made a guard: composed_unavailable cannot reach an auto start (it passes no mode — passthrough) — refused by name, never mapped to `unavailable` the panel would show", () => {
+    const err = new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable");
+    expect(() => autoStartRefusalOf(err)).toThrow(/answered composed_unavailable to an automatic start/);
+    // The positive pair: the ingest's own 503 on the same status IS mapped — the guard is on the code, not the status.
+    expect(autoStartRefusalOf(new HttpError(503, "x", "ingest_unavailable"))).toBe("unavailable");
+  });
+
   it("anything else is a bug: null (the caller rethrows it)", () => {
     let checked = 0;
     for (const err of [new Error("boom"), new HttpError(500, "x"), new HttpError(409, "x", "something_new"), new HttpError(404, "fixture not found"), "a string", null]) {

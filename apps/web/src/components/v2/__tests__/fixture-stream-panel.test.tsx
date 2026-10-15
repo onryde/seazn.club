@@ -1236,6 +1236,12 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const elsewhere = body({ view: null, balance: 1, createError: { code: "target_in_use", holder: null } });
     expect(textAt(elsewhere, "stream-create-error")).toBe(m("stream.error.target_in_use.unknown"));
     expect(byTestId(body({ view: null, balance: 1 }), "stream-create-error"), "the empty case").toBeUndefined();
+    // R2001: composed asked for where the compositor cannot run — its own sentence in the same slot, never the ingest's
+    // "try again in a minute" nor the catch-all.
+    const composed = body({ view: null, balance: 1, createError: { code: "composed_unavailable", holder: null } });
+    expect(textAt(composed, "stream-create-error")).toBe(m("stream.error.composed_unavailable"));
+    expect(textAt(composed, "stream-create-error")).not.toBe(m("stream.error.ingest_unavailable"));
+    expect(textAt(composed, "stream-create-error")).not.toBe(m("stream.error.unknown"));
   });
 
   it("Ready, no phone (§6.12, Option B): the code card — its title, the QR through SeaznQrImage (sensitive, the sheet's cap), the paste code (ph-no-capture, exactly the QR's four keys), Copy beneath it, Revoke & reissue", () => {

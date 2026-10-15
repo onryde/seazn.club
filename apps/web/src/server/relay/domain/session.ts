@@ -70,8 +70,8 @@ export type StartCause = "organiser" | "operator" | "automatic";
 export type StopReason = Exclude<DbEndReason, "max_duration">;
 
 // ---- admission (§6.3 order, amended by owner ruling 2026-09-29 (F-A5): active_session moves up to directly after the
-// plan gates; E5: storage_exhausted is a refusal, never a state)
-export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session" | "phone_not_paired" | "phone_not_responding";
+// plan gates; E5: storage_exhausted is a refusal, never a state; R2001: composed_unavailable comes first of all)
+export type AdmitRefusal = "composed_unavailable" | "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session" | "phone_not_paired" | "phone_not_responding";
 /** Capture QR v2 W5 (§6.9), split by owner ruling 2026-10-09 (Option 1): the fixture's phone as admission sees it — no
  *  current pairing on slot 0 of the active code (`unpaired`), current and beating (`present`), or current but silent
  *  (`silent`: no beat within max(floor, answered cadence + slack)). Only `present` is admitted. */
@@ -90,8 +90,28 @@ export interface AdmitInput {
    *  live asks it of the fixture's code; the phone's start and the auto start pass `present` — the caller IS the current
    *  phone. Required, so no start path can forget it. */
   phone: PhoneStanding;
+  /** R2001: the mode this start asks for. Required, so no start path can forget it. */
+  mode: Mode;
+  /** R2001: this deployment cannot run a composed session's runner — the relay is unavailable or RELAY_IMAGE is unset
+   *  (drivers.ts `composedUnavailable()`, the ONE authority, which the organiser UI also reads). An env fact, so the
+   *  usecase reads it and the domain stays pure. Read only for a composed start. Required. */
+  composedUnavailable: boolean;
 }
+
+/** R2001: the mode gate, FIRST on admit's ladder. Before this, a composed start on a deployment with no compositor image
+ *  was admitted, wrote its session row, opened its Cloudflare input and only then failed at the runner's constructor. A
+ *  configuration fact about the whole deployment, so it outranks every per-org and per-match gate: whatever the plan, the
+ *  phone, the credits or the storage say, the organiser is told the mode itself cannot run here. Exported so the usecase
+ *  can ask it at startBroadcast's ENTRY, before anything is read for the plan, so no session row, input, credit or runner
+ *  is created — nothing later on the ladder can change its answer. A passthrough start never reads the flag. */
+export function admitMode(i: Pick<AdmitInput, "mode" | "composedUnavailable">): { ok: true } | { ok: false; refusal: "composed_unavailable" } {
+  if (i.mode === "composed" && i.composedUnavailable) return { ok: false, refusal: "composed_unavailable" };
+  return { ok: true };
+}
+
 export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: AdmitRefusal; activeSessionId?: string } {
+  const byMode = admitMode(i);
+  if (!byMode.ok) return byMode;
   if (i.relay && !i.overlay) return { ok: false, refusal: "overlay_required" };  // r5: the implication check
   if (!i.overlay) return { ok: false, refusal: "plan_lacks_overlay" };
   if (!i.relay) return { ok: false, refusal: "plan_lacks_relay" };

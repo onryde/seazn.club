@@ -61,6 +61,16 @@ afterAll(() => {
   else process.env.RELAY_KEK = savedKek;
 });
 
+// R2001: a composed start is refused 503 composed_unavailable while RELAY_IMAGE is unset (drivers.ts `composedUnavailable`).
+// This file's composed sessions run on the fake runner, which needs no image, so the file names one of its own — put
+// back afterwards the KEK's way.
+const savedImage = process.env.RELAY_IMAGE;
+beforeAll(() => { process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:sweep-test"; });
+afterAll(() => {
+  if (savedImage === undefined) delete process.env.RELAY_IMAGE;
+  else process.env.RELAY_IMAGE = savedImage;
+});
+
 const DAY_MS = 86_400_000;
 /** A storage pool no plausible number of foreign reservations can exhaust (stream-sessions.test.ts's, int4-safe). */
 const ROOMY_STORAGE_MINUTES = 100_000_000;

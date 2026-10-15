@@ -15,7 +15,9 @@
 //                       organiser can act on (lane D amendment D1): 402
 //                       no_credits, 409 overlay_required / active_session /
 //                       target_in_use, 503 storage_exhausted /
-//                       ingest_unavailable, 422 destination_not_allowed (a
+//                       ingest_unavailable / composed_unavailable (R2001: composed
+//                       asked for where the compositor cannot run), 422
+//                       destination_not_allowed (a
 //                       saved target the allowlist no longer admits), 402 plan
 //                       refusals → plan_lacks_relay, and everything else →
 //                       unknown. E5: storage lives ONLY here; no_credits lives
@@ -132,7 +134,7 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
 /** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
-  "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
+  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
 
@@ -146,6 +148,8 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   phone_not_responding: "stream.error.phone_not_responding",
   storage_exhausted: "stream.error.storage_exhausted",
   ingest_unavailable: "stream.error.ingest_unavailable",
+  // R2001: composed asked for on a deployment with no compositor image (admission's FIRST gate) — go live camera-only.
+  composed_unavailable: "stream.error.composed_unavailable",
   // T3: the ONE holder-less "elsewhere" sentence; a holder with a match is named by `inUseText` (stream.inUse.*).
   target_in_use: "stream.error.target_in_use.unknown",
   destination_not_allowed: "stream.error.destination_not_allowed",
@@ -160,7 +164,7 @@ const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unkn
 /** The lower-case domain codes createSession puts on the wire VERBATIM (stream-sessions.ts `refuse`, `targetInUse`). */
 const VERBATIM_CODES: readonly CreateErrorCode[] = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
-  "target_in_use",
+  "composed_unavailable", "target_in_use",
 ];
 
 /** The plan gates createSession refuses with `PaymentRequiredError(featureKey)` — read from the ONE authority the
