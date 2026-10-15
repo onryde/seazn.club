@@ -1825,7 +1825,7 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
     await expect(frozen.getByTestId("room-own-tile-connecting"), "and the words stay over the silhouette").toBeVisible();
     await expect(announce).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
     await expect(cta, "the D2 wait is still the SDK's").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
-    await shoot(p, "d23-connecting", [320, 1280]);
+    await shoot(p, "d23-connecting", [320, 768, 1280]);
     // How this wait ends: the seat is never answered here (the SDK cannot join offline), so the room's own poll budget on
     // camera_starting runs out — the words go with it, the live region empties, and Check in is offered again.
     await expect(frozen, "the words end with the poll budget").toHaveCount(0, { timeout: 40_000 });
@@ -1905,6 +1905,57 @@ test("T17B fix 2, D23-fix: a camera that FAILS ends the cover at once — the wo
     await ctx.close();
     // The SDK refuses the opaque token composed above: expected here, and only here.
     consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
+  } finally {
+    await camBrowser.close();
+  }
+});
+
+test("T17B fix 2, D23-fix-2: a seat claim that FAILS ends the cover at once — the words are not left standing for a minute with the button enabled", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, {
+    names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
+    cameraPolicy: "required",
+  });
+  const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+  try {
+    const ctx = await cold(camBrowser);
+    await ctx.grantPermissions(["camera"]);
+    const p = await openRoom(ctx, room, room.white.token);
+    const cta = p.getByTestId("room-checkin-cta");
+    await p.getByTestId("room-checkin-test-cta").click();
+    await expect(cta, "the preview painted a frame: Check in opens").toBeEnabled({ timeout: 10_000 });
+    // The first claim is held, then FAILS (a 500): no seat, no participant, the camera never starts.
+    let fail!: () => void;
+    const failing = new Promise<void>((resolve) => (fail = resolve));
+    let claims = 0;
+    await p.route(
+      (u) => /\/external-play\/room$/.test(u.pathname),
+      async (route: Route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        claims += 1;
+        await failing;
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "E2E_DOWN" }, requestId: "e2e" }) });
+      },
+    );
+    const frozen = p.getByTestId("room-own-tile-frozen");
+    const clicked = Date.now();
+    await cta.click();
+    await expect(frozen, "premise: the cover is up while the claim is in flight").toBeVisible();
+    expect(claims, "premise: one claim, held").toBe(1);
+    await expect(p.getByTestId("room-own-tile-announce"), "premise: the live region speaks while it is up").toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+    fail();
+    // Gone at once — well inside the picture's own bound, so only the failure can have taken it down.
+    await expect(frozen, "the failed claim ends the cover").toHaveCount(0, { timeout: 3_000 });
+    expect(Date.now() - clicked, "well inside the picture's bound").toBeLessThan(HANDOVER_COVER_MS - 2_000);
+    await expect(p.getByTestId("room-own-tile-announce"), "the live region is emptied").toHaveText("");
+    await expect(cta, "Check in is offered again").toBeEnabled();
+    await expect(cta).toHaveText(uiEn["externalPlay.room.checkin.cta"]!);
+    // And it STAYS gone: the picture's bound and the words' stand-in would both have fired inside this wait.
+    await p.waitForTimeout(HANDOVER_COVER_MS - 4_000);
+    await expect(frozen, "nothing resurfaces").toHaveCount(0);
+    await ctx.close();
+    // The failed claim is this test's own 500: the browser logs it, expected here and only here.
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Failed to load resource: the server responded with a status of 500/.test(e)));
   } finally {
     await camBrowser.close();
   }
@@ -2443,9 +2494,11 @@ test("T17B fix 2, D24: my increment shows AT ONCE on my move — the clock jumps
     .poll(async () => faceSeconds(await mine.textContent()), { message: "restored: below what it read before the drop", timeout: 3_000 })
     .toBeLessThan(before);
   const restored = faceSeconds(await mine.textContent());
-  // More than a whole second, so a running face MUST have crossed a second boundary (700 ms crossed one 70% of the time).
-  await p.waitForTimeout(1_200);
-  expect(faceSeconds(await mine.textContent()), "and running again").toBeLessThan(restored);
+  // Polled, not slept: the face ticks once a second, so a running clock is seen below `restored` within a few seconds,
+  // and a stopped one never (a fixed 700 ms sleep crossed a tick boundary only 70% of the time).
+  await expect
+    .poll(async () => faceSeconds(await mine.textContent()), { message: "and running again", timeout: 3_000 })
+    .toBeLessThan(restored);
   expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
   await ctx.close();
 });

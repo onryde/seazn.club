@@ -22,9 +22,9 @@ export const HANDOVER_CEILING_MS = 60_000;
 const MAX_EDGE = 640;
 
 /** How a hand-over ended: the SDK's own video painted (`sdk`), the camera failed or gave up (`failed`), the room moved
- *  to a screen with no tile to cover (`left`), the seat's `camera_starting` poll budget ran out (`budget`), or the
- *  guard's ceiling (`ceiling`). */
-export type HandoverEnd = "sdk" | "failed" | "left" | "budget" | "ceiling";
+ *  to a screen with no tile to cover (`left`), the seat's `camera_starting` poll budget ran out (`budget`), nothing was
+ *  left in flight to bring a picture (`idle`), a seat claim failed (`seat`), or the guard's ceiling (`ceiling`). */
+export type HandoverEnd = "sdk" | "failed" | "left" | "budget" | "idle" | "seat" | "ceiling";
 /** What the end reports: how, the milliseconds from the Check in click, and whether the picture had already gone (the
  *  SDK took longer than HANDOVER_COVER_MS). */
 export type HandoverEndEvent = { by: HandoverEnd; ms: number; pictureExpired: boolean };

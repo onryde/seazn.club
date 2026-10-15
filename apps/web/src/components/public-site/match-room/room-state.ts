@@ -104,6 +104,10 @@ export type RoomState = {
    *  clock-math `optimisticOwnMs` says when it applies, and the server's number replaces it the moment the ply is on the
    *  ledger. Set by a move's `act_sent`; removed by a refusal or a failure. */
   optimistic: OptimisticClock | null;
+  /** T17B fix 2, D23-fix-2: how many seat claims have FAILED (the call itself — a dropped connection, a 5xx; not a refusal,
+   *  which is an answer). A failed claim changes nothing else a screen can read (`pending` just clears), and the
+   *  hand-over's words end on it: edge-triggered on this counter, never level-triggered on anything the state holds. */
+  seatFailures: number;
   /** Fix round 4b: the last read (or seat call) found the board being re-paired — it names nobody for now. The
    *  room reads on; the next answered read or seat call says where the player stands. */
   repairing: boolean;
@@ -142,6 +146,7 @@ export function initialRoomState(snap: RoomSnapshot, receivedAt: number, grantRe
     notFound: false,
     grantRefused,
     optimistic: null,
+    seatFailures: 0,
     repairing: false,
   };
 }
@@ -235,7 +240,11 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false };
     }
     case "seat_failed":
-      return { ...roomCallFailed(s, e.status, e.code ?? null), pending: s.pending?.kind === "seat" ? null : s.pending };
+      return {
+        ...roomCallFailed(s, e.status, e.code ?? null),
+        pending: s.pending?.kind === "seat" ? null : s.pending,
+        seatFailures: s.seatFailures + 1,
+      };
     case "act_sent":
       if (s.pending !== null) return s;
       return {

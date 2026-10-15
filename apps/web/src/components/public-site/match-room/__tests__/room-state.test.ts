@@ -286,6 +286,45 @@ describe("seat round trip", () => {
   });
 });
 
+// D23-fix-2 (b): a seat claim that FAILED is an event the screen must be able to see — the cover over the tile ends on it —
+// but nothing on the state said so (a 5xx changes nothing but `pending`). `seatFailures` counts them.
+describe("seatFailures: how many seat claims have failed", () => {
+  const sent = () => roomReducer(initialRoomState(snap(), T0), { type: "seat_sent" });
+
+  it("starts at 0 (the empty case), and each failed claim adds one — whatever the status (0, 404, 409, 5xx), counted", () => {
+    expect(initialRoomState(snap(), T0).seatFailures, "the empty case").toBe(0);
+    let checked = 0;
+    for (const status of [0, 401, 404, 409, 429, 500, 503]) {
+      let s = sent();
+      s = roomReducer(s, { type: "seat_failed", status });
+      expect(s.seatFailures, `first failure (${status})`).toBe(1);
+      s = roomReducer(roomReducer(s, { type: "seat_sent" }), { type: "seat_failed", status });
+      expect(s.seatFailures, `a second failure (${status})`).toBe(2);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: statuses").toBe(7);
+  });
+
+  it("nothing else moves it: a seat sent, a seat answered, a failed act, a failed read, a snapshot", () => {
+    const answer = { snapshot: snap(), seat: { seated: true, participant: null } } as never;
+    const events: RoomEvent[] = [
+      { type: "seat_sent" },
+      { type: "seat_answered", answer, receivedAt: T0 },
+      { type: "act_failed", status: 500 },
+      { type: "fetch_failed", status: 500 },
+      { type: "snapshot", snap: snap(), receivedAt: T0 + 1 },
+    ];
+    let s = initialRoomState(snap(), T0);
+    let checked = 0;
+    for (const e of events) {
+      s = roomReducer(s, e);
+      expect(s.seatFailures, e.type).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(events.length);
+  });
+});
+
 describe("act round trip", () => {
   const live = () => initialRoomState(snap({ game: game(2) }), T0);
 

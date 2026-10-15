@@ -25,6 +25,7 @@ import { HANDOVER_CEILING_MS, HANDOVER_COVER_MS } from "../camera-handover";
 import { initialRoomState, type RoomState } from "../room-state";
 import type { RoomSnapshot } from "../room-snapshot";
 import type { CameraTestView } from "../camera-test";
+import type { RoomScreen } from "../room-screen";
 
 const T0 = Date.parse("2026-10-14T16:50:00.000Z");
 
@@ -76,6 +77,10 @@ function props(state: RoomState): Parameters<typeof Screen>[0] {
   };
 }
 const stateOf = (s: RoomSnapshot, seat: RoomState["seat"] = null): RoomState => ({ ...initialRoomState(s, T0), seat });
+/** D23-fix-2: what the Screen is handed while Check in's own seat claim is in flight — the state a cover is for. A cover
+ *  with NOTHING in flight is a false statement and ends (see the end table below), so every test that wants one standing
+ *  starts from a claim on its way. */
+const coverProps = (state: RoomState): Parameters<typeof Screen>[0] => ({ ...props(state), busy: true });
 
 class FakeTrack extends EventTarget {
   readyState: "live" | "ended" = "live";
@@ -225,7 +230,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
   afterEach(() => vi.useRealTimers());
 
   it("the empty case first: before Check in nothing covers the tile", async () => {
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     expect(handoverOf(island)!.view).toEqual({ status: "idle", frame: null });
     expect(tileOf(island).frozen ?? null).toBeNull();
   });
@@ -233,7 +238,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
   it("the preview's frame is drawn WHILE the camera is still live, then the camera stops; the cover holds that frame", async () => {
     const cam = stubCamera();
     const canvases = stubDocumentCanvas(cam.track);
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video(640, 480));
     testOf(island)!.onHandOver();
@@ -248,7 +253,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
   it("the SDK's own video painting a frame removes the cover — and a frame of nothing earlier does not", async () => {
     const cam = stubCamera();
     stubDocumentCanvas(cam.track);
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video());
     testOf(island)!.onHandOver();
@@ -267,7 +272,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
     vi.useFakeTimers();
     const cam = stubCamera();
     stubDocumentCanvas(cam.track);
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video());
     testOf(island)!.onHandOver();
@@ -296,7 +301,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
     vi.useFakeTimers();
     const cam = stubCamera();
     stubDocumentCanvas(cam.track);
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video());
     testOf(island)!.onHandOver();
@@ -313,7 +318,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
     for (const waited of [0, HANDOVER_COVER_MS + 1_000]) {
       const cam = stubCamera();
       stubDocumentCanvas(cam.track);
-      const island = renderIsland(Screen, props(stateOf(snap())));
+      const island = renderIsland(Screen, coverProps(stateOf(snap())));
       await liveCheckin(island, cam);
       handoverOf(island)!.register(video());
       testOf(island)!.onHandOver();
@@ -330,7 +335,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
   it("a preview that never painted (no size) leaves no cover — and Check in still stops the camera", async () => {
     const cam = stubCamera();
     const canvases = stubDocumentCanvas(cam.track);
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video(0, 0));
     testOf(island)!.onHandOver();
@@ -382,14 +387,43 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
   };
   type P = Parameters<typeof Screen>[0];
   const withCamera = (p: P, status: string): P => ({ ...p, camera: { ...p.camera, status } as never });
-  const withScreen = (p: P, kind: string): P => ({ ...p, screen: { kind } as never });
+  const withScreen = (p: P, kind: string): P => ({
+    ...p,
+    screen: (kind === "creating" ? { kind, retryAt: null } : { kind }) as never,
+  });
+  /** D23-fix-2 (the cards): what each screen means for a cover standing over the tile. The check-in is where it is born,
+   *  the live board is where it follows the tile (a quick check-in beats the SDK's video), and the creating card is
+   *  where the claim is answered and the game is not up yet; EVERY OTHER screen has no tile coming up for the player, so
+   *  a cover standing across one would resurface on re-entry as a false "Connecting…". A Record over the union: a new
+   *  screen kind is a compile error here until someone decides which it is. */
+  const SCREEN_VERDICT: Record<RoomScreen["kind"], "ends" | "keeps"> = {
+    unavailable: "ends",
+    repairing: "ends",
+    offForClub: "ends",
+    revoked: "ends",
+    seatHeld: "ends",
+    relink: "ends",
+    over: "ends",
+    held: "ends",
+    live: "keeps",
+    notOpened: "ends",
+    cameraRequired: "ends",
+    cameraLost: "ends",
+    cameraBlocked: "ends",
+    videoDown: "ends",
+    creating: "keeps",
+    closed: "ends",
+    boardClosed: "ends",
+    checkin: "keeps",
+  };
+  const screensWhere = (v: "ends" | "keeps") => Object.entries(SCREEN_VERDICT).filter(([, x]) => x === v).map(([k]) => k);
   /** A cover is up (the picture or the words, by `phase`); returns the island and the props it is rendered with. */
   async function covered(phase: "covering" | "connecting") {
     vi.useFakeTimers();
     const cam = stubCamera();
     stubDocumentCanvas(cam.track);
     // A game on file, so the seams and the result have a board to draw when the Screen is taken to them.
-    const base = props(stateOf(snap({ game: ENDS_GAME as never })));
+    const base = coverProps(stateOf(snap({ game: ENDS_GAME as never })));
     const island = renderIsland(Screen, base);
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video());
@@ -412,22 +446,37 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
     return handoverOf(island);
   }
 
+  /** Seat failures counted from the state the cover was born in (edge-triggered: only a NEW failure ends it). */
+  const withSeatFailure = (p: P): P => ({ ...p, state: { ...p.state, seatFailures: p.state.seatFailures + 1 } });
+  const meetingSeat = { seated: true, participant: { authToken: "t", participantId: "p1" } } as unknown as RoomState["seat"];
   const ENDS: { name: string; by: string; change: (p: P) => P }[] = [
     { name: "the camera failed", by: "failed", change: (p) => withCamera(p, "failed") },
     { name: "the camera gave up", by: "failed", change: (p) => withCamera(p, "gave_up") },
-    { name: "the screen became the revoked seam", by: "left", change: (p) => withScreen(p, "revoked") },
-    { name: "the screen became the seat-held seam", by: "left", change: (p) => withScreen(p, "seatHeld") },
-    { name: "the screen became held", by: "left", change: (p) => withScreen(p, "held") },
-    { name: "the screen became the result", by: "left", change: (p) => withScreen(p, "over") },
+    // (a) nothing in flight: the claim answered or failed, no poll, and no camera on its way.
+    { name: "nothing is in flight (claim cleared, no poll, camera idle, no meeting)", by: "idle", change: (p) => ({ ...p, busy: false }) },
+    { name: "nothing is in flight, the camera is off", by: "idle", change: (p) => ({ ...withCamera(p, "off"), busy: false }) },
+    // (b) a seat claim failed, while something else (a live camera) is still in flight — (a) says "keep", (b) ends it.
+    { name: "a seat claim failed (camera live, so nothing else ends it)", by: "seat", change: (p) => withSeatFailure(withCamera(p, "live")) },
+    ...screensWhere("ends").map((k) => ({ name: `the screen became ${k}`, by: "left", change: (p: P) => withScreen(p, k) })),
     { name: "the seat's camera_starting poll budget ran out", by: "budget", change: (p) => ({ ...p, startBudgetSpent: true }) },
   ];
   const KEEPS: { name: string; change: (p: P) => P }[] = [
     { name: "the camera is joining", change: (p) => withCamera(p, "joining") },
     { name: "the camera is recovering", change: (p) => withCamera(p, "recovering") },
     { name: "the camera is live", change: (p) => withCamera(p, "live") },
-    { name: "the camera is idle", change: (p) => withCamera(p, "idle") },
-    { name: "the screen is still the check-in", change: (p) => withScreen(p, "checkin") },
+    { name: "the camera is idle (claim in flight)", change: (p) => withCamera(p, "idle") },
+    // The claim is answered and nothing is pending, but the camera is on its way: that is the happy path.
+    { name: "claim answered, camera joining", change: (p) => ({ ...withCamera(p, "joining"), busy: false }) },
+    { name: "claim answered, camera recovering", change: (p) => ({ ...withCamera(p, "recovering"), busy: false }) },
+    { name: "claim answered, camera live", change: (p) => ({ ...withCamera(p, "live"), busy: false }) },
+    {
+      name: "claim answered with a participant, camera not started yet (idle) — the SDK is about to join",
+      change: (p) => ({ ...p, busy: false, state: { ...p.state, seat: meetingSeat } }),
+    },
+    { name: "claim answered camera_starting, the room is polling", change: (p) => ({ ...p, busy: false, checkingCamera: true }) },
+    ...screensWhere("keeps").map((k) => ({ name: `the screen is ${k}`, change: (p: P) => withScreen(p, k) })),
     { name: "the budget is not spent", change: (p) => ({ ...p, startBudgetSpent: false }) },
+    { name: "an old seat failure is not a new one (the counter, unchanged)", change: (p) => ({ ...p, state: { ...p.state } }) },
   ];
 
   it("each end stops it, from the picture and from the words alone, and reports how — and each keep leaves it standing (counted)", async () => {
@@ -456,7 +505,28 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: 7 ends and 6 keeps, two phases").toBe(2 * (ENDS.length + KEEPS.length));
+    expect(checked, `anti-vacuity: ${ENDS.length} ends and ${KEEPS.length} keeps, two phases`).toBe(2 * (ENDS.length + KEEPS.length));
+    expect(screensWhere("ends").length + screensWhere("keeps").length, "every screen kind is classified").toBe(Object.keys(SCREEN_VERDICT).length);
+  });
+
+  it("a seat failure from BEFORE the hand-over is not an end (edge-triggered: only a NEW failure ends the cover) — and one after it is", async () => {
+    vi.useFakeTimers();
+    const cam = stubCamera();
+    stubDocumentCanvas(cam.track);
+    const failedBefore = { ...stateOf(snap({ game: ENDS_GAME as never })), seatFailures: 1 };
+    const base = withCamera(coverProps(failedBefore), "live");
+    const island = renderIsland(Screen, base);
+    await liveCheckin(island, cam);
+    handoverOf(island)!.register(video());
+    testOf(island)!.onHandOver();
+    await settle();
+    island.rerender(base);
+    await settle();
+    expect(handoverOf(island)!.view.status, "an old failure, a camera live: the cover stands").toBe("covering");
+    island.rerender({ ...base, state: { ...base.state, seatFailures: 2 } });
+    await settle();
+    expect(handoverOf(island)!.view, "a NEW failure ends it").toEqual({ status: "over", frame: null, by: "seat" });
+    expect(vi.mocked(Sentry.addBreadcrumb).mock.calls.map((c) => c[0]!.data?.by), "reported once").toEqual(["seat"]);
   });
 
   it("a camera that failed with NO hand-over in progress reports nothing and covers nothing (the empty case)", async () => {
@@ -494,6 +564,8 @@ describe("D23 on the live board: the cover follows the tile into the room (a qui
   const liveProps = (): Parameters<typeof Screen>[0] => ({
     ...props(stateOf(snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, game: game as never }))),
     screen: { kind: "live" } as never,
+    // The seat is answered; the SDK is on its way to the first frame: something is in flight.
+    camera: { ...props(stateOf(snap())).camera, status: "joining" } as never,
   });
   const strip = (island: Island) => {
     const strips = [...new Set(walk(island.tree()))].filter((e) => typeof e.type === "function" && e.type.name === "TileStrip");
@@ -508,7 +580,7 @@ describe("D23 on the live board: the cover follows the tile into the room (a qui
   it("Check in, then the board comes up before the SDK's video: the live tile holds the same frame, and the SDK's frame removes it", async () => {
     const cam = stubCamera();
     const canvases = stubDocumentCanvas(cam.track);
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video());
     testOf(island)!.onHandOver();
@@ -529,7 +601,7 @@ describe("D23 on the live board: the cover follows the tile into the room (a qui
     vi.useFakeTimers();
     const cam = stubCamera();
     stubDocumentCanvas(cam.track);
-    const island = renderIsland(Screen, props(stateOf(snap())));
+    const island = renderIsland(Screen, coverProps(stateOf(snap())));
     await liveCheckin(island, cam);
     handoverOf(island)!.register(video());
     testOf(island)!.onHandOver();

@@ -348,9 +348,11 @@ function TileStrip({
 /** The give-up notice's way back: a fresh page joins afresh (fix round 5). */
 const reloadPage = () => location.reload();
 
-/** D23-fix: the screens on which no tile is coming up for the player — the seams for a frozen or held board and the
- *  result. A cover standing on one of them would tell the player their camera is connecting when it is not. */
-const HANDOVER_ENDS_ON_SCREEN: readonly string[] = ["revoked", "seatHeld", "held", "over"];
+/** D23-fix-2: the only screens a hand-over's cover may stand across — the check-in it is born on, the live board it
+ *  follows the tile into (a quick check-in beats the SDK's video), and the creating card between the two. On every other
+ *  screen — a seam, a card, the result — no tile is coming up for the player, and a cover left standing would resurface
+ *  on re-entry as a false "Connecting your camera…". Listed by what it KEEPS, so a screen added later ends it by default. */
+const HANDOVER_KEPT_BY_SCREEN: readonly string[] = ["checkin", "live", "creating"];
 
 // Exported for its first-paint test (room-shell.test.tsx): the camera-off
 // banner reads the camera hook, which a server render never runs.
@@ -439,12 +441,32 @@ export function Screen({
   // triggered (the cover being up is a dependency), so the order of the two facts never matters.
   const { end: endHandover } = handover;
   const handoverActive = isHandoverActive(handover.view);
+  // D23-fix-2 (a): nothing is in flight — no seat call out, no camera_starting poll, and no camera on its way (joining,
+  // recovering or live; or idle with a meeting's token in hand, about to join). A claim that failed leaves exactly this
+  // (seat null, pending cleared, camera idle), and the words used to stand for the full 60 s with the button enabled.
+  const cameraComing =
+    camera.status === "joining" ||
+    camera.status === "recovering" ||
+    camera.status === "live" ||
+    (camera.status === "idle" && meetingJoined);
+  const nothingInFlight = !busy && !checkingCamera && !cameraComing;
   useEffect(() => {
     if (!handoverActive) return;
     if (camera.status === "failed" || camera.status === "gave_up") endHandover("failed");
-    else if (HANDOVER_ENDS_ON_SCREEN.includes(screen.kind)) endHandover("left");
+    else if (!HANDOVER_KEPT_BY_SCREEN.includes(screen.kind)) endHandover("left");
     else if (startBudgetSpent) endHandover("budget");
-  }, [handoverActive, camera.status, screen.kind, startBudgetSpent, endHandover]);
+    else if (nothingInFlight) endHandover("idle");
+  }, [handoverActive, camera.status, screen.kind, startBudgetSpent, nothingInFlight, endHandover]);
+  // D23-fix-2 (b): a seat claim FAILED while the cover was up (a dropped connection, a 5xx): the check-in did not go
+  // through, so the words about connecting are not the news. Edge-triggered on the reducer's counter — a failure from
+  // before the hand-over is not its end — and independent of (a): a live camera would otherwise keep it standing.
+  const seatFailures = state.seatFailures;
+  const failuresSeen = useRef(seatFailures);
+  useEffect(() => {
+    if (failuresSeen.current === seatFailures) return;
+    failuresSeen.current = seatFailures;
+    if (handoverActive) endHandover("seat");
+  }, [seatFailures, handoverActive, endHandover]);
   // T17B fix 2, D13: the side to move's clock at zero, the game not over — the board and every action lock.
   const flagged = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);

@@ -103,9 +103,9 @@ describe("the hand-over cover (D23) — a session between Check in's stop and th
     expect(ends).toEqual([{ by: "sdk", ms: 1_234, pictureExpired: false }]);
   });
 
-  it("the room's own ends (failed, left, budget) stop it from either state, each saying why — and from idle or over they are no-ops (counted)", () => {
+  it("the room's own ends (failed, left, budget, idle, seat) stop it from either state, each saying why — and from idle or over they are no-ops (counted)", () => {
     let checked = 0;
-    for (const by of ["failed", "left", "budget"] as const) {
+    for (const by of ["failed", "left", "budget", "idle", "seat"] as const) {
       for (const phase of ["covering", "connecting"] as const) {
         const { s, views, ends } = harness();
         s.end(by); // idle: nothing
@@ -126,7 +126,7 @@ describe("the hand-over cover (D23) — a session between Check in's stop and th
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: 3 ends x 2 phases").toBe(6);
+    expect(checked, "anti-vacuity: 5 ends x 2 phases").toBe(10);
   });
 
   it("the words have a hard ceiling too (a frame proof that never fires cannot pin a false 'Connecting…'): one tick before still there, at it over by 'ceiling'", () => {
