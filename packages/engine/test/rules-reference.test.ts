@@ -5,6 +5,24 @@ import { describe, expect, it } from "vitest";
 import { AWAITING_PROOF, ENGINE, ID, ROW_HEADER, RULES_DIR, STATUS, allRows, engineFileExists, hasToken, inEngine, isMatrixCase, parseRuleRows, proofProblems, readEngineFile, ruleFiles, testTitles, type ReadRepoFile, type RuleRow } from "./rules-reference.ts";
 import { OPEN, W2B_PER_FILE, W2B_ROWS, X_BR_1, readAppendixA, signed, w2bIds, w2bProblems } from "./w2b-rows.ts";
 
+/** Batch 4 review M7. The proof check reads one proving file per (row, test path) pair and parses each DISTINCT file once
+ *  (`testTitles` memoises), so its cost grows with the table: 1.4 s for 311 pairs on an idle machine (about 4.5 ms a pair),
+ *  and it timed out at 13 s under load. AGENTS.md class 20: a flat timeout beside a derived cost is a latent red, so the
+ *  budget is stated from the pairs the table has. PROOF_PAIR_MS is about 20x the idle cost, the margin a loaded machine
+ *  needed (the Stryker spawn tests budget the same way, `spawnBudget`); SLACK_MS is the file-system and parse floor. */
+const PROOF_PAIR_MS = 100;
+const SLACK_MS = 5_000;
+const proofBudget = (pairs: number): number => {
+  if (!Number.isInteger(pairs) || pairs < 1) throw new Error(`proofBudget: ${pairs} is not a pair count of at least 1`);
+  return SLACK_MS + pairs * PROOF_PAIR_MS;
+};
+/** The (row, proving test path) pairs this file's proof check reads: every signed or deviation row not awaiting proof, each
+ *  of its non-matrix paths under packages/engine/ (the monorepo's checker reads the rest). Counted from the table, not from
+ *  the check's own reads. */
+const PROOF_PAIRS = allRows()
+  .filter((r) => !r.status.startsWith("⬜") && !AWAITING_PROOF.has(r.id))
+  .reduce((n, r) => n + r.provedBy.filter((p) => !isMatrixCase(p) && inEngine(p)).length, 0);
+
 /** The ten ids W2a seeds, typed from spec §6 (2026-10-08-format-matrix-w2a-design.md, "W2a seeds only"). */
 const SEEDED = ["X-BR-1", "X-BR-2", "X-ST-1", "X-ST-2", "X-DR-1", "BG-KO-1", "BG-KO-2", "CA-KO-1", "GN-KO-1", "CK-KO-1"];
 
@@ -98,8 +116,9 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(refused).toBe(7);
   });
 
-  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (engine paths)", () => {
+  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (engine paths)", (ctx) => {
     const reads: string[] = [];
+    // The reader the check calls once per (row, proving test path): counting it is counting the work the budget is for.
     const read: ReadRepoFile = (p) => { reads.push(p); return readEngineFile(p); };
     let rows = 0;
     let paths = 0;
@@ -121,7 +140,11 @@ describe("rules reference (ruling 75, spec §6)", () => {
     // the split is observed, not assumed: every path this half read is the engine's (a literal, not the predicate under test)
     expect(reads.filter((p) => !p.startsWith("packages/engine/")), "paths outside the engine this half read").toEqual([]);
     expect(reads.length, "paths this half read").toBe(paths);
-  });
+    // Batch 4 review M7 (AGENTS.md class 20): one read and, per distinct file, one TypeScript parse for every pair, so the
+    // cost grows with the table. The budget is stated from the pairs the table has, and the run made exactly those.
+    expect(reads.length, "the reads the budget was derived from are the reads made").toBe(PROOF_PAIRS);
+    expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those pairs, not a default").toBe(proofBudget(reads.length));
+  }, proofBudget(PROOF_PAIRS));
 
   it("the proof checks catch a row with no test, a missing file and a file that does not name the id (synthetic signed rows)", () => {
     expect(proofProblems(row([]), read)).toEqual(["X-ZZ-1 names no proving test"]);
