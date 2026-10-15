@@ -3,6 +3,9 @@
 Status: for owner review, 2026-10-15, off `d601f9da5` (main with #961-#963). Follows `reviews/1e.md` M2, `reviews/golden-floor.md` #1
 and `reviews/1e-minor.md`. Rules in force: D32b, D34, GOLDEN-POLICY.md, TEST-STRATEGY.md.
 
+**Implementation status (2026-10-15, branch `feat/engine-gf2-kernel-overlay`): T1 and T2 done; T3 and T4 open.** See §7 for what landed and
+what it changed in the plan.
+
 ## 0. Premises checked against the tree (each is a finding)
 
 - **P1 true.** The pad recomputes `summaryOf` on every live fold (`use-pad-pipeline.ts:1261-1263`, via `foldClientFacts`), passing
@@ -163,3 +166,28 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
 - **Q4 yes.** Notes need no manual bump (the `note` claim stays as an inertness pin, reason rewritten).
 - **Q5 yes.** Live (mid-match) summaries are recorded as digests, one per step.
 - **Q6.** D34's "a harness-only rewrite of EXISTING fields is a MAJOR" is unchanged.
+
+## 7. Implementation status
+
+- **T1 done** (recorder, format 2, `REFORMAT_GOLDEN`; reviewed, fixes below). **T2 done** (guard + the reformat commit). **T3 open** (floor
+  streams, claim and exemption retirements, apps/web lists, the real-kernel teeth tests). **T4 open** (Q2 player stats).
+- **Guard (T2).** As §3/§4, plus: the changed-path list comes from `git diff --name-only --no-renames` and untracked files, prefix-aware;
+  a guard not told what changed fails closed (fold source touched); `src/sport/fold-epoch.ts` IS fold source, so paying ONE sport's bump in
+  the PR that reformats leaves every other sport's newly recorded streams owing (the reformat lands alone, or every sport is bumped);
+  a pre-existing field that moves during a reformat is a major whatever the source did (Q6); the format never falls (exit 1, no bump
+  settles it); malformed formats and hybrids exit 2. 40 guard mutants: 39 killed, 1 equivalent (`typeof s.overlay !== "string"`, redundant
+  with `JSON.parse` throwing).
+- **The reformat commit** (data only): 11 sports, 381 streams, 4,973 steps, 2,722,041 -> 2,866,061 bytes (+144,020, +5.3%); every one of the
+  2,687 pre-existing stream fields byte-identical; `fold-epoch:check --against <parent>`: `changed 0`, `recorded 381`, 0 violations.
+- **Teeth, measured (real kernel mutant, throwaway branch):** dropping `reason` from the open stoppage in `foldMatchWithStoppage`, then
+  `REBASELINE_GOLDEN=1`: every module's state, outcome and summary stay byte for byte (the reason lives beside module state), the guard
+  names all 11 sports (1-2 streams each) as major owed, exit 1; raising each FOLD_EPOCH settles it, exit 0. Before GF-2 the same
+  re-baseline changed no recorded byte and the guard saw nothing.
+- **Review fixes to T1** (test-only): the decider column pinned against the module's `awaitingDecider`; the recorded lineups pinned by an
+  independent `initSquads` initial (20 streams across the 11 sports carry non-default sheets); `recomputeStream`'s `format` is a REQUIRED
+  parameter and a wrong-format replay throws; the write gate is the pure `writeRefusal`; a reformat is all sports or none (`reformatAll`).
+- **Deviation from §4 for T3 to settle:** the floor's settle exemption and overlay-unpinned probes run on `moduleRecorder` (format 1) until
+  T3 moves them onto the format-2 recorder and retires what that flips; the corpora being format 2 changes none of their behaviour.
+- **Found while doing this:** the guard CLI fixtures held the table's current values as literals (boardgame epoch 1) and would have reddened
+  at the first real bump; they now read the live table (proven with boardgame: 2, football: 3 and a raised minor).
+

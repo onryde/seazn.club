@@ -192,7 +192,8 @@ unchanged, and `fold-epoch:check --against <the commit's parent>` passes with
 recorder itself (or to the kernel) moves fields both sides record, and that is
 the major above.
 
-**What is still open (GF-2 T3).** Recording the overlay is not yet exercising it:
+**What is still open (GF-2 T3).** The corpora are format 2 (the reformat landed in its own
+data-only commit), but recording the overlay is not yet exercising it:
 the golden floor and the unpinned-class probes still run on the module-only
 recorder, so the lists under "What the guard cannot see" below still stand until
 T3 moves them onto the new recorder, and every manual major they name is still
