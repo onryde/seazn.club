@@ -20,6 +20,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { StageKind } from "@seazn/engine/core";
 import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import type { Tx } from "@/lib/db";
+import { withoutNulls } from "@/lib/stage-decider-off";
 import { lockedStageIdsAmong } from "./rule-locks";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -31,9 +32,7 @@ export function reseededRules(
   oldPreset: Record<string, unknown>,
   newPreset: Record<string, unknown>,
 ): Record<string, unknown> | null {
-  const out: Record<string, unknown> = isObj(stored)
-    ? Object.fromEntries(Object.entries(stored).filter(([, v]) => v !== null && v !== undefined))
-    : {};
+  const out: Record<string, unknown> = isObj(stored) ? withoutNulls(stored) : {};
   for (const key of new Set([...Object.keys(oldPreset), ...Object.keys(newPreset)])) {
     const had = Object.hasOwn(out, key);
     if (Object.hasOwn(oldPreset, key)) {
