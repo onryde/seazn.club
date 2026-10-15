@@ -17,7 +17,7 @@ import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
+import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { makeUser } from "./_seed";
@@ -314,5 +314,69 @@ describe.skipIf(!HAS_DB)("batch 4 I1: createStages reads the division UNDER the 
     const rules = (await sql<{ r: unknown }[]>`select config -> 'rules' as r from stages where id = ${stage!.id}`)[0]!.r;
     expect(rules, "the knockout is seeded from the variant that stands at commit (test), not the one read before the lock").toBeNull();
     expect(settled, "the create ran to completion after the lock was released").toBe(true);
+  });
+});
+
+// Batch 4 re-review N1. ONE lock order everywhere: the division advisory lock FIRST, then any row lock on `divisions`.
+// `insertStageBatch` takes the advisory lock and then reopens a completed division (an `update divisions` row lock);
+// `patchDivision` used to read the row `for no key update` (a body naming youth / player_name_display / age_max /
+// show_seeds) and only THEN take the advisory lock for a format field, so on a completed division the two held one
+// lock each and wanted the other's: Postgres broke it with 40P01 after ~1 s. Interleaving, with no sleeps: a holder takes
+// the advisory lock, the stage writer queues on it first, the patch queues second, and the holder commits. The writer is
+// woken first and wants the row; under the old order the patch already holds it.
+describe.skipIf(!HAS_DB)("batch 4 N1: patchDivision and the stage writers take the division locks in ONE order (advisory, then row)", () => {
+  type Case = { name: string; seedStage: boolean; write: (auth: AuthCtx, divisionId: string) => Promise<unknown> };
+  const cases: Case[] = [
+    { name: "createStages", seedStage: false, write: (auth, id) => createStages(auth, id, [league(1)]) },
+    { name: "replaceStages", seedStage: true, write: (auth, id) => replaceStages(auth, id, [league(1)]) },
+  ];
+  let checked = 0;
+
+  it.each(cases)("$name on a COMPLETED division, racing a patch that names a masking field and a format field: both finish, no 40P01", async (c) => {
+    const auth = await seedOrg("pro");
+    const { divisionId } = await seedDivision(auth);
+    if (c.seedStage) await createStages(auth, divisionId, [league(1)]);
+    const stagesBefore = await stageIds(divisionId);
+    expect(stagesBefore.length, "premise: the stage graph the writer finds").toBe(c.seedStage ? 1 : 0);
+    // 'completed' with no fixtures: replaceStages is not FORMAT_LOCKED, and the writer reaches the reopen.
+    await sql`update divisions set status = 'completed' where id = ${divisionId}`;
+    const read = async () =>
+      (await sql<{ status: string; player_name_display: string | null; tiebreakers: string[] | null }[]>`
+        select status, player_name_display, tiebreakers from divisions where id = ${divisionId}`)[0]!;
+    const start = await read();
+    expect(start.status, "premise: a completed division").toBe("completed");
+    expect(start.player_name_display, "premise: the masking field the patch changes").not.toBe("first_initial");
+    expect(start.tiebreakers, "premise: the format field the patch changes").toBeNull();
+
+    let writer!: Promise<unknown>;
+    let patch!: Promise<unknown>;
+    await sql.begin(async (holder) => {
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+      const [held] = await holder<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      writer = c.write(auth, divisionId);
+      writer.catch(() => undefined); // the verdict is read below; a rejection must not escape as an unhandled one first
+      await until("the stage writer queues on the held division lock", async () => (await waitersOn(held!.pid)).length === 1);
+      patch = patchDivision(auth, divisionId, { player_name_display: "first_initial", tiebreakers: ["head_to_head"] as never });
+      patch.catch(() => undefined);
+      await until("the patch queues behind it", async () => (await waitersOn(held!.pid)).length === 2);
+    }); // commits: the writer is woken first and wants the divisions row
+
+    const verdict = (r: PromiseSettledResult<unknown>) =>
+      r.status === "fulfilled" ? "fulfilled" : String((r.reason as { code?: string; message?: string }).code ?? r.reason);
+    const settled = await Promise.allSettled([writer, patch]);
+    expect(settled.map(verdict), "[stage writer, patch]: a deadlock would be 40P01 for one of them").toEqual(["fulfilled", "fulfilled"]);
+
+    const end = await read();
+    expect(end.status, "the stage write reopened the division").toBe("active");
+    expect(end.player_name_display, "the patch's masking write landed").toBe("first_initial");
+    expect(end.tiebreakers, "the patch's format write landed").toEqual(["head_to_head"]);
+    const stagesAfter = await stageIds(divisionId);
+    expect(stagesAfter.length, "one stage stands").toBe(1);
+    if (c.seedStage) expect(stagesAfter, "replaceStages replaced the graph").not.toEqual(stagesBefore);
+    checked += 1;
+  });
+
+  it("anti-vacuity: both stage writers were driven through the race", () => {
+    expect(checked, "cases checked").toBe(cases.length);
   });
 });
