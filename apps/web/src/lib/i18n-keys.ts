@@ -2914,6 +2914,7 @@ export type DictionaryKey =
   | "format.points.bonus"
   | "format.points.bonuses"
   | "format.points.forfeit"
+  | "format.points.forfeitScore"
   | "format.rules.abandon.award"
   | "format.rules.abandon.q4_stands"
   | "format.rules.abandon.replay"

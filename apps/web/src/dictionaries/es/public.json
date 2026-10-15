@@ -426,6 +426,7 @@
   "format.rules.abandon.share": "un partido suspendido reparte los puntos",
   "format.points.base": "victoria {win}, empate {draw}, derrota {loss}",
   "format.points.forfeit": "el walkover otorga {winner}‑{loser} puntos",
+  "format.points.forfeitScore": "walkover con el marcador {winner}‑{loser}",
   "format.points.bonus": "1 regla de bonificación",
   "format.points.bonuses": "{n} reglas de bonificación",
   "table.col.rank": "Posición",

@@ -13,7 +13,7 @@ import "server-only";
 // its "null inherits" rule or of the bracket overlay (carrom's extra board,
 // whatever the division's tie board) is exactly the kind of thing that drifts.
 import type { AnySportModule } from "@seazn/engine/sport";
-import type { PointsRule } from "@seazn/engine/competition";
+import { pointsRuleAwardReachesTable, type PointsRule } from "@seazn/engine/competition";
 import { forbidsLevelResult } from "@seazn/engine/core";
 import { pointsLine } from "@/lib/points-line";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
@@ -42,7 +42,8 @@ export interface StageFormatLine {
  *    (`describeDeciders`; "level matches wait for the organiser" when every
  *    decider is off). A table stage never says so: a drawn league match is a
  *    result;
- *  - its OWN points rule (`points_rule`, X-PT-1), after the format.
+ *  - its OWN points rule (`points_rule`, X-PT-1), after the format; its walkover SCORE is part of it where the award
+ *    reaches the sport's table (X-WO-1 B: the headline reads the same number).
  *
  * `stages[].rules` is the stored FRAGMENT (`PublicStage.rules`); since W2c the
  * deciders (`shootout`, `extraTime`, `overtime`, `superOver`, `tiebreakRungs`,
@@ -70,7 +71,9 @@ export function stageFormatLines(
       );
       line = effectiveRulesLine(sportKey, module_, effective, divisionCfg, kind) ?? (forbidsLevelResult(kind) ? describeDeciders(module_, kind, effective) : []);
     }
-    const points = pointsLine(stage.points_rule as PointsRule);
+    // X-WO-1 B: the rule's walkover score is said where the walkover headline reads it (the award reaches the sport's table);
+    // a retired module (none to ask) says nothing of it.
+    const points = pointsLine(stage.points_rule as PointsRule, { awardReaches: module_ ? pointsRuleAwardReachesTable(module_) : false });
     if (line.length + points.length > 0) out.push({ stageId: stage.id, stageName: stage.name, line: [...line, ...points] });
   }
   return out;

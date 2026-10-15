@@ -426,6 +426,7 @@
   "format.rules.abandon.share": "an abandoned match shares the points",
   "format.points.base": "win {win}, draw {draw}, loss {loss}",
   "format.points.forfeit": "walkover pays {winner}‑{loser} points",
+  "format.points.forfeitScore": "walkover scored {winner}‑{loser}",
   "format.points.bonus": "1 bonus rule",
   "format.points.bonuses": "{n} bonus rules",
   "table.col.rank": "Position",

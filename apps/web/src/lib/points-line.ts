@@ -10,12 +10,16 @@
 // CLIENT-SAFE on purpose: no `server-only`, no value import from the engine (`import type` is erased).
 //
 // WHAT IT SAYS, in order: the base points (win / draw / loss); the walkover row (the points the winner and the loser
-// are paid); and how many bonus rules there are (counted, not listed - the public line is a sentence, not a table).
+// are paid); the SCORE a walkover is awarded (`forfeit.awardScore`), only where the caller states that the award reaches
+// the sport's table (X-WO-1 part B, Task 16b); and how many bonus rules there are (counted, not listed - the public line
+// is a sentence, not a table).
 //
-// WHAT IT DELIBERATELY DOES NOT SAY: the SCORE a walkover is awarded (`forfeit.awardScore`). The headline of a walkover
-// fixture still reads the DIVISION config's award (`resolveFixtureCfg` never overlays a stage's points rule), so a line
-// that said "walkover scored 7-0" would contradict the "3 - 0" beside it. It comes back with X-WO-1 part B (Task 16b),
-// when the headline and the line read the one number.
+// THE AWARDED SCORE is said only on `awardReaches`: the engine's `pointsRuleAwardReachesTable(module)`, which this
+// client-safe file cannot import (no value import from the engine). That is the same declaration that lets the sport's
+// fold read the rule's award on a walkover nobody played, so the number on the line is the number on the headline and in
+// the table. A sport the award never reaches (the set sports, carrom, the board games, cricket) or a retired module (none
+// to ask) says nothing of it: a score the headline cannot show would be a second number for one walkover. Task 16 part A
+// printed it unconditionally and its fix round 1 (I-1) took it out for exactly that contradiction.
 //
 // WHAT IT NEVER SAYS: a number it cannot read. `public_stages_v` rebuilds the rule from only the keys `PointsRule` reads,
 // but a hand-edited or pre-schema row can still reach it malformed; a missing or non-numeric part says nothing about
@@ -32,7 +36,13 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 const record = (v: unknown): Record<string, unknown> | undefined =>
   typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 
-export function pointsLine(rule: PointsRule): PointsClause[] {
+export interface PointsLineOptions {
+  /** The engine's `pointsRuleAwardReachesTable(module)` for the stage's sport: the rule's `forfeit.awardScore` is read by
+   *  its table and its walkover headline, so the line may say it. Absent/false: never said. */
+  awardReaches?: boolean;
+}
+
+export function pointsLine(rule: PointsRule, opts: PointsLineOptions = {}): PointsClause[] {
   const r = record(rule);
   const base = record(r?.base);
   // The base is the sentence's head: without all three numbers there is nothing honest to say.
@@ -42,6 +52,9 @@ export function pointsLine(rule: PointsRule): PointsClause[] {
   const forfeit = record(r?.forfeit);
   if (isNum(forfeit?.winnerPoints) && isNum(forfeit?.loserPoints)) {
     out.push({ key: "format.points.forfeit", params: { winner: forfeit.winnerPoints, loser: forfeit.loserPoints } });
+    const score = forfeit.awardScore;
+    if (opts.awardReaches === true && Array.isArray(score) && score.length === 2 && isNum(score[0]) && isNum(score[1]))
+      out.push({ key: "format.points.forfeitScore", params: { winner: score[0], loser: score[1] } });
   }
 
   const bonuses = Array.isArray(r?.bonuses) ? r.bonuses.length : 0;

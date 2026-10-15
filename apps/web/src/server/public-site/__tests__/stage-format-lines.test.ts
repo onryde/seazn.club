@@ -8,6 +8,7 @@
 // Both halves are read from the engine's own declarations, never a sport list typed here; the one typed-in thing is
 // what the rulebook says a knockout of cricket / chess / carrom reads like. Counted: zero checked is a failure.
 import { describe, expect, it } from "vitest";
+import { pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { deciderKeysFor, stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -150,22 +151,51 @@ describe("stage format line - a stage's deciders reach its line (batch 4 M4, clo
 describe("stage format line - a stage's own points rule (X-PT-1, public half)", () => {
   const football = mod("football");
   const division = divisionCfg(football, "11-a-side");
-  // The rule's award score (7-0) is NOT the division's (football's own `awardScore.goals`), and the headline reads the
-  // division's: the line must not say it (X-WO-1 part B is Task 16b).
+  // The rule's award score (7-0) is NOT the division's (football's own `awardScore.goals`). Since X-WO-1 part B (Task 16b)
+  // the walkover headline reads the RULE's award wherever it reaches the sport's table, so the line says it there.
   const points = { base: { win: 4, draw: 2, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [7, 0] } };
+  const noAward = { ...points, forfeit: { winnerPoints: 2, loserPoints: 0 } };
 
   it("a stage with its own points and the division's format gets the points sentence alone", () => {
-    const [line] = stageFormatLines("football", football, division, [stage("s1", 1, "league", undefined, points)]);
+    const [line] = stageFormatLines("football", football, division, [stage("s1", 1, "league", undefined, noAward)]);
     expect(words(line!)).toBe(`Win 4, draw 2, loss 0, walkover pays 2${NB}0 points`);
   });
 
-  it("a points rule's walkover AWARD score (7-0) is never said on the public line - the headline reads the division's award, and the base points still are", () => {
+  it("a points rule's walkover AWARD score (7-0) is said on the public line, with the RULE's number, beside the base points - and not the division's award", () => {
+    expect(football.configSchema.parse(football.variants["11-a-side"]).awardScore.goals, "premise: the division's award is not the rule's").not.toBe(7);
     const [line] = stageFormatLines("football", football, division, [stage("s1", 1, "league", undefined, points)]);
     const text = words(line!);
     expect(text, "the positive pair: the base points are there").toMatch(/^Win 4, draw 2, loss 0/);
-    expect(text).not.toMatch(/walkover scored/i);
-    expect(text).not.toMatch(/\b7\b/);
-    expect(line!.line.map((c) => c.key)).not.toContain("format.points.forfeitScore");
+    expect(text).toBe(`Win 4, draw 2, loss 0, walkover pays 2${NB}0 points, walkover scored 7${NB}0`);
+    expect(line!.line.at(-1)).toEqual({ key: "format.points.forfeitScore", params: { winner: 7, loser: 0 } });
+    // The same stage with no award says none.
+    const [plain] = stageFormatLines("football", football, division, [stage("s1", 1, "league", undefined, noAward)]);
+    expect(plain!.line.map((c) => c.key)).not.toContain("format.points.forfeitScore");
+  });
+
+  it("the clause is said exactly for the sports whose table the award reaches, and never for the rest (counted, both sides)", () => {
+    let said = 0;
+    let withheld = 0;
+    for (const m of modules) {
+      const lines = stageFormatLines(m.key, m, divisionCfg(m, Object.keys(m.variants)[0]!), [stage("s1", 1, "league", undefined, points)]);
+      expect(lines.length, m.key).toBe(1);
+      const keys = lines[0]!.line.map((c) => c.key);
+      if (pointsRuleAwardReachesTable(m)) {
+        expect(keys, `${m.key}: the award reaches its table`).toContain("format.points.forfeitScore");
+        said++;
+      } else {
+        expect(keys, `${m.key}: the award never reaches its table, so the headline cannot agree with it`).not.toContain("format.points.forfeitScore");
+        withheld++;
+      }
+    }
+    expect(said, "sports that say it").toBeGreaterThan(0);
+    expect(withheld, "sports that do not").toBeGreaterThan(0);
+    expect(said + withheld).toBe(modules.length);
+  });
+
+  it("a retired module (none to ask) never claims a score it cannot back", () => {
+    const [line] = stageFormatLines("football", null, {}, [stage("s1", 1, "league", undefined, points)]);
+    expect(line!.line.map((c) => c.key)).toEqual(["format.points.base", "format.points.forfeit"]);
   });
 
   it("points ride AFTER the format and the deciders when the stage differs too (4 is not the division's win of 3)", () => {
@@ -178,6 +208,7 @@ describe("stage format line - a stage's own points rule (X-PT-1, public half)", 
       "format.rules.decider.penalties",
       "format.points.base",
       "format.points.forfeit",
+      "format.points.forfeitScore",
     ]);
   });
 
@@ -189,7 +220,7 @@ describe("stage format line - a stage's own points rule (X-PT-1, public half)", 
   it("points are said for every sport's stage, not just football's (counted)", () => {
     let checked = 0;
     for (const m of modules) {
-      const lines = stageFormatLines(m.key, m, divisionCfg(m, Object.keys(m.variants)[0]!), [stage("s1", 1, "league", undefined, points)]);
+      const lines = stageFormatLines(m.key, m, divisionCfg(m, Object.keys(m.variants)[0]!), [stage("s1", 1, "league", undefined, noAward)]);
       expect(lines.length, m.key).toBe(1);
       expect(words(lines[0]!), m.key).toMatch(/Win 4, draw 2, loss 0/);
       checked++;

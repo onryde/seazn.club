@@ -98,8 +98,8 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
     const cfg = m.configSchema.parse(m.variants["11-a-side"]) as { halfMinutes: number; points: { win: number } };
     const preset = stageDefaultsFor(m, "knockout", "11-a-side") as { extraTime: { halfMinutes: number }; shootoutAttempts: number };
     // 4/2 points and a stored 5-0 award: the points are the stage's own, not the division's win of 3; the award score is
-    // stored but NEVER said on the public line (the headline reads the division's award until Task 16b) - the clauses below
-    // are the whole sentence.
+    // the stage's too (X-WO-1 B, Task 16b: the headline reads it, so the line says it) - the clauses below are the whole
+    // sentence.
     const points = { base: { win: 4, draw: 2, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 1, loserPoints: 0, awardScore: [5, 0] as [number, number] } };
     expect(cfg.points.win, "premise: the division's win is not the stage's").not.toBe(points.base.win);
     const s = await seedDecidersScene({ sportKey: "football", variantKey: "11-a-side", leaguePoints: points });
@@ -110,6 +110,7 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
         line: [
           { key: "format.points.base", params: { win: 4, draw: 2, loss: 0 } },
           { key: "format.points.forfeit", params: { winner: 1, loser: 0 } },
+          { key: "format.points.forfeitScore", params: { winner: 5, loser: 0 } },
         ],
       },
       {

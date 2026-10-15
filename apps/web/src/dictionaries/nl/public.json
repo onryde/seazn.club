@@ -426,6 +426,7 @@
   "format.rules.abandon.share": "bij een gestaakte wedstrijd worden de punten gedeeld",
   "format.points.base": "winst {win}, gelijkspel {draw}, verlies {loss}",
   "format.points.forfeit": "walkover levert {winner}‑{loser} punten op",
+  "format.points.forfeitScore": "walkover met uitslag {winner}‑{loser}",
   "format.points.bonus": "1 bonusregel",
   "format.points.bonuses": "{n} bonusregels",
   "table.col.rank": "Positie",

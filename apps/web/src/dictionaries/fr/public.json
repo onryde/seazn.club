@@ -426,6 +426,7 @@
   "format.rules.abandon.share": "un match abandonné partage les points",
   "format.points.base": "victoire {win}, nul {draw}, défaite {loss}",
   "format.points.forfeit": "le walk-over rapporte {winner}‑{loser} points",
+  "format.points.forfeitScore": "walk-over avec le score {winner}‑{loser}",
   "format.points.bonus": "1 règle de bonus",
   "format.points.bonuses": "{n} règles de bonus",
   "table.col.rank": "Position",
