@@ -11,8 +11,9 @@ type Ctx = { params: Promise<{ sid: string }> };
  *  Machine takes no inbound traffic, so this reply is the only way a stop reaches it. The bearer's PRESENCE is checked
  *  before the body is read; the token itself is verified by the usecase before anything is written. The body is
  *  `RelayHeartbeat` (strict). Its final beat may carry the Machine's own exit reason (`exitReason`/`exitDetail`, owner
- *  2026-10-15): a record only, kept in the two beat stores — never the runner's exit columns (A5: those are persisted
- *  from its observed exit, and a beat must not be able to overwrite them). */
+ *  2026-10-15), kept in the two beat stores — never the runner's exit columns (A5: those are persisted from its observed
+ *  exit, and a beat must not be able to overwrite them). R2003: on a COMPOSED session the reason also decides what the
+ *  stopped beat asks of the runner (`stoppedBeatTrigger`, domain/runner.ts) — a stop, a refusal, or nothing at all. */
 export async function POST(req: Request, { params }: Ctx) {
   return handler(async () => {
     const { sid } = await params;

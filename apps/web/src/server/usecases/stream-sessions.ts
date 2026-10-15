@@ -34,7 +34,7 @@ import {
 import { isPresent } from "@/server/relay/domain/pairing";
 import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { codeStatus } from "@/server/relay/domain/stream-code";
-import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
+import { InvalidRunnerTransition, machineNameFor, stoppedBeatTrigger, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
 import { type Ask10Phone, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
@@ -2161,9 +2161,15 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && !isTerminal(cur.state) && (cur.runner.state === "booting" || cur.runner.state === "playing")
       ? { type: "runner", trigger: { type: "callback_playing" } } : null), deps)) ?? s;
   }
-  if (s.mode === "composed" && body.state === "stopped" && (s.runner.state === "stopping" || s.runner.state === "playing" || s.runner.state === "booting")) {
+  // R2003: a COMPOSED stopped beat is routed by its exit reason (stoppedBeatTrigger). null = record only — a fatal or
+  // signalled run is Fly's to restart in place on the SAME attempt (runner-fly.ts, on-failure), and if the restarted
+  // process never beats, the composed stale window takes the runner lost → destroyed → the one retry. A record-only beat
+  // applies nothing (the lifecycle has no trigger for it); its reason stays in last_heartbeat and the sample, and it never
+  // writes the runner exit facts (A5). A passthrough stopped beat is untouched.
+  const stopped = s.mode === "composed" && body.state === "stopped" ? stoppedBeatTrigger(body.exitReason) : null;
+  if (stopped && (s.runner.state === "stopping" || s.runner.state === "playing" || s.runner.state === "booting")) {
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && (cur.runner.state === "stopping" || cur.runner.state === "playing" || cur.runner.state === "booting")
-      ? { type: "runner", trigger: { type: "callback_stopped" } } : null), deps)) ?? s;
+      ? { type: "runner", trigger: stopped } : null), deps)) ?? s;
   }
   return { desiredState: s.desiredState };
 }

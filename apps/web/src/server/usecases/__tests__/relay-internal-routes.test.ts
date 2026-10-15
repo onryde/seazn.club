@@ -31,8 +31,11 @@ import { sql } from "@/lib/db";
 import { RelayHeartbeatReply, RelayJobSession } from "@/server/api-v1/schemas";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
-import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS } from "@/server/relay/config";
-import { failReasonFromExit, type ExitInfo } from "@/server/relay/domain/runner";
+import {
+  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
+  RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
+} from "@/server/relay/config";
+import { BEAT_EXIT_REASONS, failReasonFromExit, type BeatExitReason, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
@@ -604,9 +607,10 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect(await samples(s.sessionId)).toHaveLength(1);
   });
 
-  // Owner scope addition (2026-10-15): the final beat carries the exit reason. Recorded in both beat stores — and ONLY
-  // there: what web does with a stopped beat is R2003's, so this asserts the record, never a reaction. The runner's own
-  // exit columns are written from the OBSERVED exit (A5), never from a beat.
+  // Owner scope addition (2026-10-15): the final beat carries the exit reason, recorded in both beat stores. The runner's
+  // own exit columns are written from the OBSERVED exit (A5), never from a beat. What web DOES with each reason is R2003's
+  // (the describe block "R2003: the final beat's exit reason" below); this test keeps the record and the one reaction
+  // that inverted when R2003 landed — a fatal run is no longer a stop.
   it("heartbeat-final-fatal through the ROUTE: exitReason and exitDetail land in BOTH stores; the runner's exit columns are not the beat's to write", async () => {
     const s = await session();
     const fatal = vector("heartbeat-final-fatal");
@@ -626,14 +630,22 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     }
     expect(checked).toBe(4);
     expect(raw).toEqual(fatal);
-    // A stopped beat moves the runner today (callback_stopped — unchanged here; R2003 owns it). The exit REASON adds
-    // nothing to that: a twin session sent the same stopped beat WITHOUT the two fields ends with the same runner facts.
+    // R2003 INVERTED this half (it read "the reason is recorded, never acted on" before). A stopped beat with NO reason is
+    // still today's stop — its Machine is torn down and the ONE retry boots. A FATAL one is record only: Fly restarts the
+    // compositor in place on the same attempt, so the Machine is left alone and nothing is created. The twin is the
+    // positive pair: the same beat without the two fields.
     const twin = await session();
+    const before = await row(s.sessionId);
     expect((await postBeat(twin.sessionId, { state: "stopped" }, { token: twin.jobToken })).status).toBe(200);
-    const pick = (r: Awaited<ReturnType<typeof row>>) => ({ state: r.state, runner_state: r.runner_state, desired_state: r.desired_state,
-      runner_exit_code: r.runner_exit_code, runner_oom_killed: r.runner_oom_killed, runner_requested_stop: r.runner_requested_stop });
-    expect(pick(await row(s.sessionId)), "the reason is recorded, never acted on").toEqual(pick(await row(twin.sessionId)));
-    expect((await row(s.sessionId)).runner_exit_code, "fatal's 70 is the Machine's word, not an observed exit").not.toBe(70);
+    expect(s.runner.created, "fatal: no replacement").toHaveLength(1);
+    expect(s.runner.destroyed, "fatal: the restarting Machine is not torn down").toEqual([]);
+    expect(await row(s.sessionId), "fatal: the runner is exactly as it was").toMatchObject({ state: before.state, runner_state: before.runner_state, machine_id: before.machine_id });
+    expect(twin.runner.created, "no reason: the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(twin.runner.destroyed, "no reason: the first Machine is torn down").toHaveLength(1);
+    // the exit columns stay the observed exit's in both (A5) — fatal's 70 is the Machine's word, not an observed exit
+    for (const r of [await row(s.sessionId), await row(twin.sessionId)]) {
+      expect({ code: r.runner_exit_code, oom: r.runner_oom_killed, requested: r.runner_requested_stop }).toEqual({ code: null, oom: null, requested: null });
+    }
     // The two refusals the addition owes, through the same route: an exit reason outside C06's vocabulary, and a
     // detail one character past its bound. Each is a 400 that writes nothing.
     const t = await session();
@@ -809,5 +821,189 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
     // The positive pair: the busy session's own review sees its one beat.
     expect((await healthReview(busy.sessionId))[0]).toMatchObject({ beats: 1, reported_beats: 1, kick_alert_beats: 1, max_input_kicks: 4 });
     expect(await healthReview(randomUUID())).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R2003 through the REAL routes: the final beat's exit reason (controller ruling 2026-10-15), the composed stale window
+// with its boot allowance (owner ruling 2026-10-15, option A), and the refusal exit (78). Every beat here is a STOPPED
+// beat where it carries an exit reason (R2002 review M6: the schema refuses one on any other state). The clock is moved
+// the way production's is — the beat window runs out (age BOTH anchors, G1) — and the Machine's own facts read ticks it.
+// ---------------------------------------------------------------------------------------------------------------
+const BEAT_S = RELAY_HEARTBEAT_INTERVAL_MS / 1000;
+/** Age the beat window: the last beat RECEIVED and the window anchor, both `secs` ago. */
+async function ageBeat(sid: string, secs: number): Promise<void> {
+  await sql`update fixture_stream_sessions set heartbeat_at = now() - make_interval(secs => ${secs}),
+                beat_window_at = now() - make_interval(secs => ${secs}) where id = ${sid}`;
+}
+/** A composed session whose runner has PLAYED: one playing beat through the route. */
+async function playingSession() {
+  const s = await session();
+  expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+  expect(await row(s.sessionId), "premise: live and playing").toMatchObject({ state: "live", runner_state: "playing" });
+  return s;
+}
+const stoppedBeat = (reason: BeatExitReason | "absent" | "null") =>
+  reason === "absent" ? { state: "stopped" } : { state: "stopped", exitReason: reason === "null" ? null : reason };
+
+describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartbeat route", () => {
+  // The oracle is the ruling, typed — never read off stoppedBeatTrigger. The empty case (no reason, and null) first.
+  type Routed = "stop" | "record" | "refused";
+  const RULED: Record<BeatExitReason | "absent" | "null", Routed> = {
+    absent: "stop", null: "stop", ended: "stop", deadline: "stop",
+    fatal: "record", signalled: "record", session_gone: "record",
+    refused: "refused",
+  };
+
+  it("every reason, from a PLAYING runner and from a BOOTING one: a stop tears the Machine down and boots the ONE retry; fatal / signalled / session_gone leave it exactly as it was; refused FAILS the session machine_refused with no retry (count reported)", async () => {
+    expect(Object.keys(RULED).sort()).toEqual([...BEAT_EXIT_REASONS, "absent", "null"].sort());
+    let checked = 0;
+    for (const from of ["playing", "booting"] as const) {
+      for (const [reason, routed] of Object.entries(RULED) as [keyof typeof RULED, Routed][]) {
+        const s = from === "playing" ? await playingSession() : await session();
+        const label = `${from} × ${reason}`;
+        const before = await row(s.sessionId);
+        expect(before.runner_state, `${label}: premise`).toBe(from);
+        const res = await postBeat(s.sessionId, stoppedBeat(reason), { token: s.jobToken });
+        expect(res.status, label).toBe(200);
+        const after = await row(s.sessionId);
+        expect(await lastHeartbeat(s.sessionId), `${label}: recorded whatever the route`).toMatchObject({ state: "stopped" });
+        if (routed === "stop") {
+          expect(s.runner.created, `${label}: the ONE retry`).toHaveLength(RUNNER_MAX_ATTEMPTS);
+          expect(s.runner.destroyed, label).toEqual([before.machine_id]);
+          expect(after, label).toMatchObject({ state: before.state, runner_state: "booting", fail_reason: null });
+          expect(after.machine_id, label).not.toBe(before.machine_id);
+        } else if (routed === "record") {
+          expect(s.runner.created, label).toHaveLength(1);
+          expect(s.runner.destroyed, label).toEqual([]);
+          expect(after, label).toMatchObject({ state: before.state, runner_state: before.runner_state, machine_id: before.machine_id, fail_reason: null, desired_state: before.desired_state });
+        } else {
+          expect(after, label).toMatchObject({ state: "failed", fail_reason: "machine_refused" });
+          expect(s.runner.created, `${label}: never a retry`).toHaveLength(1);
+          expect(s.runner.destroyed, `${label}: the Machine Fly would restart into the same refusal is torn down`).toEqual([before.machine_id]);
+          const gone = await getFacts(s.sessionId, { token: s.jobToken });
+          expect(gone.status, label).toBe(410);
+          expect(s.runner.created, `${label}: still no retry after the next read`).toHaveLength(1);
+        }
+        // a beat never writes the runner exit columns (A5)
+        expect(after.runner_exit_code, label).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * (BEAT_EXIT_REASONS.length + 2));
+  });
+
+  it("STOPPING (our own stop is ending it): an `ended` final beat and a `signalled` one both finish as COMPLETED stopped — never a retry, never a failure; the differential is only how far the beat itself moves the runner", async () => {
+    let checked = 0;
+    for (const [reason, runnerAfterBeat] of [["ended", "exited"], ["signalled", "stopping"]] as const) {
+      const s = await playingSession();
+      const machine = (await row(s.sessionId)).machine_id!;
+      // A real Machine takes its flush to exit after the SIGINT (≤ RUNNER_STOP_GRACE_SECONDS); the fake would report it
+      // stopped at once, so this one's stop is ACCEPTED and nothing more — the final beat then lands while `stopping`.
+      const slowStop = Object.assign(Object.create(s.runner) as FakeRunner, { async stop() { /* signalled; still flushing */ } });
+      setRelayDriversForTest({ ingest: s.ingest, runner: slowStop });
+      await stopSession(s.auth, s.fixtureId, s.sessionId, defaultDeps("http://app.test"));
+      expect((await row(s.sessionId)).runner_state, `${reason}: premise`).toBe("stopping");
+      expect((await postBeat(s.sessionId, stoppedBeat(reason), { token: s.jobToken })).status, reason).toBe(200);
+      expect((await row(s.sessionId)).runner_state, reason).toBe(runnerAfterBeat);
+      // the Machine exits 0 on our SIGINT and auto_destroy takes it
+      s.runner.setObserved(machine, "destroyed", { exitCode: 0, oomKilled: false, requestedStop: true });
+      let reads = 0;
+      while (!["completed", "failed"].includes((await row(s.sessionId)).state) && reads < 4) { await getFacts(s.sessionId, { token: s.jobToken }); reads++; }
+      expect(await row(s.sessionId), reason).toMatchObject({ state: "completed", end_reason: "stopped", fail_reason: null });
+      expect(s.runner.created, reason).toHaveLength(1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the SEQUENCE (owner ruling, option A): fatal → Fly restarting (pending) → not lost one beat short of the window → lost AT it → ONE create → the replacement boots 30 s unbeaten and is still alive → it plays → a second fatal → lost at the window → failed machine_crash, 410, and no third Machine", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    const read = async () => getFacts(s.sessionId, { token: s.jobToken });
+    // attempt 1 crashes: its final beat says fatal, and Fly is restarting it in place
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    s.runner.setObserved(m1, "pending");
+    await ageBeat(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED - BEAT_S);
+    expect((await read()).status).toBe(200);
+    expect(await row(s.sessionId), "one beat short of the window: still the same Machine").toMatchObject({ state: "live", runner_state: "playing", machine_id: m1 });
+    expect(s.runner.created).toHaveLength(1);
+    // the restart did not come back: the window runs out
+    await ageBeat(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED);
+    expect((await read()).status).toBe(200);
+    expect(s.runner.destroyed, "torn down before any replacement").toEqual([m1]);
+    expect(s.runner.created, "exactly ONE create").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    const r2 = await row(s.sessionId);
+    expect(r2).toMatchObject({ state: "live", runner_state: "booting" });
+    // the replacement cold-starts: 30 s without a beat is inside its boot allowance
+    const coldStart = 2 * STALE_HEARTBEAT_SECONDS_COMPOSED;
+    expect(coldStart, "premise").toBeLessThan(STALE_HEARTBEAT_SECONDS);
+    await ageBeat(s.sessionId, coldStart);
+    expect((await read()).status).toBe(200);
+    expect(await row(s.sessionId), "booting, unbeaten for 30 s: alive").toMatchObject({ state: "live", runner_state: "booting", machine_id: r2.machine_id });
+    expect(s.runner.created).toHaveLength(RUNNER_MAX_ATTEMPTS);
+    // it plays, then crashes too, and never comes back
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    expect((await row(s.sessionId)).runner_state).toBe("playing");
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    expect((await row(s.sessionId)).runner_state, "the second fatal is record only too").toBe("playing");
+    await ageBeat(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED);
+    const ended = await read();
+    expect(ended.status).toBe(410);
+    // no exit was observed for attempt 2 (its beats never write one, A5): the domain's no-exit reason
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: failReasonFromExit(null) });
+    expect(s.runner.created, "no third Machine, ever").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(s.runner.destroyed).toEqual([m1, r2.machine_id]);
+  });
+
+  it("exit 78 observed through the facts route fails the session machine_refused with NO retry; its positive pair (exit 1) takes the ONE retry", async () => {
+    const refused = await playingSession();
+    refused.runner.setObserved((await row(refused.sessionId)).machine_id!, "destroyed", { exitCode: RELAY_EXIT_REFUSED, oomKilled: false, requestedStop: false });
+    expect((await getFacts(refused.sessionId, { token: refused.jobToken })).status).toBe(410);
+    expect(await row(refused.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_refused", runner_exit_code: RELAY_EXIT_REFUSED });
+    expect(refused.runner.created).toHaveLength(1);
+    const crashed = await playingSession();
+    crashed.runner.setObserved((await row(crashed.sessionId)).machine_id!, "destroyed", { exitCode: 1, oomKilled: false, requestedStop: false });
+    expect((await getFacts(crashed.sessionId, { token: crashed.jobToken })).status).toBe(200);
+    expect(await row(crashed.sessionId)).toMatchObject({ state: "live", fail_reason: null });
+    expect(crashed.runner.created).toHaveLength(RUNNER_MAX_ATTEMPTS);
+  });
+
+  it("PASSTHROUGH: a stopped beat with ANY reason (or none) changes nothing — no Machine, no stale rule, no reaction (count reported)", async () => {
+    const p = await session("passthrough");
+    const pick = (r: Awaited<ReturnType<typeof row>>) => ({ state: r.state, runner_state: r.runner_state, fail_reason: r.fail_reason, end_reason: r.end_reason, desired_state: r.desired_state, machine_id: r.machine_id });
+    const before = pick(await row(p.sessionId));
+    let checked = 0;
+    for (const reason of Object.keys(RULED) as (keyof typeof RULED)[]) {
+      expect((await postBeat(p.sessionId, stoppedBeat(reason), { token: p.jobToken })).status, reason).toBe(200);
+      expect(pick(await row(p.sessionId)), reason).toEqual(before);
+      checked++;
+    }
+    // and a beat window far past both composed windows is not a stale beat on a passthrough row
+    await ageBeat(p.sessionId, STALE_HEARTBEAT_SECONDS * 2);
+    expect((await getFacts(p.sessionId, { token: p.jobToken })).status).toBe(200);
+    expect(pick(await row(p.sessionId))).toEqual(before);
+    expect(checked).toBe(BEAT_EXIT_REASONS.length + 2);
+    expect(p.runner.created).toEqual([]);
+  });
+
+  // Brief test 7 (slate_on_air): the compositor's slate is ON AIR before the camera connects — `state: playing` with
+  // `programmePhase: waiting`. Going live is the runner's `playing`, never the programme phase: the session goes live and
+  // consumes ONE credit on the first playing beat, and a later reconnecting phase neither ends it nor consumes again.
+  it("slate_on_air: a warming composed session goes LIVE on a playing beat whose programme is still `waiting` (camera connecting) and consumes ONE credit; a later `reconnecting` beat keeps it live with no second consume; a stalled beat (the pair) never goes live", async () => {
+    const consumes = async (sid: string) =>
+      (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where session_id = ${sid} and reason = 'consume'`)[0]!.n;
+    const s = await session();
+    expect((await row(s.sessionId)).state, "premise").toBe("warming");
+    expect((await postBeat(s.sessionId, { state: "playing", programmePhase: "waiting", input: "connecting" }, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "playing" });
+    expect(await consumes(s.sessionId)).toBe(1);
+    expect((await postBeat(s.sessionId, { state: "playing", programmePhase: "reconnecting", input: "backoff" }, { token: s.jobToken })).status).toBe(200);
+    expect((await row(s.sessionId)).state).toBe("live");
+    expect(await consumes(s.sessionId), "never a second consume").toBe(1);
+    const stalled = await session();
+    expect((await postBeat(stalled.sessionId, { state: "stalled", programmePhase: "waiting", input: "connecting" }, { token: stalled.jobToken })).status).toBe(200);
+    expect(await row(stalled.sessionId)).toMatchObject({ state: "warming", runner_state: "booting" });
+    expect(await consumes(stalled.sessionId)).toBe(0);
   });
 });

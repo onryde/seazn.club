@@ -10,15 +10,17 @@
 //
 // Everything below the budget is the adapter itself. C7 / design §7.1 D4 +
 // recommendation B: the create body carries the OWNER-ruled guest
-// (performance-4x / 8 GB), auto_destroy: true, restart.policy "no" (any other
-// policy puts two compositors on one stream key), the deterministic
+// (performance-4x / 8 GB), auto_destroy: true, restart.policy "on-failure" with
+// max_retries RUNNER_INPLACE_RESTARTS (R2003, ADR 0004: a crashed compositor is
+// restarted IN PLACE, the same Machine and the same attempt — never a second
+// Machine, so never two compositors on one stream key), the deterministic
 // attempt-carrying name and the session metadata (the client's idempotency), and
 // RELAY_DEADLINE_AT (the Machine-side hard stop). The adapter is tested through a
 // FlyClient whose fetch is scripted — the retry/redaction claims are the client's
 // own tests; what is proved here is that `FlyRunner` routes through them.
 import { describe, expect, it, vi } from "vitest";
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "../fly-client";
-import { ENDING_TIMEOUT_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
+import { ENDING_TIMEOUT_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_INPLACE_RESTARTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, ENV_METADATA_KEY, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, fromFlyState, isUnestablishedCreate, runnerCreateErrorFrom } from "../runner-fly";
 import { OBSERVED_STATES, machineNameFor, stepRunner } from "../domain/runner";
 import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
@@ -183,7 +185,8 @@ describe("FlyRunner", () => {
         image: "registry.fly.io/seazn-relay:abc",
         guest: { cpus: 4, memory_mb: 8192, cpu_kind: "performance" },
         auto_destroy: true,
-        restart: { policy: "no" },
+        // R2003 (ADR 0004 / 0007): Fly restarts a crashed compositor in place, at most RUNNER_INPLACE_RESTARTS times
+        restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
         env: { SESSION_ID: SPEC.sessionId, JOB_TOKEN: "jwt-SECRET", APP_URL: "https://seazn.club", RELAY_DEADLINE_AT: "2026-09-14T15:00:00.000Z" },
         // I1: the environment that created it rides in the metadata — the sweep's only licence to destroy it later
         metadata: { [SESSION_METADATA_KEY]: SPEC.sessionId, [ENV_METADATA_KEY]: "stg" },
@@ -193,6 +196,21 @@ describe("FlyRunner", () => {
     // The defaults themselves are the ruled values — a mutant editing config.ts dies here.
     expect(RUNNER_DEFAULT_GUEST).toEqual({ cpus: 4, memoryMb: 8192, cpuClass: "dedicated" });
     expect(RUNNER_DEFAULT_REGION).toBe("lhr");
+    expect(RUNNER_INPLACE_RESTARTS, "ADR 0004: on-failure, max_retries 2").toBe(2);
+  });
+
+  // R2003: what an in-place restart looks like from web. Fly reports the restarting Machine as `restarting`; the adapter
+  // says `pending`, and the domain keeps the runner it has — same attempt, same name, no effect, no signal. The restart
+  // is invisible to the lifecycle; only a beat that stays away for the composed window makes it a lost runner.
+  it("R2003: a Fly in-place restart (`restarting`) reaches the domain as pending, and a booting or playing runner stays exactly as it was", () => {
+    expect(fromFlyState("restarting")).toBe("pending");
+    let checked = 0;
+    for (const state of ["booting", "playing"] as const) {
+      const r = { state, attempt: 1, name: machineNameFor("s1", 1), machineId: "m1", stopRequestedAt: null, lastExit: null };
+      expect(stepRunner(r, { type: "observed", state: fromFlyState("restarting") }, new Date(0)), state).toEqual({ next: r, effects: [], signal: null });
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("cpuClass is the port's word; Fly's spelling appears only through cpuKindFor", () => {

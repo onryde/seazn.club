@@ -8,8 +8,23 @@
 //    caller passes from config.ts, not a driver default that could drift.
 //  * auto_destroy: true — fires on a NON-ZERO exit too (R0 watch 4 closed:
 //    Machine `destroyed`, absent from the list).
-//  * restart.policy "no" — D4: the lazy expiry path is the only retry
-//    authority; any other policy puts two encoders on one stream key.
+//  * restart { policy "on-failure", max_retries RUNNER_INPLACE_RESTARTS } —
+//    R2003, ADR 0004/0007 (Fly specifics live HERE and nowhere else): Fly
+//    restarts a crashed compositor IN PLACE — the same Machine, the same name,
+//    the SAME attempt — so the organiser's stream reconnects inside YouTube's
+//    split threshold instead of waiting out a cold start. It never adds an
+//    encoder: the lazy expiry path stays the only authority for a SECOND
+//    Machine (attempt + 1), and the domain creates one only from a CONFIRMED
+//    destroyed (invariant 1: a restarting Machine reads `pending`, below; a
+//    beat that stays away for the composed window takes the runner lost +
+//    force_destroy, and destroy_ok/observed destroyed is the only road to
+//    r<n+1>) — runner.test.ts walks every order of crash/beat/observe/wait/
+//    destroy against it. Exit 0 is never restarted (Fly), and exit 78 (the
+//    refusal) is restarted at most this many times, each refused in a second,
+//    then fails machine_refused without the retry. Fly counts max_retries per
+//    5-minute window, not per Machine lifetime (docs.fly.io, re-pinned
+//    2026-10-15): a compositor that crashes repeatedly over a long session is
+//    restarted again after the window rolls — bounded per window, not overall.
 //  * name `machineNameFor(sessionId, attempt)` — i.e. `relay-<sid>-r<attempt>`,
 //    the domain's own spelling (domain/runner.ts), never a second one here —
 //    plus metadata.seazn_session: together the client's idempotency key, so a
@@ -25,7 +40,7 @@
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, type Machine } from "./fly-client";
-import { liveRunnerIdentity } from "./config";
+import { RUNNER_INPLACE_RESTARTS, liveRunnerIdentity } from "./config";
 import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
 import { NOOP_RECORDER, RunnerCreateError } from "./ports";
@@ -234,7 +249,7 @@ export class FlyRunner implements RunnerProvider {
           image: this.image,
           guest: { cpus: spec.guest.cpus, memory_mb: spec.guest.memoryMb, cpu_kind: cpuKindFor(spec.guest.cpuClass) },
           auto_destroy: true,
-          restart: { policy: "no" },
+          restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
           env: { SESSION_ID: spec.sessionId, JOB_TOKEN: spec.jobToken, APP_URL: spec.appUrl, RELAY_DEADLINE_AT: spec.deadlineAt.toISOString() },
           metadata: { [SESSION_METADATA_KEY]: spec.sessionId, [ENV_METADATA_KEY]: spec.environment },
         },

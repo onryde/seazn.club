@@ -1364,10 +1364,12 @@ export const StreamFailReason = z.enum([
   "no_inbound_timeout", "target_rejected", "no_credits",
   // the Fly machine lifecycle's reasons (plan §"Fly machine lifecycle"; domain/runner.ts RunnerFailReason)
   "machine_create_failed", "machine_boot_timeout", "machine_exit_nonzero", "machine_oom", "machine_crash",
+  // R2003: the compositor refused its run (exit 78, or a final beat saying `refused`) — never retried
+  "machine_refused",
   // The two TIMED exits the domain's expiry owns (Task 2B `evaluate`): a create
   // that never finished (F16) and a row admitted but never provisioned (F18).
   // They belong HERE and not in StreamEndReason: a failed session carries no
-  // end reason at all (P1-F-b). Eleven members — the copy map (Task 13) is total
+  // end reason at all (P1-F-b). Twelve members — the copy map (Task 13) is total
   // over this enum, so adding one here owes four dictionary keys there.
   "provision_timeout", "admission_timeout",
   // M10 (Task 14b review): a deployment with no relay ended a session left up from before.

@@ -117,6 +117,8 @@ export const FAIL_REASON_KEYS: Record<StreamFailReason, MessageKey> = {
   machine_exit_nonzero: "stream.fail.machine_exit_nonzero",
   machine_oom: "stream.fail.machine_oom",
   machine_crash: "stream.fail.machine_crash",
+  // R2003: the compositor refused its run — a retry would be refused the same way, so the copy says to get help
+  machine_refused: "stream.fail.machine_refused",
   // M10 (Task 14b review): the deployment has no relay, so a session left up from before was ended.
   relay_disabled: "stream.fail.relay_disabled",
 };

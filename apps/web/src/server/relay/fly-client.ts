@@ -92,7 +92,9 @@ export interface MachineCreateInput {
   name: string; region: string;
   config: {
     image: string; guest: { cpus: number; memory_mb: number; cpu_kind: "shared" | "performance" };
-    auto_destroy: true; restart: { policy: "no" }; env: Record<string, string>;
+    // R2003: the adapter sends on-failure with a bound (runner-fly.ts, ADR 0004; runner-fly.test.ts pins the body). "no"
+    // stays for the client's own live probes, whose throwaway Machines must not be restarted. Never "always".
+    auto_destroy: true; restart: { policy: "no" } | { policy: "on-failure"; max_retries: number }; env: Record<string, string>;
     /** The session key is REQUIRED, not merely conventional: it is the only thing
      *  `createMachine`'s ambiguity lookup can find the Machine by, and a create
      *  that cannot be looked up cannot report a trustworthy `retryable` (C1).

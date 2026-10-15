@@ -161,12 +161,14 @@ export const RELAY_HEARTBEAT_INTERVAL_MS = 5_000;
 /** Compositor spec 2026-10-14 §8 item 6: a COMPOSED runner that has PLAYED is `lost` after "3 missed beats at the 5 s
  *  cadence of `heartbeatIntervalMs`" — defined AS that product, so the cadence the compositor is served and the rule that
  *  times it cannot drift apart. It replaces R1's 90 s for a played runner (and for the idle lost/destroyed states that
- *  re-fire on the same window); STALE_HEARTBEAT_SECONDS is now the boot allowance alone (owner ruling 2026-10-15). It sits
- *  under the YouTube split threshold, 15–30 s of output gap (compositor `_FINDINGS.md` F-004 addendum). */
+ *  re-fire on the same window); STALE_HEARTBEAT_SECONDS is now the boot allowance alone (owner ruling 2026-10-15). It is
+ *  the LOWER edge of the YouTube split threshold, 15–30 s of output gap (compositor `_FINDINGS.md` F-004 addendum): the
+ *  in-place restart is what keeps a crash inside it; this window only decides when web stops waiting for one. */
 export const STALE_HEARTBEAT_SECONDS_COMPOSED = (3 * RELAY_HEARTBEAT_INTERVAL_MS) / 1000;
 /** Compositor plan Global Constraints "Exit codes" (`78`: unauthorized or not found), whose final beat says
- *  `exitReason: "refused"`: the compositor's REFUSAL exit — its bootstrap read was refused or did not decode. A replacement would be refused the same
- *  way, so a runner that exits with it never spends the ONE retry (domain/runner.ts `afterLostDestroyed`). */
+ *  `exitReason: "refused"`: the compositor's REFUSAL exit — its bootstrap read was refused or did not decode. A
+ *  replacement would be refused the same way, so a runner that exits with it never spends the ONE retry
+ *  (domain/runner.ts `afterLostDestroyed`). */
 export const RELAY_EXIT_REFUSED = 78;
 /** Compositor ADR 0006 / `_FINDINGS.md` F-002 (C00 owner session, 2026-10-15): the camera→compositor delay measured
  *  IN-CHAIN (the overlay's clock against the camera's, 3083 and 3105 ms). The default `overlayDelayMs` a composed

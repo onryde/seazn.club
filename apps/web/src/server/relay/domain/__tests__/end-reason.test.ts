@@ -36,8 +36,8 @@ describe("the declarations this table is checked against", () => {
     expect([...DB_END_REASONS]).toEqual(lastCheckList("fixture_stream_sessions", "end_reason"));
   });
 
-  it("StreamFailReason declares eleven (the count the sweep must reach)", () => {
-    expect(FAIL_REASONS).toHaveLength(11);
+  it("StreamFailReason declares twelve (the count the sweep must reach; R2003 added machine_refused)", () => {
+    expect(FAIL_REASONS).toHaveLength(12);
   });
 });
 
@@ -62,7 +62,7 @@ describe("wireEndReason (§6.8.4)", () => {
   it("every fail reason the table does not name → failed (no_credits, the timeouts, relay_disabled, the runner's)", () => {
     const named = new Set(NAMED.filter((r) => r.kind === "fail").map((r) => r.db));
     const unnamed = FAIL_REASONS.filter((f) => !named.has(f));
-    expect(unnamed).toHaveLength(9);
+    expect(unnamed).toHaveLength(10);   // R2003: machine_refused joined the runner's reasons
     for (const failReason of unnamed) expect(wireEndReason({ endReason: null, failReason }), failReason).toBe("failed");
   });
 

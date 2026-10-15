@@ -370,3 +370,19 @@ describe("R2 relay numbers equal their sources", () => {
     expect(config.RELAY_OVERLAY_DELAY_DEFAULT_MS, "the differential: not the page's own no-delay default").not.toBe(DEFAULT_DELAY_MS);
   });
 });
+
+// R2003 — the restart and beat constants. The expected values are the RULINGS, cited, never read back off config.ts:
+// spec §8 item 6 ("lost after 3 missed beats (15 s)"), ADR 0004 (on-failure, max_retries 2), the compositor's refusal
+// exit (the compositor plan's Global Constraints exit-code table: 78), and the owner's option A (2026-10-15: the boot allowance stays 90 s).
+describe("R2003 — restart and beat constants", () => {
+  it("the composed window is THREE beat intervals (spec §8 item 6: 15 s), derived from the cadence — and shorter than the boot allowance it sits beside", () => {
+    expect(config.STALE_HEARTBEAT_SECONDS_COMPOSED * 1000).toBe(3 * config.RELAY_HEARTBEAT_INTERVAL_MS);
+    expect(config.STALE_HEARTBEAT_SECONDS_COMPOSED, "spec §8 item 6").toBe(15);
+    expect(config.STALE_HEARTBEAT_SECONDS, "owner option A: the boot allowance is unchanged").toBe(90);
+    expect(config.STALE_HEARTBEAT_SECONDS_COMPOSED).toBeLessThan(config.STALE_HEARTBEAT_SECONDS);
+  });
+  it("RUNNER_INPLACE_RESTARTS is ADR 0004's max_retries (2); RELAY_EXIT_REFUSED is the compositor's refusal exit (78)", () => {
+    expect(config.RUNNER_INPLACE_RESTARTS).toBe(2);
+    expect(config.RELAY_EXIT_REFUSED).toBe(78);
+  });
+});
