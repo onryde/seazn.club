@@ -582,8 +582,8 @@
  {
   "id": "t11-stage-rewrite",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "      await rewriteHeldAwards(tx, held);\n    }",
-  "replace": "    }",
+  "find": "      await rewriteHeldAwards(tx, held);\n",
+  "replace": "",
   "killers": [
    {
     "cwd": "apps/web",

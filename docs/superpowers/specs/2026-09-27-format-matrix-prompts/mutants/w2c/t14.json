@@ -424,8 +424,8 @@
  {
   "id": "t14-award-current-override",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "            ? mergeRulesOverride(stageResolved, row.rules_override)",
-  "replace": "            ? stageResolved",
+  "find": "const current = snapshotted ? row.config_snapshot : liveNow;",
+  "replace": "const current = snapshotted ? row.config_snapshot : stageResolved;",
   "killers": [
    {
     "cwd": "apps/web",
@@ -819,8 +819,8 @@
  {
   "id": "b3-i1-stage-skip-fragment",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "      await rewriteHeldAwards(tx, held);\n    }",
-  "replace": "      if (next === null) await rewriteHeldAwards(tx, held);\n    }",
+  "find": "      await rewriteHeldAwards(tx, held);\n",
+  "replace": "      if (next === null) await rewriteHeldAwards(tx, held);\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -834,8 +834,8 @@
  {
   "id": "b3-i1-stage-skip-clear",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "      await rewriteHeldAwards(tx, held);\n    }",
-  "replace": "      if (next !== null) await rewriteHeldAwards(tx, held);\n    }",
+  "find": "      await rewriteHeldAwards(tx, held);\n",
+  "replace": "      if (next !== null) await rewriteHeldAwards(tx, held);\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -864,8 +864,8 @@
  {
   "id": "b3-i1-division-skip",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "    rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;\n    return written;",
-  "replace": "    return written;",
+  "find": "    rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;\n",
+  "replace": "",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1049,8 +1049,8 @@
  {
   "id": "b3-writer-played-fit",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
-  "find": "      } else if (played) {\n",
-  "replace": "      } else if (false) {\n",
+  "find": "        if (played) await assertFits(tx, row, cfg);\n",
+  "replace": "        if (false) await assertFits(tx, row, cfg);\n",
   "killers": [
    {
     "cwd": "apps/web",
