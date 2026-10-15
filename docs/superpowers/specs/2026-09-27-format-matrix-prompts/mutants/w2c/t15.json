@@ -666,7 +666,7 @@
  {
   "id": "t15fr1-unfrozen-takes-awards",
   "file": "apps/web/src/server/engine-db/rules-version.ts",
-  "find": "\n       and (f.outcome is null or exists (select 1 from score_events e where e.fixture_id = f.id))`;",
+  "find": "\n       and not (coalesce(f.outcome->>'reason', '') = 'bye'\n                and not exists (select 1 from fixtures g where g.winner_to_fixture = f.id or g.loser_to_fixture = f.id))`;",
   "replace": "`;",
   "killers": [
    {
