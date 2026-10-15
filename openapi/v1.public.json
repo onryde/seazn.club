@@ -20214,7 +20214,8 @@
                       "example"
                     ],
                     "order": [
-                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a21"
                     ]
                   }
                 ]
@@ -23886,7 +23887,7 @@
                     }
                   ]
                 },
-                "tz": "example"
+                "tz": "Europe/London"
               }
             }
           }
@@ -32708,7 +32709,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "streamUrl": "example"
+                "streamUrl": "https://www.youtube.com/watch?v=example"
               }
             }
           }
@@ -54154,7 +54155,7 @@
               "example": {
                 "contact": {
                   "name": "example",
-                  "email": "example",
+                  "email": "user@example.com",
                   "dob": "2026-08-01",
                   "gender": "m"
                 },
@@ -55007,7 +55008,7 @@
                   "full_name": "example",
                   "dob": "2026-08-01",
                   "gender": "m",
-                  "email": "example"
+                  "email": "user@example.com"
                 },
                 "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "guardian_name": "example",
@@ -55660,7 +55661,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -55962,7 +55963,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -56398,7 +56399,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -56562,7 +56563,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -62875,7 +62876,7 @@
                 "display_name": "example",
                 "person_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "email": "example",
+                "email": "user@example.com",
                 "role_keys": [
                   "example"
                 ]
@@ -63576,7 +63577,7 @@
                 "display_name": "example",
                 "person_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "email": "example"
+                "email": "user@example.com"
               }
             }
           }

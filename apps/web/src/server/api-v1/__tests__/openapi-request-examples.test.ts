@@ -10,7 +10,7 @@
 // is therefore ZERO: any example its own schema refuses is red, naming the route and the schema's reasons, and a new route
 // whose example fails owes a patch.
 import { describe, expect, it } from "vitest";
-import { ROUTES, buildOpenApiDocument } from "../openapi";
+import { REQUEST_EXAMPLE_PATCHES, ROUTES, buildOpenApiDocument, requestExampleOf } from "../openapi";
 
 type Op = { requestBody?: { content: Record<string, { example?: unknown }> } };
 
@@ -39,6 +39,31 @@ describe("OpenAPI — every published request example parses against its own sch
     const detail = failing.map((v) => `${v.key} ${JSON.stringify(v.example)} :: ${v.issues.join(" | ")}`);
     expect(detail, "a request example its own schema refuses").toEqual([]);
     expect(verdicts.filter((v) => v.ok).length, "anti-vacuity: examples that parse").toBeGreaterThanOrEqual(114);
+  });
+
+  // A patch is for a refine JSON Schema cannot express. One the generated example does not need is a stale entry (the schema
+  // or the generator moved), and one that names no route is a typo: both are caught here, with the generator alone as witness.
+  it("every patch names a route with a body, and each is load-bearing: the generator alone is refused by that route's schema (counted)", () => {
+    let checked = 0;
+    for (const key of Object.keys(REQUEST_EXAMPLE_PATCHES)) {
+      const route = ROUTES.find((r) => `${r.method.toUpperCase()} ${r.path}` === key);
+      expect(route?.request, `${key}: a route with a request body`).toBeDefined();
+      const alone = route!.request!.safeParse(requestExampleOf(route!, { patched: false }));
+      expect(alone.success, `${key}: the generated example needs its patch`).toBe(false);
+      expect(route!.request!.safeParse(requestExampleOf(route!)).success, `${key}: and the patched one parses`).toBe(true);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: patches checked").toBe(Object.keys(REQUEST_EXAMPLE_PATCHES).length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  // `minItems` asks for several places: a tie-break order of two entrants is two DIFFERENT entrants, never one repeated.
+  it("an array the schema asks several items of is several distinct items (a tie-break order)", () => {
+    const route = ROUTES.find((r) => r.method === "post" && r.path === "/stages/{id}/seed-proposal/confirm")!;
+    const example = requestExampleOf(route) as { tiePicks: { order: string[] }[] };
+    const order = example.tiePicks[0]!.order;
+    expect(order.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(order).size, "distinct entrants").toBe(order.length);
   });
 
   it("the stage routes' examples are real stage bodies: no refused top-level decider, and a config key with a reader", () => {

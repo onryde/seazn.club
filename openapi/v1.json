@@ -15404,7 +15404,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "email": "example"
+                "email": "user@example.com"
               }
             }
           }
@@ -26477,7 +26477,8 @@
                       "example"
                     ],
                     "order": [
-                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a21"
                     ]
                   }
                 ]
@@ -30149,7 +30150,7 @@
                     }
                   ]
                 },
-                "tz": "example"
+                "tz": "Europe/London"
               }
             }
           }
@@ -38971,7 +38972,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "streamUrl": "example"
+                "streamUrl": "https://www.youtube.com/watch?v=example"
               }
             }
           }
@@ -44011,9 +44012,9 @@
                   "pollSeconds": 5,
                   "autoAllowed": true,
                   "destinationName": "example",
-                  "overlayUrl": "example",
-                  "heartbeatUrl": "example",
-                  "startUrl": "example"
+                  "overlayUrl": "https://example.com/example",
+                  "heartbeatUrl": "https://example.com/example",
+                  "startUrl": "https://example.com/example"
                 }
               }
             }
@@ -44707,9 +44708,9 @@
                 "additionalProperties": false
               },
               "example": {
-                "code": "example",
+                "code": "3f1a2b04m8cd",
                 "slot": 0,
-                "phone": "example",
+                "phone": "exampleexampleex",
                 "claim": "new",
                 "device": {
                   "model": "example"
@@ -44720,7 +44721,7 @@
                 "cause": "organiser",
                 "notReady": "camera",
                 "startFailed": "not-found",
-                "stopped": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "stopped": null,
                 "mode": "automatic",
                 "transport": "srt",
                 "bitrateKbps": 0,
@@ -45211,7 +45212,7 @@
                   "scheduledStart": 1,
                   "autoAllowed": true,
                   "destinationName": "example",
-                  "overlayUrl": "example",
+                  "overlayUrl": "https://example.com/example",
                   "pollSeconds": 5,
                   "state": "waiting"
                 }
@@ -45618,7 +45619,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "phone": "example"
+                "phone": "exampleexampleex"
               }
             }
           }
@@ -47937,7 +47938,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "phone": "example"
+                "phone": "exampleexampleex"
               }
             }
           }
@@ -61278,7 +61279,7 @@
               },
               "example": {
                 "name": "example",
-                "url": "example",
+                "url": "https://example.com/example",
                 "logo_path": "example",
                 "tier": "title",
                 "status": "active"
@@ -61712,7 +61713,7 @@
               },
               "example": {
                 "name": "example",
-                "url": "example",
+                "url": "https://example.com/example",
                 "logo_path": "example",
                 "tier": "title"
               }
@@ -62870,7 +62871,7 @@
                 "name": "example",
                 "description": "example",
                 "price_cents": 1,
-                "currency": "example",
+                "currency": "gbp",
                 "tier": "title"
               }
             }
@@ -63808,7 +63809,7 @@
               "example": {
                 "package_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "sponsor_name": "example",
-                "sponsor_email": "example"
+                "sponsor_email": "user@example.com"
               }
             }
           }
@@ -68953,7 +68954,7 @@
                 "kind": "youtube",
                 "label": "example",
                 "streamKey": "example",
-                "watchUrl": "example"
+                "watchUrl": "https://www.youtube.com/watch?v=example"
               }
             }
           }
@@ -69476,8 +69477,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "label": "example",
-                "streamKey": "example"
+                "label": "example"
               }
             }
           }
@@ -85234,7 +85234,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "return_path": "example",
+                "return_path": "/settings/billing",
                 "tos_agreed": true
               }
             }
@@ -86560,7 +86560,7 @@
               "example": {
                 "contact": {
                   "name": "example",
-                  "email": "example",
+                  "email": "user@example.com",
                   "dob": "2026-08-01",
                   "gender": "m"
                 },
@@ -87413,7 +87413,7 @@
                   "full_name": "example",
                   "dob": "2026-08-01",
                   "gender": "m",
-                  "email": "example"
+                  "email": "user@example.com"
                 },
                 "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "guardian_name": "example",
@@ -88066,7 +88066,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -88368,7 +88368,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -88804,7 +88804,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -88968,7 +88968,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -91489,7 +91489,7 @@
               "example": {
                 "role_key": "secretary",
                 "full_name": "example",
-                "email": "example",
+                "email": "user@example.com",
                 "phone": "example"
               }
             }
@@ -91839,7 +91839,7 @@
               "example": {
                 "role_key": "secretary",
                 "full_name": "example",
-                "email": "example",
+                "email": "user@example.com",
                 "phone": "example"
               }
             }
@@ -96469,7 +96469,7 @@
                 "display_name": "example",
                 "person_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "email": "example",
+                "email": "user@example.com",
                 "role_keys": [
                   "example"
                 ]
@@ -97170,7 +97170,7 @@
                 "display_name": "example",
                 "person_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "email": "example"
+                "email": "user@example.com"
               }
             }
           }
@@ -98659,7 +98659,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "email": "example"
+                "email": "user@example.com"
               }
             }
           }
@@ -114502,8 +114502,6 @@
               },
               "example": {
                 "date": "2026-08-01",
-                "dateFrom": "2026-08-01",
-                "dateTo": "2026-08-01",
                 "divisionId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
               }
             }

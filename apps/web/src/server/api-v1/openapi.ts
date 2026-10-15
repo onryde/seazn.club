@@ -27,6 +27,9 @@ import { PublicPlayerMatches } from "../public-site/player-matches-schema.ts";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_KEY_EMPTY, TARGET_UNREADABLE,
 } from "../../lib/stream-destinations.ts";
+// The stream-link validator's own host list (zod only, client-safe, already reached through schemas.ts): a published example
+// link is built from it, so it is a link `isStreamUrl` accepts by construction.
+import { STREAM_HOSTS } from "../../lib/stream-url.ts";
 
 // ---------------------------------------------------------------------------
 // Route registry — one row per (path, method). The coverage test asserts this
@@ -806,7 +809,31 @@ function refusesEverything(schema: unknown): boolean {
   return Object.keys(s).length === 1 && typeof not === "object" && not !== null && Object.keys(not).length === 0;
 }
 
-function exampleOf(schema: unknown, depth = 0): unknown {
+/** A string example that satisfies what the JSON Schema says of it (batch 4: a request example is a body a client copies, so
+ *  it must parse). In order: a declared DEFAULT where the stock word cannot be made to fit (a pattern, or an exact length:
+ *  valid by construction, e.g. `return_path`, `currency`), then its format, then the stock word padded to `minLength` and cut to
+ *  `maxLength`. `ordinal` is the element's place in an array whose `minItems` asks for several, so uuid items stay distinct. */
+function stringExample(s: Record<string, unknown>, ordinal: number): string {
+  const exactLength = typeof s.minLength === "number" && s.minLength === s.maxLength;
+  if ((typeof s.pattern === "string" || exactLength) && typeof s.default === "string") return s.default;
+  if (s.format === "uuid") return ordinal === 0 ? "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b" : `3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2${(ordinal % 16).toString(16)}`;
+  if (s.format === "date") return "2026-08-01";
+  if (s.format === "date-time") return "2026-08-01T09:00:00Z";
+  if (s.format === "email") return "user@example.com";
+  if (s.format === "uri" || s.format === "url") return "https://example.com/example";
+  const min = typeof s.minLength === "number" ? s.minLength : 0;
+  const max = typeof s.maxLength === "number" ? s.maxLength : Number.POSITIVE_INFINITY;
+  const word = "example";
+  const padded = word.length >= min ? word : word.repeat(Math.ceil(min / word.length)).slice(0, min);
+  return padded.length > max ? padded.slice(0, max) : padded;
+}
+
+const isScalarSchema = (schema: unknown): boolean => {
+  const type = typeof schema === "object" && schema !== null ? (schema as { type?: unknown }).type : undefined;
+  return type === "string" || type === "integer" || type === "number";
+};
+
+function exampleOf(schema: unknown, depth = 0, ordinal = 0): unknown {
   if (depth > 6 || typeof schema !== "object" || schema === null) return null;
   const s = schema as Record<string, unknown>;
   if ("const" in s) return s.const;
@@ -815,7 +842,7 @@ function exampleOf(schema: unknown, depth = 0): unknown {
   const first = (k: "anyOf" | "oneOf" | "allOf") =>
     Array.isArray(s[k]) && (s[k] as unknown[]).length > 0 ? (s[k] as unknown[])[0] : null;
   const union = first("anyOf") ?? first("oneOf") ?? first("allOf");
-  if (union) return exampleOf(union, depth + 1);
+  if (union) return exampleOf(union, depth + 1, ordinal);
   const type = Array.isArray(s.type) ? s.type[0] : s.type;
   switch (type) {
     case "object": {
@@ -838,12 +865,11 @@ function exampleOf(schema: unknown, depth = 0): unknown {
       // A tuple (`z.tuple`, emitted `prefixItems` with no `items`: a stage forfeit's `awardScore` pair) is one example
       // per position; `[exampleOf(undefined)]` would publish `[null]`, which the tuple refuses.
       if (Array.isArray(s.prefixItems)) return (s.prefixItems as unknown[]).map((item) => exampleOf(item, depth + 1));
-      return [exampleOf(s.items, depth + 1)];
+      // `minItems` is a count the schema demands (a tie-break order needs two entrants): one example per place, for a list of
+      // scalars. A list of objects keeps its single sample (the same object repeated is noise in a document, and no request needs more).
+      return Array.from({ length: isScalarSchema(s.items) && typeof s.minItems === "number" && s.minItems > 1 ? s.minItems : 1 }, (_, i) => exampleOf(s.items, depth + 1, i));
     case "string":
-      if (s.format === "uuid") return "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b";
-      if (s.format === "date") return "2026-08-01";
-      if (s.format === "date-time") return "2026-08-01T09:00:00Z";
-      return "example";
+      return stringExample(s, ordinal);
     case "integer":
     case "number":
       return typeof s.minimum === "number" ? s.minimum : 1;
@@ -854,6 +880,49 @@ function exampleOf(schema: unknown, depth = 0): unknown {
     default:
       return null;
   }
+}
+
+/** One published stream link: the validator's first allowed host, so `isStreamUrl` accepts it by construction. */
+const STREAM_EXAMPLE_URL = `https://${STREAM_HOSTS[0]}/watch?v=example`;
+
+/**
+ * Batch 4 — the request examples JSON Schema cannot get right on its own. A zod `.refine` is not exported to JSON Schema, so a
+ * timezone is "a string" to the generator, a stream link is "a string", and two fields that exclude each other are both
+ * "optional strings". Each entry names the route (`METHOD /path`, as `RouteSpec`) and the TOP-LEVEL body properties to set;
+ * `undefined` removes the property. The ratchet (`openapi-request-examples.test.ts`) parses every example against its own
+ * schema, so a patch that is wrong is red, and a patch the generated example did not need is red too (a stale entry).
+ */
+export const REQUEST_EXAMPLE_PATCHES: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+  "PUT /divisions/{id}/schedule-settings": { tz: "Europe/London" },
+  "PUT /fixtures/{id}/stream": { streamUrl: STREAM_EXAMPLE_URL },
+  "POST /orgs/{id}/stream-targets": { watchUrl: STREAM_EXAMPLE_URL },
+  // Exactly one of label or streamKey (the route's refine).
+  "PATCH /orgs/{id}/stream-targets/{targetId}": { streamKey: undefined },
+  // The code's own pattern; and `stopped` rides only while no broadcast is held (`sid` null), which the example's sid breaks.
+  "POST /capture/codes/{code}/beats": { code: "3f1a2b04m8cd", stopped: null },
+  // `date` and `dateFrom`/`dateTo` are exclusive.
+  "POST /competitions/{id}/exports/scorer-sheets": { dateFrom: undefined, dateTo: undefined },
+};
+
+/** The request body example the spec publishes for a route: the schema-driven `exampleOf`, then the route's patch.
+ *  `patched: false` is the generator alone (the ratchet uses it to prove every patch is load-bearing). */
+export function requestExampleOf(
+  route: { method: string; path: string; request?: ZodType },
+  opts: { patched?: boolean } = {},
+): unknown {
+  if (route.request === undefined) throw new Error(`${route.method} ${route.path} takes no request body`);
+  const generated = exampleOf(toSchema(route.request));
+  const patch = opts.patched === false ? undefined : REQUEST_EXAMPLE_PATCHES[`${route.method.toUpperCase()} ${route.path}`];
+  if (patch === undefined) return generated;
+  if (typeof generated !== "object" || generated === null || Array.isArray(generated)) {
+    throw new Error(`${route.method} ${route.path}: an example patch needs an object body`);
+  }
+  const out = { ...(generated as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete out[key];
+    else out[key] = value;
+  }
+  return out;
 }
 
 /** The key scope this operation needs, from the SAME allowlist the auth
@@ -919,7 +988,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
             content: {
               [route.requestContentType ?? "application/json"]: {
                 schema: toSchema(route.request),
-                example: exampleOf(toSchema(route.request)),
+                example: requestExampleOf(route),
               },
             },
           },
