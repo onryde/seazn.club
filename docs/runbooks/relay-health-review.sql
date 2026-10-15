@@ -10,6 +10,12 @@
 -- a flag or a rung (`reported_beats` counts the beats that carried a programme phase), and it neither extends nor ends
 -- a camera backoff run.
 --
+-- One phase_<word> column per word of web lib/relay-phase.ts PROGRAMME_PHASES, so the columns partition
+-- `reported_beats` (relay-internal-routes.test.ts sweeps that). phase_final counts the final hold's beats and the exit
+-- beat after it (compositor C06, R2007 PR B): did the Final scene air? channel_loopback_beats / channel_web_beats say
+-- which channel the overlay page read its phase from (overlay templates spec §4.3); a session whose beats report `web`
+-- fell back from the compositor's loopback endpoint to the data poll.
+--
 -- The counters (inputKicks, pipelineRebuilds, sinkSwaps) count per PROCESS: a restarted Machine (R2003's one retry)
 -- starts them at 0 again, so the review shows each one's maximum, never a sum.
 --
@@ -52,6 +58,9 @@ select s.id as session_id,
        (count(b.id) filter (where b.raw->>'programmePhase' = 'live'))::int as phase_live,
        (count(b.id) filter (where b.raw->>'programmePhase' = 'frozen'))::int as phase_frozen,
        (count(b.id) filter (where b.raw->>'programmePhase' = 'reconnecting'))::int as phase_reconnecting,
+       (count(b.id) filter (where b.raw->>'programmePhase' = 'final'))::int as phase_final,
+       (count(b.id) filter (where b.raw->>'phaseChannel' = 'loopback'))::int as channel_loopback_beats,
+       (count(b.id) filter (where b.raw->>'phaseChannel' = 'web'))::int as channel_web_beats,
        (count(b.id) filter (where b.raw->>'input' = 'backoff'))::int as input_backoff_beats,
        (count(b.id) filter (where b.raw->>'output' = 'backoff'))::int as output_backoff_beats,
        (count(b.id) filter (where b.raw->>'graphics' = 'restarting'))::int as graphics_restarting_beats,

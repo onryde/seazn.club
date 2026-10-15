@@ -31,6 +31,7 @@ import { sql } from "@/lib/db";
 import { RelayHeartbeatReply, RelayJobSession } from "@/server/api-v1/schemas";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
+import { PHASE_CHANNELS, PROGRAMME_PHASES } from "@/lib/relay-phase";
 import {
   MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
   RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
@@ -814,6 +815,11 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
       // The first Machine's final beat (it was signalled), then the retry's (fatal) — R2003's one retry, as beats.
       { state: "stopped", exitReason: "signalled", exitDetail: "SIGTERM: draining before exit" },
       vector("heartbeat-final-fatal"),
+      // R2007 PR B: Fly restarts the fatal one in place, the organiser ends the stream, and the compositor holds the Final
+      // scene (C06) — two hold beats on the loopback channel — then sends its exit beat, still in `final`.
+      vector("heartbeat-final-hold"),
+      vector("heartbeat-final-hold"),
+      { state: "stopped", programmePhase: "final", phaseChannel: "loopback", exitReason: "ended", exitDetail: "drained after the final hold" },
     ];
     for (const b of beats) expect((await postBeat(s.sessionId, b, { token: s.jobToken })).status, JSON.stringify(b)).toBe(200);
     // The beats landed milliseconds apart; space them 5 s apart in posting order, as a Machine beats.
@@ -833,6 +839,8 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
       reported_beats: beats.filter((b) => "programmePhase" in b).length,
       phase_waiting: count("programmePhase", "waiting"), phase_live: count("programmePhase", "live"),
       phase_frozen: count("programmePhase", "frozen"), phase_reconnecting: count("programmePhase", "reconnecting"),
+      phase_final: count("programmePhase", "final"),
+      channel_loopback_beats: count("phaseChannel", "loopback"), channel_web_beats: count("phaseChannel", "web"),
       input_backoff_beats: count("input", "backoff"), output_backoff_beats: count("output", "backoff"),
       graphics_restarting_beats: count("graphics", "restarting"), graphics_failed_beats: count("graphics", "failed"),
       kick_alert_beats: count("inputKickAlert", true),
@@ -847,9 +855,33 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
     expect(Number(r.longest_input_backoff_s)).toBe(15);
     expect(new Date(r.first_kick_alert_at as string).toISOString()).toBe("2026-10-15T12:00:10.000Z");
     expect(new Date(r.first_beat_at as string).toISOString()).toBe("2026-10-15T12:00:00.000Z");
-    expect(new Date(r.last_beat_at as string).toISOString()).toBe("2026-10-15T12:00:40.000Z");
-    // The exit reason is the LATEST one reported (the final beat's), never the first (the signalled one before it).
-    expect(r).toMatchObject({ exit_reason: "fatal", exit_detail: "programme start failed: cefsrc not found" });
+    expect(new Date(r.last_beat_at as string).toISOString()).toBe(new Date(Date.parse("2026-10-15T12:00:00Z") + 5_000 * (beats.length - 1)).toISOString());
+    // The exit reason is the LATEST one reported (the final beat's), never an earlier one (the signalled, the fatal).
+    expect(r).toMatchObject({ exit_reason: "ended", exit_detail: "drained after the final hold" });
+    // R2007 PR B: every phase the compositor declares has its own column, and the columns PARTITION the reported beats —
+    // a phase added to lib/relay-phase.ts without a runbook column reds here, never in a post-match review. The same for
+    // the two phase channels, over the beats that reported one.
+    let phases = 0;
+    for (const p of PROGRAMME_PHASES) {
+      expect(r, `phase_${p}: a column`).toHaveProperty(`phase_${p}`);
+      expect(r[`phase_${p}`], `phase_${p}`).toBe(count("programmePhase", p));
+      phases++;
+    }
+    console.log(`runbook phases checked: ${phases}`);
+    expect(phases, "anti-vacuity: zero phases checked is a failure").toBeGreaterThan(0);
+    expect(Object.keys(r).filter((k) => k.startsWith("phase_")).sort(), "no phase column the declaration lacks").toEqual(PROGRAMME_PHASES.map((p) => `phase_${p}`).sort());
+    expect(PROGRAMME_PHASES.reduce((n, p) => n + (r[`phase_${p}`] as number), 0), "Σ phase_* == reported_beats").toBe(r.reported_beats);
+    expect(r.phase_final, "premise: the hold and the exit beat are in the sweep").toBe(3);
+    let channels = 0;
+    for (const c of PHASE_CHANNELS) {
+      expect(r, `channel_${c}_beats: a column`).toHaveProperty(`channel_${c}_beats`);
+      channels++;
+    }
+    expect(channels, "anti-vacuity").toBe(2);
+    expect(Object.keys(r).filter((k) => k.startsWith("channel_")).sort()).toEqual(PHASE_CHANNELS.map((c) => `channel_${c}_beats`).sort());
+    expect(PHASE_CHANNELS.reduce((n, c) => n + (r[`channel_${c}_beats`] as number), 0), "Σ channel_* == the beats that reported a channel")
+      .toBe(beats.filter((b) => typeof b.phaseChannel === "string").length);
+    expect([r.channel_loopback_beats, r.channel_web_beats], "both channels witnessed").toEqual([3, 1]);
     // The latest beat, whole, is the session row's — the review shows it beside the history.
     expect(r.last_heartbeat).toEqual(beats.at(-1));
     // The differential to a query that counts the minimal beat's absent fields as measured: it is a beat, not a report.
@@ -863,11 +895,11 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
     const rows = await healthReview(quiet.sessionId);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      session_id: quiet.sessionId, beats: 0, reported_beats: 0, kick_alert_beats: 0, input_backoff_beats: 0,
+      session_id: quiet.sessionId, beats: 0, reported_beats: 0, phase_final: 0, channel_loopback_beats: 0, channel_web_beats: 0, kick_alert_beats: 0, input_backoff_beats: 0,
       max_input_kicks: null, longest_input_backoff_s: null, first_beat_at: null, last_heartbeat: null, exit_reason: null, exit_detail: null,
     });
     // The positive pair: the busy session's own review sees its one beat.
-    expect((await healthReview(busy.sessionId))[0]).toMatchObject({ beats: 1, reported_beats: 1, kick_alert_beats: 1, max_input_kicks: 4 });
+    expect((await healthReview(busy.sessionId))[0]).toMatchObject({ beats: 1, reported_beats: 1, channel_web_beats: 1, kick_alert_beats: 1, max_input_kicks: 4 });
     expect(await healthReview(randomUUID())).toEqual([]);
   });
 });

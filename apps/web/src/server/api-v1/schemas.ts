@@ -79,7 +79,10 @@ import { isValidIana } from "../../lib/tz.ts";
 import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
 // R2007 PR B — the compositor's programme phases, the overlay page's phase channels and the loopback phase endpoint's
 // constants. RELATIVE with `.ts` for the same reason; lib/relay-phase.ts is deliberately import-free.
-import { PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT } from "../../lib/relay-phase.ts";
+import {
+  PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT,
+  type RelayPhaseReply as RelayPhaseReplyWire,
+} from "../../lib/relay-phase.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -1726,9 +1729,11 @@ export type RelayHeartbeatReply = z.infer<typeof RelayHeartbeatReply>;
 
 /** R2007 PR B (overlay templates spec 2026-10-15 §4.3): the compositor's loopback `GET /phase?after=<seq>` reply, which
  *  the overlay page reads when `host=compositor`. The compositor serves it, never web; this twin exists so
- *  docs/contracts/relay-job.v1.json publishes it as `$defs.phaseReply` for both repos to pin. STRICT. */
+ *  docs/contracts/relay-job.v1.json publishes it as `$defs.phaseReply` for both repos to pin. STRICT.
+ *  The TYPE and the page's reader live in lib/relay-phase.ts (client-safe; a client component must never import this
+ *  file), and relay-contract.test.ts sweeps that reader against this twin and the published bytes (review M3). */
 export const RelayPhaseReply = z.object({ phase: z.enum(PROGRAMME_PHASES), seq: z.number().int().min(0) }).strict();
-export type RelayPhaseReply = z.infer<typeof RelayPhaseReply>;
+export type RelayPhaseReply = RelayPhaseReplyWire;
 /** …and where that endpoint listens, as consts (`$defs.phaseEndpoint`): lib/relay-phase.ts is the authority, and the
  *  compositor drift-tests its own copies against the vendored file (C12). STRICT. */
 export const RelayPhaseEndpoint = z
