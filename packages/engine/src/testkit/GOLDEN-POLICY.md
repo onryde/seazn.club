@@ -634,11 +634,14 @@ config key switches on that none of the others can reach: the generator never
 sets an opt-in key, `extendCorpus` stops once the key is pinned, and the floor
 derives its tokens from kernel events. It is a table of **stories**; each builds
 its ledger from the module's own generator plus the kernel event the branch is
-about, and carries a verdict (`reached`) over the engine's own folds. Every
-verdict is a **differential**: the same ledger refolded without the key must
-decide differently (the default five kicks leave the shoot-out running; the
-replay default holds nothing), so a stream that only names the key proves
-nothing. `branchHoles` is the skip rule (any recorded stream that reaches a
+about, and carries a verdict (`reached`) over the engine's own folds. Where a
+ledger can name the key and still miss the branch the verdict is a
+**differential**: the same ledger refolded without the key must decide
+differently (the default five kicks leave the shoot-out running; the replay
+default leaves a shared abandon "abandoned", where carrom's drawn walk stays
+"final"), so a stream that only names the key proves nothing. Every guard in a
+verdict is owed a counterfactual that only it rejects, and the test asserts the
+REASON each one gives. `branchHoles` is the skip rule (any recorded stream that reaches a
 branch makes it a skip, whatever its config name or seed) and `extendBranches`
 appends one slim stream per hole; `EXTEND_GOLDEN=1` runs it after the floor.
 

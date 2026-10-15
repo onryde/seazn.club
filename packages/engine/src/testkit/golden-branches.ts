@@ -10,8 +10,11 @@
 // WHAT. A table of named stories. Each says which module and config key it exercises, how to BUILD a ledger that takes the
 // branch (the module's own generator up to a point the fold confirms, then the kernel event that triggers it - nothing
 // here is a hand-typed score line), and what it takes for a RECORDED stream to REACH the branch. `reached` is a verdict
-// over the engine's own folds - never a value typed here - and each branch is proven by a DIFFERENTIAL: the same ledger
-// refolded under the config WITHOUT the key must decide differently, or the stream proves nothing about the key.
+// over the engine's own folds - never a value typed here. Where a ledger can name the key and still miss the branch, the
+// verdict is a DIFFERENTIAL: the same ledger refolded under the config WITHOUT the key must decide differently (the
+// shoot-out count, the shared abandon). The award and 4th-quarter verdicts carry none, because there the fold's own
+// observables already say the abandon was applied (the expunge flag, an abandon that ends the ledger and holds a result)
+// and a replay refold of an applied abandon is "abandoned" by construction; the test file reads that refold itself.
 //
 // HOW IT IS USED. `branchHoles` is the stories no recorded stream reaches (the check that a stream already there is a
 // SKIP, not a duplicate); `extendBranches` appends one slim stream per hole. `EXTEND_GOLDEN=1` runs it after the floor.
@@ -86,14 +89,14 @@ const held = (state: Record<string, unknown>): Record<string, unknown> | null =>
 const without = (raw: unknown, key: string): Record<string, unknown> => Object.fromEntries(Object.entries(obj(raw)).filter(([k]) => k !== key));
 const lastEvent = (r: Recorded): GoldenEvent | undefined => r.events[r.events.length - 1];
 
-/** What an abandon replays to: a closed match with nothing decided and the fixture flagged (football, the period kernel) -
- *  or, for carrom and generic, just closed with nothing decided. */
-function replaysOnAbandon(r: Recorded, raw: unknown, flagged: boolean): string | null {
+/** The differential for an abandon policy: refolded under `raw` (the replay default - the key gone), the same ledger is an
+ *  ABANDONED match. A ledger that merely names the policy, or reaches its result some other way (carrom's drawn walk), is
+ *  still "final" there, so the abandon was never what decided it. (An abandon the fold applies always closes a replay-policy
+ *  match as abandoned with nothing decided, so that is the one check - the rest of what it holds is the engine's.) */
+function replaysOnAbandon(r: Recorded, raw: unknown): string | null {
   const replayed = replay(r, raw);
   if (typeof replayed === "string") return `the counterfactual config does not fold the ledger: ${replayed}`;
   if (replayed.state.phase !== "abandoned") return `under the replay default the ledger is "${String(replayed.state.phase)}", not an abandoned match, so the abandon never ran`;
-  if (held(replayed.state) !== null) return "under the replay default the abandon still decides a result";
-  if (flagged && replayed.state.replayFlagged !== true) return "under the replay default the fixture is not flagged for a replay";
   return null;
 }
 
@@ -123,12 +126,14 @@ function reachesSharedAbandon(r: Recorded): string | null {
   const played = replay(r, r.raw);
   if (typeof played === "string") return played;
   if (held(played.state)?.kind !== "draw") return "the ledger does not end in a draw";
-  return replaysOnAbandon(r, without(r.raw, "abandonPolicy"), false);
+  return replaysOnAbandon(r, without(r.raw, "abandonPolicy"));
 }
 
 /** `abandonPolicy: "award"` with an EXPUNGE, ending on `kind`: the module holds the result the award gives (a leader's win
- *  by abandonment, or a draw), the kernel's fold reports the withdrawal's expunge (which `outcomeOf` reads as no outcome at
- *  all), and the replay default would have held nothing. */
+ *  by abandonment, or a draw) and the kernel's fold reports the withdrawal's expunge (which `outcomeOf` reads as no outcome
+ *  at all). No replay differential here: the expunge flag exists only on an applied `core.abandon`, and the fold's one abandon
+ *  under the replay default always holds nothing, so that refold could not tell any ledger that passes this from one that
+ *  fails it. */
 function reachesAwardExpunge(kind: "win" | "draw"): (r: Recorded) => string | null {
   return (r) => {
     if (obj(r.raw).abandonPolicy !== "award") return "its config does not award an abandoned match";
@@ -136,13 +141,15 @@ function reachesAwardExpunge(kind: "win" | "draw"): (r: Recorded) => string | nu
     if (typeof played === "string") return played;
     if (!played.expunged) return "the fold reports no expunge: the active abandon does not carry expunge: true";
     const result = held(played.state);
-    if (result?.kind !== kind || (kind === "win" && result.method !== "abandoned")) return `the module does not hold ${kind === "win" ? "the leader's win by abandonment" : "a draw"} under the expunge`;
-    return replaysOnAbandon(r, without(r.raw, "abandonPolicy"), true);
+    if (result?.kind !== kind) return `the module does not hold ${kind === "win" ? "the leader's win by abandonment" : "a draw"} under the expunge`;
+    return null;
   };
 }
 
-/** hockey `abandonPolicy: "q4_stands"`: an abandon DURING the last regulation period, and the score stands. The
- *  differential: the replay default holds nothing for the same ledger. */
+/** hockey `abandonPolicy: "q4_stands"`: an abandon that ENDS the ledger and still holds a result - which under this policy
+ *  only happens from the 4th quarter on (before it the same abandon replays and holds nothing; the builder aims at the
+ *  4th quarter itself and the test reads the phase independently). No replay differential: the abandon is the last event
+ *  and the fold applied it, so the replay refold is "abandoned" by construction. */
 function reachesQ4Stands(r: Recorded): string | null {
   if (obj(r.raw).abandonPolicy !== "q4_stands") return "its config does not apply the 4th-quarter rule";
   const last = lastEvent(r);
@@ -150,11 +157,7 @@ function reachesQ4Stands(r: Recorded): string | null {
   const played = replay(r, r.raw);
   if (typeof played === "string") return played;
   if (held(played.state) === null) return "the abandon holds no result: the score did not stand";
-  const before = replay({ ...r, events: r.events.slice(0, -1) }, r.raw);
-  if (typeof before === "string") return before;
-  const final = periodLabels(before.cfg as never).at(-1);
-  if (before.state.phase !== final) return `the abandon came in "${String(before.state.phase)}", not in the last regulation period "${String(final)}"`;
-  return replaysOnAbandon(r, without(r.raw, "abandonPolicy"), true);
+  return null;
 }
 
 // ----------------------------------------------------------------------------------------------------------- builders

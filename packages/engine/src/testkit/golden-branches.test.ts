@@ -297,59 +297,99 @@ describe("each branch stream takes the branch it is named for (the engine's own 
 });
 
 describe("each verdict has teeth: the stream passes, its counterfactuals do not", () => {
+  // Each counterfactual names the GUARD that must reject it, by the reason it gives. Rejection alone is not enough: two
+  // guards that cover for each other are each untested (delete one and the other still rejects), so a counterfactual is only
+  // evidence for the guard whose reason it matches.
+  type Counterfactual = [name: string, recorded: Recorded, reason: RegExp];
+  /** The reason a story's verdict gives when its config no longer carries the key, and when the deciding event is gone. */
+  const KEY_GONE: Record<string, RegExp> = {
+    "football.shootoutAttempts": /sets no shootoutAttempts/,
+    "hockey.q4_stands": /does not apply the 4th-quarter rule/,
+    "carrom.share": /does not share the points/,
+    "generic.share": /does not share the points/,
+    "football.award_expunge": /does not award an abandoned match/,
+    "hockey.award_expunge": /does not award an abandoned match/,
+    "icehockey.award_expunge": /does not award an abandoned match/,
+  };
+  const DECIDER_GONE: Record<string, RegExp> = {
+    "football.shootoutAttempts": /does not end in a shoot-out win/,
+    "hockey.q4_stands": /does not end on an abandon/,
+    "carrom.share": /does not end in a draw/,
+    "generic.share": /does not end in a draw/,
+    "football.award_expunge": /reports no expunge/,
+    "hockey.award_expunge": /reports no expunge/,
+    "icehockey.award_expunge": /reports no expunge/,
+  };
   /** Counterfactuals every story has: the key gone, and the deciding event (the last one in every story) dropped. */
-  const common = (c: Case): [string, Recorded][] => [
-    ["the key removed from the recorded config", { ...c.recorded, raw: without(c.raw, c.story.key) }],
-    ["the deciding event dropped", { ...c.recorded, events: c.stream.events.slice(0, -1) }],
-    ["no events at all", { ...c.recorded, events: [] }],
-    ["the deciding event replaced by a note", { ...c.recorded, events: [...c.stream.events.slice(0, -1), note] }],
+  const common = (c: Case): Counterfactual[] => [
+    ["the key removed from the recorded config", { ...c.recorded, raw: without(c.raw, c.story.key) }, KEY_GONE[c.story.id]!],
+    ["the deciding event dropped", { ...c.recorded, events: c.stream.events.slice(0, -1) }, DECIDER_GONE[c.story.id]!],
+    ["no events at all", { ...c.recorded, events: [] }, DECIDER_GONE[c.story.id]!],
+    ["the deciding event replaced by a note", { ...c.recorded, events: [...c.stream.events.slice(0, -1), note] }, DECIDER_GONE[c.story.id]!],
   ];
+  /** A shoot-out of `pairs` kick pairs, every pair scored by both sides until the last, which only A scores: the ledger a
+   *  shorter count AND the default decide at the same final kick. */
+  const longTiedShootout = (events: readonly GoldenEvent[], pairs: number): GoldenEvent[] => {
+    const kicks: GoldenEvent[] = [];
+    for (let pair = 1; pair <= pairs; pair++) {
+      for (const [by, scored] of [["A", true], ["H", pair < pairs]] as const) {
+        kicks.push({ type: "football.shootout.kick", payload: { by, scored, at: { period: "SHOOTOUT", elapsed: 60 * (kicks.length + 1) } } });
+      }
+    }
+    return [...events.filter((e) => e.type !== "football.shootout.kick"), ...kicks];
+  };
   /** The branch's own other half, per story. */
-  const specific = (c: Case): [string, Recorded][] => {
+  const specific = (c: Case): Counterfactual[] => {
     const events = c.stream.events;
     const last = events[events.length - 1]!;
     switch (c.story.id) {
       case "football.shootoutAttempts":
         return [
-          ["the count at the default", { ...c.recorded, raw: { ...c.raw, shootoutAttempts: SHOOTOUT_ATTEMPTS_DEFAULT } }],
-          ["a count above the default", { ...c.recorded, raw: { ...c.raw, shootoutAttempts: SHOOTOUT_ATTEMPTS_DEFAULT + 2 } }],
+          ["the count at the default", { ...c.recorded, raw: { ...c.raw, shootoutAttempts: SHOOTOUT_ATTEMPTS_DEFAULT } }, /not shorter than the default/],
+          ["a count above the default", { ...c.recorded, raw: { ...c.raw, shootoutAttempts: SHOOTOUT_ATTEMPTS_DEFAULT + 2 } }, /not shorter than the default/],
+          // a win, under the key's own config, that no shoot-out decided: the method is what makes it the branch
+          ["a regulation win (no shoot-out)", { ...c.recorded, events: [events[0]!, { type: "football.goal", payload: { by: "H", at: { period: "H1", elapsed: 30 } } }, events[1]!, events[3]!] }, /does not end in a shoot-out win/],
+          // 3 < 5, a shoot-out win, and it folds - but a tied run to a sixth pair is decided by the default of five as well
+          ["a long tied shoot-out the default count decides too", { ...c.recorded, events: longTiedShootout(events, 6) }, /decide the same ledger/],
         ];
       case "hockey.q4_stands":
         return [
-          ["an abandon before the 4th quarter", { ...c.recorded, events: [events[0]!, last] }],
-          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }],
-          ["the award policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "award" } }],
+          ["an abandon before the 4th quarter", { ...c.recorded, events: [events[0]!, last] }, /holds no result/],
+          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }, /does not apply the 4th-quarter rule/],
+          ["the award policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "award" } }, /does not apply the 4th-quarter rule/],
         ];
       case "carrom.share":
       case "generic.share":
-        return [["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }]];
+        return [["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }, /does not share the points/]];
       case "football.award_expunge":
         return [
-          ["no expunge", { ...c.recorded, events: [...events.slice(0, -1), { type: "core.abandon", payload: { reason: "withdrew" } }] }],
-          ["a level score (the draw arm)", { ...c.recorded, events: [events[0]!, last] }],
-          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }],
+          ["no expunge", { ...c.recorded, events: [...events.slice(0, -1), { type: "core.abandon", payload: { reason: "withdrew" } }] }, /reports no expunge/],
+          ["a level score (the draw arm)", { ...c.recorded, events: [events[0]!, last] }, /does not hold the leader's win/],
+          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }, /does not award an abandoned match/],
         ];
       case "hockey.award_expunge":
       case "icehockey.award_expunge":
         return [
-          ["no expunge", { ...c.recorded, events: [...events.slice(0, -1), { type: "core.abandon", payload: { reason: "withdrew" } }] }],
+          ["no expunge", { ...c.recorded, events: [...events.slice(0, -1), { type: "core.abandon", payload: { reason: "withdrew" } }] }, /reports no expunge/],
           // one goal fewer: a leader, so the award is a win and the draw story must not accept it
-          ["a leader instead of a level score", { ...c.recorded, events: events.filter((_, i) => i !== 2) }],
-          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }],
+          ["a leader instead of a level score", { ...c.recorded, events: events.filter((_, i) => i !== 2) }, /does not hold a draw/],
+          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }, /does not award an abandoned match/],
         ];
       default:
         throw new Error(`${c.story.id}: no counterfactuals declared for this story`);
     }
   };
 
-  it("passes the committed stream and fails every counterfactual of it, by name", () => {
+  it("passes the committed stream and fails every counterfactual of it, by the guard it is aimed at", () => {
     let counterfactuals = 0;
     for (const c of allCases()) {
       expect(c.story.reached(c.recorded), `${c.story.id} passes`).toBeNull();
       const all = [...common(c), ...specific(c)];
       expect(all.length, c.story.id).toBeGreaterThanOrEqual(5);
-      for (const [name, recorded] of all) {
-        expect(c.story.reached(recorded), `${c.story.id} must reject: ${name}`).not.toBeNull();
+      for (const [name, recorded, reason] of all) {
+        const refusal = c.story.reached(recorded);
+        expect(refusal, `${c.story.id} must reject: ${name}`).not.toBeNull();
+        expect(refusal, `${c.story.id} rejects "${name}" for the wrong reason - the guard aimed at it is not the one that fired`).toMatch(reason);
         counterfactuals++;
       }
     }
