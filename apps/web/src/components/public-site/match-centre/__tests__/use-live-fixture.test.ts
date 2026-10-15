@@ -24,6 +24,8 @@ vi.mock("../../live-score-data", async () => {
 
 import { fetchLiveFixture, fetchPublicRealtimeToken, OVERLAY_REALTIME_PURPOSE } from "../../live-score-data";
 import { DRAIN_MS, POLL_MS, useLiveFixture } from "../use-live-fixture";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { LOCKED_FIXTURE_STATUSES } from "@/server/engine-db/append-event";
 
 function mount(
   fixtureId: string,
@@ -102,9 +104,11 @@ describe("useLiveFixture", () => {
     expect(hook.current.data).toBe(scheduled); // unchanged, not undefined/null
   });
 
-  it("never arms a poll timer when the fixture is already decided at mount", async () => {
-    const decided: LiveFixtureData = { status: "decided", summary: null, outcome: null } as LiveFixtureData;
-    mount("fx-1", decided, false);
+  // Was "…already DECIDED at mount" — which froze the owner's 2026-10-15 bug as its expected value: a decided fixture
+  // is NOT terminal (an undo reopens it). FINALIZED is: the ledger refuses every write, so nothing can move it.
+  it("never arms a poll timer when the fixture is already finalized at mount", async () => {
+    const finalized: LiveFixtureData = { status: "finalized", summary: null, outcome: null } as LiveFixtureData;
+    mount("fx-1", finalized, false);
 
     await vi.advanceTimersByTimeAsync(POLL_MS * 2);
     expect(fetchLiveFixture).not.toHaveBeenCalled();
@@ -476,5 +480,70 @@ describe("useLiveFixture — the overlay's declared realtime purpose and signed 
     }
     expect(renders).toBe(3);
     expect(fetchPublicRealtimeToken).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Owner bug, 2026-10-15: the stream overlay's end card stayed on air after the scorer undid the deciding point. The
+// server had reopened the fixture; this hook had stopped listening the moment a poll brought `decided`, so the undo
+// never reached the page. The expected values come from the WRITE path's own declaration — LOCKED_FIXTURE_STATUSES
+// (append-event.ts), the statuses whose ledger refuses every write — never from this hook: any other status can still
+// change (an undo reopens a decided, abandoned or forfeited fixture; a settle closes a held one).
+describe("useLiveFixture — listens for exactly as long as the ledger can still move the fixture", () => {
+  beforeEach(() => {
+    // The realtime effect only asks for a token when a Supabase URL is configured (the CI stub host: mints, never dials).
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://stub.supabase.co");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("every fixture status: polls and asks for realtime iff the ledger is still open", async () => {
+    for (const s of LOCKED_FIXTURE_STATUSES) expect(FIXTURE_STATUSES, `locked status ${s} is a fixtures.status`).toContain(s);
+    let open = 0;
+    let locked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      vi.mocked(fetchLiveFixture).mockClear();
+      vi.mocked(fetchPublicRealtimeToken).mockClear();
+      const doc = { status, summary: null, outcome: null } as LiveFixtureData;
+      vi.mocked(fetchLiveFixture).mockResolvedValue(doc);
+      const hook = mount("fx-1", doc, true);
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      const listens = !LOCKED_FIXTURE_STATUSES.has(status);
+      expect(vi.mocked(fetchLiveFixture).mock.calls.length > 0, `${status}: polls`).toBe(listens);
+      expect(vi.mocked(fetchPublicRealtimeToken).mock.calls.length > 0, `${status}: asks for realtime`).toBe(listens);
+      hook.unmount();
+      if (listens) open++;
+      else locked++;
+    }
+    // Anti-vacuity: every status was checked, and both answers occurred.
+    expect(open + locked).toBe(FIXTURE_STATUSES.length);
+    expect(open, "statuses whose ledger is still open").toBeGreaterThan(0);
+    expect(locked, "locked statuses").toBeGreaterThan(0);
+  });
+
+  it("the sequence: a poll that brings `decided` keeps the poll armed, so the undo that reopens it is presented", async () => {
+    const inPlay = { status: "in_play", summary: { headline: "10 — 10" }, outcome: null } as LiveFixtureData;
+    const decided = { status: "decided", summary: { headline: "11 — 10" }, outcome: { kind: "win" } } as LiveFixtureData;
+    const reopened = { status: "in_play", summary: { headline: "10 — 10" }, outcome: null } as LiveFixtureData;
+    vi.mocked(fetchLiveFixture).mockResolvedValueOnce(inPlay).mockResolvedValueOnce(decided).mockResolvedValue(reopened);
+    const hook = mount("fx-1", inPlay, false);
+    await vi.advanceTimersByTimeAsync(0); // mount refresh: in_play
+    await vi.advanceTimersByTimeAsync(POLL_MS); // the deciding point arrives
+    expect(hook.current.data.status).toBe("decided");
+
+    await vi.advanceTimersByTimeAsync(POLL_MS); // the undo
+    expect(vi.mocked(fetchLiveFixture).mock.calls.length, "a poll ran after `decided`").toBe(3);
+    expect(hook.current.data).toBe(reopened);
+  });
+
+  it("the negative pair: a poll that brings `finalized` stops the poll — a locked fixture costs nothing", async () => {
+    const inPlay = { status: "in_play", summary: null, outcome: null } as LiveFixtureData;
+    const finalized = { status: "finalized", summary: null, outcome: { kind: "win" } } as LiveFixtureData;
+    vi.mocked(fetchLiveFixture).mockResolvedValueOnce(finalized).mockResolvedValue(inPlay);
+    const hook = mount("fx-1", inPlay, false);
+    await vi.advanceTimersByTimeAsync(0); // mount refresh brings `finalized`
+    expect(hook.current.data.status).toBe("finalized");
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    expect(vi.mocked(fetchLiveFixture).mock.calls.length, "no poll after `finalized`").toBe(1);
   });
 });

@@ -92,13 +92,16 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
  *  sequence, retrying the optimistic-concurrency 409 — `v6-sports.spec.ts`'s
  *  own `sendEvent` (:103-120), the call site the F9a recipe names. Throws on
  *  any other refusal: a silently-dropped card is a seed that photographs a
- *  state the assertions never asked for. */
+ *  state the assertions never asked for.
+ *
+ *  Answers the appended event's id — what a `core.void` names to take it back,
+ *  exactly as the pad's Undo does. */
 export async function sendEvent(
   request: APIRequestContext,
   fixtureId: string,
   type: string,
   payload: unknown,
-): Promise<void> {
+): Promise<string> {
   for (let attempt = 0; ; attempt++) {
     const state = await apiJson<{ last_seq: number }>(
       request,
@@ -107,12 +110,15 @@ export async function sendEvent(
     if (state.status !== 200 || !state.data) {
       throw new Error(`overlay seed: GET state before ${type} -> ${state.status}`);
     }
-    const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    const res = await apiJson<{ event_id: string }>(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
       expected_seq: state.data.last_seq,
       type,
       payload,
     });
-    if (res.status === 201) return;
+    if (res.status === 201) {
+      if (!res.data?.event_id) throw new Error(`overlay seed: ${type} -> 201 without an event_id`);
+      return res.data.event_id;
+    }
     if (res.status === 409 && attempt < 3) continue;
     throw new Error(`overlay seed: ${type} -> ${res.status} ${JSON.stringify(res.error)}`);
   }
@@ -553,6 +559,68 @@ export async function seedHockeyGoalOverlayFixture(page: Page): Promise<OverlayR
     label: "Hockey",
     squad: 11,
   });
+}
+
+/**
+ * A LIVE, ROSTERLESS fixture of any sport, in a fresh pro org — for the owner's 2026-10-15 undo bug, which is about the
+ * transport and the fixture's status, not about names: one member a side, no line-up (the pad's rosterless case, as
+ * `seedOverlayFixture` uses), `core.start` already on the ledger. The caller writes the rest of the match itself,
+ * because the deciding write is the thing under test.
+ */
+export async function seedUndoOverlayFixture(
+  page: Page,
+  spec: { sportKey: string; variantKey: string; entrantKind: "individual" | "team"; prefix: string },
+): Promise<OverlayRig> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const ownerEmail = `delivered+${spec.prefix}-${tag}@resend.dev`;
+  const orgSlug = `${spec.prefix}-org-${tag}`;
+
+  const { orgId } = await withDb(async (sql) => {
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${ownerEmail}, ${`Overlay Undo ${spec.sportKey} Owner ` + tag}, true) returning id`;
+    const [{ id: newOrgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status, created_by)
+      values (${`Overlay Undo ${spec.sportKey} Org ` + tag}, ${orgSlug}, 'active', ${userId}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
+    const [{ id: subId }] = await sql<{ id: string }[]>`
+      insert into subscriptions (owner_user_id, plan_key, status)
+      values (${userId}, 'pro', 'active') returning id`;
+    await sql`update organizations set subscription_id = ${subId} where id = ${newOrgId}`;
+    return { orgId: newOrgId };
+  });
+
+  await signInAs(page, ownerEmail);
+  const request = page.request;
+  const seeded = await seedRosteredFixture(request, {
+    label: `Overlay Undo ${spec.sportKey} ${tag}`,
+    sportKey: spec.sportKey,
+    variantKey: spec.variantKey,
+    home: [{ fullName: `Home ${tag}` }],
+    away: [{ fullName: `Away ${tag}` }],
+    entrantKind: spec.entrantKind,
+    skipLineups: true,
+  });
+  await sendEvent(request, seeded.fixtureId, "core.start", {});
+
+  const comp = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${seeded.competitionId}`);
+  const div = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${seeded.divisionId}`);
+  if (!comp.data?.slug || !div.data?.slug) {
+    throw new Error(`${spec.prefix} seed: slugs missing (comp ${comp.status}, div ${div.status})`);
+  }
+  return {
+    orgId,
+    orgSlug,
+    ownerEmail,
+    competitionId: seeded.competitionId,
+    compSlug: comp.data.slug,
+    divisionId: seeded.divisionId,
+    divSlug: div.data.slug,
+    fixtureId: seeded.fixtureId,
+    homeEntrantId: seeded.homeEntrantId,
+    awayEntrantId: seeded.awayEntrantId,
+    offenderIds: [],
+  };
 }
 
 /** Switch `streaming.overlay` OFF for this rig's org — the one way left to

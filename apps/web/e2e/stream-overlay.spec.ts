@@ -44,6 +44,7 @@ import {
   seedCricketOverlayFixture,
   seedCricketOverlayFreshOver,
   seedOverlayFixture,
+  seedUndoOverlayFixture,
   sendEvent,
   setRigPlan,
   signInAs,
@@ -701,6 +702,107 @@ test.describe("the overlay puts the right score on air", () => {
       await page.context().close();
     }
   });
+});
+
+// ===========================================================================
+// OWNER BUG 2026-10-15 — the end card stayed on air after an UNDO.
+//
+// Live proof of concept: the match was decided, the overlay put up its
+// Result card, the scorer undid the deciding point — and the card stayed.
+// The server had reopened the fixture (status back to in_play); the page had
+// stopped listening the moment a poll brought `decided` (`useLiveFixture`'s
+// `live` predicate), so it never heard about the undo.
+//
+// NO RELOAD anywhere in this test, and that is the whole point: OBS keeps one
+// browser source open for the broadcast, and a reload would hide the defect
+// by refetching. The sequence is the test — decide → undo → re-decide → undo
+// — in two sports whose deciding writes differ in shape (a badminton rally,
+// a cricket innings summary). The budget per step is the poll period plus
+// slack, derived from `POLL_MS` (AGENTS.md #20), because locally and on CI's
+// stub Supabase host the overlay's transport IS the poll.
+// ===========================================================================
+
+const CARD_WAIT_MS = POLL_MS + 15_000;
+
+const UNDO_CASES = [
+  {
+    // `short`: to 11, best of three — 21 unanswered rallies leave home one rally from the match.
+    sportKey: "badminton",
+    variantKey: "short",
+    entrantKind: "individual" as const,
+    approach: async (request: Page["request"], r: OverlayRig) => {
+      for (let i = 0; i < 21; i++) await sendEvent(request, r.fixtureId, "badminton.rally", { wonBy: r.homeEntrantId });
+    },
+    decide: (request: Page["request"], r: OverlayRig) =>
+      sendEvent(request, r.fixtureId, "badminton.rally", { wonBy: r.homeEntrantId }),
+  },
+  {
+    // A T20 whose chase falls short in its full quota: the second innings' summary decides it.
+    sportKey: "cricket",
+    variantKey: "t20",
+    entrantKind: "team" as const,
+    approach: async (request: Page["request"], r: OverlayRig) => {
+      await sendEvent(request, r.fixtureId, "cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 });
+    },
+    decide: (request: Page["request"], r: OverlayRig) =>
+      sendEvent(request, r.fixtureId, "cricket.innings.summary", { runs: 100, wickets: 6, legalBalls: 120 }),
+  },
+];
+
+test.describe("an undo of the deciding write takes the end card down on the OPEN page", () => {
+  for (const c of UNDO_CASES) {
+    test(`${c.sportKey}: decide → card up → undo → down → re-decide → up → undo → down, never reloaded`, async ({
+      browser,
+    }) => {
+      test.setTimeout(120_000 + 4 * CARD_WAIT_MS);
+      const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+      const ownerPage = await owner.newPage();
+      const page = await anonPage(browser);
+      try {
+        const r = await seedUndoOverlayFixture(ownerPage, {
+          sportKey: c.sportKey,
+          variantKey: c.variantKey,
+          entrantKind: c.entrantKind,
+          prefix: `ovlu${c.sportKey.slice(0, 2)}`,
+        });
+        await c.approach(ownerPage.request, r);
+
+        await page.goto(`/overlay/fixtures/${r.fixtureId}`);
+        await expect(page.getByTestId("ovl-root")).toHaveCount(1);
+        const card = page.getByTestId("ovl-slate");
+        await expect(card, "empty case first: an in-play match carries no end card").toHaveCount(0);
+        let reloads = 0;
+        page.on("framenavigated", (frame) => {
+          if (frame === page.mainFrame()) reloads++;
+        });
+
+        const cardIs = async (up: boolean, step: string) => {
+          if (up) {
+            await expect(card, `${step}: the Result card is on air`).toHaveAttribute("data-slate-state", "ended", {
+              timeout: CARD_WAIT_MS,
+            });
+          } else {
+            await expect(card, `${step}: the end card has come down`).toHaveCount(0, { timeout: CARD_WAIT_MS });
+          }
+        };
+        const undo = (eventId: string) => sendEvent(ownerPage.request, r.fixtureId, "core.void", { event_id: eventId });
+
+        const first = await c.decide(ownerPage.request, r);
+        await cardIs(true, "after the deciding write");
+        await undo(first);
+        await cardIs(false, "after the undo");
+        const second = await c.decide(ownerPage.request, r);
+        await cardIs(true, "after re-deciding");
+        await undo(second);
+        await cardIs(false, "after the second undo");
+
+        expect(reloads, "the OBS page was never reloaded — every change arrived over its own transport").toBe(0);
+      } finally {
+        await owner.close();
+        await page.context().close();
+      }
+    });
+  }
 });
 
 // ===========================================================================
