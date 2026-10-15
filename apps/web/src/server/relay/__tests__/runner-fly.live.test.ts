@@ -1,6 +1,7 @@
 // LIVE, opt-in: drives `FlyRunner` itself — the ADAPTER, not the client —
 // against the real Machines API, for the one composition no fixture can prove.
-// Runs only with FLY_API_TOKEN and RELAY_LIVE_FLY=1; skips LOUDLY otherwise.
+// Runs only with FLY_API_TOKEN, RELAY_LIVE_FLY=1 and FLY_RELAY_APP (REQUIRED, no default — PR #971 review I1; the
+// retired shared `seazn-relay` throws, `_live-fly-gate.ts`); skips LOUDLY otherwise.
 // The token is never echoed, logged or asserted on.
 //
 // What it settles that runner-fly.test.ts cannot: that a real `409
@@ -29,6 +30,7 @@ import { FlyRunner } from "../runner-fly";
 import { RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { machineNameFor, stepRunner } from "../domain/runner";
 import type { ProviderCallRecord, RunnerSpec } from "../ports";
+import { liveFlyGate } from "./_live-fly-gate";
 
 /** The token from the environment, or from `apps/web/.env.local`, which is where
  *  it lands — so the run command needs no shell substitution. */
@@ -49,10 +51,11 @@ function flyToken(): string | undefined {
 // ordinary unit run of this file, pulling a live Fly credential off disk into the
 // worker's heap for no reason — the exact shape m8 named in fly-client.live.test.ts.
 // Fixing one sibling and leaving the other is half a fix.
-const WANTS_LIVE = process.env.RELAY_LIVE_FLY === "1";
-const TOKEN = WANTS_LIVE ? flyToken() : undefined;
-const ENABLED = !!TOKEN && WANTS_LIVE;
-if (!ENABLED) console.log("SKIP  runner-fly live adopt test (needs FLY_API_TOKEN in apps/web/.env.local or the environment and RELAY_LIVE_FLY=1)");
+// PR #971 review I1: and the app is named explicitly, never defaulted, never the retired one (the sibling's gate).
+const GATE = liveFlyGate(process.env, flyToken);
+const TOKEN = GATE.enabled ? GATE.token : undefined;
+const ENABLED = GATE.enabled;
+if (!GATE.enabled) console.log(`SKIP  runner-fly live adopt test — ${GATE.reason} (needs RELAY_LIVE_FLY=1, FLY_RELAY_APP naming an app in org seazn-club, and FLY_API_TOKEN in the environment or apps/web/.env.local)`);
 
 const seen: string[] = [];
 const note = (s: string) => {
@@ -61,7 +64,7 @@ const note = (s: string) => {
 };
 
 describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", () => {
-  const app = process.env.FLY_RELAY_APP ?? "seazn-relay";
+  const app = GATE.enabled ? GATE.app : "(live leg disabled)";   // read by nothing while skipped
   const region = process.env.FLY_RELAY_REGION ?? "lhr";
   const image = "registry-1.docker.io/library/nginx:1.27-alpine";
   // A create can take tens of seconds on a cold image pull, so this leg's client
