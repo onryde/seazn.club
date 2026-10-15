@@ -122,9 +122,10 @@ export function forfeitDialogModel(
     // X-DW-4: a double walkover credits nothing; a choice the dialog does not offer previews nothing.
     if (w === "both" || headline === undefined || !why(w).includes(reason as WriterForfeitReason)) return null;
     let credit: ReturnType<ForfeitModule["forfeitCredit"]>;
+    // The rule's award applies to this forfeit exactly when the server's fold applies it (`unplayedForfeitEvent`).
+    const awarded = f.forfeitAward !== undefined && typeof state === "object" && state !== null && unplayedForfeitEvent({ by: w, reason }, f.playRecorded);
     try {
       // The module reads the award from its own state (`state.forfeitAward`), as the server's fold leaves it.
-      const awarded = f.forfeitAward !== undefined && typeof state === "object" && state !== null && unplayedForfeitEvent({ by: w, reason }, f.playRecorded);
       credit = module.forfeitCredit(cfg, awarded ? { ...state, forfeitAward: f.forfeitAward } : state, reason, w);
     } catch {
       // A credit the module cannot compute here (an unpriceable cfg) is the server's refusal to explain, not a guess.
@@ -133,7 +134,9 @@ export function forfeitDialogModel(
     const [h, a] = [credit.perSide[0][headline], credit.perSide[1][headline]];
     if (typeof h !== "number" || typeof a !== "number") return null;
     // GN-WO-1 / CK-WO-1: a walkover that credits no score on the headline (generic 0-0, cricket's runs) reads as none.
-    if (h === 0 && a === 0) return null;
+    // An APPLIED rule award is a score the organiser typed, not "no score": a 0-0 award reads "0 - 0" on the headline
+    // (`awardedLine`), so the preview says the same.
+    if (h === 0 && a === 0 && !awarded) return null;
     return { home: String(h), away: String(a) };
   };
   return {

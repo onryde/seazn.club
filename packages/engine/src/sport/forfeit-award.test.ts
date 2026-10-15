@@ -126,6 +126,39 @@ describe("X-WO-1 B: an unplayed walkover under a stage award reads the RULE's nu
     expect(checked).toBeGreaterThan(0);
   });
 
+  it("a nil-nil award is an award, not 'no award': headline, credit and table all read 0 - 0 for a forfeit with nothing played", () => {
+    let checked = 0;
+    let differsFromDefault = 0;
+    for (const m of reaching()) {
+      const keys = m.awardScoreKeys!;
+      const { cfg } = rig(m);
+      for (const offender of [A, H] as const) {
+        const events = [forfeit(1, offender, "walkover")];
+        const base = fold(m, events);
+        const nil = fold(m, events, [0, 0]);
+        expect(lines(nil.summary), `${m.key}/${offender}: the headline is the rule's nil-nil`).toEqual(["0", "0"]);
+        expect(Object.hasOwn(nil.folded.state as object, "forfeitAward"), `${m.key}/${offender}: the award is held in state, not dropped as falsy`).toBe(true);
+        const credit = m.forfeitCredit(cfg, nil.folded.state, "walkover", offender === A ? "away" : "home");
+        for (const side of [0, 1] as const) expect([credit.perSide[side][keys.for], credit.perSide[side][keys.against], credit.perSide[side][keys.diff]], `${m.key}/${offender}/${side}: credit`).toEqual([0, 0, 0]);
+        // The table: the state's credit and the rule's overlay agree on nil-nil (the two authorities).
+        const stage = { kind: "league" } as never;
+        const viaState = m.standingsDelta(nil.outcome!, cfg, stage, nil.folded.state);
+        const viaRule = applyPointsRule(base.outcome!, m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), ruleOf([0, 0]), false, m.awardScoreKeys);
+        for (const side of [0, 1] as const) {
+          for (const key of [keys.for, keys.against, keys.diff]) {
+            expect(viaState[side].metrics[key], `${m.key} side ${side} ${key}: the state's credit and the rule's overlay agree on nil-nil`).toBe(viaRule[side].metrics[key]);
+            expect(viaState[side].metrics[key], `${m.key} side ${side} ${key}: nil`).toBe(0);
+          }
+        }
+        // Premise: the headline is the RULE's where the sport's own reading is not already nil-nil (football's 3-0).
+        if (JSON.stringify(lines(base.summary)) !== JSON.stringify(["0", "0"])) differsFromDefault++;
+        checked++;
+      }
+    }
+    expect(checked, "orientations checked").toBe(reaching().length * 2);
+    expect(differsFromDefault, "sport x orientation cases where nil-nil is not the sport's own reading").toBeGreaterThan(0);
+  });
+
   it("every sport the award does NOT reach: the offered fold is the un-offered fold, byte for byte", () => {
     let checked = 0;
     forEachSport(({ module: m }) => {

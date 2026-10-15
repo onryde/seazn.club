@@ -290,6 +290,35 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
       expect(checked).toBe(reaching().length);
     });
 
+    it("a nil-nil award is an award: the preview says 0 - 0 where the headline does, and only an applied award lifts the 'no score' suppression", () => {
+      // The headline reads the rule's "0 - 0" (engine forfeit-award.test.ts), so the dialog must not preview nothing.
+      let checked = 0;
+      let suppressedWithout = 0;
+      for (const m of reaching()) {
+        for (const [shape, ledger] of [["pre", PRE], ["started", STARTED]] as const) {
+          const fx = fixtureOf(m.key, ledger);
+          const plain = offered(fx);
+          const nil = offered(fx, [0, 0]);
+          for (const who of ["home", "away"] as const) {
+            expect(nil.preview(who, "walkover"), `${m.key}/${shape}/${who}: a 0-0 rule award previews 0 - 0`).toEqual({ home: "0", away: "0" });
+            // The no-award twin keeps the sport's own reading (a credit of nothing reads as none: generic's 0-0).
+            if (plain.preview(who, "walkover") === null) suppressedWithout++;
+            checked++;
+          }
+        }
+        // After play, a retirement is not unplayed: the 0-0 award never applies, so the sport's own credit stands.
+        const played = playedOf(m.key);
+        for (const who of ["home", "away"] as const) {
+          expect(offered(played, [0, 0]).preview(who, "retired"), `${m.key}/${who}: retired after play ignores the award`).toEqual(offered(played).preview(who, "retired"));
+        }
+      }
+      expect(checked, "sport x shape x side cases").toBe(reaching().length * 2 * 2);
+      expect(reaching().length).toBeGreaterThan(0);
+      // The suppression the bypass must not remove: generic credits 0-0 without an award and previews nothing.
+      expect(suppressedWithout, "sports whose own walkover credit is 0-0 still preview nothing without an award").toBeGreaterThan(0);
+      expect(offered(fixtureOf("generic", PRE)).preview("away", "walkover")).toBeNull();
+    });
+
     it("no award offered: nothing changes (the empty case) - and a sport the award never reaches is never offered one", () => {
       const fx = fixtureOf("football", PRE);
       expect(offered(fx).preview("away", "walkover")).toEqual({ home: "3", away: "0" });
