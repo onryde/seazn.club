@@ -85,7 +85,7 @@ export default async function FixturePage({
       fixtureFeedsNextMatch(auth, id),
     ]);
   // W2c Task 15 (X-SR-7): the rules version rides the bootstrap to the console's pad, read with the cfg.
-  const { cfg: padCfg, stageKind, rulesVersion } = padLoad;
+  const { cfg: padCfg, stageKind, rulesVersion, forfeitAward } = padLoad;
   const [competition, planKey] = await Promise.all([
     getCompetition(auth, division.competition_id),
     orgPlanKey(auth.orgId),
@@ -262,6 +262,9 @@ export default async function FixturePage({
             // W2b Task 11 (D19, X-DW-3): the server's own reading of "a double walkover is refused here" — the forfeit
             // dialog shows the guidance instead of "Neither" (a reset grand final and a 2-entrant DE winners' match included).
             no_next_match: doubleWalkoverRefused(stageKind, feedsNext),
+            // W2c Task 16b (X-WO-1 B): the stage points rule's walkover award, when it reaches this sport's table - the
+            // forfeit dialog's preview then says the number the table will carry (absent: the sport's own credit).
+            ...(forfeitAward === undefined ? {} : { forfeit_award: forfeitAward }),
           }}
           sport={{
             key: division.sport_key,

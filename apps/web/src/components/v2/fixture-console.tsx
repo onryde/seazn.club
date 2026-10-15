@@ -335,6 +335,10 @@ interface Props {
      *  The forfeit dialog then shows the guidance instead of "Neither". Absent reads false: "Neither" is offered and
      *  the server's own refusal still stands. */
     no_next_match?: boolean;
+    /** W2c Task 16b (X-WO-1 B): the walkover score the fixture's stage points rule awards (winner first), read by the page
+     *  server-side (`stageForfeitAward`) - present only where the award reaches this sport's table. The forfeit dialog's
+     *  preview says it for a forfeit with nothing played. Absent: the sport's own credit. */
+    forfeit_award?: readonly [number, number];
   };
   sport: SportInfo;
   home: SideInfo | null;
@@ -902,6 +906,7 @@ export function FixtureConsole({
   // scheduled fixture's null read as the module's init), the cfg the pad folds against, and the page's D19 reading.
   const forfeitCfg = scorePadV2?.resolvedConfig ?? sport.config;
   const noNextMatch = fixture.no_next_match === true;
+  const forfeitAward = fixture.forfeit_award;
   // Ruling 112: a walkover stays on offer after the Start until something is played — the engine's own reading of the
   // full ledger this console holds (`listEvents` since 0, re-read on every resync beside the state), for this
   // fixture's module (ruling 118: chess's Start is play). No module, no dialog (below), so nothing to read.
@@ -910,12 +915,12 @@ export function FixtureConsole({
     if (sportModule === null || home === null || away === null) return null;
     try {
       const state = forfeitBaseState(sportModule, forfeitCfg, live.state, lineupPairFrom(home, away));
-      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch, playRecorded });
+      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch, playRecorded, ...(forfeitAward === undefined ? {} : { forfeitAward }) });
     } catch {
       // A state the module cannot read here is not a dialog to guess at; the console stays up without the Forfeit.
       return null;
     }
-  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch, playRecorded]);
+  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch, playRecorded, forfeitAward]);
   // The match-actions band's two halves, each decided ONCE and read both by the band's own gate and by the control it
   // renders (two gates for one fact would each cover for the other, and neither would be tested).
   //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.
