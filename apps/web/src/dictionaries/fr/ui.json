@@ -6526,7 +6526,7 @@
   "settings.credits.stream.kind.other": "Autre modification",
   "rules.err.fixtureRulesChanged": "Le format du match a été corrigé : {format}. Cette saisie n'a pas été enregistrée — vérifiez le score, puis saisissez-la à nouveau.",
   "rules.err.fixtureRulesChangedNoLine": "Le format du match a été corrigé. Cette saisie n'a pas été enregistrée — vérifiez le score, puis saisissez-la à nouveau.",
-  "scorepad.refusal.rulesChanged": "Non enregistré : le format du match a été corrigé. La feuille de marque suit désormais le nouveau format ; vérifiez le score, puis refaites la saisie.",
+  "scorepad.refusal.rulesChanged": "Non enregistré : le format du match a été corrigé. Vérifiez le format et le score, puis refaites la saisie.",
   "pad.rulesChanged": "L'organisateur a corrigé le format de ce match. Le score le suit désormais.",
   "pad.rulesChangedDismiss": "Compris"
 }

@@ -88,6 +88,26 @@ describe("refusalText", () => {
     expect(refusalText({ code: "FIXTURE_RULES_CHANGED", message: "server prose" }, identityMsg)).toBe("scorepad.refusal.rulesChanged");
   });
 
+  it("W2c Task 15 fix round 1 (M-3): the rules-changed refusal promises no follow, in every locale (counted)", () => {
+    // The refusal shows on the 409 itself — before, or without, the reload (`use-pad-pipeline.ts` `reloadRules` keeps the
+    // old rules when its read fails). Only the banner (`pad.rulesChanged`), rendered once the reload LANDED, may say the
+    // pad follows the new format. Each locale's verb the first build used for that claim:
+    const follows: readonly [string, Record<string, string>, RegExp][] = [
+      ["en", en as Record<string, string>, /\bfollows?\b/i],
+      ["es", es as Record<string, string>, /\bsigue\b/i],
+      ["fr", fr as Record<string, string>, /\bsuit\b/i],
+      ["nl", nl as Record<string, string>, /\bvolgt\b/i],
+    ];
+    let checked = 0;
+    for (const [locale, d, claim] of follows) {
+      const copy = d["scorepad.refusal.rulesChanged"];
+      expect(copy, `${locale}: the refusal has copy`).toBeTruthy();
+      expect(copy, `${locale}: the refusal claims the pad follows the new format`).not.toMatch(claim);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the four shipped locales").toBe(4);
+  });
+
   it("gives an unknown code the generic fallback rather than the server's string", () => {
     expect(refusalText({ code: "SOMETHING_NEW", message: "a brand new english sentence" }, identityMsg)).toBe(
       REFUSAL_FALLBACK,
