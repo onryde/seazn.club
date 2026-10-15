@@ -4,7 +4,7 @@
 // → that rule's boundary row red; ADD a retries check (`runnerRetries < 1`) →
 // the "regardless of attempt" row red (the retry cap is the runner table's, Task 2C).
 import { describe, expect, it } from "vitest";
-import { ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES } from "../../config";
+import { ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES } from "../../config";
 import { ACTIVE_STATES } from "../session";
 import { DEFAULT_LIMITS, deadlineOf, evaluate, runnerDeadlineOf, type Expiry } from "../expiry";
 import { RUNNER_NONE, RUNNER_STATES, type Runner, type RunnerState } from "../runner";
@@ -13,6 +13,9 @@ import { decide, type Session } from "../session";
 const T0 = new Date("2026-09-14T10:00:00Z");
 const at = (s: number) => new Date(T0.getTime() + s * 1000);
 const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+/** R2003 (owner ruling 2026-10-15, option A), typed as the oracle: the runner states that have NOT yet played in their
+ *  attempt — the create in flight and the boot — keep the STALE_HEARTBEAT_SECONDS boot allowance. */
+const NOT_YET_PLAYED: readonly RunnerState[] = ["creating", "booting"];
 const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "warming", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
@@ -126,11 +129,13 @@ describe("evaluate", () => {
     expect(evaluate(warming, at(MAX_DURATION_MINUTES * 60 - 1), LONG_WARMING)).toEqual({ kind: "none" });
     expect(evaluate(warming, at(MAX_DURATION_MINUTES * 60), LONG_WARMING)).toEqual({ kind: "wall_clock" });
   });
-  it("live composed with a PLAYING runner and a stale beat → stale_beat regardless of attempt (the table decides retry vs fail); passthrough never (no Machine)", () => {
+  // R2003 (owner ruling 2026-10-15, option A): a PLAYED runner is timed by the composed window; a replacement still booting
+  // keeps STALE_HEARTBEAT_SECONDS, its boot allowance.
+  it("live composed with a PLAYING runner and a stale beat → stale_beat at STALE_HEARTBEAT_SECONDS_COMPOSED regardless of attempt (the table decides retry vs fail); passthrough never (no Machine)", () => {
     const c = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: T0, heartbeatAt: T0 });
-    expect(evaluate(c, at(STALE_HEARTBEAT_SECONDS - 1))).toEqual({ kind: "none" });
-    expect(evaluate(c, at(STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
-    expect(evaluate({ ...c, runnerRetries: 1, runner: { ...PLAYING, attempt: 2 } }, at(STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
+    expect(evaluate(c, at(STALE_HEARTBEAT_SECONDS_COMPOSED - 1))).toEqual({ kind: "none" });
+    expect(evaluate(c, at(STALE_HEARTBEAT_SECONDS_COMPOSED))).toEqual({ kind: "stale_beat" });
+    expect(evaluate({ ...c, runnerRetries: 1, runner: { ...PLAYING, attempt: 2 } }, at(STALE_HEARTBEAT_SECONDS_COMPOSED))).toEqual({ kind: "stale_beat" });
     expect(evaluate(S({ state: "live", startedAt: T0, heartbeatAt: null }), at(STALE_HEARTBEAT_SECONDS * 10))).toEqual({ kind: "none" });
     // …and it is the MODE that rules, not the runner state: the same playing runner on a passthrough row owes no beat
     // (Task 2B: the row above carries RUNNER_NONE, so dropping the mode check survived it)
@@ -143,12 +148,12 @@ describe("evaluate", () => {
   });
   it("a live composed session with NO beat yet measures staleness from started_at", () => {
     const c = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: T0, heartbeatAt: null });
-    expect(evaluate(c, at(STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
+    expect(evaluate(c, at(STALE_HEARTBEAT_SECONDS_COMPOSED))).toEqual({ kind: "stale_beat" });
     // The differential (Task 2B: with startedAt === createdAt, measuring from created_at survived): a Machine that
     // took 60 s to boot is NOT stale one beat-window after it was created, only one beat-window after it went live.
     const booted = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: at(60), heartbeatAt: null });
-    expect(evaluate(booted, at(60 + STALE_HEARTBEAT_SECONDS - 1))).toEqual({ kind: "none" });
-    expect(evaluate(booted, at(60 + STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
+    expect(evaluate(booted, at(60 + STALE_HEARTBEAT_SECONDS_COMPOSED - 1))).toEqual({ kind: "none" });
+    expect(evaluate(booted, at(60 + STALE_HEARTBEAT_SECONDS_COMPOSED))).toEqual({ kind: "stale_beat" });
   });
   // Fix round 1 (M3): retitled to what the rows witness. The brief's title also claimed "ordered below wall clock",
   // which no row pins (review M2, DEFERRED by the orchestrator) — the claim is dropped here, not tested.
@@ -184,31 +189,37 @@ describe("evaluate", () => {
   // before `retry_runner` ran), a replacement stuck in `creating`, a `lost` one — is a dead stream still reading `live`,
   // holding its credit and its reservation until the 5 h wall clock. It is timed by the SAME stale-beat rule. This test pins
   // ONLY evaluate's answer: what stale_beat does to each runner state is the runner table's (Task 2C), and 2A's stub throws.
-  it("a LIVE COMPOSED session wanting live whose runner is NOT playing/booting and UNMARKED (destroyed awaiting retry, creating, lost…) owes the beat: stale_beat at (heartbeatAt ?? startedAt) + STALE_HEARTBEAT_SECONDS, none 1 s before; marked / passthrough / desired-ending twins never read stale_beat; wall clock still outranks (I2)", () => {
+  it("a LIVE COMPOSED session wanting live whose runner is NOT playing/booting and UNMARKED (destroyed awaiting retry, creating, lost…) owes the beat: stale_beat at (heartbeatAt ?? startedAt) + its window, none 1 s before; marked / passthrough / desired-ending twins never read stale_beat; wall clock still outranks (I2)", () => {
     const beat = 60;   // heartbeatAt ≠ startedAt, so the anchor is witnessed (a retry restarts the window through beatWindowAt, I4)
+    const grace = RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS;
     const idle = RUNNER_STATES.filter((r) => r !== "playing" && r !== "booting");   // walked, never a typed list
     expect(idle).toEqual(expect.arrayContaining(["destroyed", "creating", "lost"]));   // not vacuous: the ruled states are in it
     const GRACE_TIMED: readonly RunnerState[] = ["stopping", "exited", "creating"];
     for (const state of idle) {
+      // R2003 (owner ruling 2026-10-15, option A): `creating` has not played in this attempt — the boot allowance; every
+      // other idle state re-fires on the composed window.
+      const window = NOT_YET_PLAYED.includes(state) ? STALE_HEARTBEAT_SECONDS : STALE_HEARTBEAT_SECONDS_COMPOSED;
       const s = S({ state: "live", mode: "composed", startedAt: T0, heartbeatAt: at(beat), runner: { ...PLAYING, state } });
-      expect(evaluate(s, at(beat + STALE_HEARTBEAT_SECONDS - 1)), `${state} T−1`).toEqual({ kind: "none" });
-      expect(evaluate(s, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} T`).toEqual({ kind: "stale_beat" });
+      expect(evaluate(s, at(beat + window - 1)), `${state} T−1`).toEqual({ kind: "none" });
+      expect(evaluate(s, at(beat + window)), `${state} T`).toEqual({ kind: "stale_beat" });
       // no beat since it went live: measured from started_at, both sides
-      expect(evaluate({ ...s, heartbeatAt: null }, at(STALE_HEARTBEAT_SECONDS - 1)), `${state} from started_at T−1`).toEqual({ kind: "none" });
-      expect(evaluate({ ...s, heartbeatAt: null }, at(STALE_HEARTBEAT_SECONDS)), `${state} from started_at T`).toEqual({ kind: "stale_beat" });
-      // a stop-MARKED twin stays with the grace rule (which times only stopping/exited/creating) — never stale_beat
+      expect(evaluate({ ...s, heartbeatAt: null }, at(window - 1)), `${state} from started_at T−1`).toEqual({ kind: "none" });
+      expect(evaluate({ ...s, heartbeatAt: null }, at(window)), `${state} from started_at T`).toEqual({ kind: "stale_beat" });
+      // a stop-MARKED twin stays with the grace rule (which times only stopping/exited/creating) — never stale_beat, read
+      // past BOTH its beat window and the grace
       const marked = { ...s, runner: { ...s.runner, stopRequestedAt: at(beat) } };
-      expect(evaluate(marked, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} marked`).toEqual({ kind: GRACE_TIMED.includes(state) ? "grace_expired" : "none" });
+      expect(evaluate(marked, at(beat + Math.max(window, grace))), `${state} marked`).toEqual({ kind: GRACE_TIMED.includes(state) ? "grace_expired" : "none" });
       // a passthrough twin has no Machine; a session that no longer wants to be live is not the beat's business
-      expect(evaluate({ ...s, mode: "passthrough" }, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} passthrough`).toEqual({ kind: "none" });
-      expect(evaluate({ ...s, desiredState: "ending" }, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} desired ending`).toEqual({ kind: "none" });
+      expect(evaluate({ ...s, mode: "passthrough" }, at(beat + window)), `${state} passthrough`).toEqual({ kind: "none" });
+      expect(evaluate({ ...s, desiredState: "ending" }, at(beat + window)), `${state} desired ending`).toEqual({ kind: "none" });
       // precedence unchanged: the wall clock still outranks
       expect(evaluate(s, at(MAX_DURATION_MINUTES * 60)), `${state} wall clock`).toEqual({ kind: "wall_clock" });
     }
     // playing/booting are UNCHANGED by the ruling: they owe the beat whatever desiredState says (only the idle states are gated)
     for (const state of ["playing", "booting"] as const) {
+      const window = NOT_YET_PLAYED.includes(state) ? STALE_HEARTBEAT_SECONDS : STALE_HEARTBEAT_SECONDS_COMPOSED;
       const s = S({ state: "live", mode: "composed", desiredState: "ending", startedAt: T0, heartbeatAt: at(beat), runner: { ...PLAYING, state } });
-      expect(evaluate(s, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} desired ending`).toEqual({ kind: "stale_beat" });
+      expect(evaluate(s, at(beat + window)), `${state} desired ending`).toEqual({ kind: "stale_beat" });
     }
   });
   // Task 2C review I4, RULING option A (fix round 1): a stale-beat decision or a retry restarts the window through its OWN
@@ -225,21 +236,58 @@ describe("evaluate", () => {
     ];
     for (const [label, heartbeatAt, beatWindowAt, from] of rows) {
       const s = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: at(30), heartbeatAt, beatWindowAt });
-      expect(evaluate(s, at(from + STALE_HEARTBEAT_SECONDS - 1)), `${label} T−1`).toEqual({ kind: "none" });
-      expect(evaluate(s, at(from + STALE_HEARTBEAT_SECONDS)), `${label} T`).toEqual({ kind: "stale_beat" });
+      expect(evaluate(s, at(from + STALE_HEARTBEAT_SECONDS_COMPOSED - 1)), `${label} T−1`).toEqual({ kind: "none" });
+      expect(evaluate(s, at(from + STALE_HEARTBEAT_SECONDS_COMPOSED)), `${label} T`).toEqual({ kind: "stale_beat" });
     }
     // and with no started_at either, created_at (T0)
     const unstarted = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: null });
-    expect(evaluate(unstarted, at(STALE_HEARTBEAT_SECONDS - 1))).toEqual({ kind: "none" });
-    expect(evaluate(unstarted, at(STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
+    expect(evaluate(unstarted, at(STALE_HEARTBEAT_SECONDS_COMPOSED - 1))).toEqual({ kind: "none" });
+    expect(evaluate(unstarted, at(STALE_HEARTBEAT_SECONDS_COMPOSED))).toEqual({ kind: "stale_beat" });
+  });
+  // R2003 (owner ruling 2026-10-15, option A). The differential the ruling exists for: at ONE instant past the composed
+  // window, a played runner is lost and a replacement still booting is not — so neither "15 s everywhere" (every retry
+  // killed mid-boot) nor "90 s everywhere" (a played runner's crash noticed after the YouTube split) survives.
+  it("R2003: a booting (or creating) replacement at T + STALE_HEARTBEAT_SECONDS_COMPOSED + 1 is NOT lost while a PLAYING runner at the same instant IS; each is lost at its own boundary and not one second before", () => {
+    const anchor = 60;   // the retry's window anchor (beatWindowAt), later than the last beat the old Machine sent
+    const live = (state: RunnerState) => S({ state: "live", mode: "composed", startedAt: T0, heartbeatAt: at(10), beatWindowAt: at(anchor), runner: { ...PLAYING, state, attempt: 2, name: "relay-s1-r2", machineId: state === "creating" ? null : "m2" } });
+    const past = anchor + STALE_HEARTBEAT_SECONDS_COMPOSED + 1;
+    expect(past, "premise: the instant sits between the two windows").toBeLessThan(anchor + STALE_HEARTBEAT_SECONDS);
+    expect(evaluate(live("playing"), at(past))).toEqual({ kind: "stale_beat" });
+    let checked = 0;
+    for (const state of NOT_YET_PLAYED) {
+      expect(evaluate(live(state), at(past)), `${state} past the played window`).toEqual({ kind: "none" });
+      expect(evaluate(live(state), at(anchor + STALE_HEARTBEAT_SECONDS - 1)), `${state} T−1`).toEqual({ kind: "none" });
+      expect(evaluate(live(state), at(anchor + STALE_HEARTBEAT_SECONDS)), `${state} T`).toEqual({ kind: "stale_beat" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(evaluate(live("playing"), at(anchor + STALE_HEARTBEAT_SECONDS_COMPOSED - 1))).toEqual({ kind: "none" });
+    expect(evaluate(live("playing"), at(anchor + STALE_HEARTBEAT_SECONDS_COMPOSED))).toEqual({ kind: "stale_beat" });
+    // the window is the RUNNER's, not the attempt's: a booting runner at attempt 1 in a live session is on the allowance too
+    expect(evaluate({ ...live("booting"), runner: { ...PLAYING, state: "booting" } }, at(past))).toEqual({ kind: "none" });
+  });
+  // The brief's test 4 ("a passthrough session is stale at T+90 s") was a FALSE PREMISE: the stale rule is composed-only
+  // and always was — a passthrough session has no Machine and owes no beat. Pinned as it is, swept, never invented.
+  it("R2003: a PASSTHROUGH session is never stale — any runner shape, any beat anchor, at every window boundary up to the wall clock (count reported)", () => {
+    const instants = [0, STALE_HEARTBEAT_SECONDS_COMPOSED - 1, STALE_HEARTBEAT_SECONDS_COMPOSED, STALE_HEARTBEAT_SECONDS_COMPOSED + 1,
+      STALE_HEARTBEAT_SECONDS - 1, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS * 10, MAX_DURATION_MINUTES * 60 - 1];
+    let checked = 0;
+    for (const runnerState of RUNNER_STATES) for (const heartbeatAt of [null, T0]) for (const t of instants) {
+      const p = S({ state: "live", mode: "passthrough", startedAt: T0, heartbeatAt, warmingAt: T0, runner: { ...PLAYING, state: runnerState } });
+      expect(evaluate(p, at(t)), `${runnerState} beat ${heartbeatAt ? "T0" : "none"} at ${t}`).toEqual({ kind: "none" });
+      checked++;
+    }
+    expect(checked).toBe(RUNNER_STATES.length * 2 * instants.length);
+    // the positive pair: the same row, composed, IS stale on the played window
+    expect(evaluate(S({ state: "live", mode: "composed", startedAt: T0, heartbeatAt: T0, runner: PLAYING }), at(STALE_HEARTBEAT_SECONDS_COMPOSED))).toEqual({ kind: "stale_beat" });
   });
   it("wall clock outranks a stale beat (an over-long session ends, it is not retried)", () => {
     const c = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: T0, heartbeatAt: T0 });
     expect(evaluate(c, at(MAX_DURATION_MINUTES * 60))).toEqual({ kind: "wall_clock" });
   });
   it("limits are injectable and default to config.ts", () => {
-    const SHORT = { warmingTimeoutMinutes: 0, staleHeartbeatSeconds: 90, stopGraceSeconds: 30, provisionTimeoutSeconds: 1, requestedTimeoutSeconds: 1, endingTimeoutSeconds: 1 };
-    expect(DEFAULT_LIMITS).toEqual({ warmingTimeoutMinutes: WARMING_TIMEOUT_MINUTES, staleHeartbeatSeconds: STALE_HEARTBEAT_SECONDS, stopGraceSeconds: RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS, provisionTimeoutSeconds: PROVISION_TIMEOUT_SECONDS, requestedTimeoutSeconds: REQUESTED_TIMEOUT_SECONDS, endingTimeoutSeconds: ENDING_TIMEOUT_SECONDS });
+    const SHORT = { warmingTimeoutMinutes: 0, staleHeartbeatSeconds: 90, staleBootAllowanceSeconds: 90, stopGraceSeconds: 30, provisionTimeoutSeconds: 1, requestedTimeoutSeconds: 1, endingTimeoutSeconds: 1 };
+    expect(DEFAULT_LIMITS).toEqual({ warmingTimeoutMinutes: WARMING_TIMEOUT_MINUTES, staleHeartbeatSeconds: STALE_HEARTBEAT_SECONDS_COMPOSED, staleBootAllowanceSeconds: STALE_HEARTBEAT_SECONDS, stopGraceSeconds: RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS, provisionTimeoutSeconds: PROVISION_TIMEOUT_SECONDS, requestedTimeoutSeconds: REQUESTED_TIMEOUT_SECONDS, endingTimeoutSeconds: ENDING_TIMEOUT_SECONDS });
     expect(evaluate(S(), at(5), SHORT)).toEqual({ kind: "warming_timeout" });
     expect(evaluate(S({ state: "provisioning" }), at(5), SHORT)).toEqual({ kind: "provision_timeout" });
     expect(evaluate(S({ state: "requested" }), at(5), SHORT)).toEqual({ kind: "requested_timeout" });

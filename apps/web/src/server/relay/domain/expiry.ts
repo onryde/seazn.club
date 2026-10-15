@@ -3,7 +3,8 @@
 // usecases, and once a day by the sweep's backstop. Order matters and is
 // tested: wall clock outranks a stale beat, so an over-long session ENDS and is
 // never retried into overtime.
-import { ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES } from "../config";
+import { ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES } from "../config";
+import type { RunnerState } from "./runner";
 import type { Session } from "./session";
 
 // EVERY non-terminal state owns a kind here, and the sweep in expiry.test.ts walks ACTIVE_STATES to prove it.
@@ -11,12 +12,14 @@ export type Expiry =
   | { kind: "none" } | { kind: "requested_timeout" } | { kind: "provision_timeout" } | { kind: "warming_timeout" }
   | { kind: "wall_clock" } | { kind: "stale_beat" } | { kind: "grace_expired" } | { kind: "ending_timeout" };
 
+/** `staleHeartbeatSeconds` times a composed runner that has PLAYED (and the idle states that re-fire on the same window);
+ *  `staleBootAllowanceSeconds` one that has not yet played in this attempt (R2003, owner ruling 2026-10-15, option A). */
 export interface ExpiryLimits {
-  warmingTimeoutMinutes: number; staleHeartbeatSeconds: number; stopGraceSeconds: number;
+  warmingTimeoutMinutes: number; staleHeartbeatSeconds: number; staleBootAllowanceSeconds: number; stopGraceSeconds: number;
   provisionTimeoutSeconds: number; requestedTimeoutSeconds: number; endingTimeoutSeconds: number;
 }
 export const DEFAULT_LIMITS: ExpiryLimits = {
-  warmingTimeoutMinutes: WARMING_TIMEOUT_MINUTES, staleHeartbeatSeconds: STALE_HEARTBEAT_SECONDS,
+  warmingTimeoutMinutes: WARMING_TIMEOUT_MINUTES, staleHeartbeatSeconds: STALE_HEARTBEAT_SECONDS_COMPOSED, staleBootAllowanceSeconds: STALE_HEARTBEAT_SECONDS,
   stopGraceSeconds: RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS,
   provisionTimeoutSeconds: PROVISION_TIMEOUT_SECONDS, requestedTimeoutSeconds: REQUESTED_TIMEOUT_SECONDS,
   endingTimeoutSeconds: ENDING_TIMEOUT_SECONDS,
@@ -61,6 +64,14 @@ const laterOf = (a: Date | null, b: Date | null): Date | null => (a === null ? b
  *  judges a passthrough session that went live with no first ingest recorded on the same clock — one authority. */
 export function warmingTimedOut(s: Pick<Session, "warmingAt" | "createdAt">, now: Date, limits: ExpiryLimits = DEFAULT_LIMITS): boolean {
   return now.getTime() - (s.warmingAt ?? s.createdAt).getTime() >= limits.warmingTimeoutMinutes * 60_000;
+}
+
+/** R2003 (owner ruling 2026-10-15, option A): the beat window a composed runner is timed by. A runner that has NOT yet
+ *  played in this attempt — the create in flight, or the boot (a replacement after a retry cold-starts in ~25 s and beats
+ *  only once it has read its session) — keeps the boot allowance; every other state is timed at the beat cadence, so a
+ *  played Machine that went silent is lost inside the YouTube split threshold. */
+function staleWindowSeconds(runner: RunnerState, limits: ExpiryLimits = DEFAULT_LIMITS): number {
+  return runner === "creating" || runner === "booting" ? limits.staleBootAllowanceSeconds : limits.staleHeartbeatSeconds;
 }
 
 /** ORDER (tested): wall clock > stop grace > warming timeout > stale beat. The
@@ -116,7 +127,7 @@ export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_L
     // I4 (Task 2C ruling A): the window runs from the LATER of the last beat received and the window anchor a stale-beat
     // decision or a retry set — a null on either side ignored — then the started_at ?? created_at fallback as before.
     const beatAt = laterOf(s.heartbeatAt, s.beatWindowAt) ?? s.startedAt ?? s.createdAt;
-    if (now.getTime() - beatAt.getTime() >= limits.staleHeartbeatSeconds * 1000) return { kind: "stale_beat" };
+    if (now.getTime() - beatAt.getTime() >= staleWindowSeconds(s.runner.state, limits) * 1000) return { kind: "stale_beat" };
   }
   return { kind: "none" };
 }

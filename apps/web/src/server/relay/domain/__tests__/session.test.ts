@@ -3,7 +3,7 @@
 // mutant killers are recorded per edge in the PR table.
 import { describe, expect, it } from "vitest";
 import {
-  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS,
+  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
 } from "../../config";
 import { evaluate, type Expiry } from "../expiry";
 import {
@@ -1290,7 +1290,9 @@ describe("decide — a composed session's Machine events go through the runner t
 // with the signal — and how often the lazy read may act again — is proven here, through the real policy.
 describe("C1 — a live composed session's stale beat, evaluate → decide, for every runner state", () => {
   const T = (sec: number) => new Date(T0.getTime() + sec * 1000);
-  const stale = T(STALE_HEARTBEAT_SECONDS);
+  const stale = T(STALE_HEARTBEAT_SECONDS);   // past BOTH windows (R2003): every runner state reads stale here
+  // R2003 (owner ruling 2026-10-15, option A): lost / destroyed have no boot in flight — they re-fire on the composed window
+  const W = STALE_HEARTBEAT_SECONDS_COMPOSED;
   const FORCE = { type: "runner", effect: { type: "force_destroy" } };
   const R1: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
   const live = (runner: Runner, over: Partial<Session> = {}): Session => S({ mode: "composed", state: "live", startedAt: T0, heartbeatAt: T0, runner, ...over });
@@ -1304,7 +1306,7 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     }
   });
 
-  it("lost: the teardown is re-issued at most ONCE per STALE_HEARTBEAT_SECONDS (the stale-beat arm restarts the beat window, beatWindowAt) and never retries; the playing → lost entry restarts it too", () => {
+  it("lost: the teardown is re-issued at most ONCE per STALE_HEARTBEAT_SECONDS_COMPOSED (the stale-beat arm restarts the beat window, beatWindowAt) and never retries; the playing → lost entry restarts it too", () => {
     const lost = live({ ...R1, state: "lost" });
     const d = read(lost, stale);
     expect(d.next).toMatchObject({ state: "live", runnerRetries: 0, heartbeatAt: T0, beatWindowAt: stale, runner: { state: "lost", attempt: 1 } });
@@ -1312,9 +1314,9 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     expect(d.events).toEqual([{ type: "RunnerChanged", from: "lost", to: "lost", trigger: "stale_beat" }]);
     // the next 5 s poll does NOT call Fly again, nor does any read inside the new window…
     expect(evaluate(d.next, T(STALE_HEARTBEAT_SECONDS + 5))).toEqual({ kind: "none" });
-    expect(evaluate(d.next, T(2 * STALE_HEARTBEAT_SECONDS - 1))).toEqual({ kind: "none" });
+    expect(evaluate(d.next, T(STALE_HEARTBEAT_SECONDS + W - 1))).toEqual({ kind: "none" });
     // …one window later it does, once more
-    expect(evaluate(d.next, T(2 * STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
+    expect(evaluate(d.next, T(STALE_HEARTBEAT_SECONDS + W))).toEqual({ kind: "stale_beat" });
     const first = read(live(R1), stale);                                          // playing → lost, force_destroy
     expect(first.next).toMatchObject({ state: "live", heartbeatAt: T0, beatWindowAt: stale, runner: { state: "lost" } });
     expect(first.effects).toEqual([FORCE]);
@@ -1355,8 +1357,8 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     let s = live({ ...R1, state: "destroyed" }, { runnerRetries: 1 });
     const windows = 5;
     for (let k = 1; k <= windows; k++) {
-      const now = T(k * STALE_HEARTBEAT_SECONDS);
-      expect(evaluate(s, T(k * STALE_HEARTBEAT_SECONDS - 1)), `window ${k} T−1`).toEqual({ kind: "none" });
+      const now = T(k * W);
+      expect(evaluate(s, T(k * W - 1)), `window ${k} T−1`).toEqual({ kind: "none" });
       const d = read(s, now);
       expect(d.effects, `window ${k}`).toEqual([{ type: "retry_runner" }]);
       expect(d.next, `window ${k}`).toMatchObject({ state: "live", runnerRetries: 1, beatWindowAt: now, runner: { state: "destroyed", attempt: 1 } });
@@ -1367,7 +1369,7 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     const fromLost = decide(live({ ...R1, state: "lost" }), { type: "runner", trigger: { type: "destroy_ok" } }, stale);
     expect(fromLost.next).toMatchObject({ runnerRetries: 1, runner: { state: "destroyed", attempt: 1 } });
     expect(fromLost.effects).toEqual([{ type: "retry_runner" }]);
-    const again = decide(fromLost.next, { type: "expire", expiry: { kind: "stale_beat" } }, T(2 * STALE_HEARTBEAT_SECONDS));
+    const again = decide(fromLost.next, { type: "expire", expiry: { kind: "stale_beat" } }, T(2 * W));
     expect(again.next).toMatchObject({ runnerRetries: 1 });
     expect(again.effects).toEqual([{ type: "retry_runner" }]);
   });
@@ -1392,14 +1394,16 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
       expect(d.next.heartbeatAt, trigger.type).toBe(s.heartbeatAt);
       expect(d.next.beatWindowAt, trigger.type).toEqual(stale);
     }
-    // The replacement comes up and BEATS 30 s after the anchor (Task 10 records heartbeatAt on receipt): the window now runs
-    // from that beat. The anchor alone would read stale one window after itself; the beat holds it off for another 30 s.
+    // The replacement comes up and BEATS B s after the anchor (Task 10 records heartbeatAt on receipt): the window now runs
+    // from that beat. The anchor alone would read stale one window after itself; the beat holds it off for another B s.
+    // R2003: both rows are past their boot (destroyed; a PLAYING replacement), so both are timed by the composed window W.
+    const B = W - 1;
     const anchored = read(live({ ...R1, state: "destroyed" }, { runnerRetries: 1 }), stale).next;
-    const beaten: Session = { ...anchored, heartbeatAt: T(STALE_HEARTBEAT_SECONDS + 30), runner: { ...R1, attempt: 2, name: "relay-s1-r2", machineId: "m2" } };
-    expect(evaluate(anchored, T(2 * STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
-    expect(evaluate(beaten, T(2 * STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "none" });
-    expect(evaluate(beaten, T(2 * STALE_HEARTBEAT_SECONDS + 30 - 1))).toEqual({ kind: "none" });
-    expect(evaluate(beaten, T(2 * STALE_HEARTBEAT_SECONDS + 30))).toEqual({ kind: "stale_beat" });
+    const beaten: Session = { ...anchored, heartbeatAt: T(STALE_HEARTBEAT_SECONDS + B), runner: { ...R1, attempt: 2, name: "relay-s1-r2", machineId: "m2" } };
+    expect(evaluate(anchored, T(STALE_HEARTBEAT_SECONDS + W))).toEqual({ kind: "stale_beat" });
+    expect(evaluate(beaten, T(STALE_HEARTBEAT_SECONDS + W))).toEqual({ kind: "none" });
+    expect(evaluate(beaten, T(STALE_HEARTBEAT_SECONDS + W + B - 1))).toEqual({ kind: "none" });
+    expect(evaluate(beaten, T(STALE_HEARTBEAT_SECONDS + W + B))).toEqual({ kind: "stale_beat" });
   });
 
   it("none (a corrupt live composed row with no runner): the read FAILS it with machine_crash instead of throwing on every read forever", () => {
