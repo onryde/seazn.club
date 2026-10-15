@@ -28,7 +28,6 @@ import enUi from "@/dictionaries/en/ui.json";
 import { sql } from "@/lib/db";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { msgFor } from "@/lib/messages-i18n";
 import { decidersOffRules } from "@/lib/stage-decider-off";
 import { resolveLatestModule } from "@/server/engine-db";
 import { getPublicFixture } from "@/server/public-site/data";
@@ -142,7 +141,12 @@ describe.skipIf(!HAS_DB)("I-1 football knockout: a decider-only correction chang
   it.each(CORRECTIONS)("before kickoff ($name, the stage's rules): GET /rules, the 409 and the public line agree", async (c) => {
     const s = await startedScene("football", FB_VARIANT);
     const id = s.cupFixtureId;
-    const preset = msgFor("en", "variant.football.11-a-side");
+    // The preset NAME, as the match centre prints it for a fixture that plays the division's own rules (the Pool's): read off
+    // the page, not typed (a typed variant key here once named a message that does not exist, and the assertion below it
+    // compared against the key itself).
+    const preset = (await publicLines(s, s.leagueFixtureId)).poll;
+    expect(preset, "premise: the preset name is a real line, and not the cup's described one").not.toBe(BEFORE);
+    expect(preset.length, "premise: and it is not empty").toBeGreaterThan(0);
 
     const before = await getFixtureRules(s.auth, id, EN);
     expect(before.format_line, "the cup's line before: the period line then both deciders").toBe(BEFORE);
