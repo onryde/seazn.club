@@ -200,8 +200,15 @@ export function renderIsland<P>(
    * mount effect used to copy into state ("origin", "navigator.share",
    * "consent needed") are now read through a store, and the tests that pin the
    * after-mount value need the after-hydration read to reach it.
+   *
+   * `clientMount: true` models a component mounted on the client AFTER
+   * hydration (a client navigation, a dialog): every store is read live from
+   * the very FIRST render, with no server pass before it. A render-phase
+   * adjustment keyed on a store (`useHydrated()` going true) runs in that first
+   * pass — which `hydrate: true` can never reach, because it always renders the
+   * server snapshot first.
    */
-  options: { hydrate?: boolean } = {},
+  options: { hydrate?: boolean; clientMount?: boolean } = {},
 ) {
   const slot = hookDispatcherSlot();
   let props = initialProps;
@@ -375,6 +382,7 @@ export function renderIsland<P>(
     },
     useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot) {
       const serverRead = () => (getServerSnapshot ? getServerSnapshot() : getSnapshot());
+      if (options.clientMount) return getSnapshot();
       if (!options.hydrate) return serverRead();
       const index = storeCursor++;
       const value = hydrated ? getSnapshot() : serverRead();
@@ -412,6 +420,10 @@ export function renderIsland<P>(
    *  commit — every layout effect, then every passive one — has finished, and
    *  the next render happens after that. See `commitRound` below. */
   function schedule() {
+    if (batching) {
+      batchedUpdate = true;
+      return;
+    }
     if (committing) {
       commitUpdate = true;
       return;
@@ -420,6 +432,13 @@ export function renderIsland<P>(
   }
   let committing = false;
   let commitUpdate = false;
+  // `batch`: React batches every update an event raises into ONE render, so an
+  // effect or a render-phase adjustment sees only the SETTLED state. Without
+  // this the harness renders after every setter — a handler that dispatches
+  // twice (ADD_ENTRY, then UPDATE_ENTRY) shows its code an intermediate state no
+  // browser ever renders.
+  let batching = false;
+  let batchedUpdate = false;
 
   /** ONE render, including React's render-phase-update loop — no commit. A set
    *  fired from the component body discards the output and runs the body again,
@@ -544,6 +563,24 @@ export function renderIsland<P>(
   return {
     tree: () => expand(output),
     text: () => textOf(output),
+    /** Run `fn` the way React runs one event: every state update it raises is
+     *  queued and the island renders ONCE afterwards, with the settled state
+     *  (and renders nothing when `fn` raised none). The harness otherwise
+     *  renders after every setter, which a browser never does. */
+    batch: (fn: () => void) => {
+      if (batching) throw new Error("batch is not re-entrant");
+      batching = true;
+      batchedUpdate = false;
+      try {
+        fn();
+      } finally {
+        batching = false;
+      }
+      if (batchedUpdate) {
+        batchedUpdate = false;
+        run();
+      }
+    },
     /** Re-render with new props, the way a parent handing down fresh data
      *  would — hook state (cells, effect cleanups, memos) carries over, so an
      *  effect keyed on a prop that changed re-runs exactly once. */

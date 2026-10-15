@@ -843,3 +843,94 @@ describe("_hook-harness useId (ESLint L3 — PhoneDisclosure's aria-controls)", 
     expect(read()["data-b"]).toBe(first["data-b"]);
   });
 });
+
+describe("_hook-harness batch (ESLint L4 — React batches an event's updates, the harness did not)", () => {
+  // In a browser the two setStates of ONE event land in ONE render, so an effect
+  // or a render-phase adjustment sees only the SETTLED state. The harness
+  // rendered after every setter, so a handler that dispatches twice (the
+  // register stepper's solo signup: ADD_ENTRY, then UPDATE_ENTRY) showed code
+  // the intermediate state no browser ever renders.
+  function Island() {
+    const [a, setA] = useState(0);
+    const [b, setB] = useState(0);
+    seen.push(`${a}/${b}`);
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setA(1);
+          setB(1);
+        }}
+      >
+        {`${a}/${b}`}
+      </button>
+    );
+  }
+  const seen: string[] = [];
+
+  it("without batch, every setter renders (the intermediate state IS seen); inside batch, the event renders once with the settled state", () => {
+    seen.length = 0;
+    const island = renderIsland(Island, {});
+    expect(seen).toEqual(["0/0"]);
+
+    clickButton(island.tree());
+    expect(seen, "unbatched: the 1/0 state was rendered").toEqual(["0/0", "1/0", "1/1"]);
+
+    seen.length = 0;
+    const second = renderIsland(Island, {});
+    seen.length = 0;
+    second.batch(() => clickButton(second.tree()));
+    expect(seen, "batched: one render, the settled state only").toEqual(["1/1"]);
+    expect(second.text()).toBe("1/1");
+  });
+
+  it("an empty batch renders nothing, and a batch that throws still re-enables rendering", () => {
+    seen.length = 0;
+    const island = renderIsland(Island, {});
+    seen.length = 0;
+    island.batch(() => {});
+    expect(seen, "nothing was set: nothing renders").toEqual([]);
+    expect(() =>
+      island.batch(() => {
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+    clickButton(island.tree());
+    expect(seen, "after a throwing batch, updates render again").toEqual(["1/0", "1/1"]);
+  });
+});
+
+describe("_hook-harness useSyncExternalStore clientMount (ESLint L4 — a component mounted on the client after hydration)", () => {
+  // `hydrate: true` models a HYDRATING client: server snapshot first, live
+  // snapshot after the commit. A component mounted later (a client navigation, a
+  // dialog) reads the LIVE snapshot on its very first render — React says so in
+  // use-client-snapshot.ts — and a render-phase adjustment keyed on it runs in
+  // that first pass, which the hydrating model can never reach.
+  const live = { value: "live" };
+  const store = {
+    subscribe: () => () => {},
+    live: () => live.value,
+    server: () => "server",
+  };
+  function Island() {
+    const v = useSyncExternalStore(store.subscribe, store.live, store.server);
+    seen.push(v);
+    return <p>{v}</p>;
+  }
+  const seen: string[] = [];
+
+  it("reads the live snapshot on the first render; hydrate reads the server one first; the default never leaves the server one", () => {
+    seen.length = 0;
+    renderIsland(Island, {}, undefined, { clientMount: true });
+    expect(seen, "first render is already live").toEqual(["live"]);
+
+    seen.length = 0;
+    renderIsland(Island, {}, undefined, { hydrate: true });
+    expect(seen[0], "a hydrating client starts on the server snapshot").toBe("server");
+    expect(seen.at(-1)).toBe("live");
+
+    seen.length = 0;
+    renderIsland(Island, {}, undefined);
+    expect(seen, "default: server snapshot for ever").toEqual(["server"]);
+  });
+});
