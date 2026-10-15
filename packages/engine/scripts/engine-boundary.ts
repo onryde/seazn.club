@@ -140,9 +140,24 @@ export function checkEngineBoundary(srcDir: string): Violation[] {
  *
  *  The TypeScript parser decides what is a literal: whether a `/` divides or opens a regular expression depends on the grammar around it
  *  (`x! / y`, `i++ / 2`, `if (a) /re/.test(b)`, `a.return / 2`), which no rule about the preceding character gets right. The comments are
- *  then found in the text that is left, where no literal can hide a `//` or a `/*` any more. */
-export function codeSkeleton(source: string): string {
-  const parsed = ts.createSourceFile("skeleton.ts", source, ts.ScriptTarget.ESNext, false, ts.ScriptKind.TS);
+ *  then found in the text that is left, where no literal can hide a `//` or a `/*` any more.
+ *
+ *  `parsed` is a parse of `source` the caller already holds (the tests share one parse per file between the skeleton and their oracles);
+ *  without it the text is parsed here. Either way the result is the same, and kept for the next call with the same text. */
+export function codeSkeleton(source: string, parsed?: ts.SourceFile): string {
+  let skeleton = SKELETONS.get(source);
+  if (skeleton === undefined) {
+    skeleton = skeletonOf(source, parsed ?? ts.createSourceFile("skeleton.ts", source, ts.ScriptTarget.ESNext, false, ts.ScriptKind.TS));
+    SKELETONS.set(source, skeleton);
+  }
+  return skeleton;
+}
+
+/** The skeleton of a source is a pure function of its text, and parsing is most of what the gate costs (every file is read by the boundary
+ *  scan, and the ~50 phone modules again by the phone walk): the second read of a text is a lookup. */
+const SKELETONS = new Map<string, string>();
+
+function skeletonOf(source: string, parsed: ts.SourceFile): string {
   const bare = source.split("");
   const blank = (from: number, to: number) => bare.fill(" ", from, to);
   // an unterminated literal has no closing delimiter to keep

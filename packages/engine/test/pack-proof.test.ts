@@ -11,7 +11,7 @@ import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   assertBundleMatchesWalk,
   assertExactVersions,
@@ -36,6 +36,8 @@ import {
   sportDirsOf,
 } from "../pack-proof/lib.mjs";
 import { checkPhoneClosure, checkPhoneSafety, phoneClosureDrift } from "../scripts/engine-boundary.ts";
+import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
+import { FLOOR_MS, treeBudget } from "./tree-budget.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(ENGINE, "..", "..");
@@ -374,12 +376,25 @@ describe("the dev bundle is held to the static phone walk", () => {
     return [...seen].sort();
   };
 
+  // The compiler's account of the real build is made ONCE (the emit list of every source file, then the emitted JavaScript of each phone module
+  // in memory) and shared by the three tests below. Its budget follows the files it touches: the build's file list, and the phone modules
+  // transpiled and re-parsed.
+  const BUILD_MS = treeBudget(build.fileNames.length, 2);
+  let real: ReturnType<typeof checkPhoneClosure>;
+  let walk: ReturnType<typeof checkPhoneSafety>;
+  let emitted: Set<string>;
+  let emittedBundle: string[];
+  beforeAll(() => {
+    walk = checkPhoneSafety(ENGINE);
+    real = checkPhoneClosure(ENGINE);
+    emitted = emittedJs();
+    emittedBundle = emittedClosure(real.entries);
+  }, BUILD_MS);
+
   it("holds against the real engine: every walked module's dist/ twin is a file tsc's build emits (tsconfig.build.json), and a test file is not", () => {
-    const real = checkPhoneSafety(ENGINE);
-    const emitted = emittedJs();
     expect(emitted.size, "anti-vacuity: the files the build emits").toBeGreaterThan(100);
-    expect(real.walked.length, "anti-vacuity: the modules checked").toBeGreaterThan(30);
-    for (const src of real.walked) expect(emitted, `${src} -> ${distTwin(src)}`).toContain(distTwin(src));
+    expect(walk.walked.length, "anti-vacuity: the modules checked").toBeGreaterThan(30);
+    for (const src of walk.walked) expect(emitted, `${src} -> ${distTwin(src)}`).toContain(distTwin(src));
     // the emit list can say no: a source file the build excludes has no twin in it
     const aTest = globSync("src/**/*.test.ts", { cwd: ENGINE })[0];
     expect(aTest, "the engine has a co-located test").toBeDefined();
@@ -387,9 +402,8 @@ describe("the dev bundle is held to the static phone walk", () => {
   });
 
   it("holds against the real engine: the modules the emitted JavaScript imports, from the phone entries, are exactly the walked modules", () => {
-    const real = checkPhoneClosure(ENGINE);
     expect(real.violations).toEqual([]);
-    const bundle = emittedClosure(real.entries);
+    const bundle = emittedBundle;
     expect(bundle.length, "anti-vacuity: the emitted closure").toBeGreaterThan(30);
     // assertBundleMatchesWalk names the module either side lacks; the count it returns is the pinned closure's
     const pinned = (JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { closure: { modules: string[] } }).closure.modules;
@@ -398,10 +412,10 @@ describe("the dev bundle is held to the static phone walk", () => {
   });
 
   it("the emitted-closure check can fail: a walk with a module added or dropped disagrees with it", () => {
-    const real = checkPhoneSafety(ENGINE);
-    const bundle = emittedClosure(real.entries);
-    expect(() => assertBundleMatchesWalk({ bundle, walked: real.walked.slice(1) })).toThrow(/never walked/);
-    expect(() => assertBundleMatchesWalk({ bundle, walked: [...real.walked, "src/core/not-a-module.ts"] })).toThrow(/absent from the dev bundle/);
+    const bundle = emittedBundle;
+    expect(bundle.length, "anti-vacuity: the emitted closure").toBeGreaterThan(30);
+    expect(() => assertBundleMatchesWalk({ bundle, walked: walk.walked.slice(1) })).toThrow(/never walked/);
+    expect(() => assertBundleMatchesWalk({ bundle, walked: [...walk.walked, "src/core/not-a-module.ts"] })).toThrow(/absent from the dev bundle/);
   });
 
   it("assertPhoneRuleGreen passes a clean walk, and refuses any violation (the closure-changed one included) and an empty walk", () => {
@@ -576,7 +590,7 @@ describe("pack-proof/node/strip.ts: a data export is read as data, not imported 
       writeFileSync(join(t, "package.json"), JSON.stringify({ type: "module" }));
       // strip.ts finds the install from ITS OWN location, so it runs from a copy beside the fake one
       writeFileSync(join(t, "strip.ts"), readFileSync(join(PROOF, "node", "strip.ts"), "utf8"));
-      const real = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "strip.ts", "core"], { cwd: t, encoding: "utf8", timeout: 60_000 });
+      const real = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "strip.ts", "core"], { cwd: t, encoding: "utf8", timeout: SPAWN_MS });
       expect(real.status, real.stdout + real.stderr).toBe(0);
       const specifiers = /^SPECIFIERS (\[.*\])$/m.exec(real.stdout)?.[1];
       expect(JSON.parse(specifiers ?? "null"), "the modules imported: core and sports, then the sport directories").toEqual(["@seazn/engine/core", "@seazn/engine/sports", "@seazn/engine/sports/x"]);
@@ -585,7 +599,7 @@ describe("pack-proof/node/strip.ts: a data export is read as data, not imported 
     } finally {
       rmSync(t, { recursive: true, force: true });
     }
-  });
+  }, spawnBudget(1));
 });
 
 describe("sport directories: the tarball's dist/sports must mirror the source's", () => {
@@ -752,7 +766,7 @@ describe("installSignalCleanup", () => {
 
 describe("run.mjs, as the command line sees it (no network: both refusals come before anything is built)", () => {
   const run = (args: string[], env: Record<string, string> = {}) =>
-    spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, ...env }, timeout: 60_000 });
+    spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, ...env }, timeout: SPAWN_MS });
 
   it("refuses an unknown fixture and an unknown flag with exit 2 and the usage line", () => {
     for (const args of [["--only", "bogus"], ["--only"], ["--nope"]]) {
@@ -760,7 +774,7 @@ describe("run.mjs, as the command line sees it (no network: both refusals come b
       expect(r.status, args.join(" ")).toBe(2);
       expect(r.stderr).toContain("usage: node packages/engine/pack-proof/run.mjs [--only node|next|rn|types]");
     }
-  });
+  }, spawnBudget(3));
 
   it("refuses a scratch directory inside the repo (TMPDIR pointed into it), before any pnpm runs, and leaves nothing behind", () => {
     // node_modules is git-ignored AND inside the repo, so a crash here strands nothing in a commit
@@ -774,7 +788,7 @@ describe("run.mjs, as the command line sees it (no network: both refusals come b
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
-  });
+  }, spawnBudget(1));
 });
 
 describe("run.mjs removes its scratch directory when it is killed, and stops its child", () => {
@@ -832,7 +846,7 @@ describe("run.mjs removes its scratch directory on failure, and keeps it only fo
     const base = scratch();
     const empty = scratch();
     try {
-      const r = spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, TMPDIR: base, PATH: empty }, timeout: 60_000 });
+      const r = spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, TMPDIR: base, PATH: empty }, timeout: SPAWN_MS });
       return { r, left: readdirSync(base).filter((d) => d.startsWith("engine-pack-")), base };
     } finally {
       rmSync(empty, { recursive: true, force: true });
@@ -849,7 +863,7 @@ describe("run.mjs removes its scratch directory on failure, and keeps it only fo
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
-  });
+  }, spawnBudget(1));
 
   it("--keep keeps it, and prints where", () => {
     const { r, left, base } = failing(["--only", "node", "--keep"]);
@@ -860,7 +874,7 @@ describe("run.mjs removes its scratch directory on failure, and keeps it only fo
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
-  });
+  }, spawnBudget(1));
 });
 
 describe("the fixtures and wiring that make the run a proof", () => {
@@ -913,7 +927,7 @@ describe("the fixtures and wiring that make the run a proof", () => {
     for (const f of ["dist/core/index.js", "dist/core/index.d.ts", "dist/testkit/conformance.js"]) {
       expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(true);
     }
-  });
+  }, FLOOR_MS); // the first `new ESLint` loads the package's whole flat config: ~5 s under coverage, once per worker
 
   it("keeps the fixture sources out of the package's lint (they import the PACKED name from outside the program), but lints the runner", async () => {
     const eslint = new ESLint({ cwd: ENGINE });
@@ -921,5 +935,5 @@ describe("the fixtures and wiring that make the run a proof", () => {
     for (const f of ["pack-proof/types/consumer.ts", "pack-proof/node/strip.ts", "pack-proof/next/app/page.tsx", "pack-proof/rn/metro.config.js"]) {
       expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(true);
     }
-  });
+  }, FLOOR_MS);
 });

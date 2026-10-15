@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { checkEngineBoundary, checkPhoneClosure, checkPhoneSafety, codeSkeleton, IMPORT_EXEMPTIONS, importSpecifiers, phoneClosureDrift, scanEngineBoundary } from "../scripts/engine-boundary.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
+import { FLOOR_MS, PER_FILE_MS, treeBudget } from "./tree-budget.ts";
 
 // Every scratch directory a test makes is tracked and removed after THAT test (a test may make several: the CLI "scanned nothing" test
 // makes three), and afterAll holds the line: none made by this file is still there. It asks only for no leftovers, never for "some were
@@ -117,14 +118,55 @@ function seedEngine(files: Record<string, string>, opts: PhoneConfig = {}): stri
   return dir;
 }
 
+// The real src/, read and parsed ONCE per file and shared by every test below that needs it (the gate's own scan, the specifier oracle, the
+// skeleton oracle, the golden.ts exemption). Each `describe` that uses it loads it in a `beforeAll` with a budget derived from the file
+// count; the tests then only compare. `codeSkeleton` is handed the same parse, so the gate's later reads of these texts are lookups.
+const REAL_SRC = new URL("../src", import.meta.url).pathname;
+const REAL_FILES = globSync("**/*.ts", { cwd: REAL_SRC });
+interface RealFile {
+  name: string;
+  source: string;
+  /** One parse of `source`, with parents set, used by every oracle. */
+  sf: ts.SourceFile;
+}
+let realTree: { files: RealFile[]; scan: ReturnType<typeof scanEngineBoundary> } | undefined;
+/** Load the real tree once; later calls return the first result. Two passes: read and parse every file, then the gate's own scan. */
+function loadRealTree(): NonNullable<typeof realTree> {
+  if (realTree === undefined) {
+    const files = REAL_FILES.map((name) => {
+      const source = readFileSync(join(REAL_SRC, name), "utf8");
+      const sf = ts.createSourceFile(name, source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+      codeSkeleton(source, sf);
+      return { name, source, sf };
+    });
+    realTree = { files, scan: scanEngineBoundary(REAL_SRC) };
+  }
+  return realTree;
+}
+const LOAD_REAL_TREE_MS = treeBudget(REAL_FILES.length, 2);
+
+describe("treeBudget: a test that reads the whole tree states its budget from the number of files", () => {
+  it("is at least the floor, grows with the files and with the passes, and refuses a count that is not a count", () => {
+    expect(treeBudget(1)).toBe(FLOOR_MS);
+    const many = Math.ceil(FLOOR_MS / PER_FILE_MS) * 10;
+    expect(treeBudget(many)).toBe(many * PER_FILE_MS);
+    expect(treeBudget(many)).toBeGreaterThan(FLOOR_MS);
+    expect(treeBudget(many, 3)).toBe(3 * many * PER_FILE_MS);
+    expect(treeBudget(REAL_FILES.length, 2), "the real tree's two-pass budget clears vitest's 5 s default by a wide margin").toBeGreaterThan(5 * 5000);
+    for (const bad of [0, -1, 1.5, Number.NaN]) expect(() => treeBudget(bad), String(bad)).toThrow(/file count/);
+    for (const bad of [0, 1.5]) expect(() => treeBudget(10, bad), String(bad)).toThrow(/pass count/);
+  });
+});
+
 describe("engine boundary gate", () => {
+  beforeAll(() => { loadRealTree(); }, LOAD_REAL_TREE_MS);
+
   it("passes on the real packages/engine/src", () => {
-    const real = new URL("../src", import.meta.url).pathname;
-    expect(checkEngineBoundary(real)).toEqual([]);
+    expect(checkEngineBoundary(REAL_SRC)).toEqual([]);
     // anti-vacuity: the gate reports how many files it looked at, and that is every .ts file under src/, counted by glob rather than by the gate's own walk
-    const { scanned, violations } = scanEngineBoundary(real);
+    const { scanned, violations } = loadRealTree().scan;
     expect(violations).toEqual([]);
-    expect(scanned).toBe(globSync("**/*.ts", { cwd: real }).length);
+    expect(scanned).toBe(REAL_FILES.length);
     expect(scanned).toBeGreaterThan(100);
   });
 
@@ -184,6 +226,8 @@ describe("engine boundary gate", () => {
 // next `*/` (src/testkit/golden.ts:20 hid its first 43 lines, and a `node:crypto` import with them), and a `"//"` or `"/*"` in a string
 // hid the rest of the line. Single-sport reason: no sport is involved - this is a text-scanning rule.
 describe("engine boundary gate: it reads code, not text", () => {
+  beforeAll(() => { loadRealTree(); }, LOAD_REAL_TREE_MS);
+
   it.each([
     ["a /** inside a // comment (src/testkit/golden.ts:20)", '// the /** marker\nimport postgres from "postgres";\n/* a real comment */\nexport {};\n', "forbidden import", 2],
     ["a /* inside a // comment", '// opens /* nothing\nimport postgres from "postgres";\nexport const s = 1; // a */ b\n', "forbidden import", 2],
@@ -222,12 +266,9 @@ describe("engine boundary gate: it reads code, not text", () => {
   });
 
   it("agrees with the TypeScript AST on every module specifier of every file of the real src/ (type imports included)", () => {
-    const real = new URL("../src", import.meta.url).pathname;
-    const files = globSync("**/*.ts", { cwd: real });
+    const files = loadRealTree().files;
     let compared = 0;
-    for (const rel of files) {
-      const source = readFileSync(join(real, rel), "utf8");
-      const sf = ts.createSourceFile(rel, source, ts.ScriptTarget.ESNext, true);
+    for (const { name: rel, source, sf } of files) {
       const found: string[] = [];
       const visit = (n: ts.Node): void => {
         if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) found.push(n.moduleSpecifier.text);
@@ -242,7 +283,7 @@ describe("engine boundary gate: it reads code, not text", () => {
     }
     expect(files.length, "anti-vacuity: files compared").toBeGreaterThan(100);
     expect(compared, "anti-vacuity: specifiers compared").toBeGreaterThan(500);
-  });
+  }, treeBudget(REAL_FILES.length));
 });
 
 // The code skeleton is built from the TypeScript parser's own reading of the file (batch 1c review, M1): the hand-rolled lexer that came
@@ -305,6 +346,20 @@ describe("code skeleton: division and regular expressions (the TypeScript parser
     expect(codeSkeleton(source).split("\n")).toEqual(expected.split("\n"));
   });
 
+  it("is a function of the text alone: a parse handed in changes nothing, a repeat gives the same answer, and another text is its own", () => {
+    // texts no other test uses, so the first call of each is a cold one
+    const a = "export const memo1 = x! / 2; // the first text\nexport const memo2 = `${y! / 3}`;";
+    const b = a.replace("x!", "z!");
+    const parseOf = (t: string) => ts.createSourceFile("t.ts", t, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+    const wantA = expectedSkeleton(a).text;
+    expect(wantA, "the oracle's reading blanks the comment and keeps the code").toContain("memo1 = x! / 2;");
+    expect(codeSkeleton(a, parseOf(a)), "cold, with the parse handed in").toBe(wantA);
+    expect(codeSkeleton(a), "the repeat").toBe(wantA);
+    expect(codeSkeleton(b), "another text, one character of code apart").toBe(expectedSkeleton(b).text);
+    expect(codeSkeleton(b)).not.toBe(wantA);
+    expect(codeSkeleton(a), "and the first text is still its own after the second").toBe(wantA);
+  });
+
   it("keeps the source's length and its line breaks outside comments, strings and templates", () => {
     const source = 'const a = "x";\n// c\n/* m\nn */\nconst b = `p\nq`;\n';
     const out = codeSkeleton(source);
@@ -320,8 +375,8 @@ describe("code skeleton: division and regular expressions (the TypeScript parser
 // literal's text must be blank. Anti-vacuity: the files, the literals and the comments it covered are counted, and none is a failure.
 /** What the skeleton of `source` should be, from the parser's tokens: the text of string, template and regular-expression literals and the
  *  comments between tokens blanked, everything else as written. Also counts the spans it blanked. */
-function expectedSkeleton(source: string): { text: string; literals: number; comments: number } {
-  const sf = ts.createSourceFile("oracle.ts", source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+function expectedSkeleton(source: string, parsed?: ts.SourceFile): { text: string; literals: number; comments: number } {
+  const sf = parsed ?? ts.createSourceFile("oracle.ts", source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
   const out = source.split("");
   const blank = (from: number, to: number) => { for (let i = from; i < to; i++) out[i] = " "; };
   let literals = 0;
@@ -365,16 +420,16 @@ function expectedSkeleton(source: string): { text: string; literals: number; com
 }
 
 /** Compare the skeleton of every file to the parser's reading. A comparison over no file is a failure. */
-function skeletonMismatches(files: { name: string; source: string }[], skeleton: (s: string) => string): { files: number; literals: number; comments: number; mismatches: string[] } {
+function skeletonMismatches(files: { name: string; source: string; sf?: ts.SourceFile }[], skeleton: (s: string, parsed?: ts.SourceFile) => string): { files: number; literals: number; comments: number; mismatches: string[] } {
   if (files.length === 0) throw new Error("skeletonMismatches: no file to compare - a comparison over nothing proves nothing");
   const mismatches: string[] = [];
   let literals = 0;
   let comments = 0;
-  for (const { name, source } of files) {
-    const want = expectedSkeleton(source);
+  for (const { name, source, sf } of files) {
+    const want = expectedSkeleton(source, sf);
     literals += want.literals;
     comments += want.comments;
-    const got = skeleton(source);
+    const got = skeleton(source, sf);
     if (got === want.text) continue;
     let at = 0;
     while (got[at] === want.text[at]) at++;
@@ -384,15 +439,15 @@ function skeletonMismatches(files: { name: string; source: string }[], skeleton:
 }
 
 describe("code skeleton: against the TypeScript parser, over every file of the real src/", () => {
+  beforeAll(() => { loadRealTree(); }, LOAD_REAL_TREE_MS);
+
   it("is what the parser says on every file: no code position blanked, no comment or literal text left", () => {
-    const real = new URL("../src", import.meta.url).pathname;
-    const files = globSync("**/*.ts", { cwd: real }).map((name) => ({ name, source: readFileSync(join(real, name), "utf8") }));
-    const r = skeletonMismatches(files, codeSkeleton);
+    const r = skeletonMismatches(loadRealTree().files, codeSkeleton);
     expect(r.files, "anti-vacuity: files compared").toBeGreaterThan(100);
     expect(r.literals, "anti-vacuity: string, template and regular-expression literals compared").toBeGreaterThan(5000);
     expect(r.comments, "anti-vacuity: comments compared").toBeGreaterThan(2000);
     expect(r.mismatches, `${r.files} files, ${r.literals} literals, ${r.comments} comments: ${JSON.stringify(r.mismatches)}`).toEqual([]);
-  });
+  }, treeBudget(REAL_FILES.length)); // the oracle walks every token of every file: the heaviest per-file pass here
 
   it("refuses to compare nothing, and sees a skeleton that is wrong", () => {
     expect(() => skeletonMismatches([], codeSkeleton)).toThrow(/no file to compare/);
@@ -410,6 +465,8 @@ describe("code skeleton: against the TypeScript parser, over every file of the r
 // for createHash, and has since 2dd25ba4b; the old stripper hid that import from the gate, so the gate was never red over it. Replacing
 // createHash would churn every golden digest, so the import is allowed in that ONE file, and only that specifier.
 describe("engine boundary gate: the golden.ts node:crypto exemption", () => {
+  beforeAll(() => { loadRealTree(); }, LOAD_REAL_TREE_MS);
+
   const GOLDEN = "testkit/golden.ts";
   const CRYPTO = 'import { createHash } from "node:crypto";\nexport const h = createHash;\n';
 
@@ -461,12 +518,11 @@ describe("engine boundary gate: the golden.ts node:crypto exemption", () => {
   });
 
   it("is used by the real src/: the exemption is not dead, and it is the only one in use", () => {
-    const real = new URL("../src", import.meta.url).pathname;
-    const r = scanEngineBoundary(real);
+    const r = loadRealTree().scan;
     expect(r.violations).toEqual([]);
     expect(r.exempted).toEqual([`${GOLDEN} node:crypto`]);
     // counted without the gate: the real file does import it, and nothing else under src/ imports node:crypto outside a comment
-    expect(readFileSync(join(real, GOLDEN), "utf8")).toMatch(/^import \{ createHash \} from "node:crypto";$/m);
+    expect(readFileSync(join(REAL_SRC, GOLDEN), "utf8")).toMatch(/^import \{ createHash \} from "node:crypto";$/m);
   });
 
   it("does not extend to the phone walk: the same file reached from a phone subpath is still a Node builtin", () => {
@@ -487,6 +543,16 @@ describe("phone-safe subpaths: the real engine", () => {
     peerDependencies?: Record<string, string>;
     peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   };
+
+  // The walk of the real phone closure is made ONCE and shared by the tests that read it; a test that walks again on purpose (determinism, the
+  // perturbed pin) says so. The budget follows the closure's size: a walk parses each module, and a test may walk or re-read it twice.
+  const PHONE_MS = treeBudget(cfg.closure.modules.length, 2);
+  let walk: ReturnType<typeof checkPhoneSafety>;
+  let combined: ReturnType<typeof checkPhoneClosure>;
+  beforeAll(() => {
+    walk = checkPhoneSafety(ENGINE);
+    combined = checkPhoneClosure(ENGINE);
+  }, PHONE_MS);
 
   /** The value-import closure of the phone entries, read with the TypeScript AST: a reading of the same graph that shares no code with
    *  the gate's own scanner. `entries` come from a glob over the declared sport directories, not from the gate. */
@@ -516,7 +582,7 @@ describe("phone-safe subpaths: the real engine", () => {
   const sportIndexes = () => globSync("src/sports/*/index.ts", { cwd: ENGINE }).map((f) => f.split("\\").join("/")).sort();
 
   it("walks exactly the recorded closure, every phone entry module included, and finds it clean", () => {
-    const r = checkPhoneSafety(ENGINE);
+    const r = walk;
     expect(r.violations).toEqual([]);
     // the pin is a SET of modules recorded in phone-subpaths.json; a drift names what was added and removed, and where to re-pin
     expect(cfg.closure.modules.length, "anti-vacuity: the recorded closure").toBeGreaterThan(30);
@@ -543,7 +609,7 @@ describe("phone-safe subpaths: the real engine", () => {
     expect(r.violations).toEqual([{ kind: "closure-changed", file: "phone-subpaths.json", detail: expect.stringContaining(`added: ${dropped}`) }]);
     expect(r.violations[0]!.detail).toContain(`removed: ${invented}`);
     expect(r.walked.length, "the walk is reported whole").toBe(cfg.closure.modules.length);
-  });
+  }, PHONE_MS);
 
   it("lists the D25 phone subpaths, and every one is a key of the package's exports", () => {
     // D25 (plan 1c-1): core, sport, sports and every sport directory. The list is the authority; this pins it against the decision.
@@ -554,14 +620,14 @@ describe("phone-safe subpaths: the real engine", () => {
   it("agrees with an independent reading of the same graph: the TypeScript AST finds the same modules and the same packages", () => {
     const entries = [...cfg.subpaths.filter((p) => !p.includes("*")).map((p) => (pkg.exports[p] as string).replace(/^\.\//, "")), ...sportIndexes()];
     const oracle = astClosure(entries);
-    const r = checkPhoneSafety(ENGINE);
+    const r = walk;
     expect(oracle.modules.length, "anti-vacuity: modules the oracle read").toBeGreaterThan(30);
     expect([...r.walked].sort()).toEqual(oracle.modules);
     expect(r.externals).toEqual(oracle.externals);
-  });
+  }, PHONE_MS);
 
   it("imports only packages the engine declares as runtime dependencies: zod, and nothing optional (read without the gate's own check)", () => {
-    const r = checkPhoneSafety(ENGINE);
+    const r = walk;
     const required = (name: string) => pkg.peerDependenciesMeta?.[name]?.optional !== true;
     const declared = [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.peerDependencies ?? {}).filter(required)];
     expect(r.externals.length, "anti-vacuity: the phone closure imports at least zod").toBeGreaterThan(0);
@@ -569,11 +635,11 @@ describe("phone-safe subpaths: the real engine", () => {
   });
 
   it("is deterministic: a second call reports the same walk", () => {
-    expect(checkPhoneSafety(ENGINE)).toEqual(checkPhoneSafety(ENGINE));
-  });
+    expect(checkPhoneSafety(ENGINE)).toEqual(walk);
+  }, PHONE_MS);
 
   it("is red through the combined check when the pin and the walk disagree, and green when they agree (the real engine)", () => {
-    const green = checkPhoneClosure(ENGINE);
+    const green = combined;
     expect(green.violations).toEqual([]);
     expect(green.walked.length).toBe(cfg.closure.modules.length);
   });
