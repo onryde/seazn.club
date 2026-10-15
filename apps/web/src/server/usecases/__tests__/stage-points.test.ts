@@ -810,3 +810,87 @@ describe.skipIf(!HAS_DB)("ST-G8 over the real HTTP route", () => {
     expect(ok.status, "superOver under rules saves").toBe(200);
   });
 });
+
+// Batch 4 review M6 (ruling M6). `config.points: null` in a stage input at create or replace is the same word the stage PUT
+// uses (`{points: null}` removes the rule): NO points for this slot. Before, the schema let the null through
+// (`points: z.unknown()`), then `PointsRule.parse(null)` threw a raw ZodError at the batch gates, so with R-T13-1's carry an
+// Apply could never clear a carried rule. A null drops the carry, asks the points checks nothing, and is not stored.
+describe.skipIf(!HAS_DB)("M6 config.points: null at create and replace means no points for this slot", () => {
+  const league = (seq: number, name: string, config: Record<string, unknown> = {}) =>
+    ({ seq, kind: "league" as const, name, config, progression: null });
+  const storedKeys = async (stageId: string): Promise<string[]> => Object.keys(await stageConfig(stageId));
+
+  it("createStages: null stores no points key at all, on a table stage and on a bracket stage; the base rule still stores", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    const [table, bracket] = await createStages(auth, divisionId, [
+      league(1, "Pool", { points: null }),
+      { seq: 2, kind: "knockout", name: "KO", config: { points: null }, progression: null },
+    ]);
+    expect(await storedKeys(table!.id), "no points key (not a stored null)").not.toContain("points");
+    expect(await storedKeys(bracket!.id), "a bracket stage takes the null too: there is nothing to refuse").not.toContain("points");
+    // The positive pair: the same door stores a rule that is sent.
+    const other = await seedDivision(auth, "badminton", "short");
+    const [kept] = await createStages(auth, other.divisionId, league(1, "Pool", { points: base }));
+    expect((await stageConfig(kept!.id)).points).toMatchObject(base);
+  });
+
+  it("the null asks no gate: an org denied standings.custom_points creates and replaces with it, and the rule it would need is still 402", async () => {
+    const auth = await seedOrg("pro");
+    await denyFeature(auth.orgId, "standings.custom_points");
+    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    await createStages(auth, divisionId, league(1, "Pool", { points: null }));
+    await replaceStages(auth, divisionId, league(1, "Pool", { points: null }));
+    expect((await stageIds(divisionId)).length).toBe(1);
+    await expect(replaceStages(auth, divisionId, league(1, "Pool", { points: withForfeit }))).rejects.toMatchObject({ status: 402 });
+  });
+
+  it("Apply: a body's null clears the carried points; a body that says nothing still carries them (the pair)", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    await putStageRules(auth, s, { points: withForfeit });
+    // Absent: carried (R-T13-1).
+    await replaceStages(auth, divisionId, [league(1, "Pool")]);
+    expect((await pointsBySeq(divisionId)).get(1), "absent points still carry").toMatchObject(withForfeit);
+    // Null: cleared, and the stage is a new row (the Apply happened).
+    const before = await stageIds(divisionId);
+    await replaceStages(auth, divisionId, [league(1, "Pool", { points: null })]);
+    const after = await stageIds(divisionId);
+    expect(after.length).toBe(1);
+    expect(after, "the Apply replaced the row").not.toEqual(before);
+    expect((await pointsBySeq(divisionId)).get(1) ?? null, "null cleared the carried points").toBeNull();
+    expect(await storedKeys(after[0]!), "and stored no null in their place").not.toContain("points");
+    // Sequence: with nothing left to carry, the next Apply has none to carry.
+    await replaceStages(auth, divisionId, [league(1, "Pool")]);
+    expect((await pointsBySeq(divisionId)).get(1) ?? null, "a second Apply: still none").toBeNull();
+  });
+
+  it("a points value that is not a rule is still refused, so the null is not 'ignore whatever is sent'", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    await expect(createStages(auth, divisionId, league(1, "Pool", { points: "three" }))).rejects.toMatchObject({ name: "ZodError" });
+    expect(await stageCount(divisionId)).toBe(0);
+  });
+
+  it("over the real routes: POST and PUT /divisions/{id}/stages accept `config.points: null` (201 / 200), never a 400", async () => {
+    const auth = await seedOrg("enterprise");
+    const secret = await keyFor(auth);
+    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    const post = await postStagesRoute(
+      keyed(secret, "POST", `/divisions/${divisionId}/stages`, { seq: 1, kind: "league", name: "Pool", config: { points: null } }),
+      ctx(divisionId),
+    );
+    const posted = (await post.json()) as Body;
+    expect(posted.error, "no refusal over the wire").toBeUndefined();
+    expect(post.status).toBe(201);
+    const put = await putStagesRoute(
+      keyed(secret, "PUT", `/divisions/${divisionId}/stages`, [{ seq: 1, kind: "league", name: "Pool", config: { points: null } }]),
+      ctx(divisionId),
+    );
+    const replaced = (await put.json()) as Body;
+    expect(replaced.error, "no refusal over the wire").toBeUndefined();
+    expect(put.status).toBe(200);
+    expect(await stageCount(divisionId)).toBe(1);
+  });
+});
