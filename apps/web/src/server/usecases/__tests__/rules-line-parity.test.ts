@@ -225,6 +225,17 @@ describe.skipIf(!HAS_DB)("I-1 football knockout: a decider-only correction chang
     const pub = await publicLines(s, id);
     expect(after.format_line).toBe(pub.poll);
     expect(after.format_line).toBe(pub.page);
+    // The 409 composes the same line from its OWN reads (append-event.ts hands `matchRulesLine` the DIVISION's cfg, the
+    // abandon clause's baseline), so GET /rules agreeing says nothing about it: tap under the version the pad loaded.
+    // A 409 that passed the match's own cfg as that baseline (which already carries the stage's policy) loses the clause.
+    await expect(
+      scoreEvent(s.auth, id, { expected_seq: 0, type: "core.start", payload: {}, rules_version: before.rules_version }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "FIXTURE_RULES_CHANGED",
+      extra: { rules_version: after.rules_version, format: line(BEFORE, award) },
+      message: refusalSentence(line(BEFORE, award)),
+    });
     checked.n++;
   }, 90_000);
 
