@@ -66,6 +66,24 @@ describe("X-PT-1 the stage points sentence", () => {
       .toEqual(["format.points.base", "format.points.forfeit"]);
   });
 
+  it("a number that is not finite (NaN, Infinity, the JSON null of a lost value) is no number - never printed as one", () => {
+    expect(pointsLine({ base: { win: Number.NaN, draw: 1, loss: 0 }, bonuses: [] })).toEqual([]);
+    expect(pointsLine({ base: { win: 3, draw: Number.POSITIVE_INFINITY, loss: 0 }, bonuses: [] })).toEqual([]);
+    expect(pointsLine({ base: { win: 3, draw: 1, loss: null }, bonuses: [] } as never)).toEqual([]);
+    const forfeit = (f: unknown) => pointsLine({ base: BASE, bonuses: [], forfeit: f } as never).map((c) => c.key);
+    expect(forfeit({ winnerPoints: Number.NaN, loserPoints: 0 })).toEqual(["format.points.base"]);
+    expect(forfeit({ winnerPoints: 2, loserPoints: Number.POSITIVE_INFINITY })).toEqual(["format.points.base"]);
+    expect(forfeit({ winnerPoints: 2, loserPoints: 0, awardScore: [5, Number.POSITIVE_INFINITY] })).toEqual(["format.points.base", "format.points.forfeit"]);
+    expect(forfeit({ winnerPoints: 2, loserPoints: 0, awardScore: [Number.NaN, 0] })).toEqual(["format.points.base", "format.points.forfeit"]);
+    expect(forfeit({ winnerPoints: 2, loserPoints: 0, awardScore: [5, 0, 1] })).toEqual(["format.points.base", "format.points.forfeit"]);
+    expect(forfeit({ winnerPoints: 2, loserPoints: 0, awardScore: "5-0" })).toEqual(["format.points.base", "format.points.forfeit"]);
+    // Array-LIKE is not an array: a jsonb object with indices and a length is not a score tuple.
+    expect(forfeit({ winnerPoints: 2, loserPoints: 0, awardScore: { 0: 5, 1: 0, length: 2 } })).toEqual(["format.points.base", "format.points.forfeit"]);
+    expect(forfeit("walkover")).toEqual(["format.points.base"]);
+    // A zero is a number (a 0-0 award is legal, Task 9 fix round 2): it is said.
+    expect(forfeit({ winnerPoints: 0, loserPoints: 0, awardScore: [0, 0] })).toEqual(["format.points.base", "format.points.forfeit", "format.points.forfeitScore"]);
+  });
+
   it("every clause it can emit resolves in all four locales with no unfilled placeholder (counted)", () => {
     const rules: Rule[] = [
       { base: BASE, bonuses: [] },

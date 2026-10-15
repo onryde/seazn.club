@@ -524,3 +524,122 @@ describe("effectiveRulesLine - format, then how a tie ends, then an abandon poli
     expect(line.map((c) => c.key)).toEqual(["format.rules.period.halves", "format.rules.decider.none"]);
   });
 });
+
+describe("guards - what the describers refuse to say, and the doubles they must survive", () => {
+  const football = mod("football");
+  const cricket = mod("cricket");
+  const chess = mod("boardgame");
+  /** A module whose parse is the identity over `data`, keeping the real module's declarations - the only way to reach a
+   *  config the real schema refuses or defaults away. */
+  const parsing = (m: AnySportModule, data: Record<string, unknown>): AnySportModule =>
+    ({ ...m, configSchema: { safeParse: () => ({ success: true, data }) } }) as unknown as AnySportModule;
+
+  it("a decider no describer knows is never read as OFF: with every known decider off, a bracket line claims neither a clause nor 'none'", () => {
+    const sparkle = { ...football, ruleKeys: { ...football.ruleKeys, sparkle: { scope: "stage", decider: true } } } as unknown as AnySportModule;
+    const allOff = divisionCfg(football, "11-a-side");
+    expect(describeDeciders(football, "knockout", allOff), "premise: without the unknown key it IS 'none'").toEqual([{ key: "format.rules.decider.none" }]);
+    expect(describeDeciders(sparkle, "knockout", allOff)).toEqual([]);
+  });
+
+  it("an ON shoot-out whose kick count is neither stored nor declared says no number - and is still ON, so the line never claims 'none'", () => {
+    const { whenAbsent: _declared, ...noDefault } = football.ruleKeys!.shootoutAttempts!;
+    const bare = { ...football, ruleKeys: { ...football.ruleKeys, shootoutAttempts: noDefault } } as unknown as AnySportModule;
+    expect(describeDeciders(bare, "knockout", { ...divisionCfg(football, "11-a-side"), shootout: true })).toEqual([]);
+    // The same cfg with the engine's declaration intact says its count (the declared number, not an invented one).
+    expect(describeDeciders(football, "knockout", { ...divisionCfg(football, "11-a-side"), shootout: true }).length).toBe(1);
+  });
+
+  it("a module with no bracketDeciders (a hand-built double) is not asked for them", () => {
+    const noOverlay = { ...football, bracketDeciders: undefined } as unknown as AnySportModule;
+    const cfg = { ...divisionCfg(football, "11-a-side"), shootout: true };
+    expect(describeDeciders(noOverlay, "knockout", cfg)).toEqual(describeDeciders(football, "knockout", cfg));
+  });
+
+  it("a refused config says no abandon policy (the absent default is not the policy of a config nobody parsed)", () => {
+    expect(describeAbandon(football, { halfMinutes: -1 })).toEqual([]);
+    expect(describeAbandon(football, divisionCfg(football, "11-a-side")).length, "premise: the parsed one says it").toBe(1);
+  });
+
+  it("a bracket plays the sport's own bracketDeciders even where the caller handed the raw division cfg (carrom: the extra board, whatever the tie board)", () => {
+    const carrom = mod("carrom");
+    const drawn = { ...divisionCfg(carrom, "icf"), tieBoard: "draw" as const, abandonPolicy: "share" as const };
+    expect(carrom.configSchema.safeParse(drawn).success, "premise: the schema accepts the drawn-game house rule").toBe(true);
+    for (const kind of BRACKETS) expect(describeDeciders(carrom, kind, drawn), kind).toEqual([{ key: "format.rules.decider.extraBoard" }]);
+    for (const kind of TABLES) expect(describeDeciders(carrom, kind, drawn), kind).toEqual([]);
+  });
+
+  it("a bracket stage where NO declared decider can apply says nothing - 'level matches wait' is claimed only over deciders the stage could have played", () => {
+    const tableOnly = Object.fromEntries(
+      Object.entries(football.ruleKeys!).map(([k, f]) => [k, f.decider === true ? { ...f, appliesTo: { stageKinds: ["league"] } } : f]),
+    );
+    const fake = { ...football, ruleKeys: tableOnly } as unknown as AnySportModule;
+    expect(deciderKeysFor(fake, "knockout", null), "premise: nothing applies to a knockout").toEqual([]);
+    expect(deciderKeysFor(fake, null, null).length, "premise: but deciders are declared").toBeGreaterThan(0);
+    expect(describeDeciders(fake, "knockout", divisionCfg(football, "11-a-side"))).toEqual([]);
+  });
+
+  it("an abandon policy the sport does not offer is not said, even where the schema let it through", () => {
+    expect(football.abandonOptions).not.toContain("share");
+    expect(describeAbandon(parsing(football, { abandonPolicy: "share" }), {})).toEqual([]);
+    expect(describeAbandon(parsing(football, { abandonPolicy: 7 }), {})).toEqual([]);
+    expect(describeAbandon(parsing(football, { abandonPolicy: "award" }), {})).toEqual([{ key: "format.rules.abandon.award" }]);
+  });
+
+  it("a knockout line is the format, then how a tie ends, THEN the abandon policy it changed", () => {
+    const division = divisionCfg(football, "11-a-side");
+    const line = effectiveRulesLine("football", football, { ...postedStageCfg(football, division, "knockout", "11-a-side") as object, abandonPolicy: "award" }, division, "knockout");
+    expect(line!.map((c) => c.key)).toEqual([
+      "format.rules.period.halves",
+      "format.rules.decider.extraTime",
+      "format.rules.decider.penalties",
+      "format.rules.abandon.award",
+    ]);
+  });
+
+  it("cricket: a limited-overs format of more than one innings says both the overs and the innings", () => {
+    const c = { ...divisionCfg(cricket, "t20"), inningsPerSide: 2 };
+    expect(text(describeMatchRules("cricket", cricket, c))).toBe("20 overs a side, 2 innings a side, max 4 overs a bowler");
+  });
+
+  it("chess: the clock is minutes to two places, and a time-control family the module does not declare is not claimed", () => {
+    const base = divisionCfg(chess, "classical");
+    expect(text(describeMatchRules("boardgame", chess, { ...base, clock: { base: 100 } }))).toBe("Classical time control, 1.67 min each");
+    expect(text(describeMatchRules("boardgame", parsing(chess, { variant: "bullet", clock: { base: 600 } }), {}))).toBe("10 min each");
+    expect(describeMatchRules("boardgame", parsing(chess, { variant: "bullet" }), {}), "no variant claimed, no clock set: nothing to say").toBeNull();
+  });
+
+  it("carrom: a best-of-1 is one game, and a number the config lacks is simply not said", () => {
+    const carrom = mod("carrom");
+    expect(text(describeMatchRules("carrom", carrom, { ...divisionCfg(carrom, "icf"), bestOf: 1 }))).toBe("1 game, to 25 points, up to 8 boards");
+    expect(text(describeMatchRules("carrom", parsing(carrom, { gameTo: 25 }), {}))).toBe("To 25 points");
+    expect(describeMatchRules("carrom", parsing(carrom, {}), {})).toBeNull();
+  });
+
+  it("a result mode nobody names says nothing; a period sport with no length says nothing; a cricket with no innings says nothing", () => {
+    expect(describeMatchRules("generic", parsing(mod("generic"), { resultMode: "mystery", allowDraws: true }), {})).toBeNull();
+    expect(describeMatchRules("football", parsing(football, { halves: 2 }), {})).toBeNull();
+    expect(describeMatchRules("football", parsing(football, { halfMinutes: 45 }), {})).toBeNull();
+    expect(describeMatchRules("cricket", parsing(cricket, { ballsPerOver: 6 }), {})).toBeNull();
+  });
+
+  it("a legacy module (no ruleKeys at all) still falls back to the config's shape; one that declares keys no family reads does not", () => {
+    const legacy = (data: Record<string, unknown>) => ({ configSchema: { safeParse: () => ({ success: true, data }) } }) as unknown as AnySportModule;
+    expect(describeMatchRules("badminton", legacy({ bestOf: 1, setTo: 15 }), {})).toEqual([{ key: "format.rules.oneGamePoints", params: { points: 15 } }]);
+    expect(describeMatchRules("tennis", legacy({ bestOf: 3, set: { gamesTo: 6, tiebreakAt: 6 } }), {})![0]!.key).toBe("format.rules.tennis.bestOfSets");
+    expect(describeMatchRules("badminton", { ...legacy({ bestOf: 1, setTo: 15 }), ruleKeys: { sparkle: { scope: "match" } } } as unknown as AnySportModule, {})).toBeNull();
+  });
+
+  it("rulesDifferFromDivision: a module without declarations compares the web's own rule-key list; no module compares them raw", () => {
+    const legacy = { configSchema: { safeParse: (v: unknown) => ({ success: true, data: v }) } } as unknown as AnySportModule;
+    expect(rulesDifferFromDivision("badminton", legacy, { bestOf: 1, setTo: 15 }, { bestOf: 3, setTo: 15 })).toBe(true);
+    expect(rulesDifferFromDivision("badminton", legacy, { bestOf: 3, setTo: 15, points: 1 }, { bestOf: 3, setTo: 15, points: 2 })).toBe(false);
+    expect(rulesDifferFromDivision("badminton", null, { bestOf: 1 }, { bestOf: 3 })).toBe(true);
+    expect(rulesDifferFromDivision("badminton", null, { bestOf: 3 }, { bestOf: 3 })).toBe(false);
+  });
+
+  it("effectiveRulesLine: the abandon policy of a stage over a division whose own config was refused is still said (it differs from nothing)", () => {
+    const division = divisionCfg(football, "11-a-side");
+    const line = effectiveRulesLine("football", football, { ...division, halfMinutes: 40, abandonPolicy: "award" }, { halfMinutes: -1 }, "league");
+    expect(line!.map((c) => c.key)).toEqual(["format.rules.period.halves", "format.rules.abandon.award"]);
+  });
+});

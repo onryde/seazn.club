@@ -7242,6 +7242,7 @@ async function w2cStageRulesSuite(): Promise<void> {
   await w2cStagePointsWalkoverChecks(owner);
   await w2cRulesVersionChecks(owner);
   await w2cRulesVersionPreKickoffChecks(owner);
+  await w2cPublicStageFormatChecks(owner, who.org_id);
 }
 
 /**
@@ -7304,6 +7305,72 @@ async function w2cStagePointsWalkoverChecks(owner: Session): Promise<void> {
       (ok
         ? ""
         : ` — got ${entrants.length} entrant(s), ${generated.length} fixture(s), start ${started.status}, forfeit ${walkover.status} ${JSON.stringify(walkover.json.error ?? null)}, ${rows.length} row(s) ${JSON.stringify(rows.map((r) => [r.entrantId === fx?.home_entrant_id ? "home" : "away", r.points]))} after ${reads} read(s)`),
+    ok,
+  );
+}
+
+/**
+ * W2c Task 16 (X-SR-1 public half, spec items 12-13, carried M4) - over real HTTP, read ANONYMOUSLY: a public hockey
+ * division's knockout stage, created with its sport's preset (a shoot-out), is NAMED on the division page's stage chip
+ * and in the hub document, in the org's words - the period line from the variant's own config ("4 quarters of 15 min")
+ * and how a tie ends from the preset ("shoot-out (5 each)"). Hockey is a family the old four-sport gate never described.
+ * Every number is read from the engine's own declarations and every word from the en dictionary on disk. The league
+ * stage beside it plays the division's own format, so it gets no chip: exactly one chip, the knockout's. The attribute
+ * is anchored on `="` (AGENTS.md: React serialises an omitted prop as "$undefined").
+ */
+async function w2cPublicStageFormatChecks(owner: Session, orgId: string): Promise<void> {
+  const pub = JSON.parse(
+    readFileSync(new URL("../apps/web/src/dictionaries/en/public.json", import.meta.url), "utf8"),
+  ) as Record<string, string>;
+  const fill = (template: string | undefined, params: Record<string, number>): string =>
+    (template ?? "<missing key>").replace(/\{(\w+)\}/g, (_, k: string) => String(params[k]));
+  const variant = "fih-outdoor";
+  const division = hockey.configSchema.parse(hockey.variants[variant]) as { periods: { count: number; minutes: number } };
+  const preset = stageDefaultsFor(hockey as AnySportModule, "knockout", variant) as { shootout: { attempts: number } };
+  // The period word is the declared count's (4 -> quarters); the numbers differ from each other, so a swapped pair fails.
+  const periods = fill(pub["format.rules.period.quarters"], { minutes: division.periods.minutes });
+  const shootout = fill(pub["format.rules.decider.shootout"], { n: preset.shootout.attempts });
+  const sentence = `${periods}, ${shootout}`;
+
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Public Stage Format ${tag}`, visibility: "public" }),
+  );
+  const div = v1data<{ id: string; slug: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "W2c Hockey Cup", sport_key: "hockey", variant_key: variant }),
+  );
+  await v1(
+    owner,
+    `/api/v1/divisions/${div.id}/entrants`,
+    "POST",
+    // Hockey takes team entrants only.
+    ["Dee", "Eli", "Fay", "Gus"].map((n, i) => ({ kind: "team", display_name: `${n} ${tag}`, seed: i + 1 })),
+  );
+  const league = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" }));
+  const cup = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 2, kind: "knockout", name: "Cup" }));
+  await v1(owner, `/api/v1/stages/${league.id}/generate`, "POST");
+  await v1(owner, `/api/v1/stages/${cup.id}/generate`, "POST");
+  const started = await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
+
+  const anon = newSession();
+  const page = await html(anon, `/shared/${orgSlug}/${comp.slug}/${div.slug}`);
+  const chips = page.body.split(`data-testid="division-stage-format"`).length - 1;
+  const hub = v1data<{ divisions?: { slug: string; stageFormatLines?: { stageName: string; line: { key: string }[] }[] }[] } | undefined>(
+    await v1(anon, `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/hub`),
+  );
+  const hubLines = hub?.divisions?.find((d) => d.slug === div.slug)?.stageFormatLines ?? [];
+  const ok =
+    started.status === 200 &&
+    page.status === 200 &&
+    chips === 1 &&
+    page.body.includes(sentence) &&
+    hubLines.length === 1 &&
+    hubLines[0]!.stageName === "Cup" &&
+    hubLines[0]!.line.map((c) => c.key).join() === "format.rules.period.quarters,format.rules.decider.shootout";
+  check(
+    "w2c: the public division page states a hockey stage's format" +
+      (ok ? "" : ` - start ${started.status}, page ${page.status}, ${chips} chip(s), "${sentence}" ${page.body.includes(sentence) ? "present" : "absent"}, hub ${JSON.stringify(hubLines)}`),
     ok,
   );
 }
