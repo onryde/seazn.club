@@ -183,7 +183,9 @@ export async function scoreEvent(
       // Batch-5 m-2: a replayed answer carries the rules version NOW (`ScoreOutcome.rules_version`), whichever tier serves
       // it - the durable replay reads it off the row, and the cached answer holds the version of the original write. A
       // lost-ack retry after a correction is what tells the pad to reload; an overlay per answer, never written back.
-      const now = await rulesVersionNow(auth.orgId, fixtureId);
+      // Best-effort: the overlay only ENRICHES an answer the pad already has, and the cache fails open for the same reason
+      // (a retry must not be refused because a backing store is down). A read that rejects keeps the cached answer.
+      const now = await rulesVersionNow(auth.orgId, fixtureId).catch(() => null);
       return now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now }; // same answer, no double write
     }
   }
