@@ -284,6 +284,18 @@ describe("fold-epoch guard: the rule", () => {
       expect(owes(epochViolations(old(base), at(1, 3, [stream("std", 1), stream("std", 2, { outcome: "B" })])))).toEqual([["badminton", "major"]]);
     });
 
+    it("a sport a side's FOLD_MINOR does not name reads as minor 0, like a side with no FOLD_MINOR at all (the CLI refuses such a table before this is asked)", () => {
+      const unnamed = (minors: Record<string, number>, streams: GoldenStream[]): Side => ({ epochs: { badminton: 1 }, minors, corpora: { badminton: corpus(streams) } });
+      // baseline names nothing (minor 0): a minor of 1 pays a deltas-only move, and a minor of 0 does not
+      expect(epochViolations(unnamed({}, base), unnamed({ badminton: 1 }, deltasMoved))).toEqual([]);
+      const unpaid = epochViolations(unnamed({}, base), unnamed({}, deltasMoved));
+      expect(unpaid).toHaveLength(1);
+      expect(unpaid[0]).toMatchObject({ beforeMinor: 0, afterMinor: 0, owes: "minor" });
+      expect(unpaid[0]!.reason).toContain("raise FOLD_MINOR.badminton to 1");
+      // and the tree's table naming nothing after a baseline at 2 is a minor that fell
+      expect(epochViolations(unnamed({ badminton: 2 }, base), unnamed({}, base))[0]!.reason).toMatch(/FOLD_MINOR went down \(2 -> 0\)/);
+    });
+
     it("two sports, one owing a minor and one a major: each is judged by its own pair, and a bump in the other sport settles neither", () => {
       const two = (b: [[number, number], [number, number]], a: [[number, number], [number, number]]): [Side, Side] => [
         { epochs: { badminton: b[0][0], tennis: b[1][0] }, minors: { badminton: b[0][1], tennis: b[1][1] }, corpora: { badminton: corpus([stream("std", 1)], "badminton"), tennis: corpus([stream("std", 1)], "tennis") } },
