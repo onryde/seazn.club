@@ -193,7 +193,7 @@ const DIV_WOMENS: DivisionLike = {
 const DIV_OPEN_2: DivisionLike = { ...DIV_OPEN, division_id: "div-open-2", name: "Open Doubles" };
 
 
-function mount(divisions: DivisionLike[]) {
+function mount(divisions: DivisionLike[], harnessOptions: { hydrate?: boolean; clientMount?: boolean } = { hydrate: true }) {
   const info: RegisterInfo = {
     competition: { name: "Test Cup", starts_on: "2026-09-01" },
     org: { name: "Test Org" },
@@ -203,6 +203,10 @@ function mount(divisions: DivisionLike[]) {
     RegisterStepper,
     { orgSlug: ORG_SLUG, competitionSlug: COMPETITION_SLUG, info, locale: "en", joinCode: null },
     deepExpand,
+    // The restore from sessionStorage and `hydrated` itself are read through a
+    // store (server snapshot: not hydrated), so the harness must model React's
+    // after-hydration re-read — the render the old mount effect used to run in.
+    harnessOptions,
   );
 
   const stepWho = () => {
@@ -303,6 +307,159 @@ describe("finding #2 — un-toggling \"I'm playing\" clears the self-link", () =
       entryCartCart().entries.map((e) => e.registering_self),
       "the flag itself must be cleared, not just the UI hidden",
     ).toEqual([false]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ESLint L4 — the self-link convenience used to be an effect over (imPlaying,
+// cart size), applied AFTER an event's updates had all landed. Solo signup is
+// one event with TWO dispatches (ADD_ENTRY a team, then UPDATE_ENTRY
+// free_agent:true): a free agent has no roster, so linking it as the contact
+// would submit registering_self:true with an unresolvable index. Whatever
+// replaces the effect has to look at the settled cart, not at each dispatch.
+// ---------------------------------------------------------------------------
+
+describe("ESLint L4 — the self-link follows the SETTLED cart, not each dispatch", () => {
+  const DIV_TEAM_FA: DivisionLike = {
+    ...DIV_OPEN,
+    division_id: "div-team-fa",
+    name: "Team Cup",
+    entrant_kind: "team",
+    allow_free_agents: true,
+  };
+
+  /** WHO filled in and "I'm playing" on, then on to ENTRIES — the state both cases below start from. */
+  function playingOnEntries() {
+    const m = mount([DIV_TEAM_FA]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({
+      name: "Alex Test",
+      email: "alex@example.com",
+      dob: "1990-01-01",
+    });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> ENTRIES
+    return m;
+  }
+
+  it("solo signup while 'I'm playing' is on never self-links the free-agent entry (ADD_ENTRY then UPDATE_ENTRY in one event)", () => {
+    const { island, divisionCard, entryCartCart } = playingOnEntries();
+    // ONE event, two dispatches — React renders once, with both applied.
+    island.batch(() => (propsOf(divisionCard("div-team-fa")).onAddSoloSignup as () => void)());
+    const entries = entryCartCart().entries;
+    expect(entries, "PREMISE: one entry was added").toHaveLength(1);
+    expect(entries[0]!.free_agent, "PREMISE: it is the solo (free-agent) signup").toBe(true);
+    expect(entries[0]!.registering_self, "a free agent is never the contact's own row").toBe(false);
+  });
+
+  it("the positive pair: an ordinary lone team entry, same state, IS auto-linked — so `false` above is the free-agent rule, not auto-link being off", () => {
+    const { divisionCard, entryCartCart } = playingOnEntries();
+    (propsOf(divisionCard("div-team-fa")).onAddTeam as () => void)();
+    expect(entryCartCart().entries.map((e) => e.registering_self)).toEqual([true]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ESLint L4 — the sessionStorage restore moved from a mount effect to the first
+// render after hydration. What that owes, in sequence: the server/hydration pass
+// touches no storage at all, the restore is applied before anything is saved
+// (the first write must carry the RESTORED snapshot — an empty one would
+// clobber the visitor's draft), and nothing is written by a visit with nothing
+// to save until the visitor edits.
+// ---------------------------------------------------------------------------
+
+describe("ESLint L4 — restore from sessionStorage happens after hydration, before the first save", () => {
+  const KEY = `seazn_register_${ORG_SLUG}_${COMPETITION_SLUG}`;
+  const DRAFT = JSON.stringify({
+    version: REGISTER_STATE_VERSION,
+    contact: { ...EMPTY_CONTACT, name: "Drafted Dee", email: "dee@example.com" },
+    imPlaying: false,
+    cart: { entries: [] },
+    consent: { privacy_consent: false, media_consent: false },
+    stepIndex: 0,
+  });
+  const spyStorage = () => {
+    const reads: string[] = [];
+    const writes: string[] = [];
+    const real = fakeSessionStorage;
+    (globalThis as { sessionStorage?: unknown }).sessionStorage = {
+      getItem: (k: string) => {
+        reads.push(k);
+        return real.getItem(k);
+      },
+      setItem: (k: string, v: string) => {
+        writes.push(v);
+        real.setItem(k, v);
+      },
+      removeItem: (k: string) => real.removeItem(k),
+    };
+    return { reads, writes };
+  };
+
+  it("the first thing written is the RESTORED draft — never an empty snapshot over it", () => {
+    fakeSessionStorage.setItem(KEY, DRAFT);
+    const { reads, writes } = spyStorage();
+    const { stepWho } = mount([DIV_OPEN]);
+    expect(reads, "PREMISE: the draft was read").toContain(KEY);
+    expect(writes.length, "PREMISE: a save happened (an empty list would pass vacuously)").toBeGreaterThan(0);
+    expect(
+      writes.map((w) => (JSON.parse(w) as { contact: { name: string } }).contact.name),
+      "every write carries the restored name — none is the empty contact",
+    ).toEqual(writes.map(() => "Drafted Dee"));
+    expect(propsOf(stepWho()).contact as { name: string }).toMatchObject({ name: "Drafted Dee" });
+  });
+
+  it("a CLIENT-SIDE mount (hydrated on the very first render) restores too — and the self-link look waits for it: two restored self-links both survive", () => {
+    const entry = (id: string, division_id: string) => ({
+      id,
+      division_id,
+      entrant_kind: "individual",
+      team_name: null,
+      partner_name: null,
+      free_agent: false,
+      players: [{ full_name: "", dob: null, gender: null, email: "", squad_number: "", is_captain: false }],
+      answers: {},
+      registering_self: true,
+      self_player_index: null,
+    });
+    fakeSessionStorage.setItem(
+      KEY,
+      JSON.stringify({
+        version: REGISTER_STATE_VERSION,
+        contact: { ...EMPTY_CONTACT, name: "Drafted Dee", email: "dee@example.com", dob: "1990-01-01" },
+        imPlaying: true,
+        cart: { entries: [entry("e1", "div-open"), entry("e2", "div-open-2")] },
+        consent: { privacy_consent: false, media_consent: false },
+        stepIndex: 1,
+      }),
+    );
+    const { entryCartCart, selfCheckboxes } = mount([DIV_OPEN, DIV_OPEN_2], { clientMount: true });
+    expect(
+      entryCartCart().entries.map((e) => e.registering_self),
+      "the restored cart reached the page, links intact",
+    ).toEqual([true, true]);
+    expect(selfCheckboxes()).toHaveLength(2);
+  });
+
+  it("the server / hydration pass touches storage not at all: no read, no write, no restored contact", () => {
+    fakeSessionStorage.setItem(KEY, DRAFT);
+    const { reads, writes } = spyStorage();
+    // No `hydrate: true`: the harness stays on the server snapshot (hydrated = false).
+    const island = renderIsland(
+      RegisterStepper,
+      {
+        orgSlug: ORG_SLUG,
+        competitionSlug: COMPETITION_SLUG,
+        info: { competition: { name: "Test Cup", starts_on: "2026-09-01" }, org: { name: "Test Org" }, divisions: [DIV_OPEN] },
+        locale: "en",
+        joinCode: null,
+      },
+      deepExpand,
+    );
+    const who = island.tree().find((e) => e.type === StepWho);
+    expect(who, "PREMISE: the WHO step rendered").toBeTruthy();
+    expect(propsOf(who!).contact as { name: string }, "not restored before hydration").toMatchObject({ name: "" });
+    expect(reads).toEqual([]);
+    expect(writes).toEqual([]);
   });
 });
 
@@ -855,15 +1012,17 @@ describe("FIX 2 — the initial cart state is genuinely deterministic (source-le
     expect(match![1], "the initializer itself must not generate an id").not.toMatch(/crypto\.randomUUID/);
   });
 
-  it("the single-open-division auto-seed's crypto.randomUUID() now lives INSIDE the hydration effect (client-only, post-first-paint), not the initializer", () => {
-    const effectStart = stepperSrc.indexOf("const saved = loadRegisterState(orgSlug, competitionSlug);");
-    expect(effectStart, "hydration effect body not found").toBeGreaterThan(-1);
-    const effectEnd = stepperSrc.indexOf("}, []);", effectStart);
-    expect(effectEnd, "hydration effect's own closing (empty deps) not found").toBeGreaterThan(-1);
-    const effectBody = stepperSrc.slice(effectStart, effectEnd);
-    expect(effectBody, "autoSeedSingleDivision's id must be generated inside this effect").toMatch(
+  it("the single-open-division auto-seed's crypto.randomUUID() lives INSIDE the post-hydration restore (client-only, after the hydration render), not the initializer", () => {
+    const blockStart = stepperSrc.indexOf("if (hydrated && !restored) {");
+    expect(blockStart, "post-hydration restore block not found").toBeGreaterThan(-1);
+    const blockEnd = stepperSrc.indexOf("setConsentAttempted(false);", blockStart);
+    expect(blockEnd, "post-hydration restore block's own end not found").toBeGreaterThan(-1);
+    const blockBody = stepperSrc.slice(blockStart, blockEnd);
+    expect(blockBody, "autoSeedSingleDivision's id must be generated inside this block").toMatch(
       /autoSeedSingleDivision\([^)]*crypto\.randomUUID\(\)/,
     );
+    // ...both call sites: the restored-but-empty cart and the fresh visit.
+    expect(blockBody.match(/autoSeedSingleDivision\([^)]*crypto\.randomUUID\(\)/g)).toHaveLength(2);
   });
 });
 

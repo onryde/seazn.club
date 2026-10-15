@@ -17,6 +17,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { useHydrated } from "@/lib/use-client-snapshot";
 import { formatMinor, type Currency } from "@/lib/currency";
 import {
   autoLinkObviousSelf,
@@ -122,22 +123,24 @@ export function RegisterStepper({
   const stepOrder = buildStepOrder(openDivisions.length, openDivisions[0]?.entrant_kind);
   const seasonStartYear = seasonStartYearFrom(info.competition.starts_on);
 
-  const [hydrated, setHydrated] = useState(false);
+  // `false` on the server and in the hydration render, `true` from the render after (and on the first render of a
+  // client-side mount) — a read through a store, so nothing has to set it from an effect.
+  const hydrated = useHydrated();
   const [contact, setContact] = useState<ContactState>(EMPTY_CONTACT);
   const [imPlaying, setImPlaying] = useState(false);
   // FIX 2 (RS006 fix wave) — this used to be a lazy initializer that called
   // `crypto.randomUUID()` directly for the single-open-division auto-seed
   // (design §4: "step 2 collapses..."). That id genuinely differs between
   // the server pass and the client's first render, which made the
-  // hydration effect's own "deterministic (same on server and first client
-  // render)" claim below false for this one case. Nothing on step 0
+  // post-hydration restore's own "deterministic (same on server and first
+  // client render)" claim below false for this one case. Nothing on step 0
   // rendered an entry-derived id, so no mismatch was visible YET — but it
   // was one entry-id-keyed key/data-* away from a real hydration mismatch
   // that discards the whole client tree. EMPTY_CART is trivially identical
   // either side; the auto-seed (with a REAL id) now happens in the
-  // hydration effect below instead, which — like the sessionStorage
+  // post-hydration restore below instead, which — like the sessionStorage
   // restore it sits beside — only ever runs client-side, after the
-  // identical first paint.
+  // identical hydration render.
   const [cart, setCart] = useState<CartState>(EMPTY_CART);
   const [stepIndex, setStepIndex] = useState(0);
   const [whoAttempted, setWhoAttempted] = useState(false);
@@ -179,25 +182,24 @@ export function RegisterStepper({
   const containerRef = useRef<HTMLDivElement>(null);
   const stepFocusArmed = useRef(false);
 
-  // Hydrate from sessionStorage once, client-only. The initial useState
-  // values above are now genuinely deterministic (same on server and
-  // first client render — FIX 2, see the cart useState's own comment), so
-  // this effect — which only ever runs in the browser — is what makes a
-  // mid-flow refresh survive, AND (the `else` branch below) what seeds a
-  // single-open-division cart's real id, without an SSR/CSR mismatch
-  // either way.
-  useEffect(() => {
+  // Hydrate from sessionStorage once, client-only, in the FIRST render after
+  // hydration (or the first render of a client-side mount). The initial useState
+  // values above are genuinely deterministic (same on server and first client
+  // render — FIX 2, see the cart useState's own comment), so the markup that
+  // hydrates matches the server's; this render-phase adjustment — React throws
+  // the pass away and re-renders at once, so the unrestored state is never
+  // committed or painted — is what makes a mid-flow refresh survive, AND (the
+  // `else` branch below) what seeds a single-open-division cart's real id,
+  // without an SSR/CSR mismatch either way. It used to be a mount effect that
+  // set all of this (and `hydrated` itself) after the paint.
+  //
+  // Nothing is saved before it has run: the save effect below is guarded by
+  // `hydrated`, which is only ever true in a render that has restored.
+  const [restored, setRestored] = useState(false);
+  if (hydrated && !restored) {
+    setRestored(true);
     const saved = loadRegisterState(orgSlug, competitionSlug);
     if (saved) {
-      // react-hooks/set-state-in-effect flags this as a cascade risk in
-      // general, but there is no other correct place to do it: reading
-      // sessionStorage during the render itself (e.g. a useState lazy
-      // initializer) would make the CLIENT's first-pass markup diverge
-      // from what the SERVER rendered (sessionStorage doesn't exist
-      // server-side) and React would discard the mismatched client tree.
-      // Applying the restored snapshot here, strictly after the identical
-      // first paint, is the standard fix for this exact class of problem.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setContact(saved.contact);
       setImPlaying(saved.imPlaying);
       // A restored snapshot can carry an EMPTY cart — the visitor advanced
@@ -226,7 +228,7 @@ export function RegisterStepper({
       // used to happen in the cart's OWN useState lazy initializer,
       // generating the id with `crypto.randomUUID()` right there — see
       // that state's own comment for why calling it here, post-hydration,
-      // client-only, is what actually fixes the determinism this effect's
+      // client-only, is what actually fixes the determinism this block's
       // header now correctly claims.
       setCart({ ...EMPTY_CART, entries: autoSeedSingleDivision(openDivisions[0]!, crypto.randomUUID()) });
     }
@@ -239,10 +241,7 @@ export function RegisterStepper({
     setEntriesAttempted(false);
     setDetailsAttempted(false);
     setConsentAttempted(false);
-    setHydrated(true);
-    // Intentionally empty deps: hydration runs exactly once, at mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }
 
   useEffect(() => {
     if (!hydrated) return;
@@ -256,40 +255,33 @@ export function RegisterStepper({
     });
   }, [hydrated, orgSlug, competitionSlug, contact, imPlaying, cart, consent, stepIndex]);
 
-  // See cart.ts's autoLinkObviousSelf doc comment: links the one cart entry
-  // to "I'm playing" only when there is no ambiguity, never overriding an
-  // explicit choice. A reactive convenience over user input (the toggle,
-  // the cart shrinking/growing to exactly one entry), not a derivation of
-  // props/state that could be computed during render instead — genuinely
-  // effect-shaped. clearSelfLinkWhenNotPlaying is the inverse direction
-  // (fix wave finding #2): un-toggling "I'm playing" must clear ANY
-  // self-link, auto- or explicitly-made, or a stale registering_self:true
-  // with no dob collected reaches submit. Composing the two is safe in
-  // either order — each is a no-op exactly when the other one applies.
+  // See cart.ts's autoLinkObviousSelf doc comment: links the one cart entry to
+  // "I'm playing" only when there is no ambiguity, never overriding an explicit
+  // choice. clearSelfLinkWhenNotPlaying is the inverse direction (fix wave
+  // finding #2): un-toggling "I'm playing" must clear ANY self-link, auto- or
+  // explicitly-made, or a stale registering_self:true with no dob collected
+  // reaches submit. Composing the two is safe in either order — each is a no-op
+  // exactly when the other one applies.
   //
-  // `if (!hydrated) return` guards a hydration race (RS006 regression, found
-  // by manual browser verification against a restored multi-self-link
-  // snapshot): on the FIRST render — before the hydration effect above has
-  // applied its restored imPlaying/cart — this effect already fires once
-  // with imPlaying's STALE pre-hydration value (false). Its functional
-  // `setCart` updater still chains onto the hydration effect's newly-queued
-  // cart value (React applies same-tick updates to one state variable in
-  // call order), so clearSelfLinkWhenNotPlaying sees "imPlaying is false"
-  // plus a cart that already has self-linked entries, and clears every one
-  // of them — before the restored imPlaying:true ever commits. This was
-  // invisible under the OLD cart-wide single-self-link model: with exactly
-  // ONE entry, the SECOND invocation (once the real post-hydration values
-  // commit) silently re-links it via autoLinkObviousSelf's own "exactly
-  // one, unambiguous" rule, masking the bug. With 2+ self-linked entries
-  // that second invocation's auto-link never fires (ambiguous), so the
-  // damage from the stale first invocation stands. Matching the save
-  // effect's own guard above is the fix: this effect has nothing correct to
-  // do before hydration has applied the real values.
-  useEffect(() => {
-    if (!hydrated) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCart((prev) => clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(prev, imPlaying), imPlaying));
-  }, [hydrated, imPlaying, cart.entries.length]);
+  // Re-evaluated when its inputs change — the toggle, or the cart's SIZE (the
+  // old effect's own triggers) — as a render-phase adjustment, not an effect
+  // that re-set the cart after the paint. It looks at the SETTLED state, which
+  // is why it is not folded into each handler: solo signup is one event with two
+  // dispatches (ADD_ENTRY a team, then UPDATE_ENTRY free_agent:true), and
+  // linking after the first would make a free agent the contact's own row.
+  //
+  // It waits for the restore (`restored`): the old effect fired once on the first
+  // render with imPlaying's STALE pre-restore value, cleared every restored
+  // self-link, and only a lone entry's second invocation masked it (RS006
+  // regression, found against a restored multi-self-link snapshot). On a
+  // client-side mount `hydrated` is true on the very first render, where this
+  // branch would read the pre-restore cart and set it over the restored one.
+  const linkSeed = `${imPlaying}|${cart.entries.length}`;
+  const [linkedFor, setLinkedFor] = useState("");
+  if (restored && linkedFor !== linkSeed) {
+    setLinkedFor(linkSeed);
+    setCart(clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(cart, imPlaying), imPlaying));
+  }
 
   // Review finding #2 (MEDIUM) — move focus to the new step's own heading
   // on a REAL step transition (goNext/goBack), never on the initial mount
@@ -343,7 +335,7 @@ export function RegisterStepper({
 
   // Clamped to the LAST real step, never stepOrder.length — "review" is a
   // genuine final step with its own Submit action, not a position before a
-  // "coming soon" end-cap (matches the hydration effect's own clamp above).
+  // "coming soon" end-cap (matches the post-hydration restore's own clamp above).
   // Re-clamped on EVERY render, not just at hydration: a division flipping
   // `open` live (e.g. its window just closed) can shrink stepOrder between
   // renders, and a stale stepIndex must not point past the new, shorter list.
