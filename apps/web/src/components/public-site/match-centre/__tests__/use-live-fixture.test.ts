@@ -50,11 +50,14 @@ vi.mock("../../live-score-data", async () => {
 
 import { fetchLiveFixture, fetchPublicRealtimeToken, OVERLAY_REALTIME_PURPOSE } from "../../live-score-data";
 import {
+  DEFAULT_SETTLED_POLL_MS,
   DRAIN_MS,
+  MIN_SETTLED_POLL_MS,
   POLL_MS,
   SETTLED_LISTEN_MS,
   SETTLED_POLL_MS,
   SUBSCRIBED_POLL_MS,
+  resolveSettledPollMs,
   useLiveFixture,
 } from "../use-live-fixture";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
@@ -547,11 +550,14 @@ describe("useLiveFixture — listens open, settled-for-a-window, or never (owner
     vi.unstubAllEnvs();
   });
 
-  it("premises: the constants this suite reads are the ones the brief names, and the settled poll is slower than the live one", () => {
+  it("premises: what SHIPS is a 15-minute window polled every 60 s — pinned on the DEFAULT, never the live value", () => {
+    // Pinned on DEFAULT_SETTLED_POLL_MS, NOT SETTLED_POLL_MS (AGENTS.md #20): e2e runs the same bundle with a shorter
+    // override, and a pin on the live value would fail in exactly the process where the short value is right.
     expect(SETTLED_LISTEN_MS, "15 minutes").toBe(15 * 60 * 1000);
-    expect(SETTLED_POLL_MS, "60 s").toBe(60 * 1000);
-    // Without these the interval tests below cannot tell the two rates apart (a differential needs a difference).
-    expect(SETTLED_POLL_MS).toBeGreaterThan(POLL_MS);
+    expect(DEFAULT_SETTLED_POLL_MS, "60 s").toBe(60 * 1000);
+    // What ships polls a settled page SLOWER than a live one (the load bound), so at the default the tests below
+    // witness two different rates. Every expectation below derives from the LIVE value, so an override moves them too.
+    expect(DEFAULT_SETTLED_POLL_MS).toBeGreaterThan(POLL_MS);
     expect(SETTLED_LISTEN_MS).toBeGreaterThan(2 * SETTLED_POLL_MS);
     for (const s of [...LOCKED_FIXTURE_STATUSES, ...SETTLED_FIXTURE_STATUSES]) {
       expect(FIXTURE_STATUSES, `${s} is a fixtures.status`).toContain(s);
@@ -573,15 +579,17 @@ describe("useLiveFixture — listens open, settled-for-a-window, or never (owner
         tier === "locked" ? 0 : 1,
       );
 
+      // Two checkpoints inside the window: one live period, one settled period. At the shipped default these differ (a
+      // settled page has NOT polled after POLL_MS); the counts are the interval arithmetic of the live constants.
+      const owed = (t: number) =>
+        tier === "locked" ? 0 : tier === "open" ? 1 + Math.floor(t / POLL_MS) : 1 + Math.floor(t / SETTLED_POLL_MS);
       await vi.advanceTimersByTimeAsync(POLL_MS);
-      expect(fetches(), `${status} (${tier}): one POLL_MS later`).toBe(tier === "open" ? 2 : tier === "settled" ? 1 : 0);
-      await vi.advanceTimersByTimeAsync(SETTLED_POLL_MS - POLL_MS);
-      expect(fetches(), `${status} (${tier}): one SETTLED_POLL_MS after mount`).toBe(
-        tier === "open" ? 1 + Math.floor(SETTLED_POLL_MS / POLL_MS) : tier === "settled" ? 2 : 0,
-      );
+      expect(fetches(), `${status} (${tier}): one POLL_MS later`).toBe(owed(POLL_MS));
+      await vi.advanceTimersByTimeAsync(Math.max(POLL_MS, SETTLED_POLL_MS) - POLL_MS);
+      expect(fetches(), `${status} (${tier}): one SETTLED_POLL_MS after mount`).toBe(owed(Math.max(POLL_MS, SETTLED_POLL_MS)));
 
       // Past the window, by a margin of several of either interval.
-      await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS + 3 * SETTLED_POLL_MS - SETTLED_POLL_MS);
+      await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS + 2 * Math.max(POLL_MS, SETTLED_POLL_MS));
       const atEnd = fetches();
       await vi.advanceTimersByTimeAsync(10 * SETTLED_LISTEN_MS);
       if (tier === "open") {
@@ -612,10 +620,11 @@ describe("useLiveFixture — listens open, settled-for-a-window, or never (owner
     const afterDecided = fetches();
 
     vi.mocked(fetchLiveFixture).mockResolvedValue(reopened); // the scorer undoes the deciding point
-    await vi.advanceTimersByTimeAsync(POLL_MS);
-    expect(fetches(), "no poll at the live rate once settled").toBe(afterDecided);
+    // Quiet for one settled period less a millisecond — at the shipped default that spans a whole live period.
+    await vi.advanceTimersByTimeAsync(SETTLED_POLL_MS - 1);
+    expect(fetches(), "no poll before the settled tick").toBe(afterDecided);
     expect(hook.current.data.status).toBe("decided");
-    await vi.advanceTimersByTimeAsync(SETTLED_POLL_MS - POLL_MS);
+    await vi.advanceTimersByTimeAsync(1);
     // The settled tick brings the undo; reopening re-arms the poll at POLL_MS, which refreshes once on re-arming.
     expect(fetches(), "the settled poll ran, then the reopened re-arm").toBe(afterDecided + 2);
     expect(hook.current.data).toBe(reopened);
@@ -734,6 +743,43 @@ describe("useLiveFixture — listens open, settled-for-a-window, or never (owner
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// The e2e override (AGENTS.md #20 shape): CI's e2e runs the poll path, where a 60 s settled tick would add minutes to
+// every main push, so e2e.yml shortens it. Only a plain integer in [MIN, DEFAULT] is taken; anything else ships the
+// default. Expected values are the DEFAULT and the inputs themselves — never the live constant.
+describe("resolveSettledPollMs — the e2e override is clamped, and anything unusable ships the default", () => {
+  it("premise: the floor is above zero and below the shipped default, so both sides of the clamp exist", () => {
+    expect(MIN_SETTLED_POLL_MS).toBeGreaterThan(0);
+    expect(MIN_SETTLED_POLL_MS).toBeLessThan(DEFAULT_SETTLED_POLL_MS);
+  });
+  it("absent or blank → the default", () => {
+    expect(resolveSettledPollMs(undefined)).toBe(DEFAULT_SETTLED_POLL_MS);
+    expect(resolveSettledPollMs("")).toBe(DEFAULT_SETTLED_POLL_MS);
+    expect(resolveSettledPollMs("   ")).toBe(DEFAULT_SETTLED_POLL_MS);
+  });
+  it("in range, both bounds inclusive → taken as is", () => {
+    expect(resolveSettledPollMs(String(MIN_SETTLED_POLL_MS))).toBe(MIN_SETTLED_POLL_MS);
+    expect(resolveSettledPollMs(String(DEFAULT_SETTLED_POLL_MS))).toBe(DEFAULT_SETTLED_POLL_MS);
+    // A value distinct from the default, so "taken" cannot be confused with "fell back".
+    expect(resolveSettledPollMs("5000")).toBe(5000);
+    expect(resolveSettledPollMs("30000")).toBe(30000);
+  });
+  it("below the floor → the default (a settled page must never poll faster than the floor)", () => {
+    for (const raw of [String(MIN_SETTLED_POLL_MS - 1), "1000", "1", "0"]) {
+      expect(resolveSettledPollMs(raw), raw).toBe(DEFAULT_SETTLED_POLL_MS);
+    }
+  });
+  it("above the default → the default (an override may only shorten the shipped interval)", () => {
+    for (const raw of [String(DEFAULT_SETTLED_POLL_MS + 1), "600000", "999999999999"]) {
+      expect(resolveSettledPollMs(raw), raw).toBe(DEFAULT_SETTLED_POLL_MS);
+    }
+  });
+  it("non-numeric, signed, fractional or exponent forms → the default", () => {
+    const bad = ["abc", "5000ms", "-5000", "+5000", "5000.5", "5e3", " 5000", "5000 ", "0x1388", "NaN", "Infinity"];
+    for (const raw of bad) expect(resolveSettledPollMs(raw), `"${raw}"`).toBe(DEFAULT_SETTLED_POLL_MS);
+    expect(bad.length, "anti-vacuity").toBeGreaterThan(0);
   });
 });
 

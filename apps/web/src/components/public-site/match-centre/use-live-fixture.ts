@@ -20,9 +20,35 @@ export const SUBSCRIBED_POLL_MS = 60_000;
  *  page opened from a share a poll for as long as its tab is open. The window bounds that to one burst per page. */
 export const SETTLED_LISTEN_MS = 15 * 60_000;
 
-/** The poll interval inside the settled window — a quarter of the live rate, since nothing moves a settled fixture
- *  but an undo or a reset. A realtime channel stays on beside it, so a push still arrives at once. */
-export const SETTLED_POLL_MS = 60_000;
+/** The SHIPPED poll interval inside the settled window — a quarter of the live rate, since nothing moves a settled
+ *  fixture but an undo or a reset. A realtime channel stays on beside it, so a push still arrives at once. The premise
+ *  test pins THIS symbol, never the live `SETTLED_POLL_MS`, so an e2e override cannot move what ships. */
+export const DEFAULT_SETTLED_POLL_MS = 60_000;
+
+/** The e2e override's name, exported so a test names the same string as the build-time substitution below. */
+export const SETTLED_POLL_MS_ENV_VAR = "NEXT_PUBLIC_E2E_SETTLED_POLL_MS";
+/** The shortest settled interval an override may ask for. */
+export const MIN_SETTLED_POLL_MS = 5_000;
+
+/** Parse an override. Only a plain integer in [MIN_SETTLED_POLL_MS, DEFAULT_SETTLED_POLL_MS] is taken; anything else
+ *  — absent, blank, non-numeric, fractional, out of range — falls back to the shipped default. The clamp runs both
+ *  ways on purpose: below the floor a settled page would poll FASTER than a live one (the load this window exists to
+ *  bound), and above the default an undo would take longer than shipped to reach the page. A typo therefore only slows
+ *  an e2e leg down, never changes what a spectator's tab costs. Pure and exported for its own tests: the resolved
+ *  constant alone cannot tell a rejected override from an absent one (same shape as `resolveHoldMs`, queue.ts). */
+export function resolveSettledPollMs(raw: string | undefined): number {
+  if (raw === undefined || !/^[0-9]+$/.test(raw)) return DEFAULT_SETTLED_POLL_MS;
+  const ms = Number(raw);
+  return ms >= MIN_SETTLED_POLL_MS && ms <= DEFAULT_SETTLED_POLL_MS ? ms : DEFAULT_SETTLED_POLL_MS;
+}
+
+/** The settled interval this build uses: `DEFAULT_SETTLED_POLL_MS` in every shipped build, overridable ONLY through
+ *  `NEXT_PUBLIC_E2E_SETTLED_POLL_MS`, which e2e.yml sets at JOB level so the production bundle (Next substitutes the
+ *  literal member expression at BUILD time — a dynamic `process.env[...]` read would compile to undefined) and the
+ *  Playwright runner (which imports this module to derive its step budgets) read one value. CI's e2e runs on the poll
+ *  path (stub Supabase), where every undo step otherwise waits out a full 60 s settled tick. No deploy config may set
+ *  it (`settled-poll-override.test.ts`). */
+export const SETTLED_POLL_MS = resolveSettledPollMs(process.env.NEXT_PUBLIC_E2E_SETTLED_POLL_MS);
 
 /** What this transport does for a status: `open` listens without limit, `settled` listens for `SETTLED_LISTEN_MS`,
  *  `locked` never listens. */

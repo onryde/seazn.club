@@ -213,18 +213,18 @@ type Overlay = Awaited<ReturnType<typeof mountOverlay>>;
  *
  *  The poll's rate depends on what the page last saw. An OPEN fixture (in play) is polled every POLL_MS. A SETTLED one
  *  (the card is up: decided or abandoned) is polled every SETTLED_POLL_MS for a bounded window (`use-live-fixture.ts`),
- *  so a card-down step first proves the live rate is gone — one POLL_MS passes with no request and the card still up —
- *  and only then lets the settled tick carry the undo. */
+ *  so a card-down step first proves the page is quiet until the settled tick — one SETTLED_POLL_MS less a millisecond
+ *  passes with no request and the card still up (at the shipped 60 s that spans whole live periods) — and only then
+ *  lets the settled tick carry the undo. Derived from the LIVE constant, so an override moves it too. */
 async function expectCard(o: Overlay, r: Rig, up: boolean, step: string) {
   let polled: number;
   if (up) {
     polled = await advance(POLL_MS);
   } else {
-    expect(SETTLED_POLL_MS, "premise: the settled rate is slower than the live one").toBeGreaterThan(POLL_MS);
-    const early = await advance(POLL_MS);
-    expect(early, `${r.sportKey} — ${step}: a settled page is not polled at the live rate`).toBe(0);
+    const early = await advance(SETTLED_POLL_MS - 1);
+    expect(early, `${r.sportKey} — ${step}: a settled page is quiet until its settled tick`).toBe(0);
     expect(o.cardUp(), `${r.sportKey} — ${step}: the card is still up before the settled poll`).toBe(true);
-    polled = await advance(SETTLED_POLL_MS - POLL_MS);
+    polled = await advance(1);
     expect(polled, `${r.sportKey} — ${step}: the settled poll ran`).toBeGreaterThan(0);
   }
   const status = await serverStatus(r.fixtureId);

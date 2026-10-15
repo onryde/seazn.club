@@ -429,6 +429,18 @@ jobs:
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
       NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      # stream-overlay.spec.ts's undo test: a SETTLED fixture (decided, forfeited,
+      # abandoned) is polled every 60 s for its post-match window when shipped
+      # (use-live-fixture.ts DEFAULT_SETTLED_POLL_MS), and this job runs on the
+      # poll (stub Supabase above), so each undo step would wait out a full 60 s
+      # tick — about 4 min on every main push. 5s here, at JOB level for the same
+      # reason as the hold above: the BUILD bakes it into the overlay's bundle
+      # and the Playwright runner imports the same module to derive its budgets.
+      # `resolveSettledPollMs` takes only an integer in [5000, 60000] and falls
+      # back to the shipped 60 s for anything else; the 60 s is pinned on the
+      # DEFAULT, and settled-poll-override.test.ts refuses this var in any deploy
+      # config and requires it here in every job that runs Playwright.
+      NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
       # sitemap.spec.ts: the sitemap's competition read is cached for an hour
       # when shipped (server/public-site/sitemap-cache.ts), and the spec proves
       # both halves of that — not re-read inside the window, picked up after
@@ -1086,6 +1098,8 @@ jobs:
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
       NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      # Same as e2e-parallel's: the settled poll override (see that job's comment).
+      NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
       STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
@@ -1436,6 +1450,8 @@ jobs:
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
       NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      # Same as e2e-parallel's: the settled poll override (see that job's comment).
+      NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
       STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
