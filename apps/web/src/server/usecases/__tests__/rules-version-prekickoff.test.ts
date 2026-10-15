@@ -553,12 +553,38 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
     tableKey.push(name);
   }, 180_000);
 
-  it("counted: the table-key door was driven on a walkover revive in both a goal sport and a set sport, the reset, and the cascade void", () => {
+  it("badminton third place, a bye fed by LOSER edges only: the same save bumps it, and its pad's old version is refused after the reopen", async () => {
+    // A bye the cascade writes on the third-place match when a semi is a double walkover: its feeders are the semis'
+    // LOSER edges, never a winner edge, so a feeder test that read only winner edges would call it a seeded bye and skip it.
+    const b = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    const sf1 = await fixtureRow(b.fixtureIds[0]!);
+    const thirdId = sf1.loser_to_fixture!;
+    const pad = await loadFixturePadCfg(b.auth, thirdId);
+    const killed = await dw(b, sf1.id);
+    await winOut(b, b.fixtureIds[1]!);
+    const third = await fixtureRow(thirdId);
+    expect([third.status, third.outcome?.reason], "premise: third place is a bye").toEqual(["forfeited", "bye"]);
+    const [{ byWinner, byLoser }] = await sql<{ byWinner: number; byLoser: number }[]>`
+      select count(*) filter (where winner_to_fixture = ${thirdId})::int "byWinner",
+             count(*) filter (where loser_to_fixture = ${thirdId})::int "byLoser" from fixtures where stage_id = ${b.stageId}`;
+    expect([byWinner, byLoser], "premise: only loser edges feed third place").toEqual([0, 2]);
+    expect(await versionOf(thirdId)).toBe(pad.rulesVersion);
+    await saveTableKey(b, { pointsMap: PM_MOVED });
+    expect(await versionOf(thirdId), "the save moved what the third-place bye resolves to, so it bumped it").toBe(pad.rulesVersion + 1);
+    await post(b.auth, sf1.id, "core.void", { event_id: killed.event_id });
+    await winOut(b, sf1.id);
+    expect((await fixtureRow(thirdId)).status, "premise: both semis' losers are seated").toBe("scheduled");
+    await staleThenReload(b, thirdId, pad, (cfg) => (cfg as { pointsMap?: unknown } | null)?.pointsMap, PM_MOVED);
+    tableKey.push("badminton third place (loser edges)");
+  }, 180_000);
+
+  it("counted: the table-key door was driven on a walkover revive in both a goal sport and a set sport, the reset, the cascade void and a loser-fed bye", () => {
     expect(tableKey).toEqual([
       "football walkover revive",
       "badminton walkover revive",
       "badminton reset (taking back the played semi)",
       "badminton abandoned revive (a cascade void)",
+      "badminton third place (loser edges)",
     ]);
   });
 });
