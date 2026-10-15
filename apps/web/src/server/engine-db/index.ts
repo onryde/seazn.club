@@ -20,4 +20,4 @@ export {
 export { resolveModule, resolveLatestModule } from "./registry";
 export type { FoldedFixture } from "./fold";
 // W2 — the duplicate-write path's reconstruction of a past append's answer.
-export { replayOutcomeFor, type ReplayedOutcome } from "./replay";
+export { replayOutcomeFor, rulesVersionNow, type ReplayedOutcome } from "./replay";

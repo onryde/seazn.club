@@ -72,3 +72,15 @@ export async function replayOutcomeFor(
     };
   });
 }
+
+/**
+ * W2c batch-5 m-2 - the match's rules version NOW, for a replayed answer that did not come from the ledger: the Redis fast
+ * path caches the `ScoreOutcome` of the original write, whose `rules_version` is the version THEN. One primary-key read;
+ * null when the fixture is not visible to the tenant (deleted), and the caller keeps the cached answer.
+ */
+export async function rulesVersionNow(orgId: string, fixtureId: string): Promise<number | null> {
+  return withTenant(orgId, async (tx) => {
+    const [row] = await tx<{ rules_version: number }[]>`select rules_version from fixtures where id = ${fixtureId}`;
+    return row?.rules_version ?? null;
+  });
+}

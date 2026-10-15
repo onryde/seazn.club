@@ -13,7 +13,7 @@ import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { foldEpochOf } from "@seazn/engine/sport";
-import { appendEvent, replayOutcomeFor, resolveModule } from "@/server/engine-db";
+import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
 import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
@@ -180,7 +180,11 @@ export async function scoreEvent(
     const replay = await cacheGet<ScoreOutcome>(cacheKey);
     if (replay) {
       await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
-      return replay; // retried request: same answer, no double write
+      // Batch-5 m-2: a replayed answer carries the rules version NOW (`ScoreOutcome.rules_version`), whichever tier serves
+      // it - the durable replay reads it off the row, and the cached answer holds the version of the original write. A
+      // lost-ack retry after a correction is what tells the pad to reload; an overlay per answer, never written back.
+      const now = await rulesVersionNow(auth.orgId, fixtureId);
+      return now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now }; // same answer, no double write
     }
   }
 
