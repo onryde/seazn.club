@@ -161,11 +161,33 @@ hand in the same PR; no tool will tell you):
   (`core/events.ts`), which put a settlement, an expunge, or a withdrawal over a
   held level result on top of the module's answer. A change to how those combine
   moves no golden.
-- **Stoppage arithmetic, and `forfeit-credit.ts`.** The corpora now hold a
-  `core.suspend` / `core.resume` pair (the golden floor, below), but the stream
-  records the module's final state, not the kernel's stoppage clock
-  (`core/time.ts`): a change to how stopped time is summed moves no golden.
-  Walkover credit is pinned only where a corpus has a forfeit that reaches it.
+- **Recorded, but the overlay is unpinned: a pause, a note, an award, and a lineup
+  change in a sport whose module reads none.** The corpora hold every one of
+  these events (the golden floor, below), and recording an event is **not**
+  pinning it: the harness stores the module's state, outcome, summary and deltas,
+  so an event the kernel owns, or one a module folds as `return state`, can sit
+  in a stream and move nothing the epoch guard compares. Measured by removing the
+  event from each recorded stream and comparing every recorded field (the floor's
+  own `OVERLAY_CLAIMS` probe, which turns red the day any of these starts to
+  move a golden):
+  - `core.suspend` / `core.resume`: inert in all eleven sports. The stoppage
+    clock (`core/time.ts`) and the open-stoppage refusals live in the overlay.
+  - `core.note`, `core.award`: inert in all eleven (every module folds them as
+    `return state`).
+  - `core.lineup.*`: inert in boardgame, carrom and generic (no `onLineup`); they
+    move state in the other eight, so a change to the lineup reducer is seen there.
+  A change to how any of these folds therefore owes a **manual bump of every sport
+  it reaches**, exactly like the overlays above. Nothing here is a closed gap; the
+  floor only makes the open one visible and keeps it from widening unnoticed.
+  `forfeit-credit.ts`: walkover credit is pinned only where a corpus has a forfeit
+  that reaches it.
+- **The kernel side of an undo.** A void of a mis-tapped forfeit or abandon IS
+  pinned on the module side: the corpora strike one of each in every sport and
+  play on, and without the void the later events are refused (the match stays
+  decided), so a void that stopped clearing them fails to fold. What stays
+  unrecorded is the kernel's own flags beside module state (an abandon in force,
+  a level withdrawal, the stoppage a suspend opened); changing how those clear
+  owes the same manual bump.
 - **`core.settle`.** The one kernel type no corpus holds, by exemption: a
   settlement lives beside module state, the harness records the module's bare
   outcome, and a stream carrying one would record a value that is wrong the
@@ -177,7 +199,9 @@ hand in the same PR; no tool will tell you):
   nothing.
 
 Which `core.*` events and outcome kinds each corpus holds is no longer a gap to
-read off a table: it is a floor a test enforces (next section).
+read off a table: it is a floor a test enforces (next section). Holding an event
+is not the same as pinning it: the "Recorded, but the overlay is unpinned" bullet
+above is the list of events a corpus holds and the guard still cannot see move.
 `docs/superpowers/specs/engine-split/reviews/1e.md` ("Corpus coverage per sport")
 is the measurement that motivated it.
 
@@ -188,10 +212,18 @@ least one stream for each of:
 
 1. **Every `core.*` event the kernel accepts** — derived from
    `Object.keys(CORE_EVENT_SCHEMAS)` (fifteen: the ten kernel events and the five
-   `core.lineup.*`), never a typed list. `core.void` is in every corpus because an
-   undo is the commonest thing a phone writes. A void's target id is `voids` on
-   the recorded event (`GoldenEvent.voids`, the envelope field; the payload is
-   strictly empty).
+   `core.lineup.*`), never a typed list; the lineup planners are checked against
+   that list too, so a sixth `core.lineup.*` type with no planner fails by name
+   instead of being "impossible". `core.void` is in every corpus because an undo
+   is the commonest thing a phone writes. A void's target id is `voids` on the
+   recorded event (`GoldenEvent.voids`, the envelope field; the payload is
+   strictly empty). Two more tokens say WHAT is undone or left standing:
+   `undo:core.forfeit` and `undo:core.abandon` (a mis-tapped retirement or
+   abandon, struck, with play resuming to the walk's own result), and
+   `standing:core.abandon` (an abandon nothing strikes, which leaves the match
+   ended with no outcome). A recorded void is checked to mean what it says
+   (`golden-floor-voids.test.ts`: the ledger folds as if its target had never been
+   recorded, and differs with the target left standing).
 2. **Every outcome kind the module can produce** — there is **no** per-module
    declared union (`OUTCOME_KINDS` is the global six), so the floor derives it:
    `win` always; `draw` where `supportsDraws` holds for a draw-capable stage in a
@@ -213,16 +245,38 @@ a recorded config's policy lets the reducer accept it (football's `concussed`,
 cricket's `mutable`, volleyball's libero); everywhere else the floor records the
 reducer's own refusal code instead of a stream.
 
+**Recorded, overlay unpinned.** The floor is a presence check, and a stream that
+records `core.suspend` satisfies it without pinning the stoppage arithmetic. That
+class is explicit: `OVERLAY_CLAIMS` names, with a reason each, the events that
+move no recorded golden (pause, note, award, and lineup changes for a module with
+no `onLineup`), the claim is **derived** by ablation (never typed per sport), and
+a claim whose ablation starts to move a golden, or finds nothing recorded, or
+cannot run, fails by name. `finalize`, `abandon` and `forfeit` are probed beside
+them as controls and answer "pinned" in all eleven. Recording the kernel overlay
+in the corpus and comparing it in the guard would pin all of these; that rewrites
+`fold-epoch-guard.ts` and is a separate piece of work (GF-2). Until it lands, the
+list under "What the guard cannot see" is the list of manual bumps.
+
 **Anti-vacuity.** Every sweep reports how many sports, tokens and holes it
 checked; zero is a failure; the empty-corpus case is tested first (an emptied
-corpus is red, naming the sport).
+corpus is red, naming the sport). One bound, stated: the completeness sweep for
+outcomes the floor does not require walks 40 generator seeds per config
+(`OBSERVE_SEEDS`), which cannot reach a rare outcome (cricket's `tie` first turns up
+near seed 460); those are the ones `NATURAL_OUTCOMES` declares by hand, and the
+other direction of that table (a declared outcome no corpus records) keeps it honest.
 
 **How the streams get there.** `EXTEND_GOLDEN=1` runs `extendFloor`
 (`golden-floor-streams.ts`) after the coverage pass. It builds short named
 stories from the module's own generator with kernel events spliced in at points
-the fold confirms are live — an undo and a late correction, a stoppage with a
-note and an award and the finalize, an abandon, each forfeit reason, a withdrawal
-carrying the lineup changes — and keeps a stream only if it closes a hole. Floor
+the fold confirms are live — an undo, a struck retirement and a struck abandon
+(each with play resuming), and a late correction (an EARLIER event struck after
+later play, searched across every config and seed: a toss or a pairing card where
+a board game's or a carrom match's other events are chained), a stoppage with a
+note and an award and the finalize, an abandon that stands, each forfeit reason, a
+withdrawal carrying the lineup changes — and keeps a stream only if it closes a
+hole. A floor stream is measured against the streams that PRECEDE it in the corpus,
+so a generator walk a later `EXTEND_GOLDEN` appends after the floor changes neither
+the reproduction nor the keep-rule. Floor
 streams have `seed >= FLOOR_SEED_STRIDE` (100000); the epoch guard keys a stream
 by `config#seed`, so a floor stream is a plain **added** stream, never a changed
 one, and a floor append owes no `FOLD_EPOCH` bump. The existing streams are not

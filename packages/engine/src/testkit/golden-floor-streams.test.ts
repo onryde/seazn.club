@@ -6,7 +6,7 @@ import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenCorpus } from "./golden.ts";
 import { eventToken, floorHoles as holesOf } from "./golden-floor.ts";
-import { extendFloor, FLOOR_SEED_STRIDE, SCENARIOS, type Built, type Ctx, type Scenario } from "./golden-floor-streams.ts";
+import { extendFloor, FLOOR_SEED_STRIDE, kernelStrikes, SCENARIOS, strikeKernelEvent, type Built, type Ctx, type KernelStrike, type Scenario } from "./golden-floor-streams.ts";
 import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage, outcomeOf, playRecorded } from "../core/events.ts";
 import { resolvePositions } from "../sport/catalog.ts";
@@ -259,5 +259,55 @@ describe("the undo stream strikes the KERNEL events that decide or end a match, 
       }
     });
     expect(standing).toBeGreaterThanOrEqual(builtinModules.length);
+  });
+});
+
+describe("strikeKernelEvent — every guard of the splice is reached (a guard nothing kills is not tested)", () => {
+  const module = builtinModules.find((m) => m.key === "football")!;
+  const corpus = readCorpus("football");
+  const cfg = module.configSchema.parse(corpus.configs.default) as unknown;
+  const lineups = defaultLineupPair(resolvePositions(module, cfg));
+  const ctx: Ctx = { module, corpus, cfgNames: ["default"], holes: new Set() };
+  const START = { type: "core.start", payload: {} };
+  // a decided football ledger from the generator's own walks: the longest non-floor stream that ends decided
+  const walk = corpus.streams
+    .filter((s) => !isFloor(s) && s.events.every((e) => e.voids === undefined && e.type !== "core.forfeit" && e.type !== "core.abandon" && !e.type.startsWith("core.lineup")))
+    .sort((a, b) => b.events.length - a.events.length)[0]!;
+  const ledger = walk.events;
+  const [forfeit, abandon] = kernelStrikes(lineups);
+
+  it("the real strikes splice a pair into the ledger, and removing the pair gives the ledger back exactly", () => {
+    expect(ledger.length).toBeGreaterThan(6);
+    for (const strike of [forfeit!, abandon!]) {
+      const spliced = strikeKernelEvent(ctx, cfg, lineups, ledger, strike, 2);
+      expect(spliced, strike.type).not.toBeNull();
+      expect(spliced!.length, strike.type).toBe(ledger.length + 2);
+      const q = spliced!.findIndex((e) => e.type === strike.type);
+      expect(q, strike.type).toBeGreaterThanOrEqual(2);
+      expect(spliced![q + 1], strike.type).toEqual({ type: "core.void", payload: {}, voids: `e-${q}` });
+      expect([...spliced!.slice(0, q), ...spliced!.slice(q + 2)], strike.type).toEqual(ledger);
+    }
+  });
+
+  it("an event that never takes effect, or one the void does not clear, is not spliced", () => {
+    const never: KernelStrike = { ...forfeit!, inForce: () => false };
+    const stuck: KernelStrike = { ...forfeit!, inForce: () => true };
+    expect(strikeKernelEvent(ctx, cfg, lineups, ledger, never, 2), "takes no effect").toBeNull();
+    expect(strikeKernelEvent(ctx, cfg, lineups, ledger, stuck, 2), "the void does not clear it").toBeNull();
+  });
+
+  it("a retirement-shaped strike that needs play is not spliced where nothing has been played, though the fold would admit it", () => {
+    // a disqualification is admitted after a bare Start (R4), so only the strike's own `needsPlay` stops it here
+    const dq: KernelStrike = { ...forfeit!, event: { type: "core.forfeit", payload: { by: lineups.home.entrantId, reason: "disqualified" } }, needsPlay: true };
+    const bareStart = [START, ledger.find((e) => !e.type.startsWith("core."))!];
+    expect(strikeKernelEvent(ctx, cfg, lineups, bareStart, { ...dq, needsPlay: false }, 1), "without the play rule the fold admits it").not.toBeNull();
+    expect(strikeKernelEvent(ctx, cfg, lineups, bareStart, dq, 1), "with it, nothing has been played before the splice point").toBeNull();
+  });
+
+  it("a ledger whose remaining events hold a void is not spliced (the splice does not rewrite ids)", () => {
+    const g = ledger.find((e) => !e.type.startsWith("core.") && e.type === "football.goal") ?? ledger.find((e) => !e.type.startsWith("core."))!;
+    const voided = [START, g, g, { type: "core.void", payload: {}, voids: "e-1" }];
+    const dq: KernelStrike = { ...forfeit!, event: { type: "core.forfeit", payload: { by: lineups.home.entrantId, reason: "disqualified" } }, needsPlay: false };
+    expect(strikeKernelEvent(ctx, cfg, lineups, voided, dq, 1), "every point has the void in its tail").toBeNull();
   });
 });

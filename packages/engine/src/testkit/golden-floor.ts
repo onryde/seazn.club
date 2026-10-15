@@ -295,7 +295,15 @@ export function lineupOffers(module: AnySportModule, corpus: GoldenCorpus, coreT
 /** How many generator seeds per recorded config the admission sweep walks. The admission of a forfeit reason depends on
  *  the PHASE a state is in, not on the score, so a handful of walks reaches every phase a module has. */
 export const ADMISSION_SEEDS = 4;
-/** How many generator seeds per config the completeness sweep walks (`unrequiredObservedOutcomes`). */
+/** How many generator seeds per config the completeness sweep walks (`unrequiredObservedOutcomes`).
+ *
+ *  LIMIT, stated: 40 walks reach an outcome that turns up at least about once in forty. They do NOT reach a rare one —
+ *  cricket's `tie` first appears around generator seed 460 (the `stoppage` scenario searches `SEED_BUDGET` = 3000 seeds
+ *  for it). So an undeclared rare outcome of a sport is invisible to this direction of the check; the rare outcomes a
+ *  sport CAN produce are the ones `NATURAL_OUTCOMES` declares by hand, and the opposite direction
+ *  (`staleNaturalOutcomes`: a declared token no corpus records) is what keeps that table honest. A per-sport seed count
+ *  was considered and declined: it would cost minutes of fold per sport to find a ~1-in-500 outcome that nothing
+ *  suggests exists beyond cricket's, and a bound anyone can raise is no more honest than one stated here. */
 export const OBSERVE_SEEDS = 40;
 const WALK_EVENTS = 120;
 
@@ -490,13 +498,13 @@ export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
  *  "unpinned" would show here. */
 export const OVERLAY_CONTROLS: readonly FloorToken[] = ["core.finalize", "core.abandon", "core.forfeit"].map(eventToken);
 
-interface Ablation {
+export interface Ablation {
   readonly kept: GoldenEvent[];
 }
 
 /** The ledger without every event whose type is in `remove`, the `voids` ids renumbered to the survivors' new places; null
  *  when a void targets a removed event (its target is gone, so there is nothing sound to compare). */
-function ablate(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ablation | null {
+export function ablateEvents(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ablation | null {
   const place = new Map<number, number>();
   let next = 0;
   events.forEach((event, i) => {
@@ -539,8 +547,8 @@ function ablationProbe(
   let refused = 0;
   for (const stream of corpus.streams) {
     if (!stream.events.some((e) => extra.has(e.type))) continue;
-    const near = ablate(stream.events, small);
-    const far = ablate(stream.events, big);
+    const near = ablateEvents(stream.events, small);
+    const far = ablateEvents(stream.events, big);
     if (near === null || far === null) continue;
     const raw = corpus.configs[stream.config];
     streams++;
@@ -581,6 +589,25 @@ export function overlayVerdicts(module: AnySportModule, corpus: GoldenCorpus, re
   }
   for (const token of OVERLAY_CONTROLS) out.set(token, ablationProbe(module, corpus, new Set(), new Set([typeOf(token)]), record));
   return out;
+}
+
+/** Why a lineup type is impossible under every recorded config, as `cfg: <reducer refusal code>` joined by `; `. The reason
+ *  is the REDUCER's own code per config. A type the plan never got to ask the reducer about (`no-candidate`: nobody to act
+ *  on) or one it neither accepted nor refused is a defect of the PLAN, not a policy fact, and the floor refuses to derive
+ *  an exemption from it. */
+export function impossibleReason(moduleKey: string, offers: readonly LineupOffer[], type: string): string {
+  // Empty case: with no recorded config nothing was asked of the reducer, so "impossible under every config" is true of
+  // anything. A corpus that loses its configs must not shrink the floor.
+  if (offers.length === 0) throw new Error(`golden floor: ${moduleKey} has no recorded config, so ${type} cannot be declared impossible`);
+  return offers
+    .map((o) => {
+      const why = o.plan.refused[type];
+      if (why === undefined || why === "no-candidate") {
+        throw new Error(`golden floor: ${moduleKey}/${o.cfgName} cannot say why ${type} is impossible (${why ?? "the plan neither accepted nor refused it"}): the planner found nobody to act on`);
+      }
+      return `${o.cfgName}: ${why}`;
+    })
+    .join("; ");
 }
 
 /** Claims that no longer hold for this sport, named: the event moves a recorded golden, is not recorded, or could not be
@@ -648,17 +675,7 @@ export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus, c
     if (type.startsWith("core.lineup.")) {
       const offer = offers.find((o) => o.plan.accepted.includes(type));
       if (offer === undefined) {
-        // The reason is the reducer's own refusal code per config. A type the plan never got to ask the reducer about
-        // ('no-candidate': nobody to act on) or one the plan neither accepted nor refused is a defect of the PLAN, not a
-        // policy fact — the floor refuses to derive an exemption from it.
-        const reasons = offers.map((o) => {
-          const why = o.plan.refused[type];
-          if (why === undefined || why === "no-candidate") {
-            throw new Error(`golden floor: ${module.key}/${o.cfgName} cannot say why ${type} is impossible (${why ?? "the plan neither accepted nor refused it"}): the planner found nobody to act on`);
-          }
-          return `${o.cfgName}: ${why}`;
-        });
-        impossible.set(token, reasons.join("; "));
+        impossible.set(token, impossibleReason(module.key, offers, type));
         continue;
       }
       required.set(token, `accepted by the reducer under ${module.key}/${offer.cfgName}'s lineup policy`);

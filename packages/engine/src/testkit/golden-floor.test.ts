@@ -17,6 +17,7 @@ import {
   floorHoles,
   floorRequirement,
   forfeitAdmissions,
+  impossibleReason,
   lineupOffers,
   lineupTypesOf,
   outcomeToken,
@@ -560,5 +561,27 @@ describe("golden floor — the lineup vocabulary is derived from the kernel; an 
     expect(plan.refused["core.lineup.substitution"]).toBe("no-candidate");
     // a corpus whose only config gets no bench cannot be offered: the offers always bench, so this is the direct guard
     expect(Object.hasOwn(REDUCER_CODES, "no-candidate")).toBe(false);
+  });
+});
+
+describe("golden floor — impossibleReason refuses to derive an exemption from a plan that never asked the reducer", () => {
+  const offer = (cfgName: string, refused: Record<string, string>) => ({ cfgName, lineups: {} as never, plan: { events: [], accepted: [], refused } });
+
+  it("joins the reducer's refusal code per config", () => {
+    const offers = [offer("a", { "core.lineup.entry": "not-a-player" }), offer("b", { "core.lineup.entry": "unknown-person" })];
+    expect(impossibleReason("football", offers, "core.lineup.entry")).toBe("a: not-a-player; b: unknown-person");
+  });
+
+  it("throws by name for a 'no-candidate' plan, and for a type the plan neither accepted nor refused", () => {
+    expect(() => impossibleReason("football", [offer("a", { "core.lineup.entry": "no-candidate" })], "core.lineup.entry")).toThrow(/football\/a cannot say why core\.lineup\.entry is impossible \(no-candidate\)/);
+    expect(() => impossibleReason("football", [offer("a", {})], "core.lineup.entry")).toThrow(/neither accepted nor refused/);
+    // one config in order is not enough: a single unexplained config fails the whole derivation
+    expect(() => impossibleReason("football", [offer("a", { "core.lineup.entry": "not-a-player" }), offer("b", {})], "core.lineup.entry")).toThrow(/football\/b/);
+  });
+
+  it("with no recorded config nothing was asked of the reducer: the type cannot be declared impossible (a corpus that loses its configs must not shrink the floor)", () => {
+    expect(() => impossibleReason("football", [], "core.lineup.entry")).toThrow(/football has no recorded config.*core\.lineup\.entry cannot be declared impossible/);
+    const football = builtinModules.find((m) => m.key === "football")!;
+    expect(() => floorRequirement(football, { ...corpusOf("football"), configs: {}, streams: [] })).toThrow(/no recorded config/);
   });
 });

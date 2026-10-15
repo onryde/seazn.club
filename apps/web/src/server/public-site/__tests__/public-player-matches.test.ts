@@ -2089,12 +2089,17 @@ describe("scoreLineFor — every registered sport, over its recorded golden ledg
   // And the one IMPLICIT positional fact: with no toss recorded, cricket's home
   // side bats first. The oracle's ledger records the toss that says so for the
   // entrant who was home, or the swap would send the other side in first.
-  const oracleLedgerOf = (module: AnySportModule, events: ModuleEvent[], pair: LineupPair) => {
+  // A recorded `core.void` names its target by id (`e-<index>`); the oracle's ledger may carry one more event in front (the
+  // toss), so every void it holds is renumbered by that offset or it would strike the wrong event.
+  type Ledgered = ModuleEvent & { voids?: string };
+  const oracleLedgerOf = (module: AnySportModule, events: Ledgered[], pair: LineupPair) => {
     const noToss = module.key === "cricket" && !events.some((event) => event.type === "cricket.toss");
-    const toss: ModuleEvent = { type: "cricket.toss", payload: { wonBy: pair.home.entrantId, elected: "bat" } };
-    return { events: [...(noToss ? [toss] : []), ...events.map(turned)], offset: noToss ? 1 : 0 };
+    const toss: Ledgered = { type: "cricket.toss", payload: { wonBy: pair.home.entrantId, elected: "bat" } };
+    const offset = noToss ? 1 : 0;
+    const shifted = (event: Ledgered): Ledgered => (event.voids === undefined ? event : { ...event, voids: `e-${Number(event.voids.slice(2)) + offset}` });
+    return { events: [...(noToss ? [toss] : []), ...events.map(turned).map(shifted)], offset };
   };
-  const turned = (event: ModuleEvent): ModuleEvent => {
+  const turned = <E extends ModuleEvent>(event: E): E => {
     if (!isPositional(event)) return event;
     const turn = TURN_POSITIONAL[event.type];
     if (turn === undefined) throw new Error(`no hand turn for the positional payload of "${event.type}"`);
@@ -2108,22 +2113,27 @@ describe("scoreLineFor — every registered sport, over its recorded golden ledg
   it.each(builtinModules.map((module) => [module.key, module] as const))("%s", (_key, module) => {
     const corpus = corpora.find((c) => c.key === module.key)!;
     const mismatches: string[] = [];
+    const refused: string[] = [];
     let inPlay = 0;
     let decided = 0;
     for (const [streamNo, stream] of corpus.streams.entries()) {
       const cfg = module.configSchema.parse(corpus.configs[stream.config]);
       const pair = stream.lineups ?? defaultLineupPair(resolvePositions(module, cfg));
-      const envelopes = stream.events.map((event, i) => makeEnvelope(i, event));
+      // a recorded void carries its target (`voids`); dropping it leaves a `core.void` that strikes nothing and is refused
+      const envelopes = stream.events.map((event, i) => makeEnvelope(i, event, event.voids));
       const oracleLedger = oracleLedgerOf(module, stream.events, pair);
-      const oracleEnvelopes = oracleLedger.events.map((event, i) => makeEnvelope(i, event));
+      const oracleEnvelopes = oracleLedger.events.map((event, i) => makeEnvelope(i, event, event.voids));
       for (const length of new Set([Math.ceil(envelopes.length / 2), envelopes.length])) {
         const ledger = envelopes.slice(0, length);
         let state: unknown;
         let oracle: string;
         try {
           state = foldMatch(module, cfg, pair, ledger);
-        } catch {
-          continue; // a prefix the engine refuses has no line to compare
+        } catch (err) {
+          // Not skipped: a prefix the engine refuses has no line to compare, and a corpus whose recorded prefixes the
+          // engine refuses is a defect to name (it used to drop 22 of 727 prefixes here without a word).
+          refused.push(`stream ${streamNo} @${length}: ${String(err)}`);
+          continue;
         }
         try {
           oracle = (module.summary(foldMatch(module, cfg, swapped(pair), oracleEnvelopes.slice(0, length + oracleLedger.offset))) as ScoreSummary)
@@ -2142,9 +2152,14 @@ describe("scoreLineFor — every registered sport, over its recorded golden ledg
         else decided += 1;
       }
     }
+    expect(refused).toEqual([]);
     expect(mismatches).toEqual([]);
     expect(inPlay).toBeGreaterThan(0);
     expect(decided).toBeGreaterThan(0);
+    // anti-vacuity: the sweep compared prefixes, and every recorded prefix of this module was one of them
+    const prefixes = corpus.streams.reduce((n, stream) => n + new Set([Math.ceil(stream.events.length / 2), stream.events.length]).size, 0);
+    expect(inPlay + decided).toBe(prefixes);
+    expect(prefixes).toBeGreaterThan(corpus.streams.length);
   });
 });
 

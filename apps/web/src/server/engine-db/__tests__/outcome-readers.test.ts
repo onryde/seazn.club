@@ -102,6 +102,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       "packages/engine/src/sports/cricket/scorecard.ts",
       "packages/engine/src/sports/generic/generic.ts",
       "packages/engine/src/testkit/after-start-events.ts",
+      // GF-1 review fix 2: the floor's undo stream asks the EFFECTIVE outcome whether a mis-tapped forfeit decided the match
+      // and the void reopened it (`effectiveToken`) — the module's own outcome never sees a kernel forfeit.
+      "packages/engine/src/testkit/golden-floor-streams.ts",
       // GF-1: the golden floor's `settleProbe` folds a settled ledger and reads its EFFECTIVE outcome through outcomeOf,
       // to prove the settle exemption is still needed (the harness records the module's bare outcome instead).
       "packages/engine/src/testkit/golden-floor.ts",

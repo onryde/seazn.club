@@ -13,11 +13,13 @@ import { describe, expect, it } from "vitest";
 import { CORE_EVENT_SCHEMAS, foldMatchWithStoppage, isKernelOwnedEventType, outcomeOf } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
-import { readCorpus, recomputeStream, type GoldenCorpus } from "./golden.ts";
+import { readCorpus, recomputeStream, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
 import {
+  ablateEvents,
   CORE_TYPES,
   LINEUP_TYPES,
   OVERLAY_CLAIMS,
+  OVERLAY_CONTROLS,
   eventToken,
   floorRequirement,
   overlayVerdicts,
@@ -103,13 +105,21 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(withoutHook).toBeGreaterThan(0);
   });
 
-  it("finalize is NOT in the class: it moves a recorded golden in every sport (a control that the probe can answer 'pinned')", () => {
-    let sports = 0;
+  it("the controls are NOT in the class: finalize, abandon and forfeit each move a recorded golden in every sport (the probe can answer 'pinned')", () => {
+    expect(OVERLAY_CONTROLS.length).toBeGreaterThanOrEqual(3);
+    const claimed = new Set<FloorToken>(OVERLAY_CLAIMS.flatMap((c) => [...c.tokens]));
+    let checked = 0;
     forEachSport(({ module, key }) => {
-      expect(overlayVerdicts(module, corpusOf(key)).get(eventToken("core.finalize"))?.verdict, key).toBe("pinned");
-      sports++;
+      const verdicts = overlayVerdicts(module, corpusOf(key));
+      for (const token of OVERLAY_CONTROLS) {
+        expect(claimed.has(token), `${token} must not also be claimed unpinned`).toBe(false);
+        const v = verdicts.get(token);
+        expect(v?.streams, `${key} ${token} streams probed`).toBeGreaterThan(0);
+        expect(v?.verdict, `${key} ${token}`).toBe("pinned");
+        checked++;
+      }
     });
-    expect(sports).toBe(builtinModules.length);
+    expect(checked).toBe(builtinModules.length * OVERLAY_CONTROLS.length);
   });
 
   it("the probe answers 'pinned' for a lineup event once a module reacts to it (a boardgame given an onLineup that writes state)", () => {
@@ -198,5 +208,33 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     const claimed = new Set<FloorToken>(OVERLAY_CLAIMS.flatMap((c) => [...c.tokens]));
     expect(claimed.size).toBeGreaterThan(0);
     for (const token of claimed) expect(declared.has(token), token).toBe(true);
+  });
+});
+
+describe("ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit", () => {
+  const e = (type: string, voids?: string): GoldenEvent => ({ type, payload: {}, ...(voids === undefined ? {} : { voids }) });
+
+  it("removing events in FRONT of a void's target shifts the void's id by exactly the number removed before the target", () => {
+    // 0 start, 1 note, 2 goal, 3 note, 4 goal, 5 void->e-4 (the second goal)
+    const ledger = [e("core.start"), e("core.note"), e("x.goal"), e("core.note"), e("x.goal"), e("core.void", "e-4")];
+    const out = ablateEvents(ledger, new Set(["core.note"]));
+    expect(out?.kept.map((k) => k.type)).toEqual(["core.start", "x.goal", "x.goal", "core.void"]);
+    // the second goal moved from index 4 to index 2
+    expect(out?.kept[3]?.voids).toBe("e-2");
+    // and a void whose target is not shifted keeps its id
+    const early = ablateEvents([e("core.start"), e("x.goal"), e("core.void", "e-1"), e("core.note")], new Set(["core.note"]));
+    expect(early?.kept[2]?.voids).toBe("e-1");
+  });
+
+  it("a void whose target is removed leaves nothing sound to compare: null, not a guess", () => {
+    const ledger = [e("core.start"), e("x.goal"), e("core.void", "e-1")];
+    expect(ablateEvents(ledger, new Set(["x.goal"]))).toBeNull();
+  });
+
+  it("an empty removal set returns the ledger unchanged, and the input is never mutated", () => {
+    const ledger = [e("core.start"), e("x.goal"), e("core.void", "e-1")];
+    const before = JSON.stringify(ledger);
+    expect(ablateEvents(ledger, new Set())?.kept).toEqual(ledger);
+    expect(JSON.stringify(ledger)).toBe(before);
   });
 });

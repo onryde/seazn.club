@@ -167,7 +167,7 @@ function naturalWalk(ctx: Ctx, cfg: unknown, lineups: LineupPair, seed: number):
 // ---------------------------------------------------------------------------------------------------------- undo
 
 /** One kernel event a phone can mis-tap, and how the FOLD says it took effect. */
-interface KernelStrike {
+export interface KernelStrike {
   readonly type: (typeof UNDOABLE_KERNEL)[number];
   readonly event: GoldenEvent;
   /** The forfeit must follow recorded play (a retirement is a player leaving a match under way). */
@@ -192,7 +192,7 @@ const abandonInForce: KernelStrike["inForce"] = (ctx, cfg, lineups, events) => {
 
 /** The kernel events a ledger strikes, in the order `buildUndo` splices them: the mis-tapped retirement, then the
  *  mis-tapped abandon. Each is `UNDOABLE_KERNEL`'s, and a sport that cannot take one is not given a stream without it. */
-function kernelStrikes(lineups: LineupPair): readonly KernelStrike[] {
+export function kernelStrikes(lineups: LineupPair): readonly KernelStrike[] {
   return [
     { type: "core.forfeit", event: ev("core.forfeit", { by: lineups.home.entrantId, reason: "retired" }), needsPlay: true, inForce: forfeitInForce },
     { type: "core.abandon", event: ev("core.abandon", { reason: "rain: the ground is waterlogged, called off, then play resumed" }), needsPlay: false, inForce: abandonInForce },
@@ -204,7 +204,7 @@ function kernelStrikes(lineups: LineupPair): readonly KernelStrike[] {
  *  after `atLeast` is tried, nearest the middle first, so an earlier splice is never disturbed. Asserted by the fold before
  *  a splice is returned: the event TAKES EFFECT (`inForce`), the void CLEARS it and leaves the module state exactly as it
  *  was, and the whole ledger — every prefix of it — folds strictly to the result the unspliced ledger had. */
-function strikeKernelEvent(ctx: Ctx, cfg: unknown, lineups: LineupPair, ledger: readonly GoldenEvent[], strike: KernelStrike, atLeast: number): GoldenEvent[] | null {
+export function strikeKernelEvent(ctx: Ctx, cfg: unknown, lineups: LineupPair, ledger: readonly GoldenEvent[], strike: KernelStrike, atLeast: number): GoldenEvent[] | null {
   const result = effectiveToken(ctx, cfg, lineups, ledger);
   const mid = Math.floor((atLeast + ledger.length) / 2);
   const points: number[] = [];
@@ -220,7 +220,8 @@ function strikeKernelEvent(ctx: Ctx, cfg: unknown, lineups: LineupPair, ledger: 
     const reopened = [...decided, voidOf(q)];
     const full = [...reopened, ...tail];
     try {
-      if (effectiveToken(ctx, cfg, lineups, head) !== null) continue; // the match is live where it is struck
+      // (The match being live where it is struck needs no guard of its own: a forfeit or an abandon after a decision is
+      // refused by the fold - ALREADY_DECIDED - and the throw lands in the catch below.)
       if (!strike.inForce(ctx, cfg, lineups, decided)) continue;
       if (strike.inForce(ctx, cfg, lineups, reopened)) continue;
       if (JSON.stringify(outcomeAfter(ctx, cfg, lineups, reopened).state) !== JSON.stringify(outcomeAfter(ctx, cfg, lineups, head).state)) continue;
