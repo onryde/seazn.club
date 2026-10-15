@@ -109,6 +109,10 @@ export interface RealtimeKitFixtureServer {
    *  report (a camera turned off or back on mid-session). Throws when the
    *  participant has no connected peer. */
   setPeerCamera(participantId: string, event: "video_on" | "video_off"): void;
+  /** The report that was `pending` arrives (D22's late camera): this participant's CURRENT peer's report becomes
+   *  `camera`'s join-time shape, on the SAME peer - not a reload (that is `setLivePublisher` again, a new peer).
+   *  Throws when the participant has no connected peer. */
+  reportCamera(participantId: string, camera: FixtureCamera): void;
   /** This participant's current peer: the latest PEER_JOINING with no
    *  PEER_LEAVING after it, or null. */
   currentPeer(participantId: string): string | null;
@@ -117,6 +121,10 @@ export interface RealtimeKitFixtureServer {
   /** An outage on the peer report ALONE (D2): GET /sessions/peer-report/{peer}
    *  answers 503 while every other route still works, until cleared. */
   setPeerReportsUnavailable(down: boolean): void;
+  /** Peer reports FINALISE (D22): once on, the report of a peer that has LEFT carries `duration` - RealtimeKit's marker
+   *  that it is final (measured ~70 s after the peer leaves) - so the sweep's evidence read can settle. Off by default
+   *  (and by `reset`): a report then never finalises, which is the shape every earlier walkthrough was written against. */
+  setReportsFinal(final: boolean): void;
   /** Serve a recorded peer report's `data` for GET /sessions/peer-report/{peerId}. */
   servePeerReport(peerId: string, data: unknown): void;
   participant(participantId: string): FixtureParticipant | null;
@@ -128,6 +136,8 @@ export interface RealtimeKitFixtureServer {
   reset(): void;
   close(): Promise<void>;
 }
+
+const SAMPLE_CADENCE_MS = 7_000;
 
 type Meeting = { id: string; title: string; status: "ACTIVE" | "INACTIVE"; createdAt: string };
 type Row = {
@@ -195,6 +205,7 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
   const peerCameras = new Map<string, { rowId: string; events: PeerEvent[] | null }>();
   let down = false;
   let peerReportsDown = false;
+  let reportsFinal = false;
   let seq = 0;
   const next = (p: string) => `${p}-${(++seq).toString(36).padStart(4, "0")}-${Date.now().toString(36)}`;
   const iso = () => new Date().toISOString();
@@ -230,6 +241,18 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
     left_at: r.leftAt,
     ...(withEvents ? { peer_events: r.peerEvents } : {}),
   });
+  /** What a FINAL report shows of the video a peer produced: a sample every cadence across its whole stay when the camera
+   *  was on at the end (the last video event is `video_on`), none when it was off, refused or never reported. A camera
+   *  switched mid-stay is not modelled - the report is final, and a spec that needs one serves its own (servePeerReport).
+   *  The cadence is realtimekit.ts's PEER_REPORT_SAMPLE_CADENCE_MS (the contract test pins the two together). */
+  const finalSamples = (r: Row, events: PeerEvent[] | null): { timestamp: string }[] => {
+    if (!reportsFinal || r.leftAt === null) return [];
+    const lastVideo = [...(events ?? [])].reverse().find((e) => e.name === "video_on" || e.name === "video_off");
+    if (lastVideo?.name !== "video_on") return [];
+    const from = Date.parse(r.joinedAt);
+    const stay = Date.parse(r.leftAt) - from;
+    return Array.from({ length: Math.floor(stay / SAMPLE_CADENCE_MS) }, (_, k) => ({ timestamp: new Date(from + (k + 1) * SAMPLE_CADENCE_MS).toISOString() }));
+  };
   const sessionJson = (s: Session) => ({
     id: s.id,
     associated_id: s.meetingId,
@@ -353,9 +376,10 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
         return ok(res, {
           participant: {
             ...rowJson(row, false),
+            ...(reportsFinal && row.leftAt !== null ? { duration: Math.max(0.001, (Date.parse(row.leftAt) - Date.parse(row.joinedAt)) / 60_000) } : {}),
             peer_report: {
               metadata: { events: cam.events, sdk_name: "web-core", sdk_version: "2.0.2", room_view_type: "groupCall" },
-              quality: { video_producer: [], video_producer_cumulative: {} },
+              quality: { video_producer: finalSamples(row, cam.events), video_producer_cumulative: {} },
             },
           },
         });
@@ -437,6 +461,12 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       if (!cam) throw new Error(`setPeerCamera: participant ${participantId} has no connected peer`);
       cam.events = [...(cam.events ?? []), { name: event, timestamp: iso() }];
     },
+    reportCamera(participantId, camera) {
+      const peer = currentPeerOf(participantId);
+      const cam = peer === null ? undefined : peerCameras.get(peer);
+      if (!cam) throw new Error(`reportCamera: participant ${participantId} has no connected peer`);
+      cam.events = joinEvents(camera, iso());
+    },
     currentPeer(participantId) {
       return currentPeerOf(participantId);
     },
@@ -445,6 +475,9 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
     },
     setPeerReportsUnavailable(d) {
       peerReportsDown = d;
+    },
+    setReportsFinal(final) {
+      reportsFinal = final;
     },
     servePeerReport(peerId, data) {
       peerReports.set(peerId, JSON.stringify(data));
@@ -482,6 +515,7 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       peerCameras.clear();
       down = false;
       peerReportsDown = false;
+      reportsFinal = false;
     },
     close() {
       return new Promise<void>((resolve) => {

@@ -26,6 +26,7 @@ import {
   type RealtimeKitFixtureServer,
 } from "../../../../e2e/realtimekit-fixture-server";
 import {
+  PEER_REPORT_SAMPLE_CADENCE_MS,
   RealtimeKitError,
   addParticipant,
   fetchVideoOffCoverage,
@@ -195,6 +196,66 @@ describe("realtimekit fixture server — the adapter's contract", () => {
     await expect(fetchVideoOffCoverage("peer-nobody")).rejects.toMatchObject({ code: "not_found" });
   });
 
+  it("SEQUENCE: a peer's report FINALISES only when the fixture is told reports are final AND the peer has left (D22: the sweep's evidence read can settle) - and reset puts it back", async () => {
+    const id = await meeting();
+    const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
+    fx.setLivePublisher(me.participantId, true);
+    const peer = fx.currentPeer(me.participantId)!;
+    const coverage = () => fetchVideoOffCoverage(peer);
+    // Default: never final, whether or not the peer has left (the shape every earlier walkthrough was written against).
+    expect(await coverage(), "in the room, default").toMatchObject({ incomplete: true, reason: "not_left" });
+    fx.setLivePublisher(me.participantId, false);
+    expect(await coverage(), "left, default").toMatchObject({ incomplete: true, reason: "not_finalised" });
+    // Told reports are final: still not final while the peer is in the room; final once it has left.
+    fx.setReportsFinal(true);
+    const again = await addParticipant({ meetingId: id, subject: "black", preset: "player" });
+    fx.setLivePublisher(again.participantId, true);
+    const livePeer = fx.currentPeer(again.participantId)!;
+    expect(await fetchVideoOffCoverage(livePeer), "in the room, reports final").toMatchObject({ incomplete: true, reason: "not_left" });
+    expect(await coverage(), "left, reports final").toMatchObject({ incomplete: false });
+    fx.setLivePublisher(again.participantId, false);
+    expect(await fetchVideoOffCoverage(livePeer), "left, reports final (the second peer)").toMatchObject({ incomplete: false });
+    fx.reset();
+    const id2 = await meeting();
+    const third = await addParticipant({ meetingId: id2, subject: "white", preset: "player" });
+    fx.setLivePublisher(third.participantId, true);
+    const p3 = fx.currentPeer(third.participantId)!;
+    fx.setLivePublisher(third.participantId, false);
+    expect(await fetchVideoOffCoverage(p3), "after reset: never final again").toMatchObject({ incomplete: true, reason: "not_finalised" });
+  });
+
+  it("SEQUENCE: a FINAL report shows a camera that was on as on for the whole stay (a sample every cadence), and one that was off or refused as off for all of it (D22: an honest camera is not settled as camera_lost)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-15T10:00:00.000Z"));
+      fx.setReportsFinal(true);
+      const stay = 100_000;
+      let checked = 0;
+      for (const camera of ["on", "off", "denied", "pending"] as const) {
+        const id = await meeting();
+        const me = await addParticipant({ meetingId: id, subject: `white-${camera}`, preset: "player" });
+        fx.setLivePublisher(me.participantId, true, { camera });
+        const peer = fx.currentPeer(me.participantId)!;
+        vi.advanceTimersByTime(stay);
+        fx.setLivePublisher(me.participantId, false);
+        const cov = await fetchVideoOffCoverage(peer);
+        if (cov.incomplete) throw new Error(`${camera}: the report did not finalise`);
+        if (camera === "on") {
+          expect(cov.sampleCount, "a sample every cadence across the stay").toBe(Math.floor(stay / PEER_REPORT_SAMPLE_CADENCE_MS));
+          expect([cov.offSeconds, cov.offIntervals], "camera on: not a second off").toEqual([0, []]);
+        } else {
+          expect(cov.sampleCount, `${camera}: no video was produced`).toBe(0);
+          expect(cov.offSeconds, `${camera}: off for the whole stay`).toBe(stay / 1_000);
+        }
+        checked += 1;
+        vi.advanceTimersByTime(1_000);
+      }
+      expect(checked, "anti-vacuity").toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("an outage (D11) answers every route 503, the adapter throws `unavailable` — never a quiet 'not live' — and it recovers", async () => {
     const id = await meeting();
     const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
@@ -290,6 +351,28 @@ describe("the seat's camera: the current peer's own report, read through the rea
     expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("off");
     fx.setPeerCamera(me.participantId, "video_on");
     expect(await cameraOf({ meetingId: id, participantId: me.participantId })).toBe("on");
+  });
+
+  it("SEQUENCE: a report that was PENDING arrives later on the SAME peer - starting, then each camera the report can show, and no second peer is made (D22)", async () => {
+    let checked = 0;
+    for (const arrives of ["on", "denied", "off"] as const) {
+      fx.reset();
+      const id = await meeting();
+      const me = await addParticipant({ meetingId: id, subject: `white-${arrives}`, preset: "player" });
+      fx.setLivePublisher(me.participantId, true, { camera: "pending" });
+      const peer = fx.currentPeer(me.participantId);
+      expect(await cameraOf({ meetingId: id, participantId: me.participantId }), `${arrives}: no report yet`).toBe("starting");
+      fx.reportCamera(me.participantId, arrives);
+      // measured shapes (T17B): an accepted camera reads on, a refused one blocked, one turned off reads off.
+      const expected = { on: "on", denied: "blocked", off: "off" }[arrives];
+      expect(await cameraOf({ meetingId: id, participantId: me.participantId }), `${arrives}: the report arrived`).toBe(expected);
+      expect(fx.currentPeer(me.participantId), `${arrives}: the same peer, not a reload`).toBe(peer);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(3);
+    const lone = await meeting();
+    const nobody = await addParticipant({ meetingId: lone, subject: "nobody", preset: "player" });
+    expect(() => fx.reportCamera(nobody.participantId, "on"), "no connected peer: refused, like setPeerCamera").toThrow(/no connected peer/);
   });
 
   it("an old peer that LEFT is never judged: an allowed camera that left, beside a newer DENIED one, reads blocked", async () => {
