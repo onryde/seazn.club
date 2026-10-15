@@ -14,6 +14,7 @@ import {
   stageFormatEditorValues,
   stageFormatHeadline,
   stageFormatSaveFragment,
+  stageRulesInForce,
 } from "@/components/v2/stages-panel";
 import { MatchRuleFields } from "@/components/v2/match-rules";
 import {
@@ -308,6 +309,58 @@ describe("what a Save actually PUTs", () => {
     const opened = stageFormatEditorValues("badminton", { rules: stored });
     const cleared = { ...opened, setTo: "" };
     expect(stageFormatSaveFragment("badminton", stored, opened, cleared)).toEqual({ bestOf: 1 });
+  });
+});
+
+// W2c batch-5 review Q2 - the editor reopens over what the organiser JUST SAVED, not over the props from before the save.
+// `router.refresh()` after the PUT is not awaited, so for a moment the row's props are still the pre-save ones; a reopen
+// in that window used to hydrate the editor from them (an empty "Points to win" over a stored best of 1 to 15), and the
+// next Save would have diffed against that blank. The row now keeps the PUT's own answer until the props move on. The
+// pure half of that lives here (`stageRulesInForce`); the in-page reopen with the refresh held open is the walkthrough
+// (`stage-rules-start-promotion.spec.ts`, "best of 1"), the half a node-env render cannot click.
+describe("a stage's rules after a save, before the page's props catch up (batch-5 Q2)", () => {
+  // Pre-save props: best of 1 with no points key (the organiser had just picked 1); the PUT's answer adds the points.
+  const BEFORE = { bestOf: 1 };
+  const SAVED = { bestOf: 1, setTo: 15, finalSetTo: 15 };
+
+  it("the empty case: nothing saved reads the props, whatever they are", () => {
+    expect(stageRulesInForce(null, BEFORE)).toBe(BEFORE);
+    expect(stageRulesInForce(null, undefined)).toEqual({});
+    expect(stageRulesInForce(null, null)).toEqual({});
+    expect(stageRulesInForce(null, "nope")).toEqual({});
+    expect(stageRulesInForce(null, [1])).toEqual({});
+  });
+
+  it("while the props are still the ones the save started from, the PUT's answer stands - and the editor opens over it", () => {
+    const inForce = stageRulesInForce({ against: BEFORE, rules: SAVED }, BEFORE);
+    expect(inForce).toBe(SAVED);
+    // The reopen in that window: the number played, not the blank the stale props would hydrate.
+    expect(stageFormatEditorValues("badminton", { rules: inForce })).toEqual(stageFormatEditorValues("badminton", { rules: SAVED }));
+    expect(stageFormatEditorValues("badminton", { rules: inForce }).finalSetTo).toBe("15");
+    expect(stageFormatEditorValues("badminton", { rules: BEFORE }).finalSetTo, "premise: the stale props really hydrate blank").toBeUndefined();
+  });
+
+  it("once the props are a different object (the refresh landed), they stand again - even when they differ from the save", () => {
+    const refreshed = { bestOf: 3 }; // another editor's save arrived with the refresh
+    expect(stageRulesInForce({ against: BEFORE, rules: SAVED }, refreshed)).toBe(refreshed);
+    // …and the same value in a new object (the usual refresh) is the props too, not the saved object.
+    const same = { ...SAVED };
+    expect(stageRulesInForce({ against: BEFORE, rules: SAVED }, same)).toBe(same);
+  });
+
+  it("a stage that had no rules: a save into the empty props stands until they move on", () => {
+    expect(stageRulesInForce({ against: undefined, rules: SAVED }, undefined)).toBe(SAVED);
+    expect(stageRulesInForce({ against: undefined, rules: SAVED }, SAVED)).toBe(SAVED); // the props now ARE a (new) object
+  });
+
+  it("a clear: the saved empty fragment reads as inherited at once, over props that still hold the override", () => {
+    expect(stageRulesInForce({ against: SAVED, rules: {} }, SAVED)).toEqual({});
+    expect(Object.keys(stageRulesInForce({ against: SAVED, rules: {} }, SAVED))).toHaveLength(0);
+  });
+
+  it("a second save replaces the first: the latest answer is the one in force", () => {
+    const second = { bestOf: 3 };
+    expect(stageRulesInForce({ against: BEFORE, rules: second }, BEFORE)).toBe(second);
   });
 });
 

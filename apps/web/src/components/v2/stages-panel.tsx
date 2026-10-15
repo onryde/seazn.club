@@ -8,7 +8,7 @@
 // playing" strip, inline reschedule with undo, bye/void ghost rows, sticky
 // round headers on mobile, print via the DocModel timetable export. Scoring
 // lives on the fixture page.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
@@ -2260,11 +2260,18 @@ function StageFormatRow({
   const [opened, setOpened] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** What the last Save/Clear answered (the PUT's own `rules`), kept until the page's props move on. `onSaved` is
+   *  `router.refresh()`, which is NOT awaited: for a moment after the PUT the props are still the pre-save ones, and an
+   *  editor reopened in that window used to hydrate from them (batch-5 review Q2). See `stageRulesInForce`. */
+  const [saved, setSaved] = useState<SavedStageRules | null>(null);
+  /** The props' `rules` as of the last commit, for `save()` to read AFTER its await (the closure's own copy may be older
+   *  than a refresh that landed while the PUT was in flight). Written in an effect, read in handlers - never in render. */
+  const propRules = useRef<unknown>(stageConfig.rules);
+  useEffect(() => {
+    propRules.current = stageConfig.rules;
+  }, [stageConfig.rules]);
 
-  const rules = useMemo(
-    () => (isPlainRules(stageConfig.rules) ? stageConfig.rules : {}),
-    [stageConfig.rules],
-  );
+  const rules = useMemo(() => stageRulesInForce(saved, stageConfig.rules), [saved, stageConfig.rules]);
   const overridden = Object.keys(rules).length > 0;
   // SUMMARY — effective config. See the header.
   const effective = useMemo(() => ({ ...divisionConfig, ...rules }), [divisionConfig, rules]);
@@ -2280,8 +2287,9 @@ function StageFormatRow({
   );
 
   function openEditor() {
-    // FRAGMENT, never `effective`. See the header.
-    const hydrated = stageFormatEditorValues(sportKey, stageConfig);
+    // FRAGMENT, never `effective`. See the header. The fragment IN FORCE: what the last save answered while the props
+    // still predate it, else the props' own.
+    const hydrated = stageFormatEditorValues(sportKey, { ...stageConfig, rules });
     setValues(hydrated);
     setOpened(hydrated);
     setError(null);
@@ -2296,10 +2304,11 @@ function StageFormatRow({
       // override and is reserved for the explicit "Use division format"
       // control below. A Save that reached it would turn "I changed one field"
       // into "I cleared everything".
-      await apiV1(`/api/v1/stages/${stageId}/rules`, {
+      const out = await apiV1<{ rules: Record<string, unknown> | null }>(`/api/v1/stages/${stageId}/rules`, {
         method: "PUT",
         json: { rules: stageFormatSaveFragment(sportKey, rules, opened, values, divisionConfig) },
       });
+      setSaved({ against: propRules.current, rules: out.rules ?? {} });
       setOpen(false);
       onSaved();
     } catch (err) {
@@ -2314,7 +2323,11 @@ function StageFormatRow({
     setSaving(true);
     setError(null);
     try {
-      await apiV1(`/api/v1/stages/${stageId}/rules`, { method: "PUT", json: { rules: null } });
+      const out = await apiV1<{ rules: Record<string, unknown> | null }>(`/api/v1/stages/${stageId}/rules`, {
+        method: "PUT",
+        json: { rules: null },
+      });
+      setSaved({ against: propRules.current, rules: out.rules ?? {} });
       setOpen(false);
       onSaved();
     } catch (err) {
@@ -2403,6 +2416,27 @@ function StageFormatRow({
       )}
     </>
   );
+}
+
+/** The PUT's answer to a Save/Clear, tagged with the props' `rules` it was made against. */
+export interface SavedStageRules {
+  /** The row's `stageConfig.rules` prop when the save landed: while the prop is still THIS object the page has not
+   *  re-read the stage since, and `rules` is newer than it. */
+  readonly against: unknown;
+  /** What the stage stores now (`{}` for a clear). */
+  readonly rules: Record<string, unknown>;
+}
+
+/**
+ * The rules fragment the Match format row works from (batch-5 review Q2). Its summary, its editor's hydration and a
+ * Save's untouched-field diff all read this ONE value: the PUT's own answer while the page's props still predate it
+ * (`saved.against` is the very object the prop still holds), the props' own the moment they are anything else - the
+ * refresh landed, or another save arrived with it. No timers and no race left to lose: the row never waits for the
+ * refresh, and never keeps its own copy past it.
+ */
+export function stageRulesInForce(saved: SavedStageRules | null, propRules: unknown): Record<string, unknown> {
+  if (saved !== null && saved.against === propRules) return saved.rules;
+  return isPlainRules(propRules) ? propRules : {};
 }
 
 /** `stages.config.rules` as a plain object, or nothing. A JSON `null` and a

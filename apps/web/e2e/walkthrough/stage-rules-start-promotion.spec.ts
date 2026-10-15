@@ -688,6 +688,23 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   await picker.selectOption("1");
   await expect(single).toHaveValue(String(BO1_POINTS));
 
+  // The save's `router.refresh()` is not awaited (stages-panel), so the props can still be the pre-save ones when the
+  // organiser taps Edit again. That window is a race on a fast machine, so HOLD the refresh's own request (the RSC GET)
+  // open across the reopen: the reopen below then happens, deterministically, while the page still holds the props it had
+  // before the save (batch-5 review Q2). Released after the assertions; the count proves the hold caught the refresh.
+  const heldRefreshes: string[] = [];
+  let releaseRefresh: () => void = () => undefined;
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  await page.route("**/*", async (route) => {
+    const req = route.request();
+    if (req.method() === "GET" && req.headers()["rsc"] === "1") {
+      heldRefreshes.push(req.url());
+      await refreshGate;
+    }
+    await route.continue();
+  });
   await finals.getByTestId("stage-format-save").click();
   await expect(finals.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
   await expect(finals.getByTestId("stage-format-summary")).toHaveText(
@@ -700,13 +717,15 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
       timeout: POLL_MS,
     })
     .toEqual({ bestOf: 1, setTo: BO1_POINTS, finalSetTo: BO1_POINTS });
-  // Reopen shows the number played. The save's `router.refresh()` is not awaited (stages-panel), so the editor can
-  // reopen over the PRE-refresh props for a moment and read the blank it opened at; a fresh page load reads what the
-  // server stored, which is what this asserts - the value assertion itself is unchanged.
-  await page.reload();
+  // Reopen shows the number played - IN PAGE, with no reload between the save and the reopen, and while the refresh is
+  // still in flight: the editor hydrates from the PUT's own answer until the props catch up. (A reload here, or waiting
+  // for the refresh, would read what the server stored and hide exactly that.)
+  expect(heldRefreshes.length, "the hold caught the save's refresh: the reopen below is mid-refresh").toBeGreaterThan(0);
   await finals.getByTestId("stage-format-edit").click();
   await expect(single).toHaveValue(String(BO1_POINTS));
   await finals.getByTestId("stage-format-edit").click(); // the toggle now reads Cancel
+  releaseRefresh();
+  await page.unroute("**/*");
 
   // --- 2. A stage that INHERITS best of 1 ------------------------------------
   // A division that is best of 1 itself, and a stage naming no best-of of its
