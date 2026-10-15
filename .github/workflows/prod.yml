@@ -72,6 +72,36 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+
+      # Release-time WARNING (owner-approved 2026-10-15), before anything irreversible: which sports does this tag lock out for older capture
+      # apps? The server refuses a score write from an app whose FOLD_EPOCH for the sport is lower than the engine's (426 ENGINE_OUTDATED), and
+      # a tag that raised an epoch used to say nothing. This names each sport whose epoch rose since the previous v*.*.* tag, as a ::warning::
+      # per sport and a section in this run's summary (packages/engine/scripts/release-epoch-report.ts; a minor change is listed as "no app
+      # update needed").
+      #
+      # It INFORMS and can never gate or hold up the deploy: continue-on-error, a timeout, and a script that exits 0 for every table and ref
+      # it reads (a baseline from before src/sport/fold-epoch.ts, a table that does not parse). The checkout above is one commit deep and holds
+      # only this tag, so the v* tags and their history are fetched first (without touching the checked-out commit, which is what deploys; a
+      # refspec takes ONE wildcard, so it cannot say v*.*.*, and `git describe --match` narrows it again).
+      # scripts/__tests__/prod-release-epoch-workflow.test.ts pins all of this and runs this shell against a checkout of the same shape.
+      - name: Report FOLD_EPOCH bumps since the previous release (non-blocking)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --quiet --unshallow origin '+refs/tags/v*:refs/tags/v*'
+          else
+            git fetch --quiet origin '+refs/tags/v*:refs/tags/v*'
+          fi
+          prev="$(git describe --tags --abbrev=0 --match 'v*.*.*' HEAD^ 2>/dev/null || true)"
+          if [ -z "$prev" ]; then
+            msg="no previous v*.*.* tag before ${GITHUB_REF_NAME}; nothing to compare"
+            echo "$msg"
+            printf '### Engine fold epoch\n\n- %s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node --experimental-strip-types packages/engine/scripts/release-epoch-report.ts --from "$prev" --to HEAD --annotate --summary "$GITHUB_STEP_SUMMARY"
+
       # See stg.yml's identical step for why --prod and why it's transitive
       # into @seazn/engine's own dependencies section (and why zod, the engine's
       # peer, must be in the ROOT's `dependencies`).
