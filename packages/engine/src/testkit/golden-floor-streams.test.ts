@@ -114,7 +114,7 @@ describe("extendFloor — the golden floor's append path", () => {
       sports++;
     });
     expect(sports).toBe(builtinModules.length);
-  }, 60_000);
+  }, 30_000);
 
   it("floor seeds are unique per config inside a corpus (the epoch guard keys a stream by config#seed) and clear of the generator's", () => {
     let identities = 0;

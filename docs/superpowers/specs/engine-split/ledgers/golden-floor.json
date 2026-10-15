@@ -1,6 +1,6 @@
 {
   "batch": "golden-floor",
-  "note": "Test-id ledger for GF-1 (golden floor for the core events and outcome kinds; owner ruling 2026-10-15), built against base 115b7b573 (main after the engine-split 1e merge, #960). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection). GF-1 plus its review fixes add 78 tests and change no existing test id: 42 in the new src/testkit/golden-floor.test.ts, 14 in the new src/testkit/golden-floor-overlay.test.ts, 17 in the new src/testkit/golden-floor-streams.test.ts, 2 in the new src/testkit/golden-floor-voids.test.ts, and 3 in src/testkit/golden-forfeit-migration.test.ts. Existing tests whose BODY changed under their unchanged title: golden-slim.test.ts (extendCorpus appends in the canonical slim form: drops the last generator stream, not the last stream). apps/web tests that read the corpora (timeline.test.ts, outcome-readers.test.ts, and public-player-matches.test.ts, whose golden sweep now carries each void's target and asserts zero refused prefixes) change no id and are outside this ledger's roots. Whole-run parity: before-only 0, after-only 78, both 11437 (engine 5987 + matrix 5222 + scripts 228 before; engine 6065 + matrix 5222 + scripts 228 after), unaccounted 0.",
+  "note": "Test-id ledger for GF-1 (golden floor for the core events and outcome kinds; owner ruling 2026-10-15), built against base 115b7b573 (main after the engine-split 1e merge, #960). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection). GF-1 plus its review fixes add 81 tests and change no existing test id: 42 in the new src/testkit/golden-floor.test.ts, 17 in the new src/testkit/golden-floor-overlay.test.ts, 17 in the new src/testkit/golden-floor-streams.test.ts, 2 in the new src/testkit/golden-floor-voids.test.ts, and 3 in src/testkit/golden-forfeit-migration.test.ts. Existing tests whose BODY changed under their unchanged title: golden-slim.test.ts (extendCorpus appends in the canonical slim form: drops the last generator stream, not the last stream). apps/web tests that read the corpora (timeline.test.ts, outcome-readers.test.ts, and public-player-matches.test.ts, whose golden sweep now carries each void's target and asserts zero refused prefixes) change no id and are outside this ledger's roots. Whole-run parity: before-only 0, after-only 81, both 11437 (engine 5987 + matrix 5222 + scripts 228 before; engine 6068 + matrix 5222 + scripts 228 after), unaccounted 0. The N1 round (3 tests added, 1 retitled, both in golden-floor-overlay.test.ts; two timeouts changed in place) was re-verified at file level: the after-side ids of the five GF-1 test files equal this ledger's entries for them plus the 8 pre-existing golden-forfeit-migration tests, and no other test file changed.",
   "entries": [
     {
       "id": "src/testkit/golden-floor-overlay.test.ts › ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit › a void whose target is removed leaves nothing sound to compare: null, not a guess",
@@ -18,12 +18,17 @@
       "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
     },
     {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › EVERY recorded core event whose ablation says 'unpinned' is covered by a claim: swept per sport x token, counted (review N1)",
+      "fate": "added",
+      "reason": "GF-1 review N1: the overlay class is swept the other way too - every recorded core event whose ablation says unpinned must be covered by a claim, so football's position change (onLineup declared, position inert) is covered by the verdict and not by the declaration"
+    },
+    {
       "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › a claimed event that cannot be probed (a recorder that throws) is stale, never silently held",
       "fate": "added",
       "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
     },
     {
-      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › a lineup event is unpinned exactly where the module declares no onLineup; where it declares one, the probe SEES movement",
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › a lineup event is unpinned in EVERY recorded type where the module declares no onLineup; where it declares one, the probe sees movement in at least one type",
       "fate": "added",
       "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
     },
@@ -36,6 +41,11 @@
       "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › every claim row names real core types, a reason, and applies to at least one sport",
       "fate": "added",
       "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › football declares onLineup yet its position change moves no golden: the claim COVERS it by the verdict, though it is not asserted for football",
+      "fate": "added",
+      "reason": "GF-1 review N1: the overlay class is swept the other way too - every recorded core event whose ablation says unpinned must be covered by a claim, so football's position change (onLineup declared, position inert) is covered by the verdict and not by the declaration"
     },
     {
       "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › pause is unpinned in EVERY sport: suspend and resume move no recorded golden anywhere (the review's finding 1)",
@@ -71,6 +81,11 @@
       "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the shipped corpora hold every claim: each claimed event is recorded and inert in each sport it applies to (swept, counted)",
       "fate": "added",
       "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the sweep has teeth: the old declaration-only rule (lineups claimed where onLineup is undefined) leaves football's position change uncovered, by name",
+      "fate": "added",
+      "reason": "GF-1 review N1: the overlay class is swept the other way too - every recorded core event whose ablation says unpinned must be covered by a claim, so football's position change (onLineup declared, position inert) is covered by the verdict and not by the declaration"
     },
     {
       "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › a generator stream appended AFTER the floor streams (a later EXTEND) changes neither the reproduction nor the keep-rule",

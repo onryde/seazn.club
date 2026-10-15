@@ -22,8 +22,10 @@ import {
   OVERLAY_CONTROLS,
   eventToken,
   floorRequirement,
+  recordedTokens,
   overlayVerdicts,
   staleOverlayClaims,
+  uncoveredUnpinned,
   type FloorToken,
 } from "./golden-floor.ts";
 import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
@@ -39,7 +41,7 @@ const corpusOf = (key: string): GoldenCorpus => {
 /** How many claimed tokens the sport's own policy leaves possible: the ones a claim is held over. */
 const claimedTokens = (module: (typeof builtinModules)[number], corpus: GoldenCorpus): number => {
   const impossible = floorRequirement(module, corpus).impossible;
-  return OVERLAY_CLAIMS.filter((c) => c.appliesTo(module)).reduce((n, c) => n + c.tokens.filter((t) => !impossible.has(t)).length, 0);
+  return OVERLAY_CLAIMS.filter((c) => c.assertedFor(module)).reduce((n, c) => n + c.tokens.filter((t) => !impossible.has(t)).length, 0);
 };
 
 describe("golden floor — the overlay-unpinned class is declared, reasoned and derived", () => {
@@ -51,7 +53,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       expect(claim.reason.length, claim.id).toBeGreaterThan(40);
       expect(claim.tokens.length, claim.id).toBeGreaterThan(0);
       for (const token of claim.tokens) expect(allTokens.has(token), `${claim.id}: ${token}`).toBe(true);
-      const sports = builtinModules.filter((m) => claim.appliesTo(m));
+      const sports = builtinModules.filter((m) => claim.assertedFor(m));
       expect(sports.length, `${claim.id} applies to no sport`).toBeGreaterThan(0);
       applied += sports.length;
     }
@@ -63,11 +65,11 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     const stale: string[] = [];
     forEachSport(({ module, key }) => {
       stale.push(...staleOverlayClaims(module, corpusOf(key)));
-      for (const claim of OVERLAY_CLAIMS) if (claim.appliesTo(module)) holds += claim.tokens.length;
+      for (const claim of OVERLAY_CLAIMS) if (claim.assertedFor(module)) holds += claim.tokens.length;
     });
     expect(stale).toEqual([]);
     expect(holds).toBeGreaterThan(builtinModules.length * 4);
-  });
+  }, 30_000);
 
   it("pause is unpinned in EVERY sport: suspend and resume move no recorded golden anywhere (the review's finding 1)", () => {
     let sports = 0;
@@ -83,7 +85,9 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(sports).toBe(builtinModules.length);
   });
 
-  it("a lineup event is unpinned exactly where the module declares no onLineup; where it declares one, the probe SEES movement", () => {
+  // ASSERTED, not exhaustive: without onLineup every lineup type is unpinned; with it the probe must SEE some movement. Which
+  // types a hook-declaring module still ignores (football's position) is the per-token sweep below, not this `some`.
+  it("a lineup event is unpinned in EVERY recorded type where the module declares no onLineup; where it declares one, the probe sees movement in at least one type", () => {
     let withHook = 0;
     let withoutHook = 0;
     forEachSport(({ module, key }) => {
@@ -104,6 +108,56 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(withHook).toBeGreaterThan(0);
     expect(withoutHook).toBeGreaterThan(0);
   });
+
+  it("EVERY recorded core event whose ablation says 'unpinned' is covered by a claim: swept per sport x token, counted (review N1)", () => {
+    let probed = 0;
+    let unpinned = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const r = uncoveredUnpinned(module, corpus);
+      expect(r.uncovered, `${key}: an unpinned core event no claim covers`).toEqual([]);
+      // the sweep reached EVERY core event the corpus records (read off the corpus, not off the probe)
+      const recordedCore = [...recordedTokens(corpus)].filter((t) => t.startsWith("event:core."));
+      expect(r.probed, `${key}: probed every recorded core event`).toBe(recordedCore.length);
+      expect(r.unpinned, `${key}: pause, note and award at least`).toBeGreaterThanOrEqual(4);
+      probed += r.probed;
+      unpinned += r.unpinned;
+    });
+    expect(probed).toBeGreaterThan(builtinModules.length * 8);
+    expect(unpinned).toBeGreaterThan(builtinModules.length * 4);
+  }, 30_000);
+
+  it("football declares onLineup yet its position change moves no golden: the claim COVERS it by the verdict, though it is not asserted for football", () => {
+    const football = builtinModules.find((m) => m.key === "football")!;
+    expect(football.onLineup, "football reacts to lineup changes").toBeDefined();
+    const position = eventToken("core.lineup.position");
+    const verdicts = overlayVerdicts(football, corpusOf("football"));
+    expect(verdicts.get(position)?.verdict).toBe("unpinned");
+    expect(verdicts.get(position)?.streams).toBeGreaterThan(0);
+    // and the rest of football's lineup changes DO move it (the class is not 'all lineups' there)
+    expect(["core.lineup.substitution", "core.lineup.retirement", "core.lineup.entry"].map((t) => verdicts.get(eventToken(t))?.verdict)).toEqual(["pinned", "pinned", "pinned"]);
+    const lineup = OVERLAY_CLAIMS.find((c) => c.id === "lineup")!;
+    expect(lineup.assertedFor(football)).toBe(false);
+    expect(lineup.covers(football, position, "unpinned")).toBe(true);
+    expect(lineup.covers(football, eventToken("core.lineup.substitution"), "pinned")).toBe(false);
+    expect(uncoveredUnpinned(football, corpusOf("football")).uncovered).toEqual([]);
+  });
+
+  it("the sweep has teeth: the old declaration-only rule (lineups claimed where onLineup is undefined) leaves football's position change uncovered, by name", () => {
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const declarationOnly = OVERLAY_CLAIMS.map((c) => (c.id === "lineup" ? { ...c, covers: (m: typeof football) => m.onLineup === undefined } : c));
+    const r = uncoveredUnpinned(football, corpusOf("football"), undefined, declarationOnly);
+    expect(r.uncovered).toEqual([expect.stringMatching(/^football event:core\.lineup\.position: moves no recorded golden/)]);
+    // and a claim table that forgets a whole class names it in every sport
+    const withoutNote = OVERLAY_CLAIMS.filter((c) => c.id !== "note");
+    let named = 0;
+    forEachSport(({ module, key }) => {
+      const missing = uncoveredUnpinned(module, corpusOf(key), undefined, withoutNote).uncovered;
+      expect(missing.some((m) => m.startsWith(`${key} event:core.note:`)), `${key} names core.note`).toBe(true);
+      named++;
+    });
+    expect(named).toBe(builtinModules.length);
+  }, 30_000);
 
   it("the controls are NOT in the class: finalize, abandon and forfeit each move a recorded golden in every sport (the probe can answer 'pinned')", () => {
     expect(OVERLAY_CONTROLS.length).toBeGreaterThanOrEqual(3);
@@ -190,7 +244,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       const kernelTokens: FloorToken[] = [];
       const moduleTokens: FloorToken[] = [];
       for (const claim of OVERLAY_CLAIMS) {
-        if (!claim.appliesTo(module)) continue;
+        if (!claim.assertedFor(module)) continue;
         for (const token of claim.tokens) {
           if (impossible.has(token)) continue;
           (isKernelOwnedEventType(token.slice("event:".length)) ? kernelTokens : moduleTokens).push(token);
@@ -212,7 +266,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(moduleHeld).toBe(builtinModules.length * 2);
     // (4.8 s under the CI coverage run: an explicit budget, not the 5 s default, for a sweep that folds every prefix of every
     // recorded stream twice)
-  }, 60_000);
+  }, 30_000);
 
   it("a claimed event that cannot be probed (a recorder that throws) is stale, never silently held", () => {
     const module = builtinModules[0]!;

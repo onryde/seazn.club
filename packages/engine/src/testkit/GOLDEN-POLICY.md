@@ -162,7 +162,7 @@ hand in the same PR; no tool will tell you):
   held level result on top of the module's answer. A change to how those combine
   moves no golden.
 - **Recorded, but the overlay is unpinned: a pause, a note, an award, and a lineup
-  change in a sport whose module reads none.** The corpora hold every one of
+  change a module does not read.** The corpora hold every one of
   these events (the golden floor, below), and recording an event is **not**
   pinning it: the harness stores the module's state, outcome, summary and deltas,
   so an event the kernel owns, or one a module folds as `return state`, can sit
@@ -174,11 +174,20 @@ hand in the same PR; no tool will tell you):
     clock (`core/time.ts`) and the open-stoppage refusals live in the overlay.
   - `core.note`, `core.award`: inert in all eleven (every module folds them as
     `return state`).
-  - `core.lineup.*`: inert in boardgame, carrom and generic (no `onLineup`); they
-    move state in the other eight, so a change to the lineup reducer is seen there.
+  - `core.lineup.*`: inert in boardgame, carrom and generic (no `onLineup`, every
+    type), and `core.lineup.position` is inert in football too, which does declare
+    `onLineup` but reads nothing a position change writes. `substitution`,
+    `retirement` and `entry` move state wherever `onLineup` exists, and `position`
+    moves it in the other seven (cricket, volleyball, badminton, table tennis,
+    tennis, ice hockey, hockey), so a change to the lineup reducer is seen there and
+    only there. Which sport x type pairs are unpinned is DERIVED from the same
+    ablation, not from the `onLineup` declaration: `uncoveredUnpinned` ablates every
+    recorded `core.*` event and reds on any that moves nothing yet is named by no
+    `OVERLAY_CLAIMS` class (the declaration alone had missed football's position).
   A change to how any of these folds therefore owes a **manual bump of every sport
-  it reaches**, exactly like the overlays above. Nothing here is a closed gap; the
-  floor only makes the open one visible and keeps it from widening unnoticed.
+  it reaches**: raise each sport's `FOLD_EPOCH` (the MAJOR) by hand in the same PR,
+  exactly like the overlays above. Nothing here is a closed gap; the floor only
+  makes the open one visible and keeps it from widening unnoticed.
   `forfeit-credit.ts`: walkover credit is pinned only where a corpus has a forfeit
   that reaches it.
 - **The kernel side of an undo.** A void of a mis-tapped forfeit or abandon IS

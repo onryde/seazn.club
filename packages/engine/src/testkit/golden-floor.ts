@@ -449,17 +449,26 @@ export interface OverlayClaim {
    *  it adds to the tokens planned before it, i.e. the ledger without tokens k.. against the one without k+1.. (a lineup
    *  change depends on the squad the earlier ones left, so it cannot be removed alone). */
   readonly mode: "together" | "chain";
-  /** The sports the claim covers — a statement about the module's own declaration, not a list typed here. */
-  appliesTo(module: AnySportModule): boolean;
+  /** Where the class is ASSERTED, from the module's OWN declaration (not a list typed here): the probe must agree there, or
+   *  the claim is stale (`staleOverlayClaims`). A module with no `onLineup` is never shown a lineup change. */
+  assertedFor(module: AnySportModule): boolean;
+  /** Whether the class COVERS a sport x token, given what the probe found. This is what the policy's list of manual bumps
+   *  stands for, and it is derived from the VERDICT, not from the declaration: a module that declares `onLineup` can still
+   *  ignore one lineup type (football's position change moves nothing it reads), and a declaration-only rule left that
+   *  token unlisted while the policy said otherwise (review N1). */
+  covers(module: AnySportModule, token: FloorToken, verdict: OverlayVerdict): boolean;
   readonly reason: string;
 }
+
+const coversWhenUnpinned: OverlayClaim["covers"] = (_module, _token, verdict) => verdict === "unpinned";
 
 export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
   {
     id: "stoppage",
     tokens: [eventToken("core.suspend"), eventToken("core.resume")],
     mode: "together",
-    appliesTo: () => true,
+    assertedFor: () => true,
+    covers: coversWhenUnpinned,
     reason:
       "kernel-owned: core.suspend / core.resume never reach module.apply, and the stoppage clock (core/time.ts) and the " +
       "open-stoppage refusals live in the kernel overlay, which the harness does not record — a change to how a pause folds moves no golden",
@@ -468,7 +477,8 @@ export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
     id: "note",
     tokens: [eventToken("core.note")],
     mode: "together",
-    appliesTo: () => true,
+    assertedFor: () => true,
+    covers: coversWhenUnpinned,
     reason:
       "a free-text annotation: it reaches module.apply but every module folds it as `return state`, so the recorded states, " +
       "outcome, summary and deltas are identical with or without it",
@@ -477,7 +487,8 @@ export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
     id: "award",
     tokens: [eventToken("core.award")],
     mode: "together",
-    appliesTo: () => true,
+    assertedFor: () => true,
+    covers: coversWhenUnpinned,
     reason:
       "a player award (motm and the like): it reaches module.apply but every module folds it as `return state`, so the recorded " +
       "fields are identical with or without it",
@@ -486,10 +497,13 @@ export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
     id: "lineup",
     tokens: LINEUP_TYPES.map(eventToken),
     mode: "chain",
-    appliesTo: (module) => module.onLineup === undefined,
+    assertedFor: (module) => module.onLineup === undefined,
+    covers: coversWhenUnpinned,
     reason:
-      "kernel-owned squads: a module that declares no onLineup never sees a lineup change, so its recorded fields are identical " +
-      "with or without them — a change to the lineup reducer (core/lineup.ts) moves no golden in that sport",
+      "kernel-owned squads: a module reacts to a lineup change only through onLineup, so one that declares none never sees it and " +
+      "its recorded fields are identical with or without them (asserted there); one that declares it can still ignore a type " +
+      "(football's position change), which the probe finds and the class then covers — a change to the lineup reducer " +
+      "(core/lineup.ts) moves no golden for the covered sport x type",
   },
 ];
 
@@ -575,11 +589,19 @@ function ablationProbe(
   return { verdict, streams, moved, refused };
 }
 
-/** For every event a claim names (and the finalize control): is it recorded, and does it move a recorded golden? */
-export function overlayVerdicts(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = recomputeStream): Map<FloorToken, OverlayResult> {
+/** For every event a claim names, and the controls: is it recorded, and does it move a recorded golden? With `scope: "all"`
+ *  every OTHER core event the corpus records is probed too, one type at a time, so an unpinned event no claim names shows up
+ *  (`uncoveredUnpinned`). */
+export function overlayVerdicts(
+  module: AnySportModule,
+  corpus: GoldenCorpus,
+  record: Recorder = recomputeStream,
+  claims: readonly OverlayClaim[] = OVERLAY_CLAIMS,
+  scope: "claims" | "all" = "claims",
+): Map<FloorToken, OverlayResult> {
   const out = new Map<FloorToken, OverlayResult>();
   const typeOf = (token: FloorToken): string => token.slice("event:".length);
-  for (const claim of OVERLAY_CLAIMS) {
+  for (const claim of claims) {
     const types = claim.tokens.map(typeOf);
     claim.tokens.forEach((token, k) => {
       const big = new Set(claim.mode === "chain" ? types.slice(k) : types);
@@ -587,8 +609,47 @@ export function overlayVerdicts(module: AnySportModule, corpus: GoldenCorpus, re
       out.set(token, ablationProbe(module, corpus, small, big, record));
     });
   }
-  for (const token of OVERLAY_CONTROLS) out.set(token, ablationProbe(module, corpus, new Set(), new Set([typeOf(token)]), record));
+  const alone = (token: FloorToken) => ablationProbe(module, corpus, new Set(), new Set([typeOf(token)]), record);
+  for (const token of OVERLAY_CONTROLS) if (!out.has(token)) out.set(token, alone(token));
+  if (scope === "all") {
+    for (const token of recordedTokens(corpus)) if (token.startsWith("event:core.") && !out.has(token)) out.set(token, alone(token));
+  }
   return out;
+}
+
+export interface UncoveredReport {
+  /** Recorded core events probed. */
+  readonly probed: number;
+  /** Of those, the ones whose removal moves no recorded golden. */
+  readonly unpinned: number;
+  /** The unpinned ones no claim covers, named. */
+  readonly uncovered: string[];
+}
+
+/** The other direction of the class: every core event the corpus RECORDS is ablated, and every one that moves no golden must
+ *  be covered by a claim. Without it the class is tested one way only (each claim holds) and an unpinned event the table
+ *  never names stays invisible, which is how football's position change slipped past the `onLineup` rule. An event that moves
+ *  something is pinned and owes nothing here. Probed one type at a time unless a claim groups it (a pause is suspend AND resume). */
+export function uncoveredUnpinned(
+  module: AnySportModule,
+  corpus: GoldenCorpus,
+  record: Recorder = recomputeStream,
+  claims: readonly OverlayClaim[] = OVERLAY_CLAIMS,
+): UncoveredReport {
+  const verdicts = overlayVerdicts(module, corpus, record, claims, "all");
+  let probed = 0;
+  let unpinned = 0;
+  const uncovered: string[] = [];
+  for (const [token, r] of verdicts) {
+    if (!token.startsWith("event:core.") || r.verdict === "unrecorded") continue;
+    probed++;
+    if (r.verdict !== "unpinned") continue;
+    unpinned++;
+    if (!claims.some((c) => c.tokens.includes(token) && c.covers(module, token, r.verdict))) {
+      uncovered.push(`${module.key} ${token}: moves no recorded golden (${r.streams} stream(s) ablated) and no OVERLAY_CLAIMS class covers it: add it to a class with its reason, or record what it changes`);
+    }
+  }
+  return { probed, unpinned, uncovered };
 }
 
 /** Why a lineup type is impossible under every recorded config, as `cfg: <reducer refusal code>` joined by `; `. The reason
@@ -621,13 +682,13 @@ export function staleOverlayClaims(module: AnySportModule, corpus: GoldenCorpus,
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
     for (const claim of OVERLAY_CLAIMS) {
-      if (!claim.appliesTo(module)) continue;
+      if (!claim.assertedFor(module)) continue;
       for (const token of claim.tokens) if (!impossible.has(token)) out.push(`${module.key} ${token}: the probe that proves the "${claim.id}" claim could not run: ${why}`);
     }
     return out;
   }
   for (const claim of OVERLAY_CLAIMS) {
-    if (!claim.appliesTo(module)) continue;
+    if (!claim.assertedFor(module)) continue;
     for (const token of claim.tokens) {
       if (impossible.has(token)) continue;
       const r = verdicts.get(token);
