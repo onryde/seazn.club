@@ -102,6 +102,31 @@ describe("every production fold of a fixture's ledger is on the ledger, and the 
   });
 });
 
+// The console's forfeit dialog is a client component (`apps/web` vitest runs in a node environment, no DOM), so the seam from
+// the server's reading of the award to the dialog's preview is held by source, link by link, and by e2e/forfeit-dialog.spec.ts
+// ("W2c Task 16b ... previews the stage rule's walkover award") in a real browser. A link missing from this chain compiles
+// (every prop is optional) and previews the division's number while the table credits the rule's.
+describe("the console seam: the page reads the award, the console hands it on, the dialog model takes it", () => {
+  const read = (rel: string) => readFileSync(join(SRC, rel), "utf8");
+  const CHAIN: { file: string; must: RegExp; what: string }[] = [
+    { file: "server/usecases/fixtures.ts", must: /forfeitAward: stageForfeitAward\(stage, sportModule\)/, what: "the pad-cfg load reads the stage rule's award" },
+    { file: "server/usecases/fixtures.ts", must: /return \{ cfg, stageKind, rulesVersion, \.\.\.\(forfeitAward === undefined \? \{\} : \{ forfeitAward \}\) \}/, what: "loadFixturePadCfg returns it" },
+    { file: "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx", must: /const \{ cfg: padCfg, stageKind, rulesVersion, forfeitAward \} = padLoad/, what: "the console page destructures it" },
+    { file: "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx", must: /forfeit_award: forfeitAward/, what: "the console page passes it as fixture.forfeit_award" },
+    { file: "components/v2/fixture-console.tsx", must: /const forfeitAward = fixture\.forfeit_award/, what: "the console reads fixture.forfeit_award" },
+    { file: "components/v2/fixture-console.tsx", must: /forfeitDialogModel\(sportModule, forfeitCfg, state, \{ noNextMatch, playRecorded, \.\.\.\(forfeitAward === undefined \? \{\} : \{ forfeitAward \}\) \}\)/, what: "the console hands it to the dialog model" },
+    { file: "components/v2/fixture-console.tsx", must: /playRecorded, forfeitAward\]\)/, what: "the model is rebuilt when the award changes (useMemo dependency)" },
+  ];
+  it("every link of the chain is present", () => {
+    let checked = 0;
+    for (const link of CHAIN) {
+      expect(link.must.test(read(link.file)), `${link.file}: ${link.what}`).toBe(true);
+      checked++;
+    }
+    expect(checked, "links checked").toBe(CHAIN.length);
+  });
+});
+
 const RULE_AWARD = [7, 1] as const;
 const rule = (award: readonly [number, number] | null) => ({
   base: { win: 3, draw: 1, loss: 0 },

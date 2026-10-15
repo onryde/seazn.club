@@ -7243,6 +7243,7 @@ async function w2cStageRulesSuite(): Promise<void> {
   await w2cRulesVersionChecks(owner);
   await w2cRulesVersionPreKickoffChecks(owner);
   await w2cPublicStageFormatChecks(owner, who.org_id);
+  await w2cWalkoverHeadlineChecks(owner, who.org_id);
 }
 
 /**
@@ -7371,6 +7372,85 @@ async function w2cPublicStageFormatChecks(owner: Session, orgId: string): Promis
   check(
     "w2c: the public division page states a hockey stage's format" +
       (ok ? "" : ` - start ${started.status}, page ${page.status}, ${chips} chip(s), "${sentence}" ${page.body.includes(sentence) ? "present" : "absent"}, hub ${JSON.stringify(hubLines)}`),
+    ok,
+  );
+}
+
+/**
+ * W2c Task 16b (X-WO-1 B, Task 9 P-3 "A") - over real HTTP: a football pool whose points rule awards a walkover score gives
+ * ONE number everywhere. The away side's walkover is recorded with `core.forfeit` and nothing is played, so the console's
+ * stored summary (`GET /fixtures/{id}/state`), the hub's results card (read anonymously) and the stage table's goals-for /
+ * goals-against all say the RULE's award - never the division's own walkover goals, which the same headline said before.
+ * Both numbers come from the engine's declarations: the division's is football's `awardScore.goals` for the variant, the
+ * rule's is that figure plus 4 for the winner and 1 for the side that did not turn up, so the right answer differs from the
+ * wrong one's constant on both figures. A second match, played to a score and then retired, keeps the sport's own credit.
+ */
+async function w2cWalkoverHeadlineChecks(owner: Session, orgId: string): Promise<void> {
+  const football = builtinModules.find((m) => m.key === "football") as AnySportModule;
+  const variant = "11-a-side";
+  const divisionGoals = (football.configSchema.parse(football.variants[variant]) as { awardScore: { goals: number } }).awardScore.goals;
+  const award: [number, number] = [divisionGoals + 4, 1];
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Walkover Headline ${tag}`, visibility: "public" }),
+  );
+  const div = v1data<{ id: string; slug: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "W2c Football", sport_key: "football", variant_key: variant }),
+  );
+  await v1(
+    owner,
+    `/api/v1/divisions/${div.id}/entrants`,
+    "POST",
+    ["Dee", "Eli", "Fay", "Gus"].map((n, i) => ({ kind: "team", display_name: `${n} ${tag}`, seed: i + 1 })),
+  );
+  const stage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" }));
+  const put = await v1(owner, `/api/v1/stages/${stage.id}/rules`, "PUT", {
+    points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
+  });
+  const generated = v1data<{ fixtures: { id: string }[] }>(await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST")).fixtures;
+  const started = await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
+  const fixtureId = generated[0]?.id ?? "";
+  const fx = v1data<{ home_entrant_id: string; away_entrant_id: string }>(await v1(owner, `/api/v1/fixtures/${fixtureId}`));
+  const walkover = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: 0,
+    type: "core.forfeit",
+    payload: { by: fx.away_entrant_id, reason: "walkover" },
+  });
+
+  const lines = [String(award[0]), String(award[1])];
+  const state = v1data<{ summary: { headline: string; perSide: { line: string }[] } }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`));
+  const consoleOk = isDeepStrictEqual(state.summary.perSide.map((p) => p.line), lines) && state.summary.headline === `${lines[0]} — ${lines[1]}`;
+
+  const hub = v1data<{ matches?: { fixtureId: string; header: { scoreLines: (string | null)[] } }[] } | undefined>(
+    await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/hub`),
+  );
+  const card = hub?.matches?.find((m) => m.fixtureId === fixtureId);
+  const hubOk = isDeepStrictEqual(card?.header.scoreLines, lines);
+
+  type Row = { entrantId: string; metrics: { gf?: number; ga?: number } };
+  const table = async () => v1data<{ rows?: Row[] } | undefined>(await v1(owner, `/api/v1/stages/${stage.id}/standings`))?.rows ?? [];
+  const credited = (rows: readonly Row[]) => {
+    const home = rows.find((r) => r.entrantId === fx.home_entrant_id)?.metrics;
+    const away = rows.find((r) => r.entrantId === fx.away_entrant_id)?.metrics;
+    return home?.gf === award[0] && home?.ga === award[1] && away?.gf === award[1] && away?.ga === award[0];
+  };
+  // The table is a snapshot the append refreshes; a bounded poll, its reads counted, never a fixed sleep.
+  let rows = await table();
+  let reads = 1;
+  for (; reads < 20 && !credited(rows); reads++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    rows = await table();
+  }
+  const tableOk = credited(rows);
+
+  const ok =
+    put.status === 200 && started.status === 200 && generated.length > 0 && walkover.status === 201 && consoleOk && hubOk && tableOk && award[0] !== divisionGoals;
+  check(
+    `w2c: a walkover under a stage points rule reads ${award[0]}-${award[1]} on the console, the results list and the table (the division's own is ${divisionGoals}-0)` +
+      (ok
+        ? ""
+        : ` - rules ${put.status} ${JSON.stringify(put.json.error ?? null)}, start ${started.status}, forfeit ${walkover.status} ${JSON.stringify(walkover.json.error ?? null)}, console ${JSON.stringify(state.summary)}, hub ${JSON.stringify(card?.header.scoreLines)}, table ${JSON.stringify(rows.map((r) => [r.entrantId === fx.home_entrant_id ? "home" : "away", r.metrics.gf, r.metrics.ga]))} after ${reads} read(s)`),
     ok,
   );
 }

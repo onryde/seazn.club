@@ -718,3 +718,51 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     for (const s of screens) expect(await forfeitsIn(request, s.id), s.name).toHaveLength(0);
   });
 });
+
+// W2c Task 16b (X-WO-1 B, Task 9 P-3 "A"): the console previews the number the table WILL carry. A football pool whose
+// stage points rule awards a walkover score previews the RULE's figures for a walkover with nothing played, and the
+// confirmed walkover stores the same. The rule's winner figure is the division's plus 4 and the absent side's is 1, so a
+// dialog still previewing the division's own credit fails on both figures.
+test.describe("W2c Task 16b — the forfeit dialog previews the stage rule's walkover award", () => {
+  test("X-WO-1 B: Away does not turn up — the preview is the rule's award, and the stored result says the same", async ({ page, request }) => {
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const divisionGoals = (football.configSchema.parse(football.variants["11-a-side"]) as { awardScore: { goals: number } }).awardScore.goals;
+    const award: [number, number] = [divisionGoals + 4, 1];
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `W2c T16b ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+      visibility: "private",
+    });
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Pool", sport_key: "football", variant_key: "11-a-side",
+    });
+    const names = [`Asha FC ${TAG}`, `Bala FC ${TAG}`];
+    const added = await addEntrantsViaApi(request, div.data!.id, names, "team");
+    expect(added.ids).toHaveLength(2);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" });
+    const put = await apiJson(request, `/api/v1/stages/${stage.data!.id}/rules`, "PUT", {
+      points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
+    });
+    expect(put.status, JSON.stringify(put.error)).toBe(200);
+    const gen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+    const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+    const fx = await read(request, gen.data!.fixtures[0]!.id);
+    const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
+    const home = nameOf.get(fx.home_entrant_id!)!;
+    const away = nameOf.get(fx.away_entrant_id!)!;
+    expect(award[0], "the premise: the rule's winner figure is not the division's").not.toBe(divisionGoals);
+
+    await page.goto(await fixturePath(request, fx.id));
+    const d = await openDialog(page);
+    await d.getByTestId("forfeit-who-away").click();
+    await d.getByTestId("forfeit-why-walkover").check();
+    await expect(d.getByTestId("forfeit-preview"), "the preview is the rule's award, the side that turned up first").toHaveText(
+      ui("forfeitDialog.preview", { home, homeScore: award[0], away, awayScore: award[1] }),
+    );
+    await d.getByTestId("forfeit-confirm").click();
+    await expect.poll(async () => (await forfeitsIn(request, fx.id)).length, { timeout: 20_000 }).toBe(1);
+    const state = await apiJson<{ summary: { perSide: { line: string }[] } }>(request, `/api/v1/fixtures/${fx.id}/state`);
+    expect(state.data!.summary.perSide.map((p) => p.line), "the stored result is what the dialog said").toEqual([String(award[0]), String(award[1])]);
+  });
+});
