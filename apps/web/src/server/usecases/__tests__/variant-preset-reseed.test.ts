@@ -216,11 +216,15 @@ describe.skipIf(!HAS_DB)("R-T12-2 a division variant change re-seeds its unstart
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "cricket", "t20");
     const mine = () => revalidated.filter((d) => d === divisionId).length;
-    await patchDivision(auth, divisionId, { variant_key: "odi" }); // no stage: nothing re-seeded
-    expect(mine(), "nothing re-seeded, nothing revalidated").toBe(0);
+    await patchDivision(auth, divisionId, { name: "Renamed " + divisionId.slice(0, 6) }); // moves no format at all
+    expect(mine(), "nothing moved, nothing revalidated").toBe(0);
+    // Batch-5 m-1: a variant change stores a different format whether or not a stage was re-seeded, and the public pages
+    // print it - so the stage-less change is told too (it was the case this test used to pin as "nothing re-seeded").
+    await patchDivision(auth, divisionId, { variant_key: "odi" }); // no stage: nothing re-seeded, the format moved
+    expect(mine(), "the format moved, so the public pages are told").toBe(1);
     await knockout(auth, divisionId);
     await patchDivision(auth, divisionId, { variant_key: "test" });
-    expect(mine(), "the knockout's super over went with the variant").toBe(1);
+    expect(mine(), "the knockout's super over went with the variant: told once more, not twice").toBe(2);
   });
 
   it("empty case: a variant change on a division with no stages, or only table stages, re-seeds nothing and lands", async () => {

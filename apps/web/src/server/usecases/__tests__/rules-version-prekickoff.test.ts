@@ -20,7 +20,7 @@
 // variant declarations, the refusal's format line off the public describer.
 //
 // Real Postgres; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
 import enPublic from "@/dictionaries/en/public.json";
@@ -37,6 +37,20 @@ import { scoreEvent } from "../scoring";
 import { putStageRules } from "../stage-rules";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// Batch-5 m-1: which divisions the public revalidation was asked for. The spy wraps the REAL revalidation (it still runs).
+const revalidated = vi.hoisted(() => [] as { divisionId: string; competitionId: string | undefined }[]);
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...real,
+    fireDivisionRevalidate: (...args: Parameters<typeof real.fireDivisionRevalidate>) => {
+      revalidated.push({ divisionId: args[0], competitionId: args[1] });
+      return real.fireDivisionRevalidate(...args);
+    },
+  };
+});
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const g = globalThis as { _sql?: { end(): Promise<void> } };
@@ -376,5 +390,48 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
 
   it("counted: all three reopening writes were driven, and the one open door", () => {
     expect(reopened).toEqual(["walkover revive", "reset", "abandoned revive", "abandoned revive + per-match"]);
+  });
+});
+
+// Batch-5 m-1: a division format save that only moves `config` must reach the public pages. The pad's banner said "Best of
+// 5" the moment the save's version bump was reloaded, while the hub's format line, the stage chips and the match centre
+// kept "Best of 3" until their caches expired - `putStageRules` and the per-match writer always revalidate, the division
+// save did so only when it re-wrote a walkover or re-seeded a stage.
+describe.skipIf(!HAS_DB)("a division format save revalidates the public pages when the format it stores moved (batch-5 m-1)", () => {
+  it("the empty cases first: a rename and a re-sent config revalidate nothing; a config that moves the format does, once, with its competition", async () => {
+    const b = await league();
+    const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${b.divisionId}`;
+    const mine = () => revalidated.filter((r) => r.divisionId === b.divisionId);
+    const [{ config }] = await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${b.divisionId}`;
+
+    revalidated.length = 0;
+    await patchDivision(b.auth, b.divisionId, { name: "Renamed " + b.divisionId.slice(0, 6) });
+    expect(mine(), "a rename moves no format").toEqual([]);
+    await patchDivision(b.auth, b.divisionId, { config } as never);
+    expect(mine(), "the stored config re-sent moves no format").toEqual([]);
+
+    await patchDivision(b.auth, b.divisionId, { config: { bestOf: TARGET } } as never);
+    expect(mine(), "a config-only save that moved the format: told once, with the competition").toEqual([{ divisionId: b.divisionId, competitionId }]);
+    expect(((await sql<{ c: { bestOf: number } }[]>`select config c from divisions where id = ${b.divisionId}`)[0]!.c).bestOf, "premise: it stored the change").toBe(TARGET);
+
+    revalidated.length = 0;
+    await patchDivision(b.auth, b.divisionId, { config: { bestOf: TARGET } } as never);
+    expect(mine(), "the same save again moves nothing").toEqual([]);
+  });
+
+  it("a save the stage lock refuses entirely lands nothing and tells nobody", async () => {
+    const b = await league();
+    await scoreEvent(b.auth, b.fixtureIds[0]!, { expected_seq: 0, type: "core.start", payload: {} });
+    revalidated.length = 0;
+    await expect(patchDivision(b.auth, b.divisionId, { config: { bestOf: TARGET } } as never)).rejects.toMatchObject({ code: "DIVISION_FORMAT_LOCKED" });
+    expect(revalidated.filter((r) => r.divisionId === b.divisionId), "refused: nothing stored, nothing to refresh").toEqual([]);
+  });
+
+  it("another sport (football): a halves save revalidates too, though no stage was re-seeded and no walkover re-written", async () => {
+    const b = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "league", entrants: 2 });
+    const half = (declared("football", "11-a-side") as { halfMinutes: number }).halfMinutes;
+    revalidated.length = 0;
+    await patchDivision(b.auth, b.divisionId, { config: { halfMinutes: half === 40 ? 35 : 40 } } as never);
+    expect(revalidated.filter((r) => r.divisionId === b.divisionId)).toHaveLength(1);
   });
 });

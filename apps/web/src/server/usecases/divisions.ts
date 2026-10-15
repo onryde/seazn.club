@@ -812,6 +812,9 @@ export async function patchDivision(
   let rewroteAwards = false;
   // W2c Task 12 fix round 1 (R-T12-2): the stages a variant change re-seeded, set in the transaction, read after it.
   let reseededStages: string[] = [];
+  // Batch-5 m-1: whether this save stored a format that is not the one it replaced (the config or the variant). Set in the
+  // transaction, read after it commits - the public pages print the division's format, whichever match it moved.
+  let formatMoved = false;
   const cameraGate = async (ptx: Tx) => {
     await ptx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
     roundOpened = await anyRoundOpened(ptx, id, new Date());
@@ -1213,6 +1216,7 @@ export async function patchDivision(
         // only when the save really moves the config (an unchanged one leaves every stage exactly as it was valid) or the
         // variant (Task 12, M1: the keys a stage may carry are the variant's, so a stored one can stop being settable).
         const variantApplied = variantChanged && variantRefusal === undefined;
+        formatMoved = configApplied || variantApplied;
         // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE this save's first write (the re-seed
         // below is one) — re-written after it.
         held = await heldAwards(tx, tx`division_id = ${id}`);
@@ -1334,7 +1338,10 @@ export async function patchDivision(
   // the public pages now, not after their cache expires (15-300 s) - the same tags `putStageRules` fires after its own
   // re-write. Synchronous and after the commit, like that one (Next flushes a request's revalidations once).
   // A variant change that re-seeded a stage's rules moved the format its public pages print (R-T12-2): the same tags.
-  if (rewroteAwards || reseededStages.length > 0) fireDivisionRevalidate(row.id, row.competition_id);
+  // Batch-5 m-1: and so does ANY stored format change - a config-only save that re-wrote no walkover and re-seeded no
+  // stage still moved the hub's format line, the stage chips and the match centre; `putStageRules` and the per-match
+  // writer always fire, this door fired only on the two cases above.
+  if (formatMoved || rewroteAwards || reseededStages.length > 0) fireDivisionRevalidate(row.id, row.competition_id);
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, matching the pattern in patchCompetition.
   if (previousSlug) {
