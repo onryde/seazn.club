@@ -1,6 +1,6 @@
 # Overlay templates and compositor scenes: design
 
-**Status:** owner decisions taken in chat on 2026-10-15. The written spec is up for owner review.
+**Status:** owner-approved 2026-10-15, with two additions requested at approval: templates must be extendable and updatable (§4.7), and on-air events such as a six, a goal or game point must be covered (§4.8).
 **Programme:** Relay Release 2 (compositor). Plan:
 `seazn.club.compositor/docs/plans/2026-10-14-r2-compositor-plan.md`.
 **Source design:** `Live-Sports-Compositor-Design-Spec-complete.pdf` §4, "Overlay graphics: the HTML
@@ -30,6 +30,8 @@ show before they go live.
 | D8 | Reconnecting look | **A:** a branded night backdrop plus the existing match-card style. |
 | D9 | Phone readability | **B:** a readable text floor, and the bar lifted above YouTube's controls, for **both** hosts. |
 | D10 | How the page learns the compositor's state | **A:** a loopback endpoint inside the Machine, with **B** (via web) as the fallback. |
+| D12 | Templates extendable and updatable | **Yes** (owner, at spec approval). A template is a registry entry behind a fixed contract; adding, changing and retiring one each have a defined path (§4.7). |
+| D13 | Events (six, goal, game point…) | **Covered** (owner, at spec approval). The existing moment slabs work in every template and in the compositor (§4.8). |
 | D11 | Mockups | Mockups decide layout and behaviour only. **The build uses the house theme** (overlay tokens, `--sport-led`, sport palettes, the stadium-night plate, bundled fonts). |
 
 ## 3. What already exists (re-pinned 2026-10-15)
@@ -140,6 +142,51 @@ radii and motion come from `overlay-tokens.ts`, `--sport-led`, `SPORT_PALETTES` 
 styles. Visual sign-off compares the built screens against the house theme. Dispatches load the
 frontend-design skill.
 
+### 4.7 Extending and updating templates (D12)
+
+**The template contract.** Every template is one registry entry, `OverlayTemplateDef`:
+
+| Field | Meaning |
+|---|---|
+| `id` | Stable string, used in `?template=`, in stored choices and in OBS URLs. **It never changes once shipped.** |
+| `labelKey` | Picker label (4 locales). |
+| `sports` | `"all"` or a list; the picker only offers templates that suit the fixture's sport. |
+| `component` | The scorebug component, taking today's `OverlayThemeProps`. |
+| `slabPlacement` | Where the moment slab attaches (replaces `slabPlacementFor`). |
+| `sceneCardSafeArea` | The box that scene and match cards must keep clear, so a card never covers the scorebug. |
+| `retired?` | `{ replacedBy: id }`. |
+
+- **Add a template:** one component file plus one registry entry plus 4-locale label keys. Nothing else changes, because the gallery, the picker, the readability sweep and the scene tests all **enumerate the registry**. So a new template is covered the day it lands, and the sweeps report their counts (0 = fail).
+- **Update a template:** templates are versioned with the page, so a deploy updates every fixture using that id, on OBS and in the compositor alike. No per-fixture migration. Each change is reviewed in the staff gallery across every sport × scene; no screenshot baselines are committed (house rule), and structural assertions plus the sweeps carry the regression load.
+- **Retire a template:** keep the entry with `retired: { replacedBy }`. Stored choices and OBS URLs resolve to the replacement; nothing 404s and nobody's stream breaks. The picker hides retired ids.
+- **Not in this spec:** organisers editing templates (D3) and per-organisation branding (next).
+
+### 4.8 Events on air: moments (D13)
+
+**What exists today** (`lib/overlay-moments.ts`, `MOMENT_RULES`, stream overlay W2):
+
+| Sport | Moments that raise a slab |
+|---|---|
+| Cricket | six, four, wicket (`cricket.ball`, super over too) |
+| Football | goal, card |
+| Hockey | goal, card (suspension class) |
+| Ice hockey | goal, penalty |
+| Tennis | ace, set won, break / set / match point |
+| Badminton, table tennis, volleyball | game won, game / match point |
+| Board games, carrom, generic | none |
+
+Moments are **sport-owned and template-independent**. The rules decide WHICH events raise a slab; the template only decides WHERE and HOW the slab looks (`slabPlacement`). So every template gets every moment, and a new template cannot drop one.
+
+**What this spec adds:**
+- **Compositor parity:** moments render in the composed stream exactly as in OBS. They are timed by the same `delay`, so a six's slab appears with the six on the video, not 3 s before it.
+  - Test: the slab's on-screen time is ≥ `delay` after the event, at `host=compositor`.
+- **Moments during scenes:**
+  - **Reconnecting:** moments **still fire**. With no picture, the slab is the only way a viewer learns a goal happened. The slab sits above the scene card.
+  - **Starting soon / Final:** none fire. No scoring happens before the start, and the deciding moment has already shown before Final.
+- **Readability:** slab text meets the §4.5 floor.
+- **Gallery:** shows each template × each sport's moments (a sample event per rule, enumerated from `MOMENT_RULES`).
+- **Adding a moment later** (e.g. chess check/mate, carrom, a "last over" alert) stays one rule plus 4-locale keys, guarded by the existing `MOMENT_KEYS` dictionary gate. New moment kinds are a product decision per sport, not part of this spec.
+
 ## 5. Testing (house rules)
 
 - **Unit:** the template registry and alias resolution (`style`/`template`, unknown → default);
@@ -158,10 +205,14 @@ frontend-design skill.
   - a second camera loss
   - reconnecting while the match is decided (Result card + backdrop)
   - another sport (cricket bar, badminton bug)
+- **Extensibility:** register a throwaway test-only template in the unit test, then assert it appears in the picker list, the gallery matrix and the readability sweep without any other edit. Retired-id resolution: stored choice → replacement; OBS URL → replacement.
+- **Moments:** each `MOMENT_RULES` entry × each template renders a slab (enumerated, count > 0); a moment during Reconnecting shows; a moment during Starting soon is dropped; slab timing ≥ delay at `host=compositor`.
 - **Mutants:**
   - the scene layer mounting without `host=compositor` → RED
   - the text floor drops to 29 px → RED
   - fallback never engages → RED
+  - a template's `slabPlacement` ignored → RED
+  - moments suppressed during Reconnecting → RED
 
 ## 6. Plan changes (R2)
 
@@ -183,5 +234,5 @@ frontend-design skill.
 - A Break or interval scene (operator-triggered).
 - Custom organisation templates.
 - Sponsor slots.
-- Moments changes.
+- New moment kinds (a per-sport product decision; the path is defined in §4.8).
 - The end-card-after-undo bug, which has its own fix in flight.
