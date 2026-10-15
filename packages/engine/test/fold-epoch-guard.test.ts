@@ -976,6 +976,22 @@ describe("fold-epoch guard: GF-2 T4 - player stats are a minor", () => {
       expect(row!.reason).toMatch(/corpus format fell \(3 -> 2\): 2 stream\(s\)/);
       expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(2, 0, fmt3(rerecorded.map((s) => stats3(s)))), frozen), "the control: re-recorded but still format 3").toEqual([]);
     });
+    it("ONE stream that stops recording its stats while the others still do is a fall too (counted per matched stream; the CLI refuses such a hybrid, the pure function must still not wave it through)", () => {
+      const [first, second] = rec3();
+      const dropped = recorded(base()[1]!); // the kernel fields stay, the stats go
+      expect(dropped.playerStats, "precondition: the stream records no stats").toBeUndefined();
+      const v = epochViolations(at3(1, 0, fmt3([first!, second!])), at3(1, 0, fmt3([first!, dropped])), frozen);
+      expect(v.map((x) => x.sport)).toEqual(["badminton"]);
+      expect(v[0]!.reason).toMatch(/corpus format fell/);
+      expect(v[0]!.reason).toMatch(/1 stream\(s\) recorded their player stats at the baseline and no longer do/);
+      expect(epochViolations(at3(1, 0, fmt3([first!, second!])), at3(1, 1, fmt3([first!, dropped])), frozen), "no bump settles it").toHaveLength(1);
+    });
+    it("a corpus that drops its `format` marker while its streams keep every field has not fallen: the format is read from the evidence too", () => {
+      const { format: _marker, ...unmarked } = fmt3(rec3());
+      expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 0, unmarked as GoldenCorpus), frozen)).toEqual([]);
+      const { format: _marker2, ...unmarked2 } = fmt2(base().map((s) => recorded(s)));
+      expect(epochViolations(at3(1, 0, fmt2(base().map((s) => recorded(s)))), at3(1, 0, unmarked2 as GoldenCorpus), frozen), "and the same for the kernel fields").toEqual([]);
+    });
     it("a format-3 corpus kept as it is is not a fall, and neither is a rise", () => {
       expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3(rec3())), frozen)).toEqual([]);
       expect(epochViolations(at3(1, 0, corpus(base())), at3(1, 0, fmt2(base().map((s) => recorded(s)))), frozen)).toEqual([]);

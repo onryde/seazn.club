@@ -10,8 +10,6 @@ import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, ty
 import { eventToken, floorHoles as holesOf, floorRequirement, LEVEL_OUTCOME_TOKENS, NATURAL_OUTCOMES, overlayToken, statsAwardToken, undoToken, type FloorToken } from "./golden-floor.ts";
 import { creditedAwardKeys, readStatRows, recordPlayerStats } from "./golden-stats.ts";
 import {
-  awardCredits,
-  awardStoryHolds,
   corpusBefore,
   expungeStrike,
   extendFloor,
@@ -713,47 +711,6 @@ describe("the award story (GF-2 T4) — an award the sport declares, given, stru
       }
     });
     expect(proofs).toBeGreaterThan(0);
-  });
-
-  it("awardCredits asks the real stats fold: a declared key credits its person, an undeclared key credits nobody, and a struck award credits nobody", () => {
-    // single-sport: hockey declares `potm` (not `motm`), so the same ledger answers both ways; the sweep above is every sport
-    const key = "hockey";
-    const stream = readCorpus(key).streams.find(isAwardStory)!;
-    const { module, corpus, cfg, lineups } = setup(key, stream);
-    const ctx: Ctx = { module, corpus, cfgNames: ["default"], holes: new Set() };
-    const away = lineups.away.slots[0]!.personId;
-    const home = lineups.home.slots[0]!.personId;
-    expect(declared(module)).toEqual(["potm"]);
-    expect([...awardCredits(ctx, cfg, lineups as never, stream.events, "potm")]).toEqual([[away, 1]]);
-    expect(awardCredits(ctx, cfg, lineups as never, stream.events, "motm").size, "an undeclared key credits nobody").toBe(0);
-    const unstruck = stream.events.filter((e) => e.voids === undefined);
-    expect(new Map(awardCredits(ctx, cfg, lineups as never, unstruck, "potm"))).toEqual(new Map([[home, 1], [away, 1]]));
-    expect(awardCredits(ctx, cfg, lineups as never, stream.events.slice(0, stream.events.findIndex((e) => e.type === "core.award")), "potm").size, "before any award").toBe(0);
-  });
-
-  it("awardStoryHolds is asked of the stats fold: it holds for the committed story and fails for each way the story can fail to take effect", () => {
-    // single-sport: hockey (potm); every sport's committed award stream is read by the sweep above
-    const key = "hockey";
-    const stream = readCorpus(key).streams.find(isAwardStory)!;
-    const { module, corpus, cfg, lineups } = setup(key, stream);
-    const ctx: Ctx = { module, corpus, cfgNames: ["default"], holes: new Set() };
-    const away = lineups.away.slots[0]!.personId;
-    const home = lineups.home.slots[0]!.personId;
-    const holds = (events: readonly GoldenEvent[], keys: readonly string[], who: string) => awardStoryHolds(ctx, cfg, lineups as never, events, keys, who);
-    expect(holds(stream.events, ["potm"], away), "the committed story").toBe(true);
-    // the struck award still stands (no void): two people hold it
-    expect(holds(stream.events.filter((e) => e.voids === undefined), ["potm"], away), "no void: the home player holds it too").toBe(false);
-    // only the first (struck) award, no void: one person holds it, but it is not the away player
-    const first = stream.events.findIndex((e) => e.type === "core.award");
-    expect(holds(stream.events.slice(0, first + 1), ["potm"], away), "the standing award is missing: one holder, the wrong one").toBe(false);
-    // the away award said twice credits the away player twice
-    const last = stream.events[stream.events.length - 1]!;
-    expect(holds([...stream.events, last], ["potm"], away), "credited twice").toBe(false);
-    // a key the sport does not declare credits nobody, so the story did not take effect
-    expect(holds(stream.events, ["motm"], away), "an undeclared key").toBe(false);
-    expect(holds(stream.events, ["potm"], home), "the wrong person").toBe(false);
-    // every key is asked: one that took effect does not cover one that did not
-    expect(holds(stream.events, ["potm", "motm"], away)).toBe(false);
   });
 
   it("the scenario builds only for the declared keys that are holes: nothing for an empty hole set, for an undeclared token or for a sport that declares none; the story for a hole", () => {

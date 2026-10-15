@@ -178,10 +178,9 @@ const phoneOutputsDiffer = (a: GoldenStream, b: GoldenStream): boolean =>
     (a.overlay !== b.overlay || a.summaries!.length !== b.summaries!.length || a.summaries!.some((digest, i) => digest !== b.summaries![i])));
 /** Whether the player stats differ: only when BOTH sides record them (gaining them is a separate question, losing them is `formatFell`). */
 const statsDiffer = (a: GoldenStream, b: GoldenStream): boolean => recordsStats(a) && recordsStats(b) && a.playerStats !== b.playerStats;
-/** How a matched pair differs: "major" when anything a phone computes does, "minor" when ONLY what the server computes does (the standings
- *  deltas, the final player stats), null when nothing does. */
-const foldChange = (a: GoldenStream, b: GoldenStream): Owed | null =>
-  phoneOutputsDiffer(a, b) ? "major" : a.deltas !== b.deltas || statsDiffer(a, b) ? "minor" : null;
+/** How a matched pair differs: "major" when anything a phone computes does, "minor" when ONLY the standings deltas do, null when nothing does.
+ *  (The caller reads only "major" from it: the server-only classes it counts itself, deltas and `statsDiffer`, beside it.) */
+const foldChange = (a: GoldenStream, b: GoldenStream): Owed | null => (phoneOutputsDiffer(a, b) ? "major" : a.deltas !== b.deltas ? "minor" : null);
 /** A side's minor for a sport: 0 when the side declares no FOLD_MINOR (or none for this sport), which is what a baseline from before it existed means. */
 const minorOf = (side: Side, sport: string): number => (side.minors === undefined ? 0 : (get(side.minors, sport) ?? 0));
 

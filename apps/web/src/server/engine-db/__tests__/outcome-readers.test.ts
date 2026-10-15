@@ -24,7 +24,7 @@ const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
   "packages/engine/src/testkit/scenarios.ts": { calls: 6, reason: "testkit: scenario builder; `played.state` comes from decidedStream, which drives module.apply with the module's own generated events — never a kernel-owned type" },
   "packages/engine/src/testkit/golden-floor.ts": { calls: 1, reason: "golden floor (GF-1): the module-level outcome of a generator walk, to learn which outcome kinds a module can produce; no walk carries core.settle" },
   "packages/engine/src/testkit/golden-floor-streams.ts": { calls: 1, reason: "golden floor (GF-1): the one bare read (`moduleOutcome`) of the module's outcome, to find a walk that is decided or a prefix that is still live; the settle story (GF-2 T3) reads the kernel's outcome through `effectiveToken`/`outcomeOf`, and the corpus scan below holds every settle stream to a settled win" },
-  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the format-1 recorder (`moduleRecorder`) records the MODULE's outcome; format 2 (every committed corpus since GF-2) records the effective outcome through outcomeOf in golden-overlay.ts. A stream carrying core.settle is guarded below, not assumed" },
+  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the format-1 recorder (`moduleRecorder`) records the MODULE's outcome; format 2 and later (every committed corpus since GF-2; format 3 adds the player stats) record the effective outcome through outcomeOf in golden-overlay.ts. A stream carrying core.settle is guarded below, not assumed" },
 };
 const stripComments = (text: string): string => text.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "");
 function walk(dir: string, out: string[]): string[] {
@@ -164,8 +164,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       if (settles.length === 0) return;
       out.settleStreams++;
       const label = `${file}#${i} (${stream.config}#${stream.seed})`;
-      // a settle only ever reaches a format-2 corpus: the format-1 recorder would have written the module's answer
-      if (corpus.format !== 2) out.wrong.push(`${label}: carries core.settle in a format-${corpus.format ?? 1} corpus`);
+      // a settle only ever reaches a corpus recorded by the format-2 recorder or a later one (format 3 is format 2 plus the player
+      // stats): the format-1 recorder would have written the module's answer
+      if ((corpus.format ?? 1) < 2) out.wrong.push(`${label}: carries core.settle in a format-${corpus.format ?? 1} corpus`);
       // the settle in force at the end (no later void strikes it) decides the match: the recorded outcome is a settled win
       const standing = settles.filter((k) => !stream.events.some((e) => e.voids === `e-${k}`));
       out.struck += settles.length - standing.length;
@@ -177,7 +178,7 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     return out;
   };
 
-  it("golden.ts's allowance holds: every corpus stream that carries core.settle is recorded by the format-2 recorder, and ends on a settled win (the reason is a guard, not a comment)", () => {
+  it("golden.ts's allowance holds: every corpus stream that carries core.settle is recorded by the format-2 recorder or a later one, and ends on a settled win (the reason is a guard, not a comment)", () => {
     const SPORTS = join(REPO, "packages/engine/src/sports");
     const settledMethods = SETTLE_METHODS.map(settledMethod);
     let streams = 0;
@@ -216,6 +217,8 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     // control: a standing settle ending on a settled win in a format-2 corpus
     const clean = scanSettles("f", { format: 2, streams: [stream(good, [settle])] }, methods);
     expect(clean).toMatchObject({ settleStreams: 1, checked: 1, struck: 0, wrong: [] });
+    // the same stream in a format-3 corpus (GF-2 T4: format 2 plus the player stats) is as clean: a later format is the real recorder too
+    expect(scanSettles("f", { format: 3, streams: [stream(good, [settle])] }, methods), "format 3 is recorded by the effective-outcome recorder").toMatchObject({ settleStreams: 1, checked: 1, struck: 0, wrong: [] });
     // struck then said again: both counted, the standing one checked
     const again = scanSettles("f", { format: 2, streams: [stream(good, [settle, { type: "core.void", voids: "e-0" }, settle])] }, methods);
     expect(again).toMatchObject({ settleStreams: 1, checked: 1, struck: 1, wrong: [] });

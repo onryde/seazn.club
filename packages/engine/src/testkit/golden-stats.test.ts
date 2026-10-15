@@ -443,7 +443,11 @@ describe("reformatCorpus to format 3 — adds playerStats and moves nothing the 
   it("a corpus is never reformatted DOWN, and target 1 is not a reformat at all", () => {
     const module = sport("generic");
     expect(() => reformatCorpus(module, formatThreeOf("generic"), 2)).toThrow(/format 3.*format 2.*never goes back/s);
-    expect(() => reformatCorpus(module, formatTwoOf("generic"), 1)).toThrow(/never goes back|nothing to reformat to/);
+    expect(() => reformatCorpus(module, formatTwoOf("generic"), 1)).toThrow(/never goes back/);
+    // target 1 is meaningless even for a format-1 corpus (which a same-format no-op would otherwise return untouched)
+    const oneOf = asFormatOne(readCorpus("generic"));
+    expect(corpusFormat(oneOf), "precondition: a format-1 corpus").toBe(1);
+    expect(() => reformatCorpus(module, oneOf, 1)).toThrow(/format 1 is the format before the first reformat, so there is nothing to reformat to/);
     expect(bytesOf(reformatCorpus(module, formatTwoOf("generic"), 2)), "same format: a no-op after verifying").toBe(bytesOf(formatTwoOf("generic")));
   });
 

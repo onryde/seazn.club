@@ -45,7 +45,6 @@ import {
   UNDOABLE_KERNEL,
   type FloorToken,
 } from "./golden-floor.ts";
-import { awardStatKey, readStatRows, recordPlayerStats } from "./golden-stats.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -579,32 +578,14 @@ function buildExpunge(ctx: Ctx): Built | null {
 
 // -------------------------------------------------------------------------------------------------------- award
 
-/** What the player-stats FOLD says each person holds of one award key (`<key>_awards`), for a ledger: asked of the real fold
- *  (recordPlayerStats), never of the builder's belief that an award took effect. */
-export function awardCredits(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], key: string): Map<string, number> {
-  // (recordPlayerStats writes canonical rows by construction - golden-stats.test.ts reads every committed text back - so null is not a case)
-  const rows = readStatRows(recordPlayerStats(ctx.module, cfg, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids))))!;
-  const credits = new Map<string, number>();
-  for (const row of rows) {
-    const held = row.stats[awardStatKey(key)];
-    if (held !== undefined && held > 0) credits.set(row.personId, held);
-  }
-  return credits;
-}
-
-/** Whether an award story took effect, asked of the player-stats fold itself: for every key, the struck award credits nobody and the
- *  standing one credits `away` exactly once (so exactly one person holds the key, and it is `away`). */
-export function awardStoryHolds(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], keys: readonly string[], away: string): boolean {
-  return keys.every((key) => {
-    const credits = awardCredits(ctx, cfg, lineups, events, key);
-    return credits.size === 1 && credits.get(away) === 1;
-  });
-}
-
 /** An award the sport DECLARES (`playerStats.awards`), given and struck: the match is played out, an award goes to a home player
  *  (and is struck at once, so the undo of an award is on the record), then the same award to an away player stands. Where the
- *  sport declares no award key there is no such token and this builds nothing. The story is kept only when the stats fold says it
- *  took effect (`awardStoryHolds`). */
+ *  sport declares no award key there is no such token and this builds nothing.
+ *
+ *  Nothing here asks the stats fold whether the story took effect: `extendFloor` keeps a stream only when it closes a hole, and the
+ *  hole is the credit itself (`stats:award:<key>`, read off the recorded rows), so a story that credited nobody is dropped and named
+ *  in `stillMissing`. What the story is FOR (the struck award credits nobody, the standing one its person once) is read off every
+ *  committed award stream by the story test (golden-floor-streams.test.ts). */
 function buildAward(ctx: Ctx): Built | null {
   const keys = (ctx.module.playerStats?.awards ?? []).map((a) => a.key).filter((key) => ctx.holes.has(statsAwardToken(key)));
   if (keys.length === 0) return null;
@@ -623,9 +604,6 @@ function buildAward(ctx: Ctx): Built | null {
         events.push(ev("core.award", { person: home, key }), voidOf(first), ev("core.award", { person: away, key }));
       }
       if (!folds(ctx, cfg, lineups, events)) continue;
-      // an award leaves the module's story untouched: the match ends on the outcome the bare walk reached
-      if (outcomeAfter(ctx, cfg, lineups, events).token !== walk.token) continue;
-      if (!awardStoryHolds(ctx, cfg, lineups, events, keys, away)) continue;
       return { config: cfgName, seed: 11 * FLOOR_SEED_STRIDE + seed, events };
     }
   }
