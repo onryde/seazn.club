@@ -243,6 +243,10 @@ async function hold(
   detail: string | null,
   final: boolean,
   seat: RevokedSeat | null = null,
+  /** D20-fix-3b: place this hold on an OPEN row only. On a row that is held it changes nothing — no seat widened, no
+   *  last_error written, no reason replaced — and the answer is the stored reason. The check is the write's own
+   *  predicate (`needs_reason is null`), so it holds under the row lock whatever the caller read earlier. */
+  ifNotHeld = false,
 ): Promise<Held> {
   return sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
@@ -258,7 +262,7 @@ async function hold(
     if (row.needs_reason !== null) {
       const stored = readNeedsReason(row.needs_reason);
       const replaces = final && (stored === reason || (MID_GAME_REASONS as readonly NeedsReason[]).includes(stored));
-      if (!replaces) {
+      if (!replaces && !ifNotHeld) {
         if (isSeatHold(stored) && isSeatHold(reason)) {
           // A second frozen seat is new information, not a new diagnosis:
           // the record widens (ruling M7), nothing else on the row moves —
@@ -294,8 +298,10 @@ async function hold(
          set status = 'needs_organiser', needs_reason = ${reason},
              revoked_seat = ${isSeatHold(reason) ? seat : null},
              last_error = coalesce(${detail}, last_error), updated_at = now()
-       where fixture_id = ${fixtureId}`;
-    return { held: true, reason };
+       where fixture_id = ${fixtureId}
+         ${ifNotHeld ? tx`and needs_reason is null` : tx``}`;
+    // `ifNotHeld` on a held row reaches here with the write a no-op by its predicate: the stored reason answers.
+    return { held: true, reason: ifNotHeld && row.needs_reason !== null ? readNeedsReason(row.needs_reason) : reason };
   });
 }
 
@@ -320,6 +326,9 @@ export async function holdForOrganiser(a: {
    *  on a FRESH hold ⇒ unknown, and both seats are frozen; absent on a row
    *  that already records a seat ⇒ that seat stands (review N4). */
   seat?: RevokedSeat;
+  /** Only on a row that is not held (see `hold`): the hold of a read that could not be made (D20 re-review n1) must
+   *  never widen a seat freeze or overwrite the evidence of a hold that landed while it was being made. */
+  ifNotHeld?: boolean;
 }): Promise<ResultWrite> {
   // The union is the contract, and a cast must not smuggle a no-show past it.
   if (!(HOLD_REASONS as readonly string[]).includes(a.reason)) {
@@ -329,7 +338,7 @@ export async function holdForOrganiser(a: {
   if (a.seat !== undefined && !isSeatHold(a.reason)) {
     throw new HttpError(500, `a seat is recorded only for a seat hold (${SEAT_HOLD_REASONS.join(", ")}), not ${a.reason}`, "HOLD_SEAT_WITHOUT_REVOKE");
   }
-  const h = await hold(a.fixtureId, a.reason, a.detail ?? null, false, a.seat ?? null);
+  const h = await hold(a.fixtureId, a.reason, a.detail ?? null, false, a.seat ?? null, a.ifNotHeld ?? false);
   return h.held ? heldAnswer(h.reason) : NONE;
 }
 

@@ -93,7 +93,8 @@ const lichess = vi.hoisted(() => {
     calls: { kind: "stream" | "export" | "other"; gameId: string; token: string | null }[];
     /** D11: the holdMs of every SETTLING stream read, in order (a first-line read records nothing). */
     holds: number[];
-    onStream: (c: { gameId: string; token: string | null }) => Answer;
+    /** May be async: a case interleaves a write DURING a read (the settling read holds the stream ~9 s in life). */
+    onStream: (c: { gameId: string; token: string | null }) => Answer | Promise<Answer>;
     onExport: (c: { gameId: string }) => Answer;
     reset(): void;
     serve(url: string, init?: RequestInit): Promise<Response>;
@@ -118,7 +119,7 @@ const lichess = vi.hoisted(() => {
       if (stream) {
         const c = { kind: "stream" as const, gameId: decodeURIComponent(stream[1]!), token };
         state.calls.push(c);
-        const r = state.onStream(c);
+        const r = await state.onStream(c);
         return new Response(r.body, { status: r.status });
       }
       const exported = /^\/game\/export\/([^/]+)$/.exec(u.pathname);
@@ -1082,6 +1083,47 @@ describe.runIf(HAS_DB)("reconcile — D11 (b, c): a flag Lichess has not settled
       }
     }
     expect(checked, "anti-vacuity: reason x seat x trigger").toBe(REASONS.length * SEATS.length * 2);
+  });
+
+  // D20-fix-3b: the reconcile-level check above reads the row as it was when the reconcile began; the settling read then
+  // holds the stream ~9 s, and a seat hold can land in that window (a move's 401, a re-link). The hold call must not
+  // widen or overwrite it: the check is the hold's own write (result.ts `ifNotHeld`), under the row lock.
+  it("D20-fix-3b: a SEAT hold that lands DURING the settling read is not widened or overwritten by the unasked hold that follows it — reason, seat, last_error as the seat hold left them (both seats, both reasons — counted)", async () => {
+    const CASES = [
+      { reason: "token_revoked", seat: "white" },
+      { reason: "token_revoked", seat: "black" },
+      { reason: "account_changed", seat: "white" },
+      { reason: "account_changed", seat: "black" },
+    ] as const;
+    let checked = 0;
+    for (const c of CASES) {
+      const label = `${c.reason} (${c.seat}) lands mid-read`;
+      lichess.reset();
+      const { g, flagAt } = await caughtUp();
+      expect((await bridge(g.fixtureId)).status, `${label}: premise — the reconcile begins on a LIVE row (the guard above cannot see this hold)`).toBe("live");
+      let n = 0;
+      let landed = false;
+      lichess.onStream = async () => {
+        if (n++ === 0) return ok(gameFull(g, EXPIRED_1, { moves: [...LINE] }));
+        if (!landed) {
+          landed = true;
+          await holdForOrganiser({ fixtureId: g.fixtureId, reason: c.reason, seat: c.seat, detail: `test: the ${c.seat} seat landed mid-read` });
+        }
+        return status(503);
+      };
+      const out = await reconcile(g.fixtureId, "sweep", observed(new Date(flagAt + FLAG_UNASKED_HOLD_MS + 60_000)).deps);
+      expect(landed, `${label}: premise — the seat hold landed inside the settling read`).toBe(true);
+      expect(out, `${label}: answers the stored reason`).toMatchObject({ result: { wrote: "needs_organiser", reason: c.reason } });
+      const after = await bridge(g.fixtureId);
+      expect([after.status, after.needs_reason, (await rowOf(g.fixtureId)).revoked_seat], `${label}: reason and seat stand`).toEqual([
+        "needs_organiser",
+        c.reason,
+        c.seat,
+      ]);
+      expect(after.last_error, `${label}: the seat's own evidence stands`).toBe(`test: the ${c.seat} seat landed mid-read`);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: reason x seat").toBe(CASES.length);
   });
 
   it("D20 (re-review 2, n2), the pair: the same unaskable read on a row that is NOT held still places the provider_error hold — the guard is the held status alone", async () => {

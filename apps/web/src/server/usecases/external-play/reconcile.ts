@@ -746,9 +746,11 @@ async function applyStream(
     // Re-review 2, n2: only a row that is not held yet. A held row is already the organiser's, and result.ts answers a
     // provider_error on a SEAT hold by freezing both seats and overwriting its last_error (review N2 — right for a ledger
     // called untrustworthy, wrong for a read that could not be made): Black's valid seat frozen, the refusal's evidence lost.
+    // Two layers: this check spares a held row the call (the row as the reconcile began); `ifNotHeld` is the write's own
+    // predicate, for a hold that lands during the ~9 s settling read, after this row was read (D20-fix-3b).
     const unasked =
       settling === "unasked" && g.bridge.status !== "needs_organiser" ? unaskedFlagEvidence(g, lichess, adopted, t.at) : null;
-    const heldUnasked = unasked === null ? null : await holdForOrganiser({ fixtureId, reason: "provider_error", detail: unasked });
+    const heldUnasked = unasked === null ? null : await holdForOrganiser({ fixtureId, reason: "provider_error", detail: unasked, ifNotHeld: true });
     return out({ result: heldUnasked, adopted: applied });
   }
   return settle(g, snapshot, t.at, deps, applied, "stream");
