@@ -142,10 +142,52 @@ is a no-op, and a format-2 corpus whose recorded fields no longer replay is refu
 never "repaired". `rebaselineCorpus`, `extendCorpus` and `extendFloor` keep the
 corpus's format.
 
-**What this does not do yet (GF-2 T1).** Recording the overlay is not comparing it:
-until the epoch guard compares `summaries` and `overlay` (T2) and the floor and the
-unpinned-class probes move onto the new recorder (T3), the lists under "What the
-guard cannot see" below still stand, and every manual major they name is still owed.
+**What the guard does with the new fields (GF-2 T2).** When both sides of a
+comparison record them, a difference in either `summaries` (its length, or any
+digest) or `overlay` is a **major** owed, like a moved state: a phone computes
+both. A stream that **gains** them (the baseline is format 1, the tree is format 2,
+the stream's identity and input are the same) is *newly recorded*, and that owes
+**nothing only while the change touches no fold source** (owner ruling Q1,
+2026-10-15). With the source frozen, the recorder ran the baseline's own code, so
+what it wrote is what the baseline computes; with the source moving in the same
+diff, the new fields would record the NEW rule and every old field, which cannot
+see the kernel, would still look unchanged. The guard asks git which files the
+tree changes against the baseline (`git diff --name-only --no-renames` and the
+untracked files, repository-relative) and counts as **fold source**:
+
+- anything under the engine's `src/` except `src/testkit/**` and any `*.test.ts`,
+  `*.golden.json`, `*.schema.json` and `*.md` (so `src/sport/fold-epoch.ts` IS
+  fold source: paying a bump in the PR that reformats makes every other sport's
+  newly recorded streams owe too, so a reformat lands alone, or every sport is
+  bumped);
+- the engine's own `package.json` (zod and the toolchain fold too);
+- the lockfile at the repository root.
+
+When any of those moved, every newly recorded stream counts as **changed**: the
+line says `N newly recorded stream(s) while the change touches fold source: <paths>
+(land the format bump alone, or raise FOLD_EPOCH)`. A pre-existing field that
+moved in the same change is changed whatever the source did (D34, owner ruling Q6:
+a harness-only rewrite of an existing field stays a **major**). The report has a
+`recorded N` column (the newly recorded streams of the sport). The format never
+falls: a stream that recorded the fields at the baseline and does not now is a
+violation (`corpus format fell (2 -> 1)`) that no bump settles. A corpus that
+declares a format other than 1 and 2, a format-2 stream without one summary digest
+per event and an overlay that is a JSON object, or a format-1 stream that already
+holds either, is refused (exit 2). A guard that is not told what changed (the pure
+`epochViolations` without its change list) treats it as fold source touched.
+
+The reformat itself (`REFORMAT_GOLDEN=1`) is **data only and lands in its own
+commit**: the corpora gain `format: 2` and the two fields, every other byte
+unchanged, and `fold-epoch:check --against <the commit's parent>` passes with
+`changed 0` and `recorded` equal to the stream count. A later change to the
+recorder itself (or to the kernel) moves fields both sides record, and that is
+the major above.
+
+**What is still open (GF-2 T3).** Recording the overlay is not yet exercising it:
+the golden floor and the unpinned-class probes still run on the module-only
+recorder, so the lists under "What the guard cannot see" below still stand until
+T3 moves them onto the new recorder, and every manual major they name is still
+owed.
 
 ## A re-baseline that changes a fold must raise that sport's version
 
@@ -160,6 +202,10 @@ depending on who computes what moved:
 | a stream was removed, or re-recorded (its events, lineups or raw config object changed) | **major** |
 | only the standings `deltas` (states, outcome and summary byte for byte the same): the server computes these | **minor** |
 | both kinds in one sport | **major** (the strongest class owed decides) |
+| format 2: a recorded `summaries` digest (or the list's length) or `overlay` differs, on a stream both sides record | **major** |
+| format 2: the stream gains `summaries` and `overlay` for the first time, nothing it held moved, and the change touches no fold source | nothing |
+| the same, but the change touches fold source (see "Corpus format 2") | **major** |
+| format 2 -> 1: a stream stops recording them | red; no bump settles it |
 | streams only appended (`EXTEND_GOLDEN`) | nothing |
 
 The **major is the one the server gates on** (batch 1f): native clients send
@@ -227,7 +273,7 @@ re-baseline into a clean tree, bump, and run it):
     pnpm --filter @onryde/seazn-engine fold-epoch:check --against origin/main
 
 It prints one line per sport (major and minor before -> after; streams matched,
-changed, deltas-only, removed, added) and `N sports checked, M streams
+changed, deltas-only, removed, added, recorded) and `N sports checked, M streams
 compared`; a violation line says `major owed` or `minor owed` and names the
 exact entry to raise, for example `raise FOLD_MINOR.badminton to 1` or
 `raise FOLD_EPOCH.badminton to 2`. Exit codes: `0` every sport is in order (or
@@ -236,8 +282,9 @@ results moved without the half that is owed rising, the pair fell, or a corpus
 and an epoch entry do not pair up; `2` refused, nothing judged (the ref is not
 a commit, which is what a shallow clone or a root commit gives; git could not
 list or read the base; a table or corpus that does not load, including a tree
-whose `FOLD_MINOR` is missing or names other sports than `FOLD_EPOCH`; a run
-that compared no stream); `3` the guard itself crashed.
+whose `FOLD_MINOR` is missing or names other sports than `FOLD_EPOCH`; a corpus
+format that is neither 1 nor 2, or a half-recorded format-2 stream; a run that
+compared no stream); `3` the guard itself crashed.
 
 ## What the guard cannot see
 

@@ -27,6 +27,16 @@
 //     (before this rule existed) is a minor of 0 for every sport.
 //   - A corpus with no epoch entry, an epoch entry with no corpus (nothing would ever compare it), and a sport that has vanished (corpus
 //     and entry both gone) are violations: retiring a sport is a decision, not a quiet deletion.
+//   - CORPUS FORMAT 2 (GF-2): a stream also records `summaries` (a digest of the summary after EVERY event) and `overlay` (what the kernel
+//     keeps beside module state: stoppage, squads, settlement, the effective outcome...). A phone computes both, so when both sides record
+//     them a difference in either is CHANGED (a MAJOR). A stream that GAINS them (baseline format 1 -> format 2, same identity and input) is
+//     NEWLY RECORDED and owes nothing ONLY IF the change touches no fold source (the owner's Q1, 2026-10-15; `foldSourceTouched`): with the
+//     source frozen the recorder ran the baseline's own code, so what it recorded IS what the baseline computes. Anything in the diff that
+//     can change a fold (the engine's src/ outside src/testkit/** and *.test.ts / *.golden.json / *.schema.json / *.md, the engine's
+//     package.json, the root lockfile) makes every newly recorded stream CHANGED: land the format bump alone, or raise FOLD_EPOCH. A
+//     pre-existing field that moved in the same change is CHANGED whatever the source did (D34, Q6). The format never FALLS: a baseline
+//     stream that recorded the fields and a current one that does not is a violation no bump settles. `recorded N` in the report counts
+//     the newly recorded streams.
 //
 // THE CLI reads the tree's corpora and table from the working tree, and the baseline's from `git` at <ref> (rev-parse, ONE ls-tree, ONE
 // cat-file --batch, all relative to this engine's directory, so it works with the engine at packages/engine or at a repository root). The
@@ -46,7 +56,8 @@
 //   2  refused, nothing judged: usage, a ref that is not a commit (shallow clone, root commit), no git to ask, a table or corpus that is
 //      missing, does not load or is malformed (the tree's must declare FOLD_MINOR for exactly the sports of FOLD_EPOCH), a table that declares
 //      no sport, a duplicate stream identity, a stream that names no config of
-//      its corpus, a baseline git cannot read, a baseline that lacks the table but already has this guard or holds no corpus (a moved table, a
+//      its corpus, a corpus format that is neither 1 nor 2, a format-2 stream without `summaries` (one per event) and `overlay` (a JSON
+//      object), a format-1 stream that has either, a baseline git cannot read, a baseline that lacks the table but already has this guard or holds no corpus (a moved table, a
 //      renamed engine directory), or a run that compared no stream (a pass over nothing proves nothing);
 //   3  a crash in the guard itself (an unexpected error is not a verdict; a bare uncaught exception would exit 1, which reads as one).
 import { spawnSync } from "node:child_process";
@@ -82,6 +93,8 @@ export interface SportRow {
   deltasOnly: number;
   removed: number;
   added: number;
+  /** Matched streams that GAINED the format-2 fields in this change (baseline format 1 -> format 2). */
+  recorded: number;
   /** The major (FOLD_EPOCH) on each side. */
   before: number | null;
   after: number | null;
@@ -100,6 +113,7 @@ export interface Violation {
   deltasOnly: number;
   removed: number;
   added: number;
+  recorded: number;
   before: number | null;
   after: number | null;
   beforeMinor: number | null;
@@ -130,13 +144,46 @@ const canonical = (v: unknown): string => JSON.stringify(v ?? null, sortKeys);
 const sameInput = (x: unknown, y: unknown): boolean => JSON.stringify(x) === JSON.stringify(y) || canonical(x) === canonical(y);
 /** What a stream's replay starts from (see THE RULE): its raw config object, its events and its lineups. */
 const inputOf = (s: GoldenStream, corpus: GoldenCorpus): unknown => [get(corpus.configs, s.config) ?? null, s.events, s.lineups ?? null];
-/** What a phone computes: the state after every event, the outcome and the summary. */
+/** Whether a stream records the format-2 fields. `parseCorpus` makes it all or nothing per corpus, so a stream has both or neither. */
+const recordsKernel = (s: GoldenStream): boolean => s.summaries !== undefined && s.overlay !== undefined;
+/** What a phone computes: the state after every event, the outcome and the summary, and (when BOTH sides record them) the summary digest
+ *  after every event and the kernel overlay. A stream that records them on one side only is compared on the rest: gaining them is a
+ *  separate question (`foldSourceTouched`), losing them is `formatFell`. */
 const phoneOutputsDiffer = (a: GoldenStream, b: GoldenStream): boolean =>
-  a.outcome !== b.outcome || a.summary !== b.summary || a.states.length !== b.states.length || a.states.some((state, i) => state !== b.states[i]);
+  a.outcome !== b.outcome || a.summary !== b.summary || a.states.length !== b.states.length || a.states.some((state, i) => state !== b.states[i]) ||
+  (recordsKernel(a) && recordsKernel(b) &&
+    (a.overlay !== b.overlay || a.summaries!.length !== b.summaries!.length || a.summaries!.some((digest, i) => digest !== b.summaries![i])));
 /** How a matched pair differs: "major" when anything a phone computes does, "minor" when ONLY the standings deltas do, null when it does not. */
 const foldChange = (a: GoldenStream, b: GoldenStream): Owed | null => (phoneOutputsDiffer(a, b) ? "major" : a.deltas !== b.deltas ? "minor" : null);
 /** A side's minor for a sport: 0 when the side declares no FOLD_MINOR (or none for this sport), which is what a baseline from before it existed means. */
 const minorOf = (side: Side, sport: string): number => (side.minors === undefined ? 0 : (get(side.minors, sport) ?? 0));
+
+/** Root lockfiles. A lockfile pins zod and the toolchain the fold runs on, so one that moved can move a fold with no source change. */
+const LOCKFILES: ReadonlySet<string> = new Set(["pnpm-lock.yaml", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "bun.lock", "bun.lockb"]);
+
+/** Which of the changed paths can change a fold: the owner's list (Q1, 2026-10-15). Everything under the engine's `src/` EXCEPT `src/testkit/**`
+ *  and any `*.test.ts`, `*.golden.json`, `*.schema.json`, `*.md`; the engine's own `package.json`; a lockfile at the repository root.
+ *  `changed` are repository-root-relative paths as git spells them (`git diff --name-only`), `prefix` is where the engine sits in the
+ *  repository ("packages/engine/" in the monorepo, "" with the engine at a repository root, as `git rev-parse --show-prefix` prints it).
+ *  The order of `changed` is kept. Nothing outside this list counts, on purpose: a wider list would make an unrelated edit owe a major. */
+export function foldSourceTouched(changed: readonly string[], prefix: string): string[] {
+  return changed.filter((path) => {
+    if (LOCKFILES.has(path)) return true;
+    if (!path.startsWith(prefix)) return false;
+    const rel = path.slice(prefix.length);
+    if (rel === "package.json") return true;
+    if (!rel.startsWith("src/")) return false;
+    return !(rel.startsWith("src/testkit/") || rel.endsWith(".test.ts") || rel.endsWith(".golden.json") || rel.endsWith(".schema.json") || rel.endsWith(".md"));
+  });
+}
+
+/** Asks which paths of the change touch fold source (`foldSourceTouched` of the diff). Called at most once per comparison, and only when a
+ *  stream was newly recorded, so a change that records nothing never asks git. Where a comparison is given none, the answer is "cannot be
+ *  ruled out" and a newly recorded stream owes the major: not being told what changed is never a reason to pass. */
+export type FoldSource = () => readonly string[];
+const NOT_TOLD = "no list of changed files was given, so a change to fold source cannot be ruled out";
+/** The touched paths as a short phrase: the first three, then how many more. */
+const listPaths = (paths: readonly string[]): string => (paths.length <= 3 ? paths.join(", ") : `${paths.slice(0, 3).join(", ")}, and ${paths.length - 3} more`);
 
 interface Indexed {
   stream: GoldenStream;
@@ -154,7 +201,7 @@ function indexStreams(corpus: GoldenCorpus | undefined, side: "baseline" | "curr
   return byId;
 }
 
-function compareSport(sport: string, before: Side, after: Side): SportRow {
+function compareSport(sport: string, before: Side, after: Side, touched: () => readonly string[]): SportRow {
   const bEpoch = get(before.epochs, sport);
   const aEpoch = get(after.epochs, sport);
   const bCorpus = get(before.corpora, sport);
@@ -168,6 +215,9 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
   let deltasOnly = 0;
   let removed = 0;
   let added = 0;
+  let recorded = 0; // matched streams that GAINED the format-2 fields
+  let recordedUnfrozen = 0; // ... of which, in a change that touches fold source
+  let fell = 0; // matched streams that LOST them
   for (const [id, b] of bStreams) {
     const a = aStreams.get(id);
     if (a === undefined) removed++;
@@ -177,7 +227,13 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
     } else {
       matched++;
       const change = foldChange(a.stream, b.stream);
-      if (change === "major") changed++;
+      // Gaining the fields owes nothing when the source is frozen (the recorder ran the baseline's own code) and a major when it is not.
+      const gained = recordsKernel(a.stream) && !recordsKernel(b.stream);
+      if (gained) recorded++;
+      if (recordsKernel(b.stream) && !recordsKernel(a.stream)) fell++;
+      const unfrozen = gained && touched().length > 0;
+      if (unfrozen) recordedUnfrozen++;
+      if (change === "major" || unfrozen) changed++;
       else if (change === "minor") deltasOnly++;
     }
   }
@@ -191,6 +247,9 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
   const aMinor = aEpoch === undefined ? null : minorOf(after, sport);
 
   const reasons: string[] = [];
+  if (fell > 0) {
+    reasons.push(`corpus format fell (2 -> 1): ${fell} stream(s) recorded their summaries and overlay at the baseline and no longer do; a corpus never goes back to format 1, and no bump restores a pin that was dropped: record them again`);
+  }
   // (a sport is in the union because one side names it, so with neither on the current side it was on the baseline)
   if (aEpoch === undefined && aCorpus === undefined) {
     reasons.push(`sport "${sport}" is gone (no FOLD_EPOCH entry, no golden corpus): retiring a sport is a deliberate decision this guard does not wave through`);
@@ -212,6 +271,7 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
       const parts: string[] = [];
       if (bStreams.size > 0 && matched === 0) parts.push("no baseline stream matched");
       if (changed > 0) parts.push(`${changed} stream(s) fold differently`);
+      if (recordedUnfrozen > 0) parts.push(`${recordedUnfrozen} newly recorded stream(s) while the change touches fold source: ${listPaths(touched())} (land the format bump alone, or raise FOLD_EPOCH)`);
       if (removed > 0) parts.push(`${removed} stream(s) removed or re-recorded`);
       // a minor bump is what someone reaches for first, and it does not do: say so when they did
       const minorNote = aMin > bMin ? ` (FOLD_MINOR ${bMin} -> ${aMin} does not stand in for it: a phone computes this)` : "";
@@ -221,22 +281,25 @@ function compareSport(sport: string, before: Side, after: Side): SportRow {
     }
   }
 
-  return { sport, matched, changed, deltasOnly, removed, added, before: bEpoch ?? null, after: aEpoch ?? null, beforeMinor: bMinor, afterMinor: aMinor, owes, baseline, reason: reasons.length === 0 ? null : reasons.join("; ") };
+  return { sport, matched, changed, deltasOnly, removed, added, recorded, before: bEpoch ?? null, after: aEpoch ?? null, beforeMinor: bMinor, afterMinor: aMinor, owes, baseline, reason: reasons.length === 0 ? null : reasons.join("; ") };
 }
 
-/** One row per sport that appears on either side, alphabetical. `null` before (no baseline at all) compares nothing. */
-export function compareSides(before: Side | null, after: Side): SportRow[] {
+/** One row per sport that appears on either side, alphabetical. `null` before (no baseline at all) compares nothing. `foldSource` says which
+ *  paths of the change touch fold source (see `FoldSource`); it decides only what a newly recorded stream owes. */
+export function compareSides(before: Side | null, after: Side, foldSource?: FoldSource): SportRow[] {
   if (before === null) return [];
+  let answer: readonly string[] | undefined;
+  const touched = (): readonly string[] => (answer ??= foldSource === undefined ? [NOT_TOLD] : foldSource());
   const sports = new Set([...Object.keys(before.epochs), ...Object.keys(before.corpora), ...Object.keys(after.epochs), ...Object.keys(after.corpora)]);
-  return [...sports].sort().map((sport) => compareSport(sport, before, after));
+  return [...sports].sort().map((sport) => compareSport(sport, before, after, touched));
 }
 
 /** The sports that broke the rule. Pure. `null` before means there is no baseline to hold the tree to. */
-export function epochViolations(before: Side | null, after: Side): Violation[] {
+export function epochViolations(before: Side | null, after: Side, foldSource?: FoldSource): Violation[] {
   const violations: Violation[] = [];
-  for (const r of compareSides(before, after)) {
+  for (const r of compareSides(before, after, foldSource)) {
     if (r.reason !== null) {
-      violations.push({ sport: r.sport, matched: r.matched, changed: r.changed, deltasOnly: r.deltasOnly, removed: r.removed, added: r.added, before: r.before, after: r.after, beforeMinor: r.beforeMinor, afterMinor: r.afterMinor, owes: r.owes, reason: r.reason });
+      violations.push({ sport: r.sport, matched: r.matched, changed: r.changed, deltasOnly: r.deltasOnly, removed: r.removed, added: r.added, recorded: r.recorded, before: r.before, after: r.after, beforeMinor: r.beforeMinor, afterMinor: r.afterMinor, owes: r.owes, reason: r.reason });
     }
   }
   return violations;
@@ -377,6 +440,17 @@ async function loadTable(source: string, label: string, requireMinor: boolean): 
   }
 }
 
+/** A format-2 stream's two new fields: one summary digest per event, and the overlay as the text of a JSON object. */
+function formatTwoFieldsOk(s: { events: unknown[]; summaries?: unknown; overlay?: unknown }): boolean {
+  if (!Array.isArray(s.summaries) || s.summaries.length !== s.events.length || !s.summaries.every((x: unknown) => typeof x === "string")) return false;
+  if (typeof s.overlay !== "string") return false;
+  try {
+    return isObject(JSON.parse(s.overlay));
+  } catch {
+    return false;
+  }
+}
+
 function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
   let v: unknown;
   try {
@@ -389,12 +463,23 @@ function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
   }
   const configs = v.configs;
   if (v.key !== sport) throw new GuardRefusal(`${label} names sport "${v.key}", but its file name says "${sport}"`);
+  // The corpus format: absent is 1 (every corpus written before GF-2). Format 2 records `summaries` and `overlay` on EVERY stream, and
+  // format 1 on none, so a stream's two new fields are all or nothing and "the baseline did not record them" can only mean format 1.
+  if (v.format !== undefined && v.format !== 1 && v.format !== 2) throw new GuardRefusal(`${label} declares corpus format ${JSON.stringify(v.format) ?? "undefined"}; this guard reads formats 1 and 2`);
+  const format = v.format === 2 ? 2 : 1;
   v.streams.forEach((s: unknown, i: number) => {
     const ok =
       isObject(s) && typeof s.config === "string" && typeof s.seed === "number" && Array.isArray(s.events) &&
       Array.isArray(s.states) && s.states.every((x: unknown) => typeof x === "string") &&
       typeof s.outcome === "string" && typeof s.summary === "string" && typeof s.deltas === "string";
     if (!ok) throw new GuardRefusal(`${label}: stream #${i} is malformed (it needs config, seed, events, states, outcome, summary and deltas)`);
+    const kernel = s as { events: unknown[]; summaries?: unknown; overlay?: unknown };
+    if (format === 1 && (kernel.summaries !== undefined || kernel.overlay !== undefined)) {
+      throw new GuardRefusal(`${label}: stream #${i} records summaries or an overlay, but the corpus is format 1 (it declares no "format": 2): a half-converted corpus is refused`);
+    }
+    if (format === 2 && !formatTwoFieldsOk(kernel)) {
+      throw new GuardRefusal(`${label}: stream #${i} is malformed (a format-2 stream needs summaries, one digest string per event, and an overlay that is a JSON object)`);
+    }
     // the config is part of the stream's input (THE RULE): one that names nothing would compare as an empty input on both sides
     const config = (s as { config: string }).config;
     if (!own(configs, config)) throw new GuardRefusal(`${label}: stream #${i} names config "${config}", which is not one of the corpus's configs`);
@@ -413,6 +498,19 @@ async function readSide(snap: Snapshot, requireMinor: boolean): Promise<Side | n
     corpora[sport] = parseCorpus(text, `${rel}${snap.at}`, sport);
   }
   return minors === undefined ? { epochs, corpora } : { epochs, minors, corpora };
+}
+
+/** Every path the working tree changes against `commit`, repository-root-relative as git spells them: tracked files that differ (an edit,
+ *  an addition, a deletion; a rename lists BOTH names, so moving a file out of src/ is not hidden by its new name) and untracked files
+ *  that are not ignored. Asked only when a stream was newly recorded (see `FoldSource`). Anything git fails on is a refusal. */
+function changedPaths(commit: string, ref: string): string[] {
+  // diff.relative would print paths relative to the engine directory; the classification wants one spelling, the repository's
+  const diff = git(["-c", "diff.relative=false", "diff", "--name-only", "--no-renames", "--no-ext-diff", "-z", commit, "--"]);
+  const untracked = git(["ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/"]);
+  if (diff.status !== 0 || untracked.status !== 0) {
+    throw new GuardRefusal(`git diff --name-only ${ref} (or git ls-files --others) failed, so what the change touches cannot be known: ${`${diff.stderr}${untracked.stderr}`.trim()}`);
+  }
+  return [...diff.stdout.split("\0"), ...untracked.stdout.split("\0")].filter((n) => n !== "");
 }
 
 function resolveCommit(ref: string): string {
@@ -465,17 +563,17 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
-    const rows = compareSides(before, after);
+    const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim(); // "packages/engine/" in the monorepo, "" with the engine at a repository root
+    const rows = compareSides(before, after, () => foldSourceTouched(changedPaths(commit, ref), prefix));
     const compared = rows.filter((r) => r.baseline);
     const streams = compared.reduce((n, r) => n + r.matched, 0);
     const violations = rows.filter((r) => r.reason !== null);
     for (const r of rows) {
       const epoch = `epoch ${r.before ?? "(none)"} -> ${r.after ?? "(none)"}, minor ${r.beforeMinor ?? "(none)"} -> ${r.afterMinor ?? "(none)"}`;
-      out(`fold-epoch: ${r.sport}: ${epoch}, matched ${r.matched} changed ${r.changed} deltas-only ${r.deltasOnly} removed ${r.removed} added ${r.added}${r.reason === null ? "" : ` - VIOLATION: ${r.reason}`}`);
+      out(`fold-epoch: ${r.sport}: ${epoch}, matched ${r.matched} changed ${r.changed} deltas-only ${r.deltasOnly} removed ${r.removed} added ${r.added} recorded ${r.recorded}${r.reason === null ? "" : ` - VIOLATION: ${r.reason}`}`);
     }
     out(`fold-epoch: ${compared.length} sports checked, ${streams} streams compared against ${ref}: ${violations.length} violation(s)`);
     if (violations.length > 0) {
-      const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim(); // "packages/engine/" in the monorepo, "" with the engine at a repository root
       out(`fold-epoch: to clear the violation(s) above, raise the sport's entry in ${prefix}${TABLE} in this same change: FOLD_EPOCH where a line says major owed (a phone computes what moved), FOLD_MINOR where it says minor owed (only the server does); CI compares the whole PR with the branch it merges into; to check it before pushing: pnpm --filter @onryde/seazn-engine fold-epoch:check --against origin/main`);
       return 1;
     }
