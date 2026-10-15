@@ -25,11 +25,19 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError } from "../core/errors.ts";
-import { foldMatch, isCoreEventType, type EventEnvelope } from "../core/events.ts";
-import type { LineupPair, StageCtx } from "../core/types.ts";
+import { foldMatch, foldMatchWithStoppage, isCoreEventType, type EventEnvelope } from "../core/events.ts";
+import type { LineupPair, MatchOutcome, StageCtx } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { buildStream, buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
+import {
+  compactOverlay,
+  denseOverlay,
+  effectiveFacts,
+  foldPrefixes,
+  summaryDigests,
+  type DenseOverlay,
+} from "./golden-overlay.ts";
 import { fieldPresent, optionalFieldPaths, valueFieldPaths } from "./schema-fields.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it builds a stream event by
@@ -133,7 +141,18 @@ export interface GoldenStream {
   summary: string;
   /** JSON of { [stageKind]: [homeDelta, awayDelta] | null }. */
   deltas: string;
+  /** FORMAT 2 only — required there, absent in format 1, so absence can only mean "format 1". Per step, `#` + 16 hex of
+   *  SHA-256 of `JSON.stringify(summaryOf(fold of events[0..i]))`: the headline the pad shows after each event. Length always
+   *  equals events.length. */
+  summaries?: string[];
+  /** FORMAT 2 only — the kernel overlay as change points (`compactOverlay`, golden-overlay.ts). */
+  overlay?: string;
 }
+
+/** What a corpus records per stream. Format 1 is the module's answers (state, outcome, summary, deltas of the FINAL state).
+ *  Format 2 adds the kernel's per-step facts (`summaries`, `overlay`) and records the EFFECTIVE `outcome` / `summary` /
+ *  `deltas` (`outcomeOf`, `summaryOf`, `standingsDelta` of `outcomeOf`; owner ruling Q3, 2026-10-15). */
+export type CorpusFormat = 1 | 2;
 
 export interface GoldenCorpus {
   key: string;
@@ -144,7 +163,18 @@ export interface GoldenCorpus {
   params: { minEvents: number; maxEvents: number };
   /** Config name -> the RAW config object, re-parsed at replay time. */
   configs: Record<string, unknown>;
+  /** 2 once the corpus records the kernel overlay; ABSENT means 1 (every corpus written before GF-2). Written just before
+   *  `streams`, which stays the LAST key. Never written as 1. */
+  format?: CorpusFormat;
   streams: GoldenStream[];
+}
+
+/** A corpus's format: absent is 1. Anything else than 1 or 2 is refused, so a typo cannot read as "format 1". */
+export function corpusFormat(corpus: Pick<GoldenCorpus, "format">): CorpusFormat {
+  const format = corpus.format;
+  if (format === undefined) return 1;
+  if (format === 1 || format === 2) return format;
+  throw new Error(`unknown golden corpus format ${JSON.stringify(format)}: expected 1 (absent) or 2`);
 }
 
 // ------------------------------------------------------------------ recording
@@ -192,16 +222,39 @@ function seedsFor(module: AnySportModule, cfg: unknown, lineups: LineupPair): nu
   return [...picks].sort((a, b) => a - b);
 }
 
+/** The standings deltas of a decided match, per stage kind, as the corpus records them: null while undecided and for a draw
+ *  a stage kind does not allow. Format 1 feeds the MODULE's outcome, format 2 the effective one. */
+function deltasOf(module: AnySportModule, cfg: unknown, outcome: MatchOutcome | null, finalState: unknown): Record<string, unknown> {
+  const deltas: Record<string, unknown> = {};
+  for (const ctx of STAGE_CTXS) {
+    deltas[ctx.kind] =
+      outcome === null || (outcome.kind === "draw" && !module.supportsDraws(cfg, ctx.kind))
+        ? null
+        : module.standingsDelta(outcome, cfg, ctx, finalState);
+  }
+  return deltas;
+}
+
 /** Recomputes everything a GoldenStream records, from the module as it is
  *  RIGHT NOW. Replay compares this against the committed values; recording
  *  simply stores it. Deliberately never calls arbitraryEvent — a recorded
- *  corpus must be independent of the generator. */
+ *  corpus must be independent of the generator.
+ *
+ *  `format` is the corpus format the result is recorded under (GF-2). 1, the default, is exactly what every corpus held
+ *  before: the MODULE's outcome, summary and deltas of the final state, four fields. 2 records what a phone computes — the
+ *  EFFECTIVE outcome, summary and deltas (`outcomeOf` / `summaryOf`, a settlement, an expunge and a withdrawal over a held
+ *  level result laid over the module's answer), a digest of the effective summary after every event (`summaries`), the kernel
+ *  overlay as change points (`overlay`) and, for the ablation probe, the dense per-step overlay (`dense`, never stored). The
+ *  default stays 1 on purpose: every caller that pairs a recomputation with a corpus passes `corpusFormat(corpus)`, and a
+ *  harness-internal caller that does not (the golden floor's settle probe) keeps asking the question it was written for. */
 export function recomputeStream(
   module: AnySportModule,
   rawConfig: unknown,
   events: readonly GoldenEvent[],
   recordedLineups?: LineupPair,
-): Pick<GoldenStream, "states" | "outcome" | "summary" | "deltas"> {
+  format: CorpusFormat = 1,
+): Recomputed {
+  if (format === 2) return recomputeKernel(module, rawConfig, events, recordedLineups);
   const cfg = module.configSchema.parse(rawConfig);
   const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
   const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));
@@ -212,19 +265,51 @@ export function recomputeStream(
   const finalState = foldMatch(module, cfg, lineups, envelopes, STRICT_ALL);
   const outcome = module.outcome(finalState);
 
-  const deltas: Record<string, unknown> = {};
-  for (const ctx of STAGE_CTXS) {
-    deltas[ctx.kind] =
-      outcome === null || (outcome.kind === "draw" && !module.supportsDraws(cfg, ctx.kind))
-        ? null
-        : module.standingsDelta(outcome, cfg, ctx, finalState);
-  }
-
   return {
     states,
     outcome: JSON.stringify(outcome ?? null),
     summary: JSON.stringify(module.summary(finalState)),
-    deltas: JSON.stringify(deltas),
+    deltas: JSON.stringify(deltasOf(module, cfg, outcome, finalState)),
+  };
+}
+
+/** The format-2 recording (`recomputeStream(…, 2)`), with its extra fields typed as present. One fold per prefix feeds the
+ *  states, the effective final facts, the summary digests and the overlay, so the kernel runs once per step, as the
+ *  format-1 recording already does. */
+export function recomputeKernel(
+  module: AnySportModule,
+  rawConfig: unknown,
+  events: readonly GoldenEvent[],
+  recordedLineups?: LineupPair,
+): KernelRecomputed {
+  const cfg = module.configSchema.parse(rawConfig);
+  const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
+  const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));
+  const folds = foldPrefixes(module, cfg, lineups, envelopes, STRICT_ALL);
+  const final = folds.at(-1) ?? foldMatchWithStoppage(module, cfg, lineups, [], STRICT_ALL);
+  const { outcome, summary } = effectiveFacts(module, final);
+  const dense = denseOverlay(module, lineups, folds, textDigest);
+  return {
+    states: folds.map((folded) => JSON.stringify(folded.state)),
+    outcome: JSON.stringify(outcome ?? null),
+    summary: JSON.stringify(summary),
+    deltas: JSON.stringify(deltasOf(module, cfg, outcome, final.state)),
+    summaries: summaryDigests(module, folds, textDigest),
+    overlay: compactOverlay(dense),
+    dense,
+  };
+}
+
+/** The fields of a recomputation a stream STORES: everything but the dense overlay (a probe's form, never written). Spread
+ *  this into a stream rather than the recomputation itself. */
+export function storedFields(recomputed: Recomputed): ReplayedStream {
+  return {
+    states: recomputed.states,
+    outcome: recomputed.outcome,
+    summary: recomputed.summary,
+    deltas: recomputed.deltas,
+    ...(recomputed.summaries === undefined ? {} : { summaries: recomputed.summaries }),
+    ...(recomputed.overlay === undefined ? {} : { overlay: recomputed.overlay }),
   };
 }
 
@@ -238,7 +323,7 @@ export function buildCorpus(module: AnySportModule): GoldenCorpus {
     for (const seed of seedsFor(module, cfg, lineups)) {
       const envelopes = buildStream(module, cfg, lineups, seed, MAX_EVENTS);
       const events: GoldenEvent[] = envelopes.map((e) => ({ type: e.type, payload: e.payload }));
-      streams.push({ config: name, seed, events, ...recomputeStream(module, raw, events) });
+      streams.push({ config: name, seed, events, ...storedFields(recomputeStream(module, raw, events, undefined, 2)) });
     }
   }
 
@@ -248,6 +333,7 @@ export function buildCorpus(module: AnySportModule): GoldenCorpus {
     recordedBy: "testkit/golden.ts",
     params: { minEvents: MIN_EVENTS, maxEvents: MAX_EVENTS },
     configs,
+    format: 2,
     streams,
   };
 }
@@ -268,6 +354,21 @@ export const REBASELINE_GOLDEN = process.env.REBASELINE_GOLDEN === "1";
 
 /** Append coverage streams for uncovered fidelity-tier event types. */
 export const EXTEND_GOLDEN = process.env.EXTEND_GOLDEN === "1";
+
+/** GF-2: record the kernel overlay in a corpus that does not hold it yet (format 1 -> 2). Adds `summaries` and `overlay` to
+ *  every stream and writes `format: 2`, and proves on the way that every field, event and config the corpus already holds
+ *  stays byte for byte: it is never a re-baseline, and it refuses to run if one would be (`reformatCorpus`). */
+export const REFORMAT_GOLDEN = process.env.REFORMAT_GOLDEN === "1";
+
+/** The write modes that REWRITE existing bytes or the whole corpus, and so run only from a working tree holding nothing but
+ *  corpus changes (`corpusWriteVerdict`). `EXTEND_GOLDEN` is absent on purpose: it only ever appends, and the prefix it must
+ *  leave untouched is asserted byte for byte. */
+export const GUARDED_WRITE_MODES = ["UPDATE_GOLDEN", "REBASELINE_GOLDEN", "REFORMAT_GOLDEN"] as const;
+
+/** The guarded write modes `env` asks for (only the exact value "1" counts, as for the flags above). */
+export function guardedWriteModes(env: Readonly<Record<string, string | undefined>>): (typeof GUARDED_WRITE_MODES)[number][] {
+  return GUARDED_WRITE_MODES.filter((mode) => env[mode] === "1");
+}
 
 // ------------------------------------------------------- coverage extension
 //
@@ -1107,7 +1208,7 @@ export function extendCorpus(module: AnySportModule, existing: GoldenCorpus): Co
         seed: best.seed,
         ...(lineups === undefined ? {} : { lineups }),
         events,
-        ...recomputeStream(module, best.raw, events, lineups),
+        ...storedFields(recomputeStream(module, best.raw, events, lineups, corpusFormat(existing))),
       }),
     );
     used.add(`${best.name}:${best.seed}`);
@@ -1140,7 +1241,7 @@ function refoldStream(
   collapse: ReadonlySet<string>;
 } {
   const raw = corpus.configs[stream.config];
-  const fresh = recomputeStream(module, raw, stream.events, stream.lineups);
+  const fresh = storedFields(recomputeStream(module, raw, stream.events, stream.lineups, corpusFormat(corpus)));
   const { configKey, collapse } = streamLens(module, corpus, stream);
   const carrier = stream.states.find((state) => !isStateDigest(state));
   const states = fresh.states.map((state, i) => {
@@ -1422,6 +1523,11 @@ export interface StreamStateDiff {
   outcomeMoved: boolean;
   summaryMoved: boolean;
   deltasMoved: boolean;
+  /** Format 2, on a stream both sides record: the steps whose summary digest moved. A stream newly recorded (one side has no
+   *  format-2 fields) is not a move and lists nothing here. */
+  summaryStepsMoved: number[];
+  /** Format 2, on a stream both sides record: the overlay columns whose change points moved. */
+  overlayKeysMoved: string[];
   /** Must always be false — a re-baseline keeps the recorded ledger. */
   eventsMoved: boolean;
 }
@@ -1442,6 +1548,10 @@ export interface CorpusStateDiff {
   changedStateKeys: string[];
   /** True if any recorded event moved, or the stream count did. Always a bug. */
   eventsMoved: boolean;
+  /** Streams that gained the format-2 fields (`before` has neither, `after` has them): a reformat, not a move. */
+  streamsRecorded: number;
+  /** Streams that LOST them. A corpus never goes back to format 1, so this is always a defect. */
+  streamsDropped: number;
 }
 
 /** Sentinel key for a state that is not a JSON object, so a diff of one is
@@ -1479,6 +1589,8 @@ export function corpusStateDiff(
   let changedStates = 0;
   let digestOnlyStates = 0;
   let reformattedStates = 0;
+  let streamsRecorded = 0;
+  let streamsDropped = 0;
 
   const shared = Math.min(before.streams.length, after.streams.length);
   for (let i = 0; i < shared; i++) {
@@ -1529,6 +1641,18 @@ export function corpusStateDiff(
     const streamEventsMoved = JSON.stringify(was.events) !== JSON.stringify(now.events);
     if (streamEventsMoved) eventsMoved = true;
     reformattedStates += reformattedSteps.length;
+    const wasKernel = was.summaries !== undefined || was.overlay !== undefined;
+    const nowKernel = now.summaries !== undefined || now.overlay !== undefined;
+    if (!wasKernel && nowKernel) streamsRecorded++;
+    if (wasKernel && !nowKernel) streamsDropped++;
+    const summaryStepsMoved: number[] = [];
+    const overlayKeysMoved: string[] = [];
+    if (wasKernel && nowKernel) {
+      const a = was.summaries ?? [];
+      const b = now.summaries ?? [];
+      for (let step = 0; step < Math.max(a.length, b.length); step++) if (a[step] !== b[step]) summaryStepsMoved.push(step);
+      overlayKeysMoved.push(...movedOverlayColumns(was.overlay, now.overlay));
+    }
     const diff: StreamStateDiff = {
       index: i,
       config: now.config,
@@ -1540,6 +1664,8 @@ export function corpusStateDiff(
       outcomeMoved: was.outcome !== now.outcome,
       summaryMoved: was.summary !== now.summary,
       deltasMoved: was.deltas !== now.deltas,
+      summaryStepsMoved,
+      overlayKeysMoved,
       eventsMoved: streamEventsMoved,
     };
     if (
@@ -1547,6 +1673,8 @@ export function corpusStateDiff(
       diff.outcomeMoved ||
       diff.summaryMoved ||
       diff.deltasMoved ||
+      summaryStepsMoved.length > 0 ||
+      overlayKeysMoved.length > 0 ||
       streamEventsMoved
     ) {
       streams.push(diff);
@@ -1565,7 +1693,30 @@ export function corpusStateDiff(
     reformattedStates,
     changedStateKeys: [...allKeys].sort(),
     eventsMoved,
+    streamsRecorded,
+    streamsDropped,
   };
+}
+
+/** The overlay columns whose change points differ between two recorded overlays (sorted). Text that is not a JSON object is
+ *  reported as one moved "column" rather than skipped. */
+function movedOverlayColumns(before: string | undefined, after: string | undefined): string[] {
+  if (before === after) return [];
+  const parse = (overlay: string | undefined): Record<string, unknown> | null => {
+    if (overlay === undefined) return {};
+    try {
+      const parsed: unknown = JSON.parse(overlay);
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  };
+  const a = parse(before);
+  const b = parse(after);
+  if (a === null || b === null) return ["(overlay is not a JSON object)"];
+  const moved = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((column) => JSON.stringify(a[column]) !== JSON.stringify(b[column]));
+  // equal columns with different text is a key-order change inside a value: still a move, named as such
+  return moved.length === 0 ? ["(key order)"] : moved.sort();
 }
 
 /** The summary a reviewer reads. One line per moved stream; the distinct set of
@@ -1575,12 +1726,13 @@ export function formatCorpusStateDiff(diff: CorpusStateDiff): string {
     diff.reformattedStates > 0
       ? ` (${diff.reformattedStates} state(s) re-formatted to digests, unmoved)`
       : "";
-  if (diff.streams.length === 0 && !diff.eventsMoved) {
-    return `[rebaseline] ${diff.key}: nothing moved${reformatted}`;
+  const recorded = diff.streamsRecorded > 0 ? ` (${diff.streamsRecorded} stream(s) newly recorded)` : "";
+  if (diff.streams.length === 0 && !diff.eventsMoved && diff.streamsDropped === 0) {
+    return `[rebaseline] ${diff.key}: nothing moved${reformatted}${recorded}`;
   }
   const lines = [
     `[rebaseline] ${diff.key}: ${diff.changedStreams} stream(s), ` +
-      `${diff.changedStates} state(s) moved${reformatted}`,
+      `${diff.changedStates} state(s) moved${reformatted}${recorded}`,
   ];
   for (const stream of diff.streams) {
     const moved = [
@@ -1596,6 +1748,8 @@ export function formatCorpusStateDiff(diff: CorpusStateDiff): string {
         (stream.digestOnlySteps.length > 0
           ? ` digests=[${stream.digestOnlySteps.join(",")}]`
           : "") +
+        (stream.summaryStepsMoved.length > 0 ? ` summaries=[${stream.summaryStepsMoved.join(",")}]` : "") +
+        (stream.overlayKeysMoved.length > 0 ? ` overlay=[${stream.overlayKeysMoved.join(",")}]` : "") +
         (moved.length > 0 ? ` moved=${moved.join("+")}` : ""),
     );
   }
@@ -1612,6 +1766,9 @@ export function formatCorpusStateDiff(diff: CorpusStateDiff): string {
   }
   if (diff.eventsMoved) {
     lines.push(`  !! RECORDED EVENTS MOVED — this is not a re-baseline, it is a re-record`);
+  }
+  if (diff.streamsDropped > 0) {
+    lines.push(`  !! FORMAT-2 FIELDS DROPPED from ${diff.streamsDropped} stream(s) — a corpus never goes back to format 1`);
   }
   return lines.join("\n");
 }
@@ -1969,10 +2126,13 @@ export function comparableStateText(state: string, configKey: string | null): st
 
 /** The digest a slim corpus stores in place of a recorded state. */
 export function stateDigest(state: string, configKey: string | null): string {
-  const hex = createHash("sha256")
-    .update(comparableStateText(state, configKey), "utf8")
-    .digest("hex")
-    .slice(0, STATE_DIGEST_HEX);
+  return textDigest(comparableStateText(state, configKey));
+}
+
+/** The one digest shape every corpus field uses: `#` + the first 16 hex of the SHA-256 of the text (UTF-8). A step's state,
+ *  its summary and the squads in the overlay are all digested through here. */
+export function textDigest(text: string): string {
+  const hex = createHash("sha256").update(text, "utf8").digest("hex").slice(0, STATE_DIGEST_HEX);
   return `${STATE_DIGEST_PREFIX}${hex}`;
 }
 
@@ -2174,7 +2334,20 @@ export function slimCorpus(module: AnySportModule, corpus: GoldenCorpus): Golden
 // against a re-implementation of it that could drift green.
 
 /** The half of a `GoldenStream` a replay reproduces. */
-export type ReplayedStream = Pick<GoldenStream, "states" | "outcome" | "summary" | "deltas">;
+export type ReplayedStream = Pick<GoldenStream, "states" | "outcome" | "summary" | "deltas"> &
+  Pick<GoldenStream, "summaries" | "overlay">;
+
+/** A recomputation: the replayed half of a stream, plus (format 2) the dense overlay a probe compares. */
+export interface Recomputed extends ReplayedStream {
+  readonly dense?: DenseOverlay;
+}
+
+/** A format-2 recomputation: the kernel fields are present. */
+export interface KernelRecomputed extends Recomputed {
+  summaries: string[];
+  overlay: string;
+  readonly dense: DenseOverlay;
+}
 
 /** The nearest step at or around `step` whose full state the corpus stores. */
 function nearestFullStep(stream: GoldenStream, step: number): number | null {
@@ -2229,7 +2402,8 @@ export function verifyStream(
 ): string[] {
   const raw = corpus.configs[stream.config];
   const label = `${module.key} config=${stream.config} seed=${stream.seed}`;
-  const result = replayed ?? recomputeStream(module, raw, stream.events, stream.lineups);
+  const format = corpusFormat(corpus);
+  const result = replayed ?? recomputeStream(module, raw, stream.events, stream.lineups, format);
   const configKey = configStateKey(module, raw, stream.lineups);
   const out: string[] = [];
 
@@ -2259,7 +2433,69 @@ export function verifyStream(
   if (result.deltas !== stream.deltas) {
     out.push(`${label} deltas: recorded ${stream.deltas}, replayed ${result.deltas}`);
   }
+  out.push(...kernelFieldMismatches(label, stream, result, format));
   return out;
+}
+
+/** The format-2 half of a replay (GF-2): the per-step summary digests and the kernel overlay. Format 2 REQUIRES both on every
+ *  stream, so absence can only mean format 1; format 1 holds neither. A replay that did not produce them under format 2 is a
+ *  harness fault and is reported as one, never read as "nothing moved". */
+function kernelFieldMismatches(label: string, stream: GoldenStream, result: ReplayedStream, format: CorpusFormat): string[] {
+  if (format === 1) {
+    return stream.summaries === undefined && stream.overlay === undefined
+      ? []
+      : [`${label}: a format-1 stream carries summaries/overlay — absence can only mean format 1, so the corpus must say \`format: 2\``];
+  }
+  const out: string[] = [];
+  if (stream.summaries === undefined || stream.overlay === undefined) {
+    return [`${label}: a format-2 corpus stream must record both summaries and overlay (has ${stream.summaries === undefined ? "no summaries" : "summaries"}, ${stream.overlay === undefined ? "no overlay" : "overlay"})`];
+  }
+  if (stream.summaries.length !== stream.events.length) {
+    out.push(`${label}: ${stream.summaries.length} summary digests recorded for ${stream.events.length} events`);
+  }
+  if (result.summaries === undefined || result.overlay === undefined) {
+    return [...out, `${label}: the replay produced no summaries/overlay, so a format-2 stream cannot be verified (replay it with format 2)`];
+  }
+  if (result.summaries.length !== stream.summaries.length) {
+    out.push(`${label} summaries: recorded ${stream.summaries.length} digests, the replay produced ${result.summaries.length}`);
+  }
+  for (let i = 0; i < Math.min(stream.summaries.length, result.summaries.length); i++) {
+    if (stream.summaries[i] !== result.summaries[i]) {
+      out.push(
+        `${label} summary after event ${i} (${stream.events[i]?.type ?? "?"}): recorded digest ${stream.summaries[i]}, replayed ${result.summaries[i]} — ` +
+          `the headline the pad shows after this event moved. Recompute it: summaryOf(module, foldMatchWithStoppage(module, cfg, lineups, envelopes.slice(0, ${i + 1})))`,
+      );
+    }
+  }
+  if (result.overlay !== stream.overlay) {
+    out.push(`${label} overlay: ${overlayMismatch(stream.overlay, result.overlay)}`);
+  }
+  return out;
+}
+
+/** Names what moved between two overlay strings: the columns whose change points differ and the first step of each. */
+export function overlayMismatch(recorded: string, replayed: string): string {
+  let a: Record<string, unknown[]>;
+  let b: Record<string, unknown[]>;
+  try {
+    a = JSON.parse(recorded) as Record<string, unknown[]>;
+    b = JSON.parse(replayed) as Record<string, unknown[]>;
+  } catch {
+    return `recorded ${recorded}, replayed ${replayed}`;
+  }
+  const moved: string[] = [];
+  for (const column of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const left = a[column] ?? [];
+    const right = b[column] ?? [];
+    if (JSON.stringify(left) === JSON.stringify(right)) continue;
+    let at = 0;
+    while (at < Math.min(left.length, right.length) && JSON.stringify(left[at]) === JSON.stringify(right[at])) at++;
+    const point = (left[at] ?? right[at]) as [number, unknown] | undefined;
+    moved.push(`${column} (first differing change point at step ${point?.[0] ?? "?"}: recorded ${JSON.stringify(left[at] ?? null)}, replayed ${JSON.stringify(right[at] ?? null)})`);
+  }
+  return moved.length === 0
+    ? `the text moved but no column did (a key-order change): recorded ${recorded}, replayed ${replayed}`
+    : `the kernel overlay moved in ${moved.join("; ")}`;
 }
 
 // ------------------------------------------------- additive-only tripwire

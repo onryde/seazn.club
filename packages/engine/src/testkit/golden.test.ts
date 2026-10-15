@@ -17,6 +17,7 @@ import {
   EXTEND_GOLDEN,
   MIN_EVENTS,
   REBASELINE_GOLDEN,
+  REFORMAT_GOLDEN,
   UPDATE_GOLDEN,
   buildCorpus,
   corpusStateDiff,
@@ -26,6 +27,7 @@ import {
   eventTypesIn,
   extendCorpus,
   formatCorpusStateDiff,
+  guardedWriteModes,
   isStateDigest,
   payloadParseFailures,
   readCorpus,
@@ -47,8 +49,10 @@ import {
   writeCorpus,
 } from "./golden.ts";
 import { extendFloor } from "./golden-floor-streams.ts";
+import { reformatCorpus } from "./golden-reformat.ts";
 
-// #429 — the corpus-write guard. Both modes that rewrite a committed corpus are
+// #429 — the corpus-write guard. Every mode that rewrites a committed corpus (UPDATE, REBASELINE, and GF-2's REFORMAT: see
+// `GUARDED_WRITE_MODES`) is
 // gated on a working tree that holds NOTHING but corpus changes, because the
 // policy they exist under ("deliberate, isolated in its own commit, reviewed as
 // a state diff" — see GOLDEN-POLICY.md) is unverifiable otherwise: a re-baseline
@@ -56,7 +60,7 @@ import { extendFloor } from "./golden-floor-streams.ts";
 // can tell which state moved because the fold changed. The guard runs BEFORE any
 // writing test is registered, so a refusal cannot half-write the corpus.
 const corpusWriteRefusal =
-  UPDATE_GOLDEN || REBASELINE_GOLDEN ? (() => {
+  guardedWriteModes(process.env).length > 0 ? (() => {
     const verdict = corpusWriteGuard();
     return verdict.ok ? null : verdict.reason;
   })() : null;
@@ -127,6 +131,26 @@ if (corpusWriteRefusal !== null) {
         console.log(formatCorpusStateDiff(diff));
         writeCorpus(after);
       });
+    }
+  });
+} else if (REFORMAT_GOLDEN) {
+  // GF-2: add the format-2 fields (summaries, overlay) to every stream. NOT a re-baseline: `reformatCorpus` refuses to run if
+  // any field, event or config the corpus already holds would change, and the printout below must say "nothing moved".
+  describe("golden corpus reformat (REFORMAT_GOLDEN=1)", () => {
+    for (const module of builtinModules) {
+      it(`records the kernel overlay of ${module.key} without moving anything it holds`, () => {
+        const before = readCorpus(module.key);
+        const after = reformatCorpus(module, before);
+        expect(after.streams.map((s) => s.events)).toEqual(before.streams.map((s) => s.events));
+        expect(after.configs).toEqual(before.configs);
+        const diff = corpusStateDiff(before, after, module);
+        expect(diff.eventsMoved, `${module.key}: a reformat must keep the ledger`).toBe(false);
+        expect(diff.changedStreams, `${module.key}: a reformat must move no state, outcome, summary or deltas`).toBe(0);
+        const bytes = (c: typeof before): number => `${JSON.stringify(c, null, 0)}\n`.length;
+        // eslint-disable-next-line no-console
+        console.log(`${formatCorpusStateDiff(diff)}\n[reformat] ${module.key}: format ${before.format ?? 1} -> ${after.format}, ${bytes(before)} -> ${bytes(after)} bytes (+${bytes(after) - bytes(before)})`);
+        writeCorpus(after);
+      }, 300_000);
     }
   });
 } else {

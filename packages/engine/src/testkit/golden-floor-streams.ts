@@ -26,7 +26,7 @@ import { mulberry32, type Rng } from "../core/rng.ts";
 import type { LineupPair } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
-import { recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
+import { corpusFormat, recomputeStream, slimStream, storedFields, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
 import { eventToken, floorHoles, lineupOffers, outcomeToken, outcomeTokenOf, standingToken, STANDING_KERNEL, undoToken, UNDOABLE_KERNEL, type FloorToken } from "./golden-floor.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
@@ -473,7 +473,7 @@ export function extendFloor(module: AnySportModule, existing: GoldenCorpus, scen
       seed: built.seed,
       ...(built.lineups === undefined ? {} : { lineups: built.lineups }),
       events: built.events,
-      ...recomputeStream(module, raw, built.events, built.lineups),
+      ...storedFields(recomputeStream(module, raw, built.events, built.lineups, corpusFormat(existing))),
     };
     const grown: GoldenCorpus = { ...corpus, streams: [...corpus.streams, slimStream(module, corpus, stream)] };
     const after = new Set(floorHoles(module, grown));

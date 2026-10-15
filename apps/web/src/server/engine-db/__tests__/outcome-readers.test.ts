@@ -108,6 +108,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       // GF-1: the golden floor's `settleProbe` folds a settled ledger and reads its EFFECTIVE outcome through outcomeOf,
       // to prove the settle exemption is still needed (the harness records the module's bare outcome instead).
       "packages/engine/src/testkit/golden-floor.ts",
+      // GF-2 T1: the golden recorder's format 2 records the EFFECTIVE outcome of every prefix fold (`effectiveFacts`,
+      // `denseOverlay`), so a corpus pins what the server stores and the phone shows, not the module's bare answer.
+      "packages/engine/src/testkit/golden-overlay.ts",
       "packages/engine/src/testkit/play-event.ts",
       "tools/matrix/lib/fold.ts",
       "tools/matrix/lib/model/ledger-fold.ts",
