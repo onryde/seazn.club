@@ -566,6 +566,70 @@ describe("Stryker floor CI wiring (W1d Task 15, D14)", () => {
   }, spawnBudget(1));
 });
 
+// Engine-split Task 1e-2 (D15, D26): the fold-epoch guard. Nothing else goes red when the step is deleted, made advisory, or loses the history
+// HEAD^1 needs, so this pins it line-based as the floor gate's is, and then RUNS the command as ci.yml spells it, so a flag pnpm swallowed or a
+// script that does not exist reds here and not on the first PR that moves a golden.
+describe("fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26)", () => {
+  const engine = JSON.parse(readFileSync(resolve(REPO, "packages/engine/package.json"), "utf8")) as { name: string; scripts: Record<string, string> };
+  const FLOOR_STEP = "      - run: pnpm --filter ./packages/engine --fail-if-no-match mutation:floor --check-file-against HEAD^1";
+  const STEP = `      - run: pnpm --filter ${engine.name} --fail-if-no-match fold-epoch:check --against HEAD^1`;
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+
+  it("the guard runs in the gates job, exactly once, after the floor gate, and nothing can make it conditional or advisory", () => {
+    const at = lines.indexOf(STEP);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.filter((l) => l.includes("fold-epoch") && !isComment(l))).toEqual([STEP]);
+    expect(lines[at + 1]).toMatch(/^ {6}(- |#)/); // no key beneath it (`if:`, `continue-on-error:`, `env:`, `working-directory:`)
+    expect(jobAt(at)).toBe("  gates:");
+    expect(lines.indexOf(FLOOR_STEP)).toBeGreaterThan(0);
+    expect(at).toBeGreaterThan(lines.indexOf(FLOOR_STEP));
+    const gatesAt = lines.indexOf("  gates:");
+    const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+    expect(header.length).toBeGreaterThan(0);
+    for (const l of header.filter((x) => !isComment(x))) expect(l, "a job-level softener or cwd shift").not.toMatch(/^ {4}(if|continue-on-error|defaults|working-directory):/);
+    expect(lines.filter((l) => /^(defaults|working-directory):/.test(l)), "a workflow-level default would shift every job's cwd").toEqual([]);
+    // a name filter that matches no package exits 0 in silence unless told not to
+    expect(lines[at]).toContain(" --fail-if-no-match fold-epoch:check ");
+  });
+
+  it("compares against HEAD^1 and the job's checkout is the full-history one that makes HEAD^1 exist", () => {
+    const at = lines.indexOf(STEP);
+    expect(lines[at]).toMatch(/ --against HEAD\^1$/);
+    const gatesAt = lines.indexOf("  gates:");
+    const checkoutAt = lines.findIndex((l, i) => i > gatesAt && l.includes("uses: actions/checkout@"));
+    expect(checkoutAt).toBeGreaterThan(gatesAt);
+    expect(jobAt(checkoutAt)).toBe("  gates:");
+    const nextStepAt = lines.findIndex((l, i) => i > checkoutAt && /^ {6}- /.test(l));
+    expect(nextStepAt).toBeGreaterThan(checkoutAt);
+    expect(lines.slice(checkoutAt, nextStepAt), "a shallow checkout has no HEAD^1: the guard would refuse every PR").toContain("          fetch-depth: 0");
+    expect(checkoutAt).toBeLessThan(at);
+  });
+
+  it("the engine's package script runs the guard under strip-types, and the guard exists", () => {
+    expect(engine.scripts["fold-epoch:check"]).toBe("node --experimental-strip-types scripts/fold-epoch-guard.ts");
+    expect(existsSync(resolve(REPO, "packages/engine/scripts/fold-epoch-guard.ts"))).toBe(true);
+  });
+
+  it("the step's command as ci.yml spells it, run the way CI runs it, reaches the guard and passes on this tree", () => {
+    const step = lines.find((l) => l.includes("fold-epoch:check") && !isComment(l));
+    expect(step).toBeDefined();
+    const cmd = (step ?? "").trim().replace(/^- run: /, "");
+    expect(cmd).toContain(" --against HEAD^1");
+    // HEAD^1 needs history and a merge commit; HEAD is always there, and this tree is HEAD unless a golden is edited and not committed.
+    const r = spawnSync("bash", ["-c", cmd.replace(" --against HEAD^1", " --against HEAD")], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    // only a guard that read the flag, through `pnpm --filter`, in the engine's directory, prints this; the sport count is the corpora on disk
+    const corpora = (readdirSync(resolve(REPO, "packages/engine/src/sports"), { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json")).length;
+    expect(corpora).toBeGreaterThan(0);
+    const m = /^fold-epoch: (\d+) sports checked, (\d+) streams compared against HEAD: 0 violation\(s\)$/m.exec(r.stdout);
+    expect(m, r.stdout).not.toBeNull();
+    expect(Number(m?.[1])).toBe(corpora);
+    expect(Number(m?.[2])).toBeGreaterThanOrEqual(corpora);
+  }, spawnBudget(1));
+});
+
 // Engine-split Task 1b-3 (D14): the packed-tarball proof. The job is only worth having if it runs, and the ways it quietly stops
 // running are all in this file's text: a step gated on a filter id that does not exist is skipped for ever (a skipped step is a
 // green job), a pnpm other than the pin packs a different tarball, a shifted cwd breaks the script path.
