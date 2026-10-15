@@ -6,8 +6,43 @@
 // the same wiring. `LiveScore` now delegates here (see `../live-score.tsx`).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLiveFixture, fetchPublicRealtimeToken, type LiveFixtureData, type RealtimePurpose } from "../live-score-data";
+import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 
 export const POLL_MS = 15_000;
+
+/** The safety-net poll once a realtime channel is SUBSCRIBED (slideshow pattern). */
+export const SUBSCRIBED_POLL_MS = 60_000;
+
+/** How long a SETTLED fixture (decided, forfeited, abandoned — `SETTLED_FIXTURE_STATUSES`) keeps listening, counted
+ *  from when this hook first sees it settled. A settled ledger still takes an undo, and an undo must reach an open page
+ *  (owner bug 2026-10-15: the stream overlay's end card stayed on air after the deciding point was undone) — but
+ *  `decided` is also where most matches STAY (finalizing is manual), so an unbounded listen would make every result
+ *  page opened from a share a poll for as long as its tab is open. The window bounds that to one burst per page. */
+export const SETTLED_LISTEN_MS = 15 * 60_000;
+
+/** The poll interval inside the settled window — a quarter of the live rate, since nothing moves a settled fixture
+ *  but an undo or a reset. A realtime channel stays on beside it, so a push still arrives at once. */
+export const SETTLED_POLL_MS = 60_000;
+
+/** What this transport does for a status: `open` listens without limit, `settled` listens for `SETTLED_LISTEN_MS`,
+ *  `locked` never listens. */
+export type ListenTier = "open" | "settled" | "locked";
+
+const KNOWN_STATUSES: ReadonlySet<string> = new Set(FIXTURE_STATUSES);
+const warnedUnknown = new Set<string>();
+
+export function listenTierOf(status: string): ListenTier {
+  if (LOCKED_FIXTURE_STATUSES.has(status)) return "locked";
+  if (SETTLED_FIXTURE_STATUSES.has(status)) return "settled";
+  // FAIL-OPEN on a status this build does not know (a newer server, a migration ahead of the client): treated as
+  // open, so the page keeps listening rather than freezing on a fixture that may still move. Wrong in the cheap
+  // direction — it costs polls, never a stale card. Logged once per status so the drift is visible.
+  if (!KNOWN_STATUSES.has(status) && !warnedUnknown.has(status)) {
+    warnedUnknown.add(status);
+    console.warn(`useLiveFixture: unknown fixture status ${JSON.stringify(status)} — listening as if open`);
+  }
+  return "open";
+}
 
 /** How often the presentation buffer is drained (review MINOR 2). It is a
  *  FIXED tick, not a per-snapshot timer, so a snapshot received at `t` is
@@ -174,15 +209,35 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     }
   }, [fixtureId, delayMs]);
 
-  // `live` = the ledger can still move this fixture, so it keeps its realtime
-  // channel and its poll. Only a LOCKED fixture is terminal — finalized or
-  // cancelled, the set append-event.ts's LOCKED_FIXTURE_STATUSES refuses
-  // every write for. Everything else can still change: a held fixture
-  // (`needs_decision`) by the organiser's settle (W2a), and a decided,
-  // abandoned or forfeited one by an undo that reopens it (owner bug
-  // 2026-10-15: this used to stop at `decided`, so the stream overlay's end
-  // card stayed on air after the scorer undid the deciding point).
-  const live = data.status !== "finalized" && data.status !== "cancelled";
+  // `live` = this hook keeps its realtime channel and its poll. Three tiers
+  // (`listenTierOf`), all read from `lib/fixture-status.ts` so they cannot
+  // drift from the write path's own lock:
+  //  - open (scheduled, in_play, the held needs_decision): listen, no limit.
+  //  - settled (decided, forfeited, abandoned): the ledger still takes an undo
+  //    that reopens it (owner bug 2026-10-15: this used to stop at `decided`,
+  //    so the stream overlay's end card stayed on air after the scorer undid
+  //    the deciding point) — listen for SETTLED_LISTEN_MS from the moment this
+  //    hook first sees it settled, polling at SETTLED_POLL_MS, then stop.
+  //  - locked (finalized, cancelled): the ledger refuses every write; never.
+  // Back to open (an undo) clears the window; settling again starts a new one.
+  const tier = listenTierOf(data.status);
+  // Render-phase adjust, not an effect: a tier change resets the window's
+  // expiry in the same render that observes it, so a stale `true` from the
+  // previous settled spell can never tear down a fresh one.
+  const [prevTier, setPrevTier] = useState(tier);
+  const [settledExpired, setSettledExpired] = useState(false);
+  if (tier !== prevTier) {
+    setPrevTier(tier);
+    setSettledExpired(false);
+  }
+  useEffect(() => {
+    if (tier !== "settled") return;
+    const id = setTimeout(() => {
+      if (mountedRef.current) setSettledExpired(true);
+    }, SETTLED_LISTEN_MS);
+    return () => clearTimeout(id);
+  }, [tier]);
+  const live = tier === "open" || (tier === "settled" && !settledExpired);
 
   // Realtime push (entitled orgs; and the OBS stream overlay, which declares
   // its purpose with its signed key — RT). Any failure — no entitlement (403), env missing,
@@ -287,21 +342,24 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   }, [delayMs]);
 
   // 15 s polling — primary on Community / when push is not connected; slower
-  // safety net once SUBSCRIBED (slideshow pattern). NEVER stop polling entirely
-  // while live: a SUBSCRIBED private channel that receives no broadcasts (e.g.
-  // public HTTP publish vs private subscribe mismatch, fixed 2026-09-12) would
-  // otherwise freeze the overlay on first paint.
+  // safety net once SUBSCRIBED (slideshow pattern), and SETTLED_POLL_MS inside
+  // a settled window. NEVER stop polling entirely while live: a SUBSCRIBED
+  // private channel that receives no broadcasts (e.g. public HTTP publish vs
+  // private subscribe mismatch, fixed 2026-09-12) would otherwise freeze the
+  // overlay on first paint.
   //
   // Immediate refresh only when undelayed: under `?delay=` a mount-time fetch
   // would land in the buffer next to the seed and the drain would present the
   // NEWER undelayed tip first (I1 regression). Interval still arms either way.
+  // A NUMBER in the deps, so a settled transition on a subscribed channel
+  // (60 s either way) does not re-arm the interval or re-fetch.
+  const pollMs = tier === "settled" ? SETTLED_POLL_MS : subscribed ? SUBSCRIBED_POLL_MS : POLL_MS;
   useEffect(() => {
     if (!live) return;
     if (delayMs <= 0) void refresh();
-    const ms = subscribed ? 60_000 : POLL_MS;
-    const id = setInterval(refresh, ms);
+    const id = setInterval(refresh, pollMs);
     return () => clearInterval(id);
-  }, [live, subscribed, refresh, delayMs]);
+  }, [live, pollMs, refresh, delayMs]);
 
   return {
     data,

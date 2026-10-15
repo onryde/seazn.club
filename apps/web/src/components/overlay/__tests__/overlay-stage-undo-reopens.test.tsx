@@ -39,7 +39,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { loadOverlayLiveData } from "@/server/overlay/load";
 import { GET as overlayRoute } from "@/app/api/v1/public/fixtures/[id]/overlay/route";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import { POLL_MS } from "@/components/public-site/match-centre/use-live-fixture";
+import { POLL_MS, SETTLED_POLL_MS } from "@/components/public-site/match-centre/use-live-fixture";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { OverlayModel } from "@/lib/overlay-model";
 import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
@@ -100,10 +100,10 @@ async function settle(): Promise<void> {
   throw new Error("overlay polls never settled");
 }
 
-/** One poll period on the stage's own clock; answers how many requests it made. */
-async function onePollPeriod(): Promise<number> {
+/** Advance the stage's own clock by `ms`; answers how many requests it made. */
+async function advance(ms: number): Promise<number> {
   const before = fetches;
-  await vi.advanceTimersByTimeAsync(POLL_MS);
+  await vi.advanceTimersByTimeAsync(ms);
   await settle();
   return fetches - before;
 }
@@ -209,9 +209,24 @@ async function mountOverlay(r: Rig) {
 
 type Overlay = Awaited<ReturnType<typeof mountOverlay>>;
 
-/** One step of the sequence: the poll after a write must carry the server's state onto the card. */
+/** One step of the sequence: the poll after a write must carry the server's state onto the card.
+ *
+ *  The poll's rate depends on what the page last saw. An OPEN fixture (in play) is polled every POLL_MS. A SETTLED one
+ *  (the card is up: decided or abandoned) is polled every SETTLED_POLL_MS for a bounded window (`use-live-fixture.ts`),
+ *  so a card-down step first proves the live rate is gone — one POLL_MS passes with no request and the card still up —
+ *  and only then lets the settled tick carry the undo. */
 async function expectCard(o: Overlay, r: Rig, up: boolean, step: string) {
-  const polled = await onePollPeriod();
+  let polled: number;
+  if (up) {
+    polled = await advance(POLL_MS);
+  } else {
+    expect(SETTLED_POLL_MS, "premise: the settled rate is slower than the live one").toBeGreaterThan(POLL_MS);
+    const early = await advance(POLL_MS);
+    expect(early, `${r.sportKey} — ${step}: a settled page is not polled at the live rate`).toBe(0);
+    expect(o.cardUp(), `${r.sportKey} — ${step}: the card is still up before the settled poll`).toBe(true);
+    polled = await advance(SETTLED_POLL_MS - POLL_MS);
+    expect(polled, `${r.sportKey} — ${step}: the settled poll ran`).toBeGreaterThan(0);
+  }
   const status = await serverStatus(r.fixtureId);
   expect(
     o.cardUp(),

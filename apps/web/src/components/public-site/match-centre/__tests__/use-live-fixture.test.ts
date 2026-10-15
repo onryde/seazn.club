@@ -11,6 +11,32 @@ import { renderIsland } from "@/components/__tests__/_hook-harness";
 import type { LiveFixtureData } from "../../live-score-data";
 import type { UseLiveFixtureOptions, UseLiveFixtureResult } from "../use-live-fixture";
 
+// The browser Supabase client, faked at its module boundary for the channel-lifetime test at the bottom of this file.
+// Only a NON-stub Supabase URL ever reaches it (the hook returns before the import on the stub host every other test
+// here configures), so it is inert for them.
+const rt = vi.hoisted(() => ({ subscribes: 0, unsubscribes: 0 }));
+/** Captured before any test fakes the clock. */
+const realSetTimeout = globalThis.setTimeout;
+vi.mock("@/lib/supabase-browser", () => ({
+  supabaseBrowser: () => ({
+    realtime: { setAuth: async () => {} },
+    channel: () => {
+      const ch = {
+        on: () => ch,
+        subscribe: (cb: (status: string) => void) => {
+          rt.subscribes++;
+          cb("SUBSCRIBED");
+          return ch;
+        },
+        unsubscribe: () => {
+          rt.unsubscribes++;
+        },
+      };
+      return ch;
+    },
+  }),
+}));
+
 vi.mock("../../live-score-data", async () => {
   const actual = await vi.importActual<typeof import("../../live-score-data")>("../../live-score-data");
   return {
@@ -23,9 +49,15 @@ vi.mock("../../live-score-data", async () => {
 });
 
 import { fetchLiveFixture, fetchPublicRealtimeToken, OVERLAY_REALTIME_PURPOSE } from "../../live-score-data";
-import { DRAIN_MS, POLL_MS, useLiveFixture } from "../use-live-fixture";
-import { FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { LOCKED_FIXTURE_STATUSES } from "@/server/engine-db/append-event";
+import {
+  DRAIN_MS,
+  POLL_MS,
+  SETTLED_LISTEN_MS,
+  SETTLED_POLL_MS,
+  SUBSCRIBED_POLL_MS,
+  useLiveFixture,
+} from "../use-live-fixture";
+import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 
 function mount(
   fixtureId: string,
@@ -485,10 +517,28 @@ describe("useLiveFixture — the overlay's declared realtime purpose and signed 
 
 // Owner bug, 2026-10-15: the stream overlay's end card stayed on air after the scorer undid the deciding point. The
 // server had reopened the fixture; this hook had stopped listening the moment a poll brought `decided`, so the undo
-// never reached the page. The expected values come from the WRITE path's own declaration — LOCKED_FIXTURE_STATUSES
-// (append-event.ts), the statuses whose ledger refuses every write — never from this hook: any other status can still
-// change (an undo reopens a decided, abandoned or forfeited fixture; a settle closes a held one).
-describe("useLiveFixture — listens for exactly as long as the ledger can still move the fixture", () => {
+// never reached the page. The fix listens in THREE tiers, and the expected tier of each status comes from the
+// declarations the write path itself reads — LOCKED_FIXTURE_STATUSES (append refuses every write) and
+// SETTLED_FIXTURE_STATUSES (settled, not locked: `carried-forward.test.ts` derives it from the fixtures CHECK constraint)
+// — never from this hook. Every interval and window below is read from the hook's exported constants, so moving one
+// moves its test with it.
+//  - open (anything else): listen without limit, at POLL_MS.
+//  - settled: listen for SETTLED_LISTEN_MS after the hook first sees it settled, at SETTLED_POLL_MS — a settled ledger
+//    still takes an undo, but `decided` is where most matches stay forever (finalizing is manual), so the listen is
+//    bounded rather than paid for as long as a result page is open.
+//  - locked: never.
+type Tier = "open" | "settled" | "locked";
+const expectedTier = (status: string): Tier =>
+  LOCKED_FIXTURE_STATUSES.has(status) ? "locked" : SETTLED_FIXTURE_STATUSES.has(status) ? "settled" : "open";
+const doc = (status: string, headline: string | null = null) =>
+  ({ status, summary: headline ? { headline } : null, outcome: status === "decided" ? { kind: "win" } : null }) as LiveFixtureData;
+const fetches = () => vi.mocked(fetchLiveFixture).mock.calls.length;
+/** The fetches the poll makes across a settled window that started with the hook's own immediate refresh at t=0:
+ *  that refresh, plus one per SETTLED_POLL_MS tick that falls strictly INSIDE the window — the tick landing on the
+ *  window's last instant is not owed (the window timer was armed first, so it fires first). */
+const WINDOW_FETCHES = 1 + Math.ceil(SETTLED_LISTEN_MS / SETTLED_POLL_MS) - 1;
+
+describe("useLiveFixture — listens open, settled-for-a-window, or never (owner bug 2026-10-15 + its load fix)", () => {
   beforeEach(() => {
     // The realtime effect only asks for a token when a Supabase URL is configured (the CI stub host: mints, never dials).
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://stub.supabase.co");
@@ -497,53 +547,236 @@ describe("useLiveFixture — listens for exactly as long as the ledger can still
     vi.unstubAllEnvs();
   });
 
-  it("every fixture status: polls and asks for realtime iff the ledger is still open", async () => {
-    for (const s of LOCKED_FIXTURE_STATUSES) expect(FIXTURE_STATUSES, `locked status ${s} is a fixtures.status`).toContain(s);
-    let open = 0;
-    let locked = 0;
-    for (const status of FIXTURE_STATUSES) {
-      vi.mocked(fetchLiveFixture).mockClear();
-      vi.mocked(fetchPublicRealtimeToken).mockClear();
-      const doc = { status, summary: null, outcome: null } as LiveFixtureData;
-      vi.mocked(fetchLiveFixture).mockResolvedValue(doc);
-      const hook = mount("fx-1", doc, true);
-      await vi.advanceTimersByTimeAsync(POLL_MS);
-      const listens = !LOCKED_FIXTURE_STATUSES.has(status);
-      expect(vi.mocked(fetchLiveFixture).mock.calls.length > 0, `${status}: polls`).toBe(listens);
-      expect(vi.mocked(fetchPublicRealtimeToken).mock.calls.length > 0, `${status}: asks for realtime`).toBe(listens);
-      hook.unmount();
-      if (listens) open++;
-      else locked++;
+  it("premises: the constants this suite reads are the ones the brief names, and the settled poll is slower than the live one", () => {
+    expect(SETTLED_LISTEN_MS, "15 minutes").toBe(15 * 60 * 1000);
+    expect(SETTLED_POLL_MS, "60 s").toBe(60 * 1000);
+    // Without these the interval tests below cannot tell the two rates apart (a differential needs a difference).
+    expect(SETTLED_POLL_MS).toBeGreaterThan(POLL_MS);
+    expect(SETTLED_LISTEN_MS).toBeGreaterThan(2 * SETTLED_POLL_MS);
+    for (const s of [...LOCKED_FIXTURE_STATUSES, ...SETTLED_FIXTURE_STATUSES]) {
+      expect(FIXTURE_STATUSES, `${s} is a fixtures.status`).toContain(s);
     }
-    // Anti-vacuity: every status was checked, and both answers occurred.
-    expect(open + locked).toBe(FIXTURE_STATUSES.length);
-    expect(open, "statuses whose ledger is still open").toBeGreaterThan(0);
-    expect(locked, "locked statuses").toBeGreaterThan(0);
+    for (const s of LOCKED_FIXTURE_STATUSES) expect(SETTLED_FIXTURE_STATUSES.has(s), `${s}: one tier only`).toBe(false);
   });
 
-  it("the sequence: a poll that brings `decided` keeps the poll armed, so the undo that reopens it is presented", async () => {
-    const inPlay = { status: "in_play", summary: { headline: "10 — 10" }, outcome: null } as LiveFixtureData;
-    const decided = { status: "decided", summary: { headline: "11 — 10" }, outcome: { kind: "win" } } as LiveFixtureData;
-    const reopened = { status: "in_play", summary: { headline: "10 — 10" }, outcome: null } as LiveFixtureData;
-    vi.mocked(fetchLiveFixture).mockResolvedValueOnce(inPlay).mockResolvedValueOnce(decided).mockResolvedValue(reopened);
+  it("every fixture status at mount: open polls at POLL_MS without end, settled at SETTLED_POLL_MS for SETTLED_LISTEN_MS, locked never", async () => {
+    const seen: Record<Tier, number> = { open: 0, settled: 0, locked: 0 };
+    for (const status of FIXTURE_STATUSES) {
+      vi.mocked(fetchLiveFixture).mockReset();
+      vi.mocked(fetchPublicRealtimeToken).mockClear();
+      vi.mocked(fetchLiveFixture).mockResolvedValue(doc(status));
+      const tier = expectedTier(status);
+      const hook = mount("fx-1", doc(status), true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetches(), `${status} (${tier}): the mount refresh`).toBe(tier === "locked" ? 0 : 1);
+      expect(vi.mocked(fetchPublicRealtimeToken).mock.calls.length, `${status} (${tier}): asks for realtime`).toBe(
+        tier === "locked" ? 0 : 1,
+      );
+
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      expect(fetches(), `${status} (${tier}): one POLL_MS later`).toBe(tier === "open" ? 2 : tier === "settled" ? 1 : 0);
+      await vi.advanceTimersByTimeAsync(SETTLED_POLL_MS - POLL_MS);
+      expect(fetches(), `${status} (${tier}): one SETTLED_POLL_MS after mount`).toBe(
+        tier === "open" ? 1 + Math.floor(SETTLED_POLL_MS / POLL_MS) : tier === "settled" ? 2 : 0,
+      );
+
+      // Past the window, by a margin of several of either interval.
+      await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS + 3 * SETTLED_POLL_MS - SETTLED_POLL_MS);
+      const atEnd = fetches();
+      await vi.advanceTimersByTimeAsync(10 * SETTLED_LISTEN_MS);
+      if (tier === "open") {
+        expect(fetches() - atEnd, `${status}: an open fixture is still polled at POLL_MS`).toBe((10 * SETTLED_LISTEN_MS) / POLL_MS);
+      } else {
+        expect(atEnd, `${status} (${tier}): requests over the whole life of the page`).toBe(tier === "settled" ? WINDOW_FETCHES : 0);
+        expect(fetches(), `${status} (${tier}): nothing after the window`).toBe(atEnd);
+      }
+      hook.unmount();
+      seen[tier]++;
+    }
+    // Anti-vacuity: every status was checked, and every tier occurred.
+    expect(seen.open + seen.settled + seen.locked).toBe(FIXTURE_STATUSES.length);
+    for (const t of ["open", "settled", "locked"] as const) expect(seen[t], `statuses in tier ${t}`).toBeGreaterThan(0);
+  });
+
+  it("the sequence: a poll that brings `decided` keeps listening at SETTLED_POLL_MS, so the undo that reopens it is presented", async () => {
+    const inPlay = doc("in_play", "10 — 10");
+    const decided = doc("decided", "11 — 10");
+    const reopened = doc("in_play", "10 — 10");
+    vi.mocked(fetchLiveFixture).mockResolvedValue(decided).mockResolvedValueOnce(inPlay).mockResolvedValueOnce(decided);
     const hook = mount("fx-1", inPlay, false);
     await vi.advanceTimersByTimeAsync(0); // mount refresh: in_play
     await vi.advanceTimersByTimeAsync(POLL_MS); // the deciding point arrives
     expect(hook.current.data.status).toBe("decided");
+    // The transition re-arms the poll at the settled rate (and refreshes once on re-arming).
+    await vi.advanceTimersByTimeAsync(0);
+    const afterDecided = fetches();
 
-    await vi.advanceTimersByTimeAsync(POLL_MS); // the undo
-    expect(vi.mocked(fetchLiveFixture).mock.calls.length, "a poll ran after `decided`").toBe(3);
+    vi.mocked(fetchLiveFixture).mockResolvedValue(reopened); // the scorer undoes the deciding point
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(fetches(), "no poll at the live rate once settled").toBe(afterDecided);
+    expect(hook.current.data.status).toBe("decided");
+    await vi.advanceTimersByTimeAsync(SETTLED_POLL_MS - POLL_MS);
+    // The settled tick brings the undo; reopening re-arms the poll at POLL_MS, which refreshes once on re-arming.
+    expect(fetches(), "the settled poll ran, then the reopened re-arm").toBe(afterDecided + 2);
     expect(hook.current.data).toBe(reopened);
   });
 
-  it("the negative pair: a poll that brings `finalized` stops the poll — a locked fixture costs nothing", async () => {
-    const inPlay = { status: "in_play", summary: null, outcome: null } as LiveFixtureData;
-    const finalized = { status: "finalized", summary: null, outcome: { kind: "win" } } as LiveFixtureData;
-    vi.mocked(fetchLiveFixture).mockResolvedValueOnce(finalized).mockResolvedValue(inPlay);
+  it("an undo INSIDE the window reopens: the poll returns to POLL_MS, with no window, long past where it would have closed", async () => {
+    vi.mocked(fetchLiveFixture).mockResolvedValue(doc("decided"));
+    const hook = mount("fx-1", doc("decided"), false);
+    await vi.advanceTimersByTimeAsync(0);
+    // Most of the window gone, then the undo lands on a settled tick.
+    const ticksBeforeUndo = Math.floor(SETTLED_LISTEN_MS / SETTLED_POLL_MS) - 2;
+    await vi.advanceTimersByTimeAsync((ticksBeforeUndo - 1) * SETTLED_POLL_MS);
+    vi.mocked(fetchLiveFixture).mockResolvedValue(doc("in_play"));
+    await vi.advanceTimersByTimeAsync(SETTLED_POLL_MS);
+    expect(hook.current.data.status, "the undo reached the page").toBe("in_play");
+
+    // Well past where the settled window would have closed: still polled, at the live rate.
+    await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS);
+    const before = fetches();
+    await vi.advanceTimersByTimeAsync(4 * POLL_MS);
+    expect(fetches() - before, "reopened: polled at POLL_MS with no window").toBe(4);
+  });
+
+  it("re-deciding after an undo starts a NEW window, measured from the re-decision", async () => {
+    vi.mocked(fetchLiveFixture).mockResolvedValue(doc("decided"));
+    const hook = mount("fx-1", doc("decided"), false);
+    await vi.advanceTimersByTimeAsync(0);
+    const ticks = Math.floor(SETTLED_LISTEN_MS / SETTLED_POLL_MS);
+    // The undo, late in the first window.
+    await vi.advanceTimersByTimeAsync((ticks - 3) * SETTLED_POLL_MS - SETTLED_POLL_MS);
+    vi.mocked(fetchLiveFixture).mockResolvedValue(doc("in_play"));
+    await vi.advanceTimersByTimeAsync(SETTLED_POLL_MS);
+    expect(hook.current.data.status).toBe("in_play");
+    // The re-decision, on the next live tick.
+    vi.mocked(fetchLiveFixture).mockResolvedValue(doc("decided"));
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(hook.current.data.status).toBe("decided");
+    await vi.advanceTimersByTimeAsync(0);
+    const windowStart = fetches();
+
+    // The FIRST window would have closed by now; the second has not.
+    await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS - 2 * SETTLED_POLL_MS);
+    expect(fetches(), "still listening inside the new window").toBe(windowStart + Math.floor(SETTLED_LISTEN_MS / SETTLED_POLL_MS) - 2);
+    // And it closes on its own schedule.
+    await vi.advanceTimersByTimeAsync(2 * SETTLED_POLL_MS + 10 * SETTLED_LISTEN_MS);
+    const closed = fetches();
+    expect(closed - windowStart, "the new window's own polls").toBe(WINDOW_FETCHES - 1);
+    await vi.advanceTimersByTimeAsync(10 * SETTLED_LISTEN_MS);
+    expect(fetches(), "nothing after the new window").toBe(closed);
+  });
+
+  it("a DELAYED overlay: an undo received inside the window but presented after it closes reopens, and the next settle gets a fresh window", async () => {
+    // `?delay=` presents what was received delayMs ago, so the tier follows the PRESENTED snapshot and can change after
+    // the window has closed. The delay must exceed one settled interval for a received-inside/presented-after undo.
+    const delayMs = 2 * SETTLED_POLL_MS;
+    expect(delayMs, "premise: a delay the overlay accepts (lib/overlay-delay.ts caps it at 300 000)").toBeLessThanOrEqual(300_000);
+    let current = doc("decided");
+    vi.mocked(fetchLiveFixture).mockImplementation(async () => current);
+    const hook = mount("fx-1", doc("decided"), false, { delayMs });
+    // The last settled tick inside the window carries the undo.
+    const lastTick = (Math.ceil(SETTLED_LISTEN_MS / SETTLED_POLL_MS) - 1) * SETTLED_POLL_MS;
+    await vi.advanceTimersByTimeAsync(lastTick - 1);
+    current = doc("in_play");
+    await vi.advanceTimersByTimeAsync(1);
+    current = doc("decided"); // and every poll after it re-decides
+    expect(hook.current.data.status, "received, not yet presented").toBe("decided");
+
+    // The window closes (still presenting `decided`), then the undo is presented: the page listens again.
+    await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS - lastTick);
+    const atClose = fetches();
+    const presentedAt = lastTick + delayMs; // a whole number of DRAIN_MS ticks, so presented exactly then
+    expect(presentedAt, "premise: presented AFTER the window closed").toBeGreaterThan(SETTLED_LISTEN_MS);
+    await vi.advanceTimersByTimeAsync(presentedAt - SETTLED_LISTEN_MS - 1);
+    expect(hook.current.data.status).toBe("decided");
+    expect(fetches(), "nothing polled between the window closing and the undo presenting").toBe(atClose);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(hook.current.data.status, "the undo, presented after the window closed").toBe("in_play");
+
+    // The re-decision is polled, presented delayMs later, and opens a FRESH window — not the closed one's expiry.
+    await vi.advanceTimersByTimeAsync(POLL_MS + delayMs + DRAIN_MS);
+    expect(hook.current.data.status).toBe("decided");
+    const resettled = fetches();
+    await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS / 2);
+    expect(fetches() - resettled, "a fresh window polls at SETTLED_POLL_MS").toBe(Math.floor(SETTLED_LISTEN_MS / 2 / SETTLED_POLL_MS));
+    await vi.advanceTimersByTimeAsync(10 * SETTLED_LISTEN_MS);
+    const closed = fetches();
+    await vi.advanceTimersByTimeAsync(10 * SETTLED_LISTEN_MS);
+    expect(fetches(), "and it closes too").toBe(closed);
+  });
+
+  it("the negative pair: a poll that brings `finalized` stops the poll at once — a locked fixture costs nothing", async () => {
+    const inPlay = doc("in_play");
+    vi.mocked(fetchLiveFixture).mockResolvedValueOnce(doc("finalized")).mockResolvedValue(inPlay);
     const hook = mount("fx-1", inPlay, false);
     await vi.advanceTimersByTimeAsync(0); // mount refresh brings `finalized`
     expect(hook.current.data.status).toBe("finalized");
-    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
-    expect(vi.mocked(fetchLiveFixture).mock.calls.length, "no poll after `finalized`").toBe(1);
+    await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS * 2);
+    expect(fetches(), "no poll after `finalized`").toBe(1);
+  });
+
+  it("an UNKNOWN status fails open — listened to like an open fixture — and is logged once, not per poll", async () => {
+    const odd = "postponed_by_a_newer_server";
+    expect(FIXTURE_STATUSES as readonly string[], "premise: really unknown").not.toContain(odd);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.mocked(fetchLiveFixture).mockResolvedValue(doc(odd));
+      const hook = mount("fx-1", doc(odd), false);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS * 2);
+      expect(fetches(), "polled at POLL_MS, past any settled window").toBe(1 + (SETTLED_LISTEN_MS * 2) / POLL_MS);
+      hook.unmount();
+      mount("fx-2", doc(odd), false);
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      const mentions = warn.mock.calls.filter((c) => String(c[0]).includes(odd));
+      expect(mentions.length, "one warning for the status, however many renders and hooks saw it").toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+// The realtime half of the window: a SUBSCRIBED channel is a Realtime connection held against the plan's quota, so it
+// must survive the settled transition (an undo must still arrive at once) and close when the window does. The browser
+// client is faked at its module boundary; everything above it — the token, the subscribe status, the teardown — is the
+// hook's own code.
+describe("useLiveFixture — a subscribed channel lives through the settled window and closes with it", () => {
+  beforeEach(() => {
+    rt.subscribes = 0;
+    rt.unsubscribes = 0;
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://project.supabase.co");
+    vi.mocked(fetchPublicRealtimeToken).mockResolvedValue({ token: "t", channel: "fixture:fx-1" });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.mocked(fetchPublicRealtimeToken).mockRejectedValue(new Error("not entitled"));
+  });
+
+  it("open → settled keeps ONE channel (no re-mint, no re-subscribe); the window's end unsubscribes and stops the poll", async () => {
+    let current = doc("in_play");
+    vi.mocked(fetchLiveFixture).mockImplementation(async () => current);
+    const hook = mount("fx-1", doc("in_play"), true);
+    // The token and the client import resolve on REAL turns (module loading is not on the fake clock).
+    for (let i = 0; i < 100 && rt.subscribes === 0; i++) await new Promise((r) => realSetTimeout(r, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.subscribes, "subscribed at mount").toBe(1);
+    expect(hook.current.transport).toBe("realtime");
+
+    current = doc("decided");
+    await vi.advanceTimersByTimeAsync(SUBSCRIBED_POLL_MS); // the safety-net poll brings `decided`
+    expect(hook.current.data.status).toBe("decided");
+    expect(hook.current.transport, "still on realtime while settled").toBe("realtime");
+    expect(rt.subscribes, "the settled transition does not re-subscribe").toBe(1);
+    expect(rt.unsubscribes).toBe(0);
+    expect(vi.mocked(fetchPublicRealtimeToken).mock.calls.length, "no second token mint").toBe(1);
+
+    await vi.advanceTimersByTimeAsync(SETTLED_LISTEN_MS);
+    expect(rt.unsubscribes, "the window's end closes the channel").toBe(1);
+    expect(hook.current.transport).toBe("poll");
+    const closed = fetches();
+    await vi.advanceTimersByTimeAsync(10 * SETTLED_LISTEN_MS);
+    expect(fetches(), "and nothing polls after it").toBe(closed);
+    expect(rt.subscribes, "nor re-subscribes").toBe(1);
   });
 });
