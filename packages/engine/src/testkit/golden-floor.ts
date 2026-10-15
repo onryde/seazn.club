@@ -28,7 +28,7 @@
 // shape is untouched by this task. That is why `core.settle` is exempt (see its row) until that later task lands.
 //
 // Purity: this file reads corpora through `golden.ts` (node:fs), so it stays out of the published testkit barrel.
-import { CORE_EVENT_SCHEMAS, forfeitAdmission, foldMatchWithStoppage, outcomeOf, playRecorded, type EventEnvelope } from "../core/events.ts";
+import { CORE_EVENT_SCHEMAS, forfeitAdmission, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, type EventEnvelope } from "../core/events.ts";
 import {
   DEFAULT_LINEUP_POLICY,
   initSquads,
@@ -44,14 +44,27 @@ import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 // ------------------------------------------------------------------------------------------------------------ tokens
 
-/** `event:core.void`, `outcome:award:retired`, `outcome:double_walkover`. */
-export type FloorToken = `event:${string}` | `outcome:${string}`;
+/** `event:core.void`, `outcome:award:retired`, `outcome:double_walkover`, `undo:core.forfeit`, `standing:core.abandon`. */
+export type FloorToken = `event:${string}` | `outcome:${string}` | `undo:${string}` | `standing:${string}`;
 
 /** Every `core.*` type the kernel accepts — the keys of its own schema map. */
 export const CORE_TYPES: readonly string[] = Object.keys(CORE_EVENT_SCHEMAS);
 
 export const eventToken = (type: string): FloorToken => `event:${type}`;
 export const outcomeToken = (token: string): FloorToken => `outcome:${token}`;
+/** A `core.void` keyed by the TYPE of the event it strikes: an undo of a goal and an undo of a forfeit are different folds. */
+export const undoToken = (type: string): FloorToken => `undo:${type}`;
+
+/** The kernel events that DECIDE or END a match — a mis-tapped forfeit or abandon is the undo a phone needs most, and
+ *  voiding one must REOPEN the match (the decided flag, the walkover credit and the stoppage it set all clear). Both are
+ *  required of every sport: the kernel owns them, and `forfeitAdmission` / the abandon path admit them everywhere. */
+export const UNDOABLE_KERNEL: readonly string[] = ["core.forfeit", "core.abandon"];
+
+/** An event a stream records and NOTHING strikes. An abandon that stands leaves a match ended with no outcome (the fixture
+ *  awaits a settle or a replay), which is a different fold from an abandon that was voided and played on; a corpus that
+ *  only ever struck its abandons would never record the first. */
+export const standingToken = (type: string): FloorToken => `standing:${type}`;
+export const STANDING_KERNEL: readonly string[] = ["core.abandon"];
 
 /** The outcome token a recorded `outcome` field names, or null while the stream recorded no outcome. An award is
  *  keyed by its REASON (`award:walkover`): the reason is what the sport's `forfeitCredit` and the table react to. */
@@ -69,7 +82,19 @@ export function outcomeTokenOf(outcomeJson: string): string | null {
 export function recordedTokens(corpus: GoldenCorpus): Set<FloorToken> {
   const out = new Set<FloorToken>();
   for (const stream of corpus.streams) {
-    for (const event of stream.events) if (event.type.startsWith("core.")) out.add(eventToken(event.type));
+    const struck = new Set(stream.events.flatMap((e) => (e.type === "core.void" && e.voids !== undefined ? [e.voids] : [])));
+    stream.events.forEach((event, i) => {
+      if (event.type.startsWith("core.")) out.add(eventToken(event.type));
+      if (STANDING_KERNEL.includes(event.type) && !struck.has(`e-${i}`)) out.add(standingToken(event.type));
+      if (event.type !== "core.void") return;
+      // A recorded void the fold would refuse is a corrupt corpus, not a token: name it.
+      const where = `${stream.config}#${stream.seed}`;
+      if (event.voids === undefined) throw new Error(`golden floor: a core.void in stream ${where} (event ${i}) has no target`);
+      const target = /^e-(\d+)$/.exec(event.voids)?.[1];
+      const index = target === undefined ? -1 : Number(target);
+      if (index < 0 || index >= i) throw new Error(`golden floor: a core.void in stream ${where} (event ${i}) targets "${event.voids}", which is not an earlier event`);
+      out.add(undoToken(stream.events[index]!.type));
+    });
     const token = outcomeTokenOf(stream.outcome);
     if (token !== null) out.add(outcomeToken(token));
   }
@@ -460,9 +485,10 @@ export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
   },
 ];
 
-/** `core.finalize` is probed beside the claims as a CONTROL: it is folded by every module and is not claimed unpinned, so
- *  a probe that could only ever answer "unpinned" would show here. */
-const OVERLAY_CONTROLS: readonly OverlayClaim["tokens"][] = [[eventToken("core.finalize")]];
+/** Probed beside the claims as CONTROLS: events the modules fold into the state the corpora record (a finalize closes the
+ *  phase, an abandon ends play, a forfeit decides), and so are NOT claimed unpinned. A probe that could only ever answer
+ *  "unpinned" would show here. */
+export const OVERLAY_CONTROLS: readonly FloorToken[] = ["core.finalize", "core.abandon", "core.forfeit"].map(eventToken);
 
 interface Ablation {
   readonly kept: GoldenEvent[];
@@ -488,6 +514,13 @@ function ablate(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ab
     kept.push({ ...event, voids: `e-${target}` });
   }
   return { kept };
+}
+
+/** The recorded form of the state before any event: what the first event folds from. */
+function initialState(module: AnySportModule, rawConfig: unknown, recordedLineups: LineupPair | undefined): string {
+  const cfg = module.configSchema.parse(rawConfig) as unknown;
+  const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
+  return JSON.stringify(foldMatch(module as never, cfg as never, lineups, [], { strictFromSeq: 0 }));
 }
 
 /** Whether removing `big \ small` from the ledger changes any recorded field, across every recorded stream that carries one
@@ -523,7 +556,11 @@ function ablationProbe(
     const gone = near.kept.map((e, i) => (extra.has(e.type) ? i : -1)).filter((i) => i >= 0);
     const retained = near.kept.map((_, i) => i).filter((i) => !gone.includes(i));
     const sameSteps = JSON.stringify(retained.map((i) => a.states[i])) === JSON.stringify(b.states);
-    const ownStepsNeutral = gone.every((i) => i === 0 || a.states[i] === a.states[i - 1]);
+    // An ablated event's OWN step must leave the recorded state as it found it (the state before the first event is the
+    // module's init). Without this a module that folds the event into state would read as inert whenever a later event
+    // happened to overwrite what it wrote, or whenever nothing follows it.
+    const initial = gone.includes(0) ? initialState(module, raw, stream.lineups) : null;
+    const ownStepsNeutral = gone.every((i) => a.states[i] === (i === 0 ? initial : a.states[i - 1]));
     if (!(sameSteps && ownStepsNeutral && a.outcome === b.outcome && a.summary === b.summary && a.deltas === b.deltas)) moved++;
   }
   const verdict: OverlayVerdict = streams === 0 ? "unrecorded" : moved > 0 || refused > 0 ? "pinned" : "unpinned";
@@ -542,10 +579,7 @@ export function overlayVerdicts(module: AnySportModule, corpus: GoldenCorpus, re
       out.set(token, ablationProbe(module, corpus, small, big, record));
     });
   }
-  for (const tokens of OVERLAY_CONTROLS) {
-    const types = new Set(tokens.map(typeOf));
-    for (const token of tokens) out.set(token, ablationProbe(module, corpus, new Set(), types, record));
-  }
+  for (const token of OVERLAY_CONTROLS) out.set(token, ablationProbe(module, corpus, new Set(), new Set([typeOf(token)]), record));
   return out;
 }
 
@@ -632,6 +666,13 @@ export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus, c
     }
     required.set(token, "CORE_EVENT_SCHEMAS declares it");
   }
+
+  // 1b. an undo of each decisive kernel event.
+  for (const type of UNDOABLE_KERNEL) {
+    required.set(undoToken(type), `a mis-tapped ${type} is undone with core.void, which must reopen the match`);
+  }
+
+  for (const type of STANDING_KERNEL) required.set(standingToken(type), `a ${type} that nothing strikes: the match stays ended`);
 
   // 2. outcomes.
   required.set(outcomeToken("win"), "every sport decides a match");

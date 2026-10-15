@@ -7,11 +7,22 @@ import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenCorpus } from "./golden.ts";
 import { eventToken, floorHoles as holesOf } from "./golden-floor.ts";
 import { extendFloor, FLOOR_SEED_STRIDE, SCENARIOS, type Built, type Ctx, type Scenario } from "./golden-floor-streams.ts";
-import { playRecorded } from "../core/events.ts";
-import { makeEnvelope } from "./helpers.ts";
+import { EngineError } from "../core/errors.ts";
+import { foldMatchWithStoppage, outcomeOf, playRecorded } from "../core/events.ts";
+import { resolvePositions } from "../sport/catalog.ts";
+import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
+import { UNDOABLE_KERNEL } from "./golden-floor.ts";
 
 const isFloor = (s: { seed: number }): boolean => s.seed >= FLOOR_SEED_STRIDE;
-const withoutFloor = (c: GoldenCorpus): GoldenCorpus => ({ ...c, streams: c.streams.filter((s) => !isFloor(s)) });
+/** The corpus as it stood when the floor streams were generated: every stream BEFORE the first floor stream, and none of
+ *  what was appended after (a later `EXTEND_GOLDEN` appends generator walks at the END; the floor was never measured
+ *  against them). */
+const beforeFloor = (c: GoldenCorpus): GoldenCorpus => {
+  const first = c.streams.findIndex(isFloor);
+  return { ...c, streams: first < 0 ? c.streams : c.streams.slice(0, first) };
+};
+/** The same corpus up to (not including) the stream at `index`: what a floor stream was measured against. */
+const upTo = (c: GoldenCorpus, index: number): GoldenCorpus => ({ ...c, streams: c.streams.slice(0, index) });
 
 describe("extendFloor — the golden floor's append path", () => {
   it("empty case first: a corpus whose floor is met gets nothing appended, and a second call is the same", () => {
@@ -34,7 +45,7 @@ describe("extendFloor — the golden floor's append path", () => {
     let floorStreams = 0;
     forEachSport(({ module, key }) => {
       const committed = readCorpus(key);
-      const base = withoutFloor(committed);
+      const base = beforeFloor(committed);
       expect(base.streams.length, `${key}: the generator's walks are still there`).toBeGreaterThan(0);
       const holesBefore = holesOf(module, base);
       expect(holesBefore.length, `${key}: without its floor streams the floor has holes`).toBeGreaterThan(0);
@@ -44,7 +55,8 @@ describe("extendFloor — the golden floor's append path", () => {
       expect(result.corpus.streams.slice(0, base.streams.length), key).toEqual(base.streams);
       // and what it added is exactly what is committed
       const added = result.corpus.streams.slice(base.streams.length);
-      const expected = committed.streams.filter(isFloor);
+      const expected = committed.streams.slice(base.streams.length).filter(isFloor);
+      expect(committed.streams.filter(isFloor).length, `${key}: every floor stream sits after the base`).toBe(expected.length);
       expect(added.length, key).toBe(expected.length);
       expect(JSON.stringify(added), key).toBe(JSON.stringify(expected));
       expect(result.appended.length, key).toBe(expected.length);
@@ -57,22 +69,52 @@ describe("extendFloor — the golden floor's append path", () => {
     // the CI coverage run, so it carries an explicit budget rather than the 5 s default.
   }, 30_000);
 
-  it("every committed floor stream, taken in order, closes a hole the streams before it left open (no noise kept)", () => {
-    // The keep-rule: a scenario's stream is appended only when it reduces the holes.
+  it("every committed floor stream closes a hole the streams PRECEDING it in the corpus left open (no noise kept)", () => {
+    // The keep-rule: a scenario's stream is appended only when it reduces the holes. Measured against what came before it
+    // in the corpus — not against every non-floor stream, which a later EXTEND may have appended AFTER the floor.
     let kept = 0;
     forEachSport(({ module, key }) => {
       const committed = readCorpus(key);
-      let corpus = withoutFloor(committed);
-      for (const stream of committed.streams.filter(isFloor)) {
-        const before = holesOf(module, corpus);
-        corpus = { ...corpus, streams: [...corpus.streams, stream] };
-        const after = holesOf(module, corpus);
+      committed.streams.forEach((stream, index) => {
+        if (!isFloor(stream)) return;
+        const before = holesOf(module, upTo(committed, index));
+        const after = holesOf(module, upTo(committed, index + 1));
         expect(after.length, `${key} ${stream.config}#${stream.seed} closes a hole`).toBeLessThan(before.length);
         kept++;
-      }
+      });
     });
     expect(kept).toBeGreaterThan(builtinModules.length * 4);
   });
+
+  it("a generator stream appended AFTER the floor streams (a later EXTEND) changes neither the reproduction nor the keep-rule", () => {
+    let sports = 0;
+    forEachSport(({ module, key }) => {
+      const committed = readCorpus(key);
+      const first = committed.streams.findIndex(isFloor);
+      expect(first, `${key}: the corpus has floor streams`).toBeGreaterThan(0);
+      // a later EXTEND's walk: a generator stream (seed below the stride, a seed no stream has) after the floor
+      const donor = committed.streams[0]!;
+      const usedSeeds = new Set(committed.streams.filter((s) => s.config === donor.config).map((s) => s.seed));
+      let seed = 90_000;
+      while (usedSeeds.has(seed)) seed++;
+      const later: GoldenCorpus = { ...committed, streams: [...committed.streams, { ...donor, seed }] };
+      expect(isFloor(later.streams[later.streams.length - 1]!)).toBe(false);
+      // the base is unchanged by the appended walk
+      expect(beforeFloor(later).streams, key).toEqual(beforeFloor(committed).streams);
+      // the reproduction still yields the committed floor streams
+      const result = extendFloor(module, beforeFloor(later));
+      expect(JSON.stringify(result.corpus.streams.slice(first)), key).toBe(JSON.stringify(committed.streams.slice(first).filter(isFloor)));
+      expect(result.stillMissing, key).toEqual([]);
+      // the keep-rule still holds for every floor stream, and the appended walk leaves the floor met
+      later.streams.forEach((stream, index) => {
+        if (!isFloor(stream)) return;
+        expect(holesOf(module, upTo(later, index + 1)).length, `${key} ${stream.config}#${stream.seed}`).toBeLessThan(holesOf(module, upTo(later, index)).length);
+      });
+      expect(holesOf(module, later), key).toEqual([]);
+      sports++;
+    });
+    expect(sports).toBe(builtinModules.length);
+  }, 60_000);
 
   it("floor seeds are unique per config inside a corpus (the epoch guard keys a stream by config#seed) and clear of the generator's", () => {
     let identities = 0;
@@ -96,7 +138,7 @@ describe("extendFloor — the golden floor's append path", () => {
     const committed = readCorpus("tennis");
     const floor = committed.streams.filter(isFloor);
     expect(floor.length).toBeGreaterThan(0);
-    const base = withoutFloor(committed);
+    const base = beforeFloor(committed);
     // a decoy wearing the identity the first floor scenario will want, holding none of what the floor needs
     const donor = base.streams[0]!;
     const decoy = { ...donor, config: floor[0]!.config, seed: floor[0]!.seed };
@@ -106,7 +148,7 @@ describe("extendFloor — the golden floor's append path", () => {
   it("keeps a scenario's stream only when it closes a hole: a scenario that serves a hole but builds a stream recording nothing new is dropped, the next still runs", () => {
     const module = builtinModules.find((m) => m.key === "badminton")!;
     const committed = readCorpus("badminton");
-    const base = withoutFloor(committed);
+    const base = beforeFloor(committed);
     const holes = holesOf(module, base);
     expect(holes).toContain(eventToken("core.void"));
     // a noise scenario: claims the void hole, builds a plain generator walk (records no core.void)
@@ -139,12 +181,83 @@ describe("extendFloor — the golden floor's append path", () => {
     // drawn result first, which is play), so the pairing card in the corpus is the only live event there is to borrow
     const cfgNames = ["default"];
     expect(Object.keys(corpus.configs)).toContain("default");
-    const holes = new Set(holesOf(module, withoutFloor(corpus)));
+    const holes = new Set(holesOf(module, beforeFloor(corpus)));
     const fed = retired.build({ module, corpus, cfgNames, holes });
     expect(fed, "with the corpus's own pairing event to borrow, a retirement is built").not.toBeNull();
     const events = fed!.events.map((e, i) => makeEnvelope(i, e, e.voids));
     expect(playRecorded(events.slice(0, -1), {}), "and the play before it is real, as the one-off migration reads it").toBe(true);
     const starved = retired.build({ module, corpus: { ...corpus, streams: [] }, cfgNames, holes });
     expect(starved, "a retirement after a bare Start is a walkover wearing the wrong word, not a retirement").toBeNull();
+  });
+});
+
+describe("the undo stream strikes the KERNEL events that decide or end a match, and play carries on (review 2)", () => {
+  type Events = readonly { type: string; payload: unknown; voids?: string }[];
+  const setup = (key: string, stream: { config: string; lineups?: unknown }) => {
+    const module = builtinModules.find((m) => m.key === key)!;
+    const corpus = readCorpus(key);
+    const cfg = module.configSchema.parse(corpus.configs[stream.config]) as unknown;
+    const lineups = (stream.lineups as never) ?? defaultLineupPair(resolvePositions(module, cfg));
+    const fold = (events: Events) => foldMatchWithStoppage(module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 });
+    /** The effective outcome after the first `count` events — the kernel's reading (forfeit, settle), not the module's. */
+    const effective = (events: Events, count: number) => outcomeOf(module as never, fold(events.slice(0, count)) as never);
+    /** Whether an abandon is in force: the kernel refuses a forfeit with its own code while one is (events.ts, X-AB-4). */
+    const abandonInForce = (events: Events, count: number): boolean => {
+      const probe = { type: "core.forfeit", payload: { by: (lineups as { home: { entrantId: string } }).home.entrantId, reason: "retired" } };
+      try {
+        fold([...events.slice(0, count), probe]);
+        return false;
+      } catch (error) {
+        return error instanceof EngineError && error.code === "ABANDONED_SETTLE_OR_VOID";
+      }
+    };
+    return { effective, abandonInForce };
+  };
+
+  it("in every sport, a recorded void strikes each of core.forfeit and core.abandon: it took effect, the void clears it, and play resumes to a result", () => {
+    let proofs = 0;
+    const seen = new Map<string, Set<string>>();
+    forEachSport(({ key }) => {
+      for (const stream of readCorpus(key).streams.filter(isFloor)) {
+        const { effective, abandonInForce } = setup(key, stream);
+        stream.events.forEach((event, v) => {
+          if (event.type !== "core.void") return;
+          const t = Number(event.voids!.slice(2));
+          const target = stream.events[t]!;
+          if (!UNDOABLE_KERNEL.includes(target.type)) return;
+          const inForce = (count: number): boolean => (target.type === "core.forfeit" ? effective(stream.events, count) !== null : abandonInForce(stream.events, count));
+          expect(effective(stream.events, t), `${key} ${target.type}: live before it`).toBeNull();
+          expect(inForce(t + 1), `${key} ${target.type}: it takes effect`).toBe(true);
+          expect(inForce(v + 1), `${key} ${target.type}: the void clears it`).toBe(false);
+          expect(stream.events.length, `${key} ${target.type}: play resumes after the void`).toBeGreaterThan(v + 1);
+          // (the stream's last event is a LATE CORRECTION of a sport event, which may legitimately reopen a decided match: the
+          // play that resumed after the kernel strike must have reached its result just before it)
+          const last = stream.events[stream.events.length - 1]!;
+          const lateCorrection = last.type === "core.void" && !stream.events[Number(last.voids!.slice(2))]!.type.startsWith("core.");
+          expect(lateCorrection, `${key}: the stream ends on a late correction`).toBe(true);
+          expect(effective(stream.events, stream.events.length - 1), `${key} ${target.type}: play resumed to a result`).not.toBeNull();
+          seen.set(key, (seen.get(key) ?? new Set()).add(target.type));
+          proofs++;
+        });
+      }
+    });
+    for (const m of builtinModules) {
+      for (const type of UNDOABLE_KERNEL) expect(seen.get(m.key)?.has(type), `${m.key} ${type}`).toBe(true);
+    }
+    expect(proofs).toBeGreaterThanOrEqual(builtinModules.length * UNDOABLE_KERNEL.length);
+  });
+
+  it("the standing abandon streams of the floor are real: an abandon no void strikes, in force at the end", () => {
+    let standing = 0;
+    forEachSport(({ key }) => {
+      const corpus = readCorpus(key);
+      for (const stream of corpus.streams) {
+        const i = stream.events.findIndex((e, k) => e.type === "core.abandon" && !stream.events.some((x) => x.voids === `e-${k}`));
+        if (i < 0) continue;
+        expect(setup(key, stream).abandonInForce(stream.events, stream.events.length), `${key} ${stream.config}#${stream.seed}`).toBe(true);
+        standing++;
+      }
+    });
+    expect(standing).toBeGreaterThanOrEqual(builtinModules.length);
   });
 });

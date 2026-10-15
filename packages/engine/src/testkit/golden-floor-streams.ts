@@ -20,13 +20,14 @@
 //
 // A scenario is attempted only for a sport whose floor still has a hole it serves, and only appends a stream that
 // actually reduces the holes. Existing streams are never touched.
-import { foldMatch, playRecorded, type EventEnvelope } from "../core/events.ts";
+import { foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, type EventEnvelope } from "../core/events.ts";
+import { EngineError } from "../core/errors.ts";
 import { mulberry32, type Rng } from "../core/rng.ts";
 import type { LineupPair } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles, lineupOffers, outcomeToken, outcomeTokenOf, type FloorToken } from "./golden-floor.ts";
+import { eventToken, floorHoles, lineupOffers, outcomeToken, outcomeTokenOf, standingToken, STANDING_KERNEL, undoToken, UNDOABLE_KERNEL, type FloorToken } from "./golden-floor.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -81,6 +82,14 @@ function outcomeAfter(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: reado
   const state: unknown = foldMatch(ctx.module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), STRICT_ALL);
   const outcome = moduleOutcome(ctx, state);
   return { state, token: outcome === null ? null : outcomeTokenOf(JSON.stringify(outcome)) };
+}
+
+/** The EFFECTIVE outcome token of a ledger — the kernel's reading, so a forfeit, an abandon and a settle count, which the
+ *  module's own outcome does not see. Null while the match is live. */
+function effectiveToken(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[]): string | null {
+  const folded = foldMatchWithStoppage(ctx.module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), STRICT_ALL);
+  const outcome = outcomeOf(ctx.module as never, folded as never);
+  return outcome === null ? null : outcomeTokenOf(JSON.stringify(outcome));
 }
 
 /** The per-side score lines of a state, as one comparable string: what a scorer sees move when a point is struck. */
@@ -157,7 +166,76 @@ function naturalWalk(ctx: Ctx, cfg: unknown, lineups: LineupPair, seed: number):
 
 // ---------------------------------------------------------------------------------------------------------- undo
 
+/** One kernel event a phone can mis-tap, and how the FOLD says it took effect. */
+interface KernelStrike {
+  readonly type: (typeof UNDOABLE_KERNEL)[number];
+  readonly event: GoldenEvent;
+  /** The forfeit must follow recorded play (a retirement is a player leaving a match under way). */
+  readonly needsPlay: boolean;
+  /** True while the event is in force in `events`: the fold's own reading, never this file's. */
+  inForce(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[]): boolean;
+}
+
+/** A forfeit decides the match: the effective outcome stops being null. */
+const forfeitInForce: KernelStrike["inForce"] = (ctx, cfg, lineups, events) => effectiveToken(ctx, cfg, lineups, events) !== null;
+
+/** An abandon decides nothing the module can see, but it ENDS play: while it is active the kernel refuses a forfeit with
+ *  ABANDONED_SETTLE_OR_VOID ("settle it to decide it, or void the abandon first"). A void of the abandon clears that. */
+const abandonInForce: KernelStrike["inForce"] = (ctx, cfg, lineups, events) => {
+  try {
+    effectiveToken(ctx, cfg, lineups, [...events, ev("core.forfeit", { by: lineups.home.entrantId, reason: "retired" })]);
+    return false;
+  } catch (error) {
+    return error instanceof EngineError && error.code === "ABANDONED_SETTLE_OR_VOID";
+  }
+};
+
+/** The kernel events a ledger strikes, in the order `buildUndo` splices them: the mis-tapped retirement, then the
+ *  mis-tapped abandon. Each is `UNDOABLE_KERNEL`'s, and a sport that cannot take one is not given a stream without it. */
+function kernelStrikes(lineups: LineupPair): readonly KernelStrike[] {
+  return [
+    { type: "core.forfeit", event: ev("core.forfeit", { by: lineups.home.entrantId, reason: "retired" }), needsPlay: true, inForce: forfeitInForce },
+    { type: "core.abandon", event: ev("core.abandon", { reason: "rain: the ground is waterlogged, called off, then play resumed" }), needsPlay: false, inForce: abandonInForce },
+  ];
+}
+
+/** Records the strike's event at a point of `ledger` where the match is live and the kernel admits it, strikes it with
+ *  `core.void` at once, and lets the ledger's remaining events play on to the result they always had. Only a point at or
+ *  after `atLeast` is tried, nearest the middle first, so an earlier splice is never disturbed. Asserted by the fold before
+ *  a splice is returned: the event TAKES EFFECT (`inForce`), the void CLEARS it and leaves the module state exactly as it
+ *  was, and the whole ledger — every prefix of it — folds strictly to the result the unspliced ledger had. */
+function strikeKernelEvent(ctx: Ctx, cfg: unknown, lineups: LineupPair, ledger: readonly GoldenEvent[], strike: KernelStrike, atLeast: number): GoldenEvent[] | null {
+  const result = effectiveToken(ctx, cfg, lineups, ledger);
+  const mid = Math.floor((atLeast + ledger.length) / 2);
+  const points: number[] = [];
+  for (let q = atLeast; q < ledger.length; q++) points.push(q);
+  points.sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || a - b);
+  for (const q of points) {
+    const head = ledger.slice(0, q);
+    const tail = ledger.slice(q);
+    // A tail void would point at a place the splice moves: the splice does not rewrite ids, it declines.
+    if (tail.some((e) => e.voids !== undefined)) continue;
+    if (strike.needsPlay && !playRecorded(head.map((e, i) => makeEnvelope(i, e, e.voids)), {})) continue;
+    const decided = [...head, strike.event];
+    const reopened = [...decided, voidOf(q)];
+    const full = [...reopened, ...tail];
+    try {
+      if (effectiveToken(ctx, cfg, lineups, head) !== null) continue; // the match is live where it is struck
+      if (!strike.inForce(ctx, cfg, lineups, decided)) continue;
+      if (strike.inForce(ctx, cfg, lineups, reopened)) continue;
+      if (JSON.stringify(outcomeAfter(ctx, cfg, lineups, reopened).state) !== JSON.stringify(outcomeAfter(ctx, cfg, lineups, head).state)) continue;
+      if (effectiveToken(ctx, cfg, lineups, full) !== result) continue;
+      for (let i = 1; i <= full.length; i++) effectiveToken(ctx, cfg, lineups, full.slice(0, i));
+    } catch {
+      continue;
+    }
+    return full;
+  }
+  return null;
+}
+
 function buildUndo(ctx: Ctx): Built | null {
+  let fallback: { rank: number; built: Built } | null = null;
   for (const cfgName of ctx.cfgNames) {
     const cfg = parsed(ctx, cfgName);
     const lineups = defaultLineups(ctx, cfg);
@@ -180,17 +258,29 @@ function buildUndo(ctx: Ctx): Built | null {
       }
       wrong ??= drawSport(ctx, before, mulberry32(seed * 7919 + 1));
       if (wrong === null || !folds(ctx, cfg, lineups, [...walk.events.slice(0, j), wrong])) continue;
-      const spliced: GoldenEvent[] = [...walk.events.slice(0, j), wrong, voidOf(j), ...walk.events.slice(j)];
-      if (!folds(ctx, cfg, lineups, spliced)) continue;
+      const tapped: GoldenEvent[] = [...walk.events.slice(0, j), wrong, voidOf(j), ...walk.events.slice(j)];
+      if (!folds(ctx, cfg, lineups, tapped)) continue;
       // The void changed nothing: the ledger folds to the same state as the walk without the wrong tap.
-      if (JSON.stringify(outcomeAfter(ctx, cfg, lineups, spliced).state) !== JSON.stringify(outcomeAfter(ctx, cfg, lineups, walk.events).state)) continue;
-      // (2) A late correction: an EARLIER point (or, failing that, the last one) struck after the fact. The ledger
-      // minus that point must still fold, and must differ from the ledger with it.
+      if (JSON.stringify(outcomeAfter(ctx, cfg, lineups, tapped).state) !== JSON.stringify(outcomeAfter(ctx, cfg, lineups, walk.events).state)) continue;
+      // (1b) The decisive KERNEL events a phone can mis-tap, each struck and play resumed: a retirement, then an abandon.
+      let spliced: GoldenEvent[] | null = tapped;
+      let from = j + 2;
+      for (const strike of kernelStrikes(lineups)) {
+        spliced = strikeKernelEvent(ctx, cfg, lineups, spliced, strike, from);
+        if (spliced === null) break;
+        from = spliced.findIndex((e, i) => i >= from && e.type === strike.type) + 2;
+      }
+      if (spliced === null) continue;
+      // (2) A late correction: an event struck AFTER later play, so the void is not adjacent to its target. The ledger
+      // minus that event must still fold, and must differ from the ledger with it. Preference, best first: (a) an earlier
+      // POINT (the score line a scorer reads moves), (b) an earlier event that moves the state (a toss, a pairing card:
+      // the only earlier events a board game or a carrom match can lose without the later ones refusing), (c) the last
+      // point, (d) the last event that moves the state. (c) and (d) are an immediate correction, kept only as a last resort.
       const base = outcomeAfter(ctx, cfg, lineups, spliced);
       const targets: number[] = [];
-      for (let i = Math.floor(spliced.length * 0.6); i >= 1; i--) targets.push(i);
+      for (let i = Math.floor(spliced.length * 0.6); i >= 0; i--) targets.push(i);
       targets.push(spliced.length - 1);
-      let fallback: GoldenEvent[] | null = null;
+      const best: (GoldenEvent[] | null)[] = [null, null, null, null];
       for (const i of targets) {
         const target = spliced[i];
         if (target === undefined || target.type.startsWith("core.") || target.voids !== undefined) continue;
@@ -199,14 +289,20 @@ function buildUndo(ctx: Ctx): Built | null {
         if (!folds(ctx, cfg, lineups, corrected)) continue;
         const after = outcomeAfter(ctx, cfg, lineups, corrected).state;
         if (JSON.stringify(after) === JSON.stringify(base.state)) continue;
-        // Strike a POINT: the score line the scorer reads must move. Failing that, any struck event that moves the state.
-        if (scoreLines(ctx, after) !== scoreLines(ctx, base.state)) return { config: cfgName, seed: 1 * FLOOR_SEED_STRIDE + seed, events: corrected };
-        fallback ??= corrected;
+        const point = scoreLines(ctx, after) !== scoreLines(ctx, base.state);
+        const late = i < spliced.length - 1;
+        const rank = (late ? 0 : 2) + (point ? 0 : 1);
+        best[rank] ??= corrected;
       }
-      if (fallback !== null) return { config: cfgName, seed: 1 * FLOOR_SEED_STRIDE + seed, events: fallback };
+      const rank = best.findIndex((candidate) => candidate !== null && candidate !== undefined);
+      if (rank < 0) continue;
+      const built: Built = { config: cfgName, seed: 1 * FLOOR_SEED_STRIDE + seed, events: best[rank]! };
+      if (rank <= 1) return built; // an EARLIER event struck after later play: nothing better to search for
+      // Only an immediate correction on this walk: keep it, but go on looking (another config or seed may offer a late one).
+      if (fallback === null || rank < fallback.rank) fallback = { rank, built };
     }
   }
-  return null;
+  return fallback === null ? null : fallback.built;
 }
 
 // ----------------------------------------------------------------------------------------------------- stoppage
@@ -326,7 +422,7 @@ export interface Scenario {
 export const SCENARIOS: readonly Scenario[] = [
   {
     id: "undo",
-    serves: () => [eventToken("core.void")],
+    serves: () => [eventToken("core.void"), ...UNDOABLE_KERNEL.map(undoToken)],
     build: buildUndo,
   },
   {
@@ -337,7 +433,7 @@ export const SCENARIOS: readonly Scenario[] = [
     ],
     build: buildStoppage,
   },
-  { id: "abandon", serves: () => [eventToken("core.abandon")], build: buildAbandon },
+  { id: "abandon", serves: () => [eventToken("core.abandon"), ...STANDING_KERNEL.map(standingToken)], build: buildAbandon },
   { id: "walkover", serves: () => [outcomeToken("award:walkover")], build: (c) => buildForfeit(c, FORFEIT_STORIES.walkover!) },
   { id: "double_walkover", serves: () => [outcomeToken("double_walkover")], build: (c) => buildForfeit(c, FORFEIT_STORIES.double_walkover!) },
   { id: "retired", serves: () => [outcomeToken("award:retired")], build: (c) => buildForfeit(c, FORFEIT_STORIES.retired!) },

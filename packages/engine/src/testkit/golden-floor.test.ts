@@ -24,6 +24,10 @@ import {
   planLineupEvents,
   recordedTokens,
   settleProbe,
+  STANDING_KERNEL,
+  standingToken,
+  UNDOABLE_KERNEL,
+  undoToken,
   staleFloorExemptions,
   staleNaturalOutcomes,
   unrequiredObservedOutcomes,
@@ -70,6 +74,69 @@ describe("golden floor — the token vocabulary", () => {
     expect([...have].filter((t) => t.startsWith("outcome:"))).toHaveLength(1);
     // a sport event is not a floor token
     expect([...have].some((t) => t.startsWith("event:football."))).toBe(false);
+  });
+});
+
+describe("golden floor — an undo of a KERNEL event is a token of its own (review 2)", () => {
+  const football = builtinModules.find((m) => m.key === "football")!;
+  const base = corpusOf("football");
+  const stream = (events: GoldenEvent[]) => ({ ...base.streams[0]!, events });
+  const START = { type: "core.start", payload: {} };
+
+  it("a void is keyed by the TYPE of the event it strikes: a forfeit, an abandon and a sport event are three tokens", () => {
+    const forfeit = { type: "core.forfeit", payload: { by: "H", reason: "retired" } };
+    const abandon = { type: "core.abandon", payload: { reason: "rain" } };
+    const goal = { type: "football.goal", payload: { by: "H" } };
+    const void_ = (id: string): GoldenEvent => ({ type: "core.void", payload: {}, voids: id });
+    const have = (events: GoldenEvent[]) => recordedTokens({ ...base, streams: [stream(events)] });
+    expect(have([START, forfeit, void_("e-1")]).has(undoToken("core.forfeit"))).toBe(true);
+    expect(have([START, forfeit, void_("e-1")]).has(undoToken("core.abandon"))).toBe(false);
+    expect(have([START, abandon, void_("e-1")]).has(undoToken("core.abandon"))).toBe(true);
+    expect(have([START, goal, void_("e-1")]).has(undoToken("football.goal"))).toBe(true);
+    // a stream with no void records no undo token at all
+    expect([...have([START, goal])].filter((t) => t.startsWith("undo:"))).toEqual([]);
+  });
+
+  it("a void with no target, or one that does not point at an EARLIER event, is refused by name (a recorded ledger the fold would refuse)", () => {
+    const run = (events: GoldenEvent[]) => () => recordedTokens({ ...base, streams: [stream(events)] });
+    expect(run([START, { type: "core.void", payload: {} }])).toThrow(/core\.void.*no target/);
+    expect(run([START, { type: "core.void", payload: {}, voids: "e-5" }])).toThrow(/core\.void.*e-5/);
+    expect(run([START, { type: "core.void", payload: {}, voids: "e-1" }])).toThrow(/core\.void.*e-1/);
+  });
+
+  it("an abandon that STANDS (no void strikes it) is a token of its own: striking it does not count as ending a match on it", () => {
+    const abandon = { type: "core.abandon", payload: { reason: "rain" } };
+    const void_ = (id: string): GoldenEvent => ({ type: "core.void", payload: {}, voids: id });
+    const have = (events: GoldenEvent[]) => recordedTokens({ ...base, streams: [stream(events)] });
+    expect(have([START, abandon]).has(standingToken("core.abandon"))).toBe(true);
+    expect(have([START, abandon, void_("e-1")]).has(standingToken("core.abandon"))).toBe(false);
+    // two abandons, one struck: the other still stands
+    expect(have([START, abandon, void_("e-1"), abandon]).has(standingToken("core.abandon"))).toBe(true);
+    expect(have([START, abandon]).has(eventToken("core.abandon"))).toBe(true);
+  });
+
+  it("the standing kernel events are declared, real core types, and required in EVERY sport", () => {
+    expect(STANDING_KERNEL.length).toBeGreaterThan(0);
+    for (const type of STANDING_KERNEL) expect(CORE_TYPES, type).toContain(type);
+    let sports = 0;
+    forEachSport(({ module, key }) => {
+      for (const type of STANDING_KERNEL) expect(floorRequirement(module, corpusOf(key)).required.has(standingToken(type)), `${key} ${type}`).toBe(true);
+      sports++;
+    });
+    expect(sports).toBe(builtinModules.length);
+  });
+
+  it("the decisive kernel events a phone can mis-tap are declared, real core types, and required in EVERY sport", () => {
+    expect(UNDOABLE_KERNEL.length).toBeGreaterThan(0);
+    for (const type of UNDOABLE_KERNEL) expect(CORE_TYPES, type).toContain(type);
+    let sports = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      for (const type of UNDOABLE_KERNEL) expect(req.required.has(undoToken(type)), `${key} ${type}`).toBe(true);
+      sports++;
+    });
+    expect(sports).toBe(builtinModules.length);
+    expect(football).toBeDefined();
   });
 });
 
