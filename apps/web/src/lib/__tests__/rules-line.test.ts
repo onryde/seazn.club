@@ -26,6 +26,22 @@ describe("rulesLineText", () => {
     expect(rulesLineText(frPublic, fast4)).not.toBe(rulesLineText(enPublic, fast4));
   });
 
+  it("the LINE starts with a capital, whichever clause leads - and only the first letter is touched (W2c Task 16)", () => {
+    // Clauses are written to sit anywhere in a line, so they begin lowercase ("walkover 2–0", "penalties (5 each)").
+    // The joiner capitalises the sentence's first letter, once; a clause that leads with a digit is left alone.
+    const lowerFirst: RulesClause[] = [
+      { key: "format.rules.decider.extraTime", params: { n: 15 } },
+      { key: "format.rules.decider.penalties", params: { n: 5 } },
+    ];
+    expect(rulesLineText(enPublic, lowerFirst)).toBe("Extra time (2 × 15 min), penalties (5 each)");
+    expect(rulesLineText(enPublic, [lowerFirst[1]!, lowerFirst[0]!])).toBe("Penalties (5 each), extra time (2 × 15 min)");
+    expect(rulesLineText(enPublic, [{ key: "format.rules.period.halves", params: { m: 45 } }, lowerFirst[0]!])).toBe(
+      "2 halves of 45 min, extra time (2 × 15 min)",
+    );
+    // The same in a locale whose first letter is an accented capital candidate.
+    expect(rulesLineText(frPublic, lowerFirst).charAt(0)).toBe(rulesLineText(frPublic, lowerFirst).charAt(0).toUpperCase());
+  });
+
   it("a one-clause line is that clause alone, with no joiner", () => {
     const swiss: RulesClause[] = [{ key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } }];
     expect(rulesLineText(enPublic, swiss)).toBe(t(enPublic, swiss[0]!.key, swiss[0]!.params));
