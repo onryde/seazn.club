@@ -488,6 +488,13 @@ colour; the colour only LABELS (`arbiter.ts:283-286` and `:539-542` map white/bl
   Today's are `fixturesSeating` (`seated.ts`: a player seated on either side), the stale-meeting
   deletes in `openRound` and `retireStaleMeeting` (both rows go), and `endRoomAtResult` (ends
   every unended row, each in its own try).
+  **What counts, as built.** A reference counts when its own predicate, `on` or insert column list
+  compares `fixture_id`. A bare scan, one with no fixture predicate at all (the sweep's
+  `teardownCandidates` and `cameraCandidates`, and the scan of participants in `arbiterCandidates`),
+  does not count, but it must SELECT `side` (its per-row consumer needs it) or be identified by its
+  own primary key (`arbiterCandidates` selects `vp.id` and revokes by it). The guard also fails on any
+  mention of a video table that is not one of those five reference shapes (`lock table`, `using`, a
+  plain string), so a shape it cannot read is never skipped.
 
 **Schema** (a new delta after V446, D21's call-budget delta; numbered at the time):
 - `fixture_video_meetings` gains `side text not null check (side in ('home','away'))`. Its
