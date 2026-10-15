@@ -171,6 +171,12 @@ const REST = [
   // external-play read. Neither begins with "c".
   "src/server/public-site/__tests__/match-centre-online-live.test.ts",
   "src/server/public-site/__tests__/public-fixture-external-play.test.ts",
+  // W2c (format matrix): the rule-family describers (Task 16, describe-rules-families), the stage line's own
+  // suite (stage-format-lines, since batch 4) and the qualification points parity (Task 9). None begins with "c",
+  // so all three belong here; this gate reddened on them as each landed.
+  "src/server/public-site/__tests__/describe-rules-families.test.ts",
+  "src/server/public-site/__tests__/qualification-points-parity.test.ts",
+  "src/server/public-site/__tests__/stage-format-lines.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
