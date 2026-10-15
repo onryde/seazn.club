@@ -10,6 +10,8 @@
 // typed plan table. Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -265,5 +267,52 @@ describe.skipIf(!HAS_DB)("fix round 3 N1: the FORMAT_LOCKED check UNDER the divi
     expect(await stageIds(divisionId), "the stage graph stands").toEqual(before);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where id = ${fixtureId}`;
     expect(n, "the fixture the delete would have cascaded away is still there").toBe(1);
+  });
+});
+
+// Batch 4 review I1. `createStages` read the division's variant and config on its own and wrote the stage's preset from
+// that read, without the division lock `patchDivision` takes to change the variant and re-seed the stages that stand. A
+// create that read `t20` just before the change committed stored `superOver: true` on a knockout that now ran under
+// `test` (a rules fragment the stage's own save refuses: stageRulesProblem), and slipped past the checks the division
+// save asks of the stages that stand. The lock is taken first thing in `insertStageBatch`, and the division is read
+// after it. Expected values are the engine's own `stageDefaultsFor`, never a typed rules object.
+describe.skipIf(!HAS_DB)("batch 4 I1: createStages reads the division UNDER the division lock", () => {
+  const cricket = builtinModules.find((m) => m.key === "cricket") as unknown as AnySportModule;
+
+  it("a variant change committed while the create waits on the lock is the variant its knockout is seeded from (t20 -> test)", async () => {
+    const t20 = stageDefaultsFor(cricket, "knockout", "t20");
+    const test = stageDefaultsFor(cricket, "knockout", "test");
+    // The premise: the two variants disagree, so a stale read is visible in the stored stage.
+    expect(Object.keys(t20).length, "premise: a t20 knockout declares a super over").toBeGreaterThan(0);
+    expect(test, "premise: a test match declares none").toEqual({});
+
+    const auth = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Cl Cup " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: "cricket", variant_key: "t20", config: {},
+    });
+    expect(await stageIds(division.id), "premise: no stage yet").toEqual([]);
+
+    let create!: Promise<Awaited<ReturnType<typeof createStages>>>;
+    let settled = false;
+    await sql.begin(async (holder) => {
+      // The exact key patchDivision takes: hashtext('division:' || id).
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + division.id}))`;
+      const [held] = await holder<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      create = createStages(auth, division.id, { seq: 1, kind: "knockout", name: "Final", config: {}, progression: null });
+      create.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      // Parked, or finished without waiting: the second is the defect, and it is reported as one rather than as a timeout.
+      await until("createStages parks behind the held division lock (or finishes without waiting for it)", async () =>
+        settled || (await waitersOn(held!.pid)).length === 1);
+      // The variant change commits while the create is (or should be) waiting: what patchDivision's save leaves behind.
+      await holder`update divisions set variant_key = 'test', config = ${holder.json(cricket.variants.test as never)} where id = ${division.id}`;
+    });
+    const [stage] = await create;
+    const rules = (await sql<{ r: unknown }[]>`select config -> 'rules' as r from stages where id = ${stage!.id}`)[0]!.r;
+    expect(rules, "the knockout is seeded from the variant that stands at commit (test), not the one read before the lock").toBeNull();
+    expect(settled, "the create ran to completion after the lock was released").toBe(true);
   });
 });
