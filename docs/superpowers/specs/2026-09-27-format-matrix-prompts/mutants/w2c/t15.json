@@ -488,7 +488,7 @@
  {
   "id": "t15-reload-not-deduped",
   "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
-  "find": "      if (rulesReloadRef.current !== null) return rulesReloadRef.current;\n",
+  "find": "        if (inFlight !== null) return atLeast === undefined || waited ? inFlight : inFlight.then(() => attempt(true));\n",
   "replace": "",
   "killers": [
    {

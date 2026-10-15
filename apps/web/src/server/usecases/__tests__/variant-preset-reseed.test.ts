@@ -227,6 +227,22 @@ describe.skipIf(!HAS_DB)("R-T12-2 a division variant change re-seeds its unstart
     expect(mine(), "the knockout's super over went with the variant: told once more, not twice").toBe(2);
   });
 
+  it("m-1: a variant change whose config is sent back unchanged moved only the variant, and the public pages are still told", async () => {
+    // No two declared variants parse to the same config (probed over the registry), so this is reachable only by sending
+    // the stored config with the new variant: the variant KEY moved, the config did not.
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "cricket", "t20");
+    const [{ config, variant_key: before }] = await sql<{ config: Record<string, unknown>; variant_key: string }[]>`
+      select config, variant_key from divisions where id = ${divisionId}`;
+    const mine = () => revalidated.filter((d) => d === divisionId).length;
+    await patchDivision(auth, divisionId, { variant_key: "odi", config } as never);
+    const [{ config: after, variant_key: now }] = await sql<{ config: Record<string, unknown>; variant_key: string }[]>`
+      select config, variant_key from divisions where id = ${divisionId}`;
+    expect(now, "premise: the variant moved").not.toBe(before);
+    expect(after, "premise: and the stored config did not").toEqual(config);
+    expect(mine(), "the variant's public label moved: told once").toBe(1);
+  });
+
   it("empty case: a variant change on a division with no stages, or only table stages, re-seeds nothing and lands", async () => {
     const auth = await seedOrg();
     const { divisionId, competitionId } = await seedDivision(auth, "cricket", "t20");

@@ -572,7 +572,7 @@
  {
   "id": "t12-fr2-revalidate",
   "file": "apps/web/src/server/usecases/divisions.ts",
-  "find": "if (rewroteAwards || reseededStages.length > 0)",
+  "find": "if (formatMoved || rewroteAwards)",
   "replace": "if (rewroteAwards)",
   "killers": [
    {

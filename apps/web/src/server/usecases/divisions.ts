@@ -810,10 +810,9 @@ export async function patchDivision(
   // W2c Task 11 (carry (b) of the batch-3 re-review): whether this save re-wrote a stored walkover score. Set in the
   // transaction, read after it commits.
   let rewroteAwards = false;
-  // W2c Task 12 fix round 1 (R-T12-2): the stages a variant change re-seeded, set in the transaction, read after it.
-  let reseededStages: string[] = [];
   // Batch-5 m-1: whether this save stored a format that is not the one it replaced (the config or the variant). Set in the
-  // transaction, read after it commits - the public pages print the division's format, whichever match it moved.
+  // transaction, read after it commits - the public pages print the division's format, whichever match it moved. A variant
+  // change that re-seeded a stage's rules (W2c Task 12 R-T12-2) is one: the re-seed runs only for an applied variant.
   let formatMoved = false;
   const cameraGate = async (ptx: Tx) => {
     await ptx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
@@ -1227,7 +1226,7 @@ export async function patchDivision(
         // (`stage-preset-reseed.ts`), BEFORE the stages are re-asked below, so only a key the organiser chose meets the
         // new variant's allowlist. A refusal below rolls the re-seed back with the rest of the save.
         if (variantApplied) {
-          reseededStages = await reseedStagePresets(tx, {
+          await reseedStagePresets(tx, {
             divisionId: id, module: sportModule, fromVariant: current.variant_key, toVariant: effective.variant_key as string, actorId: auth.userId,
           });
         }
@@ -1340,8 +1339,8 @@ export async function patchDivision(
   // A variant change that re-seeded a stage's rules moved the format its public pages print (R-T12-2): the same tags.
   // Batch-5 m-1: and so does ANY stored format change - a config-only save that re-wrote no walkover and re-seeded no
   // stage still moved the hub's format line, the stage chips and the match centre; `putStageRules` and the per-match
-  // writer always fire, this door fired only on the two cases above.
-  if (formatMoved || rewroteAwards || reseededStages.length > 0) fireDivisionRevalidate(row.id, row.competition_id);
+  // writer always fire, this door fired only on the two cases above. The re-seed is covered by `formatMoved`.
+  if (formatMoved || rewroteAwards) fireDivisionRevalidate(row.id, row.competition_id);
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, matching the pattern in patchCompetition.
   if (previousSlug) {

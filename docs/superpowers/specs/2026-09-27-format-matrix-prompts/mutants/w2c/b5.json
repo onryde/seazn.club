@@ -130,7 +130,7 @@
     "files": [
      "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
     ],
-    "name": "the scene holds what the replaced subselects produced"
+    "name": "cup: concurrent and sequential reads both equal the pre-T4 read"
    }
   ]
  },
@@ -145,7 +145,7 @@
     "files": [
      "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
     ],
-    "name": "the scene holds what the replaced subselects produced"
+    "name": "cup: concurrent and sequential reads both equal the pre-T4 read"
    }
   ]
  },
@@ -160,7 +160,7 @@
     "files": [
      "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
     ],
-    "name": "the scene holds what the replaced subselects produced"
+    "name": "cup: concurrent and sequential reads both equal the pre-T4 read"
    }
   ]
  },
@@ -250,7 +250,7 @@
     "files": [
      "src/server/usecases/__tests__/variant-preset-reseed.test.ts"
     ],
-    "name": "the public pages are revalidated when a change re-seeded a stage"
+    "name": "m-1: a variant change whose config is sent back unchanged moved only the variant"
    }
   ]
  },
