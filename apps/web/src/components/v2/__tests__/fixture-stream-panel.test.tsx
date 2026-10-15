@@ -4125,6 +4125,90 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(reads()).toBe(4);
   });
 
+  // ─── ESLint L4: the mount reads and the code ask no longer set state from an effect ─────────────────────────────────────
+  // Each of these used to carry an `eslint-disable react-hooks/set-state-in-effect`. What the rewrite owes is pinned here:
+  // a Retry / another org is "loading" in the render that asks (not after it), the first code ask is not repeated by the
+  // polls that come while it is open, and a re-ask keeps the shown code until the new one lands. (A superseded answer
+  // never landing is the m2 / m-4 cases above and below — they kill the sequence guards the split kept.)
+  it("ESLint L4: Retry — and another org — show the list LOADING in the very render that asks, never the last answer", async () => {
+    const s = serve({ current: null, targets: TARGETS, failTargets: true });
+    const island = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(bodyOf(island).targets, "PREMISE: the failed read is on screen").toEqual({ status: "error" });
+    const inner = apiV1.getMockImplementation()!;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    apiV1.mockImplementation(async (url, o) => {
+      if (url === "/api/v1/orgs/o-1/stream-targets") await gate;
+      return inner(url, o);
+    });
+    s.failTargets = false;
+    bodyOf(island).onRetryTargets();
+    expect(bodyOf(island).targets, "no await: the render that asks is already loading").toEqual({ status: "loading" });
+    await settle();
+    expect(bodyOf(island).targets, "still in flight").toEqual({ status: "loading" });
+    release();
+    await settle();
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
+
+    // Another org's list: the previous org's answer is not shown under it while it is asked for.
+    let releaseOther: () => void = () => {};
+    const otherGate = new Promise<void>((r) => { releaseOther = r; });
+    apiV1.mockImplementation(async (url, o) => {
+      if (url === "/api/v1/orgs/o-2/stream-targets") { await otherGate; return [TARGETS[0]]; }
+      return inner(url, o);
+    });
+    island.rerender({ ...TAB, orgId: "o-2" });
+    expect(bodyOf(island).targets, "the other org starts from loading").toEqual({ status: "loading" });
+    releaseOther();
+    await settle();
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("ESLint L4: polls that come while the FIRST code ask is open do not ask again — the card draws loading meanwhile, then the code", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    s.code = () => gate.then(() => ({ qr: CODE_QR, issuedAt: "2026-09-14T11:00:00.000Z" }));
+    const island = track(await mount(s));
+    expect(ensures(), "the card asks at once").toBe(1);
+    expect(bodyOf(island).code, "in flight: loading").toEqual({ status: "loading" });
+    const before = phoneReads();
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 3);
+    await settle();
+    expect(phoneReads() - before, "PREMISE: the read model was polled while the ask was open").toBeGreaterThanOrEqual(3);
+    expect(ensures(), "still one ask").toBe(1);
+    release();
+    await settle();
+    expect(bodyOf(island).code).toMatchObject({ status: "ok", text: CODE_TEXT });
+    expect(ensures()).toBe(1);
+  });
+
+  it("ESLint L4: a code reissued elsewhere replaces the shown one when the new code LANDS — the shown code stays while it is asked for; a refused ask is the error card", async () => {
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    const island = track(await mount(s));
+    expect(bodyOf(island).code).toMatchObject({ status: "ok", text: CODE_TEXT });
+    const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    s.phone = readModel({ phone: null, code: { issuedAt: "2026-09-14T11:30:00.000Z", state: "active", endCause: null } });
+    s.code = () => gate.then(() => ({ qr: NEW, issuedAt: "2026-09-14T11:30:00.000Z" }));
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(ensures(), "the newer code was asked for").toBe(2);
+    expect(bodyOf(island).code, "in flight: the code that was valid until now is still the one shown").toMatchObject({ status: "ok", text: CODE_TEXT });
+    release();
+    await settle();
+    expect(bodyOf(island).code).toMatchObject({ status: "ok", text: captureQrV2Text(NEW) });
+    // A refused re-ask is the error card (with its Retry), not a code left on screen.
+    s.phone = readModel({ phone: null, code: { issuedAt: "2026-09-14T12:00:00.000Z", state: "active", endCause: null } });
+    s.code = () => { throw new TypeError("Failed to fetch"); };
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(ensures()).toBe(3);
+    expect(bodyOf(island).code).toEqual({ status: "error" });
+  });
+
   it("D1: the container never writes a destination — every call it makes is a read of the list or a session route", async () => {
     const s = serve({ current: null, targets: TARGETS });
     const island = track(await mount(s));
