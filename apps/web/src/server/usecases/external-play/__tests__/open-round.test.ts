@@ -1552,6 +1552,14 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
   const meetingsOf = (fixtureId: string) =>
     sql<{ meeting_id: string; ended_at: Date | null }[]>`
       select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId} order by side`;
+  /** Whether each row of the board still names the board's CURRENT pairing (a row marked for retirement, D16 review G1, does not). */
+  const samePairOf = async (fixtureId: string) =>
+    (
+      await sql<{ same: boolean }[]>`
+        select (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as same
+          from fixture_video_meetings m join fixtures f on f.id = m.fixture_id
+         where m.fixture_id = ${fixtureId} order by m.side`
+    ).map((r) => r.same);
   /** A meeting on file for the board's CURRENT pairing (R2-2: a meeting records the pair it was made for). */
   const insertMeeting = (fixtureId: string, meetingId: string, side: "home" | "away" = "home") =>
     sql`
@@ -1596,7 +1604,9 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
           // it (external-play-sweep.test.ts, in a parallel run) would skip this one, and this one would skip theirs.
           const report = await sweepExternalPlay({ now: later, orgIds: [s.orgId], endMeeting: rtk.end, serialise: false });
           expect(report.meetingsEnded, `${label}: premise — the sweep ended each of the unpaired board's two meetings`).toBe(2);
-          expect((await meetingsOf(fixtureId)).map((m) => m.ended_at === null), `${label}: premise — both ended`).toEqual([false, false]);
+          // D16 review G1: an unpaired board's rooms are stale (made for a pairing the board no longer has) and no game stands behind
+          // them, so the sweep ENDS each at the vendor and then DELETES its row - there is nothing left for the re-open to retire.
+          expect(await meetingsOf(fixtureId), `${label}: premise — both ended, and their rows retired`).toEqual([]);
         }
         await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
         const reopenAt = new Date(later.getTime() + MIN);
@@ -1682,7 +1692,11 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(checked, "anti-vacuity: stayers re-claimed").toBe(stayers.length);
   });
 
-  it("never silent, never blocking: RealtimeKit refusing the old meeting's end is logged by meeting, and the re-open and its invites stand", async () => {
+  // D16 review G1: the re-open used to DELETE the old pairing's rows in its transaction and end the rooms after the commit, so a
+  // refused end left an ACTIVE vendor room that no row tracked. The rows are now MARKED as belonging to no pairing in the
+  // transaction (so no claim reuses the room) and each room is ended after the commit with its row deleted only once the end
+  // succeeded; a refusal keeps the row for the next claim or the sweep.
+  it("never silent, never blocking, never orphaning: RealtimeKit refusing the old meeting's end is logged by meeting, the re-open and its invites stand, the row stays - and the next claim ends the room and seats the player in a fresh one", async () => {
     const rtk = fakeRtk();
     const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
     const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
@@ -1704,13 +1718,71 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), refuse)).toEqual({ opened: true, invited: 4, skipped: [] });
       expect(refuse.mock.calls).toEqual([[old!.meeting_id]]);
       expect(mail.sent, "every invite went out").toHaveLength(4);
-      expect(await meetingsOf(b!.fixtureId), "the row is gone all the same").toEqual([]);
-      const logged = errorSpy.mock.calls as unknown[][];
+      expect(await meetingsOf(b!.fixtureId), "the row is KEPT, unended: the room is still active upstream and still tracked").toEqual([{ meeting_id: old!.meeting_id, ended_at: null }]);
+      const logged = errorSpy.mock.calls.filter((c) => /could not end an earlier pairing's meeting/.test(String(c[1])));
       expect(logged).toHaveLength(1);
-      expect(logged[0]![0]).toMatchObject({ meetingId: old!.meeting_id, stageId: s.stageId, roundNo: 1 });
+      expect(logged[0]![0]).toMatchObject({ meetingId: old!.meeting_id, fixtureId: b!.fixtureId });
     } finally {
       errorSpy.mockRestore();
     }
+    // The heal: the player's next claim finds a room made for no pairing, ends it at the vendor, and seats them in a fresh one.
+    const mark = rtk.http.length;
+    const side = sideOnBoard(await swissRound1(s.stageId), b!.home!);
+    const healed = await rtk.video.ensureMeeting(b!.fixtureId, side);
+    expect(healed.meetingId, "a fresh room, not the old one").not.toBe(old!.meeting_id);
+    expect(rtk.http.slice(mark).filter((c) => c.startsWith("PATCH") && c.includes(old!.meeting_id)), "the old room was ended at the vendor").toHaveLength(1);
+    expect(await meetingsOf(b!.fixtureId)).toEqual([{ meeting_id: healed.meetingId, ended_at: null }]);
+  });
+
+  it("a re-open ends the room at the vendor BEFORE its row goes, and a room the re-open could not end is ended - and its row deleted - by the sweep's next pass", async () => {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+    const t0 = new Date();
+    expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+    const first = await swissRound1(s.stageId);
+    const fixtureId = first[0]!.fixtureId;
+    for (const entrant of [first[0]!.home, first[0]!.away]) {
+      expect((await seatThrough({ fixtureId, personId: personOf.get(entrant!)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video })).seated).toBe(true);
+    }
+    const olds = await meetingsOf(fixtureId);
+    expect(olds, "premise: a meeting per player").toHaveLength(2);
+    await unpairSwissRound(s.owner, s.stageId);
+    await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+    // The order: when the vendor is asked to end a room, its row is still on file (the one thing that tracks the active room).
+    const atEnd: { id: string; onFile: boolean }[] = [];
+    expect(
+      await reopen(s, new Date(t0.getTime() + 2 * MIN), async (id) => {
+        atEnd.push({ id, onFile: (await meetingsOf(fixtureId)).some((m) => m.meeting_id === id) });
+        await rtk.end(id);
+      }),
+    ).toMatchObject({ opened: true });
+    expect(atEnd.map((e) => e.id).sort(), "both players' rooms were ended").toEqual(olds.map((m) => m.meeting_id).sort());
+    expect(atEnd.map((e) => e.onFile), "each row was still on file when its room was ended").toEqual([true, true]);
+    expect(await meetingsOf(fixtureId), "and gone after").toEqual([]);
+
+    // The sweep: a second round of the same shape, the re-open's end refused, then a sweep pass with a working vendor.
+    const rtk2 = fakeRtk();
+    const s2 = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    const person2 = new Map(s2.players.map((p) => [p.entrantId, p.personId]));
+    const u0 = new Date();
+    expect(await open(s2, 1, u0)).toMatchObject({ opened: true });
+    const [b2] = await swissRound1(s2.stageId);
+    expect((await seatThrough({ fixtureId: b2!.fixtureId, personId: person2.get(b2!.home!)! }, { now: new Date(u0.getTime() + MIN), video: rtk2.video })).seated).toBe(true);
+    const [kept] = await meetingsOf(b2!.fixtureId);
+    await unpairSwissRound(s2.owner, s2.stageId);
+    await generateStageFixtures(s2.owner, s2.stageId, { pairing: "rank_adjacent" });
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      expect(await reopen(s2, new Date(u0.getTime() + 2 * MIN), async () => { throw new Error("staged: RealtimeKit down"); })).toMatchObject({ opened: true });
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(await meetingsOf(b2!.fixtureId), "premise: the refused end kept the row").toEqual([{ meeting_id: kept!.meeting_id, ended_at: null }]);
+    const report = await sweepExternalPlay({ now: new Date(u0.getTime() + 3 * MIN), orgIds: [s2.orgId], endMeeting: rtk2.end, serialise: false });
+    expect(report.meetingsEnded, "the sweep ended the room the re-open could not").toBe(1);
+    expect(rtk2.http.filter((c) => c.startsWith("PATCH") && c.includes(kept!.meeting_id))).toHaveLength(1);
+    expect(await meetingsOf(b2!.fixtureId), "and deleted its row").toEqual([]);
   });
 
   it("the positive pair: a re-open that KEEPS the window (a re-invite) deletes no meeting and ends nothing", async () => {
@@ -1759,6 +1831,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toMatchObject({ opened: true });
     expect(await auditTypes(s.competitionId), "premise: the window re-stamped").toEqual(["external_play.round_opened", "external_play.round_reopened"]);
     expect(await meetingsOf(gameBoard.fixtureId), "the game's meeting stands").toEqual([{ meeting_id: gameMeeting, ended_at: null }]);
+    expect(await samePairOf(gameBoard.fixtureId), "and is NOT marked for retirement: it still names the board's pairing").toEqual([true]);
     expect(await meetingsOf(b!.fixtureId), "the game-less board's meeting went").toEqual([]);
     expect(rtk.http.slice(mark).some((c) => c.includes(gameMeeting)), "the game's meeting is not ended").toBe(false);
   });
@@ -1801,6 +1874,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
         "external_play.round_reopened",
       ]);
       expect(await meetingsOf(board!.fixtureId), c.label).toEqual(c.kept ? [{ meeting_id: meeting, ended_at: null }] : []);
+      expect(await samePairOf(board!.fixtureId), `${c.label}: a spared meeting is not marked for retirement`).toEqual(c.kept ? [true] : []);
       expect(rtk.http.slice(mark).some((h) => h.includes(meeting)), `${c.label}: ended at RealtimeKit`).toBe(!c.kept);
       checked++;
     }
@@ -2516,10 +2590,37 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     expect(checked).toBe(2);
   });
 
-  // D21-fix m3: the stale meeting's row is already deleted, so nothing retries its end - which makes the log the only
-  // trace. A refusal by the platform's call budget is not a fault (warn); anything else still is (error).
+  it("the re-armed board's meeting whose end is REFUSED keeps its row (unended, marked for retirement): a re-arm never orphans an active room", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    await open(r, 1, new Date(Date.now() - 5 * MIN));
+    const a = r.boards[0]!;
+    const meetingId = `mtg-${randomUUID().slice(0, 12)}`;
+    await sql`
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      values (${a.fixtureId}, 'home', ${r.orgId}, ${meetingId}, ${a.home.entrantId}, ${a.away.entrantId})`;
+    await noResultThenVoid(r, a.fixtureId);
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      expect(
+        await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: async () => { throw new Error("test: down"); } }),
+      ).toEqual({ opened: true, invited: 2, skipped: [] });
+    } finally {
+      error.mockRestore();
+    }
+    expect(await sql`select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${a.fixtureId}`, "tracked, unended").toEqual([
+      { meeting_id: meetingId, ended_at: null },
+    ]);
+    // The row names no pairing, so nothing reuses the room: the next retire (a claim, or the sweep) takes it.
+    const ended: string[] = [];
+    const report = await sweepExternalPlay({ orgIds: [r.orgId], serialise: false, endMeeting: async (id) => void ended.push(id) });
+    expect([ended, report.meetingsEnded]).toEqual([[meetingId], 1]);
+    expect(await sql`select meeting_id from fixture_video_meetings where fixture_id = ${a.fixtureId}`).toEqual([]);
+  });
+
+  // D16 review G1 (was D21-fix m3): a refused end KEEPS the row now, so the log is no longer the only trace - but it is still
+  // how it is noticed. A refusal by the platform's call budget is not a fault (warn); anything else still is (error).
   it("a stale meeting's end the call budget DEFERS is logged as a warning, a real failure still as an error - and the open succeeds either way (counted)", async () => {
-    const message = /could not end a re-paired board's old meeting/;
+    const message = /could not end an earlier pairing's meeting/;
     let checked = 0;
     for (const failure of [new RealtimeKitDeferred("test: the call budget is spent"), new Error("test: the vendor fell over")]) {
       const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);

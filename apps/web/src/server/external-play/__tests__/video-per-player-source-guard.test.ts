@@ -53,10 +53,12 @@ const BOTH_SIDES: readonly BothSides[] = [
   },
   {
     file: "usecases/external-play/open-round.ts",
-    fn: "openRound",
+    fn: "retireBoardsMeetings",
     table: "fixture_video_meetings",
     times: 2,
-    reason: "a re-opened or re-armed board retires BOTH players' stale meetings (two deletes, each returning every row it took)",
+    reason:
+      "a re-opened or re-armed board retires BOTH players' meetings: the delete takes every ENDED row of the board, the update marks every still-active one " +
+      "(RETIRED_PAIR) for the room to be ended after the commit, each by board on purpose",
   },
   {
     file: "external-play/video/realtimekit.ts",

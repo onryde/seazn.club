@@ -26,12 +26,18 @@ import "server-only";
 //   - A board a game stands behind (or may: T9's create marker) is never
 //     invited into and counts on neither side of that rule.
 //   - A fresh window is a fresh pairing (final re-review N-2): the re-stamp
-//     deletes the video meetings of the round's boards that never had a game
-//     (their participants cascade), in the same transaction, and ends any
-//     still active at RealtimeKit after the commit, best effort. A meeting
-//     was one per fixture for life, so a re-paired board's new players met
-//     the old pairing's meeting — joined it, or, once the sweep had ended it,
-//     could not check in at all (VIDEO_MEETING_ENDED, under optional too).
+//     retires the video meetings of the round's boards that never had a game.
+//     A meeting was one per fixture for life, so a re-paired board's new
+//     players met the old pairing's meeting — joined it, or, once the sweep
+//     had ended it, could not check in at all (VIDEO_MEETING_ENDED, under
+//     optional too). An ENDED meeting's row is deleted in the transaction
+//     (its participants cascade); a still ACTIVE one is only MARKED there (its
+//     pair stamp set to belong to no pairing, so no claim reuses it) and, after
+//     the commit, its room is ended at RealtimeKit FIRST and its row deleted
+//     only once that succeeded (D16 review G1): the row is the only thing that
+//     tracks an active room, so a refused end keeps it, and the next claim or
+//     the sweep ends the room. The vendor call cannot sit inside the
+//     transaction, which is why this is two steps and not the claim's one.
 //   - Each seat is stamped BEFORE its mail is sent and un-stamped if the send
 //     fails, so a re-open retries it and nobody is mailed twice. A crash
 //     between the stamp and the send loses that one invite; the organiser's
@@ -40,6 +46,7 @@ import "server-only";
 // `stage_round_opens` is SEALED (FORCE RLS, no app_user grant), so the stamp
 // is written through the privileged `sql` client — which is why the actor is
 // authorised HERE, first, against the stage's own org, before any write.
+import type postgres from "postgres";
 import { getOrgRole } from "@/lib/auth";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -49,7 +56,7 @@ import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
-import { RealtimeKitDeferred, endMeeting, gameEvidenceOn } from "@/server/external-play/video/realtimekit";
+import { RETIRED_PAIR, endMeeting, gameEvidenceOn, retireStaleMeeting } from "@/server/external-play/video/realtimekit";
 import { roomPhase } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
@@ -81,7 +88,7 @@ export async function roundOpenedAt(a: { stageId: string; roundNo: number }): Pr
 export type OpenRoundDeps = {
   now?: Date;
   origin?: string;
-  /** T7's teardown, for the meetings a re-stamp deletes (N-2). */
+  /** T7's teardown, for the meetings a re-stamp retires (N-2). */
   endMeeting?: (meetingId: string) => Promise<void>;
 };
 
@@ -103,6 +110,31 @@ type RoundFixtureRow = {
 
 type Board = { f: OnlinePlayFixture; seats: [InviteSeat, InviteSeat] };
 
+type Tx = postgres.TransactionSql | postgres.Sql;
+
+/** D16 review G1: retire the video meetings of these boards in the open's transaction - BOTH players' rows, by board on purpose
+ *  (allow-listed in the source guard). An ENDED meeting has no room left upstream, so its row is deleted here (its participants
+ *  cascade). A still ACTIVE one is only MARKED (RETIRED_PAIR): its row is the only thing that tracks the active room, so it
+ *  must survive until the room is ended, which is an HTTP call and cannot happen inside this transaction; the caller ends each
+ *  room after the commit and deletes the row then (retireStaleMeeting). A board a game IS or MAY BE on file behind keeps its
+ *  meeting, unmarked - the camera evidence of that game (N-2; gameEvidenceOn, the one rule ensureMeeting keeps too). The
+ *  re-arm's boards are game-less by their own selection (a finished bridge with no challenge, no create marker, no move), so
+ *  the same clause spares nothing there. Returns the boards that have a room to end. */
+async function retireBoardsMeetings(tx: Tx, fixtureIds: readonly string[], now: Date): Promise<string[]> {
+  if (fixtureIds.length === 0) return [];
+  const spare = tx`and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
+  await tx`
+    delete from fixture_video_meetings m
+     where m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is not null ${spare}`;
+  const marked = await tx<{ fixture_id: string }[]>`
+    update fixture_video_meetings m
+       set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
+     where m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is null ${spare}
+    returning m.fixture_id`;
+  return [...new Set(marked.map((r) => r.fixture_id))];
+}
+
+
 type BridgeFactsRow = InviteBridgeFacts & {
   fixture_id: string;
   round_open_id: string | null;
@@ -114,7 +146,7 @@ type Claim = { board: Board; seat: InviteSeat };
 
 type Decision =
   | { kind: "nothing"; skipped: OpenRoundSkip[] }
-  | { kind: "opened" | "reopened" | "reinvited"; open: RoundOpenRow; claims: Claim[]; staleMeetings: string[] };
+  | { kind: "opened" | "reopened" | "reinvited"; open: RoundOpenRow; claims: Claim[]; retireBoards: string[] };
 
 const AUDIT_TYPE = {
   opened: "external_play.round_opened",
@@ -319,7 +351,7 @@ export async function openRound(
 
     let open: RoundOpenRow;
     let kind: "opened" | "reopened" | "reinvited";
-    let staleMeetings: string[] = [];
+    let retireBoards: string[] = [];
     if (!existing) {
       const [row] = await tx<RoundOpenRow[]>`
         insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
@@ -346,17 +378,7 @@ export async function openRound(
       // window are kicked too, because the window starts now for everyone. Only the still-active meetings are ended
       // at RealtimeKit, after the commit. D16: a board has a meeting PER PLAYER and this deletes BY BOARD on purpose -
       // both rows go, and every one returned is ended below, not the first (allow-listed in the source guard).
-      staleMeetings = (
-        await tx<{ meeting_id: string; ended_at: Date | null }[]>`
-          delete from fixture_video_meetings m
-           where m.fixture_id in ${tx(ids)}
-             and not exists (
-               select 1 from fixture_external_play ep
-                where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})
-          returning m.meeting_id, m.ended_at`
-      )
-        .filter((r) => r.ended_at === null)
-        .map((r) => r.meeting_id);
+      retireBoards = await retireBoardsMeetings(tx, ids, now);
     } else {
       open = existing;
       kind = "reinvited";
@@ -376,15 +398,7 @@ export async function openRound(
     // on purpose (allow-listed in the source guard).
     if (rearmed.size > 0) {
       const rearmedIds = [...rearmed];
-      staleMeetings.push(
-        ...(
-          await tx<{ meeting_id: string; ended_at: Date | null }[]>`
-            delete from fixture_video_meetings where fixture_id in ${tx(rearmedIds)}
-            returning meeting_id, ended_at`
-        )
-          .filter((r) => r.ended_at === null)
-          .map((r) => r.meeting_id),
-      );
+      retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now)));
       await tx`delete from fixture_external_play where fixture_id in ${tx(rearmedIds)}`;
     }
 
@@ -397,26 +411,26 @@ export async function openRound(
         }
       }
     }
-    return { kind, open, claims, staleMeetings };
+    return { kind, open, claims, retireBoards: [...new Set(retireBoards)] };
   });
 
   if (decision.kind === "nothing") {
     return { opened: false, reason: "already_open", skipped: decision.skipped };
   }
 
-  // N-2: its row is gone, so nothing of ours hands out a token for it again; ending it stops the old pairing's
-  // cameras at the vendor. Best effort and never silent — a failure leaves an unused meeting, never a blocked open.
-  for (const meetingId of decision.staleMeetings) {
+  // N-2: each marked board's old rooms are ended at the vendor, stopping the old pairing's cameras, and each row is deleted only
+  // after its end succeeded (retireStaleMeeting, the claim's own retire). Never blocking: a refusal keeps the row, which names
+  // no pairing, so no claim reuses the room and the next claim or the sweep ends it - the open and its invites stand. The
+  // refusal is logged by meeting inside the retire (a call the platform's budget refused as a warning, anything else as an
+  // error); this line only adds which round it was.
+  for (const fixtureId of decision.retireBoards) {
     try {
-      await (deps.endMeeting ?? endMeeting)(meetingId);
+      await retireStaleMeeting(fixtureId, now, (meetingId) => (deps.endMeeting ?? endMeeting)(meetingId));
     } catch (err) {
-      // D21-fix (m3): a call the platform's budget refused is nothing broken - warn, not error. The row is gone, so nothing
-      // retries it (the sweep ends meetings it has a row for): the old meeting stays at the vendor, unused, and no
-      // participant of ours holds a token for it.
-      const fields = { stageId: a.stageId, roundNo: a.roundNo, meetingId, err: err instanceof Error ? err.message : String(err) };
-      const message = "openRound: could not end a re-paired board's old meeting at RealtimeKit — its row is gone and it is no longer used";
-      if (err instanceof RealtimeKitDeferred) log.warn(fields, message);
-      else log.error(fields, message);
+      log.warn(
+        { stageId: a.stageId, roundNo: a.roundNo, fixtureId, err: err instanceof Error ? err.message : String(err) },
+        "openRound: a re-paired board's old meeting could not be retired - its row is kept and the next claim or the sweep ends it",
+      );
     }
   }
 

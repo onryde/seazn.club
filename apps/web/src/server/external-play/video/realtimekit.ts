@@ -329,6 +329,13 @@ async function meetingOnFile(fixtureId: string, side: MeetingSide, now: Date): P
   return row ?? null;
 }
 
+/** The pair stamp of a meeting that belongs to NO pairing: the nil uuid, which no entrant has. `openRound` writes it on a
+ *  fresh window's old meetings (D16 review G1) in place of deleting them: the row must outlive the vendor call that ends its
+ *  room, because the row is the only thing that tracks an ACTIVE room, and a row whose stamp matches no pairing is exactly
+ *  what the retire path already ends and deletes (a claim's `retireStaleMeeting`, and the sweep's teardown). The stamp is "a
+ *  stamp to compare, never joined" (V439), so this needs no schema. */
+export const RETIRED_PAIR = "00000000-0000-0000-0000-000000000000";
+
 /** R2-2: retire the board's meetings if they are (still) another pairing's with no game behind them: each room is ENDED at
  *  RealtimeKit, so no token of the old pairing is live in it, and only THEN is its row deleted (its participants cascade:
  *  the player who moved, and the one who stayed, who re-seats into the new pairing's meeting). The order is the point (D16
