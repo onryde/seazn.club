@@ -134,6 +134,25 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     for (const t of recorded) expect(verdicts.get(t)?.verdict, t).toBe("pinned");
   });
 
+  it("the lineup chain credits each type with only what it ADDS: a hook that reacts to who is on the field sees substitution, retirement and entry, not a position change", () => {
+    const boardgame = builtinModules.find((m) => m.key === "boardgame")!;
+    // the kernel hands the hook the squads after every lineup change; this one writes only WHO is on the field, which a
+    // substitution, a retirement and an entry change and a position change does not
+    const onFieldOnly = {
+      ...boardgame,
+      onLineup: (state: object, squads: { home: { members: { onField: boolean; personId: string }[] }; away: { members: { onField: boolean; personId: string }[] } }) => ({
+        ...state,
+        onField: [...squads.home.members, ...squads.away.members].filter((m) => m.onField).map((m) => m.personId).join(","),
+      }),
+    } as unknown as typeof boardgame;
+    const verdicts = overlayVerdicts(onFieldOnly, corpusOf("boardgame"));
+    const verdictOf = (type: string) => verdicts.get(eventToken(type))?.verdict;
+    expect(verdictOf("core.lineup.position"), "a position change moves nobody on or off the field").toBe("unpinned");
+    expect(verdictOf("core.lineup.substitution")).toBe("pinned");
+    expect(verdictOf("core.lineup.retirement")).toBe("pinned");
+    expect(verdictOf("core.lineup.entry")).toBe("pinned");
+  });
+
   it("an unrecorded event is 'unrecorded', never 'unpinned' (an empty corpus claims nothing, so no claim can hold vacuously)", () => {
     forEachSport(({ module, key }) => {
       const empty: GoldenCorpus = { ...corpusOf(key), streams: [] };

@@ -247,6 +247,24 @@ describe("the undo stream strikes the KERNEL events that decide or end a match, 
     expect(proofs).toBeGreaterThanOrEqual(builtinModules.length * UNDOABLE_KERNEL.length);
   });
 
+  it("each sport's undo stream holds a LATE correction: a sport event struck after later play, so the void is not next to its target (review finding 4)", () => {
+    let late = 0;
+    forEachSport(({ key }) => {
+      const undo = readCorpus(key).streams.filter((s) => isFloor(s) && s.seed < 2 * FLOOR_SEED_STRIDE);
+      expect(undo.length, `${key}: one undo stream`).toBe(1);
+      const events = undo[0]!.events;
+      const gaps = events.flatMap((e, v) => {
+        if (e.type !== "core.void") return [];
+        const t = Number(e.voids!.slice(2));
+        return events[t]!.type.startsWith("core.") ? [] : [v - t];
+      });
+      expect(gaps.length, `${key}: voids of sport events`).toBeGreaterThanOrEqual(2);
+      expect(Math.max(...gaps), `${key}: some correction is not immediate`).toBeGreaterThan(1);
+      late++;
+    });
+    expect(late).toBe(builtinModules.length);
+  });
+
   it("the standing abandon streams of the floor are real: an abandon no void strikes, in force at the end", () => {
     let standing = 0;
     forEachSport(({ key }) => {
@@ -302,6 +320,27 @@ describe("strikeKernelEvent — every guard of the splice is reached (a guard no
     const bareStart = [START, ledger.find((e) => !e.type.startsWith("core."))!];
     expect(strikeKernelEvent(ctx, cfg, lineups, bareStart, { ...dq, needsPlay: false }, 1), "without the play rule the fold admits it").not.toBeNull();
     expect(strikeKernelEvent(ctx, cfg, lineups, bareStart, dq, 1), "with it, nothing has been played before the splice point").toBeNull();
+  });
+
+  it("an abandon is 'in force' only on the kernel's own refusal: struck right after a bare Start, where a forfeit is refused for ANOTHER reason, it still splices", () => {
+    const play = ledger.find((e) => !e.type.startsWith("core."))!;
+    // [Start, play]: the splice point 1 has a bare Start before it, so the probe forfeit is refused by the phase guard
+    // (nothing played) once the abandon is voided - a refusal that is NOT ABANDONED_SETTLE_OR_VOID, and so not "in force"
+    const spliced = strikeKernelEvent(ctx, cfg, lineups, [START, play], abandon!, 1);
+    expect(spliced, "the void clears the abandon; the refusal that remains is a different one").not.toBeNull();
+    expect(spliced!.map((e) => e.type)).toEqual(["core.start", "core.abandon", "core.void", play.type]);
+  });
+
+  it("a void that leaves the module in a different state than before is not spliced (a module whose fold is not a function of the ledger)", () => {
+    let tick = 0;
+    const impure = {
+      ...module,
+      apply: (state: object, event: never, ...rest: never[]) => ({ ...(module.apply as (...a: unknown[]) => object)(state, event, ...rest), tick: ++tick }),
+    } as unknown as typeof module;
+    const impureCtx: Ctx = { ...ctx, module: impure };
+    expect(strikeKernelEvent(impureCtx, cfg, lineups, ledger, forfeit!, 2), "the same ledger folded twice differs").toBeNull();
+    // and the pure module splices the very same ledger: it is the state check that refused
+    expect(strikeKernelEvent(ctx, cfg, lineups, ledger, forfeit!, 2)).not.toBeNull();
   });
 
   it("a ledger whose remaining events hold a void is not spliced (the splice does not rewrite ids)", () => {

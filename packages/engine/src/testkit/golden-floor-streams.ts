@@ -202,10 +202,11 @@ export function kernelStrikes(lineups: LineupPair): readonly KernelStrike[] {
 /** Records the strike's event at a point of `ledger` where the match is live and the kernel admits it, strikes it with
  *  `core.void` at once, and lets the ledger's remaining events play on to the result they always had. Only a point at or
  *  after `atLeast` is tried, nearest the middle first, so an earlier splice is never disturbed. Asserted by the fold before
- *  a splice is returned: the event TAKES EFFECT (`inForce`), the void CLEARS it and leaves the module state exactly as it
- *  was, and the whole ledger — every prefix of it — folds strictly to the result the unspliced ledger had. */
+ *  a splice is returned: the event TAKES EFFECT (`inForce`), and the void CLEARS it and leaves the module state exactly as
+ *  it was. Nothing further is asserted of the whole ledger, because nothing further can differ: its tail is the unspliced
+ *  ledger's own events folded from that same state, no void sits in it (declined above), and a void is resolved before
+ *  dispatch. `buildUndo` folds the finished ledger strictly and `recomputeStream` folds every prefix of it. */
 export function strikeKernelEvent(ctx: Ctx, cfg: unknown, lineups: LineupPair, ledger: readonly GoldenEvent[], strike: KernelStrike, atLeast: number): GoldenEvent[] | null {
-  const result = effectiveToken(ctx, cfg, lineups, ledger);
   const mid = Math.floor((atLeast + ledger.length) / 2);
   const points: number[] = [];
   for (let q = atLeast; q < ledger.length; q++) points.push(q);
@@ -225,8 +226,6 @@ export function strikeKernelEvent(ctx: Ctx, cfg: unknown, lineups: LineupPair, l
       if (!strike.inForce(ctx, cfg, lineups, decided)) continue;
       if (strike.inForce(ctx, cfg, lineups, reopened)) continue;
       if (JSON.stringify(outcomeAfter(ctx, cfg, lineups, reopened).state) !== JSON.stringify(outcomeAfter(ctx, cfg, lineups, head).state)) continue;
-      if (effectiveToken(ctx, cfg, lineups, full) !== result) continue;
-      for (let i = 1; i <= full.length; i++) effectiveToken(ctx, cfg, lineups, full.slice(0, i));
     } catch {
       continue;
     }

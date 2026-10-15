@@ -127,6 +127,13 @@ describe("golden floor — an undo of a KERNEL event is a token of its own (revi
     expect(sports).toBe(builtinModules.length);
   });
 
+  it("the decisive kernel events are exactly the two that decide or end a match: a forfeit and an abandon (review finding 2)", () => {
+    // Typed from the rulebook (a forfeit decides the match, an abandon ends play), NOT read off UNDOABLE_KERNEL: dropping
+    // one from the list would otherwise shrink every loop that iterates it and stay green.
+    expect([...UNDOABLE_KERNEL].sort()).toEqual(["core.abandon", "core.forfeit"]);
+    expect([...STANDING_KERNEL]).toEqual(["core.abandon"]);
+  });
+
   it("the decisive kernel events a phone can mis-tap are declared, real core types, and required in EVERY sport", () => {
     expect(UNDOABLE_KERNEL.length).toBeGreaterThan(0);
     for (const type of UNDOABLE_KERNEL) expect(CORE_TYPES, type).toContain(type);
