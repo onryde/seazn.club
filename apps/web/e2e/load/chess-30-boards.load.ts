@@ -9,7 +9,7 @@
  * long does a sweep pass take while all of it is going on.
  *
  * WHAT IT DRIVES. The real server (a production build, started as docs/runbooks/e2e-local.md says) over HTTP, as the
- * players' browsers would: each player claims the seat on their personal link, joins the (fixture) meeting when told
+ * players' browsers would: each player claims the seat on their personal link, joins their own (fixture) meeting when told (D16: a meeting per player)
  * to, re-asks on the room's own back-off (1, 2, 4, 8 s), polls
  * the room every 3 s while the game is live (use-room.ts LIVE_POLL_MS - the polling fallback, i.e. no realtime push:
  * the worst case for reads), and moves when it is their turn after a think. Both vendors are the repo's own fixture
@@ -623,13 +623,21 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     // vendor's session and peer reports - the part of the platform's RealtimeKit demand that is not a seat - show up.
     const fixtureIds = round.boards.map((b) => b.fixtureId);
     // Camera off makes no meeting; the camera evidence is read for REQUIRED boards only (sweep.ts job 5).
+    // D16 (spec 5.6.1): a meeting per PLAYER, so a board with a camera has TWO rooms - home's and away's - and the ledger
+    // counts rooms, not boards. The two is the spec's number, typed here; `boardsWithBothRooms` proves the rooms are one of
+    // each side and not two of the same.
+    const MEETINGS_PER_BOARD = 2;
     const meetingIds = round.boards.filter((b) => b.policy !== "off").map((b) => b.fixtureId);
     const requiredIds = round.boards.filter((b) => b.policy === "required").map((b) => b.fixtureId);
     const evidenceState = async () => {
-      const [row] = await monitor<{ total: number; ended: number; settled: number }[]>`
+      const [row] = await monitor<{ total: number; ended: number; settled: number; both: number }[]>`
         select count(*)::int as total,
                count(*) filter (where ended_at is not null)::int as ended,
-               count(*) filter (where camera_evidence_at is not null and fixture_id = any(${monitor.array(requiredIds)}::uuid[]))::int as settled
+               count(*) filter (where camera_evidence_at is not null and fixture_id = any(${monitor.array(requiredIds)}::uuid[]))::int as settled,
+               (select count(*)::int from (
+                  select fixture_id from fixture_video_meetings
+                   where fixture_id = any(${monitor.array(meetingIds)}::uuid[])
+                   group by fixture_id having count(distinct side) = 2) both_sides) as both
           from fixture_video_meetings
          where fixture_id = any(${monitor.array(meetingIds)}::uuid[])`;
       return row!;
@@ -641,7 +649,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       const pass = await sweepOnce();
       evidence = await evidenceState();
       evidenceChecks += 1;
-      if (!pass.skipped && evidence.ended === evidence.total && evidence.settled === requiredIds.length) break;
+      if (!pass.skipped && evidence.ended === evidence.total && evidence.settled === requiredIds.length * MEETINGS_PER_BOARD) break;
       await sleep(EVIDENCE_SWEEP_EVERY_S * 1_000);
     }
     times.evidenceSettled = Date.now();
@@ -842,9 +850,10 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     expect(dbSamples.length, "anti-vacuity: the connection sampler looked").toBeGreaterThan(10);
     expect(peakConnections, "database connections at the peak, under the production budget").toBeLessThan(LOAD_LIMITS.dbConnectionBudget);
     expect(sweepRuns.length, "anti-vacuity: at least one sweep pass ran to the end").toBeGreaterThan(0);
-    expect(evidence.total, "anti-vacuity: every board with a camera has a meeting").toBe(meetingIds.length);
-    expect(evidence.ended, "teardown: every meeting ended").toBe(meetingIds.length);
-    if (REPORTS_FINAL) expect(evidence.settled, "the sweep read every REQUIRED board's camera evidence").toBe(requiredIds.length);
+    expect(evidence.total, "anti-vacuity: every board with a camera has a meeting PER PLAYER (D16)").toBe(meetingIds.length * MEETINGS_PER_BOARD);
+    expect(evidence.both, "and the two are one of each side").toBe(meetingIds.length);
+    expect(evidence.ended, "teardown: every meeting ended").toBe(meetingIds.length * MEETINGS_PER_BOARD);
+    if (REPORTS_FINAL) expect(evidence.settled, "the sweep read every REQUIRED board's camera evidence, both rooms").toBe(requiredIds.length * MEETINGS_PER_BOARD);
     // D21-fix-3: no board stranded, no wrong refusal, and every optional seat the budget left tokenless got its tile.
     for (const [policy, row] of Object.entries(byPolicy)) {
       expect(row.boardsWithoutGame, `${policy}: every board got a game`).toBe(0);
