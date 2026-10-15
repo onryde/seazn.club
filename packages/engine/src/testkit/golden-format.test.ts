@@ -31,6 +31,7 @@ import {
   verifyStream,
   writeRefusal,
   type GoldenCorpus,
+  type WriteGateProbes,
   type GoldenEvent,
   type GoldenStream,
 } from "./golden.ts";
@@ -164,8 +165,40 @@ describe("writeRefusal — the gate golden.test.ts runs before any guarded write
   });
 
   it("the real-environment wrapper asks git only when a guarded mode is on (a plain run never shells out to git)", () => {
+    const explode: WriteGateProbes = {
+      repoRoot: () => { throw new Error("git was asked"); },
+      porcelain: () => { throw new Error("git was asked"); },
+      writablePaths: () => { throw new Error("git was asked"); },
+    };
+    for (const env of [{}, { EXTEND_GOLDEN: "1" }, { REFORMAT_GOLDEN: "0" }]) expect(corpusWriteRefusal(env, explode), JSON.stringify(env)).toBeNull();
     expect(corpusWriteRefusal({})).toBeNull();
-    expect(corpusWriteRefusal({ EXTEND_GOLDEN: "1" })).toBeNull();
+  });
+
+  it("the guarded branch of the wrapper: a dirty tree refuses every guarded mode, a clean or corpus-only tree lets it run, no checkout fails closed", () => {
+    const calls = { root: 0, porcelain: 0, writable: 0 };
+    const probesFor = (root: string | null, porcelain: string[] | null): WriteGateProbes => ({
+      repoRoot: () => { calls.root++; return root; },
+      porcelain: () => { calls.porcelain++; return porcelain; },
+      writablePaths: () => { calls.writable++; return ["packages/engine/src/sports/generic/generic.golden.json"]; },
+    });
+    let refused = 0;
+    for (const mode of GUARDED_WRITE_MODES) {
+      const dirty = probesFor("/repo", [" M packages/engine/src/core/events.ts"]);
+      const reason = corpusWriteRefusal({ [mode]: "1" }, dirty);
+      expect(reason, `${mode}: a dirty tree`).toMatch(/refusing to rewrite the golden corpus/);
+      expect(reason, mode).toContain("packages/engine/src/core/events.ts");
+      refused++;
+      expect(corpusWriteRefusal({ [mode]: "1" }, probesFor("/repo", [])), `${mode}: a clean tree`).toBeNull();
+      expect(corpusWriteRefusal({ [mode]: "1" }, probesFor("/repo", [" M packages/engine/src/sports/generic/generic.golden.json"])), `${mode}: corpus files only`).toBeNull();
+      expect(corpusWriteRefusal({ [mode]: "1" }, probesFor(null, null)), `${mode}: not a checkout`).toMatch(/not a git checkout/);
+      expect(corpusWriteRefusal({ [mode]: "1" }, probesFor("/repo", null)), `${mode}: git could not say`).toMatch(/not a git checkout/);
+    }
+    expect(refused).toBe(GUARDED_WRITE_MODES.length);
+    expect(calls.root, "the root was asked for on every guarded run").toBe(GUARDED_WRITE_MODES.length * 5);
+    // the same dirty tree with the mode OFF: not asked, not refused
+    const before = { ...calls };
+    expect(corpusWriteRefusal({}, probesFor("/repo", [" M packages/engine/src/core/events.ts"]))).toBeNull();
+    expect(calls).toEqual(before);
   });
 });
 

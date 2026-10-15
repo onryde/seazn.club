@@ -1503,12 +1503,29 @@ export function writeRefusal(
   return verdict.ok ? null : verdict.reason;
 }
 
+/** The three questions the write gate asks of git, as functions so a test can answer them without a checkout: where the repository
+ *  root is (`null` outside one), what `git status --porcelain` lists (`null` when it cannot say), and which paths the corpus files are. */
+export interface WriteGateProbes {
+  readonly repoRoot: () => string | null;
+  readonly porcelain: () => string[] | null;
+  readonly writablePaths: (root: string) => string[];
+}
+const REAL_PROBES: WriteGateProbes = {
+  repoRoot: () => gitRepoRoot(HERE),
+  porcelain: () => gitPorcelain(HERE),
+  writablePaths: corpusWritablePaths,
+};
+
 /** `writeRefusal` for the real environment and the real working tree (git is asked only when a guarded mode is on). This is the
- *  ONE call `golden.test.ts` makes: the list of modes lives in `GUARDED_WRITE_MODES` and nowhere else. */
-export function corpusWriteRefusal(env: Readonly<Record<string, string | undefined>> = process.env): string | null {
+ *  ONE call `golden.test.ts` makes: the list of modes lives in `GUARDED_WRITE_MODES` and nowhere else. `probes` is the seam a test
+ *  uses to put a dirty tree, a clean one, or no checkout at all behind the same code. */
+export function corpusWriteRefusal(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  probes: WriteGateProbes = REAL_PROBES,
+): string | null {
   if (guardedWriteModes(env).length === 0) return null;
-  const root = gitRepoRoot(HERE);
-  return writeRefusal(env, root === null ? null : gitPorcelain(HERE), root === null ? [] : corpusWritablePaths(root));
+  const root = probes.repoRoot();
+  return writeRefusal(env, root === null ? null : probes.porcelain(), root === null ? [] : probes.writablePaths(root));
 }
 
 // ------------------------------------------- re-baseline state-diff summary
