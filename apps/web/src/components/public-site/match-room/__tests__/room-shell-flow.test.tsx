@@ -240,6 +240,11 @@ describe("camera required: check in → refused for camera → the camera joins 
     const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
     return propsOf(screen!).checkingCamera;
   };
+  /** D23-fix: what the shell hands the screen as "the poll budget on camera_starting is spent" (the hand-over's words end on it). */
+  const budgetSpentOf = (island: Island) => {
+    const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
+    return propsOf(screen!).startBudgetSpent;
+  };
   const checkInOf = (island: Island) => {
     const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
     return propsOf(screen!).tryAgain as () => void;
@@ -263,6 +268,7 @@ describe("camera required: check in → refused for camera → the camera joins 
     expect(seatPosts()).toBe(2);
     expect(screenOf(island), "starting is the check-in, never a card").toBe("checkin");
     expect(checkingOf(island), "the button waits, and says why").toBe(true);
+    expect(budgetSpentOf(island), "still inside the budget: nothing spent").toBe(false);
     await settle(CAMERA_EVIDENCE_POLL_MS - 1);
     expect(seatPosts(), "not before the step").toBe(2);
     await settle(1);
@@ -290,9 +296,11 @@ describe("camera required: check in → refused for camera → the camera joins 
     expect(seatPosts(), "two claims, then exactly the bound").toBe(2 + CAMERA_EVIDENCE_MAX_POLLS);
     expect(screenOf(island)).toBe("checkin");
     expect(checkingOf(island), "the check-in button is offered again").toBe(false);
+    expect(budgetSpentOf(island), "the budget is spent: the hand-over's words have nothing left to wait for").toBe(true);
     checkInOf(island)(); // the check-in's own press (Screen wires onCheckIn to it)
     await settle(0);
     expect(checkingOf(island), "the press starts a fresh wait").toBe(true);
+    expect(budgetSpentOf(island), "and a fresh budget").toBe(false);
     await settle(CAMERA_EVIDENCE_POLL_MS);
     expect(seatPosts(), "the press, then a fresh poll").toBe(2 + CAMERA_EVIDENCE_MAX_POLLS + 2);
     island.unmount();

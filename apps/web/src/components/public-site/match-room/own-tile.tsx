@@ -20,6 +20,8 @@ type Props = {
   videoRef?: (el: HTMLVideoElement | null) => void;
   /** T17B fix 2 (D23): the frame kept at Check in, laid over the tile until the SDK's own video is playing. */
   frozen?: HTMLCanvasElement | null;
+  /** D23-fix: the picture's bound has passed — the words alone stay over the tile until the SDK's video is playing. */
+  connecting?: boolean;
   t: RoomT;
 };
 
@@ -34,24 +36,27 @@ function Silhouette({ size }: { size: number }) {
 
 /** D23: the kept frame, mirrored and cropped exactly as the live <video> is, with the words for what is happening.
  *  The picture is drawn in a LAYOUT effect, so it is on the page in the same paint that takes the video away; it is
- *  the first child, so the words (a later sibling) paint over it. */
-function Frozen({ frame, variant, t }: { frame: HTMLCanvasElement; variant: "room" | "checkin"; t: RoomT }) {
+ *  the first child, so the words (a later sibling) paint over it. D23-fix: with no `frame` (its bound has passed) the
+ *  words stand alone over the silhouette. The chip is for eyes only — the live region in OwnTile speaks the same
+ *  words, so a screen reader hears them once. */
+function Frozen({ frame, variant, t }: { frame: HTMLCanvasElement | null; variant: "room" | "checkin"; t: RoomT }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useLayoutEffect(() => {
     const el = canvas.current;
     const g = el?.getContext("2d");
-    if (!el || !g) return;
+    if (!el || !g || frame === null) return;
     el.width = frame.width;
     el.height = frame.height;
     g.drawImage(frame, 0, 0);
   }, [frame]);
   return (
     <div data-testid="room-own-tile-frozen" className="absolute inset-0">
-      <canvas ref={canvas} aria-hidden className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
-      {/* The small phone tile has no room for a sentence: it is still announced. */}
+      {frame !== null ? <canvas ref={canvas} aria-hidden className="absolute inset-0 h-full w-full -scale-x-100 object-cover" /> : null}
+      {/* The small phone tile has no room for a sentence: it is announced, not drawn. */}
       <span
-        role="status"
-        className={`absolute inset-x-1.5 bottom-2 mx-auto w-fit max-w-[calc(100%-12px)] rounded-full bg-[rgba(27,18,48,0.75)] px-2.5 py-1 text-center text-xs text-white ${variant === "room" ? "max-md:sr-only" : ""}`}
+        data-testid="room-own-tile-connecting"
+        aria-hidden="true"
+        className={`absolute inset-x-1.5 bottom-2 mx-auto w-fit max-w-[calc(100%-12px)] rounded-full bg-[rgba(27,18,48,0.75)] px-2.5 py-1 text-center text-xs text-white ${variant === "room" ? "max-md:hidden" : ""}`}
       >
         {t("externalPlay.room.checkin.connecting")}
       </span>
@@ -59,7 +64,7 @@ function Frozen({ frame, variant, t }: { frame: HTMLCanvasElement; variant: "roo
   );
 }
 
-export function OwnTile({ policy, stream, variant = "room", cameraOn = false, onFrame, videoRef, frozen = null, t }: Props) {
+export function OwnTile({ policy, stream, variant = "room", cameraOn = false, onFrame, videoRef, frozen = null, connecting = false, t }: Props) {
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     videoRef?.(video.current);
@@ -104,6 +109,7 @@ export function OwnTile({ policy, stream, variant = "room", cameraOn = false, on
   }, [stream, onFrame]);
   if (policy === "off") return null;
   const checkin = variant === "checkin";
+  const covered = frozen !== null || connecting;
   return (
     <figure
       data-testid="room-own-tile"
@@ -124,7 +130,11 @@ export function OwnTile({ policy, stream, variant = "room", cameraOn = false, on
         aria-hidden
         className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${stream ? "" : "hidden"}`}
       />
-      {frozen !== null ? <Frozen frame={frozen} variant={variant} t={t} /> : null}
+      {covered ? <Frozen frame={frozen} variant={variant} t={t} /> : null}
+      {/* Always mounted, filled when the cover goes up: a live region injected already filled is not reliably announced. */}
+      <span data-testid="room-own-tile-announce" role="status" className="sr-only">
+        {covered ? t("externalPlay.room.checkin.connecting") : ""}
+      </span>
       {checkin ? (
         <>
           {cameraOn ? (

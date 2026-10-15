@@ -45,23 +45,44 @@ describe("OwnTile", () => {
     expect(html).not.toContain("jwt-secret");
   });
 
-  // T17B fix 2, D23: the frozen frame between Check in's stop and the SDK's first frame.
+  // T17B fix 2, D23: the frozen frame between Check in's stop and the SDK's first frame. D23-fix: the picture can go
+  // while the words stay (`connecting`), and the words are announced by an always-mounted live region.
   describe("the hand-over cover (D23)", () => {
     const frame = {} as HTMLCanvasElement;
+    const announce = (html: string) => /<span[^>]*data-testid="room-own-tile-announce"[^>]*>([^<]*)<\/span>/.exec(html);
+    const WORDS = "externalPlay.room.checkin.connecting";
 
-    it("with no cover (the empty case) nothing is laid over the tile", () => {
+    it("with no cover (the empty case) nothing is laid over the tile — and the live region is already there, empty", () => {
       for (const variant of ["checkin", "room"] as const) {
         const html = renderToStaticMarkup(<OwnTile policy="required" stream={null} variant={variant} t={t} />);
         expect(html, variant).not.toContain("room-own-tile-frozen");
-        expect(html, variant).not.toContain("externalPlay.room.checkin.connecting");
+        expect(html, variant).not.toContain(WORDS);
+        const live = announce(html);
+        expect(live, `${variant}: always mounted, so a screen reader hears the words when they arrive`).not.toBeNull();
+        expect(live![1], variant).toBe("");
+        expect(live![0], variant).toMatch(/role="status"/);
+        expect(live![0], variant).toMatch(/class="[^"]*\bsr-only\b/);
       }
     });
 
-    it("a cover is laid over the tile and says it is connecting — at check-in and in the room", () => {
+    it("a cover is laid over the tile and says it is connecting — at check-in and in the room; the live region carries the same words", () => {
       for (const variant of ["checkin", "room"] as const) {
         const html = renderToStaticMarkup(<OwnTile policy="required" stream={null} variant={variant} frozen={frame} t={t} />);
         expect(html, variant).toContain('data-testid="room-own-tile-frozen"');
-        expect(html, variant).toMatch(/role="status"[^>]*>externalPlay\.room\.checkin\.connecting</);
+        expect(html, variant).toMatch(/data-testid="room-own-tile-connecting"[^>]*>externalPlay\.room\.checkin\.connecting</);
+        expect(announce(html)![1], `${variant}: announced`).toBe(WORDS);
+        // Said once to a screen reader: the visible chip is hidden from them, the live region speaks.
+        expect(/<span[^>]*data-testid="room-own-tile-connecting"[^>]*>/.exec(html)![0], variant).toMatch(/aria-hidden="true"/);
+      }
+    });
+
+    it("the words alone (the picture's bound passed) still cover the tile: no picture, the chip, the announcement", () => {
+      for (const variant of ["checkin", "room"] as const) {
+        const html = renderToStaticMarkup(<OwnTile policy="required" stream={null} variant={variant} connecting t={t} />);
+        expect(html, variant).toContain('data-testid="room-own-tile-frozen"');
+        expect(html, variant).not.toContain("<canvas");
+        expect(html, variant).toMatch(/data-testid="room-own-tile-connecting"[^>]*>externalPlay\.room\.checkin\.connecting</);
+        expect(announce(html)![1], variant).toBe(WORDS);
       }
     });
 
@@ -76,9 +97,9 @@ describe("OwnTile", () => {
     it("inside the cover the picture comes FIRST and the words after it — a later sibling paints over an earlier one", () => {
       const html = renderToStaticMarkup(<OwnTile policy="required" stream={null} variant="checkin" frozen={frame} t={t} />);
       const picture = html.indexOf("<canvas");
-      const words = html.indexOf('role="status"');
+      const words = html.indexOf('data-testid="room-own-tile-connecting"');
       expect(picture, "premise: the picture is a canvas").toBeGreaterThan(-1);
-      expect(words, "premise: the words carry role=status").toBeGreaterThan(-1);
+      expect(words, "premise: the words are a chip").toBeGreaterThan(-1);
       expect(picture).toBeLessThan(words);
       // The picture is mirrored and cropped as the live video is (same classes), so the cover and the camera line up.
       const videoClass = /<video[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
@@ -89,11 +110,13 @@ describe("OwnTile", () => {
       }
     });
 
-    it("the phone's small tile keeps the words for screen readers only; the check-in and desktop tiles show them", () => {
+    it("the phone's small tile does not DRAW the words (no room for a sentence — the live region still speaks them); the check-in and desktop tiles show them", () => {
+      const chip = (html: string) => /<span[^>]*data-testid="room-own-tile-connecting"[^>]*>/.exec(html)![0];
       const room = renderToStaticMarkup(<OwnTile policy="required" stream={null} variant="room" frozen={frame} t={t} />);
-      expect(/<span[^>]*class="[^"]*max-md:sr-only[^"]*"[^>]*role="status"|<span[^>]*role="status"[^>]*class="[^"]*max-md:sr-only/.test(room)).toBe(true);
+      expect(chip(room)).toMatch(/class="[^"]*\smax-md:hidden\b/);
+      expect(announce(room)![1], "announced all the same").toBe(WORDS);
       const checkin = renderToStaticMarkup(<OwnTile policy="required" stream={null} variant="checkin" frozen={frame} t={t} />);
-      expect(/<span[^>]*role="status"[^>]*class="[^"]*sr-only/.test(checkin)).toBe(false);
+      expect(chip(checkin)).not.toMatch(/max-md:hidden|sr-only/);
     });
 
     it("the words exist in every locale, each its own (the brief's English typed from it)", () => {
@@ -113,8 +136,9 @@ describe("OwnTile", () => {
       expect(en["externalPlay.room.checkin.connecting"]).toBe("Connecting your camera…");
     });
 
-    it("policy off draws no tile at all, cover or not", () => {
+    it("policy off draws no tile at all, cover or not — and no live region", () => {
       expect(renderToStaticMarkup(<OwnTile policy="off" stream={null} frozen={frame} t={t} />)).toBe("");
+      expect(renderToStaticMarkup(<OwnTile policy="off" stream={null} connecting t={t} />)).toBe("");
     });
   });
 });

@@ -1669,7 +1669,7 @@ test("T17B fix 2, D15: camera required — the camera is tested ON THE PAGE befo
   }
 });
 
-test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blank between the test camera's stop and the SDK's video: the preview's last frame, mirrored as the live one, labelled, laid over the tile and gone at the bound — at every width", async ({
+test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blank between the test camera's stop and the SDK's video: the preview's last frame, mirrored as the live one, labelled, laid over the tile; the picture goes at the bound and the words stay until the wait is over — at every width", async ({
   page,
   browser,
 }) => {
@@ -1678,7 +1678,7 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
     names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
     cameraPolicy: "required",
   });
-  type Sample = { t: number; video: boolean; frozen: boolean };
+  type Sample = { t: number; video: boolean; picture: boolean; words: boolean };
   type W = { __tile: { log: Sample[]; mark: number; stop: boolean } };
   const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
   try {
@@ -1711,8 +1711,10 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
     expect(before.luma, "premise: the fake camera's picture is not black").toBeGreaterThan(20);
     expect(before.transform, "premise: the preview is mirrored").not.toBe("none|none");
 
-    // The same seat verdict the D15 test composes: the SDK cannot join offline, so its video never comes — the bound
-    // is what ends the cover here. (The SDK's own frame removing it is proven at the seam, room-camera-test-wiring.)
+    // The seat is answered camera_starting with NO participant, so the SDK never joins — it neither paints a frame nor
+    // fails (a participant would make it join the fixture's opaque token and fail at once, which ends the cover by the
+    // camera's failure: the next test). What ends the wait here is the room's own poll budget. (The SDK's own frame
+    // removing the cover is proven at the seam, room-camera-test-wiring.)
     await p.route(
       (u) => /\/external-play\/room$/.test(u.pathname),
       async (route: Route) => {
@@ -1724,7 +1726,7 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
           contentType: "application/json",
           body: JSON.stringify({
             ok: true,
-            data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: { participantId: "e2e-part", authToken: "e2e-rtk" } }, create: null },
+            data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: null }, create: null },
             requestId: "e2e",
           }),
         });
@@ -1745,8 +1747,9 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
         const t = document.querySelector('[data-testid="room-own-tile"]');
         const v = t?.querySelector("video");
         const video = !!v && getComputedStyle(v).display !== "none" && v.videoWidth > 0 && v.srcObject !== null;
-        const frozen = !!t?.querySelector('[data-testid="room-own-tile-frozen"] canvas');
-        w.__tile.log.push({ t: performance.now(), video, frozen });
+        const picture = !!t?.querySelector('[data-testid="room-own-tile-frozen"] canvas');
+        const words = !!t?.querySelector('[data-testid="room-own-tile-connecting"]');
+        w.__tile.log.push({ t: performance.now(), video, picture, words });
         if (!w.__tile.stop) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
@@ -1756,7 +1759,9 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
     const frozen = p.getByTestId("room-own-tile-frozen");
     await expect(frozen, "the cover is up the moment the test camera stops").toBeVisible({ timeout: 2_000 });
     await expect(tile).toHaveAttribute("data-stream", "off");
-    await expect(frozen.getByRole("status")).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+    await expect(frozen.getByTestId("room-own-tile-connecting")).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+    // D23-fix m6: the live region was mounted (empty) before the cover and speaks the same words now.
+    await expect(p.getByTestId("room-own-tile-announce")).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
     await expect(cta, "the D2 wait is the SDK's, untouched").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
 
     // The cover is the preview's last frame: a picture (not black), as bright as the preview was, drawn at the
@@ -1794,11 +1799,11 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
       await p.setViewportSize({ width, height: 900 });
       await p.waitForTimeout(100);
       const label = await p.evaluate(() => {
-        const l = document.querySelector('[data-testid="room-own-tile-frozen"] [role="status"]')!.getBoundingClientRect();
+        const l = document.querySelector('[data-testid="room-own-tile-connecting"]')!.getBoundingClientRect();
         const t = document.querySelector('[data-testid="room-own-tile"]')!.getBoundingClientRect();
         const top = document.elementFromPoint(l.left + l.width / 2, l.top + l.height / 2);
         return {
-          onTop: !!top?.closest('[data-testid="room-own-tile-frozen"] [role="status"]'),
+          onTop: !!top?.closest('[data-testid="room-own-tile-connecting"]'),
           inside: l.left >= t.left - 0.5 && l.right <= t.right + 0.5 && l.top >= t.top - 0.5 && l.bottom <= t.bottom + 0.5,
           width: l.width,
         };
@@ -1814,9 +1819,18 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
     expect(await nothingPastTheEdge(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
     await shoot(p, "d23-covering");
 
-    // The bound: the cover goes (nothing came from the SDK), not before eight seconds and not long after.
-    await expect(frozen).toHaveCount(0, { timeout: 15_000 });
-    await expect(cta, "the camera_starting state is what is left").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
+    // The picture's bound (D23-fix m1): the PICTURE goes at eight seconds, the words stay over the silhouette.
+    const announce = p.getByTestId("room-own-tile-announce");
+    await expect(frozen.locator("canvas"), "the picture goes at its bound").toHaveCount(0, { timeout: 15_000 });
+    await expect(frozen.getByTestId("room-own-tile-connecting"), "and the words stay over the silhouette").toBeVisible();
+    await expect(announce).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+    await expect(cta, "the D2 wait is still the SDK's").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
+    await shoot(p, "d23-connecting", [320, 1280]);
+    // How this wait ends: the seat is never answered here (the SDK cannot join offline), so the room's own poll budget on
+    // camera_starting runs out — the words go with it, the live region empties, and Check in is offered again.
+    await expect(frozen, "the words end with the poll budget").toHaveCount(0, { timeout: 40_000 });
+    await expect(announce).toHaveText("");
+    await expect(cta, "the budget spent: Check in is offered again").toHaveText(uiEn["externalPlay.room.checkin.cta"]!);
     await p.waitForTimeout(300);
     const { log, mark } = await p.evaluate(() => {
       const w = window as unknown as W;
@@ -1825,21 +1839,71 @@ test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blan
     });
     expect(mark, "premise: the click was seen").toBeGreaterThan(0);
     const after = log.filter((f) => f.t >= mark);
-    const lastCover = after.filter((f) => f.frozen).at(-1)!;
-    const lived = after.filter((f) => f.t <= lastCover.t);
-    expect(lived.filter((f) => f.frozen).length, "anti-vacuity: painted frames under the cover (counted)").toBeGreaterThan(30);
+    const lastPicture = after.filter((f) => f.picture).at(-1)!;
+    const lastWords = after.filter((f) => f.words).at(-1)!;
+    const lived = after.filter((f) => f.t <= lastWords.t);
+    expect(after.filter((f) => f.picture).length, "anti-vacuity: painted frames under the picture (counted)").toBeGreaterThan(30);
+    expect(lived.filter((f) => f.words && !f.picture).length, "anti-vacuity: painted frames of the words alone (counted)").toBeGreaterThan(30);
     expect(
-      lived.filter((f) => !f.video && !f.frozen).length,
-      `no painted frame between the click and the cover's end showed a blank tile (${lived.length} frames checked)`,
+      lived.filter((f) => !f.video && !f.picture && !f.words).length,
+      `no painted frame between the click and the words' end showed a blank tile (${lived.length} frames checked)`,
     ).toBe(0);
-    // Positive pair: the sampler CAN see a blank tile — once the cover has gone the tile is the silhouette.
-    const afterCover = after.filter((f) => f.t > lastCover.t);
-    expect(afterCover.filter((f) => !f.video && !f.frozen).length, "the sampler sees the blank that follows the bound").toBeGreaterThan(0);
-    const heldFor = lastCover.t - mark;
-    expect(heldFor, "held for the bound, no less").toBeGreaterThanOrEqual(HANDOVER_COVER_MS - 100);
-    expect(heldFor, "and let go soon after it").toBeLessThanOrEqual(HANDOVER_COVER_MS + 3_000);
+    // Positive pair: the sampler CAN see a blank tile — once the words have gone the tile is the silhouette.
+    const afterWords = after.filter((f) => f.t > lastWords.t);
+    expect(afterWords.filter((f) => !f.video && !f.picture && !f.words).length, "the sampler sees the blank that follows the wait").toBeGreaterThan(0);
+    const pictureFor = lastPicture.t - mark;
+    expect(pictureFor, "the picture is held for its bound, no less").toBeGreaterThanOrEqual(HANDOVER_COVER_MS - 100);
+    expect(pictureFor, "and let go soon after it").toBeLessThanOrEqual(HANDOVER_COVER_MS + 3_000);
+    expect(lastWords.t, "the words outlast the picture").toBeGreaterThan(lastPicture.t + 1_000);
     await ctx.close();
-    // The SDK then refuses the opaque token composed above, as in the D15 test: expected here, and only here.
+  } finally {
+    await camBrowser.close();
+  }
+});
+
+test("T17B fix 2, D23-fix: a camera that FAILS ends the cover at once — the words are not left standing over a camera that is not coming", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, {
+    names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
+    cameraPolicy: "required",
+  });
+  const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+  try {
+    const ctx = await cold(camBrowser);
+    await ctx.grantPermissions(["camera"]);
+    const p = await openRoom(ctx, room, room.white.token);
+    const cta = p.getByTestId("room-checkin-cta");
+    await p.getByTestId("room-checkin-test-cta").click();
+    await expect(cta, "the preview painted a frame: Check in opens").toBeEnabled({ timeout: 10_000 });
+    // The seat answer carries a participant, so the SDK joins the fixture's opaque token — and refuses it at once:
+    // the camera's own status is `failed`.
+    await p.route(
+      (u) => /\/external-play\/room$/.test(u.pathname),
+      async (route: Route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        const read = await route.fetch({ method: "GET" });
+        const snapshot = ((await read.json()) as { data: unknown }).data;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: { participantId: "e2e-part", authToken: "e2e-rtk" } }, create: null },
+            requestId: "e2e",
+          }),
+        });
+      },
+    );
+    const frozen = p.getByTestId("room-own-tile-frozen");
+    const clicked = Date.now();
+    await cta.click();
+    // The picture is up for no more than the moments before the SDK refuses; the bound is eight seconds, so anything
+    // standing at three seconds was held by something other than the clock.
+    await expect(frozen, "the cover is gone long before the picture's bound: the camera failed").toHaveCount(0, { timeout: 3_000 });
+    expect(Date.now() - clicked, "well inside the picture's bound").toBeLessThan(HANDOVER_COVER_MS - 2_000);
+    await expect(p.getByTestId("room-own-tile-announce"), "and the live region is emptied").toHaveText("");
+    await ctx.close();
+    // The SDK refuses the opaque token composed above: expected here, and only here.
     consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
   } finally {
     await camBrowser.close();
@@ -2379,7 +2443,8 @@ test("T17B fix 2, D24: my increment shows AT ONCE on my move — the clock jumps
     .poll(async () => faceSeconds(await mine.textContent()), { message: "restored: below what it read before the drop", timeout: 3_000 })
     .toBeLessThan(before);
   const restored = faceSeconds(await mine.textContent());
-  await p.waitForTimeout(700);
+  // More than a whole second, so a running face MUST have crossed a second boundary (700 ms crossed one 70% of the time).
+  await p.waitForTimeout(1_200);
   expect(faceSeconds(await mine.textContent()), "and running again").toBeLessThan(restored);
   expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
   await ctx.close();

@@ -61,6 +61,7 @@ import { deliverCameraFault } from "./room-api";
 import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
 import { HANDED } from "./camera-test";
 import { useCameraTest } from "./use-camera-test";
+import { isHandoverActive } from "./camera-handover";
 import { useCameraHandover } from "./use-camera-handover";
 import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
@@ -297,6 +298,7 @@ export function RoomShell({
           busy={busy}
           tryAgain={tryAgain}
           checkingCamera={checkingCamera}
+          startBudgetSpent={cameraStarting && !checkingCamera}
           relinkHref={relinkHref}
           locale={locale}
           t={t}
@@ -324,7 +326,7 @@ function TileStrip({
   handover: ReturnType<typeof useCameraHandover>;
   t: RoomT;
 }) {
-  const covering = handover.view.status === "covering" ? handover.view : null;
+  const covering = isHandoverActive(handover.view) ? handover.view : null;
   return (
     <div data-testid="room-tile-strip" className="order-6 flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
       <OwnTile
@@ -333,6 +335,7 @@ function TileStrip({
         onFrame={covering !== null ? handover.onSdkFrame : undefined}
         videoRef={handover.register}
         frozen={covering?.frame ?? null}
+        connecting={covering?.status === "connecting"}
         t={t}
       />
       {/* null is "unknown" — not joined, not settled, connection down: no
@@ -345,6 +348,10 @@ function TileStrip({
 /** The give-up notice's way back: a fresh page joins afresh (fix round 5). */
 const reloadPage = () => location.reload();
 
+/** D23-fix: the screens on which no tile is coming up for the player — the seams for a frozen or held board and the
+ *  result. A cover standing on one of them would tell the player their camera is connecting when it is not. */
+const HANDOVER_ENDS_ON_SCREEN: readonly string[] = ["revoked", "seatHeld", "held", "over"];
+
 // Exported for its first-paint test (room-shell.test.tsx): the camera-off
 // banner reads the camera hook, which a server render never runs.
 export function Screen({
@@ -356,6 +363,7 @@ export function Screen({
   busy,
   tryAgain,
   checkingCamera = false,
+  startBudgetSpent = false,
   relinkHref,
   locale,
   t,
@@ -373,6 +381,8 @@ export function Screen({
   tryAgain: () => void;
   /** T17B fix 2 (D2): the room is re-asking a seat answered `camera_starting`. */
   checkingCamera?: boolean;
+  /** D23-fix: the seat answered `camera_starting` and the room's own poll budget on it is spent — nothing left to wait for. */
+  startBudgetSpent?: boolean;
   relinkHref: string;
   locale: string;
   t: RoomT;
@@ -424,6 +434,17 @@ export function Screen({
     if (testView.status === "live") keepFrame();
     testHandOver();
   }, [testView.status, keepFrame, testHandOver]);
+  // D23-fix m2: the words end when the room knows the camera is not coming, not only on the SDK's frame or the clock —
+  // a frozen "Connecting your camera…" over a failed camera, a held board or a result is a false statement. Level
+  // triggered (the cover being up is a dependency), so the order of the two facts never matters.
+  const { end: endHandover } = handover;
+  const handoverActive = isHandoverActive(handover.view);
+  useEffect(() => {
+    if (!handoverActive) return;
+    if (camera.status === "failed" || camera.status === "gave_up") endHandover("failed");
+    else if (HANDOVER_ENDS_ON_SCREEN.includes(screen.kind)) endHandover("left");
+    else if (startBudgetSpent) endHandover("budget");
+  }, [handoverActive, camera.status, screen.kind, startBudgetSpent, endHandover]);
   // T17B fix 2, D13: the side to move's clock at zero, the game not over — the board and every action lock.
   const flagged = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);

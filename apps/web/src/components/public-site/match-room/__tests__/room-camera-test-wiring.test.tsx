@@ -15,10 +15,13 @@ vi.mock("@/components/i18n/dict-provider", () => ({
   useLocale: () => "en",
 }));
 
+vi.mock("@sentry/nextjs", () => ({ addBreadcrumb: vi.fn(), captureException: vi.fn() }));
+
+import * as Sentry from "@sentry/nextjs";
 import { Screen } from "../room-shell";
 import { Checkin } from "../checkin";
 import { OwnTile } from "../own-tile";
-import { HANDOVER_COVER_MS } from "../camera-handover";
+import { HANDOVER_CEILING_MS, HANDOVER_COVER_MS } from "../camera-handover";
 import { initialRoomState, type RoomState } from "../room-state";
 import type { RoomSnapshot } from "../room-snapshot";
 import type { CameraTestView } from "../camera-test";
@@ -103,6 +106,7 @@ const settle = async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   tryAgain.mockReset();
+  vi.mocked(Sentry.addBreadcrumb).mockClear();
 });
 
 describe("D15 through the real Screen: the camera test before Check in", () => {
@@ -259,7 +263,7 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
     expect(tileOf(island).onFrame, "nothing left to prove").toBeUndefined();
   });
 
-  it("no SDK video ever: the cover is gone at the bound, and not before", async () => {
+  it("no SDK video: the PICTURE is gone at the bound, not before; the words stay and the tile still listens for the SDK's frame (D23-fix m1)", async () => {
     vi.useFakeTimers();
     const cam = stubCamera();
     stubDocumentCanvas(cam.track);
@@ -270,9 +274,57 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
     await settle();
     vi.advanceTimersByTime(HANDOVER_COVER_MS - 1);
     expect(handoverOf(island)!.view.status).toBe("covering");
+    expect(tileOf(island).frozen, "one tick early: the picture").not.toBeNull();
     vi.advanceTimersByTime(1);
-    expect(handoverOf(island)!.view).toEqual({ status: "over", frame: null, by: "timeout" });
-    expect(tileOf(island).frozen ?? null).toBeNull();
+    expect(handoverOf(island)!.view).toEqual({ status: "connecting", frame: null });
+    expect(tileOf(island).frozen ?? null, "no picture").toBeNull();
+    expect(tileOf(island).connecting, "but the words stay over the silhouette").toBe(true);
+    expect(tileOf(island).onFrame, "and the SDK's frame still ends it").toBe(handoverOf(island)!.onSdkFrame);
+    expect(Sentry.addBreadcrumb, "nothing ended yet: nothing reported").not.toHaveBeenCalled();
+    // The SDK's video arrives late: the words go, and the end is reported once, as late (the stg measurement).
+    vi.advanceTimersByTime(2_500);
+    handoverOf(island)!.onSdkFrame(sdkStream);
+    await settle();
+    expect(handoverOf(island)!.view).toEqual({ status: "over", frame: null, by: "sdk" });
+    expect(tileOf(island).connecting, "words gone").toBe(false);
+    expect(vi.mocked(Sentry.addBreadcrumb).mock.calls).toEqual([
+      [{ category: "chess.camera.handover", level: "info", message: "camera handover ended", data: { by: "sdk", ms: HANDOVER_COVER_MS + 2_500, pictureExpired: true } }],
+    ]);
+  });
+
+  it("an SDK frame inside the bound is reported once as not late", async () => {
+    vi.useFakeTimers();
+    const cam = stubCamera();
+    stubDocumentCanvas(cam.track);
+    const island = renderIsland(Screen, props(stateOf(snap())));
+    await liveCheckin(island, cam);
+    handoverOf(island)!.register(video());
+    testOf(island)!.onHandOver();
+    await settle();
+    vi.advanceTimersByTime(1_500);
+    handoverOf(island)!.onSdkFrame(sdkStream);
+    handoverOf(island)!.onSdkFrame(sdkStream);
+    await settle();
+    expect(vi.mocked(Sentry.addBreadcrumb).mock.calls.map((c) => c[0]!.data)).toEqual([{ by: "sdk", ms: 1_500, pictureExpired: false }]);
+  });
+
+  it("unmounting the room mid-cover leaves no timer behind and reports nothing (D23-fix m5)", async () => {
+    vi.useFakeTimers();
+    for (const waited of [0, HANDOVER_COVER_MS + 1_000]) {
+      const cam = stubCamera();
+      stubDocumentCanvas(cam.track);
+      const island = renderIsland(Screen, props(stateOf(snap())));
+      await liveCheckin(island, cam);
+      handoverOf(island)!.register(video());
+      testOf(island)!.onHandOver();
+      await settle();
+      vi.advanceTimersByTime(waited);
+      expect(handoverOf(island)!.view.status, `premise: still active after ${waited} ms`).toBe(waited === 0 ? "covering" : "connecting");
+      island.unmount();
+      expect(vi.getTimerCount(), `after ${waited} ms`).toBe(0);
+      vi.advanceTimersByTime(HANDOVER_CEILING_MS * 2);
+      expect(Sentry.addBreadcrumb, "the page left: no end to report").not.toHaveBeenCalled();
+    }
   });
 
   it("a preview that never painted (no size) leaves no cover — and Check in still stops the camera", async () => {
@@ -307,6 +359,119 @@ describe("D23 through the real Screen: the tile is never blank between Check in'
       expect(checkin(island).cameraTest, cameraPolicy).toBeNull();
       expect((handoverOf(island)?.view ?? { status: "idle" }).status, cameraPolicy).toBe("idle");
     }
+  });
+});
+
+// D23-fix m2: the words end when there is nothing left to wait for, not only on the SDK's frame or the clock.
+describe("D23-fix: the cover ends when the room knows the camera is not coming (failed, gave up, the screen left, the budget spent)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  const ENDS_GAME = {
+    gameId: "g1",
+    fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    turn: "white",
+    whiteMs: 300_000,
+    blackMs: 300_000,
+    clockAsOf: new Date(T0).toISOString(),
+    clockRunning: false,
+    over: false,
+    lastMove: null,
+    moves: [],
+    drawOfferBy: null,
+    startedAt: new Date(T0).toISOString(),
+  };
+  type P = Parameters<typeof Screen>[0];
+  const withCamera = (p: P, status: string): P => ({ ...p, camera: { ...p.camera, status } as never });
+  const withScreen = (p: P, kind: string): P => ({ ...p, screen: { kind } as never });
+  /** A cover is up (the picture or the words, by `phase`); returns the island and the props it is rendered with. */
+  async function covered(phase: "covering" | "connecting") {
+    vi.useFakeTimers();
+    const cam = stubCamera();
+    stubDocumentCanvas(cam.track);
+    // A game on file, so the seams and the result have a board to draw when the Screen is taken to them.
+    const base = props(stateOf(snap({ game: ENDS_GAME as never })));
+    const island = renderIsland(Screen, base);
+    await liveCheckin(island, cam);
+    handoverOf(island)!.register(video());
+    testOf(island)!.onHandOver();
+    await settle();
+    if (phase === "connecting") vi.advanceTimersByTime(HANDOVER_COVER_MS + 500);
+    expect(handoverOf(island)!.view.status, `premise: ${phase}`).toBe(phase);
+    // Rendering again with the same props is the room's own re-render: the cover stands (the empty case of every end).
+    island.rerender(base);
+    await settle();
+    expect(handoverOf(island)!.view.status, "premise: a plain re-render ends nothing").toBe(phase);
+    return { island, base };
+  }
+
+  /** The cover's state lives in the Screen's hook and is read from the check-in's props: after a change that took the
+   *  Screen off the check-in (a seam, the result) it is read by going back to the check-in with everything else as it was. */
+  async function viewBack(island: Island, changed: P) {
+    island.rerender({ ...changed, screen: { kind: "checkin" } as never });
+    await settle();
+    return handoverOf(island);
+  }
+
+  const ENDS: { name: string; by: string; change: (p: P) => P }[] = [
+    { name: "the camera failed", by: "failed", change: (p) => withCamera(p, "failed") },
+    { name: "the camera gave up", by: "failed", change: (p) => withCamera(p, "gave_up") },
+    { name: "the screen became the revoked seam", by: "left", change: (p) => withScreen(p, "revoked") },
+    { name: "the screen became the seat-held seam", by: "left", change: (p) => withScreen(p, "seatHeld") },
+    { name: "the screen became held", by: "left", change: (p) => withScreen(p, "held") },
+    { name: "the screen became the result", by: "left", change: (p) => withScreen(p, "over") },
+    { name: "the seat's camera_starting poll budget ran out", by: "budget", change: (p) => ({ ...p, startBudgetSpent: true }) },
+  ];
+  const KEEPS: { name: string; change: (p: P) => P }[] = [
+    { name: "the camera is joining", change: (p) => withCamera(p, "joining") },
+    { name: "the camera is recovering", change: (p) => withCamera(p, "recovering") },
+    { name: "the camera is live", change: (p) => withCamera(p, "live") },
+    { name: "the camera is idle", change: (p) => withCamera(p, "idle") },
+    { name: "the screen is still the check-in", change: (p) => withScreen(p, "checkin") },
+    { name: "the budget is not spent", change: (p) => ({ ...p, startBudgetSpent: false }) },
+  ];
+
+  it("each end stops it, from the picture and from the words alone, and reports how — and each keep leaves it standing (counted)", async () => {
+    let checked = 0;
+    for (const phase of ["covering", "connecting"] as const) {
+      for (const e of ENDS) {
+        const { island, base } = await covered(phase);
+        vi.mocked(Sentry.addBreadcrumb).mockClear();
+        island.rerender(e.change(base));
+        await settle();
+        expect((await viewBack(island, e.change(base)))!.view, `${e.name} (${phase})`).toEqual({ status: "over", frame: null, by: e.by });
+        expect(vi.mocked(Sentry.addBreadcrumb).mock.calls.map((c) => [c[0]!.data?.by, c[0]!.data?.pictureExpired]), `${e.name} (${phase}): reported once`).toEqual([
+          [e.by, phase === "connecting"],
+        ]);
+        island.unmount();
+        checked += 1;
+      }
+      for (const k of KEEPS) {
+        const { island, base } = await covered(phase);
+        vi.mocked(Sentry.addBreadcrumb).mockClear();
+        island.rerender(k.change(base));
+        await settle();
+        expect((await viewBack(island, k.change(base)))!.view.status, `${k.name} (${phase})`).toBe(phase);
+        expect(Sentry.addBreadcrumb, `${k.name} (${phase})`).not.toHaveBeenCalled();
+        island.unmount();
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 7 ends and 6 keeps, two phases").toBe(2 * (ENDS.length + KEEPS.length));
+  });
+
+  it("a camera that failed with NO hand-over in progress reports nothing and covers nothing (the empty case)", async () => {
+    const island = renderIsland(Screen, withCamera(props(stateOf(snap())), "failed"));
+    await settle();
+    expect(handoverOf(island)!.view).toEqual({ status: "idle", frame: null });
+    expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("the ceiling: words that nothing ever ends are stopped at HANDOVER_CEILING_MS, reported as such (a frame proof that never fires)", async () => {
+    const { island } = await covered("connecting");
+    vi.advanceTimersByTime(HANDOVER_CEILING_MS - HANDOVER_COVER_MS - 500 - 1);
+    expect(handoverOf(island)!.view.status, "one tick before").toBe("connecting");
+    vi.advanceTimersByTime(1);
+    expect(handoverOf(island)!.view).toEqual({ status: "over", frame: null, by: "ceiling" });
   });
 });
 
@@ -357,6 +522,30 @@ describe("D23 on the live board: the cover follows the tile into the room (a qui
     (covered.onFrame as (s: MediaStream) => void)(sdkStream);
     await settle();
     expect(strip(island).frozen ?? null, "removed").toBeNull();
+    expect(strip(island).onFrame, "nothing left to prove").toBeUndefined();
+  });
+
+  it("D23-fix: on the live board the PICTURE goes at its bound but the words stay over the tile, still listening for the SDK's frame — which removes them", async () => {
+    vi.useFakeTimers();
+    const cam = stubCamera();
+    stubDocumentCanvas(cam.track);
+    const island = renderIsland(Screen, props(stateOf(snap())));
+    await liveCheckin(island, cam);
+    handoverOf(island)!.register(video());
+    testOf(island)!.onHandOver();
+    await settle();
+    island.rerender(liveProps());
+    await settle();
+    expect(strip(island).frozen, "premise: the picture is up on the live tile").not.toBeNull();
+    expect(strip(island).connecting, "and no words-only state yet").toBe(false);
+    vi.advanceTimersByTime(HANDOVER_COVER_MS);
+    await settle();
+    expect(strip(island).frozen ?? null, "no picture").toBeNull();
+    expect(strip(island).connecting, "the words stay").toBe(true);
+    expect(typeof strip(island).onFrame, "and the tile listens for the SDK's frame").toBe("function");
+    (strip(island).onFrame as (s: MediaStream) => void)(sdkStream);
+    await settle();
+    expect(strip(island).connecting, "removed").toBe(false);
     expect(strip(island).onFrame, "nothing left to prove").toBeUndefined();
   });
 

@@ -10,7 +10,7 @@
 import { OwnTile } from "./own-tile";
 import { CameraNotice } from "./camera-notice";
 import { canCheckIn, type CameraTestView } from "./camera-test";
-import type { HandoverView } from "./camera-handover";
+import { isHandoverActive, type HandoverView } from "./camera-handover";
 import { spokenClock, type RoomPlural, type RoomT } from "./room-copy";
 import type { RoomSnapshot } from "./room-snapshot";
 
@@ -65,7 +65,7 @@ export function Checkin({
   const untested = required && !done && (test === null || !canCheckIn(test.view));
   const testStream = test !== null && (test.view.status === "testing" || test.view.status === "live") ? test.view.stream : null;
   // D23: after the test camera is stopped, the tile is covered until the SDK's own video proves a frame in it.
-  const covered = handover !== null && handover.view.status === "covering" ? handover : null;
+  const covered = handover !== null && isHandoverActive(handover.view) ? handover : null;
   const tileOn = test === null ? cameraOn : test.view.status === "live" || (test.view.status === "handed" && cameraOn);
   return (
     <div data-testid="room-checkin" className="flex min-w-0 flex-1 flex-col gap-3.5 md:mx-auto md:w-full md:max-w-md">
@@ -98,6 +98,7 @@ export function Checkin({
             onFrame={testStream !== null ? test?.onFrame : covered?.onSdkFrame}
             videoRef={handover?.register}
             frozen={covered?.view.frame ?? null}
+            connecting={covered?.view.status === "connecting"}
             t={t}
           />
           {test !== null ? <CameraTestRow view={test.view} onTest={test.onTest} t={t} /> : null}
