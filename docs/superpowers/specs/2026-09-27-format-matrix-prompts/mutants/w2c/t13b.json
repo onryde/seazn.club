@@ -182,5 +182,45 @@
       { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-points.test.ts"], "name": "R-13b-1 a top-level decider only the engine declares" },
       { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/stage-config.test.ts"], "name": "R-13b-1 refuses EVERY decider the engine declares" }
     ]
+  },
+  {
+    "id": "t13b-r1-example-skips-refused",
+    "file": "apps/web/src/server/api-v1/openapi.ts",
+    "find": "        if (refusesEverything(prop)) continue;\n",
+    "replace": "",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the examples that fail are exactly the named pre-existing ones" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes.s examples are real stage bodies" }
+    ]
+  },
+  {
+    "id": "t13b-r1-example-tuple",
+    "file": "apps/web/src/server/api-v1/openapi.ts",
+    "find": "      if (Array.isArray(s.prefixItems)) return (s.prefixItems as unknown[]).map((item) => exampleOf(item, depth + 1));\n",
+    "replace": "",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the examples that fail are exactly the named pre-existing ones" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/openapi-request-examples.test.ts"], "name": "the stage routes.s examples are real stage bodies" }
+    ]
+  },
+  {
+    "id": "t13b-r1-bench-top-level-refused",
+    "file": "tools/bench/lib/validate-pack.ts",
+    "find": "        if (!TOP_LEVEL_STAGE_DECIDERS.includes(key)) continue;",
+    "replace": "        if (true) continue;",
+    "killers": [
+      { "cwd": ".", "files": ["tools/bench/lib/__tests__/validate-pack.test.ts"], "name": "refuses EVERY decider the engine declares at a stage config.s top level" },
+      { "cwd": ".", "files": ["tools/bench/lib/__tests__/validate-pack.test.ts"], "name": "is APPLIED at the fold, not merely correct in isolation" },
+      { "cwd": ".", "files": ["tools/bench/lib/__tests__/reconstruct.test.ts"], "name": "D3: the same decider at the stage config.s TOP level is read by neither side" }
+    ]
+  },
+  {
+    "id": "t13b-r1-bench-product-set",
+    "file": "tools/bench/lib/validate-pack.ts",
+    "find": "        if (!TOP_LEVEL_STAGE_DECIDERS.includes(key)) continue;",
+    "replace": "        if (![\"shootout\", \"extraTime\"].includes(key)) continue;",
+    "killers": [
+      { "cwd": ".", "files": ["tools/bench/lib/__tests__/validate-pack.test.ts"], "name": "refuses EVERY decider the engine declares at a stage config.s top level" }
+    ]
   }
 ]
