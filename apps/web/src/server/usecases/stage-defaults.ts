@@ -14,21 +14,19 @@ import "server-only";
 // instantiation.
 import type { StageKind } from "@seazn/engine/core";
 import { PointsRule } from "@seazn/engine/competition";
-import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
-import { builtinModules } from "@seazn/engine/sports";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { HttpError } from "@/lib/errors";
+import { TOP_LEVEL_STAGE_DECIDERS } from "@/lib/top-level-stage-deciders";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { storedStageRules } from "@/lib/stage-decider-off";
 import { refuseStagePoints, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
-/** W2c Task 13b (R-13b-1; D3) — every whole decider any sport declares (`decider: true`, over every kind and variant).
- *  A stage carries its deciders under `config.rules` only; one at the config's TOP level is read by nothing (stage-cfg.ts),
- *  so it is a client's mistake, refused by name rather than silently ignored. From the engine's declarations, never a
- *  list kept here: a decider a sport adds is refused with no edit to this file. That no decider collides with a stage
- *  config key of its own (`StageConfig`) is a guard in usecases/__tests__/stage-defaults.test.ts. */
-const TOP_LEVEL_DECIDERS: ReadonlySet<string> = new Set(builtinModules.flatMap((m) => deciderKeysFor(m, null, null)));
+/** W2c Task 13b (R-13b-1; D3) — every whole decider any sport declares, refused at a stage config's TOP level. The
+ *  engine-derived set lives in `lib/top-level-stage-deciders.ts`, shared with the API schema's named refusals, so the
+ *  door and the zod layer refuse the same keys. */
+const TOP_LEVEL_DECIDERS: ReadonlySet<string> = new Set(TOP_LEVEL_STAGE_DECIDERS);
 
 /**
  * The stage config with its rules as a new stage stores them: a BASE, then the rules sent with the create, merged the

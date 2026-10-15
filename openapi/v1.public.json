@@ -13461,6 +13461,24 @@
                         "default": {},
                         "type": "object",
                         "properties": {
+                          "extraTime": {
+                            "not": {}
+                          },
+                          "overtime": {
+                            "not": {}
+                          },
+                          "shootout": {
+                            "not": {}
+                          },
+                          "superOver": {
+                            "not": {}
+                          },
+                          "tieBoard": {
+                            "not": {}
+                          },
+                          "tiebreakRungs": {
+                            "not": {}
+                          },
                           "legs": {
                             "type": "integer",
                             "minimum": 1,
@@ -13563,12 +13581,6 @@
                           "rank_overrides": {},
                           "cross_feeds": {},
                           "placements": {},
-                          "shootout": {
-                            "not": {}
-                          },
-                          "extraTime": {
-                            "not": {}
-                          },
                           "rules": {
                             "anyOf": [
                               {
@@ -13875,6 +13887,24 @@
                           "default": {},
                           "type": "object",
                           "properties": {
+                            "extraTime": {
+                              "not": {}
+                            },
+                            "overtime": {
+                              "not": {}
+                            },
+                            "shootout": {
+                              "not": {}
+                            },
+                            "superOver": {
+                              "not": {}
+                            },
+                            "tieBoard": {
+                              "not": {}
+                            },
+                            "tiebreakRungs": {
+                              "not": {}
+                            },
                             "legs": {
                               "type": "integer",
                               "minimum": 1,
@@ -13977,12 +14007,6 @@
                             "rank_overrides": {},
                             "cross_feeds": {},
                             "placements": {},
-                            "shootout": {
-                              "not": {}
-                            },
-                            "extraTime": {
-                              "not": {}
-                            },
                             "rules": {
                               "anyOf": [
                                 {
@@ -14262,14 +14286,10 @@
                 "kind": "league",
                 "name": "example",
                 "config": {
-                  "legs": 1,
-                  "pools": {
-                    "count": 1
-                  },
-                  "thirdPlace": true,
-                  "byes": [
-                    "example"
-                  ]
+                  "extraTime": null,
+                  "overtime": null,
+                  "shootout": null,
+                  "superOver": null
                 }
               }
             }
@@ -14759,6 +14779,24 @@
                         "default": {},
                         "type": "object",
                         "properties": {
+                          "extraTime": {
+                            "not": {}
+                          },
+                          "overtime": {
+                            "not": {}
+                          },
+                          "shootout": {
+                            "not": {}
+                          },
+                          "superOver": {
+                            "not": {}
+                          },
+                          "tieBoard": {
+                            "not": {}
+                          },
+                          "tiebreakRungs": {
+                            "not": {}
+                          },
                           "legs": {
                             "type": "integer",
                             "minimum": 1,
@@ -14861,12 +14899,6 @@
                           "rank_overrides": {},
                           "cross_feeds": {},
                           "placements": {},
-                          "shootout": {
-                            "not": {}
-                          },
-                          "extraTime": {
-                            "not": {}
-                          },
                           "rules": {
                             "anyOf": [
                               {
@@ -15173,6 +15205,24 @@
                           "default": {},
                           "type": "object",
                           "properties": {
+                            "extraTime": {
+                              "not": {}
+                            },
+                            "overtime": {
+                              "not": {}
+                            },
+                            "shootout": {
+                              "not": {}
+                            },
+                            "superOver": {
+                              "not": {}
+                            },
+                            "tieBoard": {
+                              "not": {}
+                            },
+                            "tiebreakRungs": {
+                              "not": {}
+                            },
                             "legs": {
                               "type": "integer",
                               "minimum": 1,
@@ -15275,12 +15325,6 @@
                             "rank_overrides": {},
                             "cross_feeds": {},
                             "placements": {},
-                            "shootout": {
-                              "not": {}
-                            },
-                            "extraTime": {
-                              "not": {}
-                            },
                             "rules": {
                               "anyOf": [
                                 {
@@ -15560,14 +15604,10 @@
                 "kind": "league",
                 "name": "example",
                 "config": {
-                  "legs": 1,
-                  "pools": {
-                    "count": 1
-                  },
-                  "thirdPlace": true,
-                  "byes": [
-                    "example"
-                  ]
+                  "extraTime": null,
+                  "overtime": null,
+                  "shootout": null,
+                  "superOver": null
                 }
               }
             }
@@ -18970,6 +19010,24 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "extraTime": {
+                    "not": {}
+                  },
+                  "overtime": {
+                    "not": {}
+                  },
+                  "shootout": {
+                    "not": {}
+                  },
+                  "superOver": {
+                    "not": {}
+                  },
+                  "tieBoard": {
+                    "not": {}
+                  },
+                  "tiebreakRungs": {
+                    "not": {}
+                  },
                   "rules": {
                     "anyOf": [
                       {
@@ -19079,41 +19137,15 @@
                         "type": "null"
                       }
                     ]
-                  },
-                  "shootout": {
-                    "not": {}
-                  },
-                  "extraTime": {
-                    "not": {}
                   }
                 },
                 "additionalProperties": false
               },
               "example": {
-                "rules": {},
-                "points": {
-                  "base": {
-                    "win": 1,
-                    "draw": 1,
-                    "loss": 1
-                  },
-                  "bonuses": [
-                    {
-                      "when": "loss_margin_lte",
-                      "param": 1,
-                      "points": 1
-                    }
-                  ],
-                  "forfeit": {
-                    "winnerPoints": 1,
-                    "loserPoints": 1,
-                    "awardScore": [
-                      null
-                    ]
-                  }
-                },
+                "extraTime": null,
+                "overtime": null,
                 "shootout": null,
-                "extraTime": null
+                "superOver": null
               }
             }
           }

@@ -93,6 +93,10 @@ import {
 } from "../../lib/relay-phase.ts";
 import type { BoardErrorCode, GrantRefusal } from "../external-play/types.ts";
 import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
+// W2c Task 13b finish-up (R-13b-1) — the deciders a stage config refuses at its top level, the engine's own set (shared
+// with the create door). RELATIVE with `.ts`; the module's only imports are the bare engine packages, which load under
+// strip-types as the engine imports above do.
+import { TOP_LEVEL_STAGE_DECIDERS } from "../../lib/top-level-stage-deciders.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -1132,8 +1136,20 @@ export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 /** The refusal a top-level stage decider gets (W2c Task 12): the key moved, it is not a typo. */
 export const STAGE_DECIDER_MOVED = "moved to config.rules: a stage's deciders are its match rules";
 
+/** W2c Task 13b finish-up (R-13b-1; D3, greenfield: no shim): every whole decider any sport declares is refused at the
+ *  top level of a stage's config LOUDLY, saying where it went (`http.ts` turns the message into a named 400), rather than
+ *  as an unrecognised key a client would read as a typo. The set is the create door's own (`lib/top-level-stage-
+ *  deciders.ts`, from the engine's declarations), so a decider a sport adds is refused here the day it is declared.
+ *  Spread FIRST in each shape: a real config key of a decider's name would then win the shape, and the guard in
+ *  usecases/__tests__/stage-defaults.test.ts would see a decider that is not refused. The cast names only the two keys
+ *  the type has always carried (the rest are `never` too, so the inferred types lose nothing a client could send). */
+const TOP_LEVEL_DECIDER_REFUSALS = Object.fromEntries(
+  TOP_LEVEL_STAGE_DECIDERS.map((key) => [key, z.never({ error: STAGE_DECIDER_MOVED }).optional()]),
+) as Record<"shootout" | "extraTime", z.ZodOptional<z.ZodNever>>;
+
 export const StageConfig = z
   .strictObject({
+    ...TOP_LEVEL_DECIDER_REFUSALS,
     // League / group shape.
     legs: z.number().int().min(1).max(8).optional(),
     pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
@@ -1170,17 +1186,13 @@ export const StageConfig = z
     rank_overrides: z.unknown().optional(),
     cross_feeds: z.unknown().optional(),
     placements: z.unknown().optional(),
-    // W2c Task 12 (D3; greenfield, no shim): a stage's deciders are its match RULES now, written at create as its kind's
-    // preset under `config.rules`. A top-level `shootout` / `extraTime` is refused loudly, saying where it went, rather
-    // than as an unrecognised key a client would read as a typo.
-    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
-    extraTime: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
-    /** Per-stage match rules (design 2026-09-17 §T3; W2c Task 12, SC-P8). Deliberately LOOSE here: this file is
-     *  executed by `scripts/openapi-gen.ts` under bare `node --experimental-strip-types`, which parses neither `@/`
-     *  imports nor JSX, so it cannot see the engine's declarations. A create lays this fragment over the stage kind's
-     *  preset and validates it as `PUT /stages/{id}/rules` validates a save (`usecases/stage-defaults.ts`): the
-     *  engine's per-sport, per-kind allowlist, then the merged parse with the division's config. A key sent as null
-     *  removes that preset key (the stage inherits the division's value). */
+    // W2c Task 12 (D3): a stage's deciders are its match RULES, written at create as its kind's preset under
+    // `config.rules`; one at the top level is refused by `TOP_LEVEL_DECIDER_REFUSALS`, spread at the head of this shape.
+    /** Per-stage match rules (design 2026-09-17 §T3; W2c Task 12, SC-P8). Deliberately LOOSE here: which keys a stage
+     *  may set, and their values, depend on the stage's sport, kind and variant, none of which this schema knows. A
+     *  create lays this fragment over the stage kind's preset and validates it as `PUT /stages/{id}/rules` validates a
+     *  save (`usecases/stage-defaults.ts`): the engine's per-sport, per-kind allowlist, then the merged parse with the
+     *  division's config. A key sent as null removes that preset key (the stage inherits the division's value). */
     rules: z.record(z.string(), z.unknown()).nullish(),
   })
   .default({});
@@ -1275,10 +1287,9 @@ export const StageCourtTags = z.object({
  *  `StageConfig`. */
 export const PutStageRules = z
   .strictObject({
+    ...TOP_LEVEL_DECIDER_REFUSALS,
     rules: z.record(z.string(), z.unknown()).nullable().optional(),
     points: PointsRule.nullable().optional(),
-    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
-    extraTime: z.never({ error: STAGE_DECIDER_MOVED }).optional(),
   })
   .refine((b) => b.rules !== undefined || b.points !== undefined, "send `rules`, `points` or both");
 export type PutStageRules = z.infer<typeof PutStageRules>;
