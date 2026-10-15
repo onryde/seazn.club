@@ -139,6 +139,7 @@
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
     "build:dist": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript-native/bin/tsc -p tsconfig.build.json",
     "boundary": "node --experimental-strip-types scripts/engine-boundary.ts",
+    "fold-epoch:check": "node --experimental-strip-types scripts/fold-epoch-guard.ts",
     "pack:proof": "node pack-proof/run.mjs",
     "lint": "eslint --max-warnings 0",
     "sim:matrix": "node --experimental-strip-types scripts/sim-replay.ts --matrix",

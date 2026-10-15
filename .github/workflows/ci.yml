@@ -124,6 +124,12 @@ jobs:
       # D14 (W1d): a Stryker floor never falls. HEAD^1 as for the lock gate. Absent at HEAD^1
       # (PR-A's own first run) means "no floors yet": the CLI exits 0 for it.
       - run: pnpm --filter ./packages/engine --fail-if-no-match mutation:floor --check-file-against HEAD^1
+      # Engine-split D15, D26 (batch 1e): a golden fold that moved must bump that sport's FOLD_EPOCH in the SAME diff, or an outdated phone
+      # folds differently from the server and nobody is told. HEAD^1 as for the floor gate above: the merge commit's first parent is the base
+      # tip, and the full-history checkout makes it present; a shallow checkout or a root commit has no HEAD^1 and the CLI refuses (exit 2),
+      # it does not pass. A name filter would otherwise match nothing and exit 0 in silence, so --fail-if-no-match. ci-wiring.test.ts pins
+      # that this step always runs and always gates.
+      - run: pnpm --filter @onryde/seazn-engine --fail-if-no-match fold-epoch:check --against HEAD^1
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh
