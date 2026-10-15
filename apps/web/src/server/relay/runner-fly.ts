@@ -26,15 +26,17 @@
 //    2026-10-15): a compositor that crashes repeatedly over a long session is
 //    restarted again after the window rolls — bounded per window, not overall.
 //  * stop_config { signal RUNNER_PLATFORM_STOP_SIGNAL (SIGTERM), timeout the
-//    grace } — R2004 PR 0, coordinator decision I4: a stop FLY starts (a deploy,
-//    `fly machine stop`, host work) arrives as SIGTERM, which the compositor
-//    drains at once, and waits RUNNER_STOP_GRACE_SECONDS before SIGKILL instead of
-//    Fly's 5 s kill_timeout. OUR stop (`stop` below) names SIGINT explicitly,
-//    which holds the Final scene. Precedence MEASURED, not assumed (live probe
-//    2026-10-15, seazn-relay-spike; fly-client.live.test.ts leg 5): an explicit
-//    stop signal beats stop_config.signal, and a stop naming none gets it. Every
-//    create here is a composed Machine — a passthrough session has none — so
-//    every create carries it.
+//    grace } — R2004 PR 0, coordinator decision I4: the signal and the wait before
+//    SIGKILL for a stop that names neither, instead of Fly's SIGINT / 5 s
+//    (`kill_signal` / `kill_timeout`). The compositor drains at once on SIGTERM.
+//    OUR stop (`stop` below) names SIGINT explicitly, which holds the Final scene.
+//    MEASURED (live probe 2026-10-15, seazn-relay-spike; compositor F-008;
+//    fly-client.live.test.ts leg 5) for the API only: an explicit stop signal
+//    beats stop_config.signal, and a signal-less `POST /stop {}` gets it. That a
+//    deploy, `fly machine stop` or host maintenance stops a Machine that way is
+//    the DOCS' word (`kill_signal` / `kill_timeout` cover those stops) — UNMEASURED.
+//    Every create here is a composed Machine — a passthrough session has none —
+//    so every create carries it.
 //  * name `machineNameFor(sessionId, attempt)` — i.e. `relay-<sid>-r<attempt>`,
 //    the domain's own spelling (domain/runner.ts), never a second one here —
 //    plus metadata.seazn_session: together the client's idempotency key, so a

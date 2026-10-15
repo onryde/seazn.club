@@ -352,6 +352,25 @@ describe("FlyClient — the lifecycle endpoints (stop, signal, events)", () => {
     await expect(r.client.stopMachine("m_1", { signal: "SIGINT", timeoutSeconds: 0 })).rejects.toThrow(RangeError);
     expect(r.calls).toHaveLength(0);
   });
+  // PR #971 review m4: and the TOP of the range. docs.fly.io/reference/configuration, `kill_timeout` (fetched 2026-10-15):
+  // "The default is 5 seconds … You can set it up to a maximum of 300 seconds (5 minutes)." — the doc's figure, typed here
+  // from the doc, never read back from fly-client.ts. A grace above it would be capped or 400'd on the wire, so it is
+  // refused by name instead, and at runner-fly.ts's MODULE LOAD (PLATFORM_STOP_CONFIG), before any session is served.
+  it("flyDuration takes 1..300 s, the documented kill_timeout range: both ends accepted, 0 and 301 refused, before any request", async () => {
+    const DOC_MAX_KILL_TIMEOUT_S = 300;
+    let checked = 0;
+    for (const ok of [1, DOC_MAX_KILL_TIMEOUT_S]) { expect(flyDuration(ok)).toBe(`${ok}s`); checked++; }
+    for (const bad of [0, DOC_MAX_KILL_TIMEOUT_S + 1, 3_600]) {
+      expect(() => flyDuration(bad), String(bad)).toThrow(RangeError);
+      expect(() => flyDuration(bad), String(bad)).toThrow(/1\.\.300/);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect(RUNNER_STOP_GRACE_SECONDS, "the ruled grace is inside Fly's range").toBeLessThanOrEqual(DOC_MAX_KILL_TIMEOUT_S);
+    const r = rig([]);
+    await expect(r.client.stopMachine("m_1", { signal: "SIGINT", timeoutSeconds: DOC_MAX_KILL_TIMEOUT_S + 1 })).rejects.toThrow(RangeError);
+    expect(r.calls).toHaveLength(0);
+  });
   it("createMachine sends stop_config exactly as given — the adapter's own body (runner-fly.test.ts pins what it sends)", async () => {
     const r = rig([{ status: 200, body: { id: "m_1", name: "relay-s-r1", state: "created" } }]);
     const input: MachineCreateInput = {
