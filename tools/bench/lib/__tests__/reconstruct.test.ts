@@ -1008,7 +1008,11 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
         matches: [{ divisionRef: "d", fixtureExtKey: "fx", outcome: { kind: "draw" } }],
       },
     });
-    expect(errorsOf(validatePack(pack, { expectedSuite: "_unit" }).findings)).toEqual([]);
+    // The fold agrees with the generator (no fold finding); the one error is the
+    // refusal the product's create door would answer this stage with (R-13b-1).
+    expect(errorsOf(validatePack(pack, { expectedSuite: "_unit" }).findings).map((f) => `${f.code} @ ${f.where}`)).toEqual([
+      "pack.stage_top_level_decider @ divisions[ref=d].stages[ref=s].config.extraTime",
+    ]);
   });
 
   it("a knockout folds under its PRESET in the generator too; its held rules stop at FT (R-T12-3)", () => {

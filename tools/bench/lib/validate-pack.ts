@@ -214,6 +214,9 @@ import {
   type PackStream,
 } from "./pack-schema.ts";
 import { postedStageCfg } from "../../../apps/web/src/lib/stage-decider-off.ts";
+// The deciders the product's create door refuses at a stage config's top level (R-13b-1). Its only imports are the
+// engine's bare `sport` / `sports` barrels, which this file already loads.
+import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-stage-deciders.ts";
 
 // ---------------------------------------------------------------------------
 // Findings
@@ -1501,6 +1504,30 @@ export function validatePack(
           `nobody verified and report the difference as a product defect. Declare a scheduleConfig ` +
           `(org timezone "${pack.org.timezone}")`,
       );
+    }
+  }
+
+  // -- Stage 1.7: a decider at a stage config's TOP level -------------------
+  //
+  // D3 (W2c Task 13b): a stage's deciders are its match rules, read from
+  // `config.rules` only, so the fold below ignores one at the top level — and
+  // the product's create door refuses that stage 400 (R-13b-1), naming the key.
+  // Folding it as harmless would green a pack the product refuses at seed. The
+  // set is the product's own (`lib/top-level-stage-deciders.ts`, the engine's
+  // declared deciders), never a list kept here.
+  for (const division of pack.divisions) {
+    for (const stage of division.stages) {
+      for (const key of Object.keys(stage.config)) {
+        if (!TOP_LEVEL_STAGE_DECIDERS.includes(key)) continue;
+        add(
+          "error",
+          "pack.stage_top_level_decider",
+          `divisions[ref=${division.ref}].stages[ref=${stage.ref}].config.${key}`,
+          `stage "${stage.ref}" of division "${division.ref}" carries the decider "${key}" at its config's ` +
+            `TOP level, which nothing reads, and the product refuses the stage 400: a stage's deciders ` +
+            `are its match rules. Set it as config.rules.${key}`,
+        );
+      }
     }
   }
 
