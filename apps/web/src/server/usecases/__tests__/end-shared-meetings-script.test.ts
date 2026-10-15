@@ -145,7 +145,10 @@ function realVendor(): Vendor {
 
 type Cli = { code: number; out: string };
 function cli(s: Scratch | null, args: string[] = [], env: Record<string, string | undefined> = {}): Promise<Cli> {
-  const childEnv: Record<string, string> = { PATH: process.env.PATH ?? "" };
+  // The child gets a clean environment, NOT the runner's (a stray DATABASE_URL must not reach the script): Next's global ProcessEnv
+  // wants NODE_ENV, which a child env does not need, hence the cast.
+  const childEnv = {} as NodeJS.ProcessEnv;
+  childEnv.PATH = process.env.PATH ?? "";
   const put = (k: string, v: string | undefined) => {
     if (v !== undefined) childEnv[k] = v;
   };
