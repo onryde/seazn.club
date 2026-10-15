@@ -700,7 +700,10 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
       timeout: POLL_MS,
     })
     .toEqual({ bestOf: 1, setTo: BO1_POINTS, finalSetTo: BO1_POINTS });
-  // Reopen shows the number played.
+  // Reopen shows the number played. The save's `router.refresh()` is not awaited (stages-panel), so the editor can
+  // reopen over the PRE-refresh props for a moment and read the blank it opened at; a fresh page load reads what the
+  // server stored, which is what this asserts - the value assertion itself is unchanged.
+  await page.reload();
   await finals.getByTestId("stage-format-edit").click();
   await expect(single).toHaveValue(String(BO1_POINTS));
   await finals.getByTestId("stage-format-edit").click(); // the toggle now reads Cancel
