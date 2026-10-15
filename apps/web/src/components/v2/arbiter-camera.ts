@@ -1,9 +1,12 @@
-// T15 — the arbiter's browser in a board's video meeting (design §5.3): it
-// joins receive-only with its OWN token (preset `arbiter`: produces nothing,
-// at most two video streams) and RECEIVES exactly two things — the two
-// players' cameras. Never a microphone (chess needs no audio; controller
-// addendum 2026-10-12: "the arbiter receives NO audio"), never a screen
-// share, never another participant.
+// T15 — the arbiter's browser in a PLAYER's video meeting (design §5.3, D16
+// §5.6.4): it joins receive-only with its OWN token (preset `arbiter`:
+// produces nothing, at most two video streams) and RECEIVES exactly one
+// thing — the camera of the player whose meeting this is. Each player has a
+// meeting of their own, so the room holds that player and the arbiter and
+// nobody else; the guard still refuses every other peer, the OPPONENT
+// included, in case one is ever there. Never a microphone (chess needs no
+// audio; controller addendum 2026-10-12: "the arbiter receives NO audio"),
+// never a screen share, never another participant.
 //
 // The player's D7 guard (match-room/camera-loader.ts) is a different rule —
 // receive NOTHING — and is not reused or touched: an arbiter loader that went
@@ -25,9 +28,10 @@ import type RealtimeKitClient from "@cloudflare/realtimekit";
 import * as Sentry from "@sentry/nextjs";
 import { loadRealtimeKitSdk, type RealtimeKitSdk } from "@/components/public-site/match-room/camera-loader";
 
+/** A colour, as the panel labels a pane and its switch. The meeting is the SIDE's; the colour is only its label. */
 export type ArbiterSeat = "white" | "black";
 
-/** One player's camera as the arbiter's client holds it. */
+/** The player's camera as the arbiter's client holds it. */
 export type ArbiterTileView = {
   /** A peer of this player's participant is in the meeting. */
   present: boolean;
@@ -37,7 +41,8 @@ export type ArbiterTileView = {
 };
 
 export type ArbiterCameras = {
-  tile(seat: ArbiterSeat): ArbiterTileView;
+  /** The one player's camera in this meeting. */
+  tile(): ArbiterTileView;
   /** Called on every change a tile could show. */
   onChange(cb: () => void): () => void;
   /** The guard left the meeting: remote audio (or a stranger's video) could
@@ -46,7 +51,8 @@ export type ArbiterCameras = {
   leave(): Promise<void>;
 };
 
-export type JoinArbiter = (a: { authToken: string; white: readonly string[]; black: readonly string[] }) => Promise<ArbiterCameras>;
+/** `players`: the participant ids of the PLAYERS in this meeting (the peers' `userId`) - usually one. Every other peer is refused. */
+export type JoinArbiter = (a: { authToken: string; players: readonly string[] }) => Promise<ArbiterCameras>;
 
 export const ARBITER_MAX_ATTEMPTS = 3;
 /** With nothing harmful subscribed, a failing guard retries after these. */
@@ -81,9 +87,8 @@ export function makeJoinArbiter(
     return () => clearTimeout(id);
   },
 ): JoinArbiter {
-  return async ({ authToken, white, black }) => {
-    const seatOf = (userId: string): ArbiterSeat | null =>
-      white.includes(userId) ? "white" : black.includes(userId) ? "black" : null;
+  return async ({ authToken, players }) => {
+    const isPlayer = (userId: string): boolean => players.includes(userId);
     const { default: RealtimeKitClient } = await load();
     const meeting: Meeting = await RealtimeKitClient.init({ authToken, defaults: { audio: false, video: false } });
     const { participants } = meeting;
@@ -110,11 +115,11 @@ export function makeJoinArbiter(
       const heard = [...participants.audioSubscribed.keys()];
       if (heard.length > 0) await participants.unsubscribe(heard, ["audio", "screenshareAudio"]);
       const strangers = ([...participants.videoSubscribed.values()] as unknown as Peer[])
-        .filter((p) => seatOf(p.userId) === null)
+        .filter((p) => !isPlayer(p.userId))
         .map((p) => p.id);
       if (strangers.length > 0) await participants.unsubscribe(strangers, [...ALL_KINDS]);
       const missing = joinedPeers()
-        .filter((p) => seatOf(p.userId) !== null && !participants.videoSubscribed.has(p.id))
+        .filter((p) => isPlayer(p.userId) && !participants.videoSubscribed.has(p.id))
         .map((p) => p.id);
       if (missing.length > 0) {
         // Every kind but the camera refused FIRST (TC allows all four).
@@ -131,7 +136,7 @@ export function makeJoinArbiter(
     let cancelRetry: (() => void) | null = null;
     const harmful = () =>
       participants.audioSubscribed.size > 0 ||
-      ([...participants.videoSubscribed.values()] as unknown as Peer[]).some((p) => seatOf(p.userId) === null);
+      ([...participants.videoSubscribed.values()] as unknown as Peer[]).some((p) => !isPlayer(p.userId));
     const enforce = async (): Promise<void> => {
       if (closed) return;
       if (running) {
@@ -211,9 +216,9 @@ export function makeJoinArbiter(
     }
 
     return {
-      tile(seat) {
+      tile() {
         if (closed) return { present: false, live: false, track: null };
-        const mine = joinedPeers().filter((p) => seatOf(p.userId) === seat);
+        const mine = joinedPeers().filter((p) => isPlayer(p.userId));
         const on = mine.find((p) => p.videoEnabled && p.videoTrack !== undefined && participants.videoSubscribed.has(p.id));
         return { present: mine.length > 0, live: on !== undefined, track: on?.videoTrack ?? null };
       },

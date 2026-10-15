@@ -1,19 +1,20 @@
-// T15 — the arbiter's receive side (design §5.3: "An arbiter … joins
-// receive-only and sees both players' tiles for a chosen fixture"; "Chess
-// needs no audio"; controller addendum 2026-10-12: "the arbiter receives NO
-// audio. Assert it.").
+// T15 — the arbiter's receive side (design §5.3; D16 §5.6.4: a meeting per
+// PLAYER, the arbiter in one at a time; "Chess needs no audio"; controller
+// addendum 2026-10-12: "the arbiter receives NO audio. Assert it.").
 //
 // Driven through the REAL loader (`makeJoinArbiter`) over the same port of the
 // SDK's subscription rules the player's D7 guard is proven on
 // (match-room/__tests__/_fake-realtimekit.ts, line references inside). The
 // expected values are the scenario's own producers, never the loader's
-// output: the arbiter consumes exactly the two players' CAMERAS, and nothing
-// else — no microphone, no screen share, no other participant — however the
-// server selects and however often the socket rejoins.
+// output: the arbiter consumes exactly the CAMERA of the player whose meeting
+// it joined, and nothing else - no microphone, no screen share, no other
+// participant (the OPPONENT included, who is never in this meeting but would be
+// refused if they were) - however the server selects and however often the
+// socket rejoins.
 //
 // Both sides (controller ruling): the player's guard (`makeJoinOwnCamera`) is
 // untouched by any of this and still receives NOTHING in the very meeting the
-// arbiter watches — the last describe drives both loaders over one roster.
+// arbiter watches - the last describe drives both loaders over one roster.
 import { describe, expect, it } from "vitest";
 import { makeJoinOwnCamera } from "@/components/public-site/match-room/camera-loader";
 import { fakeRealtimeKit, type FakeMeeting } from "@/components/public-site/match-room/__tests__/_fake-realtimekit";
@@ -22,7 +23,9 @@ import { ARBITER_MAX_ATTEMPTS, ArbiterGuardError, makeJoinArbiter, type ArbiterC
 const W = { peer: "w-peer", user: "rtk-white" };
 const B = { peer: "b-peer", user: "rtk-black" };
 const OTHER = { peer: "x-peer", user: "rtk-someone-else" };
-const SEATS = { white: [W.user], black: [B.user] };
+/** The meeting the arbiter joined: one player's, W by default. B is then a stranger to it - the OTHER player, who has a
+ *  meeting of their own and must never be received here. */
+const PLAYERS = { players: [W.user] };
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 0));
@@ -48,7 +51,7 @@ function fullRoom(m: FakeMeeting): void {
 
 const consumedVideo = (m: FakeMeeting) => m.consumedVideo.map((c) => c.producerId).sort();
 const consumedAudio = (m: FakeMeeting) => m.consumedAudio.map((c) => c.producerId).sort();
-const BOTH_CAMERAS = [`${B.peer}-cam`, `${W.peer}-cam`];
+const W_CAMERA = [`${W.peer}-cam`];
 
 function reports() {
   const seen: string[] = [];
@@ -56,15 +59,15 @@ function reports() {
   return { seen, report };
 }
 
-async function arbiterIn(setup: (m: FakeMeeting) => void, presetMax = 2) {
+async function arbiterIn(setup: (m: FakeMeeting) => void, presetMax = 2, players: readonly string[] = PLAYERS.players) {
   const rtk = fakeRealtimeKit({ presetMaxVideoStreams: presetMax, selfUserId: "rtk-arbiter", setup });
   const r = reports();
-  const cams = await makeJoinArbiter(rtk.load, r.report)({ authToken: "arb-token", ...SEATS });
+  const cams = await makeJoinArbiter(rtk.load, r.report)({ authToken: "arb-token", players });
   await settle();
   return { m: rtk.meetings[0]!, cams, seen: r.seen };
 }
 
-describe("the arbiter receives both players' cameras, and nothing else", () => {
+describe("the arbiter receives the meeting's one player's camera, and nothing else", () => {
   it("controls: the SDK's own default would hand an arbiter every microphone and screen share in this room", async () => {
     // Positive control — without it the assertions below could pass on a
     // fake that never subscribes anyone.
@@ -87,36 +90,40 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
     expect(m.participants.viewMode).toBe("MANUAL");
   });
 
-  it("a full room: exactly the two players' cameras are consumed; no audio at all; no screen share; not the third participant", async () => {
-    const { m, cams } = await arbiterIn(fullRoom);
-    expect(consumedVideo(m)).toEqual(BOTH_CAMERAS);
-    expect(consumedAudio(m), "the arbiter receives NO audio").toEqual([]);
-    expect(m.participants.audioSubscribed.size).toBe(0);
-    expect([...m.participants.videoSubscribed.keys()].sort()).toEqual([B.peer, W.peer]);
-    expect(cams.tile("white")).toMatchObject({ present: true, live: true });
-    expect(cams.tile("black")).toMatchObject({ present: true, live: true });
-    expect((cams.tile("white").track as unknown as { id: string }).id).toBe(`remote-${W.peer}-cam`);
-    expect((cams.tile("black").track as unknown as { id: string }).id).toBe(`remote-${B.peer}-cam`);
+  it("a full room, for each player's meeting in turn: exactly THAT player's camera is consumed; no audio at all; no screen share; not the opponent; not the third participant", async () => {
+    let checked = 0;
+    for (const [mine, theirs] of [[W, B], [B, W]] as const) {
+      const { m, cams } = await arbiterIn(fullRoom, 2, [mine.user]);
+      expect(consumedVideo(m), `${mine.user}: only the camera of the player whose meeting this is`).toEqual([`${mine.peer}-cam`]);
+      expect(consumedAudio(m), "the arbiter receives NO audio").toEqual([]);
+      expect(m.participants.audioSubscribed.size).toBe(0);
+      expect([...m.participants.videoSubscribed.keys()], `${mine.user}: not ${theirs.user}`).toEqual([mine.peer]);
+      expect(cams.tile()).toMatchObject({ present: true, live: true });
+      expect((cams.tile().track as unknown as { id: string }).id).toBe(`remote-${mine.peer}-cam`);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both players' meetings").toBe(2);
   });
 
   it("the sequence: players arrive AFTER the arbiter, then publish; a reconnect selects in ACTIVE_GRID in its window — still only the two cameras, never audio", async () => {
     const { m, cams } = await arbiterIn(() => {});
-    expect(cams.tile("white")).toMatchObject({ present: false, live: false, track: null });
+    expect(cams.tile()).toMatchObject({ present: false, live: false, track: null });
     m.peerJoins(W.peer, W.user);
     m.peerJoins(OTHER.peer, OTHER.user);
     await settle();
-    expect(cams.tile("white")).toMatchObject({ present: true, live: false });
+    expect(cams.tile()).toMatchObject({ present: true, live: false });
     cam(m, W.peer);
     mic(m, W.peer);
     cam(m, OTHER.peer);
     mic(m, OTHER.peer);
     await settle();
-    expect(consumedVideo(m)).toEqual([`${W.peer}-cam`]);
+    expect(consumedVideo(m)).toEqual(W_CAMERA);
+    // The OPPONENT arrives in this meeting (it should never happen: they have their own) and is a stranger like any other.
     m.peerJoins(B.peer, B.user);
     cam(m, B.peer);
     mic(m, B.peer);
     await settle();
-    expect(consumedVideo(m)).toEqual(BOTH_CAMERAS);
+    expect(consumedVideo(m), "the opponent's camera is never received here").toEqual(W_CAMERA);
     // A socket rejoin: SOCKET_PEERS resets to ACTIVE_GRID, and a peer's
     // media-join broadcast selects in that mode before our own rejoin.
     m.select([W.peer, B.peer, OTHER.peer]);
@@ -125,13 +132,13 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
     expect(m.participants.viewMode, "MANUAL re-asserted after the rejoin").toBe("MANUAL");
     expect(consumedAudio(m), "never any audio, across the rejoin").toEqual([]);
     expect(consumedVideo(m).filter((p) => p.startsWith(OTHER.peer)), "never the third participant's camera").toEqual([]);
-    expect(cams.tile("white").live && cams.tile("black").live, "both tiles back after the rejoin").toBe(true);
+    expect(cams.tile().live, "the tile is back after the rejoin").toBe(true);
     let checks = 0;
     for (let i = 0; i < 3; i++) {
       await m.reconnect();
       await settle();
       expect(consumedAudio(m)).toEqual([]);
-      expect([...m.participants.videoSubscribed.keys()].sort()).toEqual([B.peer, W.peer]);
+      expect([...m.participants.videoSubscribed.keys()].sort()).toEqual([W.peer]);
       checks++;
     }
     expect(checks).toBe(3);
@@ -151,7 +158,7 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
     const held: (() => void)[] = [];
     const cams = await makeJoinArbiter(rtk.load, reports().report, (fn) => (held.push(fn), () => undefined))({
       authToken: "t",
-      ...SEATS,
+      ...PLAYERS,
     });
     await settle();
     const m = rtk.meetings[0]!;
@@ -176,7 +183,7 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
     expect(consumedAudio(m), "nothing heard").toEqual([]);
     expect(consumedVideo(m).filter((p) => p.startsWith(OTHER.peer)), "never the stranger's camera").toEqual([]);
     expect(m.calls).not.toContain("leave");
-    expect(cams.tile("white").live).toBe(true);
+    expect(cams.tile().live).toBe(true);
   });
 
   it("MANUAL refused ONCE on a rejoin while a peer's media join selects in that window: the guard's retry empties the audio and the stranger before the sync", async () => {
@@ -187,9 +194,9 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
     expect(selected.audio.size, "precondition: microphones selected in the window").toBe(3);
     expect(selected.video.has(OTHER.peer), "precondition: the stranger's video selected (cap-0 leak)").toBe(true);
     expect(consumedAudio(m), "nothing heard").toEqual([]);
-    expect(consumedVideo(m).filter((p) => !p.endsWith("-cam") || p.startsWith(OTHER.peer)), "only the players' cameras").toEqual([]);
+    expect(consumedVideo(m), "only the one player's camera - not the stranger's, not the opponent's").toEqual(W_CAMERA);
     expect(m.calls).not.toContain("leave");
-    expect(cams.tile("black").live).toBe(true);
+    expect(cams.tile().live).toBe(true);
   });
 
   it("a player RELOADS during that rejoin window (a new peer the guard never refused, selected for video AND audio): its microphone is still dropped", async () => {
@@ -205,8 +212,8 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
     });
     expect(selected.audio.has("w2-peer") && selected.video.has("w2-peer"), "precondition: the new peer selected for both").toBe(true);
     expect(consumedAudio(m), "nothing heard").toEqual([]);
-    expect(cams.tile("white")).toMatchObject({ present: true, live: true });
-    expect((cams.tile("white").track as unknown as { id: string }).id).toBe("remote-w2-cam");
+    expect(cams.tile()).toMatchObject({ present: true, live: true });
+    expect((cams.tile().track as unknown as { id: string }).id).toBe("remote-w2-cam");
   });
 
   it("…and when only the AUDIO map moves (one microphone, no video selected), that arrival alone is enough", async () => {
@@ -224,22 +231,22 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
     await m.mediaReconnect();
     await settle();
     expect(consumedAudio(m)).toEqual([]);
-    expect(consumedVideo(m)).toEqual(BOTH_CAMERAS);
+    expect(consumedVideo(m)).toEqual(W_CAMERA);
   });
 });
 
-describe("the tiles follow the players' cameras", () => {
+describe("the tile follows the player's camera", () => {
   it("a camera paused is off, resumed is live — and each change is told", async () => {
     const { m, cams } = await arbiterIn(fullRoom);
     let told = 0;
     const off = cams.onChange(() => (told += 1));
     m.toggle(W.peer, `${W.peer}-cam`, true);
-    expect(cams.tile("white")).toMatchObject({ present: true, live: false });
+    expect(cams.tile()).toMatchObject({ present: true, live: false });
     expect(told).toBeGreaterThan(0);
     const before = told;
     m.toggle(W.peer, `${W.peer}-cam`, false);
     await settle();
-    expect(cams.tile("white")).toMatchObject({ live: true });
+    expect(cams.tile()).toMatchObject({ live: true });
     expect(told).toBeGreaterThan(before);
     off();
     const afterOff = told;
@@ -248,24 +255,24 @@ describe("the tiles follow the players' cameras", () => {
     expect(told, "an unsubscribed listener hears nothing").toBe(afterOff);
   });
 
-  it("a player leaves (absent), then comes back on a NEW peer (a reload): present and live again", async () => {
-    const { m, cams } = await arbiterIn(fullRoom);
+  it("the player leaves (absent), then comes back on a NEW peer (a reload): present and live again - for the black player's meeting too", async () => {
+    const { m, cams } = await arbiterIn(fullRoom, 2, [B.user]);
     m.peerLeaves(B.peer);
     await settle();
-    expect(cams.tile("black")).toMatchObject({ present: false, live: false, track: null });
+    expect(cams.tile()).toMatchObject({ present: false, live: false, track: null });
     m.peerJoins("b-peer-2", B.user);
     m.produce("b-peer-2", { producerId: "b2-cam", kind: "video", screenShare: false });
     await settle();
-    expect(cams.tile("black")).toMatchObject({ present: true, live: true });
-    expect((cams.tile("black").track as unknown as { id: string }).id).toBe("remote-b2-cam");
+    expect(cams.tile()).toMatchObject({ present: true, live: true });
+    expect((cams.tile().track as unknown as { id: string }).id).toBe("remote-b2-cam");
   });
 
-  it("a seat with no participant at all (nobody seated yet) is absent, never someone else's tile", async () => {
+  it("a meeting whose player is not in it (only the opponent and a stranger are) shows nobody, never someone else's tile", async () => {
     const rtk = fakeRealtimeKit({ presetMaxVideoStreams: 2, setup: fullRoom });
-    const cams = await makeJoinArbiter(rtk.load, reports().report)({ authToken: "t", white: [W.user], black: [] });
+    const cams = await makeJoinArbiter(rtk.load, reports().report)({ authToken: "t", players: ["rtk-nobody-here"] });
     await settle();
-    expect(cams.tile("black")).toMatchObject({ present: false, live: false, track: null });
-    expect(consumedVideo(rtk.meetings[0]!)).toEqual([`${W.peer}-cam`]);
+    expect(cams.tile()).toMatchObject({ present: false, live: false, track: null });
+    expect(consumedVideo(rtk.meetings[0]!), "and nothing is received at all").toEqual([]);
   });
 });
 
@@ -282,7 +289,7 @@ describe("failure is reported, and audio that cannot be refused is never kept", 
       },
     });
     const r = reports();
-    const cams = await makeJoinArbiter(rtk.load, r.report)({ authToken: "t", ...SEATS }).catch((e: unknown) => e);
+    const cams = await makeJoinArbiter(rtk.load, r.report)({ authToken: "t", ...PLAYERS }).catch((e: unknown) => e);
     await settle();
     const m = rtk.meetings[0]!;
     expect(m.participants.viewMode, "the precondition: the SDK stayed in ACTIVE_GRID").toBe("ACTIVE_GRID");
@@ -296,7 +303,7 @@ describe("failure is reported, and audio that cannot be refused is never kept", 
 
   it("a fault AFTER the join (a rejoin in which MANUAL is refused) is told to the panel once; the tiles go dark; nothing heard", async () => {
     const { m, cams } = await arbiterIn(fullRoom);
-    expect(cams.tile("white").live, "precondition: watching").toBe(true);
+    expect(cams.tile().live, "precondition: watching").toBe(true);
     let faults = 0;
     cams.onFault(() => (faults += 1));
     m.failNext.setViewMode = 50;
@@ -305,7 +312,7 @@ describe("failure is reported, and audio that cannot be refused is never kept", 
     expect(consumedAudio(m)).toEqual([]);
     expect(faults).toBe(1);
     expect(m.calls.filter((c) => c === "leave")).toHaveLength(1);
-    expect(cams.tile("white")).toMatchObject({ present: false, live: false, track: null });
+    expect(cams.tile()).toMatchObject({ present: false, live: false, track: null });
     let late = 0;
     cams.onFault(() => (late += 1));
     await settle();
@@ -330,7 +337,7 @@ describe("failure is reported, and audio that cannot be refused is never kept", 
       },
     });
     const r = reports();
-    const cams = await makeJoinArbiter(rtk.load, r.report, later)({ authToken: "t", ...SEATS });
+    const cams = await makeJoinArbiter(rtk.load, r.report, later)({ authToken: "t", ...PLAYERS });
     await settle();
     const m = rtk.meetings[0]!;
     expect(m.calls).not.toContain("leave");
@@ -339,9 +346,9 @@ describe("failure is reported, and audio that cannot be refused is never kept", 
     expect(asked.length).toBeGreaterThan(0);
     pending.shift()!();
     await settle();
-    expect(consumedVideo(m)).toEqual(BOTH_CAMERAS);
+    expect(consumedVideo(m)).toEqual(W_CAMERA);
     expect(consumedAudio(m)).toEqual([]);
-    expect(cams.tile("black").live).toBe(true);
+    expect(cams.tile().live).toBe(true);
   });
 });
 
@@ -366,7 +373,7 @@ describe("both sides, one meeting: the arbiter sees the players; a player still 
     expect([pm.consumedVideo.length, pm.consumedAudio.length, pm.participants.videoSubscribed.size]).toEqual([0, 0, 0]);
 
     const { m } = await arbiterIn(fullRoom);
-    expect(consumedVideo(m)).toEqual(BOTH_CAMERAS);
+    expect(consumedVideo(m)).toEqual(W_CAMERA);
   });
 });
 

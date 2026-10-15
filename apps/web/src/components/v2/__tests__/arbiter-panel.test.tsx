@@ -17,16 +17,20 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import type { ArbiterBoard, ArbiterFlag, ArbiterRound, NoResultOffer } from "@/lib/arbiter-view";
+import type { ArbiterBoard, ArbiterFlag, ArbiterRound, ArbiterSideMeeting, NoResultOffer } from "@/lib/arbiter-view";
 import { initialArbiterDecision, type ArbiterDecisionState } from "../arbiter-decision";
 import {
   ArbiterPanel,
   ArbiterScreen,
   arbiterJoinStateFromError,
   arbiterWatchRelease,
+  defaultWatchSide,
   nextOffSince,
+  seatSide,
   shouldJoinVideo,
   showsOutageCard,
+  sideSeat,
+  switchingFrom,
   type ArbiterScreenProps,
   type ArbiterVideoView,
 } from "../arbiter-panel";
@@ -115,10 +119,12 @@ const ROUND: ArbiterRound = {
   ],
 };
 
-const WATCHING: ArbiterVideoView = {
+/** The pane on screen is ONE player's (D16): White's camera, live. */
+const WATCHING: ArbiterVideoView = { kind: "watching", tile: { present: true, live: true, offSinceMs: null, track: null } };
+/** ... and Black's, off since a time this browser saw it go. */
+const WATCHING_BLACK_OFF: ArbiterVideoView = {
   kind: "watching",
-  white: { present: true, live: true, offSinceMs: null, track: null },
-  black: { present: true, live: false, offSinceMs: Date.parse(at(19, 42)), track: null },
+  tile: { present: true, live: false, offSinceMs: Date.parse(at(19, 42)), track: null },
 };
 
 const noop = () => undefined;
@@ -128,9 +134,10 @@ function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
     requested: null,
     decision: initialArbiterDecision("f3"),
     video: WATCHING,
+    shown: "white",
     nowMs: NOW,
     slugs: { org: "club", comp: "autumn", div: "open" },
-    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, override: noop, retryVideo: noop },
+    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, override: noop, retryVideo: noop, switchTo: noop },
     ...over,
   };
 }
@@ -208,14 +215,14 @@ describe("notes above the round (re-review 1: N1, N3) — the empty case first",
   it("the current round, nothing of the viewer's left out: no note, no link — the board as ever", () => {
     const h = html(props());
     expect(notes(h)).toEqual(NONE);
-    expect(count(h, "<figure"), "the board is on screen").toBe(2);
+    expect(count(h, "<figure"), "the board is on screen: its one pane").toBe(1);
   });
 
   it("N1: a pinned EARLIER round while a newer one is open — the plain line and the way to the current round, above the board still shown", () => {
     const h = html(props({ round: { ...ROUND, current: false } }));
     expect(notes(h)).toEqual({ ...NONE, box: 1, older: true, currentLink: true });
     expect(text(h)).toContain(EN["arbiter.requested.current"]);
-    expect(count(h, "<figure"), "the pinned board stays on screen").toBe(2);
+    expect(count(h, "<figure"), "the pinned board stays on screen").toBe(1);
     expect(decode(h).indexOf(OLDER), "the note is in the markup").toBeGreaterThan(-1);
     expect(decode(h).indexOf(OLDER), "the note sits above the board").toBeLessThan(decode(h).indexOf("<figure"));
   });
@@ -279,7 +286,7 @@ describe("?fixture= — exactly that board, or said plainly (I3)", () => {
     expect(h, "no board pressed").not.toContain('aria-pressed="true"');
     expect(t).not.toContain(EN["arbiter.emptyBoards"]);
     // The positive pair: a board that IS in the round opens.
-    expect(count(html(props({ decision: initialArbiterDecision("f1") })), "<figure")).toBe(2);
+    expect(count(html(props({ decision: initialArbiterDecision("f1") })), "<figure")).toBe(1);
   });
 });
 
@@ -290,7 +297,11 @@ describe("the panel's first board (the container, first render)", () => {
         <ArbiterPanel round={ROUND} requested={null} slugs={{ org: "club", comp: "autumn", div: "open" }} initialFixtureId={initialFixtureId} />
       </DictProvider>,
     );
-  const pressed = (h: string) => [...h.matchAll(/<button[^>]*aria-pressed="true"[^>]*>([\s\S]*?)<\/button>/g)].map((m) => text(m[1]!));
+  /** The board list's pressed button(s) - inside the <nav>, never the White/Black switch's. */
+  const pressed = (h: string) => {
+    const nav = /<nav[\s\S]*?<\/nav>/.exec(h)?.[0] ?? "";
+    return [...nav.matchAll(/<button[^>]*aria-pressed="true"[^>]*>([\s\S]*?)<\/button>/g)].map((m) => text(m[1]!));
+  };
 
   it("I3: the board asked for opens — and one not in the round is SAID, never the first board in its place", () => {
     expect(pressed(panel("f3")).map((l) => l.split(" · ")[0])).toEqual(["Board 3"]);
@@ -313,8 +324,8 @@ describe("the header and the boards (canvas)", () => {
   });
 
   it("the desktop list: one button per board, labelled as the canvas labels them, the one on screen pressed", () => {
-    const h = html(props());
-    const buttons = [...h.matchAll(/<button type="button" aria-pressed="(true|false)"[^>]*>(.*?)<\/button>/g)];
+    const nav = /<nav[\s\S]*?<\/nav>/.exec(html(props()))?.[0] ?? "";
+    const buttons = [...nav.matchAll(/<button type="button" aria-pressed="(true|false)"[^>]*>(.*?)<\/button>/g)];
     expect(buttons.length, "anti-vacuity: five boards").toBe(5);
     expect(buttons.map((b) => text(b[2]!))).toEqual([
       "Board 1 · live Ada Okonkwo vs Tomasz Wieczorek",
@@ -397,33 +408,60 @@ describe("the header and the boards (canvas)", () => {
   });
 });
 
-describe("the two tiles", () => {
-  it("watching: White's camera live, Black's off since the time this browser saw it go", () => {
+/** D16: a board's room for one player, as the board list reads it. */
+const meeting = (state: ArbiterSideMeeting["state"]): ArbiterSideMeeting => ({
+  state,
+  endedAt: state === "ended" ? at(19, 50) : null,
+  evidenceAt: null,
+});
+const PANE = (h: string) => /<figure[\s\S]*?<\/figure>/.exec(h)?.[0] ?? "";
+/** The switch's markup: from its root to the live region that follows it (a plain row for each player when it is not interactive). */
+const switchOf = (h: string) => /data-arbiter-switch=""[^>]*>([\s\S]*?)<\/div><p role="status"/.exec(h)?.[1] ?? "";
+const buttonsOf = (h: string) => [...switchOf(h).matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].map((m) => ({ attrs: m[1]!, label: text(m[2]!) }));
+const statusOf = (h: string) => text(/<p role="status"[^>]*>([\s\S]*?)<\/p>/.exec(h)?.[1] ?? "");
+/** Board 3 with its two rooms in the given states, on the screen. */
+function withSides(home: ArbiterSideMeeting["state"], away: ArbiterSideMeeting["state"], over: Partial<ArbiterBoard> = {}, p: Partial<ArbiterScreenProps> = {}) {
+  const b: ArbiterBoard = { ...ROUND.boards[2]!, sides: { home: meeting(home), away: meeting(away) }, ...over };
+  return props({ round: { ...ROUND, boards: [b] }, decision: initialArbiterDecision("f3"), ...p });
+}
+
+describe("the pane: ONE player's camera (D16 §5.6.4)", () => {
+  it("watching White: one pane, the camera live, muted and inline, the player's name and colour under it", () => {
     const h = html(props());
     const t = text(h);
+    expect(count(h, "<figure"), "one pane, never two").toBe(1);
     expect(count(t, "Camera live")).toBe(1);
-    expect(t).toContain(`Camera off since ${hhmm(at(19, 42))}`);
-    expect(t).toContain("Jonah Mbeki");
-    expect(t).toContain("White");
-    expect(t).toContain("Black");
-    // The video element: muted, inline, autoplay — never sound.
+    expect(text(PANE(h))).toContain("Jonah Mbeki · White");
+    expect(text(PANE(h)), "and not the other player").not.toContain("Elif Demirtaş");
+    // The video element: muted, inline, autoplay - never sound.
     const videos = [...h.matchAll(/<video[^>]*>/g)].map((m) => m[0]);
     expect(videos).toHaveLength(1);
     expect(videos[0]).toMatch(/muted=""/);
     expect(videos[0]).toMatch(/playsInline=""|playsinline=""/);
   });
 
+  it("watching Black: the same one pane, Black's camera off since the time this browser saw it go", () => {
+    const h = html(props({ video: WATCHING_BLACK_OFF, shown: "black" }));
+    expect(count(h, "<figure")).toBe(1);
+    expect(text(PANE(h))).toContain(`Camera off since ${hhmm(at(19, 42))}`);
+    expect(text(PANE(h))).toContain("Elif Demirtaş · Black");
+    expect(text(PANE(h))).not.toContain("Jonah Mbeki");
+    expect(count(h, "<video"), "an off camera has no video element").toBe(0);
+  });
+
   it("before mount no time of day is painted (the server's timezone is not the arbiter's)", () => {
-    const t = text(html(props({ nowMs: null })));
+    const t = text(html(props({ video: WATCHING_BLACK_OFF, shown: "black", nowMs: null })));
     expect(t).not.toMatch(/Camera off since/);
     expect(t).toContain(EN["arbiter.tile.off"]);
     expect(t).not.toContain("Found at");
   });
 
-  it("each video state paints its own sentence on both tiles", () => {
+  it("each video state paints its own sentence on the one pane, and says it to the live region", () => {
     const cases: [ArbiterVideoView, string][] = [
       [{ kind: "idle" }, EN["arbiter.tile.connecting"]!],
       [{ kind: "connecting" }, EN["arbiter.tile.connecting"]!],
+      [{ kind: "switching" }, EN["arbiter.switch.switching"]!.replace("{colour}", "White")],
+      [{ kind: "notStarted" }, EN["arbiter.tile.notStarted"]!.replace("{name}", "Jonah Mbeki")],
       [{ kind: "none" }, EN["arbiter.tile.noCamera"]!],
       [{ kind: "overridden" }, EN["arbiter.tile.overridden"]!],
       [{ kind: "over" }, EN["arbiter.tile.over"]!],
@@ -432,31 +470,185 @@ describe("the two tiles", () => {
       [{ kind: "fault" }, EN["arbiter.tile.fault"]!],
       [{ kind: "error" }, EN["arbiter.tile.error"]!],
       [{ kind: "own" }, EN["arbiter.tile.own"]!],
-      [
-        { kind: "watching", white: { present: false, live: false, offSinceMs: null, track: null }, black: { present: false, live: false, offSinceMs: null, track: null } },
-        EN["arbiter.tile.absent"]!,
-      ],
+      [{ kind: "watching", tile: { present: false, live: false, offSinceMs: null, track: null } }, EN["arbiter.tile.absent"]!],
     ];
     let checked = 0;
     for (const [video, sentence] of cases) {
       const h = html(props({ video }));
-      const tiles = [...h.matchAll(/<figure[\s\S]*?<\/figure>/g)].map((m) => text(m[0]));
-      expect(tiles, `${video.kind}: two tiles`).toHaveLength(2);
-      for (const tile of tiles) expect(count(tile, sentence), video.kind).toBe(1);
+      expect(count(h, "<figure"), `${video.kind}: one pane`).toBe(1);
+      expect(count(text(PANE(h)), sentence), `${video.kind}: the pane says it`).toBe(1);
       expect(count(h, "<video"), `${video.kind}: no video element`).toBe(0);
+      // A watching view's live region announces the player now on screen (the next test); its pane sentence is the camera's.
+      if (video.kind !== "watching") expect(statusOf(h), `${video.kind}: the live region says it`).toBe(sentence);
       checked++;
     }
-    expect(checked).toBe(11);
+    expect(checked).toBe(13);
   });
 
   it("a fault or an error offers ONE retry; no other state does", () => {
     let checked = 0;
-    for (const kind of ["fault", "error", "connecting", "unavailable", "none", "own"] as const) {
+    for (const kind of ["fault", "error", "connecting", "switching", "notStarted", "ended", "unavailable", "none", "own"] as const) {
       const t = text(html(props({ video: { kind } })));
       expect(count(t, EN["arbiter.tile.retry"]!), kind).toBe(kind === "fault" || kind === "error" ? 1 : 0);
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(9);
+  });
+});
+
+describe("the White/Black switch (D16 §5.6.4, the re-review's M9)", () => {
+  it("two toggle buttons, one per colour, each named by the colour AND the player and showing that player's clock; the shown one pressed", () => {
+    const h = html(props());
+    const buttons = buttonsOf(h);
+    expect(buttons, "anti-vacuity: two buttons").toHaveLength(2);
+    expect(buttons[0]!.label).toBe("White · Jonah Mbeki 3:05");
+    expect(buttons[1]!.label).toBe("Black · Elif Demirtaş 4:17");
+    expect(buttons.map((b) => /aria-pressed="(true|false)"/.exec(b.attrs)![1])).toEqual(["true", "false"]);
+    expect(h).toContain(`role="group" aria-label="${EN["arbiter.switch.group"]}"`);
+    const black = buttonsOf(html(props({ shown: "black" })));
+    expect(black.map((b) => /aria-pressed="(true|false)"/.exec(b.attrs)![1]), "the pressed one follows the pane").toEqual(["false", "true"]);
+    for (const b of buttons) expect(b.attrs, "a real button, so the keyboard works").toContain('type="button"');
+  });
+
+  it("a switch in flight marks the target busy; no other state does", () => {
+    const busy = (video: ArbiterVideoView) => buttonsOf(html(props({ video, shown: "black" }))).map((b) => b.attrs.includes('aria-busy="true"'));
+    expect(busy({ kind: "switching" })).toEqual([false, true]);
+    expect(busy(WATCHING)).toEqual([false, false]);
+    expect(busy({ kind: "notStarted" })).toEqual([false, false]);
+  });
+
+  it("the table: a side that is not OPEN is aria-disabled and says why; an open one is neither - all nine pairs of states, both players", () => {
+    const REASON = { none: EN["arbiter.switch.none"]!, ended: EN["arbiter.switch.ended"]! };
+    const STATES = ["none", "open", "ended"] as const;
+    let checked = 0;
+    for (const home of STATES)
+      for (const away of STATES) {
+        const h = html(withSides(home, away));
+        const buttons = buttonsOf(h); // board 3: White plays the home side
+        expect(buttons).toHaveLength(2);
+        ([["white", home], ["black", away]] as const).forEach(([, state], i) => {
+          const b = buttons[i]!;
+          const disabled = state !== "open";
+          expect(b.attrs.includes('aria-disabled="true"'), `${home}/${away} #${i}: aria-disabled`).toBe(disabled);
+          if (disabled) {
+            expect(b.label, `${home}/${away} #${i}: the reason is in the button`).toContain(REASON[state]);
+            const ref = /aria-describedby="([^"]+)"/.exec(b.attrs)?.[1];
+            expect(ref, `${home}/${away} #${i}: described by its reason`).toBeTruthy();
+            expect(h, "and the id it points at exists").toContain(`id="${ref}"`);
+          } else {
+            expect(b.label, `${home}/${away} #${i}: no reason on an open side`).not.toContain(REASON.none);
+            expect(b.label).not.toContain(REASON.ended);
+            expect(b.attrs).not.toContain("aria-describedby");
+          }
+          checked++;
+        });
+      }
+    expect(checked, "anti-vacuity: nine pairs x two players").toBe(18);
+  });
+
+  it("the reason follows the PERSON, not the colour: a pairing card swapped the colours after one player arrived", () => {
+    // Ada (home) has a room, Bo (away) has not arrived. Before the swap Ada is White; after it, Black.
+    const ada = { name: "Ada Okonkwo", personId: "a" };
+    const bo = { name: "Bo Lindqvist", personId: "b" };
+    const before = html(withSides("open", "none", { white: ada, black: bo, whiteSide: "home" }));
+    const after = html(withSides("open", "none", { white: bo, black: ada, whiteSide: "away" }));
+    const flags = (h: string) => Object.fromEntries(buttonsOf(h).map((b) => [b.label.includes("Ada") ? "ada" : "bo", b.attrs.includes('aria-disabled="true"')]));
+    expect(flags(before)).toEqual({ ada: false, bo: true });
+    expect(flags(after), "the same person is still the one who can be watched").toEqual({ ada: false, bo: true });
+    expect(buttonsOf(before).map((b) => b.label.split(" · ")[0])).toEqual(["White", "Black"]);
+    expect(buttonsOf(after).map((b) => b.label.split(" · ")[0]), "and only the colour label moved").toEqual(["White", "Black"]);
+    expect(buttonsOf(before)[0]!.label).toContain("Ada");
+    expect(buttonsOf(after)[1]!.label).toContain("Ada");
+  });
+
+  it("with no camera to watch (policy off, let go, game over) the same rows are plain text: both players and both clocks, no button, no group", () => {
+    const cases: Partial<ArbiterBoard>[] = [
+      { cameraPolicy: "off" },
+      { videoOverridden: true },
+      { state: { kind: "result", score: "1–0", noResult: false }, playable: false },
+    ];
+    let checked = 0;
+    for (const over of cases) {
+      const h = html(withSides("open", "open", over, { video: { kind: "none" } }));
+      expect(switchOf(h), JSON.stringify(over)).not.toBe("");
+      expect(buttonsOf(h), JSON.stringify(over)).toHaveLength(0);
+      expect(h).not.toContain('role="group"');
+      const t = text(switchOf(h));
+      for (const w of ["White · Jonah Mbeki", "3:05", "Black · Elif Demirtaş", "4:17"]) expect(t, JSON.stringify(over)).toContain(w);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the live region says the completed switch and each refusal, for the player on screen", () => {
+    expect(statusOf(html(props()))).toBe("Watching White: Jonah Mbeki");
+    expect(statusOf(html(props({ video: WATCHING_BLACK_OFF, shown: "black" })))).toBe("Watching Black: Elif Demirtaş");
+    expect(statusOf(html(props({ video: { kind: "switching" }, shown: "black" })))).toBe("Switching to Black…");
+    expect(statusOf(html(props({ video: { kind: "notStarted" }, shown: "black" })))).toBe("Elif Demirtaş hasn't checked in yet");
+    expect(statusOf(html(props({ video: { kind: "unavailable" } })))).toBe(EN["arbiter.tile.unavailable"]);
+  });
+
+  it("the container's first render opens on White's room, or on the only room that is open (and says so)", () => {
+    const panelFor = (home: ArbiterSideMeeting["state"], away: ArbiterSideMeeting["state"]) => {
+      const b: ArbiterBoard = { ...ROUND.boards[2]!, sides: { home: meeting(home), away: meeting(away) } };
+      return renderToStaticMarkup(
+        <DictProvider dict={en as unknown as Dict} locale="en">
+          <ArbiterPanel round={{ ...ROUND, boards: [b] }} requested={null} slugs={{ org: "club", comp: "autumn", div: "open" }} initialFixtureId="f3" />
+        </DictProvider>,
+      );
+    };
+    const shownColour = (h: string) => /Jonah Mbeki|Elif Demirtaş/.exec(text(PANE(h)))![0];
+    expect(shownColour(panelFor("open", "open")), "both open: White's").toBe("Jonah Mbeki");
+    expect(shownColour(panelFor("open", "none")), "only White's open").toBe("Jonah Mbeki");
+    expect(shownColour(panelFor("none", "open")), "only Black's open").toBe("Elif Demirtaş");
+    expect(shownColour(panelFor("none", "none")), "neither: White's, and it says that player has not checked in").toBe("Jonah Mbeki");
+    expect(text(PANE(panelFor("none", "none")))).toContain(EN["arbiter.tile.notStarted"]!.replace("{name}", "Jonah Mbeki"));
+    expect(text(PANE(panelFor("open", "ended"))), "an ended room is not joined: the pane says the video closed").not.toContain("Elif Demirtaş hasn't");
+  });
+});
+
+describe("the side and the colour (the meeting is the SIDE's)", () => {
+  it("seatSide and sideSeat are inverses, for both whiteSide values", () => {
+    const rows = [
+      { whiteSide: "home" as const, white: "home" as const, black: "away" as const },
+      { whiteSide: "away" as const, white: "away" as const, black: "home" as const },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      expect(seatSide(r, "white")).toBe(r.white);
+      expect(seatSide(r, "black")).toBe(r.black);
+      expect(sideSeat(r, r.white)).toBe("white");
+      expect(sideSeat(r, r.black)).toBe("black");
+      checked += 4;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("defaultWatchSide: White's side, unless it is not open and the other one is - every whiteSide x home x away", () => {
+    const STATES = ["none", "open", "ended"] as const;
+    let checked = 0;
+    for (const whiteSide of ["home", "away"] as const)
+      for (const home of STATES)
+        for (const away of STATES) {
+          const state: Record<"home" | "away", string> = { home, away };
+          const other = whiteSide === "home" ? "away" : "home";
+          // The rule as the owner's ruling states it: the first OPEN room in the order White's, then the other; White's if none.
+          const order: ("home" | "away")[] = [whiteSide, other];
+          const expected = order.find((side) => state[side] === "open") ?? whiteSide;
+          const got = defaultWatchSide({ whiteSide, sides: { home: meeting(home), away: meeting(away) } });
+          expect(got, JSON.stringify({ whiteSide, home, away })).toBe(expected);
+          checked++;
+        }
+    expect(checked).toBe(18);
+  });
+
+  it("switchingFrom: only an answer for the OTHER side of the same board is a switch in flight", () => {
+    expect(switchingFrom(null, "fx", "home"), "nothing answered yet: a first connect").toBe(false);
+    expect(switchingFrom("fx:away#0", "fx", "home"), "the other side answered last").toBe(true);
+    expect(switchingFrom("fx:home#0", "fx", "home"), "same side: a retry, not a switch").toBe(false);
+    expect(switchingFrom("fx:home#1", "fx", "home")).toBe(false);
+    expect(switchingFrom("other:away#0", "fx", "home"), "another board: a first connect").toBe(false);
+    expect(switchingFrom("fx:away#0", "fx", null)).toBe(false);
   });
 });
 
@@ -950,7 +1142,11 @@ describe("the camera join, as pure decisions", () => {
       [new ApiV1Error("x", 409, "VIDEO_NOT_IN_USE"), "none"],
       [new ApiV1Error("x", 409, "VIDEO_OVERRIDDEN"), "overridden"],
       [new ApiV1Error("x", 409, "VIDEO_MEETING_ENDED"), "ended"],
+      // D16: the arbiter never makes a room - a player who has not checked in has none to join.
+      [new ApiV1Error("x", 409, "VIDEO_MEETING_NOT_STARTED"), "notStarted"],
       [new ApiV1Error("x", 403, "ARBITER_PLAYS_THIS_BOARD"), "own"],
+      // The join's rate limit (ARBITER_JOIN_LIMIT): the generic error tile, with its retry.
+      [new ApiV1Error("x", 429, "RATE_LIMITED"), "error"],
       // M2: the board ended between the loader's read and the join.
       [new ApiV1Error("x", 409, "FIXTURE_NOT_PLAYABLE"), "over"],
       [new ArbiterGuardError(new Error("audio")), "fault"],
@@ -964,7 +1160,7 @@ describe("the camera join, as pure decisions", () => {
       expect(arbiterJoinStateFromError(err).kind).toBe(kind);
       checked++;
     }
-    expect(checked).toBe(10);
+    expect(checked).toBe(12);
   });
 
   describe("I2: the watch is handed back — once, whenever the board closes", () => {
@@ -1064,6 +1260,14 @@ describe("every locale", () => {
       props({ round: null, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
       props({ round: { ...ROUND, boards: [], ownBoards: 1 }, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
       props({ video: { kind: "own" } }),
+      // D16: the switch and its refusals, in every state a pane can be in.
+      props({ video: WATCHING_BLACK_OFF, shown: "black" }),
+      props({ video: { kind: "switching" }, shown: "black" }),
+      props({ video: { kind: "notStarted" }, shown: "black" }),
+      props({ video: { kind: "ended" } }),
+      withSides("none", "ended", {}, { video: { kind: "notStarted" } }),
+      withSides("open", "none"),
+      withSides("open", "open", { cameraPolicy: "off" }, { video: { kind: "none" } }),
       props({ round: { ...ROUND, current: false, ownBoards: 1 } }),
       props({ round: { ...ROUND, ownBoards: 2 } }),
       props({ round: null, requested: "unavailable", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
@@ -1100,18 +1304,18 @@ describe("every locale", () => {
         checked++;
       }
     }
-    expect(checked).toBe(60);
+    expect(checked, "anti-vacuity: 22 states in 4 locales").toBe(4 * 22);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {
     let scanned = 0;
-    for (const f of ["../arbiter-panel.tsx", "../arbiter-camera.ts"]) {
+    for (const f of ["../arbiter-panel.tsx", "../arbiter-camera.ts", "../arbiter-watch.ts"]) {
       const src = readFileSync(pathJoin(__dirname, f), "utf8");
       expect(src.length).toBeGreaterThan(1_000);
       for (const call of ["getUserMedia", "enableAudio", "enableVideo", "enableScreenShare"]) expect(src, `${f}: ${call}`).not.toContain(call);
       scanned++;
     }
-    expect(scanned).toBe(2);
+    expect(scanned).toBe(3);
   });
 });
 

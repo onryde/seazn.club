@@ -1,9 +1,10 @@
 "use client";
 // T15 — the arbiter panel (chess design §5.3), built to the owner-approved
 // canvas (ArbiterPhone, ArbiterDesktop: https://claude.ai/artifact/JKzKrtjSAPiU3QsFiRkEew).
-// The organiser who opens it watches one board at a time, receive-only: both
-// players' cameras, never their sound, never seen by them. Beside the tiles,
-// the board's flags — evidence, never a verdict — and the decision actions.
+// The organiser who opens it watches one board at a time, receive-only: ONE
+// player's camera at a time (each player has a meeting of their own, D16 §5.6.4)
+// with a White/Black switch, never their sound, never seen by them. Beside the
+// pane, the board's flags — evidence, never a verdict — and the decision actions.
 //
 // One DOM, branched at `lg` (the canvas draws a 1280 desktop and a 320
 // phone): below it the board picker is a <select> and the page is one column
@@ -32,6 +33,7 @@ import {
   type SettleChoice,
 } from "./arbiter-decision";
 import { ArbiterGuardError, joinArbiter, type ArbiterCameras, type ArbiterSeat, type ArbiterTileView } from "./arbiter-camera";
+import { arbiterWatchRelease, makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "./arbiter-watch";
 import {
   boardStateWord,
   BUTTON_QUIET,
@@ -53,11 +55,15 @@ import {
 
 export type ArbiterSeatVideo = { present: boolean; live: boolean; offSinceMs: number | null; track: MediaStreamTrack | null };
 
-/** What the two tiles show. `watching` is the only state with cameras. */
+/** What the pane shows. `watching` is the only state with a camera. */
 export type ArbiterVideoView =
   | { kind: "idle" }
   | { kind: "connecting" }
-  | { kind: "watching"; white: ArbiterSeatVideo; black: ArbiterSeatVideo }
+  /** A switch is under way: the other meeting is being left and this one joined (§5.6.4, awaited at each step). */
+  | { kind: "switching" }
+  | { kind: "watching"; tile: ArbiterSeatVideo }
+  /** The player whose pane this is has not checked in: there is no meeting for the arbiter to join (it never makes one). */
+  | { kind: "notStarted" }
   /** The board plays without cameras (policy off). */
   | { kind: "none" }
   /** An organiser let it play without video (D11). */
@@ -82,6 +88,8 @@ export type ArbiterScreenProps = {
   requested: "unavailable" | "own" | null;
   decision: ArbiterDecisionState;
   video: ArbiterVideoView;
+  /** Which player's pane is on screen (or being switched to), by colour. The meeting is the SIDE's; the panel maps. */
+  shown: ArbiterSeat;
   /** The viewer's clock; null before mount (no time of day is painted). */
   nowMs: number | null;
   slugs: { org: string; comp: string; div: string };
@@ -94,6 +102,8 @@ export type ArbiterScreenProps = {
     settle(choice: SettleChoice): void;
     override(): void;
     retryVideo(): void;
+    /** The White/Black switch (§5.6.4): watch the other player. */
+    switchTo(seat: ArbiterSeat): void;
   };
 };
 
@@ -121,6 +131,8 @@ export function arbiterJoinStateFromError(err: unknown): ArbiterVideoView {
         return { kind: "none" };
       case "VIDEO_OVERRIDDEN":
         return { kind: "overridden" };
+      case "VIDEO_MEETING_NOT_STARTED":
+        return { kind: "notStarted" };
       case "VIDEO_MEETING_ENDED":
         return { kind: "ended" };
       case "ARBITER_PLAYS_THIS_BOARD":
@@ -132,32 +144,26 @@ export function arbiterJoinStateFromError(err: unknown): ArbiterVideoView {
   return { kind: "error" };
 }
 
-/** I2: the participant one open of a board minted on the server. The panel
- *  hands it back when the board closes — a switch, the panel going away —
- *  and when the tab goes away (`release`, on pagehide: `keepalive`, so the
- *  request outlives the page), ONCE. A mint that lands after the board closed
- *  (the POST raced the switch) is handed back at once. A send that fails is
- *  dropped: the sweep removes whatever the browser could not. */
-export function arbiterWatchRelease(fixtureId: string, send: (url: string, init: RequestInit) => Promise<unknown>) {
-  let participantId: string | null = null;
-  let closed = false;
-  const release = () => {
-    if (participantId === null) return;
-    const url = `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter/${encodeURIComponent(participantId)}`;
-    participantId = null;
-    void send(url, { method: "DELETE", keepalive: true }).catch(() => undefined);
-  };
-  return {
-    minted(id: string) {
-      participantId = id;
-      if (closed) release();
-    },
-    close() {
-      closed = true;
-      release();
-    },
-    release,
-  };
+/** I2 (arbiter-watch.ts): the participant one open minted, handed back once whenever the pane closes. */
+export { arbiterWatchRelease };
+
+/** The side (home/away) that plays this colour: the meeting is the SIDE's, the colour only its label (§5.6.4) - a pairing
+ *  card can swap the colours after a player has arrived and the pane then stays on the same meeting. */
+export function seatSide(board: Pick<ArbiterBoard, "whiteSide">, seat: ArbiterSeat): ArbiterSide {
+  return seat === "white" ? board.whiteSide : board.whiteSide === "home" ? "away" : "home";
+}
+
+/** The colour a side plays now. */
+export function sideSeat(board: Pick<ArbiterBoard, "whiteSide">, side: ArbiterSide): ArbiterSeat {
+  return side === board.whiteSide ? "white" : "black";
+}
+
+/** The side a board opens on when the arbiter has not chosen: White's, unless only the other has a room open. Read once
+ *  and then held (the panel pins it), so a player arriving later never moves the pane under the arbiter's eyes. */
+export function defaultWatchSide(board: Pick<ArbiterBoard, "whiteSide" | "sides">): ArbiterSide {
+  const white = board.whiteSide;
+  const other: ArbiterSide = white === "home" ? "away" : "home";
+  return board.sides[white].state !== "open" && board.sides[other].state === "open" ? other : white;
 }
 
 /** "Camera off since HH:MM": the instant THIS browser first saw a present
@@ -184,7 +190,7 @@ function flagCount(b: ArbiterBoard, f: Fmt): string | null {
 export function ArbiterScreen(p: ArbiterScreenProps) {
   const f = useFmt(p.nowMs);
   const back = routes.division(p.slugs.org, p.slugs.comp, p.slugs.div, "fixtures");
-  const ids = { flags: useId(), decide: useId(), outage: useId(), board: useId(), boards: useId() };
+  const ids = { flags: useId(), decide: useId(), outage: useId(), board: useId(), boards: useId(), switch: useId() };
   const roundLine = p.round ? f.t("arbiter.roundLine", { stage: p.round.stageName, round: p.round.roundNo }) : null;
   const board = p.round?.boards.find((b) => b.fixtureId === p.decision.boardId) ?? null;
 
@@ -281,10 +287,13 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
               <BoardStatus board={board} f={f} />
               {p.round.timeControl && <span className={`text-[13px] lg:hidden ${SOFT}`}>{p.round.timeControl}</span>}
             </div>
-            <div className="order-2 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:gap-4">
-              {(["white", "black"] as const).map((seat) => (
-                <Tile key={seat} seat={seat} board={board} video={p.video} nowMs={p.nowMs} f={f} />
-              ))}
+            <div className="order-2 flex min-w-0 flex-col gap-3 lg:gap-3.5">
+              <Tile seat={p.shown} board={board} video={p.video} f={f} />
+              <PlayerSwitch board={board} shown={p.shown} video={p.video} nowMs={p.nowMs} baseId={ids.switch} onSwitch={p.on.switchTo} f={f} />
+              {/* The completed switch, and each refusal, said to assistive technology (§5.6.4). */}
+              <p role="status" className="sr-only">
+                {statusSentence(p.video, board, p.shown, f)}
+              </p>
             </div>
             {(p.video.kind === "fault" || p.video.kind === "error") && (
               <button type="button" onClick={p.on.retryVideo} className={`order-2 self-start ${BUTTON_QUIET}`}>
@@ -428,11 +437,49 @@ function seatClock(board: ArbiterBoard, seat: ArbiterSeat, nowMs: number | null)
   return formatClock(remainingMs({ baseMs, asOfMs: Number.isFinite(asOfMs) ? asOfMs : 0, nowMs: nowMs ?? 0, running }));
 }
 
-function Tile({ seat, board, video, nowMs, f }: { seat: ArbiterSeat; board: ArbiterBoard; video: ArbiterVideoView; nowMs: number | null; f: Fmt }) {
+const colourWord = (seat: ArbiterSeat, f: Fmt) => f.t(seat === "white" ? "arbiter.colour.white" : "arbiter.colour.black");
+
+/** The sentence a pane says when it has no camera to show (or, for `switching`, while it is getting one). */
+function paneSentence(video: Exclude<ArbiterVideoView, { kind: "watching" }>, name: string, seat: ArbiterSeat, f: Fmt): string {
+  switch (video.kind) {
+    case "idle":
+    case "connecting":
+      return f.t("arbiter.tile.connecting");
+    case "switching":
+      return f.t("arbiter.switch.switching", { colour: colourWord(seat, f) });
+    case "notStarted":
+      return f.t("arbiter.tile.notStarted", { name });
+    case "none":
+      return f.t("arbiter.tile.noCamera");
+    case "overridden":
+      return f.t("arbiter.tile.overridden");
+    case "over":
+    case "ended":
+      return f.t("arbiter.tile.over");
+    case "unavailable":
+      return f.t("arbiter.tile.unavailable");
+    case "fault":
+      return f.t("arbiter.tile.fault");
+    case "error":
+      return f.t("arbiter.tile.error");
+    case "own":
+      return f.t("arbiter.tile.own");
+  }
+}
+
+/** What the live region says: the pane that is now showing, or why it is not. */
+function statusSentence(video: ArbiterVideoView, board: ArbiterBoard, seat: ArbiterSeat, f: Fmt): string {
+  const name = board[seat].name;
+  return video.kind === "watching"
+    ? f.t("arbiter.switch.watching", { colour: colourWord(seat, f), name })
+    : paneSentence(video, name, seat, f);
+}
+
+/** The one pane: the camera of the player whose meeting the arbiter is in (name and colour under it). */
+function Tile({ seat, board, video, f }: { seat: ArbiterSeat; board: ArbiterBoard; video: ArbiterVideoView; f: Fmt }) {
   const player = board[seat];
-  const colour = f.t(seat === "white" ? "arbiter.colour.white" : "arbiter.colour.black");
-  const clock = seatClock(board, seat, nowMs);
-  const v = video.kind === "watching" ? video[seat] : null;
+  const colour = colourWord(seat, f);
+  const v = video.kind === "watching" ? video.tile : null;
   const live = v !== null && v.live;
   const amber = v !== null && !v.live;
   let body: ReactNode;
@@ -456,7 +503,7 @@ function Tile({ seat, board, video, nowMs, f }: { seat: ArbiterSeat; board: Arbi
             : f.t("arbiter.tile.off")
           : f.t("arbiter.tile.absent")
         : video.kind !== "watching"
-          ? f.t(tileSentenceKey(video))
+          ? paneSentence(video, player.name, seat, f)
           : f.t("arbiter.tile.absent");
     body = (
       <>
@@ -466,51 +513,107 @@ function Tile({ seat, board, video, nowMs, f }: { seat: ArbiterSeat; board: Arbi
     );
   }
   return (
-    <figure className="m-0 flex min-w-0 flex-col gap-1.5 lg:gap-2">
+    <figure className="m-0 flex min-w-0 max-w-[640px] flex-col gap-1.5 lg:gap-2">
       <div
-        className={`relative flex aspect-video w-full min-w-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl bg-[#1b1230] lg:aspect-auto lg:h-[216px] lg:gap-2.5 ${
+        aria-busy={video.kind === "switching" || video.kind === "connecting" || undefined}
+        className={`relative flex aspect-video w-full min-w-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl bg-[#1b1230] lg:gap-2.5 ${
           amber ? "border-2 border-[#f5d27a]" : ""
         }`}
       >
         {body}
       </div>
-      <figcaption className="flex min-w-0 items-center justify-between gap-2 text-sm">
-        <span className="flex min-w-0 flex-col">
-          {/* The colour never truncates with a long name: on a phone it is
-              the only word saying which tile is White. */}
-          <span className="flex min-w-0 font-semibold lg:text-[15px]">
-            <span className="min-w-0 truncate">{player.name}</span>
-            <span className="shrink-0 whitespace-pre lg:hidden"> · {colour}</span>
-          </span>
-          <span className={`hidden text-[13px] lg:block ${MUTED}`}>{colour}</span>
-        </span>
-        {clock !== null && <span className={`shrink-0 text-[22px] lg:text-[30px] ${CLOCK_FACE}`}>{clock}</span>}
+      <figcaption className="flex min-w-0 text-sm font-semibold lg:text-[15px]">
+        {/* The colour never truncates with a long name: it is the word saying which player this pane is. */}
+        <span className="min-w-0 truncate">{player.name}</span>
+        <span className="shrink-0 whitespace-pre"> · {colour}</span>
       </figcaption>
     </figure>
   );
 }
 
-function tileSentenceKey(video: Exclude<ArbiterVideoView, { kind: "watching" }>): string {
-  switch (video.kind) {
-    case "idle":
-    case "connecting":
-      return "arbiter.tile.connecting";
-    case "none":
-      return "arbiter.tile.noCamera";
-    case "overridden":
-      return "arbiter.tile.overridden";
-    case "over":
-    case "ended":
-      return "arbiter.tile.over";
-    case "unavailable":
-      return "arbiter.tile.unavailable";
-    case "fault":
-      return "arbiter.tile.fault";
-    case "error":
-      return "arbiter.tile.error";
-    case "own":
-      return "arbiter.tile.own";
-  }
+/** The White/Black switch (§5.6.4): watch the other player. Both players are always listed with their clocks (a camera
+ *  pane shows one at a time, a game is two clocks). Where there is a camera to watch each is a toggle button whose
+ *  accessible name says the colour AND the player; a side whose room is not open is `aria-disabled` and says why in
+ *  words - it stays focusable, so the reason is reachable from the keyboard. Where there is none (no camera on the
+ *  board, let go, over) the same rows are plain text. */
+function PlayerSwitch({
+  board,
+  shown,
+  video,
+  nowMs,
+  baseId,
+  onSwitch,
+  f,
+}: {
+  board: ArbiterBoard;
+  shown: ArbiterSeat;
+  video: ArbiterVideoView;
+  nowMs: number | null;
+  baseId: string;
+  onSwitch: (seat: ArbiterSeat) => void;
+  f: Fmt;
+}) {
+  const interactive = shouldJoinVideo(board);
+  return (
+    <div
+      data-arbiter-switch=""
+      role={interactive ? "group" : undefined}
+      aria-label={interactive ? f.t("arbiter.switch.group") : undefined}
+      className="grid max-w-[640px] min-w-0 grid-cols-2 gap-2 lg:gap-3">
+      {(["white", "black"] as const).map((seat) => {
+        const player = board[seat];
+        const clock = seatClock(board, seat, nowMs);
+        const sideState = board.sides[seatSide(board, seat)].state;
+        const unavailable = interactive && sideState !== "open";
+        const pressed = seat === shown;
+        const reasonId = `${baseId}-${seat}`;
+        const inner = (
+          <>
+            <span className="flex min-w-0 text-[13px] font-semibold lg:text-sm">
+              <span className="shrink-0 whitespace-pre">{colourWord(seat, f)} · </span>
+              <span className="min-w-0 truncate">{player.name}</span>
+            </span>
+            {clock !== null && <span className={`text-xl lg:text-[26px] ${CLOCK_FACE}`}>{clock}</span>}
+            {unavailable && (
+              <span id={reasonId} className={`text-xs ${MUTED}`}>
+                {f.t(sideState === "ended" ? "arbiter.switch.ended" : "arbiter.switch.none")}
+              </span>
+            )}
+          </>
+        );
+        const base = "flex min-h-14 min-w-0 flex-col justify-center gap-0.5 rounded-[10px] px-3 py-1.5 text-left";
+        if (!interactive) {
+          return (
+            <div key={seat} className={`${base} border border-[#e7e3f3] bg-white ${INK}`}>
+              {inner}
+            </div>
+          );
+        }
+        return (
+          <button
+            key={seat}
+            type="button"
+            aria-pressed={pressed}
+            aria-disabled={unavailable || undefined}
+            aria-describedby={unavailable ? reasonId : undefined}
+            aria-busy={pressed && video.kind === "switching" ? true : undefined}
+            onClick={() => {
+              if (!unavailable && !pressed) onSwitch(seat);
+            }}
+            className={`${base} cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] ${
+              pressed
+                ? "border-2 border-[#7c3aed] bg-[#f3effc] px-[11px] py-[5px]"
+                : unavailable
+                  ? "cursor-not-allowed border border-dashed border-[#c9bdf0] bg-[#faf8ff]"
+                  : "border border-[#e7e3f3] bg-white"
+            } ${INK}`}
+          >
+            {inner}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function CameraOffIcon() {
@@ -686,6 +789,23 @@ function Decision({
  *  record, not copy — the organiser's reason as the arbiter panel states it. */
 export const ARBITER_OVERRIDE_NOTE = "Video unavailable: let this board play without video from the arbiter panel.";
 
+/** The one chain every pane's open and close is queued on (arbiter-watch.ts): module-level, so even a remount of the
+ *  panel hands the old participant back before the new one is joined. */
+const browserSerial = makeArbiterSerial({
+  join: (fixtureId, side) =>
+    apiV1<ArbiterJoinAnswer>(`/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter`, { method: "POST", json: { side } }),
+  connect: joinArbiter,
+  send: (url, init) => apiV1(url, init),
+});
+
+/** True when the last answer on screen belongs to the OTHER side of the same board: a switch is in flight, not a first
+ *  connect or a retry. */
+export function switchingFrom(lastKey: string | null, fixtureId: string, side: ArbiterSide | null): boolean {
+  if (lastKey === null || side === null) return false;
+  const m = /^(.+):(home|away)#\d+$/.exec(lastKey);
+  return m !== null && m[1] === fixtureId && m[2] !== side;
+}
+
 export function ArbiterPanel({
   round,
   requested,
@@ -730,66 +850,57 @@ export function ArbiterPanel({
   const live = round?.boards.some((b) => !boardIsOver(b.state)) ?? false;
   useEffect(() => startBandPolling(live, () => router.refresh(), browserBandPollDeps()), [live, router]);
 
-  // The camera join: one meeting at a time, for the board on screen. The
-  // answer is stored WITH the key it answers, so a board switch reads as
-  // "connecting" until its own answer lands — no state is set in the
-  // effect's body, only in the callbacks it subscribes.
+  // Which player's meeting the arbiter is in, per board: the arbiter's own choice, else the board's default read ONCE
+  // and held - a player arriving later never moves the pane under the arbiter's eyes. The meeting is the SIDE's; the
+  // colour is only its label, so a pairing card swapping the colours changes the label and nothing else (§5.6.4).
+  const [chosen, setChosen] = useState<Record<string, ArbiterSide>>({});
+  const side: ArbiterSide | null = board ? (chosen[board.fixtureId] ?? defaultWatchSide(board)) : null;
+  if (board && side && chosen[board.fixtureId] === undefined) setChosen((c) => ({ ...c, [board.fixtureId]: side }));
+  const shown: ArbiterSeat = board && side ? sideSeat(board, side) : "white";
+
+  // The camera join: one meeting at a time - the board's, and in it the one player's. The answer is stored WITH the key
+  // it answers, so a switch reads as "switching" until its own answer lands - no state is set in the effect's body, only
+  // in the callbacks it subscribes. The key carries the side, so a side switch re-runs the effect; the order of a switch
+  // (leave, then DELETE answered, then the next join) is the serial chain's, not the effect cleanup's, which React does
+  // not await (arbiter-watch.ts). A side whose room is not open is not joined at all: nothing to watch, and the arbiter
+  // never makes a room - the poll opens the join the moment the player arrives.
   const [attempt, setAttempt] = useState(0);
   const [join, setJoin] = useState<{ key: string; view: ArbiterVideoView } | null>(null);
-  const joinKey = board && shouldJoinVideo(board) ? `${board.fixtureId}#${attempt}` : null;
+  const sideState = board && side ? board.sides[side].state : null;
+  const joinKey = board && side && shouldJoinVideo(board) && sideState === "open" ? `${board.fixtureId}:${side}#${attempt}` : null;
   useEffect(() => {
     if (joinKey === null) return;
-    const fixtureId = joinKey.slice(0, joinKey.indexOf("#"));
+    const [, fixtureId, joinSide] = /^(.+):(home|away)#\d+$/.exec(joinKey)!;
     let cancelled = false;
-    let mine: ArbiterCameras | null = null;
-    // I2: whatever happens to the meeting below, the participant the POST
-    // minted is handed back when this board closes or the tab goes away.
-    const watch = arbiterWatchRelease(fixtureId, (url, init) => apiV1(url, init));
-    window.addEventListener("pagehide", watch.release);
     const answer = (view: ArbiterVideoView) => {
       if (!cancelled) setJoin({ key: joinKey, view });
     };
-    const observe = () => {
-      const c = mine;
-      if (c === null || cancelled) return;
+    const observe = (c: ArbiterCameras) => () => {
+      if (cancelled) return;
       const now = Date.now();
       setJoin((prev) => {
         // The guard left the meeting: the fault stands until a retry.
         if (prev?.key === joinKey && prev.view.kind === "fault") return prev;
-        const was = prev?.key === joinKey && prev.view.kind === "watching" ? prev.view : null;
-        const seat = (s: ArbiterSeat): ArbiterSeatVideo => {
-          const tile = c.tile(s);
-          return { ...tile, offSinceMs: nextOffSince(was?.[s].offSinceMs ?? null, tile, now) };
-        };
-        return { key: joinKey, view: { kind: "watching", white: seat("white"), black: seat("black") } };
+        const was = prev?.key === joinKey && prev.view.kind === "watching" ? prev.view.tile : null;
+        const tile = c.tile();
+        return { key: joinKey, view: { kind: "watching", tile: { ...tile, offSinceMs: nextOffSince(was?.offSinceMs ?? null, tile, now) } } };
       });
     };
-    void (async () => {
-      try {
-        const seats = await apiV1<{ authToken: string; participantId: string; white: string[]; black: string[] }>(
-          `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter`,
-          { method: "POST" },
-        );
-        watch.minted(seats.participantId);
+    const open = browserSerial.open(fixtureId!, joinSide as ArbiterSide, {
+      onCameras: (c) => {
         if (cancelled) return;
-        const joined = await joinArbiter(seats);
-        if (cancelled) {
-          void joined.leave().catch(() => undefined);
-          return;
-        }
-        mine = joined;
-        joined.onChange(observe);
-        joined.onFault(() => answer({ kind: "fault" }));
-        observe();
-      } catch (err) {
-        answer(arbiterJoinStateFromError(err));
-      }
-    })();
+        c.onChange(observe(c));
+        c.onFault(() => answer({ kind: "fault" }));
+        observe(c)();
+      },
+      onError: (err) => answer(arbiterJoinStateFromError(err)),
+    });
+    // I2: the tab going away hands the participant back at once (keepalive); the pane closing queues leave-then-DELETE.
+    window.addEventListener("pagehide", open.release);
     return () => {
       cancelled = true;
-      if (mine !== null) void mine.leave().catch(() => undefined);
-      window.removeEventListener("pagehide", watch.release);
-      watch.close();
+      window.removeEventListener("pagehide", open.release);
+      open.close();
     };
   }, [joinKey]);
 
@@ -802,9 +913,13 @@ export function ArbiterPanel({
           ? { kind: "overridden" }
           : boardIsOver(board.state)
             ? { kind: "over" }
-            : join !== null && join.key === joinKey
-              ? join.view
-              : { kind: "connecting" };
+            : sideState === "none"
+              ? { kind: "notStarted" }
+              : sideState === "ended"
+                ? { kind: "ended" }
+                : join !== null && join.key === joinKey
+                  ? join.view
+                  : { kind: switchingFrom(join?.key ?? null, board.fixtureId, side) ? "switching" : "connecting" };
 
   const runner = useMemo(
     () =>
@@ -835,6 +950,7 @@ export function ArbiterPanel({
       requested={requested}
       decision={decision}
       video={video}
+      shown={shown}
       nowMs={nowMs}
       slugs={slugs}
       on={{
@@ -853,6 +969,9 @@ export function ArbiterPanel({
           if (decision.boardId) void runner.override(decision.boardId);
         },
         retryVideo: () => setAttempt((n) => n + 1),
+        switchTo: (seat) => {
+          if (board) setChosen((c) => ({ ...c, [board.fixtureId]: seatSide(board, seat) }));
+        },
       }}
     />
   );
