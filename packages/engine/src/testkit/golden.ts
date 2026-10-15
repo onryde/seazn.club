@@ -106,6 +106,11 @@ export function goldenPath(key: string): string {
 export interface GoldenEvent {
   type: string;
   payload: unknown;
+  /** Only on a `core.void`: the envelope id of the event it cancels, spelled the way `makeEnvelope` names them
+   *  (`e-<index in this stream>`). The payload cannot carry it: `CoreVoid` is a strict empty object and the target
+   *  travels on the envelope (`EventEnvelope.voids`). Absent on every other event, so no stream recorded before the
+   *  golden floor (GF-1) changes by a byte. */
+  voids?: string;
 }
 
 export interface GoldenStream {
@@ -199,7 +204,7 @@ export function recomputeStream(
 ): Pick<GoldenStream, "states" | "outcome" | "summary" | "deltas"> {
   const cfg = module.configSchema.parse(rawConfig);
   const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
-  const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event));
+  const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));
 
   const states = envelopes.map((_, i) =>
     JSON.stringify(foldMatch(module, cfg, lineups, envelopes.slice(0, i + 1), STRICT_ALL)),
@@ -2293,7 +2298,7 @@ export function payloadParseFailures(
 ): PayloadParseFailure[] {
   const cfg = module.configSchema.parse(rawConfig);
   const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
-  const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event));
+  const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));
   const out: PayloadParseFailure[] = [];
 
   for (let i = 0; i < envelopes.length; i++) {

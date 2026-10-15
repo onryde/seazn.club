@@ -1,0 +1,364 @@
+// The golden floor (GF-1) — see golden-floor.ts. Every expected set here is read off the engine's own declarations
+// (CORE_EVENT_SCHEMAS, FORFEIT_REASONS, forfeitAdmission, supportsDraws, the lineup reducer), never typed in.
+import { describe, expect, it } from "vitest";
+import { CORE_EVENT_SCHEMAS } from "../core/events.ts";
+import { DEFAULT_LINEUP_POLICY } from "../core/lineup.ts";
+import { FORFEIT_REASONS } from "../core/types.ts";
+import { builtinModules } from "../sports/index.ts";
+import { forEachSport } from "./for-each-sport.ts";
+import { readCorpus, recomputeStream, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import {
+  CORE_TYPES,
+  FLOOR_EXEMPTIONS,
+  LINEUP_TYPES,
+  NATURAL_OUTCOMES,
+  benchPair,
+  eventToken,
+  floorHoles,
+  floorRequirement,
+  forfeitAdmissions,
+  lineupOffers,
+  outcomeToken,
+  outcomeTokenOf,
+  planLineupEvents,
+  recordedTokens,
+  settleProbe,
+  staleFloorExemptions,
+  staleNaturalOutcomes,
+  unrequiredObservedOutcomes,
+} from "./golden-floor.ts";
+import { defaultLineupPair } from "./helpers.ts";
+import { resolvePositions } from "../sport/catalog.ts";
+
+const corpora = new Map(builtinModules.map((m) => [m.key, readCorpus(m.key)] as const));
+const corpusOf = (key: string): GoldenCorpus => {
+  const c = corpora.get(key);
+  if (c === undefined) throw new Error(`no corpus for ${key}`);
+  return c;
+};
+
+describe("golden floor — the token vocabulary", () => {
+  it("CORE_TYPES is the kernel's own schema map, every key of it", () => {
+    expect(CORE_TYPES).toEqual(Object.keys(CORE_EVENT_SCHEMAS));
+    expect(CORE_TYPES.length).toBeGreaterThanOrEqual(15);
+    expect(CORE_TYPES.every((t) => t.startsWith("core."))).toBe(true);
+  });
+
+  it("outcomeTokenOf: empty case first (null), then each kind, an award keyed by its reason", () => {
+    expect(outcomeTokenOf("null")).toBeNull();
+    expect(outcomeTokenOf('{"kind":"draw"}')).toBe("draw");
+    expect(outcomeTokenOf('{"kind":"win","winner":"H","loser":"A"}')).toBe("win");
+    expect(outcomeTokenOf('{"kind":"double_walkover"}')).toBe("double_walkover");
+    expect(outcomeTokenOf('{"kind":"award","winner":"H","loser":"A","reason":"retired"}')).toBe("award:retired");
+    // different reasons differ: an award is not one token
+    expect(outcomeTokenOf('{"kind":"award","winner":"H","loser":"A","reason":"withdrew"}')).not.toBe("award:retired");
+  });
+
+  it("outcomeTokenOf refuses an outcome it cannot key (a legacy award without a reason, a kindless value)", () => {
+    expect(() => outcomeTokenOf('{"kind":"award","winner":"H","method":"walkover"}')).toThrow(/award without a reason/);
+    expect(() => outcomeTokenOf('{"winner":"H"}')).toThrow(/without a kind/);
+  });
+
+  it("recordedTokens: an empty corpus holds nothing; a stream contributes its core types and its outcome", () => {
+    const empty: GoldenCorpus = { ...corpusOf("football"), streams: [] };
+    expect(recordedTokens(empty).size).toBe(0);
+    const one: GoldenCorpus = { ...empty, streams: [corpusOf("football").streams.find((s) => s.events.some((e) => e.type === "core.forfeit"))!] };
+    const have = recordedTokens(one);
+    expect(have.has(eventToken("core.forfeit"))).toBe(true);
+    expect(have.has(eventToken("core.start"))).toBe(true);
+    expect([...have].filter((t) => t.startsWith("outcome:"))).toHaveLength(1);
+    // a sport event is not a floor token
+    expect([...have].some((t) => t.startsWith("event:football."))).toBe(false);
+  });
+});
+
+describe("golden floor — lineup planning asks the real reducer", () => {
+  const tennis = builtinModules.find((m) => m.key === "tennis")!;
+  const football = builtinModules.find((m) => m.key === "football")!;
+
+  it("a squad of ONE takes all five types in turn when the policy declares an exemption", () => {
+    const cfg = tennis.configSchema.parse(corpusOf("tennis").configs.default);
+    const lineups = benchPair(tennis, cfg);
+    expect(lineups.home.slots.filter((s) => s.slot === "starting")).toHaveLength(1);
+    const plan = planLineupEvents(lineups, { ...DEFAULT_LINEUP_POLICY, exemptions: { injury: {} } });
+    expect(plan.accepted).toEqual([...LINEUP_TYPES]);
+    expect(plan.events.map((e) => e.type)).toEqual([...LINEUP_TYPES]);
+    expect(plan.refused).toEqual({});
+  });
+
+  it("a sub cap of 0 refuses the substitution BY NAME, and no declared exemption refuses the replacement by name", () => {
+    const cfg = football.configSchema.parse(corpusOf("football").configs.default);
+    const lineups = benchPair(football, cfg);
+    const plan = planLineupEvents(lineups, { ...DEFAULT_LINEUP_POLICY, maxSubs: 0 });
+    expect(plan.refused["core.lineup.substitution"]).toBe("sub-cap-reached");
+    expect(plan.refused["core.lineup.replacement"]).toBe("exemption-not-declared");
+    expect(plan.accepted).toEqual(["core.lineup.position", "core.lineup.retirement", "core.lineup.entry"]);
+  });
+
+  it("with no bench, nothing can come on: substitution and entry find no candidate", () => {
+    const cfg = football.configSchema.parse(corpusOf("football").configs.default);
+    const plan = planLineupEvents(benchPair(football, cfg, 0), DEFAULT_LINEUP_POLICY);
+    expect(plan.accepted).toEqual(["core.lineup.position", "core.lineup.retirement"]);
+    expect(Object.keys(plan.refused).sort()).toEqual(["core.lineup.entry", "core.lineup.replacement", "core.lineup.substitution"]);
+  });
+
+  it("every lineup offer of every sport is a real plan: starters unchanged from the default pair", () => {
+    let offers = 0;
+    forEachSport(({ module, key }) => {
+      for (const offer of lineupOffers(module, corpusOf(key))) {
+        offers++;
+        const cfg = module.configSchema.parse(corpusOf(key).configs[offer.cfgName]);
+        const starters = offer.lineups.home.slots.filter((s) => s.slot === "starting");
+        expect(starters).toEqual(defaultLineupPair(resolvePositions(module, cfg)).home.slots);
+        expect(offer.lineups.home.slots.filter((s) => s.slot === "bench")).toHaveLength(3);
+      }
+    });
+    expect(offers).toBeGreaterThanOrEqual(builtinModules.length);
+  });
+});
+
+describe("golden floor — the requirement is derived from the engine, per sport", () => {
+  it("is non-empty for every sport, and states what it examined", () => {
+    let sports = 0;
+    let tokens = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      sports++;
+      tokens += req.required.size;
+      expect(req.required.size, `${key} requirement`).toBeGreaterThan(0);
+      expect(req.required.has(eventToken("core.start")), key).toBe(true);
+      expect(req.required.has(eventToken("core.void")), key).toBe(true);
+      expect(req.required.has(outcomeToken("win")), key).toBe(true);
+      expect(req.examined.coreTypes).toBe(CORE_TYPES.length);
+      expect(req.examined.configs, key).toBeGreaterThan(0);
+      expect(req.examined.admissionStates, key).toBeGreaterThan(0);
+    });
+    expect(sports).toBe(builtinModules.length);
+    expect(tokens).toBeGreaterThan(sports * 10);
+  });
+
+  it("every core type is accounted for exactly once: required, exempt, or impossible-by-policy", () => {
+    let accounted = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      for (const type of CORE_TYPES) {
+        const token = eventToken(type);
+        const where = [req.required.has(token), req.exempt.has(token), req.impossible.has(token)].filter(Boolean).length;
+        expect(where, `${key} ${type}`).toBe(1);
+        accounted++;
+      }
+    });
+    expect(accounted).toBe(builtinModules.length * CORE_TYPES.length);
+  });
+
+  it("the forfeit outcomes are the kernel's FORFEIT_REASONS, admitted by forfeitAdmission in a state the generator reaches", () => {
+    let reasons = 0;
+    forEachSport(({ module, key }) => {
+      const admission = forfeitAdmissions(module, corpusOf(key));
+      expect(admission.states, `${key} states asked`).toBeGreaterThan(0);
+      for (const reason of admission.reasons.keys()) {
+        expect((FORFEIT_REASONS as readonly string[]).includes(reason), `${key} ${reason}`).toBe(true);
+        reasons++;
+      }
+      const req = floorRequirement(module, corpusOf(key));
+      for (const reason of FORFEIT_REASONS) {
+        expect(req.required.has(outcomeToken(`award:${reason}`)), `${key} award:${reason}`).toBe(admission.reasons.has(reason));
+      }
+      expect(req.required.has(outcomeToken("double_walkover")), `${key} double_walkover`).toBe(admission.both !== null);
+    });
+    expect(reasons).toBeGreaterThan(builtinModules.length);
+  });
+
+  it("`draw` is required exactly where supportsDraws says a draw-kind stage can draw (at least one sport yes, one no)", () => {
+    const yes: string[] = [];
+    const no: string[] = [];
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      (req.required.has(outcomeToken("draw")) ? yes : no).push(key);
+    });
+    expect(yes.length).toBeGreaterThan(0);
+    expect(no.length).toBeGreaterThan(0);
+  });
+
+  it("`tie` and `no_result` are required only for the sports NATURAL_OUTCOMES names", () => {
+    let checked = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      for (const token of ["tie", "no_result"]) {
+        expect(req.required.has(outcomeToken(token)), `${key} ${token}`).toBe(token in (NATURAL_OUTCOMES[key] ?? {}));
+        checked++;
+      }
+    });
+    expect(checked).toBe(builtinModules.length * 2);
+  });
+});
+
+describe("golden floor — the empty case and the teeth, first", () => {
+  it("an EMPTY corpus fails the floor: every required token is a hole", () => {
+    let sports = 0;
+    forEachSport(({ module, key }) => {
+      const empty: GoldenCorpus = { ...corpusOf(key), streams: [] };
+      const req = floorRequirement(module, empty);
+      const holes = floorHoles(module, empty);
+      expect(holes.length, key).toBe(req.required.size);
+      expect(holes.length, key).toBeGreaterThan(10);
+      sports++;
+    });
+    expect(sports).toBe(builtinModules.length);
+  });
+
+  it("dropping every stream that holds a token makes exactly that token a hole, naming the sport", () => {
+    let dropped = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const req = floorRequirement(module, corpus);
+      for (const token of ["event:core.start", "event:core.forfeit", "outcome:win"] as const) {
+        expect(req.required.has(token), `${key} ${token}`).toBe(true);
+        const kept = corpus.streams.filter((s) => {
+          const only = recordedTokens({ ...corpus, streams: [s] });
+          return !only.has(token);
+        });
+        const holes = floorHoles(module, { ...corpus, streams: kept });
+        expect(holes, `${key} without ${token}`).toContain(token);
+        dropped++;
+      }
+    });
+    expect(dropped).toBe(builtinModules.length * 3);
+  });
+
+  it("the shipped corpus holds EVERY token a sport's floor requires (the floor itself)", () => {
+    const missing: string[] = [];
+    let sports = 0;
+    let tokens = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      tokens += floorRequirement(module, corpus).required.size;
+      sports++;
+      for (const hole of floorHoles(module, corpus)) missing.push(`${key}: ${hole}`);
+    });
+    expect(sports).toBe(builtinModules.length);
+    expect(tokens).toBeGreaterThan(sports * 10);
+    expect(missing, `${missing.length} floor holes. Extend the corpus: EXTEND_GOLDEN=1 npx vitest run src/testkit/golden.test.ts`).toEqual([]);
+  });
+});
+
+describe("golden floor — exemptions and the reasoned list cannot go stale", () => {
+  it("every exemption row carries a reason, a real token, and covers at least one sport", () => {
+    expect(FLOOR_EXEMPTIONS.length).toBeGreaterThan(0);
+    for (const e of FLOOR_EXEMPTIONS) {
+      expect(e.reason.length, e.token).toBeGreaterThan(40);
+      expect(CORE_TYPES.map(eventToken), e.token).toContain(e.token);
+      expect(e.sports === "all" || e.sports.length > 0, e.token).toBe(true);
+    }
+  });
+
+  it("no exemption is stale against the shipped corpora (swept over every sport, counted)", () => {
+    let checked = 0;
+    const stale: string[] = [];
+    forEachSport(({ module, key }) => {
+      checked++;
+      stale.push(...staleFloorExemptions(module, corpusOf(key)));
+    });
+    expect(checked).toBe(builtinModules.length);
+    expect(stale).toEqual([]);
+  });
+
+  it("the settle exemption holds for a reason a probe proves: the harness records the bare outcome, the kernel reads another", () => {
+    let probed = 0;
+    forEachSport(({ module, key }) => {
+      const probe = settleProbe(module, corpusOf(key));
+      expect(typeof probe, `${key}: ${typeof probe === "string" ? probe : ""}`).toBe("object");
+      if (typeof probe === "string") return;
+      expect(probe.recorded, key).not.toBe(probe.effective);
+      expect(probe.effective, key).toContain("settled_organiser");
+      probed++;
+    });
+    expect(probed).toBe(builtinModules.length);
+  });
+
+  it("an exemption goes STALE the moment its token is recorded", () => {
+    let stale = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const cfgName = Object.keys(corpus.configs)[0]!;
+      const lineups = defaultLineupPair(resolvePositions(module, module.configSchema.parse(corpus.configs[cfgName])));
+      const events: GoldenEvent[] = [
+        { type: "core.start", payload: {} },
+        { type: "core.abandon", payload: { reason: "floodlight failure" } },
+        { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } },
+      ];
+      const made = { config: cfgName, seed: 99_999, events, ...recomputeStream(module, corpus.configs[cfgName], events, lineups) };
+      const withSettle: GoldenCorpus = { ...corpus, streams: [...corpus.streams, made] };
+      const messages = staleFloorExemptions(module, withSettle);
+      expect(messages.join("\n"), key).toMatch(/records core\.settle/);
+      stale++;
+    });
+    expect(stale).toBe(builtinModules.length);
+  });
+
+  it("NATURAL_OUTCOMES is not stale: every row names a registered sport and a token its corpus records", () => {
+    expect(Object.keys(NATURAL_OUTCOMES).length).toBeGreaterThan(0);
+    expect(staleNaturalOutcomes(builtinModules, corpusOf)).toEqual([]);
+  });
+
+  it("NATURAL_OUTCOMES goes stale when a row names a sport that is not registered or a token nothing records", () => {
+    const fakeSport = staleNaturalOutcomes(builtinModules.filter((m) => m.key !== "cricket"), corpusOf);
+    expect(fakeSport.join("\n")).toMatch(/"cricket", which is not a registered sport/);
+    // a corpus of cricket with every tie stream removed: the row `tie` is stale
+    const noTie: GoldenCorpus = { ...corpusOf("cricket"), streams: corpusOf("cricket").streams.filter((s) => outcomeTokenOf(s.outcome) !== "tie") };
+    const stale = staleNaturalOutcomes(builtinModules, (k) => (k === "cricket" ? noTie : corpusOf(k)));
+    expect(stale.join("\n")).toMatch(/cricket tie, which no cricket stream records/);
+  });
+
+  it("a bounded sweep of every sport's own generator reaches no outcome the floor does not require", () => {
+    let walks = 0;
+    let observed = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const result = unrequiredObservedOutcomes(module, corpus, floorRequirement(module, corpus));
+      expect(result.walks, `${key} walks`).toBeGreaterThan(0);
+      expect(result.observed, `${key} observed`).toContain("win");
+      expect(result.unrequired, `${key} reaches outcomes the floor does not require: add them to NATURAL_OUTCOMES`).toEqual([]);
+      walks += result.walks;
+      observed += result.observed.length;
+    });
+    expect(walks).toBeGreaterThan(builtinModules.length * 20);
+    expect(observed).toBeGreaterThan(builtinModules.length * 2);
+  }, 20_000);
+
+  it("the sweep DOES see a token the floor lacks (a requirement without `draw` for football)", () => {
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const corpus = corpusOf("football");
+    const req = floorRequirement(football, corpus);
+    const trimmed = { ...req, required: new Map([...req.required].filter(([t]) => t !== outcomeToken("draw"))) };
+    const result = unrequiredObservedOutcomes(football, corpus, trimmed);
+    expect(result.unrequired).toContain("draw");
+  });
+});
+
+describe("golden floor — a recorded void is a real void", () => {
+  it("every core.void in every corpus targets an earlier, non-void event of ITS OWN stream, and only core.void carries `voids`", () => {
+    let voids = 0;
+    let streams = 0;
+    for (const [key, corpus] of corpora) {
+      for (const stream of corpus.streams) {
+        streams++;
+        const ids = new Map<string, string>(stream.events.map((e, i) => [`e-${i}`, e.type]));
+        stream.events.forEach((event, i) => {
+          if (event.type !== "core.void") {
+            expect(event.voids, `${key} ${stream.config}:${stream.seed} #${i} carries voids but is ${event.type}`).toBeUndefined();
+            return;
+          }
+          voids++;
+          const target = event.voids;
+          expect(typeof target, `${key} ${stream.config}:${stream.seed} #${i} void names no target`).toBe("string");
+          const at = Number((target as string).slice(2));
+          expect(at, `${key} ${stream.config}:${stream.seed} #${i} voids a later event`).toBeLessThan(i);
+          expect(ids.get(target as string), `${key} ${stream.config}:${stream.seed} #${i} voids a void`).not.toBe("core.void");
+        });
+      }
+    }
+    expect(streams).toBeGreaterThan(200);
+    expect(voids, "core.void events across the corpora").toBeGreaterThanOrEqual(builtinModules.length);
+  });
+});
