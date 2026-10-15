@@ -146,7 +146,7 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
     const s = await seedFixture();
     const id = mtg("first");
     const stub = stubFetch([{ status: 200, body: { success: true, data: { id } } }]);
-    const ref = await ensureMeeting(s.fixtureId, { fetch: stub.fetch });
+    const ref = await ensureMeeting(s.fixtureId, "home", { fetch: stub.fetch });
     expect(ref).toEqual({ meetingId: id });
     expect(stub.calls.length).toBe(1);
     expect(stub.calls[0]?.url).toBe(
@@ -168,9 +168,9 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
     const s = await seedFixture();
     const id = mtg("second");
     const first = stubFetch([{ status: 200, body: { success: true, data: { id } } }]);
-    await ensureMeeting(s.fixtureId, { fetch: first.fetch });
+    await ensureMeeting(s.fixtureId, "home", { fetch: first.fetch });
     const second = stubFetch([]); // any call throws
-    const again = await ensureMeeting(s.fixtureId, { fetch: second.fetch });
+    const again = await ensureMeeting(s.fixtureId, "home", { fetch: second.fetch });
     expect(again).toEqual({ meetingId: id });
     expect(second.calls.length, "the stored meeting is reused").toBe(0);
   });
@@ -194,8 +194,8 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
       if (!created) {
         created = true;
         await sql`
-          insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
-          values (${s.fixtureId}, ${s.orgId}, ${winner}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+          insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+          values (${s.fixtureId}, 'home', ${s.orgId}, ${winner}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
         return new Response(JSON.stringify({ success: true, data: { id: orphan } }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -206,7 +206,7 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
         headers: { "content-type": "application/json" },
       });
     });
-    const ref = await ensureMeeting(s.fixtureId, { fetch: fetchFn as unknown as typeof fetch });
+    const ref = await ensureMeeting(s.fixtureId, "home", { fetch: fetchFn as unknown as typeof fetch });
     expect(ref, "the winner's meeting is what everyone must join").toEqual({ meetingId: winner });
     const [row] = await sql<{ meeting_id: string }[]>`
       select meeting_id from fixture_video_meetings where fixture_id = ${s.fixtureId}`;
@@ -221,7 +221,7 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
     configure({ REALTIMEKIT_APP_ID: "" });
     const s = await seedFixture();
     const stub = stubFetch([]);
-    await expect(ensureMeeting(s.fixtureId, { fetch: stub.fetch })).rejects.toMatchObject({
+    await expect(ensureMeeting(s.fixtureId, "home", { fetch: stub.fetch })).rejects.toMatchObject({
       name: "RealtimeKitError",
       code: "unconfigured",
     });
@@ -239,15 +239,15 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
     const s = await seedFixture();
     const ended = mtg("ended");
     await sql`
-      insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
-      values (${s.fixtureId}, ${s.orgId}, ${ended}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
+      values (${s.fixtureId}, 'home', ${s.orgId}, ${ended}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
     // Positive control: the stub WOULD hand out a fresh meeting if asked, so
     // the zero-call assertion below is a decision, not a stub that refused.
     const stub = stubFetch([
       { status: 200, body: { success: true, data: { id: mtg("would-be-orphan") } } },
       { status: 200, body: { success: true, data: {} } },
     ]);
-    await expect(ensureMeeting(s.fixtureId, { fetch: stub.fetch })).rejects.toMatchObject({
+    await expect(ensureMeeting(s.fixtureId, "home", { fetch: stub.fetch })).rejects.toMatchObject({
       status: 409,
       code: "VIDEO_MEETING_ENDED",
     });
@@ -270,18 +270,133 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
         created = true;
         // Created AND torn down while our POST was in flight.
         await sql`
-          insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
-          values (${s.fixtureId}, ${s.orgId}, ${mtg("ended-winner")}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+          insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
+          values (${s.fixtureId}, 'home', ${s.orgId}, ${mtg("ended-winner")}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
         return new Response(JSON.stringify({ success: true, data: { id: orphan } }), { status: 200 });
       }
       return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
     });
     await expect(
-      ensureMeeting(s.fixtureId, { fetch: fetchFn as unknown as typeof fetch }),
+      ensureMeeting(s.fixtureId, "home", { fetch: fetchFn as unknown as typeof fetch }),
     ).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_ENDED" });
     const patch = calls.find((c) => c.method === "PATCH");
     expect(patch?.url, "our own meeting is still stood down").toContain(`/meetings/${orphan}`);
     expect(patch?.body).toEqual({ status: "INACTIVE" });
+  });
+});
+
+// ─── D16 (§5.6.1): a meeting per PLAYER — (fixture, side) ────────────────────────────────────────────────────────────
+describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting, per player (D16)", () => {
+  const SIDES = ["home", "away"] as const;
+  const created = (id: string) => ({ status: 200, body: { success: true, data: { id } } });
+  const rowsOf = async (fixtureId: string) =>
+    sql<{ side: string; meeting_id: string; ended_at: Date | null }[]>`
+      select side, meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId} order by side`;
+
+  it("each side's first call makes ITS OWN meeting: two vendor creates, two rows, two distinct ids, the side in the vendor title — counted per side", async () => {
+    configure();
+    const s = await seedFixture();
+    const ids = new Map<string, string>();
+    let checked = 0;
+    for (const side of SIDES) {
+      const id = mtg(`own-${side}`);
+      const stub = stubFetch([created(id)]);
+      expect(await ensureMeeting(s.fixtureId, side, { fetch: stub.fetch }), side).toEqual({ meetingId: id });
+      expect(stub.calls.length, `${side}: exactly one create`).toBe(1);
+      expect(stub.calls[0]!.body, `${side}: the title names the fixture and the side`).toEqual({ title: `seazn-fixture-${s.fixtureId}-${side}` });
+      ids.set(side, id);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both sides").toBe(SIDES.length);
+    expect(new Set(ids.values()).size, "two different vendor rooms").toBe(2);
+    const rows = await rowsOf(s.fixtureId);
+    expect(Object.fromEntries(rows.map((r) => [r.side, r.meeting_id])), "each side's row holds its own vendor room").toEqual(Object.fromEntries(ids));
+  });
+
+  it("SEQUENCE: a second call on EACH side makes no HTTP request, and the other side's meeting is never handed out in its place", async () => {
+    configure();
+    const s = await seedFixture();
+    const idOf = { home: mtg("seq-home"), away: mtg("seq-away") };
+    for (const side of SIDES) await ensureMeeting(s.fixtureId, side, { fetch: stubFetch([created(idOf[side])]).fetch });
+    let checked = 0;
+    for (const side of SIDES) {
+      const none = stubFetch([]);
+      expect(await ensureMeeting(s.fixtureId, side, { fetch: none.fetch }), side).toEqual({ meetingId: idOf[side] });
+      expect(none.calls.length, `${side}: the stored meeting is reused`).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(SIDES.length);
+    expect((await rowsOf(s.fixtureId)).length, "still two rows").toBe(2);
+  });
+
+  it("a side whose meeting has ENDED stays ended (409) and the other side is untouched: it still joins, and a side with no row still creates — counted", async () => {
+    configure();
+    const s = await seedFixture();
+    const homeId = mtg("half-home");
+    const awayId = mtg("half-away");
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([created(homeId)]).fetch });
+    await ensureMeeting(s.fixtureId, "away", { fetch: stubFetch([created(awayId)]).fetch });
+    await sql`update fixture_video_meetings set ended_at = now() where fixture_id = ${s.fixtureId} and side = 'home'`;
+    const refused = stubFetch([created(mtg("half-orphan")), { status: 200, body: { success: true, data: {} } }]);
+    await expect(ensureMeeting(s.fixtureId, "home", { fetch: refused.fetch })).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_ENDED" });
+    expect(refused.calls.length, "the ended side makes no vendor call").toBe(0);
+    const none = stubFetch([]);
+    expect(await ensureMeeting(s.fixtureId, "away", { fetch: none.fetch }), "the live side is unaffected").toEqual({ meetingId: awayId });
+    expect(none.calls.length).toBe(0);
+    // And the pair of the half-ended board: a fixture with only 'home' on file creates 'away' on its first call.
+    const t = await seedFixture();
+    await ensureMeeting(t.fixtureId, "home", { fetch: stubFetch([created(mtg("only-home"))]).fetch });
+    await sql`update fixture_video_meetings set ended_at = now() where fixture_id = ${t.fixtureId}`;
+    const fresh = stubFetch([created(mtg("late-away"))]);
+    expect(await ensureMeeting(t.fixtureId, "away", { fetch: fresh.fetch }), "an ended home does not block away").toEqual({ meetingId: mtg("late-away") });
+    expect(fresh.calls.length).toBe(1);
+  });
+
+  it("loses a creation race on ONE side: returns that side's winner, stands its own orphan down, and leaves the other side's row alone", async () => {
+    configure();
+    const s = await seedFixture();
+    const homeId = mtg("race-home");
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([created(homeId)]).fetch });
+    const winner = mtg("race-away-winner");
+    const orphan = mtg("race-away-orphan");
+    let raced = false;
+    const calls: { method: string; url: string; body: unknown }[] = [];
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? "GET", url: String(url), body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+      if (!raced) {
+        raced = true;
+        await sql`
+          insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+          values (${s.fixtureId}, 'away', ${s.orgId}, ${winner}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
+        return new Response(JSON.stringify(created(orphan).body), { status: 200 });
+      }
+      return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+    });
+    const ref = await ensureMeeting(s.fixtureId, "away", { fetch: fetchFn as unknown as typeof fetch });
+    expect(ref, "the away winner, never home's meeting").toEqual({ meetingId: winner });
+    expect(calls.find((c) => c.method === "PATCH")?.url).toContain(`/meetings/${orphan}`);
+    expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id])).toEqual([["away", winner], ["home", homeId]]);
+  });
+
+  it("a re-pair retires EVERY stale row of the board and ends each room at the vendor, not just the first; the asking side then gets a fresh meeting", async () => {
+    configure();
+    const s = await seedFixture();
+    const idOf = { home: mtg("stale-home"), away: mtg("stale-away") };
+    for (const side of SIDES) await ensureMeeting(s.fixtureId, side, { fetch: stubFetch([created(idOf[side])]).fetch });
+    // Both rows were made for another pair: the stamp names the home entrant on both sides.
+    await sql`update fixture_video_meetings m set away_entrant_id = f.home_entrant_id from fixtures f where f.id = m.fixture_id and m.fixture_id = ${s.fixtureId}`;
+    const fresh = mtg("stale-fresh");
+    const stub = stubFetch([
+      { status: 200, body: { success: true, data: { action: "kick" } } }, { status: 200, body: { success: true, data: {} } },
+      { status: 200, body: { success: true, data: { action: "kick" } } }, { status: 200, body: { success: true, data: {} } },
+      created(fresh),
+    ]);
+    expect(await ensureMeeting(s.fixtureId, "away", { fetch: stub.fetch })).toEqual({ meetingId: fresh });
+    const route = (u: string) => u.split("/realtime/kit/app-1")[1];
+    const ended = stub.calls.filter((c) => c.method === "PATCH").map((c) => route(c.url));
+    expect(new Set(ended), "both stale rooms were ended at the vendor").toEqual(new Set([`/meetings/${idOf.home}`, `/meetings/${idOf.away}`]));
+    expect(stub.calls.filter((c) => c.url.endsWith("/kick-all")).length, "each room kicked").toBe(2);
+    expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id]), "only the asking side was remade; home re-seats on its own first arrival").toEqual([["away", fresh]]);
   });
 });
 
@@ -972,7 +1087,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     const s = await seedFixture();
     const id = mtg("end");
     const create = stubFetch([{ status: 200, body: { success: true, data: { id } } }]);
-    await ensureMeeting(s.fixtureId, { fetch: create.fetch });
+    await ensureMeeting(s.fixtureId, "home", { fetch: create.fetch });
     expect(await endedAt(id), "premise: a fresh meeting is not ended").toBeNull();
     const stub = stubFetch([kicked, inactive]);
     await endMeeting(id, { fetch: stub.fetch });
@@ -1017,7 +1132,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     for (const c of cases) {
       const s = await seedFixture();
       const id = mtg(`kick404-${checked}`);
-      await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+      await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
       expect(await endedAt(id), `${c.name}: premise — a fresh meeting is not ended`).toBeNull();
       const stub = stubFetch([c.kick, inactive]);
       await endMeeting(id, { fetch: stub.fetch });
@@ -1052,7 +1167,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     for (const c of cases) {
       const s = await seedFixture();
       const id = mtg(`patch-proof-${checked}`);
-      await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+      await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
       const stub = stubFetch([gateway404, c.patch]);
       await expect(endMeeting(id, { fetch: stub.fetch }), c.name).rejects.toMatchObject({
         name: "RealtimeKitError",
@@ -1070,10 +1185,10 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     configure();
     const s = await seedFixture();
     const id = mtg("seq");
-    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
     await endMeeting(id, { fetch: stubFetch([kicked, inactive]).fetch });
     const after = stubFetch([{ status: 200, body: { success: true, data: { id: mtg("seq-orphan") } } }]);
-    await expect(ensureMeeting(s.fixtureId, { fetch: after.fetch })).rejects.toMatchObject({
+    await expect(ensureMeeting(s.fixtureId, "home", { fetch: after.fetch })).rejects.toMatchObject({
       status: 409,
       code: "VIDEO_MEETING_ENDED",
     });
@@ -1084,7 +1199,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     configure();
     const s = await seedFixture();
     const id = mtg("twice");
-    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
     await endMeeting(id, { fetch: stubFetch([kicked, inactive]).fetch });
     const first = await endedAt(id);
     expect(first, "premise: the first call stamped the row").not.toBeNull();
@@ -1102,16 +1217,16 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     const other = await seedFixture();
     const id = mtg("arb");
     const otherId = mtg("arb-other");
-    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
-    await ensureMeeting(other.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id: otherId } } }]).fetch });
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await ensureMeeting(other.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id: otherId } } }]).fetch });
     const earlier = new Date(Date.now() - 60 * 60_000);
-    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, removed_at) values
-      (${s.fixtureId}, null, 'arbiter', 'a-open-1', null),
-      (${s.fixtureId}, null, 'arbiter', 'a-open-2', null),
-      (${s.fixtureId}, null, 'arbiter', 'a-done', ${earlier}),
-      (${other.fixtureId}, null, 'arbiter', 'a-elsewhere', null)`;
-    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-              values (${s.fixtureId}, ${s.home.personId}, 'player', 'p-home')`;
+    await sql`insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, removed_at) values
+      (${s.fixtureId}, 'home', null, 'arbiter', 'a-open-1', null),
+      (${s.fixtureId}, 'home', null, 'arbiter', 'a-open-2', null),
+      (${s.fixtureId}, 'home', null, 'arbiter', 'a-done', ${earlier}),
+      (${other.fixtureId}, 'home', null, 'arbiter', 'a-elsewhere', null)`;
+    await sql`insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+              values (${s.fixtureId}, 'home', ${s.home.personId}, 'player', 'p-home')`;
     const removedAt = async () =>
       Object.fromEntries(
         (
@@ -1134,13 +1249,36 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     expect(await removedAt(), "a repeat keeps the first stamps").toEqual(after);
   });
 
+  it("D16: ending one player's meeting stamps only the arbiter watches of THAT side; the other side's watch and its meeting are untouched", async () => {
+    configure();
+    const s = await seedFixture();
+    const homeId = mtg("end-home");
+    const awayId = mtg("end-away");
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id: homeId } } }]).fetch });
+    await ensureMeeting(s.fixtureId, "away", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id: awayId } } }]).fetch });
+    await sql`insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id) values
+      (${s.fixtureId}, 'home', null, 'arbiter', 'a-on-home'),
+      (${s.fixtureId}, 'away', null, 'arbiter', 'a-on-away')`;
+    const removed = async () =>
+      Object.fromEntries(
+        (await sql<{ participant_id: string; removed_at: Date | null }[]>`
+          select participant_id, removed_at from fixture_video_participants where fixture_id = ${s.fixtureId}`).map((r) => [r.participant_id, r.removed_at !== null]),
+      );
+    await endMeeting(homeId, { fetch: stubFetch([kicked, inactive]).fetch });
+    expect(await removed(), "only the home watch ended").toEqual({ "a-on-home": true, "a-on-away": false });
+    expect(await endedAt(homeId), "home's meeting ended").not.toBeNull();
+    expect(await endedAt(awayId), "away's meeting is still live").toBeNull();
+    await endMeeting(awayId, { fetch: stubFetch([kicked, inactive]).fetch });
+    expect(await removed(), "the pair: ending away ends its own watch").toEqual({ "a-on-home": true, "a-on-away": true });
+  });
+
   it("I2: a failed deactivate stamps no arbiter watch removed — the meeting is still joinable", async () => {
     configure();
     const s = await seedFixture();
     const id = mtg("arb-patch-fails");
-    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
-    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-              values (${s.fixtureId}, null, 'arbiter', 'a-still')`;
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await sql`insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+              values (${s.fixtureId}, 'home', null, 'arbiter', 'a-still')`;
     await expect(endMeeting(id, { fetch: stubFetch([kicked, { status: 500, body: { success: false } }]).fetch })).rejects.toMatchObject({
       code: "unavailable",
     });
@@ -1153,7 +1291,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     configure();
     const s = await seedFixture();
     const id = mtg("patch-fails");
-    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
     const stub = stubFetch([kicked, { status: 500, body: { success: false } }]);
     await expect(endMeeting(id, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unavailable" });
     expect(stub.calls.length, "premise: the PATCH was attempted").toBe(2);
@@ -1164,7 +1302,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     configure();
     const s = await seedFixture();
     const id = mtg("kick-fails");
-    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
     const stub = stubFetch([{ status: 500, body: { success: false } }, inactive]);
     await expect(endMeeting(id, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unavailable" });
     expect(stub.calls.length).toBe(1);
@@ -1708,11 +1846,11 @@ describe("the call budget (D21): every vendor request spends a token first, and 
     configure();
     const s = await seedFixture();
     const stub = stubFetch([{ status: 200, body: { success: true, data: { id: mtg("budget-ens") } } }]);
-    await expect(ensureMeeting(s.fixtureId, { fetch: stub.fetch, budget: refuse })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+    await expect(ensureMeeting(s.fixtureId, "home", { fetch: stub.fetch, budget: refuse })).rejects.toBeInstanceOf(RealtimeKitDeferred);
     expect(stub.calls.length).toBe(0);
     const [none] = await sql`select 1 from fixture_video_meetings where fixture_id = ${s.fixtureId}`;
     expect(none, "a deferral leaves no row").toBeUndefined();
-    const ref = await ensureMeeting(s.fixtureId, { fetch: stub.fetch, budget: async () => true });
+    const ref = await ensureMeeting(s.fixtureId, "home", { fetch: stub.fetch, budget: async () => true });
     expect(ref).toEqual({ meetingId: mtg("budget-ens") });
   });
 
@@ -1720,7 +1858,7 @@ describe("the call budget (D21): every vendor request spends a token first, and 
     configure();
     const s = await seedFixture();
     const id = mtg("budget-end2");
-    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch, budget: async () => true });
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch, budget: async () => true });
     const stub = stubFetch([]);
     await expect(endMeeting(id, { fetch: stub.fetch, budget: refuse })).rejects.toBeInstanceOf(RealtimeKitDeferred);
     const [row] = await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_video_meetings where fixture_id = ${s.fixtureId}`;
