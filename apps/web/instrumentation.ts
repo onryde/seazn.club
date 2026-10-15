@@ -16,6 +16,12 @@ export async function register() {
     // serves nothing at all rather than faking at its first stream. Sentry is initialised first, so the refusal is reported.
     const { relayDriverMode } = await import("@/server/relay/config");
     relayDriverMode();
+    // A public page's 404 or 5xx must never be stored by a CDN or a browser (owner ruling 2026-10-14). Next sends an
+    // ISR route's 404 with the found page's `s-maxage`, and nothing short of the response itself can see the status;
+    // see the module for why, and what it leaves to Next's own cache.
+    const http = await import("node:http");
+    const { installPublicErrorNoStore } = await import("@/server/public-site/error-no-store");
+    installPublicErrorNoStore(http.ServerResponse.prototype);
   }
   if (process.env.NEXT_RUNTIME === "edge") {
     await import("./sentry.edge.config");

@@ -29,6 +29,17 @@ const nextConfig = {
   output: "standalone",
   // Don't advertise the framework (removes the `X-Powered-By: Next.js` header).
   poweredByHeader: false,
+  // A stale public page is served for at most 5 minutes (owner ruling
+  // 2026-10-14). Next's default is a year, which put
+  // `stale-while-revalidate=31535970` on every ISR page beside its
+  // `s-maxage=30`: a CDN or browser honouring it may serve a page up to a year
+  // old while it refetches. With 300, a 30 s page sends
+  // `s-maxage=30, stale-while-revalidate=270` (next/dist/server/lib/
+  // cache-control.js), and Next's own ISR cache re-renders, blocking, any page
+  // entry older than 300 s instead of serving it stale. A page whose
+  // `revalidate` is 300 s or more (/help is 3600) sends `s-maxage` alone.
+  // Pinned by src/lib/__tests__/public-stale-cap.test.ts.
+  expireTime: 300,
   // CI/Docker set SKIP_TYPECHECK=1: `tsc --noEmit` in the CI test job is the
   // sole type gate, so the in-build checker (a 6 GB-heap worker on Fly
   // builders) is duplicate work there. Local `next build` still checks.

@@ -27,7 +27,6 @@ import "server-only";
 // `live-score.tsx` uses. Same for the leader boards, which read
 // `player_stat_snapshots` and never call `recomputePlayerStats` (ruling R-L).
 // ---------------------------------------------------------------------------
-import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { inTheField } from "@/lib/entrant-field";
 import { hasFeature } from "@/lib/entitlements";
@@ -80,6 +79,7 @@ import { poolLabel } from "@/lib/pool-label";
 import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
+import { cachedIfFound } from "./cache-found";
 import { divisionQualification } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
@@ -1229,12 +1229,15 @@ export async function getPublicCompetitionHub(
   // bump: `hub-cache-poisoned-entry.test.ts` pins an old-shape hit as a miss),
   // so an older entry must never reach a renderer that reads the new fields.
   // Bump again on any shape change a cached hit cannot satisfy.
-  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v5", shell.competition.id], {
+  //
+  // The build refuses when its shell does (gone between the read above and
+  // this one); that refusal is never stored (cache-found.ts).
+  return cachedIfFound(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v5", shell.competition.id], {
     tags: [
       orgTag(orgSlug),
       competitionTag(shell.competition.id),
       ...shell.divisions.map((d) => divisionTag(d.id)),
     ],
     revalidate: REVALIDATE_FAST,
-  })();
+  });
 }
