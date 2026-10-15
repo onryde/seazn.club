@@ -935,11 +935,14 @@ export function ScheduleBoard({
   const hydrated = useHydrated();
   const [pickedDensity, setPickedDensity] = useState<Density | null>(null);
   const [autoDensity, setAutoDensity] = useState<Density>("board");
+  // The initial seed is the not-yet-hydrated one, so the server and hydration
+  // renders never decide (they match it); the first decision is the render
+  // after hydration, or the first render of a client-side mount.
   const densitySeed = `${hydrated}|${divisions.length}`;
   const [densitySeededFor, setDensitySeededFor] = useState(() => `false|${divisions.length}`);
   if (densitySeededFor !== densitySeed) {
     setDensitySeededFor(densitySeed);
-    if (hydrated && (narrow || divisions.length >= 8)) setAutoDensity("agenda");
+    if (narrow || divisions.length >= 8) setAutoDensity("agenda");
   }
   const density: Density =
     pickedDensity ??

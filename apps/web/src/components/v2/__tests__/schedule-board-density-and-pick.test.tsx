@@ -201,6 +201,17 @@ describe("schedule board density", () => {
     expect(densityOf(server.tree())).toBe("board");
   });
 
+  it("server render is the Board for ≥8 divisions too; the same props are the Agenda once hydrated", () => {
+    // The default is decided after hydration, never in the server render: a
+    // server render of 8 divisions that came out Agenda would mismatch the
+    // client's Board-first hydration pass. Non-vacuity: the SAME props do go
+    // to Agenda after hydration, so "Board" above is the guard, not the default.
+    const server = renderIsland(ScheduleBoard, manyDivisions(8));
+    islands.push(server);
+    expect(densityOf(server.tree())).toBe("board");
+    expect(densityOf(hydrated(manyDivisions(8)).tree())).toBe("agenda");
+  });
+
   it("after hydration: the saved density; empty case and junk fall to the default", () => {
     store.set(KEY, "lanes");
     expect(densityOf(hydrated().tree())).toBe("lanes");
