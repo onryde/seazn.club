@@ -15,6 +15,7 @@
 // Swept over the registry: the sports whose table the award reaches (the engine's `pointsRuleAwardReachesTable`) are the
 // cases, and the table of scenes below must name exactly that set - a sport that gains the declaration without a row here
 // fails, and a sweep that checked nothing fails.
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({
@@ -33,7 +34,11 @@ import { fixtureRow, post, tip } from "./helpers/w2b-rig";
 import { getFixtureState, listFixtureHeadlines, loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { putStageRules } from "@/server/usecases/stage-rules";
 import { startDivision } from "@/server/usecases/schedule";
-import { getStandings } from "@/server/usecases/stages";
+import { createStages, generateStageFixtures, getStandings } from "@/server/usecases/stages";
+import { createCompetition } from "@/server/usecases/competitions";
+import { createDivision } from "@/server/usecases/divisions";
+import { createEntrants } from "@/server/usecases/entrants";
+import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { getPublicDivision, getPublicFixture } from "@/server/public-site/data";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 import { seedDecidersScene } from "@/server/public-site/__tests__/_stage-rules-scene";
@@ -349,5 +354,52 @@ describe.skipIf(!HAS_DB)("a rule change before kickoff moves what an unplayed ma
     await putStageRules(rule.s.auth, rule.s.leagueStageId, { points: ruleFor(null) });
     expect(await versions(), "the award removed").toEqual(before.map(([id, v]) => [id, (v as number) + 2]));
     expect(before.length).toBeGreaterThan(0);
+  }, 300_000);
+});
+
+describe.skipIf(!HAS_DB)("a Swiss bye is not a walkover: the stage rule's award leaves it alone (X-WO-1 B)", () => {
+  /** An odd Swiss field (3 entrants, 2 rounds) under a points rule that does / does not award a walkover score. Round one pairs
+   *  two entrants and gives the third a bye - an event-less award in a TABLE stage, the one place a rule and an award meet. */
+  async function swiss(spec: SceneSpec, award: [number, number] | null) {
+    const { auth } = await seedOrg("pro");
+    const suffix = randomUUID().slice(0, 6);
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Bye " + suffix, visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + suffix, sport_key: spec.sport, variant_key: spec.variant, config: {} });
+    const kind = spec.sport === "generic" ? ("individual" as const) : ("team" as const);
+    await createEntrants(auth, division.id, ["Ada", "Bo", "Cy"].map((name, i) => ({ kind, display_name: name, seed: i + 1, members: [] })));
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 }, progression: null });
+    await putStageRules(auth, stage!.id, { points: ruleFor(award) });
+    await startDivision(auth, division.id);
+    await generateStageFixtures(auth, stage!.id);
+    const rows = await sql<{ id: string; ext_key: string | null; status: string; outcome: Record<string, unknown> | null; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+      select id, ext_key, status, outcome, home_entrant_id, away_entrant_id from fixtures where stage_id = ${stage!.id} and ext_key like '%-bye' and outcome is not null`;
+    const bye = rows[0];
+    expect(rows, `${spec.sport}: rig - exactly one seated bye in round one`).toHaveLength(1);
+    const states = await sql<{ summary: unknown; state: unknown }[]>`select summary, state from match_states where fixture_id = ${bye!.id}`;
+    const standings = (await getStandings(auth, stage!.id)).rows as { entrantId: string; played: number; won: number; points: number }[];
+    return { bye: bye!, states, standings, auth };
+  }
+  const shape = (r: Awaited<ReturnType<typeof swiss>>) => ({
+    status: r.bye.status,
+    outcomeKind: r.bye.outcome?.kind,
+    states: r.states,
+    // The ids differ between the two scenes (the bye winner's row is compared without its entrant id); the bye holds no stored
+    // match state in either, which is why no fold - and so no offered award - ever reaches it.
+    byeRow: ((row) => (row === undefined ? undefined : { ...row, entrantId: undefined }))(r.standings.find((x) => x.entrantId === r.bye.home_entrant_id)),
+    totals: r.standings.map((x) => [x.played, x.won, x.points]).sort(),
+  });
+
+  it("football and generic: the bye fixture, its stored state and the standings credit are the same with and without a walkover award", async () => {
+    let checked = 0;
+    for (const spec of SCENES.filter((x) => x.sport === "football" || x.sport === "generic")) {
+      const withRule = await swiss(spec, awardFor(spec));
+      const without = await swiss(spec, null);
+      expect(shape(withRule), `${spec.sport}: a bye reads no award`).toEqual(shape(without));
+      // The bye is still a credited win (the standings carry it) - so the equality above compares a real credit, not two blanks.
+      expect(shape(withRule).byeRow, `${spec.sport}: the bye is credited`).toMatchObject({ played: 1, won: 1 });
+      expect(withRule.states, `${spec.sport}: a bye has no stored match state to fold`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "sports checked").toBe(2);
   }, 300_000);
 });
