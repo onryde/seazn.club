@@ -1322,8 +1322,8 @@ export const FixtureRulesResult = z.object({
 });
 
 /** W2c Task 15 (X-SR-7, owner P-1) — the rules a match plays by NOW, as a scoring pad reloads them after a correction:
- *  the cfg the engine folds its ledger under, its rules version, and its format line in the reader's language (null
- *  when there is no line to say for this sport or cfg). */
+ *  the cfg the engine folds its ledger under, its rules version, and its rules line in the reader's language (the
+ *  public line: format, how a tied match ends, a changed abandon policy; null when there is none to say for this sport or cfg). */
 export const FixtureCurrentRules = z.object({
   cfg: z.unknown(),
   rules_version: z.number().int().min(0),
