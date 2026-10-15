@@ -1,0 +1,36 @@
+{
+  "batch": "1e",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1e, built against the batch base 4e72944b2 (main after 1c). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection: its titles embed the checkout absolute path). Task 1e-1 (FOLD_EPOCH): no existing test id changed; six tests are added in the new src/sport/fold-epoch.test.ts. Task 1e-2 (the epoch guard) appends its own entries to this file. Whole-batch parity after 1e-1: before-only 0, after-only 6, both 11324 (engine 5894 + matrix 5202 + scripts 228 before; engine 5900 after), unaccounted 0.",
+  "entries": [
+    {
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › has exactly one positive integer epoch per registered sport (11, never zero)",
+      "fate": "added",
+      "reason": "1e-1: one positive-integer epoch per registered sport, the key set taken from the registry (builtinModules) and the sweep counted"
+    },
+    {
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › answers each registered sport's own entry, and moving one entry moves only that sport",
+      "fate": "added",
+      "reason": "1e-1: foldEpochOf reads the table (a moved entry moves only its own sport), swept over every registered sport"
+    },
+    {
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › refuses a sport it does not know instead of answering a default",
+      "fate": "added",
+      "reason": "1e-1: an unknown sport is a named refusal, never a default"
+    },
+    {
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › does not answer from the Object prototype: constructor, toString and __proto__ are not sports",
+      "fate": "added",
+      "reason": "1e-1: foldEpochOf answers own keys only - the plan snippet answered the Object function for constructor/toString (found and fixed in this task)"
+    },
+    {
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › is exported from the ./sport subpath, which is where a phone and the server's gate import it (the same table, not a copy)",
+      "fate": "added",
+      "reason": "1e-1: FOLD_EPOCH is exported from ./sport, the phone subpath where the server gate and a phone import it"
+    },
+    {
+      "id": "src/sport/fold-epoch.test.ts › FOLD_EPOCH › is backed by a golden corpus with streams for every sport, so the fold-epoch guard always has something to compare (D15)",
+      "fate": "added",
+      "reason": "1e-1: every sport with an epoch has a golden corpus with streams, the thing the epoch guard (Task 1e-2) compares"
+    }
+  ]
+}
