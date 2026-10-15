@@ -34,6 +34,7 @@ import { sql, withTenant, type Tx } from "@/lib/db";
 import { appendEventInTx } from "@/server/engine-db/append-event";
 import { awardedMatchState } from "@/server/engine-db/awarded-state";
 import { loadLineupPair } from "@/server/engine-db/lineups";
+import { bumpMovedRules, unfrozenRules } from "@/server/engine-db/rules-version";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, post, rowsOf, tip, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { patchDivision } from "../divisions";
@@ -113,6 +114,66 @@ describe.skipIf(!HAS_DB)("division-config: the first event and a division format
     expect(await snapshotBestOf(f1!), "the event froze the format that stands at commit").toBe(5);
     await scoreEvent(b.auth, f2!, { expected_seq: 0, type: "core.start", payload: {} });
     expect(await snapshotBestOf(f2!), "a sibling in the same stage plays the same format").toBe(5);
+  });
+
+  // Fix round 2 (re-review N-1): the append read the fixture row — its `rules_version` with it — BEFORE it waited on the
+  // save, so a pad's first tap parked behind a save that bumped the version passed the check on the stale value and froze
+  // the NEW format under a pad folding the OLD one. The save's own bump runs in the holder (`unfrozenRules` →
+  // `bumpMovedRules`, the helper `patchDivision` calls), so the version moves exactly as a real save moves it.
+  it("fix round 2 (N-1): a pad's first tap parked behind a save that moves its version is refused on the version that stands at commit — nothing frozen, nothing written", async () => {
+    const b = await league(2);
+    const [f1] = b.fixtureIds;
+    const pad = await loadFixturePadCfg(b.auth, f1!);
+    const declared = (pad.cfg as { bestOf: number }).bestOf;
+    const target = declared === 5 ? 3 : 5;
+    let parked!: Awaited<ReturnType<typeof launchBehind>>;
+    let bumped: string[] = [];
+    await withTenant(b.auth.orgId, async (holder) => {
+      await holder`select pg_advisory_xact_lock(hashtext(${KEY(b.divisionId)}))`; // what a format save takes
+      const before = await unfrozenRules(holder, { divisionId: b.divisionId });
+      parked = await launchBehind(holder, "the pad's first tap parks behind the save", () =>
+        scoreEvent(b.auth, f1!, { expected_seq: 0, type: "core.start", payload: {}, rules_version: pad.rulesVersion }),
+      );
+      // The save's writes while the tap waits: the format, then the version of every match it moved.
+      await holder`update divisions set config = config || ${holder.json({ bestOf: target } as never)} where id = ${b.divisionId}`;
+      bumped = await bumpMovedRules(holder, before);
+    });
+    expect(parked.settled, "the tap waited for the save").toBe(false);
+    expect(parked.waiters).toBe(1);
+    expect(bumped, "premise: the save moved this match's version").toContain(f1!);
+    await expect(parked.p).rejects.toMatchObject({ code: "FIXTURE_RULES_CHANGED", extra: { rules_version: pad.rulesVersion + 1 } });
+    expect(await snapshotBestOf(f1!), "nothing was frozen under the old pad").toBeNull();
+    expect(await tip(f1!), "nothing was written").toBe(0);
+    // The pad reloads and taps again: taken, under the format the save committed.
+    const reloaded = await loadFixturePadCfg(b.auth, f1!);
+    await expect(scoreEvent(b.auth, f1!, { expected_seq: 0, type: "core.start", payload: {}, rules_version: reloaded.rulesVersion })).resolves.toMatchObject({
+      seq: 1,
+      rules_version: pad.rulesVersion + 1,
+    });
+    expect(await snapshotBestOf(f1!)).toBe(target);
+  });
+
+  it("fix round 2 (N-1), the positive pair: a pad's first tap parked behind a save that moves NOTHING it plays still lands, under the version it sent", async () => {
+    const b = await league(2);
+    const [f1] = b.fixtureIds;
+    const pad = await loadFixturePadCfg(b.auth, f1!);
+    let parked!: Awaited<ReturnType<typeof launchBehind>>;
+    let bumped: string[] = ["(not run)"];
+    await withTenant(b.auth.orgId, async (holder) => {
+      await holder`select pg_advisory_xact_lock(hashtext(${KEY(b.divisionId)}))`;
+      const before = await unfrozenRules(holder, { divisionId: b.divisionId });
+      parked = await launchBehind(holder, "the pad's first tap parks behind the save", () =>
+        scoreEvent(b.auth, f1!, { expected_seq: 0, type: "core.start", payload: {}, rules_version: pad.rulesVersion }),
+      );
+      // A save that writes the format it already stores: it moves no match, so it bumps none.
+      await holder`update divisions set config = config where id = ${b.divisionId}`;
+      bumped = await bumpMovedRules(holder, before);
+    });
+    expect(parked.settled, "the tap waited for the save").toBe(false);
+    expect(parked.waiters).toBe(1);
+    expect(bumped, "premise: the save moved nothing").toEqual([]);
+    await expect(parked.p).resolves.toMatchObject({ seq: 1, rules_version: pad.rulesVersion });
+    expect(await snapshotBestOf(f1!), "it froze the format the pad folds").toBe((pad.cfg as { bestOf: number }).bestOf);
   });
 
   it("the other direction: a STARTED match's append never waits for a format save (the lock is for the first freeze only)", async () => {
