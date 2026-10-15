@@ -40,7 +40,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "4d0d10951ddfc3194531a5289816a6d4f966ec6e11ff870ca50ab92a0915a9ad";
+const SHA256 = "98bc8491979fe540bb4c8ec25251fb9014164d963aa0bea79c9ebc97105f289c";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -74,6 +74,15 @@ const EXIT_DETAIL_MAX = 200;
 const EXIT_DETAIL_FILE_MAX = EXIT_DETAIL_MAX / 2;
 /** The final beat's fields (owner scope addition 2026-10-15), carried only with `state: "stopped"` (review M6). */
 const EXIT_FIELDS = ["exitReason", "exitDetail"];
+/** That rule in JSON Schema (confirm pass, minor 1: the file must not be looser than the twin): IF either exit field is
+ *  present and not null, THEN state is "stopped". Typed here from the rule, never read off the generator. */
+const STOPPED_ONLY = {
+  if: {
+    type: "object",
+    anyOf: EXIT_FIELDS.map((f) => ({ type: "object", required: [f], properties: { [f]: { not: { type: "null" } } } })),
+  },
+  then: { type: "object", properties: { state: { const: "stopped" } } },
+};
 /** C06 `HealthReport`: `input_kicks: u32`, `pipeline_rebuilds: u64`, `sink_swaps: u64` — whole and non-negative. */
 const COUNTERS = ["inputKicks", "pipelineRebuilds", "sinkSwaps"];
 /** C06 `HealthReport`: `input_kick_alert: bool`, `score_stale: Option<bool>`. */
@@ -101,8 +110,6 @@ const ROUTES: [prefix: string, def: string, count: number][] = [
 const REFUSED: Record<string, { def: string; sibling: string; field: string; issueAt: string[] }> = {
   "session-refused-delay-mismatch": { def: "session", sibling: "session-composed-720p", field: "overlayDelayMs", issueAt: ["overlayUrl"] },
   "session-refused-delay-absent": { def: "session", sibling: "session-composed-720p", field: "overlayUrl", issueAt: ["overlayUrl"] },
-  // Review M6: an exit reason rides only on the FINAL beat. The file states it in exitReason's prose.
-  "heartbeat-refused-exit-while-playing": { def: "heartbeat", sibling: "heartbeat-final-fatal", field: "state", issueAt: ["exitReason", "exitDetail"] },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -140,6 +147,9 @@ function asPublished(def: string, json: Json): Json {
   expect(strings, "the twin publishes one string branch for exitDetail").toHaveLength(1);
   expect(strings[0]!.maxLength, "the twin's bound, in UTF-16 units").toBe(EXIT_DETAIL_MAX);
   strings[0]!.maxLength = EXIT_DETAIL_FILE_MAX;
+  // …and the stopped-only rule (confirm pass, minor 1), which z.toJSONSchema cannot emit from a refinement.
+  expect(out.if, "the twin publishes no if/then of its own").toBeUndefined();
+  Object.assign(out, STOPPED_ONLY);
   return out;
 }
 const propOf = (node: Json, name: string): Json => (node.properties as Record<string, Json>)[name]!;
@@ -245,7 +255,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     expect(total).toBe(15);
     // Every REFUSED entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(refusedSeen).toBe(Object.keys(REFUSED).length);
-    expect(refusedSeen).toBe(3);
+    expect(refusedSeen).toBe(2);
   });
 
   it("the brief's nine fixtures exist by name, and the README states the absent-versus-zero convention", () => {
@@ -260,7 +270,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     }
     expect(found).toBe(9);
     // The owner's scope addition (2026-10-15): the final fatal beat, and an exit reason outside C06's vocabulary.
-    for (const name of ["heartbeat-final-fatal", "heartbeat-invalid-exit-reason", "heartbeat-refused-exit-while-playing"]) expect(existsSync(resolve(FIXTURES, `${name}.json`)), name).toBe(true);
+    for (const name of ["heartbeat-final-fatal", "heartbeat-invalid-exit-reason", "heartbeat-invalid-exit-while-playing"]) expect(existsSync(resolve(FIXTURES, `${name}.json`)), name).toBe(true);
     expect(fixture("heartbeat-final-fatal")).toEqual({ state: "stopped", exitReason: "fatal", exitDetail: "programme start failed: cefsrc not found" });
     expect(fixture("heartbeat-invalid-exit-reason")).toMatchObject({ exitReason: "crashed" });
     const readme = readFileSync(resolve(FIXTURES, "README.md"), "utf8");
@@ -294,7 +304,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(result.error?.issues.map((i) => i.path.join(".")), name).toEqual(issueAt);
       refused++;
     }
-    expect(refused).toBe(3);
+    expect(refused).toBe(2);
     // A repeated delay= is refused too, even when one copy agrees: two authorities in one URL are not one.
     const twice = { ...fixture("session-composed-720p") };
     twice.overlayUrl = `${twice.overlayUrl as string}&delay=${twice.overlayDelayMs as number}`;
@@ -440,7 +450,8 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     expect(fileAdmitted, "and refused some").toBeLessThan(texts.length);
   });
 
-  it("review M6: an exit reason or detail rides only on a STOPPED beat — every other state refuses either field (at that field), null is no report, and the file says so", () => {
+  it("review M6: an exit reason or detail rides only on a STOPPED beat — every other state refuses either field (at that field), in the twin AND the file; null is no report", () => {
+    const fileAdmits = fileValidator();
     let refused = 0;
     for (const state of SPEC_BEAT.state!.filter((w) => w !== "stopped")) {
       for (const field of EXIT_FIELDS) {
@@ -448,16 +459,23 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
         const result = S.RelayHeartbeat.safeParse({ state, [field]: value });
         expect(result.success, `${state} + ${field}`).toBe(false);
         expect(result.error?.issues.map((i) => i.path.join(".")), `${state} + ${field}`).toEqual([field]);
+        expect(fileAdmits("heartbeat", { state, [field]: value }), `the file: ${state} + ${field}`).toBe(false);
         refused++;
       }
       // null is "not reported" (the field is nullish), never an exit report.
       expect(parses(S.RelayHeartbeat, { state, exitReason: null, exitDetail: null }), `${state} + nulls`).toBe(true);
+      expect(fileAdmits("heartbeat", { state, exitReason: null, exitDetail: null }), `the file: ${state} + nulls`).toBe(true);
+      expect(fileAdmits("heartbeat", { state }), `the file: ${state} alone`).toBe(true);
     }
     expect(refused).toBe(3 * 2);
-    // The positive pair: the same fields on a stopped beat, together and apart.
-    expect(parses(S.RelayHeartbeat, { state: "stopped", exitReason: "ended" })).toBe(true);
-    expect(parses(S.RelayHeartbeat, { state: "stopped", exitDetail: "drained" })).toBe(true);
-    expect(parses(S.RelayHeartbeat, { state: "stopped" })).toBe(true);
+    // The positive pair: the same fields on a stopped beat, together and apart — the twin and the file.
+    let admitted = 0;
+    for (const beat of [{ state: "stopped", exitReason: "ended" }, { state: "stopped", exitDetail: "drained" }, { state: "stopped" }, { state: "stopped", exitReason: "fatal", exitDetail: "x" }]) {
+      expect(parses(S.RelayHeartbeat, beat), JSON.stringify(beat)).toBe(true);
+      expect(fileAdmits("heartbeat", beat), `the file: ${JSON.stringify(beat)}`).toBe(true);
+      admitted++;
+    }
+    expect(admitted).toBe(4);
     expect(propOf(defOf(contract(), "heartbeat"), "exitReason").description as string).toContain("only with `state: \"stopped\"`");
   });
 

@@ -77,14 +77,17 @@ const MIN_SECRET_LENGTH = REDACTED.length;
 
 /** R2002 review Q3 — defence in depth for a Machine's free text (the final beat's `exitDetail`). The compositor redacts
  *  it before sending; the server scrubs it again before EITHER beat store keeps it: each named secret (the job token the
- *  handler holds), anything JWT-shaped, and everything from the first `?` (the cut `sanitise` makes for samples.raw, so
- *  both stores keep the same text). Never lengthens the text, and idempotent. */
+ *  handler holds) AND each of its dot-separated parts (confirm pass: a JWT's signature alone is not JWT-shaped), anything
+ *  JWT-shaped, and everything from the first `?` (the cut `sanitise` makes for samples.raw, so both stores keep the same
+ *  text). Never lengthens the text, and idempotent. */
 export function scrubBeatText(text: string, secrets: readonly string[]): string {
-  let out = text;
-  for (const secret of secrets) {
-    if (secret.length >= MIN_SECRET_LENGTH) out = out.split(secret).join(REDACTED);
-  }
+  const redact = (from: string, patterns: readonly string[]): string =>
+    patterns.filter((p) => p.length >= MIN_SECRET_LENGTH).reduce((acc, p) => acc.split(p).join(REDACTED), from);
+  // Widest first, so each secret is ONE redaction: whole secrets, then any JWT-shaped run (a header with whatever of
+  // the token follows it), then the secrets' own parts (what is left: a signature, or a payload, alone).
+  let out = redact(text, secrets);
   out = out.replace(JWT_SHAPED, REDACTED);
+  out = redact(out, secrets.flatMap((s) => s.split(".")));
   const q = out.indexOf("?");
   return q === -1 ? out : out.slice(0, q);
 }

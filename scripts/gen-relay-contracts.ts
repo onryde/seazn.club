@@ -91,7 +91,7 @@ const HEARTBEAT: Shape = {
     sinkSwaps: "Output pipeline builds after the first, since the process started. A present 0 is a measured zero.",
     rung: "The degrade ladder's rung: full, overlay_half_rate, fast_preset. Anything but full means the encoder overran and the ladder stepped down.",
     scoreStale: "true while the overlay page cannot reach the score feed (it keeps the last score). Omitted until the page has reported either way.",
-    exitReason: "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400): a rule this schema states here, in prose. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
+    exitReason: "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400); this schema states it as its if/then. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
     exitDetail: `Sent only with \`state: "stopped"\`, on the final beat: what went wrong, in words. The server's bound is ${EXIT_DETAIL_UTF16_MAX} UTF-16 code units. This schema's maxLength counts characters (code points), and a character is at most two UTF-16 code units, so it publishes ${EXIT_DETAIL_UTF16_MAX / 2} characters: a text within that is never refused. Redacted by the compositor before it is sent (no key, token or query). The server scrubs it again before storing it (anything JWT-shaped, the session's own job token, everything from the first \`?\`), and both stores keep the same text. Human text, never parsed.`,
   },
 };
@@ -137,6 +137,21 @@ function publishExitDetailInCodePoints(heartbeat: Json): void {
   strings[0].maxLength = EXIT_DETAIL_UTF16_MAX / 2;
 }
 
+/** Confirm pass, minor 1: the stopped-only rule (RelayHeartbeat's superRefine) in JSON Schema, so the file is not looser
+ *  than the twin there either — IF either exit field is present and not null, THEN state is "stopped". z.toJSONSchema
+ *  cannot emit a refinement, so this is the second structural key the generator writes itself. */
+const EXIT_FIELDS = ["exitReason", "exitDetail"] as const;
+function publishStoppedOnly(heartbeat: Json): void {
+  const props = heartbeat.properties as Record<string, Json>;
+  for (const f of [...EXIT_FIELDS, "state"]) if (!(f in props)) throw new Error(`heartbeat: no property "${f}" for the stopped-only rule`);
+  if ("if" in heartbeat || "then" in heartbeat) throw new Error("heartbeat: z.toJSONSchema already wrote an if/then");
+  heartbeat.if = {
+    type: "object",
+    anyOf: EXIT_FIELDS.map((f) => ({ type: "object", required: [f], properties: { [f]: { not: { type: "null" } } } })),
+  };
+  heartbeat.then = { type: "object", properties: { state: { const: "stopped" } } };
+}
+
 function render(shape: Shape, where: string): Json {
   // The round trip unshares nodes: a zod instance reused by two fields (the input/output link enum) may come back as
   // ONE object, and a description set on one field would then land on the other.
@@ -163,7 +178,7 @@ const doc: Json = {
   description: `The web↔Machine contract for a relay session (${SPEC} §5.3, §5.4). The root is bare: validate against #/$defs/session (the GET's data), #/$defs/heartbeat (the POST body) and #/$defs/heartbeatReply (the POST's data). ${ENVELOPE} ${PINNED_BY}`,
   $defs: {
     session: render(SESSION, `${FILE}#/$defs/session`),
-    heartbeat: ((h) => (publishExitDetailInCodePoints(h), h))(render(HEARTBEAT, `${FILE}#/$defs/heartbeat`)),
+    heartbeat: ((h) => (publishExitDetailInCodePoints(h), publishStoppedOnly(h), h))(render(HEARTBEAT, `${FILE}#/$defs/heartbeat`)),
     heartbeatReply: render(REPLY, `${FILE}#/$defs/heartbeatReply`),
   },
 };

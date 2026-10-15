@@ -640,7 +640,7 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     for (const [label, body] of [
       ["exitReason \"crashed\"", vector("heartbeat-invalid-exit-reason")],
       ["exitDetail of 201 characters", { ...fatal, exitDetail: "x".repeat(201) }],
-      ["an exit reason on a playing beat (review M6)", vector("heartbeat-refused-exit-while-playing")],
+      ["an exit reason on a playing beat (review M6)", vector("heartbeat-invalid-exit-while-playing")],
     ] as const) {
       expect((await postBeat(t.sessionId, body, { token: t.jobToken })).status, label).toBe(400);
     }
@@ -671,6 +671,14 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect(JSON.stringify([stored, raw]), "no piece of the token in either store").not.toContain(s.jobToken.slice(0, 40));
     // Only the detail is rewritten: the rest of the beat is stored as sent.
     expect(stored).toMatchObject({ state: "stopped", exitReason: "refused" });
+    // Confirm pass, minor 2: a SIGNATURE-only fragment is not JWT-shaped (no `eyJ`), so only the token's own parts,
+    // redacted as named secrets, catch it.
+    const t = await session();
+    const signature = t.jobToken.split(".")[2]!;
+    expect(signature, "premise: the signature alone is not JWT-shaped").not.toMatch(/^eyJ/);
+    expect((await postBeat(t.sessionId, { state: "stopped", exitReason: "refused", exitDetail: `signature ${signature} rejected` }, { token: t.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(t.sessionId), "last_heartbeat").toHaveProperty("exitDetail", "signature [redacted] rejected");
+    expect((await newestRaw(t.sessionId)).raw, "samples.raw").toHaveProperty("exitDetail", "signature [redacted] rejected");
   });
 
   // Review M4: Session.fixtureId is `string | null` — V410 `on delete set null`, the session outlives its fixture. The

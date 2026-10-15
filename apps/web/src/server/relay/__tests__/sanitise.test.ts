@@ -128,6 +128,22 @@ describe("scrubBeatText (R2002 review Q3)", () => {
     const secret = "opaque-secret-0123456789";
     expect(scrubBeatText(`auth ${secret} refused; retried with ${secret}`, [secret])).toBe("auth [redacted] refused; retried with [redacted]");
   });
+  it("a named JWT secret is redacted whole AND by each of its three parts — a signature-only fragment (not JWT-shaped) cannot survive", () => {
+    const [header, payload, signature] = JWT.split(".") as [string, string, string];
+    expect(signature, "premise: the signature alone is not JWT-shaped").not.toMatch(/^eyJ/);
+    expect(scrubBeatText(`signature ${signature} rejected`, [JWT])).toBe("signature [redacted] rejected");
+    // Each part on its own, and the whole token as ONE redaction (never three).
+    let checked = 0;
+    for (const part of [header, payload, signature]) {
+      expect(scrubBeatText(`<${part}>`, [JWT]), part).toBe("<[redacted]>");
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(scrubBeatText(`token ${JWT} end`, [JWT])).toBe("token [redacted] end");
+    // The differential: with no secret named, the signature survives (it is the named secret's parts that catch it).
+    expect(scrubBeatText(`signature ${signature} rejected`, [])).toBe(`signature ${signature} rejected`);
+  });
+
   it("redacts a whole JWT, and a JWT FRAGMENT (a header and a cut payload) — no secret named", () => {
     expect(scrubBeatText(`token ${JWT} expired`, [])).toBe("token [redacted] expired");
     const fragment = JWT.slice(0, 60);

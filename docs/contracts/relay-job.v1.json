@@ -435,7 +435,7 @@
           ]
         },
         "exitReason": {
-          "description": "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400): a rule this schema states here, in prose. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
+          "description": "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400); this schema states it as its if/then. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
           "anyOf": [
             {
               "type": "string",
@@ -469,7 +469,46 @@
       "required": [
         "state"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": {
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "exitReason"
+            ],
+            "properties": {
+              "exitReason": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "exitDetail"
+            ],
+            "properties": {
+              "exitDetail": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "stopped"
+          }
+        }
+      }
     },
     "heartbeatReply": {
       "description": "The `data` of a heartbeat's 200 (compositor spec 2026-10-14 §5.3): what the Machine must do. A Machine takes no inbound traffic, so this reply is the only way a stop reaches it.",
