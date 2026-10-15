@@ -4284,6 +4284,8 @@ The English strings above are the proposed copy. They are signed with the Step 3
 
 ### Task 17: S1 + S4 — the stage format row for every sport (UI)
 
+> **Carried from the Task 13b review (gap 1).** `decidersAllOff` and the X-SR-6 notice (`deciders-off-notice.tsx`, owed here; `module.ts` and `rule-keys.ts` comments point at it) must treat chess's ARRAY decider `tiebreakRungs` as off ONLY when `Array.isArray(v) && v.length === 0`, never by truthiness. Pin it with a chess case and a truthiness mutant (`!v` in place of the array check) that the test kills. The top-level decider set is `lib/top-level-stage-deciders.ts` (engine-derived, 6 keys); the editor writes deciders only under `config.rules`.
+
 > **Carried from Task 11.** The stage PUT now MERGES its fragment into the stored rules: an omitted key is KEPT. `stageFormatSaveFragment` in `components/v2/stages-panel.tsx` must send `null` for any field the organiser blanked, or a cleared field silently survives. Pin it with a test that clears a field and reads the stored rules back. Also update the comments in `stages-panel.tsx` and `describe-rules.ts:197-207` that still describe the old four-sport gate.
 
 > **Carried from Tasks 6+7 review.** Carrom `share` is refused unless the tie board is "Drawn game" (overnight ruling, mirrors P-5): every shipped carrom variant defaults to "extra", so `share(carrom, {}).disabled === true` with the reason naming the tie-board setting — the plan's test expecting `false` (~this task's abandon-options case) is WRONG; flip it. `share` is offered only on DRAW_KINDS stages (ignored in brackets).
