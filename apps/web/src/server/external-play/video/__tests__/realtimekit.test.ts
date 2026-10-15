@@ -1830,6 +1830,67 @@ describe("the call budget (D21): every vendor request spends a token first, and 
       expect(rows.length, "and neither spent a token").toBe(0);
     });
 
+    // D22: the load test (and a deployment that reaches the real account through a forwarding proxy) needs the budget ON
+    // for a base that is not Cloudflare's. REALTIMEKIT_METER_ANY_BASE=1 says so; the bucket is keyed by that base + account.
+    describe("REALTIMEKIT_METER_ANY_BASE=1: a non-Cloudflare base is metered like the vendor (D22)", () => {
+      const freshBase = () => `http://127.0.0.1:${40_000 + Math.floor(Math.random() * 20_000)}`;
+      it.skipIf(!process.env.DATABASE_URL)("on: each request takes a token from the bucket of THAT base and account; a drained bucket defers WITHOUT making the request - off: no bucket at all", async () => {
+        let checked = 0;
+        for (const on of [false, true]) {
+          configure();
+          const base = freshBase();
+          vi.stubEnv("REALTIMEKIT_BASE_URL", base);
+          vi.stubEnv("REALTIMEKIT_METER_ANY_BASE", on ? "1" : "");
+          let calls = 0;
+          vi.stubGlobal("fetch", async () => {
+            calls += 1;
+            return okBody();
+          });
+          const key = budgetKey(base, "acct-1");
+          try {
+            await refreshParticipantToken(args, {});
+            await refreshParticipantToken(args, {});
+            expect(calls, `${on ? "on" : "off"}: both requests were made`).toBe(2);
+            const [row] = await sql<{ tokens: number }[]>`select tokens from realtimekit_call_budget where key = ${key}`;
+            if (!on) {
+              expect(row, "off: the bucket is never made").toBeUndefined();
+            } else {
+              expect(row?.tokens, "on: two tokens spent from a full bucket").toBeCloseTo(RTK_BUDGET_BURST - 2, 0);
+              // Drained, and stamped an hour AHEAD so no refill lands before the assertion.
+              await sql`update realtimekit_call_budget set tokens = 0, refilled_at = now() + interval '1 hour' where key = ${key}`;
+              await expect(refreshParticipantToken(args, {})).rejects.toBeInstanceOf(RealtimeKitDeferred);
+              expect(calls, "on, drained: the request was NOT made").toBe(2);
+            }
+            checked += 1;
+          } finally {
+            await sql`delete from realtimekit_call_budget where key = ${key}`;
+          }
+        }
+        expect(checked, "anti-vacuity").toBe(2);
+      });
+
+      it.skipIf(!process.env.DATABASE_URL)("any value but 1 leaves it off (an unset, empty, 'true', 'yes', '0' or '01' flag meters nothing: no bucket is made for the base)", async () => {
+        let checked = 0;
+        for (const value of ["", "0", "true", "yes", "01", " 1"]) {
+          configure();
+          const base = freshBase();
+          vi.stubEnv("REALTIMEKIT_BASE_URL", base);
+          vi.stubEnv("REALTIMEKIT_METER_ANY_BASE", value);
+          let calls = 0;
+          vi.stubGlobal("fetch", async () => {
+            calls += 1;
+            return okBody();
+          });
+          await refreshParticipantToken(args, {});
+          expect(calls, `"${value}": the request was made`).toBe(1);
+          const rows = await sql`select 1 from realtimekit_call_budget where key = ${budgetKey(base, "acct-1")}`;
+          expect(rows.length, `"${value}": not metered - a metered call would have made the bucket`).toBe(0);
+          checked += 1;
+        }
+        expect(checked).toBe(6);
+      });
+    });
+
     it("the same non-Cloudflare base, with a budget PASSED (a load test, a suite proving the refusal), is metered like the vendor", async () => {
       configure();
       vi.stubEnv("REALTIMEKIT_BASE_URL", "http://127.0.0.1:41999");
@@ -1895,6 +1956,25 @@ describe("the call budget (D21): every vendor request spends a token first, and 
         const { warn, adapter } = await freshAdapter();
         await adapter.refreshParticipantToken(args, {});
         expect(unmeteredWarnings(warn)).toHaveLength(0);
+      });
+
+      it.skipIf(!process.env.DATABASE_URL)("production, a non-Cloudflare base the operator chose to METER (REALTIMEKIT_METER_ANY_BASE=1): silent - there is no gap to warn about", async () => {
+        configure();
+        vi.stubEnv("NODE_ENV", "production");
+        vi.stubEnv("REALTIMEKIT_BASE_URL", PROXY);
+        vi.stubEnv("REALTIMEKIT_METER_ANY_BASE", "1");
+        vi.stubGlobal("fetch", async () => okBody());
+        const { warn, adapter } = await freshAdapter();
+        const key = budgetKey(PROXY, "acct-1");
+        try {
+          await adapter.refreshParticipantToken(args, {});
+          const [row] = await sql<{ tokens: number }[]>`select tokens from realtimekit_call_budget where key = ${key}`;
+          expect(row?.tokens, "premise: the call was metered (a bucket was made for the base)").toBeLessThan(RTK_BUDGET_BURST);
+          expect(unmeteredWarnings(warn)).toHaveLength(0);
+        } finally {
+          // Not `sql.end()`: lib/db keeps one client for the process, and the test below still needs it.
+          await sql`delete from realtimekit_call_budget where key = ${key}`;
+        }
       });
 
       it("production with a caller's own fetch or budget (a suite, a load test that chose it): silent", async () => {

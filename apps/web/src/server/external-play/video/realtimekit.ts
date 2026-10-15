@@ -180,7 +180,7 @@ function warnUnmetered(base: string): void {
   warnedUnmetered = true;
   log.warn(
     { origin: originOf(base) },
-    "RealtimeKit: REALTIMEKIT_BASE_URL is not Cloudflare's API, so the call budget does not meter these calls. Expected for a test fixture; a forwarding proxy to the real account needs its own limit",
+    "RealtimeKit: REALTIMEKIT_BASE_URL is not Cloudflare's API, so the call budget does not meter these calls. Expected for a test fixture; a forwarding proxy to the real account should set REALTIMEKIT_METER_ANY_BASE=1",
   );
 }
 
@@ -203,7 +203,12 @@ async function cfEnvelope(
   // that is not Cloudflare's: a forwarding proxy, or a misspelt URL, spends the real account's budget and is NOT metered
   // - which is why that case warns once per process in production (warnUnmetered) and why .env.example says so. A
   // caller can always pass its own `budget`.
-  const metered = deps.fetch === undefined && base === CF_BASE;
+  // D22: REALTIMEKIT_METER_ANY_BASE=1 turns the gate's second half off - the base is metered whatever it is. For a
+  // forwarding proxy in front of the real account (the case the warning below is about) and for the load test, which
+  // has to see the budget act on the fixture host to measure what a deferral costs a player. Exactly "1"; the bucket
+  // is keyed by the base and account, so it can never spend the real account's.
+  const meterAnyBase = process.env.REALTIMEKIT_METER_ANY_BASE === "1";
+  const metered = deps.fetch === undefined && (base === CF_BASE || meterAnyBase);
   if (!metered && deps.budget === undefined && deps.fetch === undefined) warnUnmetered(base);
   const spend = deps.budget ?? (metered ? takeRealtimeKitCall : null);
   if (spend && !(await spend(budgetKey(base, cfg.accountId)))) {
