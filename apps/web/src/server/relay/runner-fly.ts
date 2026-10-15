@@ -25,6 +25,16 @@
 //    5-minute window, not per Machine lifetime (docs.fly.io, re-pinned
 //    2026-10-15): a compositor that crashes repeatedly over a long session is
 //    restarted again after the window rolls — bounded per window, not overall.
+//  * stop_config { signal RUNNER_PLATFORM_STOP_SIGNAL (SIGTERM), timeout the
+//    grace } — R2004 PR 0, coordinator decision I4: a stop FLY starts (a deploy,
+//    `fly machine stop`, host work) arrives as SIGTERM, which the compositor
+//    drains at once, and waits RUNNER_STOP_GRACE_SECONDS before SIGKILL instead of
+//    Fly's 5 s kill_timeout. OUR stop (`stop` below) names SIGINT explicitly,
+//    which holds the Final scene. Precedence MEASURED, not assumed (live probe
+//    2026-10-15, seazn-relay-spike; fly-client.live.test.ts leg 5): an explicit
+//    stop signal beats stop_config.signal, and a stop naming none gets it. Every
+//    create here is a composed Machine — a passthrough session has none — so
+//    every create carries it.
 //  * name `machineNameFor(sessionId, attempt)` — i.e. `relay-<sid>-r<attempt>`,
 //    the domain's own spelling (domain/runner.ts), never a second one here —
 //    plus metadata.seazn_session: together the client's idempotency key, so a
@@ -39,8 +49,8 @@
 // Machine or start a second one — the 409 adopt (T5-c), the unestablished
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
-import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, exitRecorded, isRetryable, restartFrom, type Machine } from "./fly-client";
-import { RUNNER_INPLACE_RESTARTS, liveRunnerIdentity } from "./config";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, exitRecorded, flyDuration, isRetryable, restartFrom, type Machine, type MachineCreateInput } from "./fly-client";
+import { RUNNER_INPLACE_RESTARTS, RUNNER_PLATFORM_STOP_SIGNAL, RUNNER_STOP_GRACE_SECONDS, liveRunnerIdentity } from "./config";
 import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
 import { NOOP_RECORDER, RunnerCreateError } from "./ports";
@@ -56,6 +66,12 @@ export const ENV_METADATA_KEY = "seazn_env";
  *  undocumented list-consistency window"). The house already settles it once, for the create lookup's confirming
  *  re-list (fly-client.ts FLY_CLIENT_DEFAULTS.lookupSettleMs) — the same window, so the same number, not a second one. */
 export const FLY_LIST_SETTLE_MS = FLY_CLIENT_DEFAULTS.lookupSettleMs;
+
+/** R2004 PR 0: the create's `stop_config` (header above). Built at MODULE LOAD, so a grace `flyDuration` refuses fails the
+ *  import loudly at boot — never as a plain error out of a create, which the caller would have to read as outcome unknown. */
+const PLATFORM_STOP_CONFIG: NonNullable<MachineCreateInput["config"]["stop_config"]> = {
+  signal: RUNNER_PLATFORM_STOP_SIGNAL, timeout: flyDuration(RUNNER_STOP_GRACE_SECONDS),
+};
 
 /** The `error_code` a `stream_provider_calls` row carries when a create's
  *  OUTCOME was never established (T5-g). Its own value, not an HTTP status:
@@ -250,6 +266,7 @@ export class FlyRunner implements RunnerProvider {
           guest: { cpus: spec.guest.cpus, memory_mb: spec.guest.memoryMb, cpu_kind: cpuKindFor(spec.guest.cpuClass) },
           auto_destroy: true,
           restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
+          stop_config: PLATFORM_STOP_CONFIG,
           env: { SESSION_ID: spec.sessionId, JOB_TOKEN: spec.jobToken, APP_URL: spec.appUrl, RELAY_DEADLINE_AT: spec.deadlineAt.toISOString() },
           metadata: { [SESSION_METADATA_KEY]: spec.sessionId, [ENV_METADATA_KEY]: spec.environment },
         },
@@ -334,7 +351,9 @@ export class FlyRunner implements RunnerProvider {
       .catch(() => undefined);
   }
 
-  /** The stop sequence's signal (plan §"Fly machine lifecycle"): SIGINT + the grace as Fly's `timeout`. */
+  /** The stop sequence's signal (plan §"Fly machine lifecycle"): SIGINT + the grace as Fly's `timeout`. The signal is
+   *  passed through EXPLICITLY, never left to Fly: a stop that names none gets the create's stop_config.signal — the
+   *  PLATFORM's SIGTERM — and the compositor would drain at once with no Final card (R2004 PR 0, measured). */
   async stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void> {
     await this.client.stopMachine(runnerId, { signal: opts.signal, timeoutSeconds: opts.timeoutSeconds }); // 404 = already gone, inside the client
   }

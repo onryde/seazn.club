@@ -386,3 +386,31 @@ describe("R2003 — restart and beat constants", () => {
     expect(config.RELAY_EXIT_REFUSED).toBe(78);
   });
 });
+
+// R2004 PR 0 — the stop contract. Each figure is typed from its SOURCE, never read back off config.ts or the compositor's
+// code: a change to the source moves this pin, and the grace mutant (back to R1's 10) reds here.
+describe("R2004 PR 0 — the stop grace and the two stop signals", () => {
+  it("RUNNER_STOP_GRACE_SECONDS fits the Final hold + the drain + its headroom before the forced kill (owner ruling D15: 20)", () => {
+    const FINAL_HOLD_MS = 10_000;    // overlay spec 2026-10-15 §4.2: Final holds `FINAL_HOLD_MS` = 10 000 ms before EOS
+    const DRAIN_TIMEOUT_MS = 7_000;  // compositor crates/domain/src/config.rs: `Thresholds::default().drain_timeout_ms` = 7_000
+    const HEADROOM_MS = 3_000;       // the same field's doc line: "grace − 3 s", for EOS to reach the sink and the process to exit
+    expect(config.RUNNER_STOP_GRACE_SECONDS * 1000).toBeGreaterThanOrEqual(FINAL_HOLD_MS + DRAIN_TIMEOUT_MS + HEADROOM_MS);
+    expect(config.RUNNER_STOP_GRACE_SECONDS, "owner ruling D15 (spec 2026-10-15-overlay-templates-and-scenes-design.md, PR #969)").toBe(20);
+  });
+
+  it("grace_expired (grace + observation slack) still fires before the ending timeout, and the Machine-minutes bound still credits ONE minute of grace", () => {
+    // F19 (config.ts): ENDING_TIMEOUT_SECONDS must never pre-empt the ordinary teardown, whose first timer is grace_expired.
+    expect(config.RUNNER_STOP_GRACE_SECONDS + config.RUNNER_OBSERVE_SLACK_SECONDS).toBeLessThan(config.ENDING_TIMEOUT_SECONDS);
+    expect(config.ENDING_TIMEOUT_SECONDS, "R2004 PR 0 leaves the ending timeout at 300").toBe(300);
+    // domain/runner.ts MACHINE_MINUTES_BOUND credits ceil(grace / 60) per attempt; a grace past 60 s would raise the bound.
+    expect(Math.ceil(config.RUNNER_STOP_GRACE_SECONDS / 60)).toBe(1);
+  });
+
+  it("our stop is SIGINT and the platform's is SIGTERM — never the same signal (coordinator decision I4, 2026-10-15)", () => {
+    // C06 holds the Final scene on SIGINT (our stop) and drains at once on SIGTERM (a host-initiated stop). One signal for
+    // both would show "Stream ended" on a deploy and kill it mid-hold, or never show the Final card on ours.
+    expect(config.RUNNER_STOP_SIGNAL).toBe("SIGINT");
+    expect(config.RUNNER_PLATFORM_STOP_SIGNAL).toBe("SIGTERM");
+    expect(config.RUNNER_PLATFORM_STOP_SIGNAL).not.toBe(config.RUNNER_STOP_SIGNAL);
+  });
+});

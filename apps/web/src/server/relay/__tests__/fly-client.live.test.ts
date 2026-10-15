@@ -6,8 +6,11 @@
 // exit event's real shape (exit_code / oom_killed / requested_stop), that
 // auto_destroy removes a Machine after exit 0 AND after exit 1, the
 // request-id header's real name, the 429/Retry-After behaviour if it appears,
-// and whether a destroyed Machine's name is reusable. Costs a minute of a
-// shared-cpu-1x.
+// and whether a destroyed Machine's name is reusable — and (leg 5, R2004 PR 0)
+// which `stop_config.timeout` form round-trips and whether a stop's explicit
+// signal beats `stop_config.signal`. Costs a minute or two of a shared-cpu-1x.
+// FLY_RELAY_APP picks the app (default seazn-relay); R2004 PR 0 ran it on the
+// empty spike app, `FLY_RELAY_APP=seazn-relay-spike`.
 //
 // EVERY Machine it creates is destroyed in the same run and CONFIRMED gone by a
 // re-read, and `afterAll` sweeps the whole app by this run's tag — a test that
@@ -15,7 +18,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom } from "../fly-client";
+import { FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, flyDuration } from "../fly-client";
 // Lane-A minors, Task 5A review m9: the Machine name was spelled `relay-${session}-r${attempt}`
 // here as well as in `domain/runner.ts`, and a second spelling of an idempotency key is a
 // second key — this file's whole point is that a 409 on the SAME name is what makes a create
@@ -217,4 +220,62 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
     expect(later.length === 0 || now.length > 0).toBe(true);
     note(later.length === 0 ? "I6: Fly created nothing from the aborted POST — premise untested this run" : "I6: list-after-lost-POST was immediately consistent");
   }, 180_000);
+
+  // R2004 PR 0 — the stop contract, MEASURED (the docs settle neither half):
+  //   (a) the timeout form. The docs type `stop_config.timeout` as an integer of nanoseconds. Which form reads back as sent?
+  //   (b) precedence. Our stop names SIGINT; the Machine's stop_config names the platform's SIGTERM. If stop_config won, our
+  //       own stop would arrive as SIGTERM and the compositor's Final card would never show; and a stop that names NO
+  //       signal (every stop Fly itself starts) must get stop_config's.
+  // The shell traps INT → exit 3 and TERM → exit 4, so the exit code names the signal that ARRIVED. No auto_destroy: the
+  // stopped Machine stays readable for its exit event, and the leg (then the tag sweep) destroys it.
+  // First run 2026-10-15 (seazn-relay-spike): ns → read back "20s"; "20s" → "20s"; explicit SIGINT → exit 3; {} → exit 4.
+  it("5. R2004 PR 0: stop_config.timeout reads back as sent only in the \"<n>s\" form (nanoseconds are accepted and normalised to it); an explicit stop signal beats stop_config.signal (exit 3); a stop naming none gets it (exit 4)", async () => {
+    const probeImage = "registry-1.docker.io/library/busybox:1.36";
+    const TRAP = 'trap "exit 3" INT; trap "exit 4" TERM; while :; do sleep 1; done';
+    const GRACE_S = 20;   // any whole-second duration proves the FORM; 20 is the ruled grace (D15)
+    const probe = (session: string, stopConfig: { signal: "SIGTERM"; timeout: string | number }) => client.createMachine({
+      name: machineNameFor(session, 1), region,
+      config: {
+        image: probeImage, guest, auto_destroy: true, restart: { policy: "no" }, env: { RELAY_LIVE_TEST: "1" }, metadata: { seazn_session: session },
+        // the cast carries what the adapter's type forbids on purpose: a custom cmd, NO auto_destroy, and a raw timeout
+        ...({ init: { cmd: ["sh", "-c", TRAP] }, auto_destroy: false, stop_config: stopConfig } as object),
+      },
+    });
+    const ns = await probe(`${tag}-e`, { signal: "SIGTERM", timeout: GRACE_S * 1_000_000_000 });
+    alive.push(ns.id); created.push(ns.id);
+    const str = await probe(`${tag}-f`, { signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
+    alive.push(str.id); created.push(str.id);
+    for (const m of [ns, str]) await client.waitMachine(m.id, "started", 60);
+    const readBack = async (id: string) => ((await client.getMachine(id))?.config as { stop_config?: unknown } | undefined)?.stop_config;
+    const nsBack = await readBack(ns.id);
+    const strBack = await readBack(str.id);
+    note(`stop_config read back: sent ${GRACE_S * 1_000_000_000} ns → ${JSON.stringify(nsBack)}; sent "${flyDuration(GRACE_S)}" → ${JSON.stringify(strBack)}`);
+    expect(strBack, "the form web sends reads back exactly as sent").toEqual({ signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
+    // The docs' unit, proven: 20e9 ns IS what Fly means by "20s" — so "20s" is twenty seconds, not twenty of anything else.
+    expect(nsBack, "nanoseconds are accepted and normalised to the string form").toEqual({ signal: "SIGTERM", timeout: flyDuration(GRACE_S) });
+
+    await new Promise((r) => setTimeout(r, 2_000));   // the shell's traps are installed before the first signal lands
+    // Ours, through the production client: an explicit SIGINT.
+    await client.stopMachine(str.id, { signal: "SIGINT", timeoutSeconds: GRACE_S });
+    // The platform's shape: a stop naming no signal. The client cannot send one (its signal is required on purpose), so
+    // this one call goes out raw. The token rides in the header only, never a log line.
+    const bare = await fetch(`${FLY_MACHINES_BASE}/apps/${encodeURIComponent(app)}/machines/${encodeURIComponent(ns.id)}/stop`, {
+      method: "POST", headers: { authorization: `Bearer ${TOKEN!}`, "content-type": "application/json" }, body: "{}",
+    });
+    note(`signal-less stop → HTTP ${bare.status}`);
+    expect(bare.status).toBe(200);
+    for (const m of [str, ns]) await client.waitMachine(m.id, "stopped", 60);
+    const exitOf = async (id: string) => exitInfoFrom(await client.machineEvents(id));
+    const explicit = await exitOf(str.id);
+    const implicit = await exitOf(ns.id);
+    note(`explicit SIGINT stop → ${JSON.stringify(explicit)}; signal-less stop → ${JSON.stringify(implicit)}`);
+    expect(explicit, "our explicit SIGINT beat stop_config's SIGTERM: the INT trap ran").toEqual({ exitCode: 3, oomKilled: false, requestedStop: true });
+    expect(implicit, "a stop naming no signal got stop_config's SIGTERM: the TERM trap ran").toEqual({ exitCode: 4, oomKilled: false, requestedStop: true });
+
+    for (const m of [ns, str]) {
+      await client.destroyMachine(m.id, { force: true });
+      expect(["destroyed", "destroying"]).toContain((await client.getMachine(m.id))?.state);
+      alive.splice(alive.indexOf(m.id), 1);
+    }
+  }, 240_000);
 });

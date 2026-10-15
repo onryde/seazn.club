@@ -26,6 +26,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { FlyClient, SESSION_METADATA_KEY } from "../fly-client";
 import { FlyRunner } from "../runner-fly";
+import { RUNNER_STOP_GRACE_SECONDS } from "../config";
+import { machineNameFor, stepRunner } from "../domain/runner";
 import type { ProviderCallRecord, RunnerSpec } from "../ports";
 
 /** The token from the environment, or from `apps/web/.env.local`, which is where
@@ -159,5 +161,35 @@ describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", 
     const observed = await runner.observe(first.runnerId);
     note(`runner.observe() after destroy → ${JSON.stringify(observed)}`);
     expect(["destroyed", "destroying"]).toContain(observed.state);
+  }, 300_000);
+
+  // R2004 PR 0: the ADAPTER's own create — not a hand-built body — reads back the stop_config it sent, on the real API. The
+  // form is the one fly-client.live.test.ts leg 5 measured to round-trip; this leg proves FlyRunner sends that form. Then
+  // our stop goes out through the adapter, driven from the domain's own STOP effect, and the Machine records it as a
+  // requested stop. (Which signal ARRIVED is leg 5's to prove — this image cannot tell INT from TERM.)
+  it("R2004 PR 0: a composed create reads back the stop_config it sent ({ SIGTERM, the grace }), and our STOP effect stops it as a requested stop", async () => {
+    const session = `${tag}-b`;
+    const spec: RunnerSpec = {
+      sessionId: session, attempt: 1, environment: "live-test", jobToken: "live-not-a-real-token", appUrl: "https://seazn.club",
+      guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region,
+      deadlineAt: new Date(Date.now() + 10 * 60_000),
+    };
+    const h = await runner.create(spec);
+    created.push(h.runnerId);
+    const back = ((await client.getMachine(h.runnerId))?.config as { stop_config?: unknown } | undefined)?.stop_config;
+    note(`create → ${h.runnerId}; stop_config read back → ${JSON.stringify(back)}`);
+    expect(back).toEqual({ signal: "SIGTERM", timeout: `${RUNNER_STOP_GRACE_SECONDS}s` });
+
+    await client.waitMachine(h.runnerId, "started", 60);
+    const effect = stepRunner({ state: "playing", attempt: 1, name: machineNameFor(session, 1), machineId: h.runnerId, stopRequestedAt: null, lastExit: null }, { type: "session_stop" }, new Date())
+      .effects.find((e) => e.type === "stop_machine");
+    if (effect?.type !== "stop_machine") throw new Error("premise: playing × session_stop issues the STOP effect");
+    await runner.stop(h.runnerId, { signal: effect.signal, timeoutSeconds: effect.timeoutSeconds });
+    const gone = await client.waitMachine(h.runnerId, "destroyed", 60).catch((e: unknown) => e);
+    note(`after our stop (auto_destroy) → ${gone instanceof Error ? gone.message : JSON.stringify(gone)}`);
+    const observed = await runner.observe(h.runnerId);
+    note(`runner.observe() after our stop → ${JSON.stringify(observed)}`);
+    expect(["destroyed", "destroying"]).toContain(observed.state);
+    expect(observed.exit?.requestedStop, "the exit Fly recorded is OUR requested stop, not a crash").toBe(true);
   }, 300_000);
 });

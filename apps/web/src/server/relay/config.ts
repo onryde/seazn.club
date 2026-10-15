@@ -127,12 +127,14 @@ export const MAX_ANCHOR_DRIFT_SECONDS =
  *  CHECKED 2026-09-20 (Task 5A) against the same client constants — 300 HOLDS, unchanged. Neither
  *  `stopMachine` nor `destroyMachine` performs the nested lookup `createMachine` does, so each is bounded by
  *  `deadlineMs` + `requestTimeoutMs` = 55 s; the worst ordinary teardown is
- *  RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + stop 55 s + destroy 55 s = 140 s < 300 s.
+ *  RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + stop 55 s + destroy 55 s = 20 + 20 + 55 + 55 = 150 s < 300 s.
  *  RE-CHECKED 2026-09-20 (Task 5) against the SAME composed reasoning that raised PROVISION_TIMEOUT_SECONDS:
  *  a teardown that also waits (`waitMachine(destroyed)` — C1 measured that a destroyed Machine still GETs
  *  200 `destroyed` and that `destroying` can follow the wait, so a task may well want one) adds one more
- *  55 s operation: 30 + 55 + 55 + 55 = 195 s < 300 s. Unchanged at 300, and runner-fly.test.ts asserts that
- *  composed teardown term from `FLY_CLIENT_DEFAULTS` so it moves when a client constant does. */
+ *  55 s operation: 40 + 55 + 55 + 55 = 205 s < 300 s. Unchanged at 300, and runner-fly.test.ts asserts that
+ *  composed teardown term from `FLY_CLIENT_DEFAULTS` so it moves when a client constant does.
+ *  RE-CHECKED 2026-10-15 (R2004 PR 0) when the grace went 10 → 20 (owner ruling D15): 140 → 150 s and 195 → 205 s,
+ *  both still < 300 s, and grace_expired (grace + slack = 40 s) still fires long before this. Unchanged at 300. */
 export const ENDING_TIMEOUT_SECONDS = 300;
 /** §6.4 (R1's stale window), and since R2003 (owner ruling 2026-10-15, option A) ONLY the BOOT ALLOWANCE: a live COMPOSED
  *  session whose runner has NOT yet played in this attempt — `creating` or `booting`, i.e. the replacement a retry just
@@ -141,9 +143,14 @@ export const ENDING_TIMEOUT_SECONDS = 300;
  *  booted and read its session, so the played-runner window below would kill every retry mid-boot. A runner that HAS
  *  played is timed by STALE_HEARTBEAT_SECONDS_COMPOSED. A passthrough session has no Machine and owes no beat at all. */
 export const STALE_HEARTBEAT_SECONDS = 90;
-/** §7.2 + R0-memo.md:279: SIGINT → ffmpeg exit 0 in 114 ms; the supervisor's
- *  flush budget is ≤ 10 s. Sent as the Fly stop `timeout` (seconds before SIGKILL). */
-export const RUNNER_STOP_GRACE_SECONDS = 10;
+/** How long a stopped runner gets between the stop signal and the forced kill (Fly: the stop `timeout`, seconds before
+ *  SIGKILL — and, since R2004 PR 0, the create's `stop_config.timeout`, so a stop the PLATFORM starts gets it too, not
+ *  Fly's 5 s `kill_timeout` default). R1's figure was 10 (§7.2 + R0-memo.md:279: SIGINT → ffmpeg exit 0 in 114 ms; the
+ *  supervisor's flush budget is ≤ 10 s). OWNER RULING D15 (2026-10-16, spec 2026-10-15-overlay-templates-and-scenes,
+ *  PR #969): 20, for the R2 compositor's budget — the Final hold 10 s (spec §4.2 `FINAL_HOLD_MS`) + the drain 7 s
+ *  (compositor `config.rs` `drain_timeout_ms`) + 3 s headroom (that field's doc line: "grace − 3 s") = 20 s.
+ *  config.test.ts pins each term from its source. The arithmetic above ENDING_TIMEOUT_SECONDS moves with it. */
+export const RUNNER_STOP_GRACE_SECONDS = 20;
 /** How long after the grace we wait to OBSERVE auto_destroy before forcing it. */
 export const RUNNER_OBSERVE_SLACK_SECONDS = 20;
 /** Design §6.4: ONE retry — two attempts, ever. Invariant 3's bound derives from this. */
@@ -157,8 +164,16 @@ export const RUNNER_INPLACE_RESTARTS = 2;
  *  (stopped ~110 ms, then starting ~1.3 s). A Machine still restarting this long after its restarting exit is not coming
  *  back: the domain reads it as lost (domain/runner.ts `observedFrom`). Coordinator ruling, 2026-10-15: 10 s. */
 export const RUNNER_RESTART_STUCK_SECONDS = 10;
-/** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. */
+/** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. OUR stop — the organiser's or the
+ *  deadline's — and since R2004 PR 0 (coordinator decision I4, 2026-10-15) the R2 compositor reads it as "hold the Final
+ *  scene, then drain". Always sent EXPLICITLY: Fly falls back to the Machine's `stop_config.signal` (below) for a stop that
+ *  names none (measured, fly-client.live.test.ts leg 5). */
 export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
+/** Coordinator decision I4 (2026-10-15): the signal a stop the HOST starts arrives with — a deploy, `fly machine stop`,
+ *  host maintenance — which the compositor reads as "drain at once, no Final card". Never RUNNER_STOP_SIGNAL: Fly's default
+ *  for both is SIGINT (`kill_signal`), so without this a host stop would show "Stream ended" and be killed mid-hold.
+ *  runner-fly.ts sends it as the create's `stop_config.signal` (the Fly spelling lives there, ADR 0007). */
+export const RUNNER_PLATFORM_STOP_SIGNAL = "SIGTERM" as const;
 /** Compositor spec §5.3; served as `heartbeatIntervalMs` (R2004); R2003's composed stale rule is 3× this. Defined
  *  HERE only (R2002): R2003 and R2004 import it. */
 export const RELAY_HEARTBEAT_INTERVAL_MS = 5_000;
