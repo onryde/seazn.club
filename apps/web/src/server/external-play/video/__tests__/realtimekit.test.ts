@@ -398,6 +398,35 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting, per player (D16)", ()
     expect(stub.calls.filter((c) => c.url.endsWith("/kick-all")).length, "each room kicked").toBe(2);
     expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id]), "only the asking side was remade; home re-seats on its own first arrival").toEqual([["away", fresh]]);
   });
+
+  it("a re-pair retires the OTHER side's stale room even when the asking side has no row yet (R3-1 unchanged): the newcomer's first claim ends the stayer's old room", async () => {
+    configure();
+    const s = await seedFixture();
+    const stayerRoom = mtg("stayer-old-home");
+    await ensureMeeting(s.fixtureId, "home", { fetch: stubFetch([created(stayerRoom)]).fetch });
+    // The board is re-paired: the stayer's room was made for the OLD pair (the stamp no longer matches the fixture), and the
+    // newcomer arrives on the OTHER side, where nothing is on file.
+    await sql`update fixture_video_meetings m set away_entrant_id = f.home_entrant_id from fixtures f where f.id = m.fixture_id and m.fixture_id = ${s.fixtureId}`;
+    expect((await rowsOf(s.fixtureId)).map((r) => r.side), "premise: only the stayer's side is on file").toEqual(["home"]);
+    const fresh = mtg("newcomer-fresh");
+    const stub = stubFetch([
+      { status: 200, body: { success: true, data: { action: "kick" } } }, { status: 200, body: { success: true, data: {} } },
+      created(fresh),
+    ]);
+    expect(await ensureMeeting(s.fixtureId, "away", { fetch: stub.fetch })).toEqual({ meetingId: fresh });
+    const route = (u: string) => u.split("/realtime/kit/app-1")[1];
+    expect(stub.calls.filter((c) => c.method === "PATCH").map((c) => route(c.url)), "the stayer's stale room was ended at the vendor").toEqual([`/meetings/${stayerRoom}`]);
+    expect(stub.calls.filter((c) => c.url.endsWith("/kick-all")).length, "…and kicked").toBe(1);
+    expect((await rowsOf(s.fixtureId)).map((r) => [r.side, r.meeting_id]), "only the newcomer's own room is on file").toEqual([["away", fresh]]);
+    // The pair: with nothing stale (the same board, both sides current) the first claim of the other side retires nothing.
+    const t = await seedFixture();
+    const keep = mtg("keep-home");
+    await ensureMeeting(t.fixtureId, "home", { fetch: stubFetch([created(keep)]).fetch });
+    const calm = stubFetch([created(mtg("calm-away"))]);
+    await ensureMeeting(t.fixtureId, "away", { fetch: calm.fetch });
+    expect(calm.calls.map((c) => c.method), "no stale room, so the claim only creates").toEqual(["POST"]);
+    expect((await rowsOf(t.fixtureId)).map((r) => r.side), "and the current room is untouched").toEqual(["away", "home"]);
+  });
 });
 
 describe("addParticipant", () => {

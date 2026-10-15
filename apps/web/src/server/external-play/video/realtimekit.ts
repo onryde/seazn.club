@@ -381,6 +381,13 @@ export async function ensureMeeting(fixtureId: string, side: MeetingSide, deps: 
     }
     if (existing.evidence) throw pairingChanged(fixtureId);
     await retireStaleMeeting(fixtureId, now, deps);
+  } else {
+    // A re-pair makes EVERY row of the board stale at once (§5.6.1, R3-1 unchanged), but it is a claim that finds a stale row
+    // on ITS OWN side that retires them. A newcomer who lands on the side where nothing is on file finds none, and the
+    // player who stayed would keep a room made for the old pair until their own next claim. So a claim that is about to
+    // CREATE retires the board's other stale rows first: one statement that takes only stale rows with no game behind
+    // them, and no vendor call when there is nothing to take.
+    await retireStaleMeeting(fixtureId, now, deps);
   }
 
   const [fixture] = await sql<{ org_id: string; home: string | null; away: string | null }[]>`

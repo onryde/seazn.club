@@ -504,7 +504,11 @@ colour; the colour only LABELS (`arbiter.ts:283-286` and `:539-542` map white/bl
 - The pairing stamp (`home_entrant_id`/`away_entrant_id`, R2-2) stays on each row, and each
   row is judged by BOTH entrants, in order, exactly as today (m1). A re-pair therefore
   retires BOTH rows, the stayer's included. The stayer's meeting held no opponent, so this
-  is not about a leak; it keeps R2-2 and R3-1 working unchanged.
+  is not about a leak; it keeps R2-2 and R3-1 working unchanged. As built, the retire is not
+  left to a claim that finds a stale row on its own side: a claim that is about to CREATE
+  retires the board's stale rows first, so a newcomer who lands on the side with nothing on
+  file ends the stayer's old room too (walkthrough R3-1 found the gap; `realtimekit.test.ts`
+  pins it).
 - `camera_evidence_at` stays per row, and V442's check (evidence requires `ended_at`)
   stays per row.
 - New on the player participant row: `camera_reported text null check (camera_reported in
