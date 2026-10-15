@@ -833,7 +833,7 @@ const isScalarSchema = (schema: unknown): boolean => {
   return type === "string" || type === "integer" || type === "number";
 };
 
-function exampleOf(schema: unknown, depth = 0, ordinal = 0): unknown {
+export function exampleOf(schema: unknown, depth = 0, ordinal = 0): unknown {
   if (depth > 6 || typeof schema !== "object" || schema === null) return null;
   const s = schema as Record<string, unknown>;
   if ("const" in s) return s.const;

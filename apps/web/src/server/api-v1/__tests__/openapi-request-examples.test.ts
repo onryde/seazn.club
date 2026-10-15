@@ -10,7 +10,7 @@
 // is therefore ZERO: any example its own schema refuses is red, naming the route and the schema's reasons, and a new route
 // whose example fails owes a patch.
 import { describe, expect, it } from "vitest";
-import { REQUEST_EXAMPLE_PATCHES, ROUTES, buildOpenApiDocument, requestExampleOf } from "../openapi";
+import { REQUEST_EXAMPLE_PATCHES, ROUTES, buildOpenApiDocument, exampleOf, requestExampleOf } from "../openapi";
 
 type Op = { requestBody?: { content: Record<string, { example?: unknown }> } };
 
@@ -79,5 +79,48 @@ describe("OpenAPI — every published request example parses against its own sch
     expect(Object.keys(create.config).length, "the config example is not empty").toBeGreaterThan(0);
     const put = verdicts.find((x) => x.key === "PUT /stages/{id}/rules")!.example as Record<string, unknown>;
     expect(Object.keys(put).sort(), "the rules PUT shows its two arms").toEqual(["points", "rules"]);
+  });
+});
+
+// The generator's constraint handling, directly, on synthetic JSON Schemas: the routes above exercise only the constraints
+// today's request bodies happen to carry, so a handler no route needs would be unproven (a maxLength cut, a uri). Each
+// expectation is the constraint itself, never a string typed from the generator's output.
+describe("exampleOf honours what the JSON Schema says of a value", () => {
+  const str = (extra: Record<string, unknown>) => exampleOf({ type: "string", ...extra }) as string;
+
+  it("formats: an email is an address, a uri is a URL, a uuid is a uuid, a date is a date", () => {
+    expect(str({ format: "email" })).toMatch(/^[^@\s]+@[^@\s]+\.[^@\s]+$/);
+    expect(() => new URL(str({ format: "uri" }))).not.toThrow();
+    expect(() => new URL(str({ format: "url" }))).not.toThrow();
+    expect(str({ format: "uuid" })).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(Number.isNaN(Date.parse(str({ format: "date" })))).toBe(false);
+  });
+
+  it("length bounds: padded up to minLength, cut down to maxLength, an exact length met, and always non-empty", () => {
+    let checked = 0;
+    for (const [min, max] of [[16, 64], [10, undefined], [undefined, 3], [1, 1], [3, 3], [40, 40], [0, 0]] as const) {
+      const out = str({ ...(min === undefined ? {} : { minLength: min }), ...(max === undefined ? {} : { maxLength: max }) });
+      expect(out.length, `min ${min} max ${max}`).toBeGreaterThanOrEqual(min ?? 0);
+      expect(out.length, `min ${min} max ${max}`).toBeLessThanOrEqual(max ?? Number.POSITIVE_INFINITY);
+      if (max !== 0) expect(out.length, "an example is never empty unless the bound says so").toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("a pattern or an exact length takes the schema's declared default (valid by construction); a loose string keeps the stock word", () => {
+    expect(str({ pattern: "^/", default: "/settings/billing" })).toBe("/settings/billing");
+    expect(str({ minLength: 3, maxLength: 3, default: "gbp" })).toBe("gbp");
+    // A default beside a LOOSE bound is not preferred: an empty default would publish an empty example.
+    expect(str({ maxLength: 500, default: "" }).length).toBeGreaterThan(0);
+    expect(str({ default: "x" })).not.toBe("");
+  });
+
+  it("minItems: a list of scalars gets that many DISTINCT items; a list of objects keeps one sample", () => {
+    const ids = exampleOf({ type: "array", minItems: 3, items: { type: "string", format: "uuid" } }) as string[];
+    expect(ids.length).toBe(3);
+    expect(new Set(ids).size, "distinct").toBe(3);
+    expect(exampleOf({ type: "array", items: { type: "string" } })).toHaveLength(1);
+    expect(exampleOf({ type: "array", minItems: 3, items: { type: "object", properties: { a: { type: "string" } } } })).toHaveLength(1);
   });
 });
