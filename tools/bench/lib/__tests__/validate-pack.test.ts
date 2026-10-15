@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { BRACKET_KINDS, FORFEIT_REASONS, StageKind, foldMatchWithStoppage } from "@seazn/engine/core";
-import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { deciderKeysFor, stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 // The product's own stage composition (W2c Task 13b, R-T12-3): an import-free
@@ -2684,8 +2684,33 @@ describe("stageScopedFoldCfg — the stage's format reaches the fold (preset, ru
     const ruled = validatePack(goalless({ rules: { ...HELD, shootout: true } }), UNIT);
     expect(onlyError(ruled.findings).code).toBe("fold.not_decided");
 
-    // D3: the same key at the config's TOP level is read by nothing.
-    expectClean(validatePack(goalless({ rules: HELD, shootout: true }), UNIT), []);
+    // D3: the same key at the config's TOP level is read by nothing — and the
+    // product's create door refuses that stage 400 (R-13b-1), so the pack is
+    // refused here too rather than folded as if the key were harmless (Task 13b
+    // review gap 2: the bench would otherwise green a pack the product refuses).
+    const top = onlyError(validatePack(goalless({ rules: HELD, shootout: true }), UNIT).findings);
+    expect(top.code).toBe("pack.stage_top_level_decider");
+    expect(top.where).toBe("divisions[ref=d1].stages[ref=s1].config.shootout");
+    expect(top.message).toContain("config.rules.shootout");
+  });
+
+  it("refuses EVERY decider the engine declares at a stage config's top level, by name; under rules it folds (counted)", () => {
+    // Expected set from the engine's declarations, never the module under test.
+    const deciders = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))];
+    expect(deciders, "the premise: deciders beyond shootout/extraTime").toEqual(
+      expect.arrayContaining(["superOver", "tiebreakRungs", "tieBoard", "overtime"]),
+    );
+    let checked = 0;
+    for (const key of deciders) {
+      const refused = errors(validatePack(goalless({ rules: HELD, [key]: false }), UNIT).findings).filter(
+        (f) => f.code === "pack.stage_top_level_decider",
+      );
+      expect(refused.map((f) => f.where), key).toEqual([`divisions[ref=d1].stages[ref=s1].config.${key}`]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every engine decider").toBe(deciders.length);
+    // The positive pair: a stage config with no top-level decider is not refused.
+    expectClean(validatePack(goalless({ rules: HELD }), UNIT), []);
   });
 
   it("is NOT applied in a multi-stage division, and the risk is named", () => {
