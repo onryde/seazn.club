@@ -107,6 +107,11 @@ describe.skipIf(!HAS_DB)("records route: each assumption guard reached, and noth
     const secret = `FAKE-RACE-${randomUUID()}`;
     const bytes = new TextEncoder().encode(`${line({ at: AT, kind: "pair", claim: "new", slot: 0, tokenTag: tokenTag(r.tok), message: secret })}\n`);
     let deleted = 0;
+    // `highWaterMark: 0` is what makes `pull` LAZY. With the default (1) a ReadableStream calls `pull` once as soon as it is
+    // constructed, before anyone reads it, so the delete below raced the route's own resolve of the code: when the delete
+    // committed first the code was gone before the route looked it up and the answer was 401 `code_ended`, not the 503 this
+    // test reaches for (CI, PR #961: `expected 401 to be 503`; passes or fails on timing alone). The route reads the body only
+    // AFTER it resolved the code, so a lazy pull puts the delete exactly where the test says it is: mid-upload.
     const body = new ReadableStream<Uint8Array>({
       async pull(ctrl) {
         // The race: the organiser deletes the fixture (its code cascades) between the code's resolve and the store.
@@ -114,7 +119,11 @@ describe.skipIf(!HAS_DB)("records route: each assumption guard reached, and noth
         ctrl.enqueue(bytes);
         ctrl.close();
       },
-    });
+    }, { highWaterMark: 0 });
+    // The guard for the above, made deterministic: give an eager pull ample time to run its delete, then require that it did
+    // not. Without this the test passes or fails on how fast the route happens to get to its first query.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(deleted, "premise: nothing reads the body before the route does, so the delete cannot precede the code's resolve").toBe(0);
     await expect503(await post(r.code, r.tok, body), /^postCaptureRecord: the code's fixture is gone$/);
     expect(deleted, "premise: the race really deleted the fixture").toBe(1);
     expect((await sql`select 1 from capture_records where fixture_id = ${r.fixtureId}`).count).toBe(0);

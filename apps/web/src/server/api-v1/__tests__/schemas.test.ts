@@ -388,6 +388,35 @@ describe("AppendEventRequest passes an event payload through untouched (#427)", 
   });
 });
 
+// Engine-split D26/D31 (batch 1f): the request's `engine_epoch`. Optional (the web pad never sends it and the server cannot
+// tell a capture phone from the web pad), and when present a positive integer — a 0, a fraction or a string is a 400
+// VALIDATION at the door, before the gate in usecases/scoring.ts can mistake it for a number that is "behind".
+describe("AppendEventRequest.engine_epoch (engine-split D31)", () => {
+  const base = { expected_seq: 3, type: "generic.result", payload: {} };
+
+  it("is optional: a request without it parses, and the key stays absent", () => {
+    const r = AppendEventRequest.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) expect(Object.hasOwn(r.data, "engine_epoch")).toBe(false);
+  });
+
+  it("accepts a positive integer and keeps it", () => {
+    for (const engine_epoch of [1, 2, 7]) {
+      const r = AppendEventRequest.safeParse({ ...base, engine_epoch });
+      expect(r.success, String(engine_epoch)).toBe(true);
+      if (r.success) expect(r.data.engine_epoch).toBe(engine_epoch);
+    }
+  });
+
+  it("rejects 0, a negative, a fraction, a string and null", () => {
+    const refused = [0, -1, 1.5, "1", null, Number.NaN];
+    for (const engine_epoch of refused) {
+      expect(AppendEventRequest.safeParse({ ...base, engine_epoch }).success, String(engine_epoch)).toBe(false);
+    }
+    expect(refused.length, "the sweep checked its inputs").toBeGreaterThan(0);
+  });
+});
+
 describe("division tiebreakers are validated keys (F5)", () => {
   it("accepts the expanded fifa2026 cascade, rejects the preset NAME", () => {
     const good = ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"];

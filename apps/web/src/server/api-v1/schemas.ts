@@ -1841,6 +1841,16 @@ export const AppendEventRequest = z.object({
   type: z.string().min(1).max(100), // 'cricket.ball', 'core.void', …
   payload: z.unknown(),
   idempotency_key: z.string().min(1).max(200).optional(),
+  // Engine-split D26/D31. Optional on purpose: the server cannot tell a capture phone from the web pad (both use the same `dl_`
+  // device link), so a missing value is never a refusal. Lower than `foldEpochOf(sport)` → 426 ENGINE_OUTDATED (usecases/scoring.ts).
+  engine_epoch: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      "Fold epoch of the client's engine for this fixture's sport (engine-split D26/D31). Native clients send it; the web pad does not.",
+    ),
 });
 export type AppendEventRequest = z.infer<typeof AppendEventRequest>;
 

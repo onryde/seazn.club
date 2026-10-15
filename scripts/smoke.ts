@@ -30,6 +30,9 @@ import { AWARD_REASONS, settledMethod, type EngineErrorCode, type ForfeitReason 
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { hockey } from "@seazn/engine/sports/hockey";
+// Engine-split 1f (D31): the fold epoch a native client sends on a score write, read off the engine rather than typed. Loads under
+// plain `node --experimental-strip-types` (probed).
+import { foldEpochOf } from "@seazn/engine/sport";
 // The overlay's sport palette, from the module `overlay-tokens.ts` re-exports
 // it out of (`paletteFor = resolveSportPalette`). Imported by relative path for
 // the same reason `@seazn/engine` is imported at all and `@/…` is not: this
@@ -17962,13 +17965,27 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
   check("v1 division start → active", v1data<{ status: string }>(startRes).status === "active");
 
   // Scoring: append, optimistic-concurrency 409 (parallel scorers), void.
+  // Engine-split 1f (D31): this append carries the server's own fold epoch for the fixture's sport (generic here), the way a
+  // native client's does; an epoch the schema refuses (0) is a 400 at the door and writes nothing — the race below still
+  // finds expected_seq 1 free.
+  const badEpoch = await v1(admin, `/api/v1/fixtures/${fx}/events`, "POST", {
+    expected_seq: 0,
+    type: "core.start",
+    payload: {},
+    engine_epoch: 0,
+  });
+  check(
+    "v1 scoring: engine_epoch 0 → 400 VALIDATION, nothing written",
+    badEpoch.status === 400 && badEpoch.json.error?.code === "VALIDATION",
+  );
   const started = await v1(admin, `/api/v1/fixtures/${fx}/events`, "POST", {
     expected_seq: 0,
     type: "core.start",
     payload: {},
+    engine_epoch: foldEpochOf("generic"),
   });
   check(
-    "v1 scoring append → 201 with seq",
+    "v1 scoring append (engine_epoch = the server's fold epoch) → 201 with seq",
     started.status === 201 && v1data<{ seq: number }>(started).seq === 1,
   );
 

@@ -269,6 +269,12 @@ at 2b.
 
 ### 5.6 PR 1f — server minimum-epoch gate (D15, D26)
 
+> **Amended by D31 / D32c** (decision log): the refusal code is `ENGINE_OUTDATED`, not `engine_outdated`; `engine_epoch` is
+> OPTIONAL and there is no `engine_epoch_missing` refusal (the server cannot tell a capture phone from the web pad: both use the
+> same `dl_` device link); and the `docs/contracts` entry is deferred to capture S2 (no scoring-events contract exists today), with
+> `docs/superpowers/specs/engine-split/capture-s2-handoff.md` standing in for it. The bullets below are the original text, kept
+> for history.
+
 - Any scoring write that carries a client epoch is checked: the server refuses
   when the client's epoch for that match's sport is lower than the server's
   `FOLD_EPOCH[sport]`. Refusal is HTTP 426 with

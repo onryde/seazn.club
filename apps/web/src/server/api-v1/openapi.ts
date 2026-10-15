@@ -192,7 +192,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}/stream-settings", method: "put", summary: "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it) and the automatic-streaming switch (`autoStream`). Send either or both; a field left out is left as it is. The answer's `targetId` is the saved choice. 404 when the target is not this org's, is archived, or does not exist", tag: "fixtures", request: S.PutStreamSettings, response: S.StreamSettings, errors: [403, 404] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "put", summary: "Replace a side's lineup", tag: "fixtures", request: S.PutLineup, errors: [422] },
-  { path: "/fixtures/{id}/events", method: "post", summary: "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer", tag: "scoring", request: S.AppendEventRequest, response: S.AppendEventResponse, status: 201, errors: [403, 409, 422, 429] },
+  { path: "/fixtures/{id}/events", method: "post", summary: "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone", tag: "scoring", request: S.AppendEventRequest, response: S.AppendEventResponse, status: 201, errors: [403, 409, 422, 426, 429] },
   { path: "/fixtures/{id}/events", method: "get", summary: "Read the ledger after ?since_seq=", tag: "scoring", response: z.array(S.ScoreEvent), query: { since_seq: { schema: { type: "integer", minimum: 0, default: 0 } } } },
   { path: "/fixtures/{id}/audit", method: "get", summary: "Signed per-match audit trail: the full hash-chained event stream, chain-verification verdict and an Ed25519 signature over the head hash (Pro `scoring.audit_export`; verify keys at /.well-known/seazn-audit-keys)", tag: "scoring", errors: [402, 404], query: { format: { schema: { type: "string", enum: ["json", "pdf"], default: "json" } } } },
   { path: "/fixtures/{id}/state", method: "get", summary: "Live state (ETag = digest of the body)", tag: "scoring", response: S.FixtureState },
@@ -648,6 +648,12 @@ function scopedErrorEnvelope(extra: Record<string, unknown>) {
     },
   } as const;
 }
+// Engine-split D31: ENGINE_OUTDATED's three extras (usecases/scoring.ts assertEngineEpoch), documented on POST /fixtures/{id}/events' 426 only.
+const ENGINE_OUTDATED_ENVELOPE = scopedErrorEnvelope({
+  sport: { type: "string", description: "On ENGINE_OUTDATED (426): the fixture's sport — the one whose fold epoch moved" },
+  required: { type: "integer", description: "On ENGINE_OUTDATED (426): the server's fold epoch for that sport; the client must send at least this" },
+  got: { type: "integer", description: "On ENGINE_OUTDATED (426): the engine_epoch the request carried" },
+});
 const STREAM_TARGET_HOLDER_PROPERTIES = {
   type: "object",
   description: "On TARGET_IN_USE (409): the match whose stream holds the destination (always this organisation's)",
@@ -702,6 +708,7 @@ const STREAM_SESSION_CREATE_ERRORS = {
 // loop, so a route not listed here is completely unaffected.
 const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> = {
   "POST /stages/{id}/schedule/auto": { 422: CAPACITY_ERROR_ENVELOPE },
+  "POST /fixtures/{id}/events": { 426: ENGINE_OUTDATED_ENVELOPE },
   "POST /competitions/from-template": {
     409: TEMPLATE_VERSION_RETIRED_ENVELOPE,
     422: TEMPLATE_INSTANTIATION_FAILED_ENVELOPE,
@@ -801,7 +808,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
   const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
-      description: { 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 429: "Rate limited" }[status] ?? "Error",
+      description: { 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 426: "Client engine out of date", 429: "Rate limited" }[status] ?? "Error",
       content: { "application/json": { schema: overrides?.[status] ?? errorBody } },
     };
   }
