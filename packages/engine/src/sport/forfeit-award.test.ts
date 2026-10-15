@@ -8,7 +8,7 @@
 // constant), and whether the rule applies to a given forfeit is `isUnplayedForfeit` (competition/points.ts: the table's
 // authority) - never the kernel's own predicate read back.
 import { describe, expect, it } from "vitest";
-import { applyPointsRule, isUnplayedForfeit, pointsRuleAwardReachesTable, PointsRule } from "../competition/points.ts";
+import { applyPointsRule, forfeitAwardOffer, isUnplayedForfeit, pointsRuleAwardReachesTable, PointsRule } from "../competition/points.ts";
 import { foldMatchWithStoppage, outcomeOf, playRecorded, summaryOf, type EventEnvelope } from "../core/events.ts";
 import { FORFEIT_REASONS, type ForfeitReason } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -277,5 +277,44 @@ describe("X-WO-1 B: the sequence - a double walkover, a second forfeit, a void t
       checked++;
     });
     expect(checked).toBe(builtinModules.length);
+  });
+});
+
+describe("X-WO-1 B: the offer a stage rule makes to a fold (`forfeitAwardOffer`)", () => {
+  it("a rule's award is offered, winner first, exactly where the award reaches the table", () => {
+    let offered = 0;
+    let withheld = 0;
+    forEachSport(({ module: m }) => {
+      const rule = ruleOf([7, 1]);
+      if (pointsRuleAwardReachesTable(m)) {
+        expect(forfeitAwardOffer(rule, m), m.key).toEqual([7, 1]);
+        offered++;
+      } else {
+        expect(forfeitAwardOffer(rule, m), `${m.key}: the award never reaches this table, so no fold is offered one`).toBeUndefined();
+        withheld++;
+      }
+    });
+    expect(offered, "sports offered").toBe(reaching().length);
+    expect(withheld, "sports not offered").toBe(notReaching().length);
+    expect(offered).toBeGreaterThan(0);
+    expect(withheld).toBeGreaterThan(0);
+  });
+
+  it("no rule, a rule with no forfeit row, a forfeit row with no award: nothing is offered (the empty cases)", () => {
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const base = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] };
+    expect(forfeitAwardOffer(null, football)).toBeUndefined();
+    expect(forfeitAwardOffer(undefined, football)).toBeUndefined();
+    expect(forfeitAwardOffer(PointsRule.parse(base), football)).toBeUndefined();
+    expect(forfeitAwardOffer(PointsRule.parse({ ...base, forfeit: { winnerPoints: 2, loserPoints: 0 } }), football)).toBeUndefined();
+    // A 0-0 award is a score like any other (Task 9 fix round 2): it IS offered.
+    expect(forfeitAwardOffer(PointsRule.parse({ ...base, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [0, 0] } }), football)).toEqual([0, 0]);
+  });
+
+  it("the offer is a copy: the rule's own tuple is never handed to a state", () => {
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const rule = ruleOf([7, 1]);
+    const offer = forfeitAwardOffer(rule, football)!;
+    expect(offer).not.toBe(rule.forfeit!.awardScore);
   });
 });

@@ -3,7 +3,7 @@
 // fixture over the pair a SportModule.standingsDelta already returns — no
 // sport-module changes. Fractional/negative points are legal (Jul3/09).
 import { z } from "zod";
-import type { EntrantId, MatchOutcome, MetricSpec, StandingsDelta } from "../core/types.ts";
+import type { EntrantId, ForfeitAward, MatchOutcome, MetricSpec, StandingsDelta } from "../core/types.ts";
 import { EngineError } from "../core/errors.ts";
 import { awardReasonOf } from "../sport/forfeit-credit.ts";
 import type { AnySportModule, AwardScoreKeys, MatchPointsBounds } from "../sport/module.ts";
@@ -225,6 +225,22 @@ export function applyPointsRule(
  */
 export function pointsRuleAwardReachesTable(module_: Pick<AnySportModule, "awardScoreKeys">): boolean {
   return module_.awardScoreKeys !== undefined;
+}
+
+/**
+ * W2c Task 16b (X-WO-1 part B) - what a stage PointsRule offers a fold of that stage's matches (`FoldOptions.forfeitAward`):
+ * its `forfeit.awardScore`, winner first, as a COPY, and only where the award reaches the sport's table
+ * (`pointsRuleAwardReachesTable`) - the one place the fold and the table agree on "does this rule award a score here".
+ * The fold then applies it to a forfeit with nothing played alone (`unplayedForfeitEvent`, the event half of
+ * `isUnplayedForfeit`). `undefined` for no rule, a rule with no forfeit row or no award, and a sport the award never reaches.
+ * A 0-0 award is a score like any other (Task 9 fix round 2).
+ */
+export function forfeitAwardOffer(
+  rule: Pick<PointsRule, "forfeit"> | null | undefined,
+  module_: Pick<AnySportModule, "awardScoreKeys">,
+): ForfeitAward | undefined {
+  const award = rule?.forfeit?.awardScore;
+  return award !== undefined && pointsRuleAwardReachesTable(module_) ? [award[0], award[1]] : undefined;
 }
 
 // ---------------------------------------------------------------------------
