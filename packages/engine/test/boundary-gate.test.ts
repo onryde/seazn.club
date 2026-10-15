@@ -7,7 +7,7 @@ import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { checkEngineBoundary, checkPhoneSafety, scanEngineBoundary } from "../scripts/engine-boundary.ts";
+import { checkEngineBoundary, checkPhoneClosure, checkPhoneSafety, IMPORT_EXEMPTIONS, importSpecifiers, phoneClosureDrift, scanEngineBoundary } from "../scripts/engine-boundary.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 // Every scratch directory a test makes is tracked and removed after THAT test (a test may make several: the CLI "scanned nothing" test
@@ -59,6 +59,8 @@ interface PhoneConfig {
   subpaths?: readonly string[];
   /** Extra or replacing `exports` entries (a value that is not a string is allowed, to seed a malformed one). */
   exports?: Record<string, unknown>;
+  /** The `closure.modules` pin phone-subpaths.json records (default: a one-module pin that only checkPhoneClosure reads, and never matches). */
+  pinned?: readonly string[];
 }
 
 function writePhoneConfig(dir: string, opts: PhoneConfig = {}): void {
@@ -69,8 +71,15 @@ function writePhoneConfig(dir: string, opts: PhoneConfig = {}): void {
     "./sports/*": "./src/sports/*/index.ts",
     ...opts.exports,
   };
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "scratch-engine", exports: exportsMap, dependencies: { "dep-a": "1.0.0" }, peerDependencies: { zod: "^4", "opt-peer": "^1" }, peerDependenciesMeta: { "opt-peer": { optional: true } } }));
-  writeFileSync(join(dir, "phone-subpaths.json"), JSON.stringify({ subpaths: opts.subpaths ?? PHONE_LIST, closure: { modules: 0, measured: "scratch", why: "scratch" } }));
+  // declared packages: dep-a and @scope/pkg (dependencies), zod (a required peer), opt-peer (an OPTIONAL peer), dev-only (a devDependency)
+  const declared = {
+    dependencies: { "dep-a": "1.0.0", "@scope/pkg": "1.0.0" },
+    devDependencies: { "dev-only": "1.0.0" },
+    peerDependencies: { zod: "^4", "opt-peer": "^1" },
+    peerDependenciesMeta: { "opt-peer": { optional: true } },
+  };
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "scratch-engine", exports: exportsMap, ...declared }));
+  writeFileSync(join(dir, "phone-subpaths.json"), JSON.stringify({ subpaths: opts.subpaths ?? PHONE_LIST, closure: { modules: opts.pinned ?? ["src/core/index.ts"], measured: "scratch", why: "scratch" } }));
 }
 
 function writeFiles(dir: string, files: Record<string, string>): void {
@@ -152,12 +161,147 @@ describe("engine boundary gate", () => {
   });
 });
 
+// The boundary scan reads the code skeleton (comments, strings, templates and regexes blanked), not a regex-stripped copy: the old
+// comment stripper ran its block-comment pass before its line-comment pass, so a `/**` inside a `//` comment blanked the code up to the
+// next `*/` (src/testkit/golden.ts:20 hid its first 43 lines, and a `node:crypto` import with them), and a `"//"` or `"/*"` in a string
+// hid the rest of the line. Single-sport reason: no sport is involved - this is a text-scanning rule.
+describe("engine boundary gate: it reads code, not text", () => {
+  it.each([
+    ["a /** inside a // comment (src/testkit/golden.ts:20)", '// the /** marker\nimport postgres from "postgres";\n/* a real comment */\nexport {};\n', "forbidden import", 2],
+    ["a /* inside a // comment", '// opens /* nothing\nimport postgres from "postgres";\nexport const s = 1; // a */ b\n', "forbidden import", 2],
+    ["a // inside a string", 'export const u = "http://x"; export const t = Date.now();\n', "forbidden call", 1],
+    ["a /* inside a string", 'export const g = "/*"; export const t = Date.now(); export const h = "*/";\n', "forbidden call", 1],
+    ["an apostrophe in a comment", "// it's fine\nexport const r = Math.random();\n", "forbidden call", 2],
+    ["a quote in a regular expression", 'export const q = /"/.test(x); export const d = new Date();\n', "forbidden call", 1],
+    ["a template placeholder", "export const t = `a ${Date.now()} b`;\n", "forbidden call", 1],
+    ["a mid-line import after a string holding //", 'export const u = "http://x"; import postgres from "postgres";\n', "forbidden import", 1],
+    ["an import with no space before its string", 'import"postgres";\n', "forbidden import", 1],
+    ["an import after another statement on its line", 'export {}; import "postgres";\n', "forbidden import", 1],
+    ["a no-space from", 'import{headers}from"next/headers";\n', "forbidden import", 1],
+    ["a multi-line import", 'import {\n  a,\n} from "react";\nexport {};\n', "forbidden import", 3],
+    ["a multi-line block comment before it (the line is the source's, not the skeleton's)", "/* a\n   b\n   c */\nexport const t = Date.now();\n", "forbidden call", 4],
+    ["a multi-line template before it", "export const s = `a\nb`;\nexport const t = Date.now();\n", "forbidden call", 3],
+    ["a multi-line template before an import", 'export const s = `a\nb`;\nimport postgres from "postgres";\n', "forbidden import", 3],
+  ])("still sees the violation after %s", (_label, code, rule, line) => {
+    const violations = checkEngineBoundary(seed({ "core/bad.ts": code }));
+    expect(violations).toEqual([{ file: "core/bad.ts", line, rule: expect.stringContaining(rule) }]);
+  });
+
+  it.each([
+    ["Date.now( in a string", 'export const s = "Date.now(";\n'],
+    ["Math.random( in a template", "export const s = `Math.random( ${1}`;\n"],
+    ["new Date() in a single-quoted string", "export const s = 'new Date()';\n"],
+    ["a banned import written inside a string", "export const s = 'import x from \"postgres\"';\n"],
+    ["a banned import written inside a template", "export const s = `import \"next\"`;\n"],
+    ["a banned import written inside a regex", 'export const r = /from "react"/;\n'],
+    ["a banned import written in a block comment", '/* import x from "react"; */\nexport {};\n'],
+    ["a method named import", 'export const r = loader.import("postgres");\n'],
+    ["a method named require", 'export const r = loader.require("postgres");\n'],
+    ["a function whose name ends in import", 'export const r = reimport("postgres");\n'],
+    ["a function whose name ends in require", 'export const r = $require("postgres");\n'],
+  ])("does not flag %s", (_label, code) => {
+    expect(checkEngineBoundary(seed({ "core/ok.ts": code }))).toEqual([]);
+  });
+
+  it("agrees with the TypeScript AST on every module specifier of every file of the real src/ (type imports included)", () => {
+    const real = new URL("../src", import.meta.url).pathname;
+    const files = globSync("**/*.ts", { cwd: real });
+    let compared = 0;
+    for (const rel of files) {
+      const source = readFileSync(join(real, rel), "utf8");
+      const sf = ts.createSourceFile(rel, source, ts.ScriptTarget.ESNext, true);
+      const found: string[] = [];
+      const visit = (n: ts.Node): void => {
+        if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) found.push(n.moduleSpecifier.text);
+        else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference) && ts.isStringLiteral(n.moduleReference.expression)) found.push(n.moduleReference.expression.text);
+        else if (ts.isCallExpression(n) && n.arguments[0] && ts.isStringLiteral(n.arguments[0]) && (n.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(n.expression) && n.expression.text === "require"))) found.push(n.arguments[0].text);
+        else if (ts.isImportTypeNode(n) && ts.isLiteralTypeNode(n.argument) && ts.isStringLiteral(n.argument.literal)) found.push(n.argument.literal.text);
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+      expect(importSpecifiers(source), rel).toEqual(found);
+      compared += found.length;
+    }
+    expect(files.length, "anti-vacuity: files compared").toBeGreaterThan(100);
+    expect(compared, "anti-vacuity: specifiers compared").toBeGreaterThan(500);
+  });
+});
+
+// The one named exemption (orchestrator ruling, a recommendation to the owner, reversible): src/testkit/golden.ts imports node:crypto
+// for createHash, and has since 2dd25ba4b; the old stripper hid that import from the gate, so the gate was never red over it. Replacing
+// createHash would churn every golden digest, so the import is allowed in that ONE file, and only that specifier.
+describe("engine boundary gate: the golden.ts node:crypto exemption", () => {
+  const GOLDEN = "testkit/golden.ts";
+  const CRYPTO = 'import { createHash } from "node:crypto";\nexport const h = createHash;\n';
+
+  it("is declared once, for that file and that specifier, with a reason", () => {
+    expect(IMPORT_EXEMPTIONS.map((e) => [e.file, e.specifier])).toEqual([[GOLDEN, "node:crypto"]]);
+    expect(IMPORT_EXEMPTIONS[0]!.why.length).toBeGreaterThan(20);
+  });
+
+  it("allows node:crypto in that file, and says it did", () => {
+    const r = scanEngineBoundary(seed({ [GOLDEN]: CRYPTO }));
+    expect(r.violations).toEqual([]);
+    expect(r.exempted).toEqual([`${GOLDEN} node:crypto`]);
+  });
+
+  it.each([
+    ["another testkit file", "testkit/other.ts"],
+    ["a file of the same name elsewhere", "core/testkit/golden.ts"],
+    ["a file named like it", "testkit/golden-compare.ts"],
+    ["a phone module", "core/index.ts"],
+    ["the sport directory", "sports/x/index.ts"],
+  ])("still refuses node:crypto in %s", (_label, file) => {
+    const r = scanEngineBoundary(seed({ [file]: CRYPTO, [GOLDEN]: CRYPTO }));
+    expect(r.violations).toEqual([{ file, line: 1, rule: expect.stringContaining('"node:crypto"') }]);
+    expect(r.exempted, "the exemption is used by the one file only").toEqual([`${GOLDEN} node:crypto`]);
+  });
+
+  it("allows nothing else in that file: bare crypto, another banned import, and a banned call still red", () => {
+    const code = 'import { createHash } from "node:crypto";\nimport c from "crypto";\nimport postgres from "postgres";\nexport const t = Date.now();\n';
+    const r = scanEngineBoundary(seed({ [GOLDEN]: code }));
+    expect(r.violations.map((v) => [v.line, v.rule.split(" ").slice(0, 3).join(" ")])).toEqual([
+      [2, 'forbidden import "crypto"'],
+      [3, 'forbidden import "postgres"'],
+      [4, "forbidden call Date.now()"],
+    ]);
+  });
+
+  it("is red when the file no longer imports it (a stale exemption), whether it imports nothing, or only mentions it in a comment or a string", () => {
+    for (const code of ["export const h = 1;\n", '// import { createHash } from "node:crypto";\nexport {};\n', 'export const s = \'import "node:crypto"\';\n']) {
+      const r = scanEngineBoundary(seed({ [GOLDEN]: code }));
+      expect(r.violations, code).toEqual([{ file: GOLDEN, line: 1, rule: expect.stringContaining("stale import exemption") }]);
+      expect(r.exempted, code).toEqual([]);
+    }
+  });
+
+  it("asks nothing of a tree that has no such file", () => {
+    const r = scanEngineBoundary(seed({ "core/ok.ts": "export {};\n" }));
+    expect(r.violations).toEqual([]);
+    expect(r.exempted).toEqual([]);
+  });
+
+  it("is used by the real src/: the exemption is not dead, and it is the only one in use", () => {
+    const real = new URL("../src", import.meta.url).pathname;
+    const r = scanEngineBoundary(real);
+    expect(r.violations).toEqual([]);
+    expect(r.exempted).toEqual([`${GOLDEN} node:crypto`]);
+    // counted without the gate: the real file does import it, and nothing else under src/ imports node:crypto outside a comment
+    expect(readFileSync(join(real, GOLDEN), "utf8")).toMatch(/^import \{ createHash \} from "node:crypto";$/m);
+  });
+
+  it("does not extend to the phone walk: the same file reached from a phone subpath is still a Node builtin", () => {
+    const dir = seedEngine({ "src/core/index.ts": 'export * from "../testkit/golden.ts";', "src/testkit/golden.ts": CRYPTO });
+    expect(checkPhoneSafety(dir).violations).toEqual([{ kind: "node-builtin", file: "src/testkit/golden.ts", detail: expect.stringContaining("line 1") }]);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Phone-safe subpaths (engine-split 1c-1, D25). The phone subpaths (phone-subpaths.json) and everything they import by value must read
 // no Node builtin, no `process`, and nothing from scheduling. Single-sport reason: no sport is involved - this is a module-graph rule.
 
 describe("phone-safe subpaths: the real engine", () => {
-  const cfg = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { subpaths: string[]; closure: { modules: number; why: string } };
+  const cfg = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { subpaths: string[]; closure: { modules: string[]; why: string } };
   const pkg = JSON.parse(readFileSync(join(ENGINE, "package.json"), "utf8")) as {
     exports: Record<string, string>;
     dependencies?: Record<string, string>;
@@ -195,7 +339,9 @@ describe("phone-safe subpaths: the real engine", () => {
   it("walks exactly the recorded closure, every phone entry module included, and finds it clean", () => {
     const r = checkPhoneSafety(ENGINE);
     expect(r.violations).toEqual([]);
-    expect(r.walked.length, `closure changed: re-pin phone-subpaths.json closure.modules deliberately (${cfg.closure.why})`).toBe(cfg.closure.modules);
+    // the pin is a SET of modules recorded in phone-subpaths.json; a drift names what was added and removed, and where to re-pin
+    expect(cfg.closure.modules.length, "anti-vacuity: the recorded closure").toBeGreaterThan(30);
+    expect(phoneClosureDrift(r.walked, cfg.closure.modules), "the phone closure drifted from the pin").toBeNull();
     // the entries are the declared exports of the listed subpaths, counted without the gate: one file per plain subpath, one per sport directory
     expect(sportIndexes().length, "anti-vacuity: the sport directories the ./sports/* pattern expands over").toBeGreaterThan(5);
     expect(r.entries.length).toBe(cfg.subpaths.filter((p) => !p.includes("*")).length + sportIndexes().length);
@@ -217,7 +363,7 @@ describe("phone-safe subpaths: the real engine", () => {
     expect(r.externals).toEqual(oracle.externals);
   });
 
-  it("imports only packages the engine declares as runtime dependencies: zod, and nothing optional", () => {
+  it("imports only packages the engine declares as runtime dependencies: zod, and nothing optional (read without the gate's own check)", () => {
     const r = checkPhoneSafety(ENGINE);
     const required = (name: string) => pkg.peerDependenciesMeta?.[name]?.optional !== true;
     const declared = [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.peerDependencies ?? {}).filter(required)];
@@ -227,6 +373,74 @@ describe("phone-safe subpaths: the real engine", () => {
 
   it("is deterministic: a second call reports the same walk", () => {
     expect(checkPhoneSafety(ENGINE)).toEqual(checkPhoneSafety(ENGINE));
+  });
+
+  it("is red through the combined check when the pin and the walk disagree, and green when they agree (the real engine)", () => {
+    const green = checkPhoneClosure(ENGINE);
+    expect(green.violations).toEqual([]);
+    expect(green.walked.length).toBe(cfg.closure.modules.length);
+  });
+});
+
+// The pin is a set, and every check that reds on a new phone module says the same thing: which file to update, and which modules were
+// added and removed.
+describe("phone-safe subpaths: the closure pin", () => {
+  const A = "src/core/a.ts";
+  const B = "src/core/b.ts";
+  const C = "src/core/c.ts";
+
+  it("is silent when the walk and the pin hold the same modules, in any order and however often the pin repeats one", () => {
+    expect(phoneClosureDrift([A, B, C], [C, A, B])).toBeNull();
+    expect(phoneClosureDrift([A, B], [A, B, B])).toBeNull();
+  });
+
+  it("names the modules added, the modules removed, and the file to re-pin", () => {
+    const added = phoneClosureDrift([A, B, C], [A, B]);
+    expect(added).toContain("1 module(s) added");
+    expect(added).toContain(C);
+    expect(added).not.toMatch(/removed/);
+    const removed = phoneClosureDrift([A], [A, B, C]);
+    expect(removed).toContain("2 module(s) removed");
+    expect(removed).toContain(B);
+    expect(removed).toContain(C);
+    expect(removed).not.toMatch(/added/);
+    const both = phoneClosureDrift([A, C], [A, B])!;
+    expect(both).toContain(`added: ${C}`);
+    expect(both).toContain(`removed: ${B}`);
+    for (const msg of [added, removed, both]) {
+      expect(msg).toContain("closure.modules");
+      expect(msg).toContain("phone-subpaths.json");
+      expect(msg).toContain("closure.measured");
+    }
+  });
+
+  it("is a violation of the combined check, named at phone-subpaths.json, and not of the plain walk", () => {
+    const dir = seedEngine({ "src/core/index.ts": 'export * from "./a.ts";', "src/core/a.ts": "export const a = 1;" }, { pinned: ["src/core/index.ts", "src/sport/index.ts", "src/sports/index.ts", "src/sports/x/index.ts", "src/core/gone.ts"] });
+    expect(checkPhoneSafety(dir).violations, "the plain walk does not read the pin").toEqual([]);
+    const r = checkPhoneClosure(dir);
+    expect(r.violations).toEqual([{ kind: "closure-changed", file: "phone-subpaths.json", detail: expect.stringContaining("added: src/core/a.ts") }]);
+    expect(r.violations[0]!.detail).toContain("removed: src/core/gone.ts");
+    expect(r.walked, "the walk is reported whole").toContain("src/core/a.ts");
+  });
+
+  it("passes the combined check when the pin matches", () => {
+    const pinned = ["src/core/index.ts", "src/sport/index.ts", "src/sports/index.ts", "src/sports/x/index.ts"];
+    const r = checkPhoneClosure(seedEngine({}, { pinned }));
+    expect(r.violations).toEqual([]);
+    expect(r.walked).toEqual(pinned);
+  });
+
+  it("reports the walk's own violations as well, ahead of the drift", () => {
+    const dir = seedEngine({ "src/core/index.ts": 'import "node:fs";' }, { pinned: ["src/core/other.ts"] });
+    expect(checkPhoneClosure(dir).violations.map((v) => v.kind)).toEqual(["node-builtin", "closure-changed"]);
+  });
+
+  it("refuses a pin it cannot read: missing, empty, not a list, or a list of anything but strings", () => {
+    for (const closure of [undefined, {}, { modules: [] }, { modules: "src/core/index.ts" }, { modules: [7] }, { modules: null }]) {
+      const dir = seedEngine({});
+      writeFileSync(join(dir, "phone-subpaths.json"), JSON.stringify({ subpaths: PHONE_LIST, closure }));
+      expect(() => checkPhoneClosure(dir), JSON.stringify(closure)).toThrow(/closure\.modules/);
+    }
   });
 });
 
@@ -246,6 +460,49 @@ describe("phone-safe subpaths: what the walk refuses", () => {
     ["optional-chained globalThis.process", "export const lvl = globalThis?.process;", "process"],
     ["process behind brackets", 'export const lvl = process["env"];', "process"],
     ["globalThis behind brackets", 'export const lvl = globalThis["process"];', "process"],
+    ["process spread into an object", "export const env = { ...process.env };", "process"],
+    ["process spread into an array", "export const argv = [...process.argv];", "process"],
+    ["process destructured", "export const { env } = process;", "process"],
+    ["process destructured by name", "const { process } = globalThis; export const p = 1;", "process"],
+    ["process destructured from globalThis under another name", "const { process: p } = globalThis; export const e = p;", "process"],
+    ["process passed as an argument", "declare function f(x: unknown): void; f(process);", "process"],
+    ["process in parentheses", "export const lvl = (process).env;", "process"],
+    ["process in a ternary", "export const p = Math.abs(1) > 0 ? process : null;", "process"],
+    ["process on the right of a ternary", "export const p = Math.abs(1) > 0 ? null : process;", "process"],
+    ["typeof process", 'export const has = typeof process !== "undefined";', "process"],
+    ["a type query of process", "export type P = typeof process;", "process"],
+    ["a shorthand property", "export const o = { process };", "process"],
+    ["global.process", "export const p = global.process;", "process"],
+    ["window.process", "export const p = window.process;", "process"],
+    ["self.process", "export const p = self.process;", "process"],
+    ["optional-chained global.process", "export const p = global?.process;", "process"],
+    ["global behind brackets", "export const p = global['process'];", "process"],
+    ["window behind optional brackets", 'export const p = window?.["process"];', "process"],
+    ["globalThis.process with whitespace", "export const p = globalThis . process;", "process"],
+    ["process after a return", "export function f() { return process; }", "process"],
+    ["process as a default parameter", "export function f(p = process) { return p; }", "process"],
+    ["require of a variable", "export const load = (n: string) => require(n);", "unresolved-import"],
+    ["require of a template", "export const load = require(`node:fs`);", "unresolved-import"],
+    ["an empty require", "export const load = require();", "unresolved-import"],
+    ["a dynamic import of a template", "export const load = () => import(`node:fs`);", "unresolved-import"],
+    ["an import with no spaces", 'import{readFileSync}from"node:fs";', "node-builtin"],
+    ["a re-export with no spaces", 'export{join}from"path";', "node-builtin"],
+    ["a star re-export with no spaces", 'export*from"node:path";', "node-builtin"],
+    ["an import of a string-named specifier", 'import { "a-b" as ab } from "node:fs"; export const x = ab;', "node-builtin"],
+    ["a re-export of a string-named specifier", 'export { "a-b" as "c-d" } from "node:fs";', "node-builtin"],
+    ["a star re-export under a string name", 'export * as "x-y" from "node:path";', "node-builtin"],
+    ["a default import named type", 'import type from "node:fs"; export const x = type;', "node-builtin"],
+    ["a default import named type next to a named import", 'import type, { a } from "node:fs"; export const x = [type, a];', "node-builtin"],
+    ["a default import with a namespace import", 'import d, * as ns from "node:fs"; export const x = [d, ns];', "node-builtin"],
+    ["an import of the package by its published name", 'import "scratch-engine/core";', "self-import"],
+    ["an import of the package by its alias", 'import { a } from "@seazn/engine/core"; export const b = a;', "self-import"],
+    ["an import of the bare alias", 'export * from "@seazn/engine";', "self-import"],
+    ["a dynamic import of the package itself", 'export const load = () => import("@seazn/engine/sport");', "self-import"],
+    ["a package that is not declared at all", 'import "left-pad";', "undeclared-package"],
+    ["a package that is only a devDependency", 'import "dev-only";', "undeclared-package"],
+    ["a package that is only an optional peer", 'import "opt-peer";', "undeclared-package"],
+    ["a scoped package that is not declared", 'import "@scope/other/sub";', "undeclared-package"],
+    ["a package whose name starts like the package's own alias", 'import "@seazn/engine-extra";', "undeclared-package"],
     ["scheduling", 'import { buildSchedule } from "../scheduling/build.ts";', "scheduling"],
     ["scheduling through a directory import", 'export * from "../scheduling";', "scheduling"],
     ["a dynamic import it cannot resolve", "export const load = (n: string) => import(n);", "unresolved-import"],
@@ -283,6 +540,17 @@ describe("phone-safe subpaths: what the walk refuses", () => {
     ["a dynamic import()", 'export const load = () => import("./leak.ts");'],
     ["a require()", 'export const load = require("./leak.ts");'],
     ["an inline `type` specifier (whether the build keeps it is a compiler flag; a walk too wide is loud, too narrow silent)", 'import { type X } from "./leak.ts"; export const a = 1;'],
+    ["an import with no spaces", 'import{a}from"./leak.ts";export const b = a;'],
+    ["a re-export with no spaces", 'export{a}from"./leak.ts";'],
+    ["a star re-export with no spaces", 'export*from"./leak.ts";'],
+    ["a string-named import specifier", 'import { "a" as ab } from "./leak.ts"; export const b = ab;'],
+    ["a string-named re-export", 'export { "a" as "z-z" } from "./leak.ts";'],
+    ["a star re-export under a string name", 'export * as "z-z" from "./leak.ts";'],
+    ["a default import named type", 'import type from "./leak.ts"; export const a = type;'],
+    ["a default import named type next to a named import", 'import type, { a } from "./leak.ts"; export const b = [type, a];'],
+    ["an import after a statement on its line", 'export const k = 1; import "./leak.ts";'],
+    ["a dynamic import with spaces inside the parentheses", 'export const load = () => import( "./leak.ts" );'],
+    ["a require with spaces inside the parentheses", 'export const load = require( "./leak.ts" );'],
   ])("follows %s", (_label, line) => {
     const dir = seedEngine({ "src/core/index.ts": line, "src/core/leak.ts": 'import "node:fs"; export const a = 1; export const c = 2; export default 3;' });
     const r = checkPhoneSafety(dir);
@@ -295,6 +563,11 @@ describe("phone-safe subpaths: what the walk refuses", () => {
     ["import type of a default", 'import type D from "./leak.ts"; export const a = 1;'],
     ["export type { … } from", 'export type { X } from "./leak.ts";'],
     ["export type *", 'export type * from "./leak.ts";'],
+    ["import type with no space before the braces", 'import type{ X }from"./leak.ts"; export const a = 1;'],
+    ["import type of a namespace", 'import type * as ns from "./leak.ts"; export const a = 1;'],
+    ["import type of a default and braces on several lines", 'import type {\n  X,\n} from "./leak.ts";\nexport const a = 1;'],
+    ["typeof import()", 'export type T = typeof import("./leak.ts"); export const a = 1;'],
+    ["typeof import() with whitespace", 'export type T = typeof  import ( "./leak.ts" ); export const a = 1;'],
   ])("does not follow `%s` (erased at compile time)", (_label, line) => {
     const dir = seedEngine({ "src/core/index.ts": line, "src/core/leak.ts": 'import "node:fs"; export type X = 1; export default 1;' });
     const r = checkPhoneSafety(dir);
@@ -358,12 +631,57 @@ describe("phone-safe subpaths: what the walk refuses", () => {
     ]);
   });
 
+  it("lists a file's violations in the order they stand in the file, whichever check found them", () => {
+    const code = ['export const e = process.env;', 'import "node:fs";', 'export const l = (n: string) => require(n);', 'export const g = globalThis.process;', 'import "left-pad";'].join("\n");
+    const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": code }));
+    expect(r.violations.map((v) => [v.kind, v.detail.split(":")[0]])).toEqual([
+      ["process", "line 1"],
+      ["node-builtin", "line 2"],
+      ["unresolved-import", "line 3"],
+      ["process", "line 4"],
+      ["undeclared-package", "line 5"],
+    ]);
+  });
+
   it("does not flag the same code outside the phone closure", () => {
     const dir = seedEngine({ "src/core/index.ts": "export const a = 1;", "src/history/x.ts": 'import "node:fs"; export const e = process.env;' });
     const r = checkPhoneSafety(dir);
     expect(r.violations).toEqual([]);
     expect(r.walked, "the walk did run").toContain("src/core/index.ts");
     expect(r.walked).not.toContain("src/history/x.ts");
+  });
+});
+
+// A walk that does not terminate must fail, not hang: the visit budget is 10 x the .ts files under src/, and the walk visits each
+// module once, so only a broken visited-guard can reach it.
+describe("phone-safe subpaths: the visit budget", () => {
+  const cyc = { "src/core/index.ts": 'import "./a.ts";', "src/core/a.ts": 'import "./b.ts"; import "./index.ts";', "src/core/b.ts": 'import "./a.ts"; import "./index.ts";' };
+
+  it("walks a cycle once, and a module that several others import once", () => {
+    const r = checkPhoneSafety(seedEngine(cyc));
+    expect(r.violations).toEqual([]);
+    expect(r.walked).toEqual(["src/core/a.ts", "src/core/b.ts", "src/core/index.ts", "src/sport/index.ts", "src/sports/index.ts", "src/sports/x/index.ts"]);
+  });
+
+  it("stops with an error naming the budget when the visits pass it, and not one visit sooner", () => {
+    const dir = seedEngine(cyc);
+    const needed = checkPhoneSafety(dir).walked.length; // every module is visited exactly once
+    expect(checkPhoneSafety(dir, { visitBudget: needed }).walked).toHaveLength(needed);
+    expect(() => checkPhoneSafety(dir, { visitBudget: needed - 1 })).toThrow(/visit budget/);
+    expect(() => checkPhoneSafety(dir, { visitBudget: 0 })).toThrow(/visit budget/);
+  });
+
+  it("defaults to ten times the .ts files under src/", () => {
+    // 6 scratch files here (the four entries and a, b ... plus index) -> a budget of 10 x the files; a one-module walk is far below it
+    const dir = seedEngine(cyc);
+    const files = globSync("**/*.ts", { cwd: join(dir, "src") }).length;
+    expect(files).toBe(6);
+    // the visit budget the walk used is reported, so the default is pinned by what it says rather than by waiting for a hang
+    expect(checkPhoneSafety(dir).visitBudget).toBe(10 * files);
+  });
+
+  it("refuses a budget that is not a positive-or-zero integer", () => {
+    for (const bad of [-1, 1.5, Number.NaN]) expect(() => checkPhoneSafety(seedEngine(cyc), { visitBudget: bad }), String(bad)).toThrow(/visitBudget/);
   });
 });
 
@@ -386,6 +704,22 @@ describe("phone-safe subpaths: what the walk reads", () => {
     expect(r.externals).toEqual(["@scope/pkg", "zod"]);
   });
 
+  it("reads imports written without semicolons, one violation each, however many lines they span", () => {
+    const dir = seedEngine({ "src/core/index.ts": 'import "./stub.ts"\nimport x from "node:fs"\nimport {\n  a,\n} from "node:path"\nexport const y = [x, a]', "src/core/stub.ts": "export {}" });
+    const r = checkPhoneSafety(dir);
+    expect(r.violations.map((v) => [v.kind, v.detail.split(":")[0]])).toEqual([["node-builtin", "line 2"], ["node-builtin", "line 3"]]);
+  });
+
+  it("lists the externals it saw even when it refuses them, and not the package's own name", () => {
+    const dir = seedEngine({ "src/core/index.ts": 'import "zod"; import "left-pad"; import "@seazn/engine/sport"; import "dep-a/deep/file";' });
+    const r = checkPhoneSafety(dir);
+    expect(r.externals).toEqual(["dep-a", "left-pad", "zod"]);
+    expect(r.violations.map((v) => [v.kind, v.detail])).toEqual([
+      ["undeclared-package", expect.stringContaining('"left-pad"')],
+      ["self-import", expect.stringContaining('"@seazn/engine/sport"')],
+    ]);
+  });
+
   it("reads code, not text: a comment or a string that says process.env or node:fs is not an import or a read", () => {
     const dir = seedEngine({
       "src/core/index.ts": [
@@ -404,6 +738,20 @@ describe("phone-safe subpaths: what the walk reads", () => {
         "export const i = globalThis.fetch;",
         "export const j = e.process.env;", // some other object's `process` member
         "/*/ process.env */ export const k = 1;", // `/*/` opens a comment, it does not close one
+        "export const l = { a: 1, process: 2 };", // a key after a comma
+        "export interface Cfg { x: number; process: string; y?: number }", // a member of a type
+        "export type Opt = { process?: string };",
+        "export const m = (c: { process: number }) => c.process;",
+        "export const n = e?.process;", // optional-chained property
+        "export const o = [e].map((x) => x.process);",
+        "export const q = e\n  .process;", // a property access split over lines
+        "export const r = { ...e, process: 3 };", // a spread of something else, then the key
+        'export const x1 = loader.import("node:fs");', // a method named import / require is not a module load
+        'export const x2 = loader.require("node:fs");',
+        'export const x3 = reimport("node:fs");',
+        "export const x4 = loader.import(name);",
+        "export const x5 = loader.require(name);",
+        "export const x6 = $import(name);",
       ].join("\n"),
     });
     const r = checkPhoneSafety(dir);
@@ -486,7 +834,7 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
   /** A scratch engine checkout: `eng/scripts/{engine-boundary.ts,lib/main-module.ts}`, `eng/src/<files>` (no src/ at all when `src` is null),
    *  and the phone walk's inputs, `eng/package.json` + `eng/phone-subpaths.json` (1c-1; `phone` shapes or omits them), plus `bin/gate.ts`,
    *  a symlink to the copy. Every root it makes is tracked, so afterEach removes them all. */
-  function checkout(src: Record<string, string> | null, phone: PhoneConfig | null = {}): { root: string; eng: string; via: string } {
+  function checkout(src: Record<string, string> | null, phone: PhoneConfig | null = { pinned: CLEAN_PIN }): { root: string; eng: string; via: string } {
     const root = realpathSync(scratchDir("engine-boundary-cli-"));
     const eng = join(root, "eng");
     mkdirSync(join(eng, "scripts/lib"), { recursive: true });
@@ -516,6 +864,8 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
     "a/b/c/deep.ts": "export const deep = 2;\n",
   };
   const WALKED = Object.keys(CLEAN).length - 1; // all but a/b/c/deep.ts
+  // the pin a clean scratch checkout records: written out, not read back from the walk
+  const CLEAN_PIN = ["src/core/index.ts", "src/core/ok.ts", "src/sport/index.ts", "src/sports/index.ts", "src/sports/x/index.ts"];
   const NESTED_BAD = 'export {};\nimport postgres from "postgres";\n';
 
   it("exits 1 and names a violation in a NESTED file, by its path from the working directory, and counts the files it scanned", () => {
@@ -587,6 +937,58 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
     expect(r.stdout).toContain("1 boundary violation(s)");
   }, spawnBudget(1));
 
+  const CRYPTO_IMPORT = 'import { createHash } from "node:crypto";\nexport const h = createHash;\n';
+
+  it("passes with the golden.ts node:crypto exemption, and says on stdout that it used it", () => {
+    const { eng, via } = checkout({ ...CLEAN, "testkit/golden.ts": CRYPTO_IMPORT });
+    const r = run(via, eng);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain("exempt  src/testkit/golden.ts  node:crypto");
+    expect(r.stdout).toContain(`PASS  engine boundary clean (${Object.keys(CLEAN).length + 1} files scanned)`);
+    expect(r.stderr).toBe("");
+  }, spawnBudget(1));
+
+  it("exits 1 on node:crypto anywhere else, and on a stale exemption (golden.ts without the import)", () => {
+    const other = checkout({ ...CLEAN, "testkit/golden.ts": CRYPTO_IMPORT, "testkit/other.ts": CRYPTO_IMPORT });
+    const a = run(other.via, other.eng);
+    expect(a.status, a.stdout + a.stderr).toBe(1);
+    expect(a.stderr).toContain('FAIL  src/testkit/other.ts:1  forbidden import "node:crypto" (node:crypto)');
+    expect(a.stderr).not.toContain("golden.ts");
+    expect(a.stdout).not.toContain("PASS");
+    const stale = checkout({ ...CLEAN, "testkit/golden.ts": "export const h = 1;\n" });
+    const b = run(stale.via, stale.eng);
+    expect(b.status, b.stdout + b.stderr).toBe(1);
+    expect(b.stderr).toContain("FAIL  src/testkit/golden.ts:1  stale import exemption");
+    expect(b.stdout).not.toMatch(/PASS|exempt /);
+  }, spawnBudget(2));
+
+  it("exits 1 when the phone closure drifts from the pin, names the modules and the file to re-pin, and does not say PASS", () => {
+    const { root, eng, via } = checkout({ ...CLEAN, "core/extra.ts": "export const e = 1;\n", "core/index.ts": 'export * from "./ok.ts";\nexport * from "./extra.ts";\n' });
+    const here = run(via, eng);
+    expect(here.status, here.stdout + here.stderr).toBe(1);
+    expect(here.stderr).toContain("FAIL  phone-subpaths.json  closure-changed:");
+    expect(here.stderr).toContain("added: src/core/extra.ts");
+    expect(here.stderr).toContain("closure.modules");
+    expect(here.stdout).toContain(`1 phone-safety violation(s) in ${WALKED + 1} modules walked`);
+    expect(here.stdout).not.toMatch(/PASS|phone-safe:/);
+    const above = run(via, root);
+    expect(above.stderr).toContain("FAIL  eng/phone-subpaths.json  closure-changed:");
+  }, spawnBudget(2));
+
+  it("exits 1 on a package the closure imports and the package does not declare, and on the package importing itself", () => {
+    for (const [what, line, kind] of [
+      ["an undeclared package", 'import "left-pad";\n', "undeclared-package"],
+      ["an optional peer", 'import "opt-peer";\n', "undeclared-package"],
+      ["the package itself", 'import "@seazn/engine/sport";\n', "self-import"],
+    ] as const) {
+      const { eng, via } = checkout({ ...CLEAN, "core/ok.ts": `${line}export const ok = 1;\n` });
+      const r = run(via, eng);
+      expect(r.status, `${what}: ${r.stdout}${r.stderr}`).toBe(1);
+      expect(r.stderr, what).toContain(`FAIL  src/core/ok.ts  ${kind}: line 1:`);
+      expect(r.stdout, what).not.toMatch(/PASS|phone-safe:/);
+    }
+  }, spawnBudget(3));
+
   it("exits 1 when the phone walk cannot run or walked nothing: no package.json or phone-subpaths.json, and an empty subpath list, are not a clean engine", () => {
     for (const [what, phone, expected] of [
       ["no package.json and no phone-subpaths.json", null, /FAIL {2}cannot walk the phone subpaths: .*package\.json/],
@@ -602,11 +1004,12 @@ describe("engine boundary gate CLI (a copy of the gate beside a scratch src/)", 
   }, spawnBudget(2));
 
   it("the real gate walks the recorded closure and passes, from the engine directory and from the directory above it", () => {
-    const cfg = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { closure: { modules: number } };
+    const cfg = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { closure: { modules: string[] } };
+    expect(cfg.closure.modules.length, "anti-vacuity: the recorded closure").toBeGreaterThan(30);
     for (const cwd of [ENGINE, dirname(ENGINE.replace(/[\\/]$/, ""))]) {
       const r = run(GATE, cwd);
       expect(r.status, `${cwd}: ${r.stdout}${r.stderr}`).toBe(0);
-      expect(r.stdout).toContain(`phone-safe: ${cfg.closure.modules} modules walked`);
+      expect(r.stdout).toContain(`phone-safe: ${cfg.closure.modules.length} modules walked`);
       expect(r.stderr).toBe("");
     }
   }, spawnBudget(2));

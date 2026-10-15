@@ -56,9 +56,14 @@ Import only from these. Nothing else in the package is public.
 
 Importing a subpath registers nothing: the sport registry is filled only by an explicit `registerBuiltins(registry)`.
 
-The phone-safe subpaths are `./core`, `./sport`, `./sports` and `./sports/*` (listed in `phone-subpaths.json`). They and everything they
-import by value read no Node builtin, no `process` and nothing from `./scheduling`, so a React Native app can import them. `pnpm boundary`
-walks that closure; the packed-tarball proof bundles it with Metro and compiles the bundle with Hermes.
+The phone-safe subpaths are `./core`, `./sport`, `./sports` and `./sports/*` (listed in `phone-subpaths.json`, which also pins the
+closure: the modules they reach by value import). Every module of that closure imports no Node builtin and nothing from `./scheduling`,
+names no `process` (the identifier, or `globalThis.process`, `global.process`, `window.process`, `self.process`), imports only packages
+the engine declares as a dependency or a required peer, and never imports the engine by its own package name, so a React Native app can
+import them. `pnpm boundary` walks that closure statically and fails on any of these, and when the closure no longer matches the pin
+(a new module on a phone is a reviewed change). The walk reads text, so it cannot see an alias (`const g = globalThis; g.process`) or a
+computed global lookup; the packed-tarball proof bundles the closure with Metro, compiles the bundle with Hermes and requires the
+bundle to hold exactly the modules walked.
 
 ## Peer dependencies
 
