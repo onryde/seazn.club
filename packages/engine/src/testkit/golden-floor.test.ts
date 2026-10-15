@@ -9,6 +9,7 @@ import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
 import { FOLD_OVERLAY_KEYS } from "./golden-overlay.ts";
+import { asFormatTwo } from "./golden-reformat.ts";
 import {
   CORE_TYPES,
   FLOOR_EXEMPTIONS,
@@ -26,6 +27,8 @@ import {
   lineupTypesOf,
   kernelRecorder,
   moduleRecorder,
+  statsAwardToken,
+  statsRecorder,
   outcomeToken,
   outcomeTokenOf,
   overlayRequirement,
@@ -271,6 +274,88 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
       }
     });
     expect(dropped).toBe(builtinModules.length * 3);
+  });
+});
+
+describe("golden floor — an award the sport declares must be seen credited in the recorded player stats (GF-2 T4)", () => {
+  /** The award keys the module's OWN declaration lists: the expected set is the engine's, never typed here. */
+  const declaredKeys = (module: (typeof builtinModules)[number]): string[] => (module.playerStats?.awards ?? []).map((a) => a.key);
+  const statsTokens = (tokens: Iterable<string>): string[] => [...tokens].filter((t) => t.startsWith("stats:")).sort();
+
+  it("statsAwardToken spells `stats:award:<key>`", () => {
+    expect(statsAwardToken("motm")).toBe("stats:award:motm");
+    expect(statsAwardToken("potm")).not.toBe(statsAwardToken("motm"));
+  });
+
+  it("the token reader credits exactly the keys a recorded person holds at least once (single-sport: synthetic rows prove the arithmetic, which does not depend on the sport)", () => {
+    const base = corpusOf("football");
+    const withStats = (playerStats: string | undefined): GoldenCorpus => ({ ...base, streams: [{ ...base.streams[0]!, playerStats }] });
+    const have = (playerStats: string | undefined) => statsTokens(recordedTokens(withStats(playerStats)));
+    expect(have('[{"personId":"p","stats":{"motm_awards":1,"goals":3}}]')).toEqual(["stats:award:motm"]);
+    expect(have('[{"personId":"p","stats":{"motm_awards":2}},{"personId":"q","stats":{"mvp_awards":1}}]')).toEqual(["stats:award:motm", "stats:award:mvp"]);
+    // empty case first: no field (an earlier format), no rows, a zero credit, a stat that merely ends the same way, an unreadable text
+    expect(have(undefined)).toEqual([]);
+    expect(have("[]")).toEqual([]);
+    expect(have('[{"personId":"p","stats":{"motm_awards":0}}]')).toEqual([]);
+    expect(have('[{"personId":"p","stats":{"_awards":4,"goals":1}}]')).toEqual([]);
+    expect(have("not json")).toEqual([]);
+    expect(statsTokens(recordedTokens({ ...base, streams: [] }))).toEqual([]);
+  });
+
+  it("the floor requires exactly the award keys the sport's own playerStats declares, each with a reason that names the key (every sport, counted both ways)", () => {
+    let declaring = 0;
+    let silent = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      expect(statsTokens(req.required.keys()), key).toEqual(declaredKeys(module).map(statsAwardToken).sort());
+      for (const award of declaredKeys(module)) expect(req.required.get(statsAwardToken(award)), `${key} ${award}`).toContain(award);
+      if (declaredKeys(module).length > 0) declaring++;
+      else silent++;
+    });
+    expect(declaring, "some sport declares an award").toBeGreaterThan(0);
+    expect(silent, "and some declares none: its floor owes no stats token").toBeGreaterThan(0);
+    expect(declaring + silent).toBe(builtinModules.length);
+  });
+
+  it("the shipped corpora credit every declared key; blanking the rows of the streams that credit one makes exactly that token a hole (teeth, every declaring sport)", () => {
+    let dropped = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      for (const award of declaredKeys(module)) {
+        const token = statsAwardToken(award);
+        expect(recordedTokens(corpus).has(token), `${key} ${award}: credited`).toBe(true);
+        // blank the recorded rows of the streams that credit it (a stream also closes other holes, so dropping it would name those too):
+        // the ledger is untouched, only the recorded stats are gone, and the token is read off exactly that field
+        const crediting = corpus.streams.filter((s) => recordedTokens({ ...corpus, streams: [s] }).has(token));
+        expect(crediting.length, `${key} ${award}: some stream credits it`).toBeGreaterThan(0);
+        const blanked = corpus.streams.map((s) => (crediting.includes(s) ? { ...s, playerStats: "[]" } : s));
+        expect(floorHoles(module, { ...corpus, streams: blanked }), `${key} without the ${award} credit`).toEqual([token]);
+        dropped++;
+      }
+    });
+    expect(dropped, "one drop per declared key").toBe(builtinModules.reduce((n, m) => n + declaredKeys(m).length, 0));
+    expect(dropped).toBeGreaterThan(0);
+  });
+
+  it("the requirement follows the corpus's FORMAT: a format-2 corpus records no player stats, so it owes none and is not a hole (and an empty format-3 corpus owes every declared key)", () => {
+    let two = 0;
+    let empty = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const keys = declaredKeys(module);
+      const older = asFormatTwo(corpus);
+      expect(statsTokens(floorRequirement(module, older).required.keys()), `${key}: a format-2 corpus`).toEqual([]);
+      expect(floorHoles(module, older), `${key}: and is not short of anything`).toEqual([]);
+      two++;
+      const none: GoldenCorpus = { ...corpus, streams: [] };
+      const holes = new Set(floorHoles(module, none));
+      for (const award of keys) {
+        expect(holes.has(statsAwardToken(award)), `${key} ${award}: an empty corpus owes it`).toBe(true);
+        empty++;
+      }
+    });
+    expect(two).toBe(builtinModules.length);
+    expect(empty).toBeGreaterThan(0);
   });
 });
 
@@ -523,7 +608,8 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
     expect(after).toBe(builtinModules.length);
     // the default recorder of the probe is the real one (single-sport: it is one parameter default, not a per-sport fact)
     const first = builtinModules[0]!;
-    expect(settleProbe(first, corpusOf(first.key))).toEqual(settleProbe(first, corpusOf(first.key), kernelRecorder));
+    expect(settleProbe(first, corpusOf(first.key))).toEqual(settleProbe(first, corpusOf(first.key), statsRecorder));
+    expect(settleProbe(first, corpusOf(first.key)), "the player stats do not move what the settle probe reads").toEqual(settleProbe(first, corpusOf(first.key), kernelRecorder));
   });
 
   /** The corpus as it stood when the row was written: no stream recorded `core.settle` (the row's first clause), so only the probe's

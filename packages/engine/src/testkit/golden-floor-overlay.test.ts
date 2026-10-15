@@ -11,9 +11,13 @@
 // the flip: the SAME probe over the SAME corpora answers "unpinned" under the module-only recorder (what the harness recorded
 // before, the control that shows the claim was true) and "pinned" under the real one.
 //
-// Expected values come from the engine's own declarations (`module.onLineup`, CORE_EVENT_SCHEMAS) and from the probe, and the
-// list of what flipped is the policy text of record before this task (GOLDEN-POLICY.md, "What the guard cannot see") — never a
-// table read off the code under test.
+// GF-2 T4 flipped a third: `core.award`, in the three sports that DECLARE an award key (`playerStats.awards`). Format 3 records
+// the final player-stats rows, and an award there adds `<key>_awards` to a person; the eight sports that declare none still
+// ignore it, so the claim narrows to them instead of vanishing.
+//
+// Expected values come from the engine's own declarations (`module.onLineup`, `module.playerStats.awards`, CORE_EVENT_SCHEMAS)
+// and from the probe, and the list of what flipped is the policy text of record before this task (GOLDEN-POLICY.md, "What the
+// guard cannot see") — never a table read off the code under test.
 import { describe, expect, it } from "vitest";
 import { CORE_EVENT_SCHEMAS } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -34,6 +38,7 @@ import {
   recordedTokens,
   overlayVerdicts,
   staleOverlayClaims,
+  statsRecorder,
   uncoveredUnpinned,
   type FloorToken,
   type OverlayClaim,
@@ -72,7 +77,20 @@ const RETIRED_LINEUP: OverlayClaim = {
   covers: (_m, _t, verdict) => verdict === "unpinned",
   reason: "kernel-owned squads: a module reacts to a lineup change only through onLineup, so one that declares none never sees it",
 };
+/** The award claim as it stood (every sport, nothing declared): the control of the T4 flip. A sport that declares an award key is
+ *  where the probe, under the format-3 recorder, now finds it moving a recorded golden. */
+const RETIRED_AWARD: OverlayClaim = {
+  id: "award",
+  tokens: [eventToken("core.award")],
+  mode: "together",
+  assertedFor: () => true,
+  covers: (_m, _t, verdict) => verdict === "unpinned",
+  reason: "an award reaches module.apply but every module folds it as `return state`, and the player statistics were not recorded, so nothing recorded depends on it",
+};
 const RETIRED = [RETIRED_STOPPAGE, RETIRED_LINEUP];
+
+/** The award keys the module's OWN declaration lists (the expected sets below are the engine's, never typed here). */
+const declaredAwards = (module: (typeof builtinModules)[number]): string[] => (module.playerStats?.awards ?? []).map((a) => a.key);
 
 /** The verdict of every recorded token of a claim, per sport, under one recorder. */
 const verdictsOf = (key: string, record: Recorder, claims: readonly OverlayClaim[]): Map<FloorToken, { verdict: OverlayVerdict; streams: number }> => {
@@ -101,7 +119,11 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       expect(sports.length, `${claim.id} applies to no sport`).toBeGreaterThan(0);
       applied += sports.length;
     }
-    expect(applied).toBe(builtinModules.length * OVERLAY_CLAIMS.length);
+    // the note claim applies everywhere; the award claim only where the sport declares no award key (its own declaration)
+    const awardSports = builtinModules.filter((m) => declaredAwards(m).length === 0).length;
+    expect(awardSports, "some sport declares an award and some does not: the claim is narrowed, not dropped").toBeGreaterThan(0);
+    expect(awardSports).toBeLessThan(builtinModules.length);
+    expect(applied).toBe(builtinModules.length + awardSports);
     expect(OVERLAY_CLAIMS.find((c) => c.id === "note")!.reason).toContain("nothing computes from a note");
   });
 
@@ -113,7 +135,8 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       for (const claim of OVERLAY_CLAIMS) if (claim.assertedFor(module)) holds += claim.tokens.length;
     });
     expect(stale).toEqual([]);
-    expect(holds).toBe(builtinModules.length * OVERLAY_CLAIMS.flatMap((c) => c.tokens).length);
+    // one note per sport, one award where the sport declares no key for it
+    expect(holds).toBe(builtinModules.length + builtinModules.filter((m) => declaredAwards(m).length === 0).length);
   }, 30_000);
 
   it("RETIRED stoppage: suspend and resume are unpinned under the module-only recorder and PINNED under the real format-2 recorder, in EVERY sport", () => {
@@ -132,7 +155,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(flipped).toBe(builtinModules.length * 2);
   }, sweepBudget("probe"));
 
-  it("the probe's DEFAULT recorder is the real format-2 one: with no recorder named, a retired class reads as pinned in every sport (overlayVerdicts and staleOverlayClaims)", () => {
+  it("the probe's DEFAULT recorder is the real one (format 3, a superset of format 2): with no recorder named, a retired class reads as pinned in every sport (overlayVerdicts and staleOverlayClaims)", () => {
     let checked = 0;
     forEachSport(({ key, module }) => {
       const verdicts = overlayVerdicts(module, corpusOf(key), undefined, [RETIRED_STOPPAGE]);
@@ -198,9 +221,10 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(stale).toBeGreaterThan(builtinModules.length * 2);
   }, sweepBudget("probe"));
 
-  it("EVERY recorded core event whose ablation says 'unpinned' is covered by a claim, and the unpinned ones are exactly a note and an award (swept per sport x token, counted)", () => {
+  it("EVERY recorded core event whose ablation says 'unpinned' is covered by a claim: a note everywhere, an award exactly where the sport declares no key for it (swept per sport x token, counted)", () => {
     let probed = 0;
     let unpinned = 0;
+    let loose = 0;
     forEachSport(({ module, key }) => {
       const corpus = corpusOf(key);
       const r = uncoveredUnpinned(module, corpus);
@@ -208,16 +232,68 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       // the sweep reached EVERY core event the corpus records (read off the corpus, not off the probe)
       const recordedCore = [...recordedTokens(corpus)].filter((t) => t.startsWith("event:core."));
       expect(r.probed, `${key}: probed every recorded core event`).toBe(recordedCore.length);
-      // typed from the retirement ruling: what is still unpinned is what nothing computes from
-      const sheet = overlayVerdicts(module, corpus, kernelRecorder, [], "all");
-      const loose = [...sheet].filter(([, v]) => v.verdict === "unpinned").map(([t]) => t).sort();
-      expect(loose, `${key}: the events no recorded fact depends on`).toEqual(["event:core.award", "event:core.note"]);
-      expect(r.unpinned, key).toBe(2);
+      // what is still unpinned is what nothing computes from: a note, and an award the sport declares no key for (the engine's declaration)
+      const expected = ["event:core.note", ...(declaredAwards(module).length === 0 ? ["event:core.award"] : [])].sort();
+      const sheet = overlayVerdicts(module, corpus, statsRecorder, [], "all");
+      expect([...sheet].filter(([, v]) => v.verdict === "unpinned").map(([t]) => t).sort(), `${key}: the events no recorded fact depends on`).toEqual(expected);
+      expect(r.unpinned, key).toBe(expected.length);
+      // the control: before format 3 an award moved no recorded field in ANY sport (this is what the flip is measured against)
+      const before = overlayVerdicts(module, corpus, kernelRecorder, [], "all");
+      expect([...before].filter(([, v]) => v.verdict === "unpinned").map(([t]) => t).sort(), `${key}: under the format-2 recorder`).toEqual(["event:core.award", "event:core.note"]);
       probed += r.probed;
       unpinned += r.unpinned;
+      loose += expected.length;
     });
     expect(probed).toBeGreaterThan(builtinModules.length * 8);
-    expect(unpinned).toBe(builtinModules.length * 2);
+    expect(unpinned).toBe(loose);
+    expect(unpinned, "the award class narrowed: fewer unpinned than two per sport").toBeLessThan(builtinModules.length * 2);
+  }, sweepBudget("probe"));
+
+  it("RETIRED award: core.award is unpinned under the module-only and the format-2 recorders in EVERY sport, and PINNED under the real format-3 recorder exactly where the sport declares an award key", () => {
+    const flipped: string[] = [];
+    let steady = 0;
+    forEachSport(({ module, key }) => {
+      const token = eventToken("core.award");
+      const was = verdictsOf(key, moduleRecorder, [RETIRED_AWARD]).get(token)!;
+      const mid = verdictsOf(key, kernelRecorder, [RETIRED_AWARD]).get(token)!;
+      const now = verdictsOf(key, statsRecorder, [RETIRED_AWARD]).get(token)!;
+      expect(was.streams, `${key}: an award is recorded`).toBeGreaterThan(0);
+      expect(was.verdict, `${key} under the module-only recorder`).toBe("unpinned");
+      expect(mid.verdict, `${key} under the format-2 recorder`).toBe("unpinned");
+      expect(now.streams, `${key}: same streams probed`).toBe(was.streams);
+      if (declaredAwards(module).length > 0) {
+        expect(now.verdict, `${key} declares an award: the stats rows record its credit`).toBe("pinned");
+        flipped.push(key);
+      } else {
+        expect(now.verdict, `${key} declares none: the stats fold ignores the event`).toBe("unpinned");
+        steady++;
+      }
+    });
+    expect(flipped.length, "the sports that flip").toBeGreaterThan(0);
+    expect(steady, "the sports that do not").toBeGreaterThan(0);
+    expect(flipped.length + steady).toBe(builtinModules.length);
+  }, sweepBudget("probe"));
+
+  it("the award retirement is DETECTED by the staleness check itself: stale under the real recorder exactly where a key is declared, quiet under the format-2 recorder everywhere", () => {
+    let stale = 0;
+    let quiet = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      expect(staleOverlayClaims(module, corpus, kernelRecorder, [RETIRED_AWARD]), `${key}: the claim held before format 3`).toEqual([]);
+      const messages = staleOverlayClaims(module, corpus, statsRecorder, [RETIRED_AWARD]);
+      if (declaredAwards(module).length > 0) {
+        expect(messages, `${key}: the claim goes stale`).toHaveLength(1);
+        expect(messages[0], key).toContain(" event:core.award: moves a recorded golden");
+        stale++;
+      } else {
+        expect(messages, `${key}: and holds`).toEqual([]);
+        quiet++;
+      }
+      // the PRODUCTION table is never stale: it asserts the award claim only where it holds
+      expect(staleOverlayClaims(module, corpus), `${key}: production claims hold`).toEqual([]);
+    });
+    expect(stale).toBeGreaterThan(0);
+    expect(quiet).toBeGreaterThan(0);
   }, sweepBudget("probe"));
 
   it("core.settle is recorded and PINNED in every sport: it is the one event whose every recorded instance is struck once, so the probe must ablate the void with it", () => {

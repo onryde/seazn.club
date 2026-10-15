@@ -137,7 +137,8 @@ before they update. There is no grace window, so this ordering is the only prote
   states), a harness-only rewrite that moves a state string, a removed or re-recorded golden stream, and anything the guard cannot see
   (§4) are MAJOR. Anything ambiguous is a MAJOR. The pair goes up lexicographically, and a MAJOR bump may reset the minor to 0.
 - **The phone contract this rests on (recommendation; put it to your owner).** The app must not compute or render `standingsDelta`,
-  `supportsDraws`, or credit on any metric the match summary does not show. `standingsDelta` is exported from the same `./sport` closure,
+  `supportsDraws`, or credit on any metric the match summary does not show, and a phone must not compute or render player stats
+  (`aggregatePlayerStats` and the leaderboard rows it feeds: GF-2 T4 records them in the corpora as a MINOR, owner ruling Q2). `standingsDelta` is exported from the same `./sport` closure,
   so no type stops a phone from calling it. If the app ever does, a MINOR stops meaning "no app update" and D34 has to be revisited
   before it does. The statement is also in the header of `packages/engine/src/sport/fold-epoch.ts`.
 
@@ -187,7 +188,7 @@ rules instead needs an epoch per division or fixture, which does not exist.
 - [ ] Reconcile the optimistic fold against the `201` body's `state_summary` / `outcome` / `status` on every ack.
 - [ ] Only the named `sport` blocked; other sports keep scoring.
 - [ ] A test that drives the real queue through a faked epoch bump (the usecase tests' way), not a mocked transport.
-- [ ] The app never computes or renders `standingsDelta`, `supportsDraws` or non-headline credit (the phone contract in §3); if it must,
+- [ ] The app never computes or renders `standingsDelta`, `supportsDraws`, non-headline credit or player stats (the phone contract in §3); if it must,
       put D34 back in front of your owner first.
 - [ ] A MINOR change never blocks scoring; at most an optional "update available" prompt.
 - [ ] Re-read this file against `main` when S2 starts: 1f is merged (#961), and 1e-M (D34) is merged once its PR lands, so check that

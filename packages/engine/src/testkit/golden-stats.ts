@@ -66,6 +66,25 @@ export function recordPlayerStats(module: AnySportModule, cfg: unknown, lineups:
   return canonicalStatRows(aggregatePlayerStats(envelopes, model, lineups, statsCtxOf(module, cfg, lineups)));
 }
 
+/** The stat key the fold credits a `core.award` under: `<key>_awards` (stats.ts, the `core.award` branch of `aggregatePlayerStats`). The
+ *  convention is the fold's, not this file's, so a test folds a real award and reads the key back (golden-stats.test.ts); it is named
+ *  here once so the floor and the recorder do not each retype it. */
+export const awardStatKey = (awardKey: string): string => `${awardKey}_awards`;
+
+/** The award keys a recorded `playerStats` text credits at least once, sorted: every stat named `<key>_awards` with a value of 1 or
+ *  more on any person. Text that is not rows credits none. */
+export function creditedAwardKeys(text: string): string[] {
+  const rows = readStatRows(text);
+  if (rows === null) return [];
+  const keys = new Set<string>();
+  for (const row of rows) {
+    for (const [stat, value] of Object.entries(row.stats)) {
+      if (stat.endsWith("_awards") && stat.length > "_awards".length && value >= 1) keys.add(stat.slice(0, -"_awards".length));
+    }
+  }
+  return [...keys].sort(byCodeUnit);
+}
+
 /** A recorded `playerStats` text read back as rows, or null when it is not the canonical form's shape. */
 export function readStatRows(text: string): PlayerStatRow[] | null {
   let parsed: unknown;

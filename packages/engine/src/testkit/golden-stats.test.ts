@@ -14,7 +14,7 @@ import { forEachSport } from "./for-each-sport.ts";
 import { sweepBudget } from "./golden-budget.ts";
 import { FLOOR_SEED_STRIDE, extendFloor } from "./golden-floor-streams.ts";
 import { asFormatOne, asFormatTwo, reformatAll, reformatCorpus } from "./golden-reformat.ts";
-import { canonicalStatRows, movedStatKeys, readStatRows, recordPlayerStats, statsCtxOf, statsMismatch } from "./golden-stats.ts";
+import { awardStatKey, canonicalStatRows, creditedAwardKeys, movedStatKeys, readStatRows, recordPlayerStats, statsCtxOf, statsMismatch } from "./golden-stats.ts";
 import {
   CURRENT_FORMAT,
   buildCorpus,
@@ -595,4 +595,43 @@ describe("the other writers record playerStats when the corpus is format 3", () 
     expect(result.corpus.streams.slice(first)).toEqual(expected);
     for (const stream of result.corpus.streams.slice(first)) expect(typeof stream.playerStats, `${stream.config}#${stream.seed}`).toBe("string");
   }, 60_000);
+});
+
+// ------------------------------------------------------------------------------------------------- the award credit
+
+describe("awardStatKey / creditedAwardKeys — which awards a recorded set of rows credits", () => {
+  const rows = (...r: [string, Record<string, number>][]): string => canonicalStatRows(r.map(([personId, stats]) => ({ personId, stats })));
+
+  it("creditedAwardKeys reads `<key>_awards` of 1 or more, sorted, and nothing else (empty case first)", () => {
+    expect(creditedAwardKeys("[]")).toEqual([]);
+    expect(creditedAwardKeys("not json")).toEqual([]);
+    expect(creditedAwardKeys("{}")).toEqual([]);
+    expect(creditedAwardKeys(rows(["p", { goals: 2 }]))).toEqual([]);
+    expect(creditedAwardKeys(rows(["p", { motm_awards: 0 }]))).toEqual([]);
+    expect(creditedAwardKeys(rows(["p", { _awards: 3 }]))).toEqual([]);
+    expect(creditedAwardKeys(rows(["p", { mvp_awards: 1, goals: 2 }], ["q", { motm_awards: 3 }]))).toEqual(["motm", "mvp"]);
+    expect(creditedAwardKeys(rows(["p", { motm_awards: 1 }], ["q", { motm_awards: 2 }]))).toEqual(["motm"]);
+  });
+
+  it("awardStatKey is the key the real fold credits a declared award under (every sport that declares one, a core.award folded for real)", () => {
+    let checked = 0;
+    forEachSport(({ module, key }) => {
+      for (const award of module.playerStats?.awards ?? []) {
+        const corpus = readCorpus(key);
+        const raw = Object.values(corpus.configs)[0];
+        const cfg = module.configSchema.parse(raw) as never;
+        const lineups = defaultLineupPair(resolvePositions(module, cfg));
+        const person = lineups.home.slots[0]!.personId;
+        const events = [ev("core.start"), ev("core.award", { person, key: award.key })];
+        const folded = readStatRows(recordPlayerStats(module, cfg, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids))))!;
+        expect(folded.find((r) => r.personId === person)?.stats[awardStatKey(award.key)], `${key} ${award.key}`).toBe(1);
+        expect(creditedAwardKeys(recordPlayerStats(module, cfg, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)))), key).toContain(award.key);
+        // an award the sport does not declare credits nobody
+        const stray = [ev("core.start"), ev("core.award", { person, key: "no_such_award" })];
+        expect(creditedAwardKeys(recordPlayerStats(module, cfg, lineups, stray.map((e, i) => makeEnvelope(i, e, e.voids)))), `${key}: an undeclared key`).toEqual([]);
+        checked++;
+      }
+    });
+    expect(checked, "at least one sport declares an award").toBeGreaterThan(0);
+  });
 });

@@ -7,8 +7,10 @@ import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { sweepBudget } from "./golden-budget.ts";
 import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles as holesOf, floorRequirement, LEVEL_OUTCOME_TOKENS, NATURAL_OUTCOMES, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
+import { eventToken, floorHoles as holesOf, floorRequirement, LEVEL_OUTCOME_TOKENS, NATURAL_OUTCOMES, overlayToken, statsAwardToken, undoToken, type FloorToken } from "./golden-floor.ts";
+import { creditedAwardKeys, readStatRows, recordPlayerStats } from "./golden-stats.ts";
 import {
+  awardCredits,
   corpusBefore,
   expungeStrike,
   extendFloor,
@@ -520,7 +522,7 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
   };
 
   it("the scenario order is the order a floor is reproduced in: settle and expunge are APPENDED after the GF-1 stories", () => {
-    expect(SCENARIOS.map((x) => x.id)).toEqual(["undo", "stoppage", "abandon", "walkover", "double_walkover", "retired", "disqualified", "withdrew", "settle", "expunge"]);
+    expect(SCENARIOS.map((x) => x.id)).toEqual(["undo", "stoppage", "abandon", "walkover", "double_walkover", "retired", "disqualified", "withdrew", "settle", "expunge", "award"]);
   });
 
   it("every sport has one settle stream; where the floor wants a withdrawal over a level result it is the level route, elsewhere the abandon route, and the kernel reads each step as the story says", () => {
@@ -623,6 +625,121 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
     expect(strike.inForce(ctx, cfg, lineups, [start, strike.event, { type: "core.void", payload: {}, voids: "e-1" }])).toBe(false);
     // a PLAIN abandon (no flag) is not an expunge
     expect(strike.inForce(ctx, cfg, lineups, [start, { type: "core.abandon", payload: { reason: "rain" } }])).toBe(false);
+  });
+});
+
+describe("the award story (GF-2 T4) — an award the sport declares, given, struck, and given again, read off the stats fold", () => {
+  const AWARD = 11; // the scenario's index (the seed contract: index * FLOOR_SEED_STRIDE + generator seed)
+  const declared = (module: (typeof builtinModules)[number]): string[] => (module.playerStats?.awards ?? []).map((a) => a.key);
+  const isAwardStory = (s: GoldenStream): boolean => s.seed >= AWARD * FLOOR_SEED_STRIDE && s.seed < (AWARD + 1) * FLOOR_SEED_STRIDE;
+  const setup = (key: string, stream: GoldenStream) => {
+    const module = builtinModules.find((m) => m.key === key)!;
+    const corpus = readCorpus(key);
+    const cfg = module.configSchema.parse(corpus.configs[stream.config]) as unknown;
+    const lineups = (stream.lineups as never) ?? defaultLineupPair(resolvePositions(module, cfg));
+    const rows = (events: readonly GoldenEvent[]) => readStatRows(recordPlayerStats(module, cfg, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids))))!;
+    return { module, corpus, cfg, lineups: lineups as { home: { slots: { personId: string }[] }; away: { slots: { personId: string }[] } }, rows };
+  };
+
+  it("one award stream exactly where a declared key is credited by no other stream; elsewhere none (both branches counted)", () => {
+    let built = 0;
+    let satisfied = 0;
+    let silent = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = readCorpus(key);
+      const stories = corpus.streams.filter(isAwardStory);
+      const others = new Set(corpus.streams.filter((s) => !isAwardStory(s)).flatMap((s) => creditedAwardKeys(s.playerStats ?? "[]")));
+      const owed = declared(module).filter((award) => !others.has(award));
+      expect(stories.length, `${key}: one award stream iff a declared key is owed (${owed.join(",") || "none"})`).toBe(owed.length > 0 ? 1 : 0);
+      if (declared(module).length === 0) silent++;
+      else if (owed.length === 0) satisfied++;
+      else built++;
+    });
+    expect(built, "a sport whose award the corpus did not already credit").toBeGreaterThan(0);
+    expect(satisfied, "a sport whose award an earlier story already credited (the stoppage stream's award)").toBeGreaterThan(0);
+    expect(silent, "a sport that declares none").toBeGreaterThan(0);
+  });
+
+  it("each award stream: given to a home player and struck, then given to an away player; the stats fold credits the away player once, the home player never; without the void the home player is credited too", () => {
+    let proofs = 0;
+    forEachSport(({ key }) => {
+      for (const stream of readCorpus(key).streams.filter(isAwardStory)) {
+        const { module, lineups, rows, corpus } = setup(key, stream);
+        const types = stream.events.map((e) => e.type);
+        const first = types.indexOf("core.award");
+        expect(first, `${key}: an award`).toBeGreaterThan(0);
+        const home = lineups.home.slots[0]!.personId;
+        const away = lineups.away.slots[0]!.personId;
+        expect(home).not.toBe(away);
+        const owedKeys = declared(module).filter((award) => !corpus.streams.filter((s) => !isAwardStory(s)).some((s) => creditedAwardKeys(s.playerStats ?? "[]").includes(award)));
+        expect(owedKeys.length, `${key}: it exists for an owed key`).toBeGreaterThan(0);
+        // the tail is [award(home), void of it, award(away)] for each key, in the declared order
+        const tail = stream.events.slice(first);
+        expect(tail.map((e) => e.type), key).toEqual(owedKeys.flatMap(() => ["core.award", "core.void", "core.award"]));
+        owedKeys.forEach((award, i) => {
+          const [give, strike, again] = tail.slice(i * 3, i * 3 + 3) as [GoldenEvent, GoldenEvent, GoldenEvent];
+          expect(give.payload, key).toEqual({ person: home, key: award });
+          expect(strike.voids, key).toBe(`e-${first + i * 3}`);
+          expect(again.payload, key).toEqual({ person: away, key: award });
+          const stat = `${award}_awards`;
+          const standing = rows(stream.events);
+          expect(standing.find((r) => r.personId === home)?.stats[stat], `${key} ${award}: the struck award credits nobody`).toBeUndefined();
+          expect(standing.find((r) => r.personId === away)?.stats[stat], `${key} ${award}: the standing award credits its person once`).toBe(1);
+          // the differential: the same ledger WITHOUT the void credits the home player as well
+          const unstruck = stream.events.filter((e) => e.voids === undefined);
+          expect(rows(unstruck).find((r) => r.personId === home)?.stats[stat], `${key} ${award}: without the void the home player holds it`).toBe(1);
+          // and what the corpus records is what the fold says
+          expect(readStatRows(stream.playerStats!)!.find((r) => r.personId === away)?.stats[stat], `${key} ${award}: recorded`).toBe(1);
+        });
+        proofs++;
+      }
+    });
+    expect(proofs, "every award stream was read").toBeGreaterThan(0);
+  });
+
+  it("an award leaves the match's story alone: the stream decides the result its bare walk did (the module folds an award as no change)", () => {
+    let proofs = 0;
+    forEachSport(({ key }) => {
+      for (const stream of readCorpus(key).streams.filter(isAwardStory)) {
+        const { module, cfg, lineups } = setup(key, stream);
+        const effective = (events: readonly GoldenEvent[]) =>
+          outcomeOf(module as never, foldMatchWithStoppage(module as never, cfg as never, lineups as never, events.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 }) as never);
+        const first = stream.events.findIndex((e) => e.type === "core.award");
+        const bare = stream.events.slice(0, first);
+        expect(effective(bare), `${key}: the bare walk is decided`).not.toBeNull();
+        expect(effective(stream.events), key).toEqual(effective(bare));
+        proofs++;
+      }
+    });
+    expect(proofs).toBeGreaterThan(0);
+  });
+
+  it("awardCredits asks the real stats fold: a declared key credits its person, an undeclared key credits nobody, and a struck award credits nobody", () => {
+    // single-sport: hockey declares `potm` (not `motm`), so the same ledger answers both ways; the sweep above is every sport
+    const key = "hockey";
+    const stream = readCorpus(key).streams.find(isAwardStory)!;
+    const { module, corpus, cfg, lineups } = setup(key, stream);
+    const ctx: Ctx = { module, corpus, cfgNames: ["default"], holes: new Set() };
+    const away = lineups.away.slots[0]!.personId;
+    const home = lineups.home.slots[0]!.personId;
+    expect(declared(module)).toEqual(["potm"]);
+    expect([...awardCredits(ctx, cfg, lineups as never, stream.events, "potm")]).toEqual([[away, 1]]);
+    expect(awardCredits(ctx, cfg, lineups as never, stream.events, "motm").size, "an undeclared key credits nobody").toBe(0);
+    const unstruck = stream.events.filter((e) => e.voids === undefined);
+    expect(new Map(awardCredits(ctx, cfg, lineups as never, unstruck, "potm"))).toEqual(new Map([[home, 1], [away, 1]]));
+    expect(awardCredits(ctx, cfg, lineups as never, stream.events.slice(0, stream.events.findIndex((e) => e.type === "core.award")), "potm").size, "before any award").toBe(0);
+  });
+
+  it("the scenario serves exactly the declared award tokens, and none for a sport that declares no key", () => {
+    const award = SCENARIOS.find((x) => x.id === "award")!;
+    let served = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = readCorpus(key);
+      const ctx: Ctx = { module, corpus, cfgNames: Object.keys(corpus.configs), holes: new Set() };
+      expect(award.serves(ctx), key).toEqual(declared(module).map(statsAwardToken));
+      served += award.serves(ctx).length;
+    });
+    expect(served, "some sport declares a key").toBeGreaterThan(0);
   });
 });
 

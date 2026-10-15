@@ -957,7 +957,7 @@ describe("fold-epoch guard: GF-2 T4 - player stats are a minor", () => {
 
   describe("the format never falls: a corpus that stops recording the stats (or the kernel fields) is a violation no bump settles", () => {
     it("3 -> 2 is red whatever else is bumped, and the reason says what was lost and how many streams", () => {
-      for (const [major, minor] of [[1, 0], [1, 1], [2, 0], [9, 9]]) {
+      for (const [major, minor] of [[1, 0], [1, 1], [2, 0], [9, 9]] as const) {
         const v = epochViolations(at3(1, 0, fmt3(rec3())), at3(major, minor, fmt2(base().map((s) => recorded(s)))), frozen);
         expect(v.map((x) => x.sport), `${major}.${minor}`).toEqual(["badminton"]);
         expect(v[0]!.reason, `${major}.${minor}`).toMatch(/^corpus format fell \(3 -> 2\): 2 stream\(s\) recorded their player stats at the baseline and no longer do; a corpus never goes back to format 2/);
@@ -1032,7 +1032,7 @@ describe("fold-epoch guard: GF-2 T4 - player stats are a minor", () => {
       let checked = 0;
       forEachSport(({ key }) => {
         const c = real.get(key)!;
-        for (const [major, minor] of [[1, 0], [1, 1], [2, 0]]) {
+        for (const [major, minor] of [[1, 0], [1, 1], [2, 0]] as const) {
           const v = epochViolations(only(key, asFormat3(c)), only(key, asFormat2(c), major, minor), frozen);
           expect(v.map((x) => x.sport), `${key}: ${major}.${minor}`).toEqual([key]);
           expect(v[0]!.reason).toMatch(/corpus format fell \(3 -> 2\)/);

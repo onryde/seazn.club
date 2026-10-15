@@ -39,11 +39,13 @@ import {
   outcomeTokenOf,
   overlayToken,
   standingToken,
+  statsAwardToken,
   STANDING_KERNEL,
   undoToken,
   UNDOABLE_KERNEL,
   type FloorToken,
 } from "./golden-floor.ts";
+import { awardStatKey, readStatRows, recordPlayerStats } from "./golden-stats.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -575,6 +577,56 @@ function buildExpunge(ctx: Ctx): Built | null {
   return null;
 }
 
+// -------------------------------------------------------------------------------------------------------- award
+
+/** What the player-stats FOLD says each person holds of one award key (`<key>_awards`), for a ledger: asked of the real fold
+ *  (recordPlayerStats), never of the builder's belief that an award took effect. */
+export function awardCredits(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], key: string): Map<string, number> {
+  const rows = readStatRows(recordPlayerStats(ctx.module, cfg, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids))));
+  if (rows === null) throw new Error(`golden floor: ${ctx.module.key} recorded player stats that are not rows`);
+  const credits = new Map<string, number>();
+  for (const row of rows) {
+    const held = row.stats[awardStatKey(key)];
+    if (held !== undefined && held > 0) credits.set(row.personId, held);
+  }
+  return credits;
+}
+
+/** An award the sport DECLARES (`playerStats.awards`), given and struck: the match is played out, an award goes to a home player
+ *  (and is struck at once, so the undo of an award is on the record), then the same award to an away player stands. Where the
+ *  sport declares no award key there is no such token and this builds nothing. The story is kept only when the stats fold says it
+ *  took effect: the struck award credits nobody, the standing one credits its person exactly once. */
+function buildAward(ctx: Ctx): Built | null {
+  const keys = (ctx.module.playerStats?.awards ?? []).map((a) => a.key).filter((key) => ctx.holes.has(statsAwardToken(key)));
+  if (keys.length === 0) return null;
+  for (const cfgName of ctx.cfgNames) {
+    const cfg = parsed(ctx, cfgName);
+    const lineups = defaultLineups(ctx, cfg);
+    const home = lineups.home.slots[0]?.personId;
+    const away = lineups.away.slots[0]?.personId;
+    if (home === undefined || away === undefined || home === away) continue;
+    for (let seed = 1; seed <= SEED_BUDGET; seed++) {
+      const walk = naturalWalk(ctx, cfg, lineups, seed);
+      if (walk === null) continue;
+      const events: GoldenEvent[] = [...walk.events];
+      for (const key of keys) {
+        const first = events.length;
+        events.push(ev("core.award", { person: home, key }), voidOf(first), ev("core.award", { person: away, key }));
+      }
+      if (!folds(ctx, cfg, lineups, events)) continue;
+      // an award leaves the module's story untouched: the match ends on the outcome the bare walk reached
+      if (outcomeAfter(ctx, cfg, lineups, events).token !== walk.token) continue;
+      const took = keys.every((key) => {
+        const credits = awardCredits(ctx, cfg, lineups, events, key);
+        return !credits.has(home) && credits.get(away) === 1 && credits.size === 1;
+      });
+      if (!took) continue;
+      return { config: cfgName, seed: 11 * FLOOR_SEED_STRIDE + seed, events };
+    }
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------------------------------------------ driver
 
 export interface Scenario {
@@ -623,6 +675,8 @@ export const SCENARIOS: readonly Scenario[] = [
     build: buildSettle,
   },
   { id: "expunge", serves: () => [overlayToken("expunged", "set"), overlayToken("expunged", "cleared")], build: buildExpunge },
+  // GF-2 T4, appended for the same reason: an award the sport declares, credited in the player-stats rows format 3 records.
+  { id: "award", serves: (c) => (c.module.playerStats?.awards ?? []).map((a) => statsAwardToken(a.key)), build: buildAward },
 ];
 
 export interface FloorExtension {
