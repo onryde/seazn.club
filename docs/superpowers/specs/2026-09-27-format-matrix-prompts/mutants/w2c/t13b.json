@@ -48,7 +48,7 @@
   {
     "id": "t13b-door-engine-set",
     "file": "apps/web/src/server/usecases/stage-defaults.ts",
-    "find": "new Set(builtinModules.flatMap((m) => deciderKeysFor(m, null, null)));",
+    "find": "new Set(TOP_LEVEL_STAGE_DECIDERS);",
     "replace": "new Set([\"shootout\", \"extraTime\"]);",
     "killers": [
       { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-defaults.test.ts"], "name": "gap hunt: the create door itself refuses a top-level stage decider from any caller" }
@@ -130,6 +130,57 @@
     "killers": [
       { "cwd": ".", "files": ["tools/bench/lib/__tests__/reconstruct.test.ts"], "name": "a knockout folds under its PRESET in the generator too" },
       { "cwd": ".", "files": ["tools/bench/lib/__tests__/reconstruct.test.ts"], "name": "folds under the STAGE-scoped cfg, so a stage that disables extra time stops at FT" }
+    ]
+  },
+  {
+    "id": "t13b-fu-lib-set",
+    "file": "apps/web/src/lib/top-level-stage-deciders.ts",
+    "find": "[...new Set(builtinModules.flatMap((m) => deciderKeysFor(m, null, null)))].sort();",
+    "replace": "[\"extraTime\", \"shootout\"];",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/stage-config.test.ts"], "name": "R-13b-1 refuses EVERY decider the engine declares" },
+      { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-defaults.test.ts"], "name": "gap hunt: the create door itself refuses" }
+    ]
+  },
+  {
+    "id": "t13b-fu-schema-set",
+    "file": "apps/web/src/server/api-v1/schemas.ts",
+    "find": "  TOP_LEVEL_STAGE_DECIDERS.map((key) => [key, z.never({ error: STAGE_DECIDER_MOVED }).optional()]),",
+    "replace": "  [\"shootout\", \"extraTime\"].map((key) => [key, z.never({ error: STAGE_DECIDER_MOVED }).optional()]),",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-points.test.ts"], "name": "R-13b-1 a top-level decider only the engine declares" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/stage-config.test.ts"], "name": "R-13b-1 refuses EVERY decider the engine declares" },
+      { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-defaults.test.ts"], "name": "guard: the engine.s deciders never collide" }
+    ]
+  },
+  {
+    "id": "t13b-fu-refusal-named",
+    "file": "apps/web/src/server/api-v1/schemas.ts",
+    "find": "[key, z.never({ error: STAGE_DECIDER_MOVED }).optional()]",
+    "replace": "[key, z.never().optional()]",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-points.test.ts"], "name": "R-13b-1 a top-level decider only the engine declares" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/stage-config.test.ts"], "name": "R-13b-1 refuses EVERY decider the engine declares" }
+    ]
+  },
+  {
+    "id": "t13b-fu-stageconfig-spread",
+    "file": "apps/web/src/server/api-v1/schemas.ts",
+    "find": "  .strictObject({\n    ...TOP_LEVEL_DECIDER_REFUSALS,\n    // League / group shape.",
+    "replace": "  .strictObject({\n    // League / group shape.",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-points.test.ts"], "name": "R-13b-1 a top-level decider only the engine declares" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/stage-config.test.ts"], "name": "R-13b-1 refuses EVERY decider the engine declares" }
+    ]
+  },
+  {
+    "id": "t13b-fu-put-spread",
+    "file": "apps/web/src/server/api-v1/schemas.ts",
+    "find": "    ...TOP_LEVEL_DECIDER_REFUSALS,\n    rules: z.record(z.string(), z.unknown()).nullable().optional(),",
+    "replace": "    rules: z.record(z.string(), z.unknown()).nullable().optional(),",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/usecases/__tests__/stage-points.test.ts"], "name": "R-13b-1 a top-level decider only the engine declares" },
+      { "cwd": "apps/web", "files": ["src/server/api-v1/__tests__/stage-config.test.ts"], "name": "R-13b-1 refuses EVERY decider the engine declares" }
     ]
   }
 ]

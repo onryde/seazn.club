@@ -404,8 +404,8 @@
  {
   "id": "t13-body-closed",
   "file": "apps/web/src/server/api-v1/schemas.ts",
-  "find": "  .strictObject({\n    rules: z.record(z.string(), z.unknown()).nullable().optional(),\n    points: PointsRule.nullable().optional(),",
-  "replace": "  .object({\n    rules: z.record(z.string(), z.unknown()).nullable().optional(),\n    points: PointsRule.nullable().optional(),",
+  "find": "  .strictObject({\n    ...TOP_LEVEL_DECIDER_REFUSALS,\n    rules: z.record(z.string(), z.unknown()).nullable().optional(),\n    points: PointsRule.nullable().optional(),",
+  "replace": "  .object({\n    ...TOP_LEVEL_DECIDER_REFUSALS,\n    rules: z.record(z.string(), z.unknown()).nullable().optional(),\n    points: PointsRule.nullable().optional(),",
   "killers": [
    {
     "cwd": "apps/web",
@@ -501,8 +501,8 @@
  {
   "id": "t13-put-decider-named",
   "file": "apps/web/src/server/api-v1/schemas.ts",
-  "find": "    points: PointsRule.nullable().optional(),\n    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),",
-  "replace": "    points: PointsRule.nullable().optional(),\n    shootout: z.unknown().optional(),",
+  "find": "    points: PointsRule.nullable().optional(),\n  })\n  .refine(",
+  "replace": "    points: PointsRule.nullable().optional(),\n    shootout: z.unknown().optional(),\n  })\n  .refine(",
   "killers": [
    {
     "cwd": "apps/web",

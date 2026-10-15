@@ -277,8 +277,8 @@
  {
   "id": "t12-schema-never",
   "file": "apps/web/src/server/api-v1/schemas.ts",
-  "find": "than as an unrecognised key a client would read as a typo.\n    shootout: z.never({ error: STAGE_DECIDER_MOVED }).optional(),",
-  "replace": "than as an unrecognised key a client would read as a typo.\n    shootout: z.unknown().optional(),",
+  "find": "  .strictObject({\n    ...TOP_LEVEL_DECIDER_REFUSALS,\n    // League / group shape.",
+  "replace": "  .strictObject({\n    ...TOP_LEVEL_DECIDER_REFUSALS,\n    shootout: z.unknown().optional(),\n    // League / group shape.",
   "killers": [
    {
     "cwd": "apps/web",
