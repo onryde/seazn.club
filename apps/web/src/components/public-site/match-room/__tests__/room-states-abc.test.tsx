@@ -156,7 +156,7 @@ describe("Seam A — the Lichess link revoked: the frozen player's own room", ()
     const html = paint(revokedState());
     expect(roomScreen(revokedState()).kind).toBe("revoked");
     const present = ids(html);
-    for (const id of ["room-revoked", "room-clocks-strip", "room-clock-you", "room-revoked-notice", "room-revoked-relink", "room-board", "room-back-to-fixture"]) {
+    for (const id of ["room-revoked", "room-clock-opponent", "room-clock-you", "room-revoked-notice", "room-revoked-relink", "room-board", "room-back-to-fixture"]) {
       expect(present, id).toContain(id);
     }
     for (const id of ["room-controls", "room-resign", "room-draw", "room-abort", "room-seam-revoked"]) expect(present, id).not.toContain(id);
@@ -254,7 +254,7 @@ describe("Seam A — the game is on another Lichess account (T14 re-review 5, I-
     expect(roomScreen(s).kind).toBe("revoked");
     const html = paint(s);
     const present = ids(html);
-    for (const id of ["room-revoked", "room-clocks-strip", "room-revoked-notice", "room-revoked-relink", "room-board", "room-back-to-fixture"]) expect(present, id).toContain(id);
+    for (const id of ["room-revoked", "room-clock-opponent", "room-clock-you", "room-revoked-notice", "room-revoked-relink", "room-board", "room-back-to-fixture"]) expect(present, id).toContain(id);
     for (const id of ["room-controls", "room-resign", "room-draw", "room-abort", "room-move-notice"]) expect(present, id).not.toContain(id);
     const text = textOf(html);
     expect(text).toContain(CANVAS.otherAccount);
@@ -312,7 +312,7 @@ describe("Seam B — online chess off: one calm card", () => {
     const html = paint(s, { camera: "live" });
     const present = ids(html);
     expect(present).toContain("room-off-for-club");
-    for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-tile-strip", "room-presence-pill", "room-controls", "room-camera-notice", "room-seam-off-for-club"]) {
+    for (const id of ["room-board", "room-clocks-strip", "room-clock-opponent", "room-clock-you", "room-own-tile", "room-tile-strip", "room-presence-pill", "room-controls", "room-camera-notice", "room-seam-off-for-club"]) {
       expect(present, id).not.toContain(id);
     }
     const text = textOf(html);
@@ -336,7 +336,7 @@ describe("D10 — a board the organiser closed: its own card, every locale", () 
       const html = paint(s, { locale, camera: "live" });
       const present = ids(html);
       expect(present, locale).toContain("room-state-board-closed");
-      for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-tile-strip", "room-checkin-cta", "room-controls", "room-state-creating"]) {
+      for (const id of ["room-board", "room-clocks-strip", "room-clock-opponent", "room-clock-you", "room-own-tile", "room-tile-strip", "room-checkin-cta", "room-controls", "room-state-creating"]) {
         expect(present, `${locale} ${id}`).not.toContain(id);
       }
       expect(html, locale).not.toMatch(RAW_KEY);
@@ -353,8 +353,8 @@ describe("D10 — a board the organiser closed: its own card, every locale", () 
 
 describe("Seam C — the live room's move notices, reached through the reducer", () => {
   const live = () => initialRoomState(snap({ game: GAME }), T0);
-  const sentMove = (s: RoomState) => roomReducer(s, { type: "act_sent", action: { kind: "move", uci: "g1f3" } });
-  const sentAct = (s: RoomState, action: RoomActBody) => roomReducer(s, { type: "act_sent", action });
+  const sentMove = (s: RoomState) => roomReducer(s, { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } });
+  const sentAct = (s: RoomState, action: RoomActBody) => roomReducer(s, { type: "act_sent", at: T0, action });
   const cases: [string, () => RoomState, "offline" | "refused" | "invalid" | "failed", string[]][] = [
     ["C1 a read with no answer", () => roomReducer(live(), { type: "fetch_failed", status: 0 }), "offline", [CANVAS.offlineTitle, CANVAS.offlineBody]],
     ["C1 a move with no answer", () => roomReducer(sentMove(live()), { type: "act_failed", status: 0 }), "offline", [CANVAS.offlineTitle, CANVAS.offlineBody]],
@@ -414,20 +414,24 @@ describe("Seam C — the live room's move notices, reached through the reducer",
     expect(ids(paint(revokedOffline))).not.toContain("room-move-notice");
   });
 
-  it("a phone shows C1/C2 between the clocks and the board and C3 under the board; a desktop puts them at the top of the aside — one DOM, ordered", () => {
+  it("a phone shows C1/C2 between the opponent's clock and the board and C3 under the board AND the player's own clock; a desktop puts them at the top of the aside — one DOM, ordered", () => {
     // The aside dissolves into the phone's column (max-md:contents) so its
     // notices can take their drawn places; the browser proves the geometry.
+    // D24: the opponent's clock is above the board, the player's below it.
     const order = (html: string, id: string) => Number(/(?:^|\s)order-(\d+)(?:\s|$)/.exec(classOf(html, id))?.[1] ?? NaN);
     let checked = 0;
     for (const [name, make, kind] of cases) {
       const html = paint(make(), { camera: "live" });
-      const clocks = order(html, "room-clocks-strip");
+      const theirs = order(html, "room-clock-opponent");
       const board = order(html, "room-board");
+      const mine = order(html, "room-clock-you");
       const notice = order(html, "room-move-notice");
-      expect(clocks < board, name).toBe(true);
-      if (kind === "invalid") expect(notice > board, `${name}: under the board`).toBe(true);
-      else expect(clocks < notice && notice < board, `${name}: between clocks and board`).toBe(true);
+      expect(theirs < board, `${name}: the opponent's clock above the board`).toBe(true);
+      expect(board < mine, `${name}: the player's clock under the board`).toBe(true);
+      if (kind === "invalid") expect(notice > mine, `${name}: under the board and its clock`).toBe(true);
+      else expect(theirs < notice && notice < board, `${name}: between the opponent's clock and the board`).toBe(true);
       expect(notice < order(html, "room-controls"), `${name}: above the controls`).toBe(true);
+      expect(mine < order(html, "room-controls"), `${name}: the controls follow the player's clock`).toBe(true);
       expect(classOf(html, "room-aside")).toMatch(/(^|\s)max-md:contents(\s|$)/);
       // On a desktop the aside is ONE grid item: auto-placement follows
       // `order`, so it must come after the board or it takes column 1.
@@ -449,18 +453,18 @@ describe("A, B and C in every locale: no raw key, never English outside en", () 
       [
         "C2",
         () =>
-          roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", action: { kind: "move", uci: "g1f3" } }), {
+          roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } }), {
             type: "act_answered",
             answer: { ok: false, reconcile: true, reason: "rejected" },
           }),
       ],
       [
         "C3",
-        () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", action: { kind: "move", uci: "g1f3" } }), { type: "act_failed", status: 400 }),
+        () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } }), { type: "act_failed", status: 400 }),
       ],
       [
         "C2 generic",
-        () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", action: { kind: "resign" } }), { type: "act_failed", status: 503 }),
+        () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", at: T0, action: { kind: "resign" } }), { type: "act_failed", status: 503 }),
       ],
     ];
     const english = Object.values(CANVAS).filter((w) => w !== CANVAS.back);

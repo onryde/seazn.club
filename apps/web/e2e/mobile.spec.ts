@@ -5137,15 +5137,17 @@ test("2048 (first visit): empty storage deals the opening two tiles", async ({ p
 
 // Online chess on OUR page (design 2026-10-09 §6, §8.6; Task 17): the live
 // match room at this project's REAL width. Below md the room is one column
-// in a fixed order — the clocks-and-names row, the board at the column's full
-// width, the player's own camera tile, then Draw/Resign; from md the board
-// takes the left column and the tile and controls the right. Asserted as the
-// order and membership of what is on screen, not as box sizes, so a groomed
-// shrink of the desktop layout cannot pass for the phone composition. The
-// presence pill needs a real meeting join and is owed to staging (Task 17
-// part B). Camera `optional` so the tile is on screen with no camera duty —
-// no banner competes for the top of the column.
-test("match room (online chess): a live board is clocks, full-width board, own tile, then Draw/Resign below md — two columns from md — no horizontal scroll", async ({
+// in a fixed order — the OPPONENT's clock bar, the board at the column's full
+// width, the player's own clock bar (T17B fix 2, D24: by viewer, never by
+// colour), the player's own camera tile, then Draw/Resign; from md the board
+// takes the left column — with the two bars, each the board's width, framing
+// it — and the tile and controls the right. Asserted as the order and
+// membership of what is on screen, not as box sizes, so a groomed shrink of
+// the desktop layout cannot pass for the phone composition. The presence pill
+// needs a real meeting join and is owed to staging (Task 17 part B). Camera
+// `optional` so the tile is on screen with no camera duty — no banner
+// competes for the top of the column.
+test("match room (online chess): a live board is the opponent's clock, a full-width board, own clock, own tile, then Draw/Resign below md — two columns from md — no horizontal scroll", async ({
   browser,
   request,
 }) => {
@@ -5167,13 +5169,13 @@ test("match room (online chess): a live board is clocks, full-width board, own t
     await expect(p.getByTestId("match-room")).toHaveAttribute("data-screen", "live", { timeout: 20_000 });
     await expect(p.locator("[data-testid=room-board-surface] cg-board piece").first()).toBeAttached({ timeout: 20_000 });
 
-    const order = ["room-clocks-strip", "room-board", "room-tile-strip", "room-controls"] as const;
+    const order = ["room-clock-opponent", "room-board", "room-clock-you", "room-tile-strip", "room-controls"] as const;
     const box = async (id: string) => {
       const b = await p.getByTestId(id).first().boundingBox();
       expect(b, `${id} is on screen at ${vp!.width}px`).not.toBeNull();
       return b!;
     };
-    await expect(p.getByTestId("room-clocks-strip")).toContainText(board.away.name);
+    await expect(p.getByTestId("room-clock-opponent")).toContainText(board.away.name);
     let pairs = 0;
     if (phone) {
       for (let i = 1; i < order.length; i++) {
@@ -5182,13 +5184,13 @@ test("match room (online chess): a live board is clocks, full-width board, own t
         expect(below.y, `${order[i]} sits below ${order[i - 1]} at ${vp!.width}px`).toBeGreaterThanOrEqual(above.y + above.height - 1);
         pairs++;
       }
-      const strip = await box("room-clocks-strip");
-      const b = await box("room-board");
-      expect(Math.abs(b.width - strip.width), "the board takes the column's full width").toBeLessThanOrEqual(2);
     } else {
-      const strip = await box("room-clocks-strip");
+      const theirs = await box("room-clock-opponent");
       const b = await box("room-board");
-      expect(b.y, "the clocks row spans the top").toBeGreaterThanOrEqual(strip.y + strip.height - 1);
+      const mine = await box("room-clock-you");
+      expect(b.y, "the opponent's clock is above the board").toBeGreaterThanOrEqual(theirs.y + theirs.height - 1);
+      expect(mine.y, "the player's clock is under the board").toBeGreaterThanOrEqual(b.y + b.height - 1);
+      pairs += 2;
       for (const id of ["room-tile-strip", "room-controls"]) {
         const side = await box(id);
         expect(side.x, `${id} is right of the board from md`).toBeGreaterThanOrEqual(b.x + b.width);
@@ -5199,7 +5201,29 @@ test("match room (online chess): a live board is clocks, full-width board, own t
       expect(controls.y, "the tile above the controls").toBeGreaterThanOrEqual(tile.y + tile.height - 1);
       pairs++;
     }
-    expect(pairs, "anti-vacuity: every relation checked").toBe(3);
+    expect(pairs, "anti-vacuity: every relation checked").toBe(phone ? order.length - 1 : 5);
+    // Each bar is the board's width, left edge to left edge (D24), at every width.
+    const b = await box("room-board");
+    let framed = 0;
+    for (const id of ["room-clock-opponent", "room-clock-you"]) {
+      const bar = await box(id);
+      expect(Math.abs(bar.width - b.width), `${id} is the board's width at ${vp!.width}px`).toBeLessThanOrEqual(2);
+      expect(Math.abs(bar.x - b.x), `${id} lines up with the board at ${vp!.width}px`).toBeLessThanOrEqual(2);
+      framed++;
+    }
+    expect(framed, "anti-vacuity: both bars measured").toBe(2);
+    // The sound switch is in the player's bar, a real 44px target (hit-tested: the paint box is not the tap area).
+    const toggle = p.getByTestId("room-clock-you").getByTestId("room-sound");
+    await expect(toggle).toBeVisible();
+    const t = await toggle.boundingBox();
+    expect(t, "the switch is painted").not.toBeNull();
+    expect(Math.min(t!.width, t!.height), `the switch is at least 44px at ${vp!.width}px`).toBeGreaterThanOrEqual(43.5);
+    const hit = await toggle.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return top === el || (top !== null && el.contains(top));
+    });
+    expect(hit, "the centre of the switch hits the switch").toBe(true);
 
     // The control set, membership and order, read from the live DOM: the
     // rules' answer at two plies is Offer draw then Resign — never Abort.

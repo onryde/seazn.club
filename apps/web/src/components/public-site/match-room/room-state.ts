@@ -15,6 +15,7 @@
 //     found), stays stopped — T20 re-review n1: with the flag off, every read
 //     re-runs token, seat and Lichess reads, so the poll must stop on it.
 import type { RoomActAnswer, RoomActBody, RoomClaimAnswer, SeatAnswer } from "./room-api";
+import { optimisticAfterDrop, type OptimisticClock } from "./clock-math";
 import { ROOM_BEING_REPAIRED, type Colour, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 
 /** Lichess statuses past which the game is over (LICHESS_STATUSES minus the
@@ -99,6 +100,10 @@ export type RoomState = {
    *  revoked at lichess.org). Asked ONCE per page load by the room page and kept for the page: no event changes it.
    *  Re-linking leaves the page, and the page it returns to asks again. */
   grantRefused: boolean;
+  /** T17B fix 2, D24: the player's own clock as their dropped move leaves it (the increment added at once). A guess —
+   *  clock-math `optimisticOwnMs` says when it applies, and the server's number replaces it the moment the ply is on the
+   *  ledger. Set by a move's `act_sent`; removed by a refusal or a failure. */
+  optimistic: OptimisticClock | null;
   /** Fix round 4b: the last read (or seat call) found the board being re-paired — it names nobody for now. The
    *  room reads on; the next answered read or seat call says where the player stands. */
   repairing: boolean;
@@ -110,23 +115,15 @@ export type RoomEvent =
   | { type: "seat_sent" }
   | { type: "seat_answered"; answer: RoomClaimAnswer; receivedAt: number }
   | { type: "seat_failed"; status: number; code?: string | null }
-  | { type: "act_sent"; action: RoomActBody }
+  /** `at` is the sender's wall clock (Date.now()) when the act was sent: the reducer stays pure, so the instant arrives
+   *  with the event, and the viewer's skew turns it into the server's clock. */
+  | { type: "act_sent"; action: RoomActBody; at: number }
   | { type: "act_answered"; answer: RoomActAnswer }
   | { type: "act_failed"; status: number }
   | { type: "fetch_failed"; status: number; code?: string | null };
 
-/** Plies played, from the FEN (fullmove number and side to move) — the one
- *  measure both a snapshot and a broadcast carry. */
-export function plyOfFen(fen: string): number {
-  const parts = fen.split(" ");
-  const full = Number(parts[5]);
-  if (!Number.isFinite(full) || full < 1) return 0;
-  return (full - 1) * 2 + (parts[1] === "b" ? 1 : 0);
-}
-
-export function plyOf(game: RoomGame | null): number {
-  return game === null ? -1 : plyOfFen(game.fen);
-}
+export { plyOf, plyOfFen } from "./ply";
+import { plyOf, plyOfFen } from "./ply";
 
 function stopsPolling(snap: RoomSnapshot): boolean {
   return snap.onlineChessOff;
@@ -144,6 +141,7 @@ export function initialRoomState(snap: RoomSnapshot, receivedAt: number, grantRe
     polling: !stopsPolling(snap),
     notFound: false,
     grantRefused,
+    optimistic: null,
     repairing: false,
   };
 }
@@ -240,7 +238,22 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       return { ...roomCallFailed(s, e.status, e.code ?? null), pending: s.pending?.kind === "seat" ? null : s.pending };
     case "act_sent":
       if (s.pending !== null) return s;
-      return { ...s, pending: { kind: "act", action: e.action }, error: null };
+      return {
+        ...s,
+        pending: { kind: "act", action: e.action },
+        error: null,
+        // D24: only a MOVE earns the increment, and only where the server will add it.
+        optimistic:
+          e.action.kind === "move"
+            ? optimisticAfterDrop({
+                game: s.snap.game,
+                you: s.snap.you.colour,
+                incrementSeconds: s.snap.meta.incrementSeconds,
+                resultWritten: s.snap.result !== null,
+                atMs: e.at + s.skewMs,
+              })
+            : null,
+      };
     case "act_answered": {
       if (s.pending?.kind !== "act") return s;
       const a = e.answer;
@@ -251,6 +264,7 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
         error: a.reconcile ? "refused" : "relink",
         failedAct: s.pending.action.kind,
         syncKey: s.syncKey + 1,
+        optimistic: null, // D24: a refusal restores the clock the drop had advanced
       };
     }
     case "act_failed":
@@ -264,6 +278,7 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
         error: e.status === 0 ? "network" : ACT_RULE_REFUSAL_STATUSES.includes(e.status) ? "invalid" : "refused",
         failedAct: s.pending.action.kind,
         syncKey: s.syncKey + 1,
+        optimistic: null, // D24: a failure restores the clock the drop had advanced
       };
     case "fetch_failed":
       return roomCallFailed(s, e.status, e.code ?? null);

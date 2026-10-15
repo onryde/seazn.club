@@ -261,7 +261,7 @@ describe("seat round trip", () => {
       { type: "snapshot", snap: snap({ serverNow: iso(T0 + 1) }), receivedAt: T0 },
       { type: "seat_sent" },
       { type: "seat_answered", answer: { snapshot: snap({ serverNow: iso(T0 + 2) }), seat: { seated: true, participant: null }, create: null }, receivedAt: T0 },
-      { type: "act_sent", action: { kind: "resign" } },
+      { type: "act_sent", at: T0, action: { kind: "resign" } },
       { type: "act_answered", answer: { ok: true, applied: true } },
       { type: "fetch_failed", status: 500 },
     ];
@@ -290,8 +290,8 @@ describe("act round trip", () => {
   const live = () => initialRoomState(snap({ game: game(2) }), T0);
 
   it("one act in flight: a second act while pending is a no-op (a double tap sends once)", () => {
-    const s = roomReducer(live(), { type: "act_sent", action: { kind: "move", uci: "g1f3" } });
-    expect(roomReducer(s, { type: "act_sent", action: { kind: "resign" } })).toBe(s);
+    const s = roomReducer(live(), { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } });
+    expect(roomReducer(s, { type: "act_sent", at: T0, action: { kind: "resign" } })).toBe(s);
     expect(s.pending).toEqual({ kind: "act", action: { kind: "move", uci: "g1f3" } });
   });
 
@@ -302,7 +302,7 @@ describe("act round trip", () => {
   });
 
   it("accepted ⇒ pending clears, board untouched (the broadcast/read moves it)", () => {
-    const s = roomReducer(roomReducer(live(), { type: "act_sent", action: { kind: "move", uci: "g1f3" } }), {
+    const s = roomReducer(roomReducer(live(), { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } }), {
       type: "act_answered",
       answer: { ok: true, applied: true },
     });
@@ -310,7 +310,7 @@ describe("act round trip", () => {
   });
 
   it("refused by Lichess ⇒ the board is put back (syncKey bumps); a grant refusal reads as relink", () => {
-    const sent = roomReducer(live(), { type: "act_sent", action: { kind: "move", uci: "g1f3" } });
+    const sent = roomReducer(live(), { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } });
     const refused = roomReducer(sent, { type: "act_answered", answer: { ok: false, reconcile: true, reason: "rejected" } });
     expect([refused.error, refused.syncKey, refused.pending]).toEqual(["refused", 1, null]);
     const grant = roomReducer(sent, { type: "act_answered", answer: { ok: false, reconcile: false, reason: "lichess_reconsent_required" } });
@@ -322,7 +322,7 @@ describe("act round trip", () => {
     // hold, a finished game, a frozen seat, another account) — not the room
     // vanishing, and never a rule (T14 re-review 5, I-1). The room re-reads
     // and carries on; only GET room's own 404 is "gone".
-    const sent = roomReducer(live(), { type: "act_sent", action: { kind: "resign" } });
+    const sent = roomReducer(live(), { type: "act_sent", at: T0, action: { kind: "resign" } });
     let checked = 0;
     for (const [status, error] of [[0, "network"], [400, "invalid"], [404, "refused"], [409, "refused"], [500, "refused"]] as const) {
       const after = roomReducer(sent, { type: "act_failed", status });
@@ -407,7 +407,7 @@ describe("fix round 4b: a board being re-paired never stops the room; a refusal 
 describe("move notices (C1–C3): raised, kept and ended by the room's own events", () => {
   const live = () => initialRoomState(snap({ game: game(2) }), T0); // White to move; you are White
   const move = { kind: "move", uci: "g1f3" } as const;
-  const sent = (s: RoomState, action: RoomActBody = move) => roomReducer(s, { type: "act_sent", action });
+  const sent = (s: RoomState, action: RoomActBody = move) => roomReducer(s, { type: "act_sent", at: T0, action });
   const refusedBy = (s: RoomState) => roomReducer(s, { type: "act_answered", answer: { ok: false, reconcile: true, reason: "rejected" } });
   const read = (s: RoomState, at: number, g: RoomGame | null = game(2)) =>
     roomReducer(s, { type: "snapshot", snap: snap({ serverNow: iso(at), game: g }), receivedAt: at });
@@ -520,7 +520,7 @@ describe("move notices (C1–C3): raised, kept and ended by the room's own event
 describe("move notices end with the hold or seat state they were raised on", () => {
   const live = () => initialRoomState(snap({ game: game(2) }), T0); // White to move; you are White
   const move = { kind: "move", uci: "g1f3" } as const;
-  const sent = (s: RoomState, action: RoomActBody = move) => roomReducer(s, { type: "act_sent", action });
+  const sent = (s: RoomState, action: RoomActBody = move) => roomReducer(s, { type: "act_sent", at: T0, action });
   const read = (s: RoomState, at: number, over: Partial<RoomSnapshot> = {}) =>
     roomReducer(s, { type: "snapshot", snap: snap({ serverNow: iso(at), game: game(2), ...over }), receivedAt: at });
   const decline = { kind: "draw", accept: false } as const;
@@ -665,7 +665,7 @@ describe("notice routing: every failure × every action (the ruling, over the de
       rows += 1;
     };
     for (const a of actions) {
-      const sent = roomReducer(live(), { type: "act_sent", action: a });
+      const sent = roomReducer(live(), { type: "act_sent", at: T0, action: a });
       check(a, "network", roomReducer(sent, { type: "act_failed", status: 0 }), "offline");
       for (const st of statuses) {
         const want: Expected = !isMove(a) ? "failed" : RULE_REFUSALS.has(st) ? "invalid" : "refused";
@@ -730,7 +730,7 @@ describe("canMove", () => {
       ["their turn", initialRoomState(snap({ game: game(3) }), T0), false],
       ["over", initialRoomState(snap({ game: game(2, true) }), T0), false],
       ["result written", initialRoomState(snap({ game: game(2), result: { outcome: "won", method: null, score: "1–0" } }), T0), false],
-      ["pending", roomReducer(base, { type: "act_sent", action: { kind: "resign" } }), false],
+      ["pending", roomReducer(base, { type: "act_sent", at: T0, action: { kind: "resign" } }), false],
       // The server's word on who may act (play.ts's predicate, review I2):
       // a frozen seat and every other hold come through as canAct false.
       ["frozen you", initialRoomState(snap({ game: game(2), frozen: "you", canAct: false }), T0), false],
@@ -837,7 +837,7 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
               break;
             }
             case "act": {
-              const next = roomReducer(s, { type: "act_sent", action: st.move ? { kind: "move", uci: "g1f3" } : { kind: "draw", accept: true } });
+              const next = roomReducer(s, { type: "act_sent", at: T0, action: st.move ? { kind: "move", uci: "g1f3" } : { kind: "draw", accept: true } });
               if (before.pending !== null) {
                 expect(next, "a second send while one is in flight is a no-op").toBe(before);
                 seen.doubleSendBlocked += 1;

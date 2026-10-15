@@ -13,7 +13,7 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { CAMERA_POLICIES } from "@/lib/camera-policy";
 import { RoomShell, Screen } from "../room-shell";
-import { initialRoomState } from "../room-state";
+import { initialRoomState, roomReducer, type RoomState } from "../room-state";
 import { roomScreen } from "../room-screen";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
 
@@ -73,10 +73,10 @@ function paint(s: RoomSnapshot, locale: keyof typeof LOCALES = "en") {
 /** The screen a snapshot routes to, painted with the opponent pill's value
  *  and the camera's status as the hooks would hand them over (a first paint
  *  never runs them: the pill comes from the player's own meeting join). */
-function ScreenAs({ s, presence, cameraStatus }: { s: RoomSnapshot; presence: boolean | null; cameraStatus: "idle" | "live" }) {
+function ScreenAs({ s, presence, cameraStatus, from }: { s: RoomSnapshot; presence: boolean | null; cameraStatus: "idle" | "live"; from?: RoomState }) {
   const t = useT();
   const plural = usePlural();
-  const state = initialRoomState(s, T0);
+  const state = from ?? initialRoomState(s, T0);
   const noop = async () => null;
   return (
     <Screen
@@ -94,22 +94,136 @@ function ScreenAs({ s, presence, cameraStatus }: { s: RoomSnapshot; presence: bo
     />
   );
 }
-function paintScreen(s: RoomSnapshot, presence: boolean | null, locale: keyof typeof LOCALES = "en") {
+function paintScreen(s: RoomSnapshot, presence: boolean | null, locale: keyof typeof LOCALES = "en", from?: RoomState) {
   return renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
-      <ScreenAs s={s} presence={presence} cameraStatus="live" />
+      <ScreenAs s={s} presence={presence} cameraStatus="live" from={from} />
     </DictProvider>,
   );
 }
 const ids = (html: string) => [...html.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]!);
 const screenOf = (html: string) => /data-testid="match-room" data-screen="([^"]+)"/.exec(html)?.[1];
 
+const classOfId = (html: string, id: string) => {
+  const tag = new RegExp(`<[^>]*data-testid="${id}"[^>]*>`).exec(html)?.[0];
+  if (tag === undefined) throw new Error(`no element ${id}`);
+  return /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+};
+const orderOf = (html: string, id: string) => Number(/(?:^|\s)order-(\d+)(?:\s|$)/.exec(classOfId(html, id))?.[1] ?? NaN);
+
+// T17B fix 2, D24 (owner): while the game is live the opponent's clock is above the board and the player's below —
+// by VIEWER, never by colour — and once a result is shown the pair is side by side above the board again.
+describe("D24 — the clocks by viewer", () => {
+  const mix = (colour: "white" | "black") =>
+    snap({
+      game: GAME,
+      you: { colour, name: "Bo Lind", checkedIn: true },
+      opponent: { colour: colour === "white" ? "black" : "white", name: "Ada Okonkwo", checkedIn: true },
+    });
+
+  it("both colours: the opponent's bar above the board, the player's below, each carrying ITS OWN name and colour (counted)", () => {
+    let checked = 0;
+    for (const colour of ["white", "black"] as const) {
+      const html = paint(mix(colour));
+      const theirsAt = html.indexOf('data-testid="room-clock-opponent"');
+      const boardAt = html.indexOf('data-testid="room-board"');
+      const mineAt = html.indexOf('data-testid="room-clock-you"');
+      expect(theirsAt, `${colour}: DOM order`).toBeGreaterThan(0);
+      expect(theirsAt < boardAt && boardAt < mineAt, `${colour}: opponent, board, you — in the DOM`).toBe(true);
+      expect(orderOf(html, "room-clock-opponent") < orderOf(html, "room-board"), `${colour}: opponent above the board, drawn`).toBe(true);
+      expect(orderOf(html, "room-board") < orderOf(html, "room-clock-you"), `${colour}: you under the board, drawn`).toBe(true);
+      const theirs = html.slice(theirsAt, boardAt);
+      const mine = html.slice(mineAt);
+      const other = colour === "white" ? "Black" : "White";
+      expect(theirs, `${colour}: the opponent's name`).toContain("Ada Okonkwo");
+      expect(theirs, `${colour}: the opponent's colour`).toContain(other);
+      expect(theirs, `${colour}: never your name`).not.toContain("Bo Lind");
+      expect(mine, `${colour}: You`).toContain(">You<");
+      // the board is turned to the player's side by the shell (orientation), the clocks follow the viewer
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: colours").toBe(2);
+  });
+
+  it("the side to move is the dark bar wherever it sits: White to move darkens the TOP bar for Black and the BOTTOM bar for White", () => {
+    const asWhite = paint(mix("white"));
+    expect(asWhite).toMatch(/data-testid="room-clock-you"[^>]*data-active="true"/);
+    expect(asWhite).toMatch(/data-testid="room-clock-opponent"[^>]*data-active="false"/);
+    const asBlack = paint(mix("black"));
+    expect(asBlack).toMatch(/data-testid="room-clock-opponent"[^>]*data-active="true"/);
+    expect(asBlack).toMatch(/data-testid="room-clock-you"[^>]*data-active="false"/);
+  });
+
+  it("the sound switch is in the player's bar and nowhere else on a live board — not the header, not the opponent's bar", () => {
+    const html = paint(mix("white"));
+    expect(html.match(/data-testid="room-sound"/g)?.length, "exactly one").toBe(1);
+    const header = html.slice(html.indexOf('data-testid="room-header"'), html.indexOf("</header>"));
+    expect(header, "not in the header").not.toContain("room-sound");
+    const theirs = html.slice(html.indexOf('data-testid="room-clock-opponent"'), html.indexOf('data-testid="room-board"'));
+    expect(theirs, "not in the opponent's bar").not.toContain("room-sound");
+    expect(html.slice(html.indexOf('data-testid="room-clock-you"')), "in the player's bar").toContain("room-sound");
+  });
+
+  it("a held board and a frozen seat use the same split (the live game, not the result), the toggle included", () => {
+    const held = paint(snap({ game: GAME, you: { colour: "white", name: "Bo Lind", checkedIn: true }, canAct: false }));
+    expect(screenOf(held)).toBe("held");
+    const frozen = paint(snap({ game: GAME, you: { colour: "white", name: "Bo Lind", checkedIn: true }, frozen: "you", canAct: false }));
+    expect(screenOf(frozen)).toBe("revoked");
+    let checked = 0;
+    for (const [name, html] of [["held", held], ["frozen", frozen]] as const) {
+      expect(html, name).toContain('data-testid="room-clock-opponent"');
+      expect(html, name).not.toContain('data-testid="room-clocks-strip"');
+      expect(html.match(/data-testid="room-sound"/g)?.length, `${name}: one toggle`).toBe(1);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the optimistic increment reaches the PAGE: a 1.4 s clock with a move in flight and +5 paints 0:06.4 in the player's bar, the opponent's bar untouched (the real Screen, the real reducer)", () => {
+    const s = snap({ game: { ...GAME, whiteMs: 1_400, blackMs: 300_000 }, you: { colour: "white", name: "Bo Lind", checkedIn: true } });
+    const before = initialRoomState(s, T0);
+    const calm = paintScreen(s, null, "en", before);
+    expect(calm.slice(calm.indexOf('data-testid="room-clock-you"')), "premise: nothing in flight").toContain("0:01.4");
+    const sent = roomReducer(before, { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } });
+    const html = paintScreen(s, null, "en", sent);
+    const mine = html.slice(html.indexOf('data-testid="room-clock-you"'));
+    expect(mine, "1.4 + 5").toContain("0:06.4");
+    expect(mine).not.toContain("0:01.4");
+    expect(html.slice(html.indexOf('data-testid="room-clock-opponent"'), html.indexOf('data-testid="room-board"')), "5:00 stays 5:00").toContain("5:00");
+    // The refusal puts it back.
+    const refused = roomReducer(sent, { type: "act_failed", status: 500 });
+    const restored = paintScreen(s, null, "en", refused);
+    expect(restored.slice(restored.indexOf('data-testid="room-clock-you"'))).toContain("0:01.4");
+  });
+
+  it("the RESULT keeps today's layout: both clocks side by side above the board, the result card and the ways on below it, no sound switch", () => {
+    let checked = 0;
+    for (const colour of ["white", "black"] as const) {
+      const html = paint(
+        snap({
+          game: { ...GAME, over: true, clockRunning: false },
+          you: { colour, name: "Bo Lind", checkedIn: true },
+          opponent: { colour: colour === "white" ? "black" : "white", name: "Ada Okonkwo", checkedIn: true },
+          result: { outcome: "won", method: "checkmate", score: "1–0" },
+        }),
+      );
+      expect(screenOf(html), colour).toBe("over");
+      const order = ids(html).filter((i) => ["room-clocks-strip", "room-clock-opponent", "room-clock-you", "room-board", "room-result", "room-back-to-fixture", "room-standings", "room-sound"].includes(i));
+      expect(order, colour).toEqual(["room-clocks-strip", "room-clock-opponent", "room-clock-you", "room-board", "room-result", "room-back-to-fixture", "room-standings"]);
+      expect(classOfId(html, "room-clocks-strip"), colour).toContain("grid-cols-2");
+      expect(html.indexOf('data-testid="room-clock-opponent"') < html.indexOf('data-testid="room-clock-you"'), `${colour}: opponent on the left`).toBe(true);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: colours").toBe(2);
+  });
+});
+
 describe("the room's first paint", () => {
   it("live, cameras off: header, clocks, board, controls — in that order — and NO tile, pill or camera notice", () => {
     const html = paint(snap({ game: GAME, you: { colour: "white", name: "Bo Lind", checkedIn: true } }));
     expect(screenOf(html)).toBe("live");
-    const order = ids(html).filter((i) => ["room-header", "room-clocks-strip", "room-board", "room-tile-strip", "room-controls", "room-camera-notice"].includes(i));
-    expect(order).toEqual(["room-header", "room-clocks-strip", "room-board", "room-controls"]);
+    const order = ids(html).filter((i) => ["room-header", "room-clock-opponent", "room-board", "room-clock-you", "room-tile-strip", "room-controls", "room-camera-notice"].includes(i));
+    expect(order).toEqual(["room-header", "room-clock-opponent", "room-board", "room-clock-you", "room-controls"]);
     expect(html).toContain("Open Rapid · Round 3");
     expect(html).toContain("Board 2 · 10+5");
     expect(html, "the clocks paint the snapshot's values before any tick").toContain("9:42");
@@ -118,8 +232,8 @@ describe("the room's first paint", () => {
 
   it("live, cameras on: the tile strip and the camera notice join, after the board and after the controls", () => {
     const html = paintScreen(snap({ game: GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } }), true);
-    const order = ids(html).filter((i) => ["room-clocks-strip", "room-board", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"].includes(i));
-    expect(order).toEqual(["room-clocks-strip", "room-board", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"]);
+    const order = ids(html).filter((i) => ["room-clock-opponent", "room-board", "room-clock-you", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"].includes(i));
+    expect(order).toEqual(["room-clock-opponent", "room-board", "room-clock-you", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"]);
     expect(html).toContain("Ada · on camera");
     expect(html).toContain(en["onlineChess.camera.playerNotice" as keyof typeof en]);
   });
@@ -149,8 +263,8 @@ describe("the room's first paint", () => {
     const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
     const held = paint(snap({ game: GAME, you, canAct: false }));
     expect(screenOf(held)).toBe("held");
-    const order = ids(held).filter((i) => ["room-clock-opponent", "room-clock-you", "room-board", "room-seam-held", "room-controls", "room-resign"].includes(i));
-    expect(order).toEqual(["room-clock-opponent", "room-clock-you", "room-board", "room-seam-held"]);
+    const order = ids(held).filter((i) => ["room-clock-opponent", "room-board", "room-clock-you", "room-seam-held", "room-controls", "room-resign"].includes(i));
+    expect(order).toEqual(["room-clock-opponent", "room-board", "room-clock-you", "room-seam-held"]);
     expect(held, "no \"your move\" on a board nobody may move").not.toContain(en["externalPlay.room.yourMove" as keyof typeof en]);
     expect(held).toContain(en["externalPlay.room.state.held.title" as keyof typeof en]);
     // The pair: White to move, White's seat, the server takes it ⇒ movable.

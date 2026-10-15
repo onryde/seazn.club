@@ -15,11 +15,13 @@
 // column again, in the same order. Seam A (the revoked seat) is built the
 // same way. The board is chessground behind its licence loader, client-only.
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlural, useLocale, useT } from "@/components/i18n/dict-provider";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
-import { moverFlagAt, remainingMs } from "./clock-math";
-import { ClocksStrip } from "./clocks-strip";
+import { moverFlagAt, type OptimisticClock } from "./clock-math";
+import { ClockBar, ClocksStrip } from "./clocks-strip";
+import { SoundToggle, type SoundSwitch } from "./sound-toggle";
+import { useClockFaces } from "./use-clock-faces";
 import { RoomControls } from "./controls";
 import { OwnTile } from "./own-tile";
 import { PresencePill } from "./presence-pill";
@@ -70,49 +72,90 @@ const Board = dynamic(() => import("./board"), { ssr: false });
 const SEAT_RETRY_MS = 1_500;
 const SEAT_RETRIES = 3;
 
+/** The pair, side by side above the board: the result state (D24 keeps it as it was). */
 function Clocks({
   game,
   snap,
   skewMs,
   onZero,
-  held = false,
-  seatOnHold = false,
   t,
 }: {
   game: RoomGame;
   snap: RoomSnapshot;
   skewMs: number;
   onZero: () => void;
-  /** A held board: the times are Lichess's and still shown, but nobody is
-   *  told "your move" on a board the room takes no move on. */
+  t: RoomT;
+}) {
+  const faces = useClockFaces({ game, snap, skewMs, optimistic: null, onZero });
+  return (
+    <ClocksStrip
+      you={{ name: snap.you.name, colour: snap.you.colour, ms: faces[snap.you.colour] }}
+      opponent={{ name: snap.opponent.name, colour: snap.opponent.colour, ms: faces[snap.opponent.colour] }}
+      turn={game.turn}
+      over={game.over || snap.result !== null}
+      t={t}
+    />
+  );
+}
+
+/**
+ * T17B fix 2, D24 (owner): while the game is LIVE the board's column is the opponent's clock, the board, the player's
+ * clock — by VIEWER, never by colour (the board is already turned to the player's side). Each bar is the board's
+ * width: on a phone `className` carries the board's own max width. The sound switch sits in the player's bar. The
+ * board (with its own `order-*`) is the child; on a phone this column dissolves into the room's flex column
+ * (`contents`) so every piece takes its drawn place by `order`, and on a desktop it is the left column.
+ */
+function PlayColumn({
+  game,
+  snap,
+  skewMs,
+  optimistic,
+  onZero,
+  held = false,
+  seatOnHold = false,
+  sound,
+  barClassName = "",
+  t,
+  children,
+}: {
+  game: RoomGame;
+  snap: RoomSnapshot;
+  skewMs: number;
+  optimistic: OptimisticClock | null;
+  onZero: () => void;
+  /** A held board: the times are Lichess's and still shown, but nobody is told "your move". */
   held?: boolean;
   /** Seam A: the viewer's seat is frozen; the clocks still run. */
   seatOnHold?: boolean;
+  sound: SoundSwitch | null;
+  barClassName?: string;
   t: RoomT;
+  children: React.ReactNode;
 }) {
-  const running = game.clockRunning && !game.over;
-  const now = useServerNow(skewMs, running ? 100 : null);
-  const asOf = game.clockAsOf ? Date.parse(game.clockAsOf) : 0;
-  const ms = (colour: "white" | "black") =>
-    remainingMs({
-      baseMs: colour === "white" ? game.whiteMs : game.blackMs,
-      asOfMs: asOf,
-      nowMs: now ?? asOf,
-      running: running && now !== null && game.turn === colour,
-    });
-  const toMoveLeft = ms(game.turn);
-  useEffect(() => {
-    if (running && now !== null && toMoveLeft <= 0) onZero();
-  }, [running, now, toMoveLeft, onZero]);
+  const faces = useClockFaces({ game, snap, skewMs, optimistic, onZero });
+  const over = game.over || snap.result !== null || held;
   return (
-    <ClocksStrip
-      you={{ name: snap.you.name, colour: snap.you.colour, ms: ms(snap.you.colour) }}
-      opponent={{ name: snap.opponent.name, colour: snap.opponent.colour, ms: ms(snap.opponent.colour) }}
-      turn={game.turn}
-      over={game.over || snap.result !== null || held}
-      seatOnHold={seatOnHold}
-      t={t}
-    />
+    <div data-testid="room-play-column" className="contents md:mx-auto md:flex md:w-full md:max-w-[560px] md:min-w-0 md:flex-col md:gap-3">
+      <ClockBar
+        side="opponent"
+        who={{ name: snap.opponent.name, colour: snap.opponent.colour, ms: faces[snap.opponent.colour] }}
+        turn={game.turn}
+        over={over}
+        className={`order-1 ${barClassName}`}
+        t={t}
+      />
+      {children}
+      <ClockBar
+        side="you"
+        who={{ name: snap.you.name, colour: snap.you.colour, ms: faces[snap.you.colour] }}
+        turn={game.turn}
+        over={over}
+        seatOnHold={seatOnHold}
+        sound={sound ? <SoundToggle sound={sound} t={t} /> : null}
+        className={`order-4 ${barClassName}`}
+        t={t}
+      />
+    </div>
   );
 }
 
@@ -159,6 +202,8 @@ export function RoomShell({
   // T17B fix 2 (D19): move sounds, and the header's switch for them.
   const sound = useSoundSwitch();
   useRoomSounds(state, sound.on);
+  // D24: the switch lives in the player's own clock bar now (it was the header's).
+  const soundSwitch = useMemo<SoundSwitch>(() => ({ on: sound.on, onToggle: sound.toggle }), [sound.on, sound.toggle]);
 
   // Re-entry with cameras on: the seat is already ours, but the participant
   // token only ever arrives in a seat answer — claim once, quietly, so the
@@ -241,7 +286,7 @@ export function RoomShell({
 
   return (
     <div data-testid="match-room" data-screen={screen.kind} className="flex min-h-screen min-w-0 flex-col bg-[#fdfcf8] text-[#2e1065]">
-      <RoomHeader snap={snap} t={t} sound={{ on: sound.on, onToggle: sound.toggle }} />
+      <RoomHeader snap={snap} t={t} />
       <main className="mx-auto flex w-full min-w-0 max-w-[1040px] flex-1 flex-col px-4 pb-4 pt-3 md:p-6">
         <Screen
           screen={screen}
@@ -256,6 +301,7 @@ export function RoomShell({
           locale={locale}
           t={t}
           plural={plural}
+          sound={soundSwitch}
         />
       </main>
       <p className="px-4 pb-3 text-center text-[11px] text-[#6b5b8a] md:px-8">{t("externalPlay.room.pieceCredit")}</p>
@@ -280,7 +326,7 @@ function TileStrip({
 }) {
   const covering = handover.view.status === "covering" ? handover.view : null;
   return (
-    <div data-testid="room-tile-strip" className="order-5 flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
+    <div data-testid="room-tile-strip" className="order-6 flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
       <OwnTile
         policy={snap.cameraPolicy}
         stream={camera.stream}
@@ -314,6 +360,7 @@ export function Screen({
   locale,
   t,
   plural,
+  sound = null,
   reload = reloadPage,
 }: {
   screen: ReturnType<typeof roomScreen>;
@@ -330,6 +377,8 @@ export function Screen({
   locale: string;
   t: RoomT;
   plural: ReturnType<typeof usePlural>;
+  /** D24: the move-sounds switch, drawn in the player's own clock bar on a live board; none without one. */
+  sound?: SoundSwitch | null;
   /** The give-up notice's Reload (a test seam; the page reloads). */
   reload?: () => void;
 }) {
@@ -401,37 +450,44 @@ export function Screen({
         <div data-testid={mine ? "room-revoked" : "room-seat-held"} className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
           {cameraBanners}
           {g !== null ? (
-            <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
-              <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} seatOnHold t={t} />
-            </div>
-          ) : null}
-          {g !== null ? (
-            <div
-              data-testid="room-board"
-              data-ply={plyOf(g)}
-              data-on-hold="true"
-              className="order-3 mx-auto w-full min-w-0 max-w-[240px] opacity-50 [filter:grayscale(0.35)] md:max-w-[560px]"
+            <PlayColumn
+              game={g}
+              snap={snap}
+              skewMs={state.skewMs}
+              optimistic={null}
+              onZero={() => void room.clockZero()}
+              seatOnHold
+              sound={sound}
+              barClassName="max-md:mx-auto max-md:w-full max-md:max-w-[240px]"
+              t={t}
             >
-              <Board
-                fen={g.fen}
-                orientation={snap.you.colour}
-                lastMove={g.lastMove}
-                movable={false}
-                syncKey={state.syncKey}
-                onMove={() => {}}
-                label={t("externalPlay.room.board.seatOnHold")}
-                t={t}
-              />
-            </div>
+              <div
+                data-testid="room-board"
+                data-ply={plyOf(g)}
+                data-on-hold="true"
+                className="order-3 mx-auto w-full min-w-0 max-w-[240px] opacity-50 [filter:grayscale(0.35)] md:max-w-[560px]"
+              >
+                <Board
+                  fen={g.fen}
+                  orientation={snap.you.colour}
+                  lastMove={g.lastMove}
+                  movable={false}
+                  syncKey={state.syncKey}
+                  onMove={() => {}}
+                  label={t("externalPlay.room.board.seatOnHold")}
+                  t={t}
+                />
+              </div>
+            </PlayColumn>
           ) : null}
           <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
             <div className="order-2 min-w-0">
               {mine ? <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} t={t} /> : <SeatHeldNotice t={t} />}
             </div>
             {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} t={t} /> : null}
-            <BackToFixture href={snap.links.fixture} className="order-6" t={t} />
+            <BackToFixture href={snap.links.fixture} className="order-7" t={t} />
             {cameraDuty ? (
-              <div className="order-7">
+              <div className="order-8">
                 <CameraNotice onHold t={t} />
               </div>
             ) : null}
@@ -508,20 +564,30 @@ export function Screen({
       const g = snap.game!;
       return (
         <div data-testid="room-held" className="flex min-w-0 flex-col gap-3 md:mx-auto md:w-full md:max-w-[560px]">
-          <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} held t={t} />
-          <div data-testid="room-board" data-ply={plyOf(g)} className="mx-auto w-full max-w-[560px]">
-            <Board
-              fen={g.fen}
-              orientation={snap.you.colour}
-              lastMove={g.lastMove}
-              movable={false}
-              syncKey={state.syncKey}
-              onMove={() => {}}
-              label={boardLabel(g, false, t)}
-              t={t}
-            />
-          </div>
-          {flagged ? <FlagNotice kind="organiser" t={t} /> : <HeldSeam t={t} />}
+          <PlayColumn
+            game={g}
+            snap={snap}
+            skewMs={state.skewMs}
+            optimistic={null}
+            onZero={() => void room.clockZero()}
+            held
+            sound={sound}
+            t={t}
+          >
+            <div data-testid="room-board" data-ply={plyOf(g)} className="order-3 mx-auto w-full min-w-0 max-w-[560px]">
+              <Board
+                fen={g.fen}
+                orientation={snap.you.colour}
+                lastMove={g.lastMove}
+                movable={false}
+                syncKey={state.syncKey}
+                onMove={() => {}}
+                label={boardLabel(g, false, t)}
+                t={t}
+              />
+            </div>
+          </PlayColumn>
+          <div className="order-5">{flagged ? <FlagNotice kind="organiser" t={t} /> : <HeldSeam t={t} />}</div>
         </div>
       );
     }
@@ -533,29 +599,37 @@ export function Screen({
       return (
         <div className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
           {cameraBanners}
-          <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
-            <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} held={flagged} t={t} />
-          </div>
-          <div data-testid="room-board" data-ply={plyOf(g)} className="order-3 mx-auto w-full min-w-0 max-w-[560px]">
-            <Board
-              fen={g.fen}
-              orientation={snap.you.colour}
-              lastMove={g.lastMove}
-              movable={canMove(state) && !flagged}
-              syncKey={state.syncKey}
-              onMove={(uci) => void room.act({ kind: "move", uci })}
-              label={boardLabel(g, false, t)}
-              t={t}
-            />
-          </div>
+          <PlayColumn
+            game={g}
+            snap={snap}
+            skewMs={state.skewMs}
+            optimistic={state.optimistic}
+            onZero={() => void room.clockZero()}
+            held={flagged}
+            sound={sound}
+            t={t}
+          >
+            <div data-testid="room-board" data-ply={plyOf(g)} className="order-3 mx-auto w-full min-w-0 max-w-[560px]">
+              <Board
+                fen={g.fen}
+                orientation={snap.you.colour}
+                lastMove={g.lastMove}
+                movable={canMove(state) && !flagged}
+                syncKey={state.syncKey}
+                onMove={(uci) => void room.act({ kind: "move", uci })}
+                label={boardLabel(g, false, t)}
+                t={t}
+              />
+            </div>
+          </PlayColumn>
           <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
             {flagged ? (
               <FlagNotice kind="lichess" className="order-2" t={t} />
             ) : notice !== null ? (
-              <MoveNoticeView kind={notice} className={notice === "invalid" ? "order-4" : "order-2"} t={t} />
+              <MoveNoticeView kind={notice} className={notice === "invalid" ? "order-5" : "order-2"} t={t} />
             ) : null}
             {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} t={t} /> : null}
-            <div data-testid="room-controls" className="order-6">
+            <div data-testid="room-controls" className="order-7">
               <RoomControls
                 ply={plyOf(g)}
                 over={g.over}
@@ -569,7 +643,7 @@ export function Screen({
               />
             </div>
             {cameraDuty ? (
-              <div className="order-7">
+              <div className="order-8">
                 <CameraNotice t={t} />
               </div>
             ) : null}

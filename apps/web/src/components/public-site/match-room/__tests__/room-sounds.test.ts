@@ -324,12 +324,12 @@ describe("through the REAL reducer: the room's own events in, sounds out", () =>
       heardNow.push(r.sound);
     };
     see(state); // load
-    see(roomReducer(state, { type: "act_sent", action: { kind: "move", uci: "g1f3" } })); // my drop
+    see(roomReducer(state, { type: "act_sent", at: T0, action: { kind: "move", uci: "g1f3" } })); // my drop
     see(roomReducer(state, { type: "broadcast", b: broadcast(game(["e2e4", "e7e5", "g1f3"])), receivedAt: T0 + 1_000 })); // its broadcast
     see(roomReducer(state, { type: "act_answered", answer: { ok: true } as never }));
     see(roomReducer(state, { type: "snapshot", snap: snap(game(["e2e4", "e7e5", "g1f3"]), T0 + 2_000), receivedAt: T0 + 2_000 })); // re-read
     see(roomReducer(state, { type: "broadcast", b: broadcast(game(["e2e4", "e7e5", "g1f3", "b8c6"])), receivedAt: T0 + 3_000 })); // opponent
-    see(roomReducer(state, { type: "act_sent", action: { kind: "move", uci: "f3e5" } })); // my capture, dropped
+    see(roomReducer(state, { type: "act_sent", at: T0, action: { kind: "move", uci: "f3e5" } })); // my capture, dropped
     see(roomReducer(state, { type: "act_failed", status: 409 })); // refused: the board is put back
     // The same capture then arrives from elsewhere (another tab): the refused drop no longer covers it.
     see(roomReducer(state, { type: "snapshot", snap: snap(game(["e2e4", "e7e5", "g1f3", "b8c6", "f3e5"]), T0 + 4_000), receivedAt: T0 + 4_000 }));
@@ -339,10 +339,10 @@ describe("through the REAL reducer: the room's own events in, sounds out", () =>
 
   it("observe() reads the room's state: the game, the end, the offer, the pending move and the board's put-back key", () => {
     const s = initialRoomState(snap(game(["e2e4"], { drawOfferBy: "black" })), T0);
-    const o = observe(roomReducer(s, { type: "act_sent", action: { kind: "move", uci: "e7e5" } }));
+    const o = observe(roomReducer(s, { type: "act_sent", at: T0, action: { kind: "move", uci: "e7e5" } }));
     expect(o).toEqual({ gameId: "g1", ply: 1, fen: play(START, "e2e4"), ended: false, offerBy: "black", me: "white", move: "e7e5", sync: 0 });
     expect(observe(initialRoomState({ ...snap(null), result: { outcome: "won" } as never }, T0))).toMatchObject({ gameId: null, ply: -1, fen: null, ended: true });
-    expect(observe(roomReducer(s, { type: "act_sent", action: { kind: "resign" } })).move, "only a move is a drop").toBeNull();
+    expect(observe(roomReducer(s, { type: "act_sent", at: T0, action: { kind: "resign" } })).move, "only a move is a drop").toBeNull();
   });
 });
 

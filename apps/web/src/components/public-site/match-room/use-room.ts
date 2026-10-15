@@ -178,7 +178,8 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
   const act = useCallback(
     async (action: RoomActBody) => {
       if (stateRef.current.pending !== null) return;
-      dispatch({ type: "act_sent", action });
+      // D24: the instant rides with the event (the reducer is pure): a move's own increment shows from this moment.
+      dispatch({ type: "act_sent", action, at: Date.now() });
       const r = await sendAct(fixtureId, token, action);
       if (r.ok) dispatch({ type: "act_answered", answer: r.data });
       else dispatch({ type: "act_failed", status: r.status });

@@ -155,6 +155,54 @@ describe("useRoomSounds (D19) — the room's renders in, sounds out", () => {
   });
 });
 
+// T17B fix 2, D24: the player's own increment is shown at the drop (room-state `optimistic`). The low-time cue reads the
+// SERVER's clock only: a guess that lifts the face above the 15 s re-arm line and is then refused would otherwise sound
+// the cue a second time for one spell of low time.
+describe("low time and the optimistic increment (D24)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+  });
+  const lowTimes = (audio: ReturnType<typeof fakeAudio>) => audio.play.mock.calls.filter((c) => c[0] === "lowTime").length;
+
+  it("crossing 10 s sounds once; a move dropped with a +10 increment (the face jumps past 15 s) and then REFUSED does not sound it again", () => {
+    const audio = fakeAudio();
+    const base = snap(game(["e2e4", "e7e5"], { whiteMs: 12_000 }));
+    base.meta.incrementSeconds = 10;
+    let state = initialRoomState(base, T0);
+    const island = renderIsland(Probe, { state, on: true, audio });
+    vi.advanceTimersByTime(2_500); // 9.5 s left: the cue fires
+    expect(lowTimes(audio), "the crossing").toBe(1);
+    // The player drops a move: the face would read 9.5 + 10 = 19.5 s (past the re-arm line).
+    state = roomReducer(state, { type: "act_sent", at: Date.now(), action: { kind: "move", uci: "g1f3" } });
+    expect(state.optimistic?.ms, "premise: the guess is past the re-arm line").toBeGreaterThan(15_000);
+    island.rerender({ state, on: true, audio });
+    vi.advanceTimersByTime(300);
+    island.rerender({ state, on: true, audio });
+    // Lichess refuses it: the clock is the server's again, 9 s and falling.
+    state = roomReducer(state, { type: "act_failed", status: 500 });
+    expect(state.optimistic).toBeNull();
+    island.rerender({ state, on: true, audio });
+    vi.advanceTimersByTime(3_000);
+    island.rerender({ state, on: true, audio });
+    expect(lowTimes(audio), "one spell of low time, one cue — the bounce did not re-arm it").toBe(1);
+  });
+
+  it("the pair: the server's OWN number lifting past 15 s (the increment confirmed) and falling again DOES sound a second time", () => {
+    const audio = fakeAudio();
+    let state = initialRoomState(snap(game(["e2e4", "e7e5"], { whiteMs: 12_000 })), T0);
+    const island = renderIsland(Probe, { state, on: true, audio });
+    vi.advanceTimersByTime(2_500);
+    expect(lowTimes(audio)).toBe(1);
+    // Confirmed: Black replied and White has 19.5 s again as of now.
+    const at = Date.now();
+    state = roomReducer(state, { type: "snapshot", snap: snap(game(["e2e4", "e7e5", "g1f3", "b8c6"], { whiteMs: 19_500, clockAsOf: new Date(at).toISOString() }), at), receivedAt: at });
+    island.rerender({ state, on: true, audio });
+    vi.advanceTimersByTime(10_000); // 9.5 s left again
+    expect(lowTimes(audio), "a new spell").toBe(2);
+  });
+});
+
 describe("useSoundSwitch (D19): the header's toggle", () => {
   it("default ON; a press turns it off and remembers it; turning it on plays a short preview — it is a tap, so audio is unlocked", () => {
     const device = new Map<string, string>();

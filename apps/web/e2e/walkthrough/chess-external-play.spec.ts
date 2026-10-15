@@ -654,11 +654,29 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   test("six moves tapped on OUR board reach Lichess exactly as played, both boards agree, and the camera-off banner (9) stays up", async () => {
     test.setTimeout(budget(OPENING.length + 2));
     const rules = new Chess();
+    const faceSecs = (text: string | null): number => {
+      const m = /(\d+):(\d\d)(?:\.(\d))?/.exec(text ?? "");
+      if (!m) throw new Error(`no clock face in "${text}"`);
+      return Number(m[1]) * 60 + Number(m[2]) + (m[3] ? Number(m[3]) / 10 : 0);
+    };
+    // T17B fix 2, D24: my own clock RUNS again as soon as the server has answered my move and the opponent has replied
+    // — the increment I was shown at the drop is no longer pinned (it would be, for up to its 10 s, if the guess were
+    // not retired by the ply the answer brings). Two readings a little over a second apart must differ.
+    let runningChecked = 0;
+    const expectOwnClockRuns = async (pg: Page, plies: number) => {
+      const face = pg.getByTestId("room-clock-you").locator("span.font-display");
+      const a = faceSecs(await face.textContent());
+      await pg.waitForTimeout(1_250);
+      const b = faceSecs(await face.textContent());
+      expect(b, `after ${plies} plies my clock runs: ${a} then ${b}`).toBeLessThan(a);
+      runningChecked += 1;
+    };
     for (const [i, uci] of OPENING.entries()) {
       const mover = i % 2 === 0 ? white : black;
       const orientation = i % 2 === 0 ? "white" : "black";
       await expect(mover.getByTestId("room-board")).toHaveAttribute("data-ply", String(i), { timeout: LIVE_POLL_MS + 10_000 });
       await boardPainted(mover);
+      if (i >= 2) await expectOwnClockRuns(mover, i);
       await tapMove(mover, uci, orientation);
       rules.move({ from: uci.slice(0, 2), to: uci.slice(2, 4) });
       // What Lichess was sent is what was played, in order.
@@ -698,6 +716,22 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       // ON the live board, never instead of it.
       await expect(pg.getByTestId("room-camera-off")).toBeVisible();
     }
+    // T17B fix 2, D24: after six plies White is to move, so BLACK's clock stands still — and what BOTH pages paint for
+    // it is the ledger's number. The increment each page showed at the drop of its own moves (the optimistic add) is
+    // gone, not added to: the face reads the ledger's black_ms within a second, never that plus the increment.
+    const blackLedger = (await bridgeRow(boardA.fixtureId))!.black_ms! / 1000;
+    let faces = 0;
+    for (const [pg, bar] of [
+      [white, "room-clock-opponent"],
+      [black, "room-clock-you"],
+    ] as const) {
+      const seen = faceSecs(await pg.getByTestId(bar).locator("span.font-display").textContent());
+      expect(Math.abs(seen - blackLedger), `${bar}: the page paints the ledger's ${blackLedger} s for Black, not ${seen}`).toBeLessThanOrEqual(1.5);
+      expect(seen, `${bar}: never more than the base plus the increments Black earned (2)`).toBeLessThanOrEqual(TC.base + 2 * TC.increment);
+      faces += 1;
+    }
+    expect(faces, "anti-vacuity: both pages").toBe(2);
+    expect(runningChecked, "anti-vacuity: every turn from ply 2 on (the movers at plies 2..5)").toBe(OPENING.length - 2);
     // Whatever the pages tried to reach off the machine (and were refused),
     // on the record — measured 2026-10-13: nothing (see the file header).
     test.info().annotations.push({ type: "blocked-hosts", description: [...blocked].join(", ") || "none" });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatClock, remainingMs } from "../clock-math";
+import { formatClock, remainingMs, TENTHS_BELOW_MS } from "../clock-math";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 
 describe("remainingMs", () => {
@@ -40,17 +40,49 @@ describe("remainingMs", () => {
 });
 
 describe("formatClock", () => {
-  it("m:ss above ten seconds, rounding a partial second UP so 0:00 means really zero", () => {
+  it("m:ss from twenty seconds up, rounding a partial second UP so 0:00 means really zero", () => {
     expect(formatClock(600_000)).toBe("10:00");
     expect(formatClock(59_001)).toBe("1:00");
-    expect(formatClock(12_000)).toBe("0:12");
-    expect(formatClock(10_000)).toBe("0:10");
+    expect(formatClock(30_000)).toBe("0:30");
+    expect(formatClock(20_000)).toBe("0:20");
+    expect(formatClock(20_001), "a partial second above the line rounds up, still m:ss").toBe("0:21");
   });
 
-  it("tenths below ten seconds (the time-trouble face), and 0.0 only at zero", () => {
+  it("tenths below TWENTY seconds (D24, owner: the time-trouble face starts earlier), two-digit seconds included, and 0.0 only at zero", () => {
+    expect(formatClock(19_999)).toBe("0:19.9");
+    expect(formatClock(19_700)).toBe("0:19.7");
+    expect(formatClock(10_000), "ten seconds is no longer the line").toBe("0:10.0");
     expect(formatClock(9_950)).toBe("0:09.9");
     expect(formatClock(1)).toBe("0:00.1");
     expect(formatClock(0)).toBe("0:00.0");
     expect(formatClock(-5)).toBe("0:00.0");
+  });
+
+  it("the threshold is twenty seconds, typed from the ruling, and the face switches exactly there", () => {
+    expect(TENTHS_BELOW_MS).toBe(20_000);
+    expect(formatClock(TENTHS_BELOW_MS - 1), "one ms under: tenths").toMatch(/^0:\d\d\.\d$/);
+    expect(formatClock(TENTHS_BELOW_MS), "at the line: whole seconds").toMatch(/^\d+:\d\d$/);
+  });
+
+  it("a counted table across the line: every whole second and tenth from 0.1 s to 25 s reads as its own value, never 0.0 while time remains", () => {
+    let checked = 0;
+    for (let ms = 1; ms <= 25_000; ms += 50) {
+      const face = formatClock(ms);
+      if (ms < 20_000) {
+        // The oracle reads the digits off the decimal (whole seconds, then the tenth below them), a different route to
+        // the same face; a clock with any time left never reads 0.0, so under a tenth it shows 0.1.
+        const whole = Math.floor(ms / 1_000);
+        const tenth = Math.floor((ms % 1_000) / 100);
+        const expected = whole === 0 && tenth === 0 ? "0:00.1" : `0:${String(whole).padStart(2, "0")}.${tenth}`;
+        expect(face, `${ms} ms`).toBe(expected);
+        expect(face, `${ms} ms is not 0.0`).not.toBe("0:00.0");
+      } else {
+        // Whole seconds, a started second counted: 20.001 s reads 0:21.
+        const seconds = Math.floor(ms / 1_000) + (ms % 1_000 === 0 ? 0 : 1);
+        expect(face, `${ms} ms`).toBe(`${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`);
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: faces checked").toBe(500);
   });
 });

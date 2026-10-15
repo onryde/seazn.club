@@ -43,11 +43,11 @@ const ALL_WIDTHS = [320, 360, 375, 390, 430, 768, 834, 1280];
 /** Board-vs-build captures (owner's canvas), only when asked for, never committed. */
 const SHOTS = process.env.ROOM_SHOTS_DIR;
 
-async function shoot(page: Page, name: string): Promise<void> {
+async function shoot(page: Page, name: string, widths: number[] = [320, 768, 1280]): Promise<void> {
   if (!SHOTS) return;
   mkdirSync(SHOTS, { recursive: true });
   const original = page.viewportSize();
-  for (const width of [320, 768, 1280]) {
+  for (const width of widths) {
     await page.setViewportSize({ width, height: width === 1280 ? 900 : width === 768 ? 1024 : 700 });
     await page.waitForTimeout(250);
     await page.screenshot({ path: join(SHOTS, `${name}-${width}.png`), fullPage: true, caret: "initial" });
@@ -530,7 +530,7 @@ test("the board: legal dots from the rules, a move sent as UCI with the personal
   await expect(notice, "the re-read of the same board keeps it").toHaveAttribute("data-kind", "refused");
   await inAside(p, "room-move-notice");
   await p.setViewportSize({ width: 320, height: 800 });
-  expect(await stackedTopDown(p, ["room-clocks-strip", "room-move-notice", "room-board", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await stackedTopDown(p, ["room-clock-opponent", "room-move-notice", "room-board", "room-clock-you", "room-controls"]), "anti-vacuity: pairs").toBe(4);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "c2-refused");
   await ctx.close();
@@ -815,7 +815,7 @@ test("Seam A, the Lichess link revoked: the frozen player's board dimmed and rea
   await inAside(p, "room-revoked-notice");
   await p.setViewportSize({ width: 320, height: 800 });
   await expect(you).toContainText(uiEn["externalPlay.room.seatOnHold"]!);
-  expect(await stackedTopDown(p, ["room-clocks-strip", "room-revoked-notice", "room-board", "room-back-to-fixture"]), "anti-vacuity: pairs").toBe(3);
+  expect(await stackedTopDown(p, ["room-clock-opponent", "room-revoked-notice", "room-board", "room-clock-you", "room-back-to-fixture"]), "anti-vacuity: pairs").toBe(4);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "a-revoked");
 
@@ -849,7 +849,7 @@ async function expectNeutralHold(page: Page, o: { board: boolean }): Promise<voi
   await expect(page.getByTestId("room-board")).toHaveCount(o.board ? 1 : 0);
   if (o.board) await inAside(page, "room-seat-held-notice");
   await page.setViewportSize({ width: 320, height: 800 });
-  const column = o.board ? ["room-clocks-strip", "room-seat-held-notice", "room-board", "room-back-to-fixture"] : ["room-seat-held-notice", "room-back-to-fixture"];
+  const column = o.board ? ["room-clock-opponent", "room-seat-held-notice", "room-board", "room-clock-you", "room-back-to-fixture"] : ["room-seat-held-notice", "room-back-to-fixture"];
   expect(await stackedTopDown(page, column), "anti-vacuity: pairs").toBe(column.length - 1);
   expect(await noSidewaysScroll(page, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
 }
@@ -941,7 +941,7 @@ test("Seam A, the game on ANOTHER Lichess account (re-review 5 I-2): White re-li
   }));
   expect(fit.scroll, "the name is not clipped at 320").toBeLessThanOrEqual(fit.client);
   expect(fit.lines, "it wraps onto more lines").toBeGreaterThan(1);
-  expect(await stackedTopDown(p, ["room-clocks-strip", "room-revoked-notice", "room-board", "room-back-to-fixture"]), "anti-vacuity: pairs").toBe(3);
+  expect(await stackedTopDown(p, ["room-clock-opponent", "room-revoked-notice", "room-board", "room-clock-you", "room-back-to-fixture"]), "anti-vacuity: pairs").toBe(4);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "a-other-account");
   // The opponent's account is as recorded: Black's board plays on.
@@ -987,7 +987,7 @@ test("Seam B, online chess off: one calm card — no board, clocks or camera —
   const back = card.getByTestId("room-back-to-fixture");
   await expect(back).toHaveText(uiEn["externalPlay.room.backToFixture"]!);
   await expect(back).toHaveAttribute("href", room.fixturePath);
-  for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-tile-strip", "room-checkin-cta", "room-controls"]) {
+  for (const id of ["room-board", "room-clock-opponent", "room-clock-you", "room-own-tile", "room-tile-strip", "room-checkin-cta", "room-controls"]) {
     await expect(p.getByTestId(id), id).toHaveCount(0);
   }
   expect(await card.evaluate((el) => getComputedStyle(el).backgroundColor), "a white card (canvas)").toBe("rgb(255, 255, 255)");
@@ -1042,7 +1042,7 @@ test("T17B fix 2, D10: the organiser's No result before any game, then its void 
     await expect(card.getByRole("heading", { name: uiEn["externalPlay.room.state.boardClosed.title"]! })).toBeVisible();
     await expect(card).toContainText(uiEn["externalPlay.room.state.boardClosed.body"]!);
     await expect(card.getByTestId("room-back-to-fixture")).toHaveAttribute("href", room.fixturePath);
-    for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-checkin-cta", "room-controls", "room-state-creating"]) {
+    for (const id of ["room-board", "room-clock-opponent", "room-clock-you", "room-own-tile", "room-checkin-cta", "room-controls", "room-state-creating"]) {
       await expect(p.getByTestId(id), id).toHaveCount(0);
     }
     if (me === room.white) {
@@ -1088,7 +1088,7 @@ test("Seam C1, offline: a read with no answer shows You're offline — reconnect
   await expect(p.getByTestId("room-board-surface"), "the board plays on").toHaveAttribute("data-movable", "true");
   await inAside(p, "room-move-notice");
   await p.setViewportSize({ width: 320, height: 800 });
-  expect(await stackedTopDown(p, ["room-clocks-strip", "room-move-notice", "room-board", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await stackedTopDown(p, ["room-clock-opponent", "room-move-notice", "room-board", "room-clock-you", "room-controls"]), "anti-vacuity: pairs").toBe(4);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "c1-offline");
   // Back online: the next read that gets an answer ends it.
@@ -1143,7 +1143,7 @@ test("a move a RULE refused (400): C3 under the board — the room is not gone, 
   await expect(notice).toHaveText(uiEn["externalPlay.room.notice.invalid"]!);
   await inAside(p, "room-move-notice");
   await p.setViewportSize({ width: 320, height: 800 });
-  expect(await stackedTopDown(p, ["room-clocks-strip", "room-board", "room-move-notice", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await stackedTopDown(p, ["room-clock-opponent", "room-board", "room-clock-you", "room-move-notice", "room-controls"]), "anti-vacuity: pairs").toBe(4);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "c3-invalid");
   // The browser's own notice of the 400 it was handed (Chrome logs every
@@ -1204,7 +1204,7 @@ test("play's 404, a move racing into a hold (re-review 5 I-1): C2 — never C3 �
   await expect.poll(() => piecesOnBoard(p), { message: "the knight is back where the ledger has it" }).toEqual(piecesOf(fen));
   expect(gated, "anti-vacuity: the re-read is waiting at the gate").toBeGreaterThanOrEqual(1);
   await p.setViewportSize({ width: 320, height: 800 });
-  expect(await stackedTopDown(p, ["room-clocks-strip", "room-move-notice", "room-board"]), "anti-vacuity: pairs").toBe(2);
+  expect(await stackedTopDown(p, ["room-clock-opponent", "room-move-notice", "room-board", "room-clock-you"]), "anti-vacuity: pairs").toBe(3);
   await shoot(p, "c2-play-404");
   // The gate opens (every read from now passes straight through): the read
   // says what the board is — held — and that screen outranks the notice,
@@ -1297,7 +1297,7 @@ test("a draw offer: the player offered sees Decline and Accept draw; the one who
   await expect(notice).not.toContainText(uiEn["externalPlay.room.notice.invalid"]!);
   await inAside(w, "room-move-notice");
   await w.setViewportSize({ width: 320, height: 800 });
-  expect(await stackedTopDown(w, ["room-clocks-strip", "room-move-notice", "room-board", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await stackedTopDown(w, ["room-clock-opponent", "room-move-notice", "room-board", "room-clock-you", "room-controls"]), "anti-vacuity: pairs").toBe(4);
   expect(await noSidewaysScroll(w, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(w, "c2-generic");
   const own = consoleErrors.filter((e) => /status of 503/.test(e));
@@ -2052,7 +2052,7 @@ test("T17B fix 2, D19: move sounds — none before a tap or on load; each new pl
   expect(await soundsPlayed(p)).toEqual([]);
 
   // A tap anywhere is the gesture.
-  await p.getByTestId("room-clocks-strip").click();
+  await p.getByTestId("room-clock-opponent").click();
   await expect.poll(() => contexts(p)).toEqual(["running"]);
 
   // Each new ply, live, with the sound the rules say it is (the player is White).
@@ -2133,7 +2133,7 @@ test("T17B fix 2, D19: low time — once, when the player's OWN running clock cr
   await ctx.addInitScript(SOUND_SPY);
   const p = await openRoom(ctx, room, room.white.token);
   await boardReady(p);
-  await p.getByTestId("room-clocks-strip").click();
+  await p.getByTestId("room-clock-opponent").click();
   await expect.poll(() => contexts(p)).toEqual(["running"]);
   // Black replies; White's clock now runs from 14 s.
   await playOn(room, ["e2e4", "e7e5"], { whiteMs: 14_000 });
@@ -2167,5 +2167,220 @@ test("T17B fix 2, D19: storage blocked — the switch still works on the page, a
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => soundsPlayed(p), { message: "turned back on: the preview plays" }).toEqual(["move"]);
+  await ctx.close();
+});
+
+// ------------------------------------------------- D24: the clocks by viewer
+//
+// T17B fix 2, D24 (owner request, stg v797): while the game is live the OPPONENT's clock is a bar above the board and
+// the player's own a bar below it — by VIEWER, never by colour; each bar is the board's width; the move-sounds switch
+// sits in the player's own bar. Once a RESULT is shown the owner keeps today's layout: both clocks side by side above
+// the board, the result card and the ways on below it.
+
+/** The seconds a clock face reads ("9:42" -> 582, "0:19.7" -> 19.7), the first face in the text. */
+function faceSeconds(text: string | null): number {
+  const m = /(\d+):(\d\d)(?:\.(\d))?/.exec(text ?? "");
+  if (!m) throw new Error(`no clock face in "${text}"`);
+  return Number(m[1]) * 60 + Number(m[2]) + (m[3] ? Number(m[3]) / 10 : 0);
+}
+const faceOf = (page: Page, id: "room-clock-you" | "room-clock-opponent") => page.getByTestId(id).locator("span.font-display");
+
+test("T17B fix 2, D24: the opponent's clock above the board, mine below — both colours, each bar the board's width at 320, 768, 1100 and 1280 — the sound switch in MY bar, the header without one", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: 582_000, blackMs: 497_000 });
+  const WIDTHS = [320, 768, 1100, 1280];
+  let framed = 0;
+  let sides = 0;
+  for (const [who, me, them] of [
+    ["white", room.white, room.black],
+    ["black", room.black, room.white],
+  ] as const) {
+    const ctx = await cold(browser);
+    const p = await openRoom(ctx, room, me.token);
+    expect(await screenOf(p)).toBe("live");
+    await boardReady(p);
+    const theirs = p.getByTestId("room-clock-opponent");
+    const mine = p.getByTestId("room-clock-you");
+    // By viewer: the opponent's name and colour above, "You" below — Black's page too.
+    await expect(theirs).toContainText(them.name);
+    await expect(theirs).toContainText(uiEn[who === "white" ? "externalPlay.room.colour.black" : "externalPlay.room.colour.white"]!);
+    await expect(mine).toContainText(uiEn["externalPlay.room.you"]!);
+    await expect(mine).not.toContainText(them.name);
+    // White to move: the dark bar is wherever the side to move sits for THIS viewer.
+    await expect(who === "white" ? mine : theirs).toHaveAttribute("data-active", "true");
+    await expect(who === "white" ? theirs : mine).toHaveAttribute("data-active", "false");
+    // The switch: in my bar, not in the header, not in the opponent's bar; a real 44px target.
+    await expect(mine.getByTestId("room-sound")).toHaveCount(1);
+    await expect(theirs.getByTestId("room-sound")).toHaveCount(0);
+    await expect(p.getByTestId("room-header").getByTestId("room-sound")).toHaveCount(0);
+    await expect(p.getByTestId("room-sound")).toHaveCount(1);
+    for (const width of WIDTHS) {
+      await p.setViewportSize({ width, height: 900 });
+      await p.waitForTimeout(150);
+      const opp = await boxOf(p, "room-clock-opponent");
+      const board = await boxOf(p, "room-board");
+      const you = await boxOf(p, "room-clock-you");
+      expect(opp.y + opp.height, `${who}@${width}: the opponent's bar is above the board`).toBeLessThanOrEqual(board.y + 1);
+      expect(board.y + board.height, `${who}@${width}: my bar is below the board`).toBeLessThanOrEqual(you.y + 1);
+      for (const [name, bar] of [["opponent", opp], ["you", you]] as const) {
+        expect(Math.abs(bar.width - board.width), `${who}@${width}: the ${name} bar is the board's width`).toBeLessThanOrEqual(2);
+        expect(Math.abs(bar.x - board.x), `${who}@${width}: the ${name} bar lines up with the board`).toBeLessThanOrEqual(2);
+      }
+      // A real tap target: the paint box is not the tap area, so hit-test the centre.
+      const toggle = mine.getByTestId("room-sound");
+      const tb = (await toggle.boundingBox())!;
+      expect(Math.min(tb.width, tb.height), `${who}@${width}: the switch is 44px`).toBeGreaterThanOrEqual(43.5);
+      expect(tb.x + tb.width, `${who}@${width}: the switch is inside my bar`).toBeLessThanOrEqual(you.x + you.width + 0.5);
+      const hit = await toggle.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return top === el || (top !== null && el.contains(top));
+      });
+      expect(hit, `${who}@${width}: the centre of the switch hits the switch`).toBe(true);
+      if (width >= 768) await inAside(p, "room-controls");
+      framed += 1;
+    }
+    // D12's probe, extended to the clock rows: every painted box (the bars included) is inside the window.
+    expect(await nothingPastTheEdge(p, [320, 768, 1024, 1100, 1280]), "anti-vacuity: widths").toBe(5);
+    expect(await noSidewaysScroll(p, [320, 360, 768, 1100, 1280])).toBe(5);
+    // The switch works from its new place, and is remembered (its setting reads from the same box).
+    const toggle = mine.getByTestId("room-sound");
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await shoot(p, `d24-live-${who}`, [320, 768, 1100, 1280]);
+    sides += 1;
+    await ctx.close();
+  }
+  expect(sides, "anti-vacuity: both colours").toBe(2);
+  expect(framed, "anti-vacuity: colours x widths").toBe(2 * WIDTHS.length);
+});
+
+test("T17B fix 2, D24: the layout follows the game — live is the opponent above and me below; the RESULT is both clocks side by side above the board with the result card below (both colours), no switch in either bar", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const moves = ["e2e4", "e7e5"];
+  await seedGameSql(room, { moves, whiteMs: 582_000, blackMs: 497_000 });
+  let overs = 0;
+  const pages: [string, Page][] = [];
+  const ctxs = [];
+  for (const [who, me] of [
+    ["white", room.white],
+    ["black", room.black],
+  ] as const) {
+    const ctx = await cold(browser);
+    ctxs.push(ctx);
+    const p = await openRoom(ctx, room, me.token);
+    expect(await screenOf(p), who).toBe("live");
+    await boardReady(p);
+    const opp = await boxOf(p, "room-clock-opponent");
+    const you = await boxOf(p, "room-clock-you");
+    expect(you.y, `${who}: live, my bar is BELOW the opponent's`).toBeGreaterThan(opp.y + opp.height);
+    await expect(p.getByTestId("room-sound"), `${who}: live has the switch`).toHaveCount(1);
+    pages.push([who, p]);
+  }
+  // Lichess ends the game (Black's page and White's alike): the room leaves the live board.
+  await playOn(room, moves, { finished: true });
+  for (const [who, p] of pages) {
+    await expect.poll(() => screenOf(p), { timeout: 20_000, message: `${who}: the game is over` }).toBe("over");
+    await boardReady(p);
+    for (const width of [320, 768, 1100, 1280]) {
+      await p.setViewportSize({ width, height: 900 });
+      await p.waitForTimeout(150);
+      const opp = await boxOf(p, "room-clock-opponent");
+      const you = await boxOf(p, "room-clock-you");
+      const board = await boxOf(p, "room-board");
+      const result = await boxOf(p, "room-result");
+      expect(Math.abs(opp.y - you.y), `${who}@${width}: the two clocks sit on one row`).toBeLessThanOrEqual(2);
+      expect(opp.x + opp.width, `${who}@${width}: the opponent's on the left, mine on the right`).toBeLessThanOrEqual(you.x + 1);
+      expect(Math.max(opp.y + opp.height, you.y + you.height), `${who}@${width}: both above the board`).toBeLessThanOrEqual(board.y + 1);
+      expect(result.y, `${who}@${width}: the result card is BELOW the board`).toBeGreaterThanOrEqual(board.y + board.height - 1);
+      const back = await boxOf(p, "room-back-to-fixture");
+      expect(back.y, `${who}@${width}: the ways on follow the result`).toBeGreaterThanOrEqual(result.y + result.height - 1);
+    }
+    await expect(p.getByTestId("room-sound"), `${who}: the result has no switch`).toHaveCount(0);
+    expect(await nothingPastTheEdge(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+    await shoot(p, `d24-over-${who}`, [320, 768, 1100, 1280]);
+    overs += 1;
+  }
+  expect(overs, "anti-vacuity: both colours").toBe(2);
+  for (const c of ctxs) await c.close();
+});
+
+test("T17B fix 2, D24: the face shows tenths from 20 s — typed from the ruling at its edges (19.9, 19.7, 20.0, 20.3, 10.0, 9.95, 0.1) — never 0.0 while time remains", async ({ page, browser }) => {
+  test.setTimeout(180_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  // White is to move, so BLACK's clock (the opponent's bar) stands still at the ledger's value: an exact face to read.
+  const table: [number, string][] = [
+    [19_900, "0:19.9"],
+    [19_700, "0:19.7"],
+    [20_000, "0:20"],
+    [20_300, "0:21"],
+    [61_000, "1:01"],
+    [10_000, "0:10.0"],
+    [9_950, "0:09.9"],
+    [100, "0:00.1"],
+  ];
+  let checked = 0;
+  for (const [ms, face] of table) {
+    await withDb(async (sql) => {
+      await sql`update fixture_external_play set black_ms = ${ms}, updated_at = now() where fixture_id = ${room.fixtureId}`;
+    });
+    await p.reload();
+    await boardReady(p);
+    await expect(faceOf(p, "room-clock-opponent"), `${ms} ms reads ${face}`).toHaveText(face);
+    checked += 1;
+  }
+  expect(checked, "anti-vacuity: faces").toBe(table.length);
+  await ctx.close();
+});
+
+test("T17B fix 2, D24: my increment shows AT ONCE on my move — the clock jumps by the division's +5 while the move is still in flight, holds still, and a refusal restores the clock", async ({ page, browser }) => {
+  test.setTimeout(180_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  // White to move with 40 s on the clock (the division is 10+5): enough to move in, low enough to read as tenths.
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: 40_000, blackMs: 300_000 });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  const mine = faceOf(p, "room-clock-you");
+  const acts = await catchActs(p, { hold: true });
+  const before = faceSeconds(await mine.textContent());
+  await tap(p, "g1", "white");
+  await tap(p, "f3", "white");
+  await expect.poll(() => acts.bodies.length, { message: "the move is in flight" }).toBe(1);
+  const atDrop = faceSeconds(await mine.textContent());
+  // The division's increment is 5 s: the face jumped by it (less the moments between the two readings).
+  expect(atDrop - before, `the clock read ${before}, then ${atDrop} with the move in flight`).toBeGreaterThan(3.5);
+  expect(atDrop - before).toBeLessThan(5.2);
+  // It holds still while the answer is out (Lichess stopped my clock when it got the move).
+  const frozen = await mine.textContent();
+  await p.waitForTimeout(900);
+  expect(await mine.textContent(), "frozen while the move is in flight").toBe(frozen);
+  // The refusal: the guess goes, the clock is the ledger's again and runs down from where it stood.
+  acts.release();
+  await expect(p.getByTestId("room-move-notice")).toHaveAttribute("data-kind", "refused");
+  // Within 3 s of the answer: the guess's own 10 s expiry would also bring the clock back, but late — what restores it
+  // here is the refusal.
+  await expect
+    .poll(async () => faceSeconds(await mine.textContent()), { message: "restored: below what it read before the drop", timeout: 3_000 })
+    .toBeLessThan(before);
+  const restored = faceSeconds(await mine.textContent());
+  await p.waitForTimeout(700);
+  expect(faceSeconds(await mine.textContent()), "and running again").toBeLessThan(restored);
+  expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
   await ctx.close();
 });
