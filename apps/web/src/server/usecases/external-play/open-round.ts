@@ -49,7 +49,7 @@ import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
-import { endMeeting, gameEvidenceOn } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, endMeeting, gameEvidenceOn } from "@/server/external-play/video/realtimekit";
 import { roomPhase } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
@@ -408,10 +408,13 @@ export async function openRound(
     try {
       await (deps.endMeeting ?? endMeeting)(meetingId);
     } catch (err) {
-      log.error(
-        { stageId: a.stageId, roundNo: a.roundNo, meetingId, err: err instanceof Error ? err.message : String(err) },
-        "openRound: could not end a re-paired board's old meeting at RealtimeKit — its row is gone and it is no longer used",
-      );
+      // D21-fix (m3): a call the platform's budget refused is nothing broken - warn, not error. The row is gone, so nothing
+      // retries it (the sweep ends meetings it has a row for): the old meeting stays at the vendor, unused, and no
+      // participant of ours holds a token for it.
+      const fields = { stageId: a.stageId, roundNo: a.roundNo, meetingId, err: err instanceof Error ? err.message : String(err) };
+      const message = "openRound: could not end a re-paired board's old meeting at RealtimeKit — its row is gone and it is no longer used";
+      if (err instanceof RealtimeKitDeferred) log.warn(fields, message);
+      else log.error(fields, message);
     }
   }
 

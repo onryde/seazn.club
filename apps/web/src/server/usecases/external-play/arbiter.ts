@@ -578,6 +578,8 @@ async function mintArbiter(
       insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, user_id)
       values (${a.fixtureId}, null, 'arbiter', ${minted.participantId}, ${a.userId})`;
   } catch (err) {
+    // Best effort: a refusal (the call budget, D21) leaves the minted participant at the vendor with no row of ours
+    // naming it - nothing retries it. It is receive-only (the arbiter preset) and holds no token we gave out.
     await video.removeParticipant({ meetingId: a.meetingId, participantId: minted.participantId }).catch(() => undefined);
     // The vendor's participant is gone (or going): a record already holding it
     // must not stay a live watch. Arbiter rows only (V442: a player's is never

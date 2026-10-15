@@ -1704,8 +1704,7 @@ describe("the call budget (D21): every vendor request spends a token first, and 
     expect(checked, "anti-vacuity: every entry").toBe(ENTRIES.length);
   });
 
-  it("ensureMeeting defers its create and writes no meeting row; the retry, granted, makes the meeting", async () => {
-    if (!process.env.DATABASE_URL) return;
+  it.skipIf(!process.env.DATABASE_URL)("ensureMeeting defers its create and writes no meeting row; the retry, granted, makes the meeting", async () => {
     configure();
     const s = await seedFixture();
     const stub = stubFetch([{ status: 200, body: { success: true, data: { id: mtg("budget-ens") } } }]);
@@ -1717,8 +1716,7 @@ describe("the call budget (D21): every vendor request spends a token first, and 
     expect(ref).toEqual({ meetingId: mtg("budget-ens") });
   });
 
-  it("endMeeting deferred leaves the row UNENDED, so the sweep's teardown retries it", async () => {
-    if (!process.env.DATABASE_URL) return;
+  it.skipIf(!process.env.DATABASE_URL)("endMeeting deferred leaves the row UNENDED, so the sweep's teardown retries it", async () => {
     configure();
     const s = await seedFixture();
     const id = mtg("budget-end2");
@@ -1837,6 +1835,71 @@ describe("the call budget (D21): every vendor request spends a token first, and 
       vi.stubEnv("REALTIMEKIT_BASE_URL", "http://127.0.0.1:41999");
       vi.stubGlobal("fetch", async () => okBody());
       await expect(refreshParticipantToken(args, { budget: refuse })).rejects.toBeInstanceOf(RealtimeKitDeferred);
+    });
+
+    // D21-fix m1: the gate (`base === Cloudflare's`) FAILS OPEN - a forwarding proxy in front of the real account, or a
+    // misspelt URL, is not metered and nothing said so. Production now warns, once per process, naming the base.
+    describe("an unmetered base in production says so, once (m1)", () => {
+      const PROXY = "http://proxy.example.test:8080";
+      /** A fresh adapter (the once-flag is module state) and the logger IT logs to. */
+      async function freshAdapter() {
+        vi.resetModules();
+        const { log } = await import("@/server/logger");
+        const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+        const adapter = await import("../realtimekit");
+        return { warn, adapter };
+      }
+      const unmeteredWarnings = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls.filter((c) => /does not meter/.test(String(c[1])));
+
+      it("production, a base that is not Cloudflare's, the real fetch: ONE warning naming the base, however many calls follow - and never the token", async () => {
+        configure();
+        vi.stubEnv("NODE_ENV", "production");
+        vi.stubEnv("REALTIMEKIT_BASE_URL", PROXY);
+        vi.stubGlobal("fetch", async () => okBody());
+        const { warn, adapter } = await freshAdapter();
+        for (let i = 0; i < 3; i += 1) await adapter.refreshParticipantToken(args, {});
+        const warnings = unmeteredWarnings(warn);
+        expect(warnings, "once per process").toHaveLength(1);
+        expect(warnings[0]![0]).toEqual({ base: PROXY });
+        expect(JSON.stringify(warn.mock.calls), "no credential in the log").not.toContain("cf-token-do-not-leak");
+      });
+
+      it("not in production (a test, a dev machine): silent - a fixture is the point there", async () => {
+        configure();
+        vi.stubEnv("NODE_ENV", "test");
+        vi.stubEnv("REALTIMEKIT_BASE_URL", PROXY);
+        vi.stubGlobal("fetch", async () => okBody());
+        const { warn, adapter } = await freshAdapter();
+        await adapter.refreshParticipantToken(args, {});
+        expect(unmeteredWarnings(warn)).toHaveLength(0);
+      });
+
+      it("production with a caller's own fetch or budget (a suite, a load test that chose it): silent", async () => {
+        configure();
+        vi.stubEnv("NODE_ENV", "production");
+        vi.stubEnv("REALTIMEKIT_BASE_URL", PROXY);
+        const { warn, adapter } = await freshAdapter();
+        const stub = stubFetch([{ status: 200, body: { success: true, data: { token: "t" } } }]);
+        await adapter.refreshParticipantToken(args, { fetch: stub.fetch });
+        vi.stubGlobal("fetch", async () => okBody());
+        await adapter.refreshParticipantToken(args, { budget: async () => true });
+        expect(unmeteredWarnings(warn)).toHaveLength(0);
+      });
+
+      it.skipIf(!process.env.DATABASE_URL)("production on Cloudflare's own base (metered): silent - the warning is about the GAP, not about production", async () => {
+        const key = onTheVendor();
+        vi.stubEnv("NODE_ENV", "production");
+        vi.stubGlobal("fetch", async () => okBody());
+        const { warn, adapter } = await freshAdapter();
+        try {
+          await adapter.refreshParticipantToken(args, {});
+          expect(unmeteredWarnings(warn)).toHaveLength(0);
+        } finally {
+          await sql`delete from realtimekit_call_budget where key = ${key}`;
+          const fresh = await import("@/lib/db");
+          await fresh.sql.end({ timeout: 1 });
+        }
+      });
     });
   });
 });

@@ -44,7 +44,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
-import { addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
@@ -1623,6 +1623,28 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
     expect([next.meetingsEnded, next.deferred, next.failures]).toEqual([1, 0, []]);
     expect(rtk.calls.map((c) => c.path)).toEqual([`/meetings/${m}/active-session/kick-all`, `/meetings/${m}`]);
     expect(await endedAt(b.fixtureId)).not.toBeNull();
+  });
+
+  // D21-fix: the budget is the account's, not the row's. Once one teardown is refused, every later row of the job would be
+  // refused for the same reason and each ask costs a database statement - so the job stops there and counts the rest.
+  it("D21-fix: the first deferred teardown ENDS the job - the remaining rows are counted `deferred` (not failed), none is attempted, and the next pass ends them all", async () => {
+    const boards = [await openedBoard({ checkedIn: ["home"] }), await openedBoard({ checkedIn: ["home"] }), await openedBoard({ checkedIn: ["home"] })];
+    for (const b of boards) await meetingFor(b);
+    let attempts = 0;
+    const refusing: NonNullable<SweepDeps["endMeeting"]> = async () => {
+      attempts += 1;
+      throw new RealtimeKitDeferred("test: the call budget is spent");
+    };
+    const report = await sweep(boards, { now: boards[0]!.at(45), endMeeting: refusing });
+    expect(attempts, "anti-vacuity: the job tried; and then stopped after the first refusal").toBe(1);
+    expect(report.deferred, "the refused row and the two it never tried").toBe(boards.length);
+    expect([report.failures, report.failed], "a deferral is not a failure").toEqual([[], 0]);
+    expect(report.meetingsEnded).toBe(0);
+    for (const b of boards) expect(await endedAt(b.fixtureId), "every room still up").toBeNull();
+    const { ended, end } = recordingEnd();
+    const next = await sweep(boards, { now: boards[0]!.at(50), endMeeting: end });
+    expect([next.meetingsEnded, next.deferred, next.failures], "the pair: with the budget back, all three end").toEqual([boards.length, 0, []]);
+    expect(ended.length).toBe(boards.length);
   });
 
   it("BEFORE T+20 a room with no game yet stays up — somebody may still come", async () => {

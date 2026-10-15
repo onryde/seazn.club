@@ -839,8 +839,14 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
     const rows = await participantRows(s.fixtureId);
     expect(rows.length, "the meeting-row lock lets exactly one participant be stored").toBe(1);
     const stored = rows[0]!.participant_id;
+    // D21: the two claims race for ONE read of the camera (the evidence cache). The one that wins the slot reads, finds
+    // nobody in the meeting, and says camera_required; the other may arrive while that read is in flight, with nothing
+    // yet recorded, and is told "not yet" (camera_starting) - which of the two wins is the race. What does not depend on
+    // it: the winner's answer is the camera refusal, and BOTH hold the stored participant.
+    const reasons = [t1, t2].map((t) => (t.seated ? "seated" : t.reason));
+    expect(reasons.filter((r) => r === "camera_required").length, "the claim that won the read slot refuses for want of a camera").toBeGreaterThanOrEqual(1);
+    for (const r of reasons) expect(["camera_required", "camera_starting"], "and nobody is seated, whichever won").toContain(r);
     for (const t of [t1, t2]) {
-      expect(!t.seated && t.reason).toBe("camera_required");
       expect("participant" in t && t.participant?.participantId, "both tabs hold the STORED participant").toBe(stored);
     }
     // Both tabs join; one closes; the other keeps the seat (measured: a

@@ -236,10 +236,16 @@ async function each<T extends { fixtureId: string }>(
       // D21: the platform's RealtimeKit call budget refused a request. Nothing was made and nothing is wrong: the row keeps
       // its place and the next firing reaches it — a deferral, the report's word for exactly that (never a failure, which
       // the cron Worker pages on).
+      // The budget is the account's, not the row's: every later row of this job would be refused for the same reason, and
+      // asking costs a database statement each. So the rest is counted deferred with this one and the job stops (the same
+      // shape as the pass budget above); the next firing starts from the top.
       if (err instanceof RealtimeKitDeferred) {
-        pass.report.deferred++;
-        log.info({ job, fixtureId: row.fixtureId }, "external-play sweep: RealtimeKit call budget spent; the row keeps its place");
-        continue;
+        pass.report.deferred += rows.length - i;
+        log.info(
+          { job, fixtureId: row.fixtureId, remaining: rows.length - i },
+          "external-play sweep: RealtimeKit call budget spent; the rest of the job keeps its place",
+        );
+        break;
       }
       const code = codeOf(err);
       pass.report.failures.push({ job, fixtureId: row.fixtureId, code });

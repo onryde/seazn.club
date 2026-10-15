@@ -112,6 +112,38 @@ describe.skipIf(!DB)("the bucket", () => {
     expect(allowed, "exactly the tokens left: the burst less the eleven spent").toBe(RTK_BUDGET_BURST - spentFirst - 1);
   });
 
+  it("the statement reads the clock ONCE: a volatile clock expression is evaluated exactly one time per call, on a new bucket and on an existing one (D21 review m4)", async () => {
+    // A backward clock step between the statement's WHERE and its SET refilled less in the SET than the WHERE had
+    // judged, took the bucket a hair under zero, and the CHECK (tokens >= 0) then threw out of every RealtimeKit call.
+    // The DB clock cannot be stepped from here, so the property is witnessed the other way: stand a VOLATILE expression
+    // in for the clock (a sequence's nextval, one step further back each time it is evaluated) and count the evaluations.
+    const seq = `test_clock_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    await sql.unsafe(`create sequence ${seq}`);
+    try {
+      const steppingBack = () => sql`(${T0}::timestamptz + interval '1 hour' - nextval(${seq}::regclass) * interval '3 seconds')`;
+      const evaluations = async () => {
+        const [row] = await sql<{ last_value: string; is_called: boolean }[]>`select last_value, is_called from ${sql(seq)}`;
+        return row!.is_called ? Number(row!.last_value) : 0;
+      };
+      const key = fresh();
+      expect(await evaluations(), "premise: the stand-in clock has not been read").toBe(0);
+      expect(await takeRealtimeKitCall(key, { clockSql: steppingBack() }), "a new bucket").toBe(true);
+      expect(await evaluations(), "a new bucket: one evaluation").toBe(1);
+      expect(await takeRealtimeKitCall(key, { clockSql: steppingBack() }), "an existing bucket").toBe(true);
+      expect(await evaluations(), "an existing bucket: one more evaluation, not three").toBe(2);
+      // A refusal reads it once too (the WHERE judged against the same instant the stamp would have used).
+      const drained = fresh();
+      // Stamped ahead of the stand-in clock, so no time has passed for it: nothing refills.
+      await sql`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${drained}, 0, ${at(2 * 3_600_000)})`;
+      expect(await takeRealtimeKitCall(drained, { clockSql: steppingBack() }), "a bucket with nothing in it: refused").toBe(false);
+      expect(await evaluations(), "a refusal: one more evaluation").toBe(3);
+      const [row] = await sql<{ tokens: number }[]>`select tokens from realtimekit_call_budget where key = ${key}`;
+      expect(row!.tokens, "never below zero").toBeGreaterThanOrEqual(0);
+    } finally {
+      await sql.unsafe(`drop sequence ${seq}`);
+    }
+  });
+
   it("two vendors never share a bucket: spending one to empty leaves the other full", async () => {
     const a = fresh();
     const b = fresh();

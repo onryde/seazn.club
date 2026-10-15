@@ -107,8 +107,8 @@ import { openRound, roundOpenedAt } from "../open-round";
 import { bridgeTakesInvites } from "../invite";
 import { organiserOverrideVideo, seatPlayer, type PreflightDeps } from "../preflight";
 import { sweepExternalPlay } from "../sweep";
+import { RealtimeKitDeferred, addParticipant, endMeeting, ensureMeeting, refreshParticipantToken } from "@/server/external-play/video/realtimekit";
 import { log } from "@/server/logger";
-import { addParticipant, endMeeting, ensureMeeting, refreshParticipantToken } from "@/server/external-play/video/realtimekit";
 import { createGameIfReady } from "../create-game";
 import { resolveExternalPlay } from "../resolve";
 import { holdForOrganiser, writeResultFrom } from "../result";
@@ -2378,6 +2378,40 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
       expect(rows, "the closed pairing's meeting is gone").toEqual([]);
       expect(ended, endedAt === null ? "active: ended at the vendor" : "already ended: not asked again").toEqual(endedAt === null ? [meetingId] : []);
       checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // D21-fix m3: the stale meeting's row is already deleted, so nothing retries its end - which makes the log the only
+  // trace. A refusal by the platform's call budget is not a fault (warn); anything else still is (error).
+  it("a stale meeting's end the call budget DEFERS is logged as a warning, a real failure still as an error - and the open succeeds either way (counted)", async () => {
+    const message = /could not end a re-paired board's old meeting/;
+    let checked = 0;
+    for (const failure of [new RealtimeKitDeferred("test: the call budget is spent"), new Error("test: the vendor fell over")]) {
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+      const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+      try {
+        const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+        await open(r, 1, new Date(Date.now() - 5 * MIN));
+        const a = r.boards[0]!;
+        const meetingId = `mtg-${randomUUID().slice(0, 12)}`;
+        await sql`
+          insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+          values (${a.fixtureId}, ${r.orgId}, ${meetingId}, ${a.home.entrantId}, ${a.away.entrantId})`;
+        await noResultThenVoid(r, a.fixtureId);
+        const out = await openRound(
+          { stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId },
+          { endMeeting: async () => { throw failure; } },
+        );
+        expect(out, "the open is never blocked by it").toEqual({ opened: true, invited: 2, skipped: [] });
+        const logged = (spy: typeof warn) => spy.mock.calls.filter((c) => message.test(String(c[1]))).length;
+        const deferred = failure instanceof RealtimeKitDeferred;
+        expect([logged(warn), logged(error)], deferred ? "deferred: a warning" : "a failure: an error").toEqual(deferred ? [1, 0] : [0, 1]);
+        checked += 1;
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+      }
     }
     expect(checked).toBe(2);
   });

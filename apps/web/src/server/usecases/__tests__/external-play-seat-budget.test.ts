@@ -21,6 +21,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 import { captureError } from "@/lib/sentry";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import {
   REALTIMEKIT_FIXTURE_ENV,
   startRealtimeKitFixtureServer,
@@ -54,19 +55,26 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 /** The ruling's back-off table (controller, 2026-10-15): the wait after the first, second, third read … held at the last. */
 const RULING_BACKOFF_S = [1, 2, 4, 8];
 /** When the READS fall, simulated from the ruling alone: a claim at second t reads iff t is at least the previous read's
- *  second plus the wait for the reads so far. */
-function ruledReads(claimSeconds: number[]): number[] {
+ *  second plus the wait for the reads so far. D21-fix (review I1) adds the one rule the schedule cannot have alone: once
+ *  the peer's deadline has passed (`deadlineS` from its join, which these tests make second 0), a STARTING camera's verdict
+ *  is never the basis of an answer, so the wait shrinks to the first step - `afterDeadline: false` for a verdict the rule
+ *  does not apply to (an unreadable report). */
+function ruledReads(claimSeconds: number[], opts: { afterDeadline: boolean } = { afterDeadline: true }): number[] {
+  const deadlineS = CAMERA_EVIDENCE_DEADLINE_MS / 1_000;
   const reads: number[] = [];
-  let next = -Infinity;
+  let last = -Infinity;
   for (const t of claimSeconds) {
-    if (t < next) continue;
+    const wait = opts.afterDeadline && t >= deadlineS ? RULING_BACKOFF_S[0]! : RULING_BACKOFF_S[Math.min(reads.length, RULING_BACKOFF_S.length) - 1]!;
+    if (reads.length > 0 && t < last + wait) continue;
     reads.push(t);
-    next = t + RULING_BACKOFF_S[Math.min(reads.length, RULING_BACKOFF_S.length) - 1]!;
+    last = t;
   }
   return reads;
 }
@@ -115,7 +123,7 @@ async function cacheRow(s: Seeded, side: Side = "home") {
 }
 
 describe.skipIf(!DB)("the evidence cache: a starting camera is read on the back-off schedule, not on every claim (D21)", () => {
-  it("THE HAMMER: a claim every second for 30 s on a camera that never reports reads the vendor on the ruling's schedule only — and answers the same either side of a read", async () => {
+  it("THE HAMMER: a claim every second for 30 s on a camera that never reports reads the vendor on the ruling's schedule inside the deadline, and at most once a second after it — and answers the same either side of a read", async () => {
     const s = await seed();
     const { after } = await joinWith(s, "pending");
     const before = { reads: evidenceReads(), refreshes: tokenRefreshes() };
@@ -123,13 +131,18 @@ describe.skipIf(!DB)("the evidence cache: a starting camera is read on the back-
     const answers: string[] = [];
     for (const t of seconds) answers.push(reasonOf(await claim(s, new Date(after + t * 1_000))));
     const reads = evidenceReads() - before.reads;
-    const want = ruledReads(seconds);
-    expect(want, "premise: the ruling's schedule is 0, 1, 3, 7, 15, 23").toEqual([0, 1, 3, 7, 15, 23]);
-    expect(reads, "evidence reads the FIXTURE saw").toBe(want.length);
-    expect(reads, "…against the 31 a once-a-second poll would have made (the premise the differential rests on)").toBeLessThan(seconds.length / 4);
-    expect(tokenRefreshes() - before.refreshes, "a claim between reads still costs its one token refresh").toBe(seconds.length);
-    // Answers: starting inside the wait, the camera refusal past it — on a cached claim exactly as on a read (no flapping).
     const deadlineS = CAMERA_EVIDENCE_DEADLINE_MS / 1_000;
+    const want = ruledReads(seconds);
+    expect(want.filter((t) => t < deadlineS), "premise: inside the deadline the ruling's schedule is 0, 1, 3, 7").toEqual([0, 1, 3, 7]);
+    expect(want.filter((t) => t >= deadlineS), "premise: past it every claim reads (a refusal is a fresh answer), at most once a second").toEqual(
+      seconds.filter((t) => t >= deadlineS),
+    );
+    expect(reads, "evidence reads the FIXTURE saw").toBe(want.length);
+    // The differential the cache exists for, where it applies: the 15 claims inside the deadline made 4 reads, not 15.
+    const insideDeadline = want.filter((t) => t < deadlineS).length;
+    expect(insideDeadline, "…against the 15 a once-a-second poll would have made inside the deadline").toBeLessThan(deadlineS / 3);
+    expect(tokenRefreshes() - before.refreshes, "a claim between reads still costs its one token refresh").toBe(seconds.length);
+    // Answers: starting inside the wait, the camera refusal past it - on a cached claim exactly as on a read (no flapping).
     expect(answers).toEqual(seconds.map((t) => (t < deadlineS ? "camera_starting" : "camera_required")));
   });
 
@@ -238,7 +251,7 @@ describe.skipIf(!DB)("the evidence cache: a starting camera is read on the back-
     for (const t of seconds) answers.push(reasonOf(await claim(s, new Date(after + t * 1_000))));
     const deadlineS = CAMERA_EVIDENCE_DEADLINE_MS / 1_000;
     expect(answers).toEqual(seconds.map((t) => (t < deadlineS ? "camera_starting" : "video_unavailable")));
-    const reads = ruledReads(seconds);
+    const reads = ruledReads(seconds, { afterDeadline: false }); // an unreadable report is cached to the last step, by design
     expect(evidenceReads() - reads0).toBe(reads.length);
     const pastDeadlineReads = reads.filter((t) => t >= deadlineS).length;
     expect(pastDeadlineReads, "premise: two reads fall past the deadline (15 s, 23 s)").toBe(2);
@@ -248,17 +261,107 @@ describe.skipIf(!DB)("the evidence cache: a starting camera is read on the back-
     expect(reasonOf(await claim(s, new Date(after + 31_000))), "the vendor recovers: the same camera seats").toBe("seated");
   });
 
-  it("a reload is a new peer: the cached verdict is replaced by the NEW peer's — judged from its own join, so its deadline starts afresh", async () => {
+  // The tests below run on ONE clock. The fixture stamps a peer's join with `new Date()`, so a deadline that has to have
+  // PASSED (15 s) needs the clock to move; faking Date alone (not the timers the sockets and the database use) puts the
+  // fixture's stamps and the seat's `now` on the same line, and nothing is stamped in the "future".
+  async function onOneClock(): Promise<{ T: number; at: (s: number) => Date }> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const T = Date.now();
+    vi.setSystemTime(T);
+    return {
+      T,
+      at: (sec) => {
+        vi.setSystemTime(T + sec * 1_000);
+        return new Date(T + sec * 1_000);
+      },
+    };
+  }
+
+  it("D21-fix I1, THE PRODUCTION SEQUENCE: the camera never reported, a read past the deadline refuses - and a camera that comes up (a reload with it allowed) one second later seats on the NEXT claim", async () => {
+    const { at } = await onOneClock();
     const s = await seed();
-    const { pid, after } = await joinWith(s, "pending");
-    expect(reasonOf(await claim(s, new Date(after + 20_000))), "premise: past the first peer's deadline").toBe("camera_required");
+    const { pid } = await joinWith(s, "pending");
+    const answers: string[] = [];
+    for (const t of [0, 1, 3, 7, 15]) answers.push(reasonOf(await claim(s, at(t))));
+    expect(answers, "premise: starting on the ruling's reads, then the camera refusal at 15 s").toEqual([
+      "camera_starting",
+      "camera_starting",
+      "camera_starting",
+      "camera_starting",
+      "camera_required",
+    ]);
+    expect((await cacheRow(s)).reads, "premise: five reads so far, so the old schedule's next read was 8 s away (at 23 s)").toBe(5);
+    at(16);
+    fx.setLivePublisher(pid, false);
+    fx.setLivePublisher(pid, true, { camera: "on" }); // the player allowed the camera and reloaded: a NEW peer, camera on
+    const reads0 = evidenceReads();
+    expect(reasonOf(await claim(s, at(17))), "the next claim seats").toBe("seated");
+    expect(evidenceReads() - reads0, "…from a FRESH read, never from the refused peer's cache").toBe(1);
+  });
+
+  it("D21-fix I1: a reload that is still starting is judged by its OWN deadline, and its reads run the schedule again from the first step - not the old peer's eight-second wait", async () => {
+    const { T, at } = await onOneClock();
+    const s = await seed();
+    const { pid } = await joinWith(s, "pending");
+    for (const t of [0, 1, 3, 7, 15]) await claim(s, at(t));
+    at(16);
+    fx.setLivePublisher(pid, false);
+    fx.setLivePublisher(pid, true, { camera: "pending" }); // a new peer at 16 s, nothing reported yet
+    const reads0 = evidenceReads();
+    const claims = [17, 18, 19, 20, 21, 22, 23, 24];
+    const answers: string[] = [];
+    for (const t of claims) answers.push(reasonOf(await claim(s, at(t))));
+    expect(answers, "never the OLD peer's refusal: the new peer's own 15 s have barely begun").toEqual(Array(claims.length).fill("camera_starting"));
+    // The reads fall as the schedule says for the NEW peer, counted from its first read at 17 s: 17, 18, 20, 24.
+    const fromFirst = ruledReads(claims.map((t) => t - 17), { afterDeadline: false });
+    expect(fromFirst, "premise: the ruling's schedule from the new peer's first read").toEqual([0, 1, 3, 7]);
+    expect(evidenceReads() - reads0).toBe(fromFirst.length);
+    expect((await cacheRow(s)).since!.getTime(), "the cache now remembers the NEW peer's join (16 s)").toBe(T + 16_000);
+  });
+
+  it("D21-fix I1: a refused player pressing Check in again reads AT MOST once a second past the deadline - two presses in the same second are one read", async () => {
+    const { at } = await onOneClock();
+    const s = await seed();
+    await joinWith(s, "pending");
+    for (const t of [0, 1, 3, 7, 15]) await claim(s, at(t));
+    const reads0 = evidenceReads();
+    const first = at(20);
+    expect(reasonOf(await claim(s, first))).toBe("camera_required");
+    expect(reasonOf(await claim(s, new Date(first.getTime() + 999))), "999 ms later: still the same read").toBe("camera_required");
+    expect(evidenceReads() - reads0, "two presses, one read").toBe(1);
+    expect(reasonOf(await claim(s, new Date(first.getTime() + 1_000))), "a second later: a fresh read").toBe("camera_required");
+    expect(evidenceReads() - reads0).toBe(2);
+  });
+
+  it("a reload is a new peer: the cached verdict is replaced by the NEW peer's - judged from its own join, so its deadline starts afresh", async () => {
+    const { T, at } = await onOneClock();
+    const s = await seed();
+    const { pid } = await joinWith(s, "pending");
+    expect(reasonOf(await claim(s, at(0)))).toBe("camera_starting");
+    expect(reasonOf(await claim(s, at(20))), "premise: past the first peer's deadline - a read says so").toBe("camera_required");
+    at(21);
     fx.setLivePublisher(pid, false);
     fx.setLivePublisher(pid, true, { camera: "pending" }); // the reload: a new peer, nothing reported yet
-    const rejoined = Date.now();
-    // The earlier read is stamped 20 s ahead of this claim's clock, which never blocks a read (above); it finds the new
-    // peer, 0.5 s into ITS wait — starting, not the old peer's refusal.
-    expect(reasonOf(await claim(s, new Date(rejoined + 500)))).toBe("camera_starting");
-    expect((await cacheRow(s)).since!.getTime(), "the cache now remembers the NEW peer's join").toBeGreaterThan(after - 1);
+    // On one clock, with no claim stamped ahead of another: this claim is allowed to read because the OLD peer's deadline
+    // has passed (not because of a future stamp), finds the new peer half a second into ITS wait - starting.
+    expect(reasonOf(await claim(s, at(21.5)))).toBe("camera_starting");
+    expect((await cacheRow(s)).since!.getTime(), "the cache now remembers the NEW peer's join").toBe(T + 21_000);
+  });
+
+  it("D21-fix m5: a claim refused its read whose participant row is GONE (the board was re-paired, its meeting retired) is VIDEO_MEETING_REPLACED - not `camera_starting` for ever", async () => {
+    const s = await seed();
+    const { after } = await joinWith(s, "pending");
+    // The retire lands between the token and the claim: the second claim's token refresh deletes the row after it returns.
+    const retired: Video = {
+      ...grantAll,
+      refreshParticipantToken: async (a) => {
+        const token = await refreshParticipantToken(a);
+        await sql`delete from fixture_video_participants where fixture_id = ${s.fixtureId} and participant_id = ${a.participantId}`;
+        return token;
+      },
+    };
+    await expect(claim(s, new Date(after), "home", retired)).rejects.toMatchObject({ code: "VIDEO_MEETING_REPLACED" });
+    expect(await sql`select 1 from fixture_video_participants where fixture_id = ${s.fixtureId}`, "premise: the row really is gone").toHaveLength(0);
   });
 });
 
@@ -363,17 +466,22 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
   });
 
   it("OPTIONAL cameras never block a seat on a deferral: seated with no tile (like an outage, but nobody is told it is one)", async () => {
+    const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    const tileLost = () => info.mock.calls.filter((c) => /optional camera seated with no tile/.test(String(c[1]))).length;
     let checked = 0;
     for (const n of [1, 2]) {
       const s = await seed("optional");
       const got = await claim(s, new Date(), "home", metered(refusingRequest(n).budget));
       expect(got, `request ${n} refused`).toEqual({ seated: true, participant: null });
       expect(vi.mocked(captureError), `request ${n}: a deferral is not an outage`).not.toHaveBeenCalled();
+      // D21-fix m2: seated:true ends the room's polling, so the player has no tile until they reload - counted in the log.
+      expect(tileLost(), `request ${n}: the lost tile is logged, once`).toBe(checked + 1);
       checked += 1;
     }
-    // The pair: granted, an optional seat carries its token.
+    // The pair: granted, an optional seat carries its token - and logs nothing.
     const s = await seed("optional");
     expect(tokenOf(await claim(s, new Date(), "home", grantAll))?.participantId).toBeTruthy();
+    expect(tileLost(), "a granted optional seat loses no tile").toBe(2);
     expect(checked).toBe(2);
   });
 

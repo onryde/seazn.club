@@ -160,6 +160,19 @@ async function cf(
   return (await cfEnvelope(cfg, path, init, deps)).data;
 }
 
+let warnedUnmetered = false;
+/** Once per process, in production only: RealtimeKit calls are going to a base URL that is not Cloudflare's, so the call
+ *  budget (budget.ts) is NOT spending for them. Right for a fixture; wrong for a proxy in front of the real API, whose
+ *  traffic would count against the account's limit unmetered. The warning names the base and nothing else (no token). */
+function warnUnmetered(base: string): void {
+  if (warnedUnmetered || process.env.NODE_ENV !== "production") return;
+  warnedUnmetered = true;
+  log.warn(
+    { base },
+    "RealtimeKit: REALTIMEKIT_BASE_URL is not Cloudflare's API, so the call budget does not meter these calls. Expected for a test fixture; a forwarding proxy to the real account needs its own limit",
+  );
+}
+
 /** `cf`, keeping the envelope: `data` (checked present) and the siblings a
  *  list endpoint documents beside it — `paging` (review M5). */
 async function cfEnvelope(
@@ -175,9 +188,13 @@ async function cfEnvelope(
   // limit is the account's and blocks every call for five minutes once passed). Metered by default on the path that
   // counts against the vendor — the real `fetch` to Cloudflare's own API — so a new caller cannot forget. Exempt: a
   // caller-supplied `fetch` (a test double that never leaves the process) and a base URL that is not Cloudflare's (a
-  // fixture or a proxy: it spends no account's budget, and a bucket on it would only throttle the suites and the e2e
-  // run that use it). A caller can always pass its own `budget`.
-  const spend = deps.budget ?? (deps.fetch === undefined && base === CF_BASE ? takeRealtimeKitCall : null);
+  // fixture, where a bucket would only throttle the suites and the e2e run that use it). The gate FAILS OPEN on a base
+  // that is not Cloudflare's: a forwarding proxy, or a misspelt URL, spends the real account's budget and is NOT metered
+  // - which is why that case warns once per process in production (warnUnmetered) and why .env.example says so. A
+  // caller can always pass its own `budget`.
+  const metered = deps.fetch === undefined && base === CF_BASE;
+  if (!metered && deps.budget === undefined && deps.fetch === undefined) warnUnmetered(base);
+  const spend = deps.budget ?? (metered ? takeRealtimeKitCall : null);
   if (spend && !(await spend(budgetKey(base, cfg.accountId)))) {
     throw new RealtimeKitDeferred(`RealtimeKit ${init.method} ${path} deferred: the platform's call budget is spent`);
   }
@@ -366,7 +383,8 @@ export async function ensureMeeting(fixtureId: string, deps: RealtimeKitDeps = {
   if (mine) return { meetingId: mine.meeting_id };
 
   // Lost the race. Someone else's meeting is the one both players will be
-  // added to, so ours must be stood down.
+  // added to, so ours must be stood down. Best effort: a refusal (the call budget, D21) leaves our unused meeting active
+  // at the vendor - nothing holds its id, so nothing retries it.
   await cf(
     cfg,
     `/meetings/${encodeURIComponent(data.id)}`,

@@ -18,6 +18,7 @@ import { roundOpenFor } from "@/server/external-play/round-open";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import type { GrantRefusal } from "@/server/external-play/types";
 import { assertLichessConsentForPlay } from "../external-accounts";
@@ -194,7 +195,14 @@ export async function seatPlayer(
     } catch (err) {
       if (!(err instanceof RealtimeKitError)) throw err;
       // D21: a deferral (the call budget is spent) is not an outage, and is not reported as one.
-      if (!(err instanceof RealtimeKitDeferred)) reportOutage(err, f.orgId, a.fixtureId, policy);
+      if (err instanceof RealtimeKitDeferred) {
+        // Seated with no tile: `seated: true` ends the room's polling, so the player sees no camera until they reload.
+        // Not an outage (nothing is wrong at the vendor) and not worth Sentry - but not silent either: this counts how
+        // often the platform's call budget costs a player their tile.
+        log.info({ fixtureId: a.fixtureId, orgId: f.orgId }, "seat: RealtimeKit call budget spent; optional camera seated with no tile");
+      } else {
+        reportOutage(err, f.orgId, a.fixtureId, policy);
+      }
       return { seated: true, participant: null };
     }
   }
@@ -322,7 +330,14 @@ type SeatRead = { fixtureId: string; participantId: string };
  *  two tabs, T9's freshness check beside a poll, two machines — make one read between them. Allowed when no starting
  *  verdict is outstanding (`seat_reads = 0`: anything definite clears it) or the back-off for the reads so far has
  *  passed. A claim whose clock is BEHIND the stamp is allowed too: a stamp from a machine with a fast clock must not hold
- *  the player off for longer than the wait itself. The wait is the room's own schedule (cameraEvidenceDelayMs's table). */
+ *  the player off for longer than the wait itself. The wait is the room's own schedule (cameraEvidenceDelayMs's table).
+ *
+ *  D21-fix (review I1): a cached STARTING verdict is only ever a reason to say "not yet" — it must never become the
+ *  basis of a refusal. Past the deadline measured from the cached peer's join, that peer's report is no longer what the
+ *  player is: the camera may have come on, or a reload may have made a new peer whose own deadline has barely started.
+ *  So once `seat_read_since + deadline` has passed, the wait shrinks to the schedule's FIRST step (a refused player who
+ *  presses Check in again reads at most once a second, and always gets a fresh answer), where it would otherwise have
+ *  run to the last (8 s). Within the deadline nothing changes: the schedule above. */
 async function claimEvidenceRead(r: SeatRead, now: Date): Promise<boolean> {
   const steps = CAMERA_EVIDENCE_BACKOFF_MS as unknown as number[];
   const got = await sql`
@@ -331,7 +346,12 @@ async function claimEvidenceRead(r: SeatRead, now: Date): Promise<boolean> {
      where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}
        and (seat_reads = 0
             or ${now}::timestamptz < seat_read_at
-            or ${now}::timestamptz >= seat_read_at + ((${sql.array(steps)}::int[])[least(seat_reads, ${steps.length})] * interval '1 millisecond'))
+            or ${now}::timestamptz >= seat_read_at + (
+                 case when seat_read_state = 'starting'
+                           and ${now}::timestamptz >= seat_read_since + (${CAMERA_EVIDENCE_DEADLINE_MS}::int * interval '1 millisecond')
+                      then ${steps[0]!}::int
+                      else (${sql.array(steps)}::int[])[least(seat_reads, ${steps.length})]
+                 end * interval '1 millisecond'))
     returning 1`;
   return got.length > 0;
 }
@@ -340,8 +360,14 @@ async function claimEvidenceRead(r: SeatRead, now: Date): Promise<boolean> {
  *  anything definite clears the cache, so a seat — or its loss — is never answered from the past. */
 async function recordEvidence(r: SeatRead, camera: SeatCamera): Promise<void> {
   if (camera.state === "starting" || camera.state === "unreadable") {
+    // A read that finds a DIFFERENT peer than the last one (the player reloaded, so `since` is a new join) is the first
+    // read of that peer: the schedule starts again at its first step (D21-fix, I1). Left to run on, a reload after a
+    // refusal inherited the old peer's count and waited out its eight seconds for a camera that came up in one.
     await sql`
-      update fixture_video_participants set seat_read_state = ${camera.state}, seat_read_since = ${camera.since}
+      update fixture_video_participants
+         set seat_read_state = ${camera.state},
+             seat_reads = case when seat_read_since is distinct from ${camera.since}::timestamptz then 1 else seat_reads end,
+             seat_read_since = ${camera.since}
        where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}`;
     return;
   }
@@ -358,10 +384,14 @@ async function cachedEvidence(r: SeatRead, now: Date): Promise<SeatCamera> {
   const [row] = await sql<{ state: string | null; since: Date | null }[]>`
     select seat_read_state as state, seat_read_since as since from fixture_video_participants
      where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}`;
-  if (row?.state === "unreadable" && row.since) {
+  // D21-fix (review m5): the claim that was refused a read updated no row, and "no row" is the other thing that reads as
+  // zero rows - the participant is GONE (the board was re-paired and its meeting retired, R2-2, between the token and
+  // this claim). Answering `starting` for it would hold the player at "checking" for ever; the seat is asked again.
+  if (!row) throw meetingReplaced(r.fixtureId);
+  if (row.state === "unreadable" && row.since) {
     return { state: "unreadable", since: row.since, error: new RealtimeKitError(503, "unavailable", "the peer report could not be read (cached)") };
   }
-  return { state: "starting", since: row?.since ?? now };
+  return { state: "starting", since: row.since ?? now };
 }
 
 /** THE one place a player's RealtimeKit token is issued — so the

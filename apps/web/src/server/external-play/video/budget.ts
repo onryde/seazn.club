@@ -22,6 +22,7 @@ import "server-only";
 //
 // What is stored is the bucket's STATE only. Its size and rate are the constants below, applied on every use, so
 // retuning is a code change and needs no migration.
+import type postgres from "postgres";
 import { sql } from "@/lib/db";
 
 /** The vendor's published limit: RealtimeKit REST calls per account per five minutes. */
@@ -46,23 +47,31 @@ export function budgetKey(baseUrl: string, accountId: string): string {
 /**
  * Take one call's token from `key`'s bucket. True: spent, make the call. False: none left, do not.
  *
- * `opts.at` is a test seam — the clock of the statement; production passes nothing and the database's own clock
- * decides. A bucket nobody has asked about yet has no row; the first call creates it FULL (a vendor never asked about
- * has spent nothing).
+ * `opts.at` is a test seam - the clock of the statement; production passes nothing and the database's own clock
+ * decides. `opts.clockSql` is a second one, for the property `at` cannot show: it is a SQL expression standing in for
+ * the clock, so a test can hand in a VOLATILE one and count how often the statement evaluates it (budget.test.ts).
+ * A bucket nobody has asked about yet has no row; the first call creates it FULL (a vendor never asked about has spent
+ * nothing).
  */
-export async function takeRealtimeKitCall(key: string, opts: { at?: Date } = {}): Promise<boolean> {
-  const clock = opts.at ? sql`${opts.at}::timestamptz` : sql`clock_timestamp()`;
+export async function takeRealtimeKitCall(key: string, opts: { at?: Date; clockSql?: postgres.PendingQuery<postgres.Row[]> } = {}): Promise<boolean> {
+  const clock = opts.clockSql ?? (opts.at ? sql`${opts.at}::timestamptz` : sql`clock_timestamp()`);
   // ONE statement: a bucket nobody has asked about yet is made FULL less this call's token (the insert), and an existing
   // one is refilled by the time since it last was and charged one token only if that leaves it with one to give (the
-  // conflict arm's WHERE — a failed WHERE returns no row, which is the refusal). ON CONFLICT takes the row lock, so
-  // concurrent callers — machines, and two first-ever callers racing to make the row — queue behind it one at a time.
+  // conflict arm's WHERE - a failed WHERE returns no row, which is the refusal). ON CONFLICT takes the row lock, so
+  // concurrent callers - machines, and two first-ever callers racing to make the row - queue behind it one at a time.
+  //
+  // The clock is evaluated ONCE, in the VALUES row, and every other use reads it back as `excluded.refilled_at`. It
+  // used to be written out in the WHERE, the SET and the stamp, three evaluations of clock_timestamp(): a backward step
+  // (an NTP correction) between the WHERE and the SET refilled less in the SET than the WHERE had judged, left the
+  // bucket a hair below zero, and the CHECK (tokens >= 0) then refused the UPDATE - an exception out of every
+  // RealtimeKit call until the clock caught up (D21 review m4).
   const refilled = sql`least(${RTK_BUDGET_BURST}::float8,
-    b.tokens + ${RTK_BUDGET_REFILL_PER_S}::float8 * greatest(0, extract(epoch from (${clock} - b.refilled_at))::float8))`;
+    b.tokens + ${RTK_BUDGET_REFILL_PER_S}::float8 * greatest(0, extract(epoch from (excluded.refilled_at - b.refilled_at))::float8))`;
   const spent = await sql`
     insert into realtimekit_call_budget as b (key, tokens, refilled_at)
     values (${key}, ${RTK_BUDGET_BURST}::float8 - 1, ${clock})
     on conflict (key) do update
-       set tokens = ${refilled} - 1, refilled_at = ${clock}
+       set tokens = ${refilled} - 1, refilled_at = excluded.refilled_at
      where ${refilled} >= 1
     returning b.key`;
   return spent.length > 0;
