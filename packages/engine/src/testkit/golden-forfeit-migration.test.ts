@@ -8,6 +8,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { goldenPath, readCorpus, SPORT_DIRS } from "./golden.ts";
 import { migrateGoldenForfeits, type MigratableEvent } from "./golden-forfeit-migration.ts";
+import { playRecorded, resolveVoids } from "../core/events.ts";
+import { FORFEIT_REASONS } from "../core/types.ts";
+import { makeEnvelope } from "./helpers.ts";
 
 const stream = (...events: MigratableEvent[]) => ({ config: "default", seed: 1, events, states: ["{}"], outcome: "null" });
 const forfeit = (by: string, reason: string): MigratableEvent => ({ type: "core.forfeit", payload: { by, reason } });
@@ -62,6 +65,19 @@ describe("golden forfeit migration (ruling 102 Q1, PF-3; ruling 113)", () => {
     expect([out.examined, out.rewritten]).toEqual([3, 3]);
   });
 
+  it("GF-1: a closed-vocabulary reason the ruling never yields (disqualified, withdrew) is a deliberate record, not pre-W2b free text — kept after play and after a bare start alike; free text beside it is still rewritten", () => {
+    const GOAL: MigratableEvent = { type: "football.goal", payload: { by: "H" } };
+    const kept = ["disqualified", "withdrew"] as const;
+    // the guard on the list: both really are words of the closed vocabulary, so this is not a typed-in pair that rots
+    for (const reason of kept) expect(FORFEIT_REASONS as readonly string[]).toContain(reason);
+    const input = kept.flatMap((reason) => [stream(START, GOAL, forfeit("A", reason)), stream(START, forfeit("H", reason))]);
+    const out = migrateGoldenForfeits([...input, stream(START, GOAL, forfeit("A", "no-show"))]);
+    expect(out.streams.slice(0, 4).map((s) => reasonsOf(s.events))).toEqual([["disqualified"], ["disqualified"], ["withdrew"], ["withdrew"]]);
+    expect(JSON.stringify(out.streams.slice(0, 4))).toBe(JSON.stringify(input));
+    expect(reasonsOf(out.streams[4]!.events)).toEqual(["retired"]);
+    expect([out.examined, out.rewritten]).toEqual([5, 1]);
+  });
+
   it("`by` is never rewritten and `both` is never introduced — every forfeit of a mixed set", () => {
     const input = [
       stream(forfeit("A", "no-show")),
@@ -106,5 +122,44 @@ describe("golden forfeit migration (ruling 102 Q1, PF-3; ruling 113)", () => {
     }
     expect(examined).toBe(recorded);
     expect(examined).toBeGreaterThan(0);
+  });
+
+  it("the migration reads each forfeit's PREFIX, the fold reads the active ledger with ALL voids resolved: no committed forfeit sits where the two differ (counted)", () => {
+    // The fold's phase guard asks `playRecorded` of `resolveVoids(whole ledger).slice(0, index)` (events.ts), so a void
+    // recorded AFTER a forfeit that strikes the only play before it makes the fold read that forfeit as "before play".
+    // The migration cannot follow it (it reads the prefix; the pre-floor corpora carried no void at all). Once the corpora
+    // do carry voids (the golden floor), the divergence is a stream shape to refuse BY NAME, not to leave a comment about.
+    let forfeits = 0;
+    let struckForfeits = 0;
+    for (const key of Object.keys(SPORT_DIRS)) {
+      for (const stream of readCorpus(key).streams) {
+        const envelopes = stream.events.map((event, i) => makeEnvelope(i, event, event.voids));
+        const active = resolveVoids(envelopes);
+        stream.events.forEach((event, index) => {
+          if (event.type !== "core.forfeit") return;
+          const struck = stream.events.some((e) => e.voids === `e-${index}`);
+          if (struck) {
+            struckForfeits++; // a struck forfeit never reaches the fold's phase guard as an active event
+            return;
+          }
+          const prefixReading = playRecorded(envelopes.slice(0, index), {});
+          const foldReading = playRecorded(active.slice(0, active.findIndex((e) => e.id === `e-${index}`)), {});
+          expect(prefixReading, `${key} ${stream.config}#${stream.seed} forfeit@${index}: the fold reads play ${String(foldReading)}`).toBe(foldReading);
+          forfeits++;
+        });
+      }
+    }
+    expect(forfeits).toBeGreaterThan(50);
+    // the corpora do carry voids around forfeits (the floor strikes a mis-tapped retirement), none of them standing
+    expect(struckForfeits).toBeGreaterThanOrEqual(Object.keys(SPORT_DIRS).length);
+  });
+
+  it("and the migration DOES differ from the fold on the shape it cannot follow (a void after the forfeit striking the only play) - the divergence is real, so the guard above has something to catch", () => {
+    const GOAL: MigratableEvent = { type: "football.goal", payload: { by: "H" } };
+    const envelopes = [START, GOAL, forfeit("A", "no-show"), { type: "core.void", payload: {}, voids: "e-1" } as MigratableEvent].map((e, i) => makeEnvelope(i, e, e.voids));
+    const active = resolveVoids(envelopes);
+    const prefixReading = playRecorded(envelopes.slice(0, 2), {});
+    const foldReading = playRecorded(active.slice(0, active.findIndex((e) => e.id === "e-2")), {});
+    expect([prefixReading, foldReading]).toEqual([true, false]);
   });
 });

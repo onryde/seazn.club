@@ -129,7 +129,8 @@ interface GoldenStream {
    *  coverage stream needs a bench). Omitting it from this local type made
    *  every such stream replay against the wrong squads. */
   lineups?: LineupPair;
-  events: { type: string; payload: unknown }[];
+  /** `voids`: the target envelope id of a `core.void`, which carries it beside its (empty) payload. */
+  events: { type: string; payload: unknown; voids?: string }[];
   summary: string;
 }
 interface GoldenCorpus {
@@ -203,9 +204,21 @@ function env(seq: number, type: string, payload: unknown): EventEnvelope {
   };
 }
 
-/** Envelopes for a whole golden stream, in recorded order. */
+/** Envelopes for a whole golden stream, in recorded order. A `core.void` carries its target id (`voids`) beside the
+ *  payload, as the engine's own `makeEnvelope` writes it — the golden floor (GF-1) records voids, and a void with no
+ *  target is refused by the fold. */
 function envelopesOf(stream: GoldenStream): EventEnvelope[] {
-  return stream.events.map((e, i) => env(i, e.type, e.payload));
+  return stream.events.map((e, i) => ({
+    ...env(i, e.type, e.payload),
+    ...(e.voids === undefined ? {} : { voids: e.voids }),
+  }));
+}
+
+/** How many events of a stream owe the spectator a line: every event that survives `resolveVoids` (a voided event and
+ *  the `core.void` that struck it render nothing). Read straight off the recorded `voids` ids. */
+function eventsThatSurviveVoids(stream: GoldenStream): GoldenStream["events"] {
+  const struck = new Set(stream.events.flatMap((e) => (e.voids === undefined ? [] : [e.voids])));
+  return stream.events.filter((e, i) => e.voids === undefined && !struck.has(`e-${i}`));
 }
 
 function args(over: Partial<TimelineArgs> & { sportKey?: string }): TimelineArgs {
@@ -445,9 +458,10 @@ describe("buildTimeline", () => {
         // derived instead, so a 40-point stream is 8 lines rather than 40+.
         // Subtracted rather than skipped, so the floor still holds tennis to
         // everything else it records.
+        const surviving = eventsThatSurviveVoids(stream);
         const suppressed =
-          key === "tennis" ? stream.events.filter((e) => e.type === "tennis.point").length : 0;
-        expect(lines.length, key).toBeGreaterThanOrEqual(stream.events.length - suppressed);
+          key === "tennis" ? surviving.filter((e) => e.type === "tennis.point").length : 0;
+        expect(lines.length, key).toBeGreaterThanOrEqual(surviving.length - suppressed);
         for (const line of lines) {
           expect(TimelineLine.safeParse(line).success).toBe(true);
           validated++;
@@ -890,17 +904,24 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     // glob that silently matched nothing would make every claim below vacuous.
     expect(CORPORA).toHaveLength(11);
     expect(RECORDED_TYPES.length).toBeGreaterThanOrEqual(60);
-    // …and the corpora are NOT the whole ledger vocabulary. They record three
-    // kernel types; the kernel registers every key of CORE_EVENT_SCHEMAS, which
-    // already holds the lineup family — so the union adds nothing to it (a
-    // double-counted or dropped lineup type moves this). Derived from the
-    // engine's registry, not a literal: W2a's core.settle made it fifteen.
+    // The kernel registers every key of CORE_EVENT_SCHEMAS, which already holds
+    // the lineup family — so the union adds nothing to it (a double-counted or
+    // dropped lineup type moves this). Derived from the engine's registry, not a
+    // literal: W2a's core.settle made it fifteen.
     expect(KERNEL_TYPES.length).toBe(Object.keys(CORE_EVENT_SCHEMAS).length);
     expect(Object.keys(LINEUP_EVENT_SCHEMAS).length).toBeGreaterThan(0);
+    // The corpora used to record three kernel types and this sweep had to add the
+    // rest from the registry. The golden floor (GF-1) records every kernel type
+    // but one: the core.note, finalize, award and lineup types are now REALLY in
+    // the corpora, so the sweep above reads them off recorded ledgers.
     for (const type of ["core.note", "core.finalize", "core.award", "core.lineup.entry"]) {
-      expect(RECORDED_TYPES, type).not.toContain(type);
+      expect(RECORDED_TYPES, type).toContain(type);
       expect(ALL_TYPES, type).toContain(type);
     }
+    // The one kernel type no corpus records: core.settle, exempt from the floor
+    // because the harness records the module's bare outcome and a settlement
+    // lives beside module state (outcome-readers.test.ts guards the same fact).
+    expect(KERNEL_TYPES.filter((type) => !RECORDED_TYPES.includes(type))).toEqual(["core.settle"]);
     expect(ALL_TYPES.length).toBeGreaterThan(RECORDED_TYPES.length);
   });
 

@@ -1,0 +1,411 @@
+{
+  "batch": "golden-floor",
+  "note": "Test-id ledger for GF-1 (golden floor for the core events and outcome kinds; owner ruling 2026-10-15), built against base 115b7b573 (main after the engine-split 1e merge, #960). Ids are relative to each collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine vitest binary (--exclude **/strip-types-loadable.test.ts for the matrix collection). GF-1 plus its review fixes add 81 tests and change no existing test id: 42 in the new src/testkit/golden-floor.test.ts, 17 in the new src/testkit/golden-floor-overlay.test.ts, 17 in the new src/testkit/golden-floor-streams.test.ts, 2 in the new src/testkit/golden-floor-voids.test.ts, and 3 in src/testkit/golden-forfeit-migration.test.ts. Existing tests whose BODY changed under their unchanged title: golden-slim.test.ts (extendCorpus appends in the canonical slim form: drops the last generator stream, not the last stream). apps/web tests that read the corpora (timeline.test.ts, outcome-readers.test.ts, and public-player-matches.test.ts, whose golden sweep now carries each void's target and asserts zero refused prefixes) change no id and are outside this ledger's roots. Whole-run parity: before-only 0, after-only 81, both 11437 (engine 5987 + matrix 5222 + scripts 228 before; engine 6068 + matrix 5222 + scripts 228 after), unaccounted 0. The N1 round (3 tests added, 1 retitled, both in golden-floor-overlay.test.ts; two timeouts changed in place) was re-verified at file level: the after-side ids of the five GF-1 test files equal this ledger's entries for them plus the 8 pre-existing golden-forfeit-migration tests, and no other test file changed.",
+  "entries": [
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit › a void whose target is removed leaves nothing sound to compare: null, not a guess",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit › an empty removal set returns the ledger unchanged, and the input is never mutated",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit › removing events in FRONT of a void's target shifts the void's id by exactly the number removed before the target",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › EVERY recorded core event whose ablation says 'unpinned' is covered by a claim: swept per sport x token, counted (review N1)",
+      "fate": "added",
+      "reason": "GF-1 review N1: the overlay class is swept the other way too - every recorded core event whose ablation says unpinned must be covered by a claim, so football's position change (onLineup declared, position inert) is covered by the verdict and not by the declaration"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › a claimed event that cannot be probed (a recorder that throws) is stale, never silently held",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › a lineup event is unpinned in EVERY recorded type where the module declares no onLineup; where it declares one, the probe sees movement in at least one type",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › an unrecorded event is 'unrecorded', never 'unpinned' (an empty corpus claims nothing, so no claim can hold vacuously)",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › every claim row names real core types, a reason, and applies to at least one sport",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › football declares onLineup yet its position change moves no golden: the claim COVERS it by the verdict, though it is not asserted for football",
+      "fate": "added",
+      "reason": "GF-1 review N1: the overlay class is swept the other way too - every recorded core event whose ablation says unpinned must be covered by a claim, so football's position change (onLineup declared, position inert) is covered by the verdict and not by the declaration"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › pause is unpinned in EVERY sport: suspend and resume move no recorded golden anywhere (the review's finding 1)",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the claims name only events the kernel declares (the vocabulary is CORE_EVENT_SCHEMAS)",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the controls are NOT in the class: finalize, abandon and forfeit each move a recorded golden in every sport (the probe can answer 'pinned')",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the day the harness records the kernel overlay, the KERNEL-OWNED claims go stale and the module-folded ones do not (an overlay-recording harness, injected)",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the lineup chain credits each type with only what it ADDS: a hook that reacts to who is on the field sees substitution, retirement and entry, not a position change",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the probe answers 'pinned' for a lineup event once a module reacts to it (a boardgame given an onLineup that writes state)",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the shipped corpora hold every claim: each claimed event is recorded and inert in each sport it applies to (swept, counted)",
+      "fate": "added",
+      "reason": "GF-1 review fix 1: the recorded-but-overlay-unpinned class (pause, note, award, lineups without onLineup) is declared, derived by ablation, and goes stale when the harness records the overlay"
+    },
+    {
+      "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the sweep has teeth: the old declaration-only rule (lineups claimed where onLineup is undefined) leaves football's position change uncovered, by name",
+      "fate": "added",
+      "reason": "GF-1 review N1: the overlay class is swept the other way too - every recorded core event whose ablation says unpinned must be covered by a claim, so football's position change (onLineup declared, position inert) is covered by the verdict and not by the declaration"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › a generator stream appended AFTER the floor streams (a later EXTEND) changes neither the reproduction nor the keep-rule",
+      "fate": "added",
+      "reason": "GF-1 review fix 6: the keep-rule and the reproduction measure a floor stream against the streams preceding it; a generator walk appended after the floor changes neither"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › a retirement story needs recorded play before it: with nothing in the corpus to borrow an event from and a generator that only decides, boardgame builds none; with its corpus it does",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › empty case first: a corpus whose floor is met gets nothing appended, and a second call is the same",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › every committed floor stream closes a hole the streams PRECEDING it in the corpus left open (no noise kept)",
+      "fate": "added",
+      "reason": "GF-1 review fix 6: the keep-rule and the reproduction measure a floor stream against the streams preceding it; a generator walk appended after the floor changes neither"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › floor seeds are unique per config inside a corpus (the epoch guard keys a stream by config#seed) and clear of the generator's",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › keeps a scenario's stream only when it closes a hole: a scenario that serves a hole but builds a stream recording nothing new is dropped, the next still runs",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › refuses by name when a floor stream's identity is already taken by another stream",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › reproduces the committed floor streams byte for byte from a corpus that lacks them, in order, touching nothing else",
+      "fate": "added",
+      "reason": "GF-1: extendFloor, the floor's append path (reproduces the committed floor streams, touches nothing else, no-op on a second call, keeps only streams that close a hole, refuses an identity clash)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › strikeKernelEvent — every guard of the splice is reached (a guard nothing kills is not tested) › a ledger whose remaining events hold a void is not spliced (the splice does not rewrite ids)",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: every guard of the kernel-event splice is reached (takes effect, clears, needs play, tail void, state check, abandon refusal code)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › strikeKernelEvent — every guard of the splice is reached (a guard nothing kills is not tested) › a retirement-shaped strike that needs play is not spliced where nothing has been played, though the fold would admit it",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: every guard of the kernel-event splice is reached (takes effect, clears, needs play, tail void, state check, abandon refusal code)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › strikeKernelEvent — every guard of the splice is reached (a guard nothing kills is not tested) › a void that leaves the module in a different state than before is not spliced (a module whose fold is not a function of the ledger)",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: every guard of the kernel-event splice is reached (takes effect, clears, needs play, tail void, state check, abandon refusal code)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › strikeKernelEvent — every guard of the splice is reached (a guard nothing kills is not tested) › an abandon is 'in force' only on the kernel's own refusal: struck right after a bare Start, where a forfeit is refused for ANOTHER reason, it still splices",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: every guard of the kernel-event splice is reached (takes effect, clears, needs play, tail void, state check, abandon refusal code)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › strikeKernelEvent — every guard of the splice is reached (a guard nothing kills is not tested) › an event that never takes effect, or one the void does not clear, is not spliced",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: every guard of the kernel-event splice is reached (takes effect, clears, needs play, tail void, state check, abandon refusal code)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › strikeKernelEvent — every guard of the splice is reached (a guard nothing kills is not tested) › the real strikes splice a pair into the ledger, and removing the pair gives the ledger back exactly",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: every guard of the kernel-event splice is reached (takes effect, clears, needs play, tail void, state check, abandon refusal code)"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › the undo stream strikes the KERNEL events that decide or end a match, and play carries on (review 2) › each sport's undo stream holds a LATE correction: a sport event struck after later play, so the void is not next to its target (review finding 4)",
+      "fate": "added",
+      "reason": "GF-1 review fix 2/4: the undo stream strikes a mis-tapped forfeit and abandon with play resuming, holds a late correction, and the standing abandon stream is real"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › the undo stream strikes the KERNEL events that decide or end a match, and play carries on (review 2) › in every sport, a recorded void strikes each of core.forfeit and core.abandon: it took effect, the void clears it, and play resumes to a result",
+      "fate": "added",
+      "reason": "GF-1 review fix 2/4: the undo stream strikes a mis-tapped forfeit and abandon with play resuming, holds a late correction, and the standing abandon stream is real"
+    },
+    {
+      "id": "src/testkit/golden-floor-streams.test.ts › the undo stream strikes the KERNEL events that decide or end a match, and play carries on (review 2) › the standing abandon streams of the floor are real: an abandon no void strikes, in force at the end",
+      "fate": "added",
+      "reason": "GF-1 review fix 2/4: the undo stream strikes a mis-tapped forfeit and abandon with play resuming, holds a late correction, and the standing abandon stream is real"
+    },
+    {
+      "id": "src/testkit/golden-floor-voids.test.ts › golden floor — every recorded void means what it says (swept, counted) › each recorded void: the ledger folds as if the target had never been recorded, and differs from the ledger with the target standing",
+      "fate": "added",
+      "reason": "GF-1 review fix 5: every recorded core.void swept - the ledger folds as if its target had never been recorded and differs with the target standing (counted per sport and kind, with teeth)"
+    },
+    {
+      "id": "src/testkit/golden-floor-voids.test.ts › golden floor — every recorded void means what it says (swept, counted) › the check has teeth: a void of an inert event is named decoration, and a reader that ignores voids is named",
+      "fate": "added",
+      "reason": "GF-1 review fix 5: every recorded core.void swept - the ledger folds as if its target had never been recorded and differs with the target standing (counted per sport and kind, with teeth)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — a recorded void is a real void › every core.void in every corpus targets an earlier, non-void event of ITS OWN stream, and only core.void carries `voids`",
+      "fate": "added",
+      "reason": "GF-1: golden floor test (derived from the engine's declarations, anti-vacuity counted)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › a void is keyed by the TYPE of the event it strikes: a forfeit, an abandon and a sport event are three tokens",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: an undo of a kernel event (forfeit, abandon) and a standing abandon are tokens of their own, required in every sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › a void with no target, or one that does not point at an EARLIER event, is refused by name (a recorded ledger the fold would refuse)",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: an undo of a kernel event (forfeit, abandon) and a standing abandon are tokens of their own, required in every sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › an abandon that STANDS (no void strikes it) is a token of its own: striking it does not count as ending a match on it",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: an undo of a kernel event (forfeit, abandon) and a standing abandon are tokens of their own, required in every sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › the decisive kernel events a phone can mis-tap are declared, real core types, and required in EVERY sport",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: an undo of a kernel event (forfeit, abandon) and a standing abandon are tokens of their own, required in every sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › the decisive kernel events are exactly the two that decide or end a match: a forfeit and an abandon (review finding 2)",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: an undo of a kernel event (forfeit, abandon) and a standing abandon are tokens of their own, required in every sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › the standing kernel events are declared, real core types, and required in EVERY sport",
+      "fate": "added",
+      "reason": "GF-1 review fix 2: an undo of a kernel event (forfeit, abandon) and a standing abandon are tokens of their own, required in every sport"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › NATURAL_OUTCOMES goes stale when a row names a sport that is not registered or a token nothing records",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › NATURAL_OUTCOMES is not stale: every row names a registered sport and a token its corpus records",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › a bounded sweep of every sport's own generator reaches no outcome the floor does not require",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › an exemption goes STALE the moment its token is recorded",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › every exemption row carries a reason, a real token, and covers at least one sport",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › no exemption is stale against the shipped corpora (swept over every sport, counted)",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle exemption goes STALE the day the harness records the effective outcome (a harness that does, injected)",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle exemption goes STALE when its probe cannot run (a recorder that throws), never silently holds",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle exemption holds for a reason a probe proves: the harness records the bare outcome, the kernel reads another",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the sweep DOES see a token the floor lacks (a requirement without `draw` for football)",
+      "fate": "added",
+      "reason": "GF-1: exemptions and the NATURAL_OUTCOMES list cannot go stale (the settle probe, an injected overlay-recording harness, a sport the registry does not have)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — impossibleReason refuses to derive an exemption from a plan that never asked the reducer › joins the reducer's refusal code per config",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: a lineup type is declared impossible only on the reducer's own refusal code per config; no-candidate, an unexplained config or no config throws"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — impossibleReason refuses to derive an exemption from a plan that never asked the reducer › throws by name for a 'no-candidate' plan, and for a type the plan neither accepted nor refused",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: a lineup type is declared impossible only on the reducer's own refusal code per config; no-candidate, an unexplained config or no config throws"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — impossibleReason refuses to derive an exemption from a plan that never asked the reducer › with no recorded config nothing was asked of the reducer: the type cannot be declared impossible (a corpus that loses its configs must not shrink the floor)",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: a lineup type is declared impossible only on the reducer's own refusal code per config; no-candidate, an unexplained config or no config throws"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — lineup planning asks the real reducer › a squad of ONE takes all five types in turn when the policy declares an exemption",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per config"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — lineup planning asks the real reducer › a sub cap of 0 refuses the substitution BY NAME, and no declared exemption refuses the replacement by name",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per config"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — lineup planning asks the real reducer › every lineup offer of every sport is a real plan: starters unchanged from the default pair",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per config"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — lineup planning asks the real reducer › with no bench, nothing can come on: substitution and entry find no candidate",
+      "fate": "added",
+      "reason": "GF-1: lineup events are planned by asking the real reducer (accepted/refused by name), per config"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the empty case and the teeth, first › an EMPTY corpus fails the floor: every required token is a hole",
+      "fate": "added",
+      "reason": "GF-1: the empty corpus and dropped-stream teeth, then the shipped corpora meeting the floor"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the empty case and the teeth, first › dropping every stream that holds a token makes exactly that token a hole, naming the sport",
+      "fate": "added",
+      "reason": "GF-1: the empty corpus and dropped-stream teeth, then the shipped corpora meeting the floor"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the empty case and the teeth, first › the shipped corpus holds EVERY token a sport's floor requires (the floor itself)",
+      "fate": "added",
+      "reason": "GF-1: the empty corpus and dropped-stream teeth, then the shipped corpora meeting the floor"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure › LINEUP_TYPES are exactly the kernel's core.lineup.* types, none missing, none extra",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: the lineup vocabulary is derived from the kernel's schema map; a type with no planner (core.lineup.swap) or a planner for a dropped type throws by name; reasons are reducer refusal codes"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure › a lineup type the kernel declares and no planner covers throws BY NAME (the review's core.lineup.swap), at every entry point",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: the lineup vocabulary is derived from the kernel's schema map; a type with no planner (core.lineup.swap) or a planner for a dropped type throws by name; reasons are reducer refusal codes"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure › a plan that never got to ask the reducer ('no-candidate') cannot become a floor reason: the requirement refuses to derive from it",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: the lineup vocabulary is derived from the kernel's schema map; a type with no planner (core.lineup.swap) or a planner for a dropped type throws by name; reasons are reducer refusal codes"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure › a planner for a type the kernel no longer declares is a named failure too (the other direction)",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: the lineup vocabulary is derived from the kernel's schema map; a type with no planner (core.lineup.swap) or a planner for a dropped type throws by name; reasons are reducer refusal codes"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure › every impossible-by-policy reason is a reducer refusal code per config — never '?' and never the planner's own 'no-candidate'",
+      "fate": "added",
+      "reason": "GF-1 review fix 3: the lineup vocabulary is derived from the kernel's schema map; a type with no planner (core.lineup.swap) or a planner for a dropped type throws by name; reasons are reducer refusal codes"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the requirement is derived from the engine, per sport › `draw` is required exactly where supportsDraws says a draw-kind stage can draw (at least one sport yes, one no)",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeit admission, supportsDraws, the reasoned natural-outcome list)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the requirement is derived from the engine, per sport › `tie` and `no_result` are required only for the sports NATURAL_OUTCOMES names",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeit admission, supportsDraws, the reasoned natural-outcome list)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the requirement is derived from the engine, per sport › a lineup type is required exactly when the REAL reducer accepts it under a recorded config's policy, impossible (with the reducer's own refusal) otherwise",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeit admission, supportsDraws, the reasoned natural-outcome list)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the requirement is derived from the engine, per sport › every core type is accounted for exactly once: required, exempt, or impossible-by-policy",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeit admission, supportsDraws, the reasoned natural-outcome list)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the requirement is derived from the engine, per sport › is non-empty for every sport, and states what it examined",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeit admission, supportsDraws, the reasoned natural-outcome list)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the requirement is derived from the engine, per sport › the forfeit outcomes are the kernel's FORFEIT_REASONS, admitted by forfeitAdmission in a state the generator reaches",
+      "fate": "added",
+      "reason": "GF-1: the per-sport requirement is derived from the engine's own declarations (kernel schema map, forfeit admission, supportsDraws, the reasoned natural-outcome list)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the token vocabulary › CORE_TYPES is the kernel's own schema map, every key of it",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recorded tokens, void targets)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the token vocabulary › outcomeTokenOf refuses an outcome it cannot key (a legacy award without a reason, a kindless value)",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recorded tokens, void targets)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the token vocabulary › outcomeTokenOf: empty case first (null), then each kind, an award keyed by its reason",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recorded tokens, void targets)"
+    },
+    {
+      "id": "src/testkit/golden-floor.test.ts › golden floor — the token vocabulary › recordedTokens: an empty corpus holds nothing; a stream contributes its core types and its outcome",
+      "fate": "added",
+      "reason": "GF-1: the floor's token vocabulary (core types from CORE_EVENT_SCHEMAS, outcome tokens, recorded tokens, void targets)"
+    },
+    {
+      "id": "src/testkit/golden-forfeit-migration.test.ts › golden forfeit migration (ruling 102 Q1, PF-3; ruling 113) › GF-1: a closed-vocabulary reason the ruling never yields (disqualified, withdrew) is a deliberate record, not pre-W2b free text — kept after play and after a bare start alike; free text beside it is still rewritten",
+      "fate": "added",
+      "reason": "GF-1: the one-off forfeit migration leaves a closed-vocabulary reason it never yields (disqualified, withdrew) alone"
+    },
+    {
+      "id": "src/testkit/golden-forfeit-migration.test.ts › golden forfeit migration (ruling 102 Q1, PF-3; ruling 113) › and the migration DOES differ from the fold on the shape it cannot follow (a void after the forfeit striking the only play) - the divergence is real, so the guard above has something to catch",
+      "fate": "added",
+      "reason": "GF-1 review fix 8: the migration reads each forfeit's prefix, the fold reads the whole ledger with voids resolved; no committed forfeit sits where they differ (counted), and a control that the divergence is real"
+    },
+    {
+      "id": "src/testkit/golden-forfeit-migration.test.ts › golden forfeit migration (ruling 102 Q1, PF-3; ruling 113) › the migration reads each forfeit's PREFIX, the fold reads the active ledger with ALL voids resolved: no committed forfeit sits where the two differ (counted)",
+      "fate": "added",
+      "reason": "GF-1 review fix 8: the migration reads each forfeit's prefix, the fold reads the whole ledger with voids resolved; no committed forfeit sits where they differ (counted), and a control that the divergence is real"
+    }
+  ]
+}

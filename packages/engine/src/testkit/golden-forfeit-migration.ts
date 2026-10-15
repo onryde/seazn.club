@@ -12,11 +12,13 @@
 // per-sport table, and with `--write` rewrites the corpora in place.
 import { pathToFileURL } from "node:url";
 import { playRecorded } from "../core/events.ts";
+import { FORFEIT_REASONS } from "../core/types.ts";
 import { readCorpus, SPORT_DIRS, writeCorpus, type GoldenEvent } from "./golden.ts";
 import { makeEnvelope } from "./helpers.ts";
 
-/** A recorded event; `voids` (an `e-<index>` id, as `makeEnvelope` names them) only in synthetic streams — the
- *  committed corpora carry no `core.void`. */
+/** A recorded event; `voids` is an `e-<index>` id, as `makeEnvelope` names them. The corpora carry `core.void` since the
+ *  golden floor (GF-1) — a mis-tapped event struck at once, a late correction, a struck retirement or abandon — so a
+ *  `voids` is a real recorded field here, not only a synthetic one. */
 export type MigratableEvent = GoldenEvent & { readonly voids?: string };
 type MigratedReason = "walkover" | "retired";
 
@@ -26,13 +28,25 @@ function forfeitSide(payload: unknown): string {
   return by;
 }
 
+/** The closed-vocabulary reasons the ruling never yields — `disqualified`, `withdrew`. They were never pre-W2b free
+ *  text: the golden floor (GF-1) records them deliberately, a forfeit of that reason after play or after a bare start
+ *  alike, so the migration leaves them exactly as recorded. (`walkover` and `retired` are the two the rule produces.) */
+const KEPT_REASONS: ReadonlySet<string> = new Set(FORFEIT_REASONS.filter((reason) => reason !== "walkover" && reason !== "retired"));
+
 /** The ruled reason for the forfeit at `index` (ruling 113): walkover unless something was played before it — the
- *  fold's own reading, `playRecorded`. Voids are resolved over the PREFIX — a void recorded after the forfeit cannot
- *  un-play the match the forfeit was recorded in. */
+ *  fold's own reading, `playRecorded`. Voids are resolved over the PREFIX: a void recorded BEFORE the forfeit strikes
+ *  play it would otherwise count. The fold itself resolves voids over the WHOLE ledger (`resolveVoids`, then
+ *  `playRecorded(active.slice(0, index))`), so a void recorded AFTER the forfeit that strikes the only play before it
+ *  makes the fold read that forfeit as "before play" while this reads it as "after play". That shape cannot be followed
+ *  here (the one-off predates any recorded void); it is refused by a test instead — no committed forfeit that reaches the
+ *  fold sits where the two readings differ (golden-forfeit-migration.test.ts, counted). */
 function ruledReason(events: readonly MigratableEvent[], index: number): MigratedReason {
   const prefix = events.slice(0, index).map((event, i) => makeEnvelope(i, event as never, event.voids));
-  // No module: the migration is the one-off of ruling 113, which ruled no board-game exception (PF-3), and the corpora
-  // it rewrote stay as written. Ruling 118 moves no recorded reason: a chess walkover after the Start stays recordable.
+  // No module: the migration is the one-off of ruling 113, which ruled no board-game exception (PF-3). The corpora it
+  // rewrote are fixed points of it (every recorded forfeit already carries the ruled reason, a test pins that), and the
+  // floor streams appended since (GF-1) are fixed points too: a walkover has nothing played before it, a retirement has
+  // play, and `disqualified` / `withdrew` are `KEPT_REASONS`. Ruling 118 moves no recorded reason: a chess walkover after
+  // the Start stays recordable.
   return playRecorded(prefix, {}) ? "retired" : "walkover";
 }
 
@@ -55,7 +69,7 @@ export function migrateGoldenForfeits<S extends { readonly events: readonly Migr
         throw new Error("golden forfeit migration: a double walkover after play has no W2b reason");
       }
       const payload = event.payload as Record<string, unknown>;
-      if (payload.reason === reason) return event;
+      if (payload.reason === reason || (typeof payload.reason === "string" && KEPT_REASONS.has(payload.reason))) return event;
       rewritten++;
       return { ...event, payload: { ...payload, reason } };
     });

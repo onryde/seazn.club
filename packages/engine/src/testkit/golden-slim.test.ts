@@ -25,6 +25,7 @@ import { describe, expect, it } from "vitest";
 import { resolvePositions } from "../sport/catalog.ts";
 import { football } from "../sports/football/index.ts";
 import { builtinModules } from "../sports/index.ts";
+import { FLOOR_SEED_STRIDE } from "./golden-floor-streams.ts";
 import { defaultLineupPair } from "./helpers.ts";
 import {
   ANCHOR_STRIDE,
@@ -497,7 +498,12 @@ describe("extendCorpus appends in the canonical slim form", () => {
     it(`${key}: the appended stream is already slim, and the prefix is untouched`, () => {
       const module = builtinModules.find((m) => m.key === key) as (typeof builtinModules)[number];
       const committed = readCorpus(key);
-      const trimmed = { ...committed, streams: committed.streams.slice(0, -1) };
+      // The last stream of the GENERATOR's walks: the golden floor's streams (GF-1) sit after them, hand-built from kernel
+      // events no generator draws, so the greedy could never re-append one and this test would prove nothing.
+      const walks = committed.streams.filter((stream) => stream.seed < FLOOR_SEED_STRIDE);
+      expect(walks.length, `${key}: no generator stream left to drop`).toBeGreaterThan(0);
+      const dropped = walks[walks.length - 1]!;
+      const trimmed = { ...committed, streams: committed.streams.filter((stream) => stream !== dropped) };
       const { corpus, appended } = extendCorpus(module, trimmed);
 
       expect(

@@ -46,6 +46,7 @@ import {
   verifyStream,
   writeCorpus,
 } from "./golden.ts";
+import { extendFloor } from "./golden-floor-streams.ts";
 
 // #429 — the corpus-write guard. Both modes that rewrite a committed corpus are
 // gated on a working tree that holds NOTHING but corpus changes, because the
@@ -86,15 +87,24 @@ if (corpusWriteRefusal !== null) {
     for (const module of builtinModules) {
       it(`extends ${module.key} without replacing anything`, () => {
         const before = readCorpus(module.key);
-        const { corpus, gained, stillMissing, appended } = extendCorpus(module, before);
+        const { corpus: covered, gained, stillMissing, appended } = extendCorpus(module, before);
+        // The golden floor (GF-1) is the second append pass: the core events and outcome kinds no generator walk reaches.
+        const floor = extendFloor(module, covered);
+        const corpus = floor.corpus;
         expect(corpus.streams.slice(0, before.streams.length)).toEqual(before.streams);
         // eslint-disable-next-line no-console
         console.log(
           `[extend] ${module.key}: +${appended.length} streams ${JSON.stringify(appended)} ` +
             `gained ${JSON.stringify(gained)} stillMissing ${JSON.stringify(stillMissing)}`,
         );
-        if (appended.length > 0) writeCorpus(corpus);
-      });
+        // eslint-disable-next-line no-console
+        console.log(
+          `[extend] ${module.key} floor: +${floor.appended.length} streams ${JSON.stringify(floor.appended)} ` +
+            `stillMissing ${JSON.stringify(floor.stillMissing)}`,
+        );
+        if (appended.length > 0 || floor.appended.length > 0) writeCorpus(corpus);
+        // Generous: a maintenance tool, not a gate. The floor's search for cricket's tie walks thousands of seeds.
+      }, 300_000);
     }
   });
 } else if (REBASELINE_GOLDEN) {

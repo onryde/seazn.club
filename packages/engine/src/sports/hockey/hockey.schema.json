@@ -1004,6 +1004,63 @@
       "shots[].side": [
         "string"
       ],
+      "squads": [
+        "object"
+      ],
+      "squads[]": [
+        "object"
+      ],
+      "squads[].entrantId": [
+        "string"
+      ],
+      "squads[].exemptUsed": [
+        "object"
+      ],
+      "squads[].members": [
+        "array"
+      ],
+      "squads[].members[]": [
+        "object"
+      ],
+      "squads[].members[].lastPositionKey": [
+        "string"
+      ],
+      "squads[].members[].onField": [
+        "boolean"
+      ],
+      "squads[].members[].orderNo": [
+        "number"
+      ],
+      "squads[].members[].personId": [
+        "string"
+      ],
+      "squads[].members[].positionKey": [
+        "string"
+      ],
+      "squads[].members[].provenance": [
+        "string"
+      ],
+      "squads[].members[].role": [
+        "string"
+      ],
+      "squads[].members[].roles": [
+        "array"
+      ],
+      "squads[].members[].roles[]": [
+        "string"
+      ],
+      "squads[].members[].started": [
+        "boolean"
+      ],
+      "squads[].members[].timesOff": [
+        "number"
+      ],
+      "squads[].members[].timesOn": [
+        "number"
+      ],
+      "squads[].subsUsed": [
+        "number"
+      ],
       "suspensions": [
         "array"
       ],
