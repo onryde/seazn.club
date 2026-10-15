@@ -2,6 +2,7 @@
 // Exactly the exports the .mjs has.
 export declare function assertOutsideRepo(dir: string, repoRoot: string): void;
 export declare function requireChecked(name: string, n: unknown): number;
+export declare const DATA_EXPORTS: ReadonlyMap<string, string>;
 export declare function checkTarballExports(input: {
   manifest: { exports?: unknown };
   files: ReadonlySet<string>;
@@ -39,3 +40,8 @@ export declare function installSignalCleanup(input: {
   before?: () => void;
   proc?: { once(signal: string, handler: () => void): unknown; exit(code: number): unknown };
 }): void;
+export declare function phoneSpecifiers(input: { subpaths: readonly string[]; manifest: { exports?: unknown }; sportDirs: readonly string[]; name?: string }): string[];
+export declare function distTwin(srcPath: string): string;
+export declare function engineDistPaths(paths: readonly string[], names: readonly string[]): string[];
+export declare function assertBundleMatchesWalk(input: { bundle: readonly string[]; walked: readonly string[] }): number;
+export declare function assertPhoneRuleGreen(phone: { walked: readonly string[]; violations: readonly { kind: string; file: string; detail: string }[] }): number;

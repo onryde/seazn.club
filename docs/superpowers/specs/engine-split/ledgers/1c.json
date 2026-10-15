@@ -1,0 +1,1794 @@
+{
+  "batch": "1c",
+  "note": "Test-id ledger for the engine-split Phase 1 batch 1c, built against the batch base ca6e7a21a (main after 1d). Ids are relative to each collection's ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --before <before-matrix.json>=<base>/tools/matrix --before <before-scripts.json>=<base> --after <after-engine.json>=packages/engine --after <after-matrix.json>=tools/matrix --after <after-scripts.json>=. --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides, batch 1b review m4): the WHOLE engine package from the engine directory, and scripts/__tests__ and tools/matrix/__tests__ from the repo root with the engine's vitest binary (--exclude '**/strip-types-loadable.test.ts' for the matrix collection: its titles embed the checkout's absolute path, so a base worktree and a head worktree never agree; the file is unchanged). Task 1c-1 (phone-subpaths.json and the static RN-safe rule), as amended by its review: no existing test id left in 1c-1 - the existing CLI tests of test/boundary-gate.test.ts keep their titles and gain the phone walk's inputs (package.json, phone-subpaths.json and a four-entry skeleton) in their scratch checkout. Three existing tests changed title in round 2 (they count what the engine exports, and it now exports one data file): three `rewritten` entries. Every other entry is `added`: 330 in test/boundary-gate.test.ts (the phone walk, its refusals and its reading of code, the code-skeleton boundary scan, the golden.ts exemption, the closure pin, the visit budget, the CLI's phone behaviour), 1 in test/publish-manifest.test.ts (the phone pin exported as a data file) and 23 in test/pack-proof.test.ts (the rn leg's phone helpers, the dist-twin proof against tsc's emit, the wiring check). Whole-batch parity: before-only 3, after-only 357, both 10967, unaccounted 0.",
+  "entries": [
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › passes the engine's own publishConfig.exports and counts every target (two conditions per declared export)",
+      "fate": "rewritten",
+      "to": "test/pack-proof.test.ts › checkTarballExports › passes the engine's own publishConfig.exports and counts every target (two conditions per module export, one per data export)",
+      "reason": "1c review round 2 (m6): the engine's exports now include a data file (./phone-subpaths.json, one target), so the count is two per module export plus one per data export - the test is the same check with the arithmetic from the engine's own declarations"
+    },
+    {
+      "id": "test/pack-proof.test.ts › exportSpecifiers: the proof imports every key and every sport directory › lists each non-pattern export key plus each sport directory with an index (the engine's own declarations, counted)",
+      "fate": "rewritten",
+      "to": "test/pack-proof.test.ts › exportSpecifiers: the proof imports every key and every sport directory › lists each non-pattern module export plus each sport directory with an index, and no data export (the engine's own declarations, counted)",
+      "reason": "1c review round 2 (m6): the specifier list leaves the data export out (it holds no module to import), so the test counts module exports and asserts the data file is not listed"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › mirrors all 21 workspace exports into dist (never zero)",
+      "fate": "rewritten",
+      "to": "test/publish-manifest.test.ts › publish manifest › mirrors all 22 workspace exports into dist (never zero)",
+      "reason": "1c review round 2 (m6): the count in the title follows the engine's export list, which gained ./phone-subpaths.json; the test still mirrors every module export into dist and now also pins that the data export is published as itself"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: against the TypeScript parser, over every file of the real src/ › is what the parser says on every file: no code position blanked, no comment or literal text left",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: against the TypeScript parser, over every file of the real src/ › refuses to compare nothing, and sees a skeleton that is wrong",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › keeps the source's length and its line breaks outside comments, strings and templates",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a cast",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a closing bracket and a regex after",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a generic call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a property named in",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a property named return",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after a property named typeof",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after an angle-bracket assertion",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a division after an indexed non-null",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion before a division and a string",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion in a nested template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion in a template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a non-null assertion on a member before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a postfix ++ before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a postfix -- before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a regex after a block",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a regex after an if condition",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the phone walk still sees process after a regex in an arrow body",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a cast",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a closing bracket and a regex after",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a generic call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a property named in",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a property named return",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after a property named typeof",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after an angle-bracket assertion",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a division after an indexed non-null",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion before a division and a string",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion in a nested template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion in a template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a non-null assertion on a member before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a postfix ++ before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a postfix -- before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a regex after a block",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a regex after an if condition",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned call after a regex in an arrow body",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a cast",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a closing bracket and a regex after",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a generic call",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a property named in",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a property named return",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after a property named typeof",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after an angle-bracket assertion",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a division after an indexed non-null",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion before a division and a string",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion in a nested template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion in a template placeholder",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a non-null assertion on a member before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a postfix ++ before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a postfix -- before a division",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a regex after a block",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a regex after an if condition",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the purity scan still sees a banned import after a regex in an arrow body",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › the skeleton of a fixture is exactly what its author wrote: comments and the insides of strings, templates and regular expressions blank, quotes and code kept",
+      "fate": "added",
+      "reason": "1c review round 2 (M1): the code skeleton is built from the TypeScript parser, not from a guess at regex-versus-division - a / after a non-null !, a postfix ++ or --, an if (...) or a property called return divides or opens a regex as the grammar says, probed through both scans, held character-for-character against the parser's own tokens over every file of the real src/"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › a boundary violation does not hide the phone walk's own line, and says nothing of a clean boundary",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 on a package the closure imports and the package does not declare, and on the package importing itself",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 on a phone-safety violation, names it by its path from the working directory, and does not say PASS",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 on node:crypto anywhere else, and on a stale exemption (golden.ts without the import)",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 when the phone closure drifts from the pin, names the modules and the file to re-pin, and does not say PASS",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › exits 1 when the phone walk cannot run or walked nothing: no package.json or phone-subpaths.json, and an empty subpath list, are not a clean engine",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › passes with the golden.ts node:crypto exemption, and says on stdout that it used it",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › reports a boundary violation and a phone-safety violation together, each by its own summary",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate CLI (a copy of the gate beside a scratch src/) › the real gate walks the recorded closure and passes, from the engine directory and from the directory above it",
+      "fate": "added",
+      "reason": "1c-1: the gate CLI also walks the phone subpaths - the phone-safe line and its count, FAIL lines by working-directory path, both families of violation together, a walk that cannot run or walked nothing, the closure pin, the exemption, and the real gate from two working directories"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › agrees with the TypeScript AST on every module specifier of every file of the real src/ (type imports included)",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag Date.now( in a string",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag Math.random( in a template",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a banned import written in a block comment",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a banned import written inside a regex",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a banned import written inside a string",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a banned import written inside a template",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a function whose name ends in import",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a function whose name ends in require",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a method named import",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag a method named require",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › does not flag new Date() in a single-quoted string",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a /* inside a // comment",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a /* inside a string",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a /** inside a // comment (src/testkit/golden.ts:20)",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a // inside a string",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a mid-line import after a string holding //",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a multi-line block comment before it (the line is the source's, not the skeleton's)",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a multi-line import",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a multi-line template before an import",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a multi-line template before it",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a no-space from",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a quote in a regular expression",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after a template placeholder",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after an apostrophe in a comment",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after an import after another statement on its line",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: it reads code, not text › still sees the violation after an import with no space before its string",
+      "fate": "added",
+      "reason": "1c-1 review: the boundary scan reads the code skeleton - a /** inside a // comment, a // or /* inside a string, an apostrophe or quote in a comment or regex no longer hide code, a banned call written inside a string is not a call, line numbers are the source's, and every module specifier of every src/ file agrees with the TypeScript AST"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › allows node:crypto in that file, and says it did",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › allows nothing else in that file: bare crypto, another banned import, and a banned call still red",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › asks nothing of a tree that has no such file",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › does not extend to the phone walk: the same file reached from a phone subpath is still a Node builtin",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › is declared once, for that file and that specifier, with a reason",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › is red when the file no longer imports it (a stale exemption), whether it imports nothing, or only mentions it in a comment or a string",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › is used by the real src/: the exemption is not dead, and it is the only one in use",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › still refuses node:crypto in a file named like it",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › still refuses node:crypto in a file of the same name elsewhere",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › still refuses node:crypto in a phone module",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › still refuses node:crypto in another testkit file",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › engine boundary gate: the golden.ts node:crypto exemption › still refuses node:crypto in the sport directory",
+      "fate": "added",
+      "reason": "1c-1 review: the one named, file-scoped IMPORT_EXEMPTIONS entry (node:crypto in src/testkit/golden.ts) - what it allows, what it never does (another file, another specifier, the phone walk), the staleness guard, and that the real src/ uses it"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the closure pin › is a violation of the combined check, named at phone-subpaths.json, and not of the plain walk",
+      "fate": "added",
+      "reason": "1c-1 review: the closure pin is a set, and every check that reds on a phone-closure change prints the same message (modules added and removed, the file to re-pin)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the closure pin › is silent when the walk and the pin hold the same modules, in any order and however often the pin repeats one",
+      "fate": "added",
+      "reason": "1c-1 review: the closure pin is a set, and every check that reds on a phone-closure change prints the same message (modules added and removed, the file to re-pin)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the closure pin › names the modules added, the modules removed, and the file to re-pin",
+      "fate": "added",
+      "reason": "1c-1 review: the closure pin is a set, and every check that reds on a phone-closure change prints the same message (modules added and removed, the file to re-pin)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the closure pin › passes the combined check when the pin matches",
+      "fate": "added",
+      "reason": "1c-1 review: the closure pin is a set, and every check that reds on a phone-closure change prints the same message (modules added and removed, the file to re-pin)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the closure pin › refuses a pin it cannot read: missing, empty, not a list, or a list of anything but strings",
+      "fate": "added",
+      "reason": "1c-1 review: the closure pin is a set, and every check that reds on a phone-closure change prints the same message (modules added and removed, the file to re-pin)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the closure pin › reports the walk's own violations as well, ahead of the drift",
+      "fate": "added",
+      "reason": "1c-1 review: the closure pin is a set, and every check that reds on a phone-closure change prints the same message (modules added and removed, the file to re-pin)"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › agrees with an independent reading of the same graph: the TypeScript AST finds the same modules and the same packages",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › imports only packages the engine declares as runtime dependencies: zod, and nothing optional (read without the gate's own check)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › is deterministic: a second call reports the same walk",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › is red against the real src/ when the recorded closure is perturbed: a module dropped from the pin, one invented",
+      "fate": "added",
+      "reason": "1c review round 2 (m3): the closure pin is red against the real src/ when the recorded closure is perturbed"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › is red through the combined check when the pin and the walk disagree, and green when they agree (the real engine)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › lists the D25 phone subpaths, and every one is a key of the package's exports",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the real engine › walks exactly the recorded closure, every phone entry module included, and finds it clean",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25): the real engine's phone closure - the recorded closure as a set, the D25 subpath list, an independent TypeScript-AST reading of the same graph, the declared runtime packages, determinism"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the visit budget › defaults to ten times the .ts files under src/",
+      "fate": "added",
+      "reason": "1c-1 review: the walk has a visit budget so a broken visited-guard fails fast instead of hanging"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the visit budget › refuses a budget that is not a positive-or-zero integer",
+      "fate": "added",
+      "reason": "1c-1 review: the walk has a visit budget so a broken visited-guard fails fast instead of hanging"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the visit budget › stops with an error naming the budget when the visits pass it, and not one visit sooner",
+      "fate": "added",
+      "reason": "1c-1 review: the walk has a visit budget so a broken visited-guard fails fast instead of hanging"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: the visit budget › walks a cycle once, and a module that several others import once",
+      "fate": "added",
+      "reason": "1c-1 review: the walk has a visit budget so a broken visited-guard fails fast instead of hanging"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › does not follow the first literal of a concatenated import() as if it were the module, and follows a plain one",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › does not follow the first literal of a concatenated require() as if it were the module, and follows a plain one",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › lists the externals it saw even when it refuses them, and not the package's own name",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › lists the walk and its entries exactly: every phone entry, each sport directory with an index, what they import, once each",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ! as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after % as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after & as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after && as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ( as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ) of a while as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ) of an if as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after * as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after + as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after , as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after - as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after : as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ; as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after < as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after = as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after => as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after > as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ? as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after [ as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ^ as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word await as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word case as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word delete as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word do as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word else as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word in as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word instanceof as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word new as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word of as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word return as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word throw as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word typeof as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word void as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after the word yield as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after { (a block) as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after | as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after || as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after } of a block as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads a / after ~ as a regular expression, and still sees the next line",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads an unterminated block comment as a comment to the end of the file, and the same text closed as a comment and then code",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads code, not text: a comment or a string that says process.env or node:fs is not an import or a read",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads imports written without semicolons, one violation each, however many lines they span",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › reads the package.json and phone-subpaths.json it is given, and fails loudly when either is unusable",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › sees an import written after a string that holds a // as well",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a /* inside a string",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a // inside a string",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by a call",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by a name",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by a number",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by an indexed value",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a division by an object",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a placeholder that held braces",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a quote in a block comment",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex at the start of the file",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex holding a quote",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex holding a slash in a class",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after a regex that follows return",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an apostrophe in a comment",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an escaped backtick in a template",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an escaped quote",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an escaped slash in a regex",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process after an unterminated string",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process inside a nested template placeholder",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process inside a placeholder that holds braces",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk reads › still sees process inside a template placeholder",
+      "fate": "added",
+      "reason": "1c-1: the walk reads code, not text - comments, strings, templates and regular expressions never count - plus its ordering, line numbers and unusable inputs"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not flag the same code outside the phone closure",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `export type *` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `export type { … } from` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `import type of a default and braces on several lines` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `import type of a default` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `import type of a namespace` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `import type with no space before the braces` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `import type` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `typeof import() with whitespace` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not follow `typeof import()` (erased at compile time)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › does not walk into scheduling once it has refused the import: the one violation is the import, not what is behind it",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a default and a named import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a default import named type",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a default import named type next to a named import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import with a trailing comma",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import with import attributes",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import with spaces inside the parentheses",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a dynamic import()",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a multi-line import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a namespace import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a re-export with no spaces",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a require split over lines",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a require with spaces inside the parentheses",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a require()",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a side-effect import",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a star re-export under a string name",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a star re-export with no spaces",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a string-named import specifier",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows a string-named re-export",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows an import after a statement on its line",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows an import with no spaces",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows an inline `type` specifier (whether the build keeps it is a compiler flag; a walk too wide is loud, too narrow silent)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows export *",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows export * as",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows export { … } from",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › follows import … from",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › lists a file's violations in the order they stand in the file, whichever check found them",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer after a spread reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer as a shorthand property reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer as a type annotation reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer destructured from globalThis under another name reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __dirname in a template placeholder reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __dirname reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __filename as an argument reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses __filename reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a bare builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a builtin subpath reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a default import named type next to a named import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a default import named type reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a default import with a namespace import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import it cannot resolve reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a concatenation reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a literal and a variable reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a literal in a conditional reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a literal then an operator reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of a template reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic import of the package itself reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a dynamic node: import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a listed subpath the package does not export",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a node: builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a node:-only builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a package that is not declared at all reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a package that is only a devDependency reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a package that is only an optional peer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a package whose name starts like the package's own alias reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a pattern shape it would have to guess at, rather than walking a smaller closure",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a phone subpath whose entry file lives under scheduling",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a re-export of a string-named specifier reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a re-export with no spaces reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a re-exported builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a relative import of a file that is not there reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a require of a concatenation reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a scoped package that is not declared reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a shorthand property reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a side-effect node: import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a star re-export under a string name reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a star re-export with no spaces reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a star re-exported node: builtin reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses a type query of process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an empty require reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import of a package file outside src/ reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import of a string-named specifier reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import of the bare alias reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import of the package by its alias reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import of the package by its published name reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import that leaves the package by exactly the root reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import that leaves the package reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses an import with no spaces reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses global behind an optional template literal reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses global behind brackets reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses global.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis behind a template literal reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis behind brackets for Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis behind brackets reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis.Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses globalThis.process with whitespace reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses new Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained global.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained globalThis.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses optional-chained process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process after a return reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process as a default parameter reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process as a switch label after another case reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process as a switch label reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process behind brackets reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process destructured by name reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process destructured from globalThis under another name reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process destructured reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process in a ternary reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process in parentheses reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process on the right of a ternary reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process passed as an argument reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process spread into an array reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses process spread into an object reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses require of a template reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses require of a variable reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses scheduling reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses scheduling through a directory import reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses self.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses typeof Buffer reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses typeof __dirname reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c review round 2 (m1, m2, n2): the phone rule also names Buffer, __dirname and __filename, reads globalThis[`process`] and a switch label, and refuses an import()/require() whose module is a literal that goes on"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses typeof process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses window behind optional brackets reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › refuses window.process reached from a phone subpath",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › reports a violation at its own line, after multi-line comments, strings and templates",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › resolves a specifier as written, without its extension, with .js for .ts, and as a directory's index",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › treats a ./sports/* pattern that matches no directory, and an exports value that is not a ./ path, as violations too",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › phone-safe subpaths: what the walk refuses › treats an exports target that does not exist as a violation, not a smaller walk",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 1, D25) and review: what checkPhoneSafety refuses (a Node builtin, any naming of process, scheduling, an unresolvable or non-literal import or require, an undeclared package, the package importing itself) and the import forms it follows or ignores"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › scratch directories › every one a test makes is tracked, removed by the cleanup, and forgotten - however many a test makes",
+      "fate": "added",
+      "reason": "1c review round 2 (m5): the scratch-directory cleanup removes what a test made, however many, and the file's afterAll no longer demands that some test made one, so a single-test run stays green"
+    },
+    {
+      "id": "test/pack-proof.test.ts › checkTarballExports › holds the data exports to their file: present in the tarball, named exactly, and only as a plain string",
+      "fate": "added",
+      "reason": "1c review round 2 (m6): phone-subpaths.json is shipped and exported as a data file, and the pack proof holds the data export to its file (present, named exactly, a plain string, never a stand-in for modules) and reads it from the installed package"
+    },
+    {
+      "id": "test/pack-proof.test.ts › pack-proof/node/strip.ts: a data export is read as data, not imported as a module › imports each module export and sport directory, skips the data export in that list, and prints the data it read through the exports map",
+      "fate": "added",
+      "reason": "1c review round 2 (m6): phone-subpaths.json is shipped and exported as a data file, and the pack proof holds the data export to its file (present, named exactly, a plain string, never a stand-in for modules) and reads it from the installed package"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › assertPhoneRuleGreen passes a clean walk, and refuses any violation (the closure-changed one included) and an empty walk",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › distTwin maps src/<path>.ts to dist/<path>.js and nothing else",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › engineDistPaths keeps the engine's modules under either spelling, as their dist/ paths",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › holds against the real engine: every walked module's dist/ twin is a file tsc's build emits (tsconfig.build.json), and a test file is not",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › holds against the real engine: the modules the emitted JavaScript imports, from the phone entries, are exactly the walked modules",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › passes when the bundle holds exactly the walked modules (in any order) and reports how many",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › refuses a walked module the bundle lacks, naming it, and a bundled module the walk never reached, naming it",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › refuses an empty walk: a comparison against nothing is satisfied by nothing",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › run.mjs's rn leg takes the combined phone check, asserts it green, and compares the dev bundle to the walk - as top-level statements, in order",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the emitted-closure check can fail: a walk with a module added or dropped disagrees with it",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the assertion commented out",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the assertion guarded by a constant",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the assertion moved after the comparison",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the assertion on a copy",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the assertion short-circuited",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the comparison against an empty walk",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the comparison against the wrong list",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the comparison made conditional",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the dev bundle is held to the static phone walk › the wiring check sees the pin dropped (the plain walk instead of the combined check)",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4) and review: the dev bundle is held to the static phone walk - the dist twin proved against tsc's own emit list and the emitted JavaScript's imports, assertPhoneRuleGreen, and run.mjs's rn leg wiring read from its syntax"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the phone subpaths the rn leg imports › are the listed subpaths, each a key of the packed manifest, with ./sports/* expanded over the source's sport directories",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json"
+    },
+    {
+      "id": "test/pack-proof.test.ts › the phone subpaths the rn leg imports › honours the alias, keeps the list's order, and refuses what it cannot import: nothing, an unexported subpath, an unknown pattern",
+      "fate": "added",
+      "reason": "1c-1 (plan Step 4): the rn leg imports the phone subpaths from phone-subpaths.json"
+    },
+    {
+      "id": "test/publish-manifest.test.ts › publish manifest › exports the phone pin as a data file at the package root, the same in the workspace and in the published manifest, and ships it",
+      "fate": "added",
+      "reason": "1c review round 2 (m6): ./phone-subpaths.json is exported as a data file at the package root, the same in the workspace and in the published manifest, and listed in `files`"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › code skeleton: division and regular expressions (the TypeScript parser decides, not the preceding character) › is a function of the text alone: a parse handed in changes nothing, a repeat gives the same answer, and another text is its own",
+      "fate": "added",
+      "reason": "1c CI follow-up (PR #958): codeSkeleton keeps the skeleton of a text for the next read of it, and accepts a parse the caller already holds; the test holds both to the plain reading"
+    },
+    {
+      "id": "test/boundary-gate.test.ts › treeBudget: a test that reads the whole tree states its budget from the number of files › is at least the floor, grows with the files and with the passes, and refuses a count that is not a count",
+      "fate": "added",
+      "reason": "1c CI follow-up (PR #958): the tests that read the whole real src/ state their timeout from the file count (test/tree-budget.ts) instead of leaning on vitest's 5 s default, which coverage instrumentation exceeded"
+    }
+  ]
+}

@@ -31,6 +31,11 @@ function leaves(value, at) {
   throw new Error(`${at}: an export target must be a string or a conditions object, got ${JSON.stringify(value)}`);
 }
 
+/** The data files the package exports as themselves (engine-split 1c review, m6): export key -> the file at the package root that `files`
+ *  ships and the key must name exactly. They are not modules: they live outside dist/ and `import "<name>/<key>"` of one is not a module
+ *  load, so the proof checks them here, and `exportSpecifiers` leaves them out of what the fixtures import. */
+export const DATA_EXPORTS = new Map([["./phone-subpaths.json", "phone-subpaths.json"]]);
+
 /** What a registry consumer gets from the packed manifest. `manifest` is the tarball's own package.json, `files` the set of
  *  paths in the tarball relative to the package root (no `package/` prefix), `expectedKeys` the workspace's export subpaths,
  *  `where` what `files` is, for the message (run.mjs also calls this on the emitted dist/ BEFORE packing, where an empty dist/
@@ -38,7 +43,8 @@ function leaves(value, at) {
  *
  *  Throws on: no exports; a key set that differs from the workspace's; any target under `src/` or any `.ts` that is not a
  *  `.d.ts` (what `npm pack` ships when publishConfig.exports is not applied); any target the tarball does not contain; a `*`
- *  pattern that matches no file. Returns the number of export targets checked (every leaf string, a `*` pattern counting once). */
+ *  pattern that matches no file; a data export (DATA_EXPORTS) that is not exactly its file's plain path or whose file is not in `files`.
+ *  Returns the number of export targets checked (every leaf string, a `*` pattern counting once, a data export once). */
 export function checkTarballExports({ manifest, files, expectedKeys, where = "the tarball" }) {
   const exp = manifest.exports;
   if (exp === null || typeof exp !== "object" || Object.keys(exp).length === 0) throw new Error("the packed package.json has no exports");
@@ -51,7 +57,8 @@ export function checkTarballExports({ manifest, files, expectedKeys, where = "th
     throw new Error(`the packed exports differ from the workspace's: missing [${missing.join(", ")}], extra [${extra.join(", ")}]`);
   }
   let checked = 0;
-  for (const [at, target] of Object.entries(exp).flatMap(([key, value]) => leaves(value, `exports[${JSON.stringify(key)}]`))) {
+  const modules = Object.fromEntries(Object.entries(exp).filter(([key]) => !DATA_EXPORTS.has(key)));
+  for (const [at, target] of Object.entries(modules).flatMap(([key, value]) => leaves(value, `exports[${JSON.stringify(key)}]`))) {
     if (!target.startsWith("./")) throw new Error(`${at}: "${target}" is not a ./ path`);
     const rel = target.slice(2);
     if (SRC_SEGMENT.test(rel) || TS_SOURCE.test(rel)) throw new Error(`${at}: "${target}" points at source, which the tarball does not ship (was it packed by npm instead of pnpm?)`);
@@ -63,6 +70,15 @@ export function checkTarballExports({ manifest, files, expectedKeys, where = "th
     } else if (!files.has(rel)) {
       throw new Error(`${at}: "${target}" is not in ${where} (a dangling export)`);
     }
+    checked++;
+  }
+  // the data exports below must not make up for modules that were never judged: zero module targets is a failure on its own
+  requireChecked("module exports", checked);
+  for (const [key, data] of DATA_EXPORTS) {
+    if (!(key in exp)) continue; // a missing key is the key-set comparison's to report, above
+    // a data export names its file, as a plain string, and the tarball holds it
+    if (exp[key] !== `./${data}`) throw new Error(`exports[${JSON.stringify(key)}]: expected the plain string "./${data}", got ${JSON.stringify(exp[key])}`);
+    if (!files.has(data)) throw new Error(`exports[${JSON.stringify(key)}]: "./${data}" is not in ${where} (a dangling export)`);
     checked++;
   }
   return checked;
@@ -107,6 +123,80 @@ export function engineModules(paths, names) {
   return paths.filter((p) => names.some((n) => p.includes(`/node_modules/${n}/dist/`) || p.startsWith(`node_modules/${n}/dist/`)) && p.endsWith(".js"));
 }
 
+// ------------------------------------------------------------------------------------------------ the phone subpaths (Task 1c-1)
+
+/** The specifiers the rn entry imports: the subpaths of phone-subpaths.json, each of which must be an export of the PACKED manifest,
+ *  with `./sports/*` expanded over `sportDirs` (the only pattern with an expansion). Refuses an empty list: an entry that imports
+ *  nothing bundles nothing. `name` is the alias the fixtures install under. */
+export function phoneSpecifiers({ subpaths, manifest, sportDirs, name = "@seazn/engine" }) {
+  if (!Array.isArray(subpaths) || subpaths.length === 0) throw new Error("phone-subpaths.json lists no subpath: an entry that imports nothing proves nothing");
+  const exp = manifest.exports;
+  const out = [];
+  for (const sub of subpaths) {
+    if (typeof sub !== "string" || !sub.startsWith("./")) throw new Error(`phone subpath ${String(sub)} is not a ./ subpath`);
+    if (exp === null || typeof exp !== "object" || !Object.hasOwn(exp, sub)) throw new Error(`phone subpath ${sub} is not an export of the packed manifest`);
+    if (!sub.includes("*")) {
+      out.push(`${name}/${sub.slice(2)}`);
+    } else if (sub === "./sports/*") {
+      if (sportDirs.length === 0) throw new Error("./sports/* has no sport directory to expand over");
+      for (const dir of sportDirs) out.push(`${name}/sports/${dir}`);
+    } else {
+      throw new Error(`phone subpath pattern "${sub}" has no known expansion: teach phoneSpecifiers how to enumerate it`);
+    }
+  }
+  return out;
+}
+
+/** The dist/ file `src/<path>.ts` compiles to. */
+export function distTwin(srcPath) {
+  const m = /^src\/(.+)\.ts$/.exec(srcPath);
+  if (m === null) throw new Error(`${srcPath} is not a src/**/*.ts module`);
+  return `dist/${m[1]}.js`;
+}
+
+/** The engine's modules among a bundle's module paths, each as its path below the package (`dist/core/index.js`), whichever spelling of
+ *  the package name Metro recorded. */
+export function engineDistPaths(paths, names) {
+  return engineModules(paths, names).map((p) => {
+    for (const n of names) {
+      const marker = `node_modules/${n}/dist/`;
+      const at = p.lastIndexOf(marker);
+      if (at !== -1 && (at === 0 || p[at - 1] === "/")) return `dist/${p.slice(at + marker.length)}`;
+    }
+    throw new Error(`${p} matched engineModules but not any of its package names`);
+  });
+}
+
+/** The Metro dev bundle must hold exactly the modules the static phone walk found (scripts/engine-boundary.ts), as their dist/ twins.
+ *  A module walked but not bundled means the walk follows an import the build erases; a module bundled but not walked means the walk
+ *  misses an import form, which is how a Node builtin would reach a phone unseen. Returns how many modules both agree on. */
+export function assertBundleMatchesWalk({ bundle, walked }) {
+  if (walked.length === 0) throw new Error("the static phone walk is empty: a comparison against nothing is satisfied by nothing");
+  const expected = new Set(walked.map(distTwin));
+  const got = new Set(bundle);
+  const missing = [...expected].filter((x) => !got.has(x)).sort();
+  const extra = [...got].filter((x) => !expected.has(x)).sort();
+  const problems = [];
+  if (missing.length > 0) problems.push(`${missing.length} module(s) walked statically but absent from the dev bundle (a value import the build erases?):\n${missing.join("\n")}`);
+  if (extra.length > 0) problems.push(`${extra.length} module(s) in the dev bundle but never walked (the static walk missed an import form):\n${extra.join("\n")}`);
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+  return expected.size;
+}
+
+/** The static phone rule (scripts/engine-boundary.ts, `checkPhoneClosure`) must be green before the bundle is compared to the walk it took:
+ *  any violation - the closure-changed one, a walked module that no longer matches the pin, included - or an empty walk is a failure.
+ *  Returns the number of modules walked. */
+export function assertPhoneRuleGreen(phone) {
+  if (phone === null || typeof phone !== "object" || !Array.isArray(phone.walked) || !Array.isArray(phone.violations)) {
+    throw new Error("assertPhoneRuleGreen needs a phone report ({ walked, violations })");
+  }
+  if (phone.walked.length === 0) throw new Error("the static phone walk visited no module: a rule over nothing proves nothing");
+  if (phone.violations.length > 0) {
+    throw new Error(`the static phone rule is red, so there is nothing safe to bundle:\n${phone.violations.map((v) => `${v.file} ${v.kind}: ${v.detail}`).join("\n")}`);
+  }
+  return phone.walked.length;
+}
+
 /** Run every selected fixture, never stopping at the first failure (CI should show every red leg at once). `fixtures` maps a
  *  name to `async (ctx) => N`. A thrown error and a count that is not a positive integer are both failures. `log` receives
  *  each `<name>: <N> checked` line. Returns `{ results, failures }`. */
@@ -132,8 +222,8 @@ export async function runFixtures(names, fixtures, ctx, log) {
 
 // --------------------------------------------------------------------------------------------- what the proof must cover
 
-/** The specifiers a consumer can import: every non-pattern key of the PACKED manifest's `exports`, plus the `./sports/*` pattern
- *  expanded over `sportDirs`. `name` is the alias the fixtures install under. Throws on a pattern it has no expansion for, on a
+/** The specifiers a consumer can import: every non-pattern key of the PACKED manifest's `exports` (but the data exports, which hold no
+ *  module), plus the `./sports/*` pattern expanded over `sportDirs`. `name` is the alias the fixtures install under. Throws on a pattern it has no expansion for, on a
  *  `*` with no directory to expand over, and on an empty result (a proof that imports nothing proves nothing). */
 export function exportSpecifiers({ manifest, sportDirs, name = "@seazn/engine" }) {
   const exp = manifest.exports;
@@ -141,7 +231,9 @@ export function exportSpecifiers({ manifest, sportDirs, name = "@seazn/engine" }
   const out = [];
   for (const key of Object.keys(exp)) {
     if (!key.startsWith("./")) throw new Error(`export key "${key}" is not a ./ subpath`);
-    if (!key.includes("*")) {
+    if (DATA_EXPORTS.has(key)) {
+      continue; // a data file: there is no module in it for a fixture to import
+    } else if (!key.includes("*")) {
       out.push(`${name}/${key.slice(2)}`);
     } else if (key === "./sports/*") {
       if (sportDirs.length === 0) throw new Error("./sports/* has no sport directory to expand over");

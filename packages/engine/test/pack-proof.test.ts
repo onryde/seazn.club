@@ -5,36 +5,46 @@
 // source/dangling targets, the right pnpm is picked, and the Metro module count is read from a bundle that actually parses.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
-import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
+  assertBundleMatchesWalk,
   assertExactVersions,
   assertOutsideRepo,
+  assertPhoneRuleGreen,
   assertSameSet,
   checkTarballExports,
+  DATA_EXPORTS,
   declaredAppRoutes,
   devBundleModules,
+  distTwin,
+  engineDistPaths,
   engineModules,
   exportSpecifiers,
   installSignalCleanup,
   installedVersion,
+  phoneSpecifiers,
   pickPnpm,
   requireChecked,
   runFixtures,
   sourceSportDirs,
   sportDirsOf,
 } from "../pack-proof/lib.mjs";
+import { checkPhoneClosure, checkPhoneSafety, phoneClosureDrift } from "../scripts/engine-boundary.ts";
+import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
+import { FLOOR_MS, treeBudget } from "./tree-budget.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(ENGINE, "..", "..");
 const PROOF = join(ENGINE, "pack-proof");
 const pkg = JSON.parse(readFileSync(join(ENGINE, "package.json"), "utf8")) as {
   exports: Record<string, string>;
-  publishConfig: { exports: Record<string, Record<string, string>> };
+  publishConfig: { exports: Record<string, string | Record<string, string>> };
   scripts: Record<string, string>;
 };
 const FIXTURES = ["next", "node", "rn", "types"];
@@ -84,18 +94,51 @@ describe("requireChecked: zero checked is a failure", () => {
 const sportDirs = readdirSync(join(ENGINE, "src", "sports"), { withFileTypes: true })
   .filter((d) => d.isDirectory() && existsSync(join(ENGINE, "src", "sports", d.name, "index.ts")))
   .map((d) => d.name);
-const targetsOf = (exp: Record<string, Record<string, string>>) => Object.values(exp).flatMap((c) => Object.values(c));
-const filesFor = (exp: Record<string, Record<string, string>>) =>
+type Exports = Record<string, string | Record<string, string>>;
+const targetsOf = (exp: Exports) => Object.values(exp).flatMap((c) => (typeof c === "string" ? [c] : Object.values(c)));
+const filesFor = (exp: Exports) =>
   new Set(targetsOf(exp).flatMap((t) => (t.includes("*") ? sportDirs.map((d) => t.replace("*", d).slice(2)) : [t.slice(2)])));
 const keys = Object.keys(pkg.exports);
+// what the engine DECLARES: a data export is a plain string in the published manifest, a module is a conditions object
+const dataKeys = Object.keys(pkg.publishConfig.exports).filter((k) => typeof pkg.publishConfig.exports[k] === "string");
+const moduleKeys = keys.filter((k) => !dataKeys.includes(k));
+const declaredTargets = Object.values(pkg.publishConfig.exports).reduce((n, v) => n + (typeof v === "string" ? 1 : Object.keys(v).length), 0);
 
 describe("checkTarballExports", () => {
   const packed = pkg.publishConfig.exports;
 
-  it("passes the engine's own publishConfig.exports and counts every target (two conditions per declared export)", () => {
+  it("passes the engine's own publishConfig.exports and counts every target (two conditions per module export, one per data export)", () => {
     expect(sportDirs.length).toBeGreaterThan(0);
-    expect(keys.length).toBeGreaterThan(0);
-    expect(checkTarballExports({ manifest: { exports: packed }, files: filesFor(packed), expectedKeys: keys })).toBe(keys.length * 2);
+    expect(moduleKeys.length).toBeGreaterThan(10);
+    expect(dataKeys, "the engine declares its phone pin as a data export").toEqual(["./phone-subpaths.json"]);
+    expect(declaredTargets).toBe(moduleKeys.length * 2 + dataKeys.length);
+    expect(checkTarballExports({ manifest: { exports: packed }, files: filesFor(packed), expectedKeys: keys })).toBe(declaredTargets);
+  });
+
+  it("holds the data exports to their file: present in the tarball, named exactly, and only as a plain string", () => {
+    const key = "./phone-subpaths.json";
+    expect([...DATA_EXPORTS.keys()]).toEqual([key]);
+    const files = filesFor(packed);
+    // present: the control for the three refusals below
+    expect(files.has("phone-subpaths.json")).toBe(true);
+    expect(checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toBe(declaredTargets);
+    // the tarball lacks the file: a dangling data export, named
+    const without = new Set(files);
+    without.delete("phone-subpaths.json");
+    expect(() => checkTarballExports({ manifest: { exports: packed }, files: without, expectedKeys: keys })).toThrow(/exports\["\.\/phone-subpaths\.json"\]: "\.\/phone-subpaths\.json" is not in the tarball \(a dangling export\)/);
+    expect(() => checkTarballExports({ manifest: { exports: packed }, files: without, expectedKeys: keys, where: "dist/" })).toThrow(/is not in dist\//);
+    // named any other way: the wrong file, a path under dist/, a conditions object
+    for (const bad of ["./other.json", "./dist/phone-subpaths.json", { default: "./phone-subpaths.json" }]) {
+      expect(() => checkTarballExports({ manifest: { exports: { ...packed, [key]: bad } }, files, expectedKeys: keys }), JSON.stringify(bad)).toThrow(/expected the plain string "\.\/phone-subpaths\.json"/);
+    }
+    // the key itself is part of the compared key set
+    const gone = Object.fromEntries(Object.entries(packed).filter(([k]) => k !== key));
+    expect(() => checkTarballExports({ manifest: { exports: gone }, files, expectedKeys: keys })).toThrow(/missing \[\.\/phone-subpaths\.json\]/);
+    // a valid data export makes up for no module: every module key empty is "checked nothing" even though one data target is judged
+    const hollow = Object.fromEntries(Object.entries(packed).map(([k, v]) => [k, typeof v === "string" ? v : {}]));
+    expect(() => checkTarballExports({ manifest: { exports: hollow }, files, expectedKeys: keys })).toThrow(/module exports: 0 checked - a fixture that checked nothing/);
+    // and a data export does not excuse a module: the workspace's own exports still point at source
+    expect(() => checkTarballExports({ manifest: { exports: pkg.exports }, files, expectedKeys: keys })).toThrow(/points at source/);
   });
 
   it("refuses what `npm pack` ships: the workspace exports, pointing at ./src/*.ts", () => {
@@ -132,7 +175,7 @@ describe("checkTarballExports", () => {
     expect(() => checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toThrow(/pattern .* matches no file/);
     files.add("dist/sports/a/b/index.js");
     files.add("dist/sports/a/b/index.d.ts");
-    expect(checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toBe(keys.length * 2);
+    expect(checkTarballExports({ manifest: { exports: packed }, files, expectedKeys: keys })).toBe(declaredTargets);
   });
 
   it("refuses a manifest whose export keys differ from the workspace's, either way", () => {
@@ -229,6 +272,229 @@ describe("the Metro dev bundle reader", () => {
   });
 });
 
+// Engine-split Task 1c-1: the rn leg imports the phone subpaths of phone-subpaths.json (not a list typed in run.mjs) and holds the Metro
+// dev bundle to the static phone walk of scripts/engine-boundary.ts: the same modules, in their dist/ spelling, no more and no fewer.
+// Single-sport reason: no sport is involved - this is a module-graph rule.
+describe("the phone subpaths the rn leg imports", () => {
+  const phone = JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { subpaths: string[] };
+  const manifest = { exports: pkg.publishConfig.exports };
+
+  it("are the listed subpaths, each a key of the packed manifest, with ./sports/* expanded over the source's sport directories", () => {
+    const sportDirs = sourceSportDirs(ENGINE);
+    const got = phoneSpecifiers({ subpaths: phone.subpaths, manifest, sportDirs });
+    expect(sportDirs.length, "anti-vacuity: the sport directories").toBeGreaterThan(5);
+    expect(got.length).toBe(phone.subpaths.filter((s) => !s.includes("*")).length + sportDirs.length);
+    expect(got.slice(0, 3)).toEqual(["@seazn/engine/core", "@seazn/engine/sport", "@seazn/engine/sports"]);
+    for (const d of sportDirs) expect(got).toContain(`@seazn/engine/sports/${d}`);
+    expect(got.some((x) => x.includes("*"))).toBe(false);
+  });
+
+  it("honours the alias, keeps the list's order, and refuses what it cannot import: nothing, an unexported subpath, an unknown pattern", () => {
+    const m = { exports: { "./a": {}, "./b/*": {}, "./sports/*": {} } };
+    expect(phoneSpecifiers({ subpaths: ["./a", "./sports/*"], manifest: m, sportDirs: ["x", "y"], name: "pkg" })).toEqual(["pkg/a", "pkg/sports/x", "pkg/sports/y"]);
+    expect(() => phoneSpecifiers({ subpaths: [], manifest: m, sportDirs: ["x"] })).toThrow(/lists no subpath/);
+    expect(() => phoneSpecifiers({ subpaths: ["./nope"], manifest: m, sportDirs: ["x"] })).toThrow(/not an export/);
+    expect(() => phoneSpecifiers({ subpaths: ["./b/*"], manifest: m, sportDirs: ["x"] })).toThrow(/no known expansion/);
+    expect(() => phoneSpecifiers({ subpaths: ["./sports/*"], manifest: m, sportDirs: [] })).toThrow(/no sport directory/);
+    expect(() => phoneSpecifiers({ subpaths: ["a"], manifest: { exports: { a: {} } }, sportDirs: ["x"] })).toThrow(/not a \.\/ subpath/);
+    expect(() => phoneSpecifiers({ subpaths: ["./a"], manifest: {}, sportDirs: ["x"] })).toThrow(/not an export/);
+  });
+});
+
+describe("the dev bundle is held to the static phone walk", () => {
+  it("distTwin maps src/<path>.ts to dist/<path>.js and nothing else", () => {
+    expect(distTwin("src/core/index.ts")).toBe("dist/core/index.js");
+    expect(distTwin("src/sports/setbased/set.ts")).toBe("dist/sports/setbased/set.js");
+    for (const bad of ["dist/core/index.js", "src/core/index.js", "core/index.ts", "lib/src/core/index.ts", "src/core/x.d.ts.map"]) expect(() => distTwin(bad), bad).toThrow(/not a src/);
+  });
+
+  it("engineDistPaths keeps the engine's modules under either spelling, as their dist/ paths", () => {
+    const paths = [
+      "index.js",
+      "node_modules/.pnpm/@onryde+seazn-engine@file+x/node_modules/@onryde/seazn-engine/dist/core/index.js",
+      "node_modules/@seazn/engine/dist/sport/index.js",
+      "node_modules/zod/dist/x.js",
+    ];
+    expect(engineDistPaths(paths, ["@seazn/engine", "@onryde/seazn-engine"])).toEqual(["dist/core/index.js", "dist/sport/index.js"]);
+  });
+
+  const walked = ["src/core/index.ts", "src/core/a.ts", "src/sport/index.ts"];
+  const bundle = ["dist/core/index.js", "dist/core/a.js", "dist/sport/index.js"];
+
+  it("passes when the bundle holds exactly the walked modules (in any order) and reports how many", () => {
+    expect(assertBundleMatchesWalk({ bundle, walked })).toBe(3);
+    expect(assertBundleMatchesWalk({ bundle: [...bundle].reverse(), walked })).toBe(3);
+  });
+
+  it("refuses a walked module the bundle lacks, naming it, and a bundled module the walk never reached, naming it", () => {
+    expect(() => assertBundleMatchesWalk({ bundle: bundle.slice(0, 2), walked })).toThrow(/absent from the dev bundle[\s\S]*dist\/sport\/index\.js/);
+    expect(() => assertBundleMatchesWalk({ bundle: [...bundle, "dist/core/sneaky.js"], walked })).toThrow(/never walked[\s\S]*dist\/core\/sneaky\.js/);
+    // either alone is a failure, and the message names only the side that is wrong
+    expect(() => assertBundleMatchesWalk({ bundle: bundle.slice(0, 2), walked })).not.toThrow(/never walked/);
+  });
+
+  it("refuses an empty walk: a comparison against nothing is satisfied by nothing", () => {
+    expect(() => assertBundleMatchesWalk({ bundle: [], walked: [] })).toThrow(/empty/);
+  });
+
+  // The compiler's own account of the build, read from tsconfig.build.json: what tsc would emit (getOutputFileNames) and, file by file, what the
+  // emitted JavaScript imports (transpileModule, which elides an import used only as a type, as the build does). Neither goes through distTwin
+  // or through the static walk, so a walk that follows an import the build erases, or misses one it keeps, cannot agree with them by construction.
+  const build = (() => {
+    const read = ts.readConfigFile(join(ENGINE, "tsconfig.build.json"), ts.sys.readFile);
+    expect(read.error, "tsconfig.build.json parses").toBeUndefined();
+    return ts.parseJsonConfigFileContent(read.config, ts.sys, ENGINE, undefined, join(ENGINE, "tsconfig.build.json"));
+  })();
+  const emittedJs = (): Set<string> => {
+    const out = new Set<string>();
+    for (const file of build.fileNames) {
+      for (const o of ts.getOutputFileNames(build, file, false)) if (o.endsWith(".js")) out.add(relative(ENGINE, o).split(sep).join("/"));
+    }
+    return out;
+  };
+  /** The dist/ modules reachable from `entries` through the imports of the emitted JavaScript, by emitting each source file in memory. */
+  const emittedClosure = (entries: readonly string[]): string[] => {
+    const seen = new Set<string>();
+    const queue = entries.map((e) => e.replace(/^src\//, "dist/").replace(/\.ts$/, ".js"));
+    while (queue.length > 0) {
+      const dist = queue.shift()!;
+      if (seen.has(dist)) continue;
+      seen.add(dist);
+      const srcFile = dist.replace(/^dist\//, "src/").replace(/\.js$/, ".ts");
+      const js = ts.transpileModule(readFileSync(join(ENGINE, srcFile), "utf8"), { compilerOptions: build.options, fileName: srcFile }).outputText;
+      const sf = ts.createSourceFile(dist, js, ts.ScriptTarget.ESNext, true);
+      const follow = (spec: string) => {
+        if (spec.startsWith(".")) queue.push(posix.join(posix.dirname(dist), spec));
+      };
+      const visit = (n: ts.Node): void => {
+        if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) follow(n.moduleSpecifier.text);
+        else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword && n.arguments[0] && ts.isStringLiteral(n.arguments[0])) follow(n.arguments[0].text);
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+    }
+    return [...seen].sort();
+  };
+
+  // The compiler's account of the real build is made ONCE (the emit list of every source file, then the emitted JavaScript of each phone module
+  // in memory) and shared by the three tests below. Its budget follows the files it touches: the build's file list, and the phone modules
+  // transpiled and re-parsed.
+  const BUILD_MS = treeBudget(build.fileNames.length, 2);
+  let real: ReturnType<typeof checkPhoneClosure>;
+  let walk: ReturnType<typeof checkPhoneSafety>;
+  let emitted: Set<string>;
+  let emittedBundle: string[];
+  beforeAll(() => {
+    walk = checkPhoneSafety(ENGINE);
+    real = checkPhoneClosure(ENGINE);
+    emitted = emittedJs();
+    emittedBundle = emittedClosure(real.entries);
+  }, BUILD_MS);
+
+  it("holds against the real engine: every walked module's dist/ twin is a file tsc's build emits (tsconfig.build.json), and a test file is not", () => {
+    expect(emitted.size, "anti-vacuity: the files the build emits").toBeGreaterThan(100);
+    expect(walk.walked.length, "anti-vacuity: the modules checked").toBeGreaterThan(30);
+    for (const src of walk.walked) expect(emitted, `${src} -> ${distTwin(src)}`).toContain(distTwin(src));
+    // the emit list can say no: a source file the build excludes has no twin in it
+    const aTest = globSync("src/**/*.test.ts", { cwd: ENGINE })[0];
+    expect(aTest, "the engine has a co-located test").toBeDefined();
+    expect(emitted.has(distTwin(aTest!))).toBe(false);
+  });
+
+  it("holds against the real engine: the modules the emitted JavaScript imports, from the phone entries, are exactly the walked modules", () => {
+    expect(real.violations).toEqual([]);
+    const bundle = emittedBundle;
+    expect(bundle.length, "anti-vacuity: the emitted closure").toBeGreaterThan(30);
+    // assertBundleMatchesWalk names the module either side lacks; the count it returns is the pinned closure's
+    const pinned = (JSON.parse(readFileSync(join(ENGINE, "phone-subpaths.json"), "utf8")) as { closure: { modules: string[] } }).closure.modules;
+    expect(assertBundleMatchesWalk({ bundle, walked: real.walked })).toBe(pinned.length);
+    expect(phoneClosureDrift(real.walked, pinned), "the phone closure drifted from the pin").toBeNull();
+  });
+
+  it("the emitted-closure check can fail: a walk with a module added or dropped disagrees with it", () => {
+    const bundle = emittedBundle;
+    expect(bundle.length, "anti-vacuity: the emitted closure").toBeGreaterThan(30);
+    expect(() => assertBundleMatchesWalk({ bundle, walked: walk.walked.slice(1) })).toThrow(/never walked/);
+    expect(() => assertBundleMatchesWalk({ bundle, walked: [...walk.walked, "src/core/not-a-module.ts"] })).toThrow(/absent from the dev bundle/);
+  });
+
+  it("assertPhoneRuleGreen passes a clean walk, and refuses any violation (the closure-changed one included) and an empty walk", () => {
+    const walked = ["src/core/index.ts"];
+    expect(assertPhoneRuleGreen({ walked, violations: [] })).toBe(1);
+    expect(() => assertPhoneRuleGreen({ walked, violations: [{ kind: "node-builtin", file: "src/core/index.ts", detail: "line 1: imports node:fs" }] })).toThrow(/rule is red[\s\S]*src\/core\/index\.ts node-builtin: line 1/);
+    expect(() => assertPhoneRuleGreen({ walked, violations: [{ kind: "closure-changed", file: "phone-subpaths.json", detail: "1 module(s) added: x" }] })).toThrow(/closure-changed: 1 module\(s\) added/);
+    expect(() => assertPhoneRuleGreen({ walked: [], violations: [] })).toThrow(/visited no module/);
+    expect(() => assertPhoneRuleGreen({} as never)).toThrow(/report/);
+  });
+
+  // run.mjs is not importable (it runs on load), so its wiring is read from its SYNTAX: the rn leg must, as unconditional top-level statements
+  // of rnFixture and in this order, take the combined phone check (walk + pin), assert it green, and later compare the bundle to the walk it
+  // took. A text search would pass `if (false) assertPhoneRuleGreen(phone)` and `phone.violations.length > 0 && false`; this does not.
+  const rnLegProblems = (source: string): string[] => {
+    const sf = ts.createSourceFile("run.mjs", source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.JS);
+    const fn = sf.statements.find((n): n is ts.FunctionDeclaration => ts.isFunctionDeclaration(n) && n.name?.text === "rnFixture");
+    if (!fn?.body) return ["rnFixture is not a function declaration with a body"];
+    const unwrap = (e: ts.Expression): ts.Expression => (ts.isAwaitExpression(e) ? unwrap(e.expression) : ts.isParenthesizedExpression(e) ? unwrap(e.expression) : e);
+    const flat = (n: ts.Node) => n.getText(sf).replace(/\s+/g, " ");
+    const steps: { bound: string | null; callee: string; args: string[] }[] = [];
+    for (const st of fn.body.statements) {
+      const call = (e: ts.Expression | undefined, bound: string | null) => {
+        const c = e && unwrap(e);
+        if (c && ts.isCallExpression(c)) steps.push({ bound, callee: c.expression.kind === ts.SyntaxKind.ImportKeyword ? "import" : flat(c.expression), args: c.arguments.map(flat) });
+      };
+      if (ts.isExpressionStatement(st)) call(st.expression, null);
+      else if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) call(d.initializer, flat(d.name));
+    }
+    const at = (pred: (s: (typeof steps)[number]) => boolean) => steps.findIndex(pred);
+    const problems: string[] = [];
+    const takeAt = at((s) => s.bound === "phone" && s.callee === "checkPhoneClosure" && s.args.join(",") === "ENGINE");
+    const assertAt = at((s) => s.bound === null && s.callee === "assertPhoneRuleGreen" && s.args.join(",") === "phone");
+    const engineAt = at((s) => s.bound === "engine" && s.callee === "engineDistPaths");
+    const compareAt = at((s) => s.callee === "assertBundleMatchesWalk" && s.args.join(",") === "{ bundle: engine, walked: phone.walked }");
+    if (at((s) => s.bound === "{ checkPhoneClosure }" && s.callee === "import") === -1) problems.push("rnFixture does not import checkPhoneClosure as a top-level statement");
+    if (takeAt === -1) problems.push("rnFixture does not take `const phone = checkPhoneClosure(ENGINE)` as a top-level statement");
+    if (assertAt === -1) problems.push("rnFixture does not call assertPhoneRuleGreen(phone) as a top-level statement");
+    if (engineAt === -1) problems.push("rnFixture does not take `const engine = engineDistPaths(...)` as a top-level statement");
+    if (compareAt === -1) problems.push("rnFixture does not call assertBundleMatchesWalk({ bundle: engine, walked: phone.walked }) as a top-level statement");
+    if ([takeAt, assertAt, engineAt, compareAt].every((i) => i !== -1) && !(takeAt < assertAt && assertAt < compareAt && engineAt < compareAt)) problems.push("rnFixture's phone check, assertion and bundle comparison are out of order");
+    return problems;
+  };
+
+  it("run.mjs's rn leg takes the combined phone check, asserts it green, and compares the dev bundle to the walk - as top-level statements, in order", () => {
+    const real = readFileSync(join(PROOF, "run.mjs"), "utf8");
+    expect(rnLegProblems(real)).toEqual([]);
+    expect(real, "the 1b-3 interim floor is gone").not.toContain("RN_ENGINE_MODULE_FLOOR");
+    const code = real.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).toContain('readJson(path.join(ENGINE, "phone-subpaths.json"))');
+    expect(code).toContain("phoneSpecifiers({ subpaths,");
+  });
+
+  it.each([
+    ["the assertion guarded by a constant", "assertPhoneRuleGreen(phone);", "if (false) assertPhoneRuleGreen(phone);"],
+    ["the assertion short-circuited", "assertPhoneRuleGreen(phone);", "assertPhoneRuleGreen(phone) && false;"],
+    ["the assertion commented out", "assertPhoneRuleGreen(phone);", "// assertPhoneRuleGreen(phone);"],
+    ["the assertion on a copy", "assertPhoneRuleGreen(phone);", "assertPhoneRuleGreen({ ...phone, violations: [] });"],
+    ["the pin dropped (the plain walk instead of the combined check)", "const phone = checkPhoneClosure(ENGINE);", "const phone = checkPhoneSafety(ENGINE);"],
+    ["the comparison against an empty walk", "walked: phone.walked }", "walked: [] }"],
+    ["the comparison against the wrong list", "bundle: engine, walked", "bundle: paths, walked"],
+    ["the comparison made conditional", "const agreed = assertBundleMatchesWalk(", "const agreed = false && assertBundleMatchesWalk("],
+  ])("the wiring check sees %s", (_label, find, replace) => {
+    const real = readFileSync(join(PROOF, "run.mjs"), "utf8");
+    expect(real.split(find).length - 1, `${find} appears once in run.mjs`).toBe(1);
+    expect(rnLegProblems(real.replace(find, replace)).length).toBeGreaterThan(0);
+  });
+
+  it("the wiring check sees the assertion moved after the comparison", () => {
+    const real = readFileSync(join(PROOF, "run.mjs"), "utf8");
+    const assertion = "  assertPhoneRuleGreen(phone);\n";
+    expect(real.split(assertion).length - 1).toBe(1);
+    const afterCompare = "  info(`rn: the dev bundle holds exactly"; // the line after the comparison
+    expect(real.split(afterCompare).length - 1).toBe(1);
+    const moved = real.replace(assertion, "").replace(afterCompare, `${assertion}${afterCompare}`);
+    expect(rnLegProblems(moved)).toEqual(["rnFixture's phone check, assertion and bundle comparison are out of order"]);
+  });
+});
+
 describe("runFixtures: every fixture runs, and only a positive count passes", () => {
   it("collects every failure instead of stopping at the first, logs only the passes, and rejects zero", async () => {
     const ran: string[] = [];
@@ -262,9 +528,10 @@ describe("runFixtures: every fixture runs, and only a positive count passes", ()
 
 describe("exportSpecifiers: the proof imports every key and every sport directory", () => {
   const srcDirs = sourceSportDirs(ENGINE);
-  const nonPattern = keys.filter((k) => !k.includes("*"));
+  // the data exports hold no module, so they are not specifiers a fixture can import
+  const nonPattern = moduleKeys.filter((k) => !k.includes("*"));
 
-  it("lists each non-pattern export key plus each sport directory with an index (the engine's own declarations, counted)", () => {
+  it("lists each non-pattern module export plus each sport directory with an index, and no data export (the engine's own declarations, counted)", () => {
     const got = exportSpecifiers({ manifest: { exports: pkg.publishConfig.exports }, sportDirs: srcDirs });
     expect(srcDirs.length).toBeGreaterThan(0);
     expect(nonPattern.length).toBeGreaterThan(0);
@@ -272,8 +539,10 @@ describe("exportSpecifiers: the proof imports every key and every sport director
     expect(new Set(got).size).toBe(got.length);
     for (const k of nonPattern) expect(got, k).toContain(`@seazn/engine/${k.slice(2)}`);
     for (const d of srcDirs) expect(got, d).toContain(`@seazn/engine/sports/${d}`);
-    // the pattern itself is never a specifier
+    // the pattern itself is never a specifier, and neither is the data file
     expect(got.some((x) => x.includes("*"))).toBe(false);
+    expect(got.some((x) => x.endsWith(".json")), "a data export is not importable as a module").toBe(false);
+    expect(keys.length - got.length, "keys not listed: the pattern and the data exports, the pattern expanded to its directories").toBe(1 + dataKeys.length - srcDirs.length);
   });
 
   it("refuses a pattern it cannot expand, a `*` with no directory, an empty manifest, and a key that is not a subpath", () => {
@@ -288,6 +557,49 @@ describe("exportSpecifiers: the proof imports every key and every sport director
   it("honours the alias name, and expands the pattern in the directories' order", () => {
     expect(exportSpecifiers({ manifest: { exports: { "./core": {}, "./sports/*": {} } }, sportDirs: ["x", "y"], name: "pkg" })).toEqual(["pkg/core", "pkg/sports/x", "pkg/sports/y"]);
   });
+});
+
+// pack-proof/node/strip.ts is the consumer that imports every export of the INSTALLED package. A data export (a plain string, like the
+// phone pin) is not a module: `import()` of it without a JSON attribute throws, so strip.ts must tell the two apart by the installed
+// manifest, and read the data with the attribute. Run here, for real, against a small fake install - no network, no pnpm.
+describe("pack-proof/node/strip.ts: a data export is read as data, not imported as a module", () => {
+  it("imports each module export and sport directory, skips the data export in that list, and prints the data it read through the exports map", () => {
+    const t = scratch();
+    try {
+      const install = join(t, "node_modules", "@seazn", "engine");
+      const write = (rel: string, content: string) => {
+        mkdirSync(dirname(join(install, rel)), { recursive: true });
+        writeFileSync(join(install, rel), content);
+      };
+      write("package.json", JSON.stringify({
+        name: "@seazn/engine",
+        type: "module",
+        exports: {
+          "./core": { default: "./dist/core/index.js" },
+          "./sports": { default: "./dist/sports/index.js" },
+          "./sports/*": { default: "./dist/sports/*/index.js" },
+          "./testkit": { default: "./dist/testkit/index.js" },
+          "./pin.json": "./pin.json",
+        },
+      }));
+      write("pin.json", JSON.stringify({ subpaths: ["./core"], closure: { modules: ["src/core/index.ts"] } }));
+      write("dist/core/index.js", "export const core = 1;\n");
+      write("dist/sports/index.js", "export const builtinModules = [{ key: 'x' }];\n");
+      write("dist/sports/x/index.js", "export const x = 1;\n");
+      write("dist/testkit/index.js", "export const kit = 1;\n");
+      writeFileSync(join(t, "package.json"), JSON.stringify({ type: "module" }));
+      // strip.ts finds the install from ITS OWN location, so it runs from a copy beside the fake one
+      writeFileSync(join(t, "strip.ts"), readFileSync(join(PROOF, "node", "strip.ts"), "utf8"));
+      const real = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "strip.ts", "core"], { cwd: t, encoding: "utf8", timeout: SPAWN_MS });
+      expect(real.status, real.stdout + real.stderr).toBe(0);
+      const specifiers = /^SPECIFIERS (\[.*\])$/m.exec(real.stdout)?.[1];
+      expect(JSON.parse(specifiers ?? "null"), "the modules imported: core and sports, then the sport directories").toEqual(["@seazn/engine/core", "@seazn/engine/sports", "@seazn/engine/sports/x"]);
+      const data = /^DATA (\{.*\})$/m.exec(real.stdout)?.[1];
+      expect(JSON.parse(data ?? "null"), "the data export, read through the installed exports map").toEqual({ "@seazn/engine/pin.json": { subpaths: ["./core"], closure: { modules: ["src/core/index.ts"] } } });
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
+  }, spawnBudget(1));
 });
 
 describe("sport directories: the tarball's dist/sports must mirror the source's", () => {
@@ -454,7 +766,7 @@ describe("installSignalCleanup", () => {
 
 describe("run.mjs, as the command line sees it (no network: both refusals come before anything is built)", () => {
   const run = (args: string[], env: Record<string, string> = {}) =>
-    spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, ...env }, timeout: 60_000 });
+    spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, ...env }, timeout: SPAWN_MS });
 
   it("refuses an unknown fixture and an unknown flag with exit 2 and the usage line", () => {
     for (const args of [["--only", "bogus"], ["--only"], ["--nope"]]) {
@@ -462,7 +774,7 @@ describe("run.mjs, as the command line sees it (no network: both refusals come b
       expect(r.status, args.join(" ")).toBe(2);
       expect(r.stderr).toContain("usage: node packages/engine/pack-proof/run.mjs [--only node|next|rn|types]");
     }
-  });
+  }, spawnBudget(3));
 
   it("refuses a scratch directory inside the repo (TMPDIR pointed into it), before any pnpm runs, and leaves nothing behind", () => {
     // node_modules is git-ignored AND inside the repo, so a crash here strands nothing in a commit
@@ -476,7 +788,7 @@ describe("run.mjs, as the command line sees it (no network: both refusals come b
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
-  });
+  }, spawnBudget(1));
 });
 
 describe("run.mjs removes its scratch directory when it is killed, and stops its child", () => {
@@ -534,7 +846,7 @@ describe("run.mjs removes its scratch directory on failure, and keeps it only fo
     const base = scratch();
     const empty = scratch();
     try {
-      const r = spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, TMPDIR: base, PATH: empty }, timeout: 60_000 });
+      const r = spawnSync(process.execPath, [join(PROOF, "run.mjs"), ...args], { encoding: "utf8", env: { ...process.env, TMPDIR: base, PATH: empty }, timeout: SPAWN_MS });
       return { r, left: readdirSync(base).filter((d) => d.startsWith("engine-pack-")), base };
     } finally {
       rmSync(empty, { recursive: true, force: true });
@@ -551,7 +863,7 @@ describe("run.mjs removes its scratch directory on failure, and keeps it only fo
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
-  });
+  }, spawnBudget(1));
 
   it("--keep keeps it, and prints where", () => {
     const { r, left, base } = failing(["--only", "node", "--keep"]);
@@ -562,7 +874,7 @@ describe("run.mjs removes its scratch directory on failure, and keeps it only fo
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
-  });
+  }, spawnBudget(1));
 });
 
 describe("the fixtures and wiring that make the run a proof", () => {
@@ -615,7 +927,7 @@ describe("the fixtures and wiring that make the run a proof", () => {
     for (const f of ["dist/core/index.js", "dist/core/index.d.ts", "dist/testkit/conformance.js"]) {
       expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(true);
     }
-  });
+  }, FLOOR_MS); // the first `new ESLint` loads the package's whole flat config: ~5 s under coverage, once per worker
 
   it("keeps the fixture sources out of the package's lint (they import the PACKED name from outside the program), but lints the runner", async () => {
     const eslint = new ESLint({ cwd: ENGINE });
@@ -623,5 +935,5 @@ describe("the fixtures and wiring that make the run a proof", () => {
     for (const f of ["pack-proof/types/consumer.ts", "pack-proof/node/strip.ts", "pack-proof/next/app/page.tsx", "pack-proof/rn/metro.config.js"]) {
       expect(await eslint.isPathIgnored(join(ENGINE, f)), f).toBe(true);
     }
-  });
+  }, FLOOR_MS);
 });

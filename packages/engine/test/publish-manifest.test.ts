@@ -14,27 +14,41 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createRegistry, registry } from "../src/sport/registry.ts";
 import { builtinModules, registerBuiltins } from "../src/sports/index.ts";
-import { sourceSportDirs } from "../pack-proof/lib.mjs";
+import { DATA_EXPORTS, sourceSportDirs } from "../pack-proof/lib.mjs";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(ENGINE, "package.json"), "utf8"));
 const buildConfig = JSON.parse(readFileSync(join(ENGINE, "tsconfig.build.json"), "utf8"));
 const toDist = (src: string) => src.replace(/^\.\/src\//, "./dist/").replace(/\.ts$/, "");
+// the exports that are code (everything but the data files DATA_EXPORTS names): the ones a consumer can `import` and a bundler can walk
+const moduleExports = Object.entries<string>(pkg.exports).filter(([k]) => !DATA_EXPORTS.has(k));
 
 describe("publish manifest", () => {
   const keys = Object.keys(pkg.exports);
 
   it(`mirrors all ${keys.length} workspace exports into dist (never zero)`, () => {
     expect(keys.length).toBeGreaterThan(0);
-    for (const k of keys) expect(pkg.publishConfig.exports[k], k).toEqual({ types: `${toDist(pkg.exports[k])}.d.ts`, default: `${toDist(pkg.exports[k])}.js` });
+    for (const [k, target] of moduleExports) expect(pkg.publishConfig.exports[k], k).toEqual({ types: `${toDist(target)}.d.ts`, default: `${toDist(target)}.js` });
     expect(Object.keys(pkg.publishConfig.exports).sort()).toEqual([...keys].sort());
+    expect(moduleExports.length, "anti-vacuity: module exports mirrored").toBeGreaterThan(10);
+  });
+
+  it("exports the phone pin as a data file at the package root, the same in the workspace and in the published manifest, and ships it", () => {
+    // not a module: no types/default conditions, no dist/ twin - the file itself, which `files` carries into the tarball
+    expect([...DATA_EXPORTS]).toEqual([["./phone-subpaths.json", "phone-subpaths.json"]]);
+    for (const [key, file] of DATA_EXPORTS) {
+      expect(pkg.exports[key], `workspace ${key}`).toBe(`./${file}`);
+      expect(pkg.publishConfig.exports[key], `published ${key}`).toBe(`./${file}`);
+      expect(pkg.files, `${file} ships`).toContain(file);
+      expect(existsSync(join(ENGINE, file)), `${file} exists beside package.json`).toBe(true);
+    }
   });
 
   it("ships dist and rules/, nothing private, to GitHub Packages", () => {
     expect(pkg.private).toBeUndefined();
     // pnpm pack copies the repo's proprietary LICENSE.md into the tarball; the manifest has to say so rather than leave the registry's licence field blank
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
-    expect(pkg.files).toEqual(["dist", "rules"]);
+    expect(pkg.files).toEqual(["dist", "rules", "phone-subpaths.json"]);
     expect(pkg.publishConfig.registry).toBe("https://npm.pkg.github.com");
     // the entry in `files` is only a promise: the directory has to be where the entry says (anti-vacuity for the line above).
     // NOTE: rules/ is read at runtime by one shipped module, src/testkit/rules-reference.ts (engine-split 1d-5; before it, only the
@@ -157,7 +171,7 @@ describe("every bare package the exported entry points reach is declared for the
 
   it("covers every exported entry point, so a bare package outside the testkit cannot ship undeclared", () => {
     let entries = 0;
-    for (const target of Object.values<string>(pkg.exports)) {
+    for (const [, target] of moduleExports) {
       if (target.includes("*")) continue; // the sports/* wildcard is walked through ./sports
       entries++;
       const { bare } = closureOf(join(ENGINE, target));
@@ -179,11 +193,11 @@ describe("sideEffects: false", () => {
   it("holds: loading every exported entry point registers no sport into the shared registry", async () => {
     // the exports without a wildcard, and every concrete subpath the `./sports/*` wildcard expands to: one directory per sport family, each
     // reached by a consumer as `@seazn/engine/sports/<dir>` and none of them loaded by `./sports` itself
-    const wildcard = Object.values<string>(pkg.exports).filter((t) => t.includes("*"));
+    const wildcard = moduleExports.map(([, t]) => t).filter((t) => t.includes("*"));
     expect(wildcard, "the one wildcard export is ./sports/*").toEqual(["./src/sports/*/index.ts"]);
     const sportDirs = sourceSportDirs(ENGINE);
     expect(sportDirs.length, "sport directories under src/sports").toBeGreaterThan(5);
-    const entries = [...Object.values<string>(pkg.exports).filter((t) => !t.includes("*")), ...sportDirs.map((d) => wildcard[0]!.replace("*", d))];
+    const entries = [...moduleExports.map(([, t]) => t).filter((t) => !t.includes("*")), ...sportDirs.map((d) => wildcard[0]!.replace("*", d))];
     for (const t of entries) await import(join(ENGINE, t));
     // the keys come from the engine's own declaration of what ships, never a list typed here
     expect(builtinModules.length, "shipped sport modules").toBeGreaterThan(0);

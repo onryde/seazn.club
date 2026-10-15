@@ -20,16 +20,20 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  assertBundleMatchesWalk,
   assertExactVersions,
   assertOutsideRepo,
+  assertPhoneRuleGreen,
   assertSameSet,
+  DATA_EXPORTS,
   checkTarballExports,
   declaredAppRoutes,
   devBundleModules,
-  engineModules,
+  engineDistPaths,
   exportSpecifiers,
   installSignalCleanup,
   installedVersion,
+  phoneSpecifiers,
   pickPnpm,
   requireChecked,
   runFixtures,
@@ -42,9 +46,6 @@ const ENGINE = path.resolve(HERE, "..");
 const REPO = path.resolve(ENGINE, "..", "..");
 const FIXTURE_NAMES = ["node", "next", "rn", "types"];
 
-/** Task 1b-3: the dev bundle of every phone subpath must hold at least this many engine modules. The 2026-10-14 static closure
- *  was 46; Batch 1c makes the count exact. */
-const RN_ENGINE_MODULE_FLOOR = 40;
 /** The platform Metro bundles for. (rn/package.json pins `@react-native-community/cli` 20.2.0: React Native 0.86.3's
  *  community-cli-plugin takes it as an optional peer with the range `*`, and `react-native/cli.js` exits without it.) */
 const RN_PLATFORM = "android";
@@ -156,7 +157,9 @@ async function buildAndPack(ctx) {
   // against the workspace's own export list, so a broken build says so before it is packed.
   const distFiles = new Set(existsSync(path.join(ENGINE, "dist")) ? listFiles(path.join(ENGINE, "dist")).map((f) => `dist/${f}`) : []);
   if (distFiles.size === 0) throw new Error("dist/ is missing or empty after build:dist");
-  const distChecked = checkTarballExports({ manifest: { exports: enginePkg.publishConfig.exports }, files: distFiles, expectedKeys: Object.keys(enginePkg.exports), where: "dist/" });
+  // the data exports (the phone pin) are package-root files, not dist/ ones: present in the workspace, they are what `files` will pack
+  const dataFiles = [...DATA_EXPORTS.values()].filter((f) => existsSync(path.join(ENGINE, f)));
+  const distChecked = checkTarballExports({ manifest: { exports: enginePkg.publishConfig.exports }, files: new Set([...distFiles, ...dataFiles]), expectedKeys: Object.keys(enginePkg.exports), where: "dist/ and the package root" });
   info(`dist: ${distFiles.size} files, ${distChecked} export targets present`);
 
   const destination = path.join(scratchRoot, "tarball");
@@ -228,6 +231,13 @@ async function nodeFixture(ctx) {
   const imported = printedList(coreOut, "SPECIFIERS", "node: strip.ts core");
   // ... and the tarball's own export list is the oracle: what strip.ts read from the INSTALLED package must be the same set
   assertSameSet("node: specifiers imported from the zod-only install", imported, ctx.tarball.specifiers.filter((x) => x !== "@seazn/engine/testkit"));
+  // The data exports (the phone pin) are not modules: read through the installed package's exports map with a JSON import attribute, and
+  // equal to the workspace's own file. A package that exported the key but shipped another file, or none, fails here.
+  const printedData = JSON.parse(/^DATA (\{.*\})$/m.exec(coreOut)?.[1] ?? "null");
+  const workspaceData = Object.fromEntries([...DATA_EXPORTS].map(([key, file]) => [`@seazn/engine/${key.slice(2)}`, readJson(path.join(ENGINE, file))]));
+  if (JSON.stringify(printedData) !== JSON.stringify(workspaceData)) throw new Error(`node: the data exports read from the installed package differ from the workspace's files:\n${coreOut}`);
+  const dataChecked = requireChecked("node: data exports", Object.keys(workspaceData).length);
+  info(`node: ${dataChecked} data export(s) read from the installed package, equal to the workspace's file (${Object.keys(workspaceData).join(", ")})`);
 
   // 2. + fast-check and vitest: the testkit imported, and every builtin sport folded for real from the packed build.
   const pins = enginePins();
@@ -258,7 +268,7 @@ async function nodeFixture(ctx) {
   assertSameSet("node: rules rows per file parsed from the tarball vs the workspace", Object.entries(byFile).map(([f, n]) => `${f}:${n}`), wsByFile);
   if (total !== wsRows.length) throw new Error(`node: rules.mjs parsed ${total} rows from the tarball, the workspace parses ${wsRows.length}`);
   info(`node: ${total} rules rows parsed from the installed testkit over ${wsByFile.length} rules files`);
-  return specifiersAndSports + requireChecked("node: rules.mjs", total);
+  return specifiersAndSports + dataChecked + requireChecked("node: rules.mjs", total);
 }
 
 async function nextFixture(ctx) {
@@ -287,12 +297,11 @@ async function nextFixture(ctx) {
   return declared.length;
 }
 
-/** Every phone subpath: core, sport and sports, and every sport directory (already checked against the workspace source). */
-function phoneSubpaths(ctx) {
-  const exportsMap = ctx.tarball.manifest.exports;
-  const fixed = ["./core", "./sport", "./sports"];
-  for (const k of [...fixed, "./sports/*"]) if (!(k in exportsMap)) throw new Error(`the packed manifest has no ${k}`);
-  return [...fixed.map((k) => k.slice(2)), ...ctx.tarball.sportDirs.map((d) => `sports/${d}`)];
+/** The specifiers of the phone subpaths (Task 1c-1): the subpaths of phone-subpaths.json, each an export of the packed manifest, with
+ *  `./sports/*` expanded over the sport directories the tarball holds (already checked against the workspace source). */
+function phoneSubpathSpecifiers(ctx) {
+  const { subpaths } = readJson(path.join(ENGINE, "phone-subpaths.json"));
+  return phoneSpecifiers({ subpaths, manifest: ctx.tarball.manifest, sportDirs: ctx.tarball.sportDirs });
 }
 
 function hermescPath(dir) {
@@ -301,9 +310,18 @@ function hermescPath(dir) {
 }
 
 async function rnFixture(ctx) {
+  // The static half first (scripts/engine-boundary.ts, on the workspace source): a closure that already reads a Node builtin, `process`
+  // or scheduling is a finding of its own, and the bundle below is then compared to the modules it walked.
+  const { checkPhoneClosure } = await import(pathToFileURL(path.join(ENGINE, "scripts", "engine-boundary.ts")).href);
+  const phone = checkPhoneClosure(ENGINE); // the walk, and the closure pin of phone-subpaths.json: a drift is a violation
+  assertPhoneRuleGreen(phone);
+  info(`rn: static phone walk ${phone.walked.length} modules from ${phone.entries.length} entries, equal to the closure phone-subpaths.json pins`);
+
   const dir = await installFixture("rn", ctx);
-  const subpaths = phoneSubpaths(ctx);
-  const imports = subpaths.map((s, i) => `import * as m${i} from "@seazn/engine/${s}";`);
+  const specifiers = phoneSubpathSpecifiers(ctx);
+  const coreAt = specifiers.indexOf("@seazn/engine/core");
+  if (coreAt === -1) throw new Error("rn: phone-subpaths.json does not list ./core, which the entry folds with");
+  const imports = specifiers.map((s, i) => `import * as m${i} from "${s}";`);
   const index = [
     ...imports,
     'import { badminton } from "@seazn/engine/sports/setbased";',
@@ -312,9 +330,9 @@ async function rnFixture(ctx) {
     "// ledger. Nothing here is EXECUTED: Metro resolves and transforms it, and hermesc compiles the production bundle.",
     "const cfg = badminton.configSchema.parse({});",
     'const lineups = { home: { entrantId: "H", slots: [] }, away: { entrantId: "A", slots: [] } };',
-    "const state = m0.foldMatch(badminton, cfg, lineups, []);",
+    `const state = m${coreAt}.foldMatch(badminton, cfg, lineups, []);`,
     "",
-    `globalThis.__enginePackProof = { state, modules: [${subpaths.map((_, i) => `m${i}`).join(", ")}] };`,
+    `globalThis.__enginePackProof = { state, modules: [${specifiers.map((_, i) => `m${i}`).join(", ")}] };`,
     "",
   ].join("\n");
   writeFileSync(path.join(dir, "index.js"), index);
@@ -339,9 +357,11 @@ async function rnFixture(ctx) {
 
   await bundle("index.js", "dev.bundle.js", true);
   const paths = devBundleModules(readFileSync(path.join(dir, "dev.bundle.js"), "utf8"));
-  const engine = engineModules(paths, ["@seazn/engine", enginePkg.name]);
-  info(`rn: dev bundle ${paths.length} modules, ${engine.length} from @seazn/engine/dist (${subpaths.length} subpaths imported)`);
-  if (engine.length < RN_ENGINE_MODULE_FLOOR) throw new Error(`rn: only ${engine.length} engine modules reached the dev bundle, expected at least ${RN_ENGINE_MODULE_FLOOR}:\n${engine.join("\n")}`);
+  const engine = engineDistPaths(paths, ["@seazn/engine", enginePkg.name]);
+  info(`rn: dev bundle ${paths.length} modules, ${engine.length} from @seazn/engine/dist (${specifiers.length} subpaths imported)`);
+  // exactly the modules the static walk found, as their dist/ twins: this replaces 1b-3's interim floor
+  const agreed = assertBundleMatchesWalk({ bundle: engine, walked: phone.walked });
+  info(`rn: the dev bundle holds exactly the ${agreed} modules the static phone walk found`);
 
   await bundle("index.js", "out.js", false);
   await compile("out.js", "out.hbc");
