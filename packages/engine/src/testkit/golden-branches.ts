@@ -43,6 +43,9 @@ const STRICT_ALL = { strictFromSeq: 0 } as const;
 export const BRANCH_SEED_BASE = 90_000;
 /** How many generator seeds a builder searches; the SHORTEST ledger that reaches the branch wins, ties to the lowest seed. */
 const SEED_BUDGET = 150;
+/** A shoot-out that goes to sudden death is rare among generator walks (about one seed in twenty reaches a shoot-out at all, and
+ *  a tie after the configured kicks is a fraction of those): within this budget the shortest ledger that takes it is seed 572's. */
+const SUDDEN_DEATH_SEED_BUDGET = 700;
 /** The longest ledger a builder will walk. */
 const WALK_MAX = 120;
 
@@ -92,8 +95,9 @@ const lastEvent = (r: Recorded): GoldenEvent | undefined => r.events[r.events.le
 /** The differential for an abandon policy: refolded under `raw` (the replay default - the key gone), the same ledger is an
  *  ABANDONED match. A ledger that merely names the policy, or reaches its result some other way (carrom's drawn walk), is
  *  still "final" there, so the abandon was never what decided it. (An abandon the fold applies always closes a replay-policy
- *  match as abandoned with nothing decided, so that is the one check - the rest of what it holds is the engine's.) */
-function replaysOnAbandon(r: Recorded, raw: unknown): string | null {
+ *  match as abandoned with nothing decided, so that is the one check - the rest of what it holds is the engine's.) A
+ *  counterfactual config the module refuses is reported, not thrown: exported so a test can hand it one. */
+export function replaysOnAbandon(r: Recorded, raw: unknown): string | null {
   const replayed = replay(r, raw);
   if (typeof replayed === "string") return `the counterfactual config does not fold the ledger: ${replayed}`;
   if (replayed.state.phase !== "abandoned") return `under the replay default the ledger is "${String(replayed.state.phase)}", not an abandoned match, so the abandon never ran`;
@@ -160,6 +164,46 @@ function reachesQ4Stands(r: Recorded): string | null {
   return null;
 }
 
+/** icehockey `abandonPolicy: "award"` under a cfg that lets NO draw stand (the IIHF default plays an overtime and a
+ *  shoot-out): a level abandon is not a draw, it is flagged for a replay exactly as the replay policy would (R16-3, ruling
+ *  X-DR-1). `replayFlagged` under the award policy has no other route - a leader wins and a level score under a draw-standing
+ *  cfg is a draw - so the flag IS the arm; the test reads the draw-standing refold itself. */
+function reachesLevelAwardFlagged(r: Recorded): string | null {
+  if (obj(r.raw).abandonPolicy !== "award") return "its config does not award an abandoned match";
+  if (lastEvent(r)?.type !== "core.abandon") return "the ledger does not end on an abandon";
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
+  if (played.state.replayFlagged !== true) return "the abandon is not flagged for a replay: under this config it decided a result instead";
+  return null;
+}
+
+/** football `abandonPolicy: "award"`, the LEVEL arm: an abandon at a level score is a draw on the real score, with no
+ *  expunge in play (the leader's win by abandonment, with the withdrawal's expunge, is `football.award_expunge`). */
+function reachesAwardLevelDraw(r: Recorded): string | null {
+  if (obj(r.raw).abandonPolicy !== "award") return "its config does not award an abandoned match";
+  if (lastEvent(r)?.type !== "core.abandon") return "the ledger does not end on an abandon";
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
+  if (held(played.state)?.kind !== "draw") return "the module does not hold a draw for the abandon";
+  return null;
+}
+
+/** football `shootoutAttempts` taken past its count: a side kicked MORE than the configured attempts, so the shoot-out went
+ *  to sudden death (shootout.ts: after `attempts` each, a side is entitled to match the opponent's kick count). It is the
+ *  shoot-out win of `reachesShootoutAttempts` - with its differential, which is what makes the sudden death the KEY's and
+ *  not the default's (a tied run to a sixth pair is sudden death under five as well) - plus the kicks past the count. */
+function reachesShootoutSuddenDeath(r: Recorded): string | null {
+  const decided = reachesShootoutAttempts(r);
+  if (decided !== null) return decided;
+  const attempts = obj(r.raw).shootoutAttempts as number;
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
+  const kicks = obj(played.state.shootout).kicks as { side: string }[];
+  const taken = (side: string): number => kicks.filter((k) => k.side === side).length;
+  if (Math.max(taken("home"), taken("away")) <= attempts) return `no side kicked past its ${attempts} attempts, so the shoot-out was decided without sudden death`;
+  return null;
+}
+
 // ----------------------------------------------------------------------------------------------------------- builders
 
 interface BuildCtx {
@@ -200,9 +244,9 @@ function playUntil(c: BuildCtx, seed: number, stop: (state: Record<string, unkno
 }
 
 /** The shortest ledger (ties: the lowest seed) a seed search offers that `reached` accepts. */
-function shortest(c: BuildCtx, reached: (r: Recorded) => string | null, ledgerOf: (seed: number) => GoldenEvent[] | null): GoldenEvent[] | null {
+function shortest(c: BuildCtx, reached: (r: Recorded) => string | null, ledgerOf: (seed: number) => GoldenEvent[] | null, budget = SEED_BUDGET): GoldenEvent[] | null {
   let best: GoldenEvent[] | null = null;
-  for (let seed = 1; seed <= SEED_BUDGET; seed++) {
+  for (let seed = 1; seed <= budget; seed++) {
     const events = ledgerOf(seed);
     if (events === null || (best !== null && events.length >= best.length)) continue;
     if (reached(c.recorded(events)) === null) best = events;
@@ -333,6 +377,44 @@ export const BRANCH_STORIES: readonly BranchStory[] = [
     what: "an award-policy abandon at a level score, in a cfg where a draw stands, that is then expunged (IH-AB-1)",
     reached: reachesAwardExpunge("draw"),
     build: (c) => playThen(c, reachesAwardExpunge("draw"), levelWithGoals, EXPUNGE),
+  },
+  {
+    id: "icehockey.award_level_flagged",
+    sport: "icehockey",
+    key: "abandonPolicy",
+    seed: BRANCH_SEED_BASE + 8,
+    // the IIHF default plays an overtime and a shoot-out, so no draw can stand (R16-3): the config is the policy alone
+    config: { name: "abandonAwardIihf", raw: { abandonPolicy: "award" } },
+    what: "an award-policy abandon at a level score where the cfg lets no draw stand: flagged for a replay, not a draw (R16-3, IH-AB-1)",
+    reached: reachesLevelAwardFlagged,
+    build: (c) => playThen(c, reachesLevelAwardFlagged, levelWithGoals, ev("core.abandon", { reason: "conditions" })),
+  },
+  {
+    id: "football.award_draw",
+    sport: "football",
+    key: "abandonPolicy",
+    seed: BRANCH_SEED_BASE + 9,
+    config: { name: "abandonAward", raw: { abandonPolicy: "award" } },
+    what: "an award-policy abandon at a level score: a draw on the real score (FB-AB-1)",
+    reached: reachesAwardLevelDraw,
+    build: (c) => playThen(c, reachesAwardLevelDraw, levelWithGoals, ev("core.abandon", { reason: "conditions" })),
+  },
+  {
+    id: "football.shootout_sudden_death",
+    sport: "football",
+    key: "shootoutAttempts",
+    seed: BRANCH_SEED_BASE + 10,
+    config: { name: "youthKnockout", raw: { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: 3 } },
+    what: "a youth knockout (3 kicks each) whose shoot-out is level after the three and goes to sudden death",
+    reached: reachesShootoutSuddenDeath,
+    build: (c) => shortest(c, reachesShootoutSuddenDeath, (seed) => {
+      try {
+        const walk = buildWalk(c.module, c.cfg, c.lineups, seed, WALK_MAX).events;
+        return walk.map((e) => ({ type: e.type, payload: e.payload }));
+      } catch {
+        return null;
+      }
+    }, SUDDEN_DEATH_SEED_BUDGET),
   },
 ];
 

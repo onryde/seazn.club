@@ -649,9 +649,15 @@ Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
 and up): above every generator seed, below the floor's stride, so the floor's
 reproduction and keep-rule never count them. They are appended streams, so they
 owe no version bump. They add configs, appended at the end of `configs`; no
-existing stream or config changes. The seven stories today: football
-`shootoutAttempts`, hockey `q4_stands`, carrom and generic `share`, and the
-`award` abandon with a withdrawal's expunge for football, hockey and ice hockey.
+existing stream or config changes. The ten stories today: football
+`shootoutAttempts` (and its sudden-death arm), hockey `q4_stands`, carrom and
+generic `share`, the `award` abandon with a withdrawal's expunge for football,
+hockey and ice hockey, football's level (draw) arm, and ice hockey's level
+abandon under the IIHF default, which is flagged for a replay because no draw
+can stand there (R16-3). Three verdicts (the two award expunge arms and the
+4th quarter) carry no replay differential: an abandon is applied only to a
+match still in play, so a ledger that ends on one and holds a result has its
+effect; the test pins that refusal per story against the engine's own error.
 
 ## How the comparison actually works
 

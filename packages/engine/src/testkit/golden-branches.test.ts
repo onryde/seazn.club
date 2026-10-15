@@ -9,16 +9,17 @@
 // level abandon is a draw, an expunge is no outcome), read by folding the committed ledger HERE - not by calling the
 // verdict under test.
 import { describe, expect, it } from "vitest";
+import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { SHOOTOUT_ATTEMPTS_DEFAULT } from "../sports/football/football.ts";
-import { BRANCH_SEED_BASE, BRANCH_STORIES, branchHoles, extendBranches, type BranchStory, type Recorded } from "./golden-branches.ts";
+import { BRANCH_SEED_BASE, BRANCH_STORIES, branchHoles, extendBranches, replaysOnAbandon, type BranchStory, type Recorded } from "./golden-branches.ts";
 import { FLOOR_SEED_STRIDE } from "./golden-floor-streams.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
-import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
+import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const moduleOf = (key: string): AnySportModule => {
   const found = builtinModules.find((m) => m.key === key);
@@ -66,7 +67,7 @@ const storyById = (id: string): BranchStory => {
 const byId = (id: string): Case => caseOf(storyById(id));
 
 describe("the branch table", () => {
-  it("names exactly the opt-in branches W2c raised a major for by hand, once each, in this order", () => {
+  it("names exactly the opt-in branches W2c raised a major for by hand, and the three arms the 16c review found unrecorded, once each, in this order", () => {
     expect(BRANCH_STORIES.map((s) => s.id)).toEqual([
       "football.shootoutAttempts",
       "hockey.q4_stands",
@@ -75,6 +76,9 @@ describe("the branch table", () => {
       "football.award_expunge",
       "hockey.award_expunge",
       "icehockey.award_expunge",
+      "icehockey.award_level_flagged",
+      "football.award_draw",
+      "football.shootout_sudden_death",
     ]);
   });
 
@@ -294,6 +298,122 @@ describe("each branch stream takes the branch it is named for (the engine's own 
     expect(voided.state).toEqual(before.state);
     expect(outcomeOf(c.module as never, voided.folded as never)).toBeNull();
   });
+
+  it("icehockey.award_level_flagged: under the IIHF default a level abandon is flagged for a replay and decides nothing; where a draw can stand the same ledger is a draw", () => {
+    const c = byId("icehockey.award_level_flagged");
+    const events = c.stream.events;
+    expect(events[events.length - 1]).toEqual({ type: "core.abandon", payload: { reason: "conditions" } });
+    const before = fold(c.module, c.raw, events.slice(0, -1));
+    expect(before.cfg.overtime, "the default plays an overtime").not.toBeNull();
+    expect(before.cfg.shootout, "and a shoot-out, so no draw can stand").not.toBeNull();
+    const goals = before.state.goals as { home: number; away: number };
+    expect(goals.home, "a level score").toBe(goals.away);
+    expect(goals.home, "with goals on the board").toBeGreaterThan(0);
+    const held = fold(c.module, c.raw, events);
+    expect(held.state.phase).toBe("abandoned");
+    expect(held.state.outcome).toBeNull();
+    expect(held.state.replayFlagged).toBe(true);
+    expect(outcomeOf(c.module as never, held.folded as never)).toBeNull();
+    // the cfg is the reason: with neither overtime nor shoot-out (the 90007 story's config) the same abandon is a draw
+    const standing = fold(c.module, { ...c.raw, overtime: null, shootout: null }, events);
+    expect(standing.state.outcome).toEqual({ kind: "draw" });
+    expect(standing.state.replayFlagged).not.toBe(true);
+  });
+
+  it("football.award_draw: an abandon at a level score is a draw on the real score, with no expunge in play", () => {
+    const c = byId("football.award_draw");
+    const events = c.stream.events;
+    const last = events[events.length - 1]!;
+    expect(last).toEqual({ type: "core.abandon", payload: { reason: "conditions" } });
+    const before = fold(c.module, c.raw, events.slice(0, -1));
+    const goals = before.state.goals as { home: number; away: number };
+    expect(goals.home, "a level score").toBe(goals.away);
+    expect(goals.home, "with goals on the board").toBeGreaterThan(0);
+    const held = fold(c.module, c.raw, events);
+    expect(held.state.outcome).toEqual({ kind: "draw" });
+    expect(held.state.phase).toBe("done");
+    expect(held.folded.expunged, "no withdrawal: the draw is the module's and the kernel's").toBe(false);
+    expect(outcomeOf(c.module as never, held.folded as never)).toEqual({ kind: "draw" });
+    // the replay default would have held nothing and flagged the fixture
+    const replayed = fold(c.module, { ...c.raw, abandonPolicy: "replay" }, events).state;
+    expect(replayed.outcome).toBeNull();
+    expect(replayed.replayFlagged).toBe(true);
+  });
+
+  it("football.shootout_sudden_death: level after the configured kicks, decided in sudden death, and still running under the default of five", () => {
+    const c = byId("football.shootout_sudden_death");
+    const events = c.stream.events;
+    const attempts = c.raw.shootoutAttempts as number;
+    expect(attempts, "a non-default count").toBeLessThan(SHOOTOUT_ATTEMPTS_DEFAULT);
+    const first = events.findIndex((e) => e.type === "football.shootout.kick");
+    expect(first, "the ledger holds a shoot-out").toBeGreaterThan(0);
+    expect(events.slice(first).every((e) => e.type === "football.shootout.kick"), "and ends in its kicks").toBe(true);
+    const played = fold(c.module, c.raw, events).state;
+    expect(played.outcome).toMatchObject({ kind: "win", method: "shootout" });
+    const kicks = (played.shootout as { kicks: { side: string; scored: boolean }[] }).kicks;
+    const taken = (side: string) => kicks.filter((k) => k.side === side).length;
+    expect(Math.max(taken("home"), taken("away")), "a side kicked past the configured count: sudden death").toBeGreaterThan(attempts);
+    // after the configured kicks each the shoot-out was level and still open - sudden death is what decided it
+    const regulation = fold(c.module, c.raw, events.slice(0, first + 2 * attempts)).state;
+    expect(regulation.phase).toBe("SHOOTOUT");
+    expect(regulation.outcome).toBeNull();
+    const level = (side: string) => (regulation.shootout as { kicks: { side: string; scored: boolean }[] }).kicks.filter((k) => k.side === side && k.scored).length;
+    expect(level("home"), "level after the configured kicks").toBe(level("away"));
+    // the default of five is still in regulation for the same kicks
+    const byDefault = fold(c.module, without(c.raw, "shootoutAttempts"), events).state;
+    expect(byDefault.phase).toBe("SHOOTOUT");
+    expect(byDefault.outcome).toBeNull();
+  });
+});
+
+// The three verdicts that carry no replay differential (the two award ones and the 4th quarter) rest on one premise of the
+// engine's: an abandon is applied only to a match still in play, so a ledger that holds a result AND ends on an abandon has
+// the abandon's own effect. The premise is pinned here, per story, against the engine's own refusal.
+describe("an abandon after a match decided by play is refused by the engine, and so by every award and 4th-quarter verdict", () => {
+  const STORIES = [
+    "hockey.q4_stands",
+    "football.award_expunge",
+    "hockey.award_expunge",
+    "icehockey.award_expunge",
+    "icehockey.award_level_flagged",
+    "football.award_draw",
+  ] as const;
+  /** A generator walk under the story's own config that ends decided by play: no abandon, no forfeit, an outcome in the state. */
+  function decidedByPlay(c: Case): GoldenEvent[] {
+    const cfg = c.module.configSchema.parse(c.raw) as unknown;
+    const lineups = defaultLineupPair(resolvePositions(c.module, cfg));
+    for (let seed = 1; seed <= 200; seed++) {
+      let walk;
+      try {
+        walk = buildWalk(c.module, cfg as never, lineups, seed, 400);
+      } catch {
+        continue;
+      }
+      const events: GoldenEvent[] = walk.events.map((e) => ({ type: e.type, payload: e.payload }));
+      if (events.some((e) => e.type === "core.abandon" || e.type === "core.forfeit")) continue;
+      const last = walk.states[walk.states.length - 1] as Record<string, unknown> | undefined;
+      if (last?.outcome !== null && last?.outcome !== undefined) return events;
+    }
+    throw new Error(`${c.story.id}: no generator walk under its config is decided by play within 200 seeds`);
+  }
+
+  it.each(STORIES)("%s: the fold refuses the story's own abandon on a match decided by play, and the verdict reports that reason", (id) => {
+    const c = byId(id);
+    const decided = decidedByPlay(c);
+    const abandon = c.stream.events[c.stream.events.length - 1]!;
+    expect(abandon.type, "the story ends on its abandon").toBe("core.abandon");
+    expect(() => fold(c.module, c.raw, decided), "the walk alone folds").not.toThrow();
+    let refusal: unknown;
+    try {
+      fold(c.module, c.raw, [...decided, abandon]);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal, "the engine refuses an abandon on a decided match").toBeInstanceOf(EngineError);
+    expect((refusal as EngineError).code).toBe("ALREADY_DECIDED");
+    expect((refusal as EngineError).message).toMatch(/match outcome already decided/);
+    expect(c.story.reached({ ...c.recorded, events: [...decided, abandon] }), `${id}: the verdict hands back the engine's refusal`).toMatch(/match outcome already decided/);
+  });
 });
 
 describe("each verdict has teeth: the stream passes, its counterfactuals do not", () => {
@@ -310,6 +430,9 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "football.award_expunge": /does not award an abandoned match/,
     "hockey.award_expunge": /does not award an abandoned match/,
     "icehockey.award_expunge": /does not award an abandoned match/,
+    "icehockey.award_level_flagged": /does not award an abandoned match/,
+    "football.award_draw": /does not award an abandoned match/,
+    "football.shootout_sudden_death": /sets no shootoutAttempts/,
   };
   const DECIDER_GONE: Record<string, RegExp> = {
     "football.shootoutAttempts": /does not end in a shoot-out win/,
@@ -319,6 +442,9 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "football.award_expunge": /reports no expunge/,
     "hockey.award_expunge": /reports no expunge/,
     "icehockey.award_expunge": /reports no expunge/,
+    "icehockey.award_level_flagged": /does not end on an abandon/,
+    "football.award_draw": /does not end on an abandon/,
+    "football.shootout_sudden_death": /does not end in a shoot-out win/,
   };
   /** Counterfactuals every story has: the key gone, and the deciding event (the last one in every story) dropped. */
   const common = (c: Case): Counterfactual[] => [
@@ -375,6 +501,30 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
           ["a leader instead of a level score", { ...c.recorded, events: events.filter((_, i) => i !== 2) }, /does not hold a draw/],
           ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }, /does not award an abandoned match/],
         ];
+      case "icehockey.award_level_flagged":
+        return [
+          // one goal fewer: a leader, so the award is the leader's win and nothing is flagged
+          ["a leader instead of a level score", { ...c.recorded, events: events.filter((_, i) => i !== 2) }, /not flagged for a replay/],
+          // neither overtime nor shoot-out: a draw can stand, so the level abandon IS a draw (the 90007 arm)
+          ["a cfg where a draw stands", { ...c.recorded, raw: { ...c.raw, overtime: null, shootout: null } }, /not flagged for a replay/],
+          // the replay policy flags the same abandon: the award policy is what the story is about
+          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }, /does not award an abandoned match/],
+        ];
+      case "football.award_draw":
+        return [
+          ["a leader instead of a level score", { ...c.recorded, events: events.filter((_, i) => i !== 2) }, /does not hold a draw/],
+          ["the replay policy", { ...c.recorded, raw: { ...c.raw, abandonPolicy: "replay" } }, /does not award an abandoned match/],
+          // a draw that no abandon made: level at full time, so the abandon is what the story needs
+          ["a level full-time draw with no abandon", { ...c.recorded, events: [events[0]!, events[1]!, events[2]!, { type: "football.period", payload: { phase: "HT", at: { period: "H1", elapsed: 3000 } } }, { type: "football.period", payload: { phase: "FT", at: { period: "H2", elapsed: 6000 } } }] }, /does not end on an abandon/],
+        ];
+      case "football.shootout_sudden_death":
+        return [
+          ["the count at the default", { ...c.recorded, raw: { ...c.raw, shootoutAttempts: SHOOTOUT_ATTEMPTS_DEFAULT } }, /not shorter than the default/],
+          // decided inside the configured kicks: the shoot-out story's ledger, not a sudden death
+          ["a shoot-out decided inside the configured kicks", { ...c.recorded, events: byId("football.shootoutAttempts").stream.events }, /no side kicked past/],
+          // a tied run to a sixth pair is sudden death under the default of five as well, so the key proves nothing
+          ["a long tied shoot-out the default count decides too", { ...c.recorded, events: longTiedShootout(events, 6) }, /decide the same ledger/],
+        ];
       default:
         throw new Error(`${c.story.id}: no counterfactuals declared for this story`);
     }
@@ -395,6 +545,14 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     }
     expect(counterfactuals).toBeGreaterThan(BRANCH_STORIES.length * 4);
   }, 30_000);
+
+  it("reports a counterfactual config the module refuses, rather than throwing - and accepts the real one", () => {
+    const c = byId("carrom.share");
+    const refusal = replaysOnAbandon(c.recorded, { abandonPolicy: "not-a-policy" });
+    expect(typeof refusal).toBe("string");
+    expect(refusal).toMatch(/counterfactual config does not fold the ledger/);
+    expect(replaysOnAbandon(c.recorded, without(c.raw, "abandonPolicy"))).toBeNull();
+  });
 
   it("rejects a ledger the config would not fold with a reason, rather than throwing", () => {
     for (const c of allCases()) {
@@ -451,8 +609,13 @@ describe("extendBranches - the append path", () => {
     const base = before("football");
     const donor: GoldenStream = { ...shootout.stream, config: "youthKnockout", seed: 4242 };
     const result = extendBranches(football, { ...base, streams: [...base.streams, donor] });
-    expect(result.appended.map((a) => a.split(" ")[0])).toEqual(["football.award_expunge"]);
+    // the donor reaches the shoot-out count and nothing else: the sudden death, the awards and the draw are still holes
+    expect(result.appended.map((a) => a.split(" ")[0])).toEqual(["football.award_expunge", "football.award_draw", "football.shootout_sudden_death"]);
     expect(result.corpus.streams.filter((s) => s.config === "youthKnockout").map((s) => s.seed)).not.toContain(BRANCH_SEED_BASE + 1);
+    // a sudden-death donor reaches BOTH shoot-out stories (the sudden death is a shoot-out win inside the key's count too)
+    const sudden = byId("football.shootout_sudden_death");
+    const both = extendBranches(football, { ...base, streams: [...base.streams, { ...sudden.stream, config: "youthKnockout", seed: 4243 }] });
+    expect(both.appended.map((a) => a.split(" ")[0])).toEqual(["football.award_expunge", "football.award_draw"]);
   });
 
   it("refuses by name an identity another stream holds, and a config name held with a different raw", () => {
