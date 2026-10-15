@@ -9,7 +9,7 @@
 // authority) - never the kernel's own predicate read back.
 import { describe, expect, it } from "vitest";
 import { applyPointsRule, forfeitAwardOffer, isUnplayedForfeit, pointsRuleAwardReachesTable, PointsRule } from "../competition/points.ts";
-import { foldMatchWithStoppage, outcomeOf, playRecorded, summaryOf, type EventEnvelope } from "../core/events.ts";
+import { foldMatchWithStoppage, outcomeOf, playRecorded, summaryOf, unplayedForfeitEvent, type EventEnvelope } from "../core/events.ts";
 import { FORFEIT_REASONS, type ForfeitReason } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
@@ -206,6 +206,34 @@ describe("X-WO-1 B (Task 9 P-3 'A'): the rule's award replaces the credit ONLY f
       checked++;
     }
     expect(checked, "retirements after play").toBeGreaterThan(0);
+  });
+});
+
+describe("X-WO-1 B: the kernel's predicate over the EVENT is the table's predicate over the decided OUTCOME", () => {
+  // The sweep above reaches this only where a sport admits the forfeit (a walkover after play is refused by every sport the
+  // award reaches, so it cannot see the `walkover` arm), so the predicate is pinned directly, against `isUnplayedForfeit`
+  // (competition/points.ts: the table's authority), over every reason, both kinds of offender and both ledger facts.
+  it("every reason x offender x {nothing played, play recorded}: the same verdict the table gives the outcome that forfeit decides; a double walkover is never one", () => {
+    let checked = 0;
+    let yes = 0;
+    let no = 0;
+    for (const reason of FORFEIT_REASONS) {
+      for (const played of [false, true]) {
+        const outcome = { kind: "award" as const, winner: H, loser: A, reason };
+        const expected = isUnplayedForfeit(outcome as never, played);
+        expect(unplayedForfeitEvent({ by: A, reason }, played), `${reason}/played=${played}`).toBe(expected);
+        if (expected) yes++;
+        else no++;
+        checked++;
+      }
+    }
+    expect(checked, "combinations").toBe(FORFEIT_REASONS.length * 2);
+    // Both verdicts were reached, and the arm the sports cannot reach is among them: a walkover after play is unplayed.
+    expect(yes, "unplayed verdicts").toBeGreaterThan(0);
+    expect(no, "played verdicts").toBeGreaterThan(0);
+    expect(unplayedForfeitEvent({ by: A, reason: "walkover" }, true), "a walkover after play is still nothing played").toBe(true);
+    // A double walkover forfeits to no one: the table pays it its own row, never the award (its schema admits one reason).
+    for (const played of [false, true]) expect(unplayedForfeitEvent({ by: "both", reason: "walkover" }, played), `double walkover/played=${played}`).toBe(false);
   });
 });
 
