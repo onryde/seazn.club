@@ -28,6 +28,7 @@ import { EngineError } from "@seazn/engine/core";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { log } from "@/server/logger";
 import { v1 } from "@/server/api-v1/http";
+import { LOCKED_FIXTURE_STATUSES } from "@/server/engine-db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { scoreEvent } from "../scoring";
@@ -104,6 +105,21 @@ const start = (s: Seeded, extra: Record<string, unknown> = {}) =>
 async function rows(fixtureId: string): Promise<number> {
   const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
   return n;
+}
+
+/** A generic fixture DECIDED and then FINALIZED by a keyed core.finalize (finalized is a LOCKED fixture status: appendEvent refuses
+ *  any further write to it before it even looks at the seq). Returns the seed, the finalize's key and its original answer. */
+async function finalizedGeneric(extra: Record<string, unknown>) {
+  const s = await seed("generic");
+  await start(s);
+  await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "generic.result", payload: { winnerId: s.entrants[0] } });
+  const key = `epoch-${randomUUID()}`;
+  const finalize = (more: Record<string, unknown> = {}) =>
+    scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.finalize", payload: {}, idempotency_key: key, ...extra, ...more });
+  const first = await finalize();
+  expect(first.status, "premise: the fixture is now finalized").toBe("finalized");
+  expect(LOCKED_FIXTURE_STATUSES.has(first.status), "premise: finalized is a locked status").toBe(true);
+  return { s, key, first, finalize };
 }
 
 async function refusal(p: Promise<unknown>): Promise<HttpError> {
@@ -255,8 +271,9 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
   });
 
   it("7b. a KEYED core.void accepted at the current epoch is replayed to a behind phone's retry, cache cold (review F1)", async () => {
-    // The void is the one event whose retry the gate's durable replay alone answers on a fall-through: assertUndoTarget would
-    // refuse the already-voided target 409 UNDO_ALREADY_VOIDED before appendEvent's own replay path is ever reached.
+    // The void is the event whose retry used to be refused on a fall-through: assertUndoTarget answers the already-voided target
+    // 409 UNDO_ALREADY_VOIDED before appendEvent's own replay path is ever reached. The gate's replay answers it here, and since
+    // review F4 so does the keyed-void pre-lookup (7c); 7h is the case only the gate's replay answers.
     const s = await seed(BADMINTON);
     const phoneEpoch = foldEpochOf(BADMINTON);
     const started = await start(s);
@@ -324,24 +341,89 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     }
   });
 
-  it("7d. the gate's own durable replay answers a behind phone's retry of the event that LOCKED the fixture (appendEvent would say ALREADY_DECIDED)", async () => {
-    // A finalized fixture is refused by appendEvent BEFORE its seq check, so appendEvent's replay catch (SEQ_CONFLICT / 23505)
-    // never sees the retry: only the gate's replay can answer it. This is what makes that replay a guard of its own (review F1).
-    const s = await seed("generic");
-    const phoneEpoch = foldEpochOf("generic");
-    await start(s);
-    await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "generic.result", payload: { winnerId: s.entrants[0] } });
-    const key = `epoch-${randomUUID()}`;
-    const finalize = () =>
-      scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.finalize", payload: {}, engine_epoch: phoneEpoch, idempotency_key: key });
-    const first = await finalize();
-    expect(first.status, "premise: the fixture is now finalized").toBe("finalized");
-
+  it("7d. a BEHIND phone's cold retry of the event that LOCKED the fixture is replayed, not ALREADY_DECIDED", async () => {
+    const { s, first, finalize } = await finalizedGeneric({ engine_epoch: foldEpochOf("generic") });
     bump.set("generic", 1);
     idemCache.store.clear();
     const cold = await finalize();
     expect(cold).toEqual(first);
     expect(await rows(s.fixtureId), "one finalize: the retry wrote nothing").toBe(3);
+  });
+
+  it("7e. a keyed retry of the event that finalized the fixture replays with the cache cold at EVERY epoch state (review F11)", async () => {
+    // appendEvent refuses a locked fixture BEFORE its seq check, so its replay catch (SEQ_CONFLICT / 23505) never saw this retry.
+    const current = foldEpochOf("generic");
+    const variants: [string, Record<string, unknown>][] = [
+      ["no epoch", {}],
+      ["equal epoch", { engine_epoch: current }],
+      ["ahead epoch", { engine_epoch: current + 1 }],
+    ];
+    let checked = 0;
+    for (const [what, extra] of variants) {
+      const { s, first, finalize } = await finalizedGeneric(extra);
+      idemCache.store.clear();
+      const cold = await finalize();
+      expect([what, cold.event_id], `${what}: the cold retry is the original answer`).toEqual([what, first.event_id]);
+      expect(cold, what).toEqual(first);
+      expect(await rows(s.fixtureId), `${what}: the retry wrote nothing`).toBe(3);
+      checked++;
+    }
+    expect(checked, "every epoch state was checked").toBe(variants.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("7f. what is NOT a retry is still refused ALREADY_DECIDED: a new key, and no key, on a finalized fixture (review F11)", async () => {
+    const { s } = await finalizedGeneric({});
+    const note = (extra: Record<string, unknown>) =>
+      scoreEvent(s.auth, s.fixtureId, { expected_seq: 3, type: "core.note", payload: { text: "after finalize" }, ...extra }).catch((e: unknown) => e);
+    let checked = 0;
+    for (const [what, extra] of [
+      ["a key the ledger does not hold", { idempotency_key: `epoch-${randomUUID()}` }],
+      ["no key", {}],
+    ] as const) {
+      const err = await note(extra);
+      expect(EngineError.is(err, "ALREADY_DECIDED"), `${what}: got ${String(err)}`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(await rows(s.fixtureId), "nothing was written after the finalize").toBe(3);
+  });
+
+  it("7g. the same for a CANCELLED fixture: the keyed retry of an accepted write replays, a new keyed write is ALREADY_DECIDED (review F11)", async () => {
+    expect(LOCKED_FIXTURE_STATUSES.has("cancelled"), "premise: cancelled is a locked status").toBe(true);
+    const s = await seed(BADMINTON);
+    const key = `epoch-${randomUUID()}`;
+    const first = await start(s, { idempotency_key: key });
+    await sql`update fixtures set status = 'cancelled' where id = ${s.fixtureId}`;
+    idemCache.store.clear();
+    const retry = await start(s, { idempotency_key: key });
+    expect(retry).toEqual(first);
+    const fresh = await start(s, { idempotency_key: `epoch-${randomUUID()}` }).catch((e: unknown) => e);
+    expect(EngineError.is(fresh, "ALREADY_DECIDED"), `a new keyed write: got ${String(fresh)}`).toBe(true);
+    expect(await rows(s.fixtureId), "one event: neither the retry nor the new write added a row").toBe(1);
+  });
+
+  it("7h. the KEY decides, not expected_seq: a behind phone's cold retry carrying the CURRENT tip is the original answer, not appendEvent's re-validation of the event", async () => {
+    // The one retry only the gate's own durable replay answers: appendEvent would fold the retried event against the ledger as it
+    // stands now and refuse it (a second core.start is rejected by the module) before any unique index could name the duplicate.
+    // The warm cache already answers by key alone, whatever expected_seq says; this keeps the cold, behind path the same.
+    const s = await seed(BADMINTON);
+    const phoneEpoch = foldEpochOf(BADMINTON);
+    const key = `epoch-${randomUUID()}`;
+    const first = await start(s, { engine_epoch: phoneEpoch, idempotency_key: key });
+    expect(first.seq).toBe(1);
+
+    bump.set(BADMINTON, 1);
+    idemCache.store.clear();
+    const retry = await scoreEvent(s.auth, s.fixtureId, {
+      expected_seq: first.seq,
+      type: "core.start",
+      payload: {},
+      engine_epoch: phoneEpoch,
+      idempotency_key: key,
+    });
+    expect(retry).toEqual(first);
+    expect(await rows(s.fixtureId), "the retry wrote nothing").toBe(1);
   });
 
   it("8. a second call: two lower calls are two 426s and zero rows", async () => {

@@ -259,13 +259,20 @@ export async function scoreEvent(
     //      valid `expected_seq`, both past the seq check. The loser's insert
     //      trips the unique index.
     //
-    // In both, the question is the same: did THIS fixture already record THIS
-    // key? The ledger answers it. A SEQ_CONFLICT with no such key is a real
-    // conflict — another device got ahead — and must still raise 409, which is
-    // why the lookup gates the answer rather than the error code alone.
+    //   3. The retry of the write that LOCKED the fixture (review 1f F11): a
+    //      finalize, or a fixture cancelled since. appendEvent refuses a locked
+    //      fixture BEFORE its seq check (ALREADY_DECIDED), so neither shape
+    //      above is ever raised — with the cache cold, the lost-ack retry of
+    //      the deciding tap would be told the match is already decided.
+    //
+    // In all three, the question is the same: did THIS fixture already record
+    // THIS key? The ledger answers it. A SEQ_CONFLICT or ALREADY_DECIDED with no
+    // such key is a real refusal — another device got ahead, or the match is
+    // over — and must still raise, which is why the lookup gates the answer
+    // rather than the error code alone.
     if (
       input.idempotency_key &&
-      ((err instanceof EngineError && err.code === "SEQ_CONFLICT") || isIdemKeyViolation(err))
+      ((err instanceof EngineError && (err.code === "SEQ_CONFLICT" || err.code === "ALREADY_DECIDED")) || isIdemKeyViolation(err))
     ) {
       const replayed = await replayOutcomeFor(auth.orgId, fixtureId, input.idempotency_key);
       if (replayed) {

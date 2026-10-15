@@ -73,8 +73,10 @@ guarantee NOT pinned by a test is marked.
    into an "update the app" it cannot act on. The lookup is scoped to the fixture: a key accepted on fixture A never answers a NEW
    write on fixture B (case 15; the same key on B at the current epoch is a new write there). A keyed `core.void` is covered too, at
    EVERY epoch state and with the cache cold (cases 7b, 7c; before review F4 a cold-cache retry of an accepted keyed undo was refused
-   `409 UNDO_ALREADY_VOIDED` instead of replayed). One exception, pre-existing and NOT fixed in 1f: see §4, "keyed retry of the event
-   that finalized the fixture".
+   `409 UNDO_ALREADY_VOIDED` instead of replayed), and so is a keyed retry of the event that finalized the fixture or left it
+   cancelled (cases 7d, 7e, 7g; before review F11 the cold-cache retry of the deciding tap was refused `ALREADY_DECIDED`). The key
+   decides, not `expected_seq`: a behind phone's cold retry that carries the current tip is still the original answer (case 7h).
+   What is NOT a retry keeps its refusal: a new key, or no key, on a finalized fixture is `ALREADY_DECIDED` (case 7f).
 4. **A refusal burns nothing** (cases 4, 6, 8). It writes no row and caches nothing under the key: the same key K resent after the
    app updated is a new write, accepted exactly once. Two refusals in a row are two 426s and zero rows.
 5. Only the moved sport is refused; every other sport at its own epoch still writes (cases 5, 9).
@@ -153,11 +155,6 @@ rules instead needs an epoch per division or fixture, which does not exist.
   every sport it reaches. See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
 - A bump is also forced by deltas-only or harness-only rewrites of a corpus; each locks out every older phone of that sport.
   (In flight on `feat/engine-split-1e-minor`, pending merge: a standings-only change becomes a MINOR bump that locks nobody out.)
-- **A keyed retry of the event that finalized the fixture** (or otherwise left it `finalized` / `cancelled`), with the idempotency
-  cache cold, is answered `ALREADY_DECIDED` by `appendEvent`, which checks the fixture's lock BEFORE its seq check and so never
-  reaches its replay catch. Pre-existing (measured on the 1f branch with an up-to-date phone and no epoch involved), not fixed in 1f. A
-  BEHIND phone's retry of the same event is answered `201` by the epoch gate's own replay (case 7d). The pad should read
-  `ALREADY_DECIDED` on a keyed retry of its own finalize as "already done", and reconcile from `GET .../state`.
 
 ## 5. Checklist for S2
 
