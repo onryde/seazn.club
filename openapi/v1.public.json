@@ -32721,7 +32721,7 @@
     },
     "/api/v1/fixtures/{id}/events": {
       "post": {
-        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved)",
+        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone",
         "tags": [
           "scoring"
         ],

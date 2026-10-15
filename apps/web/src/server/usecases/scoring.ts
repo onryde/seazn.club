@@ -200,16 +200,27 @@ export async function scoreEvent(
   //   - after a DURABLE replay lookup (assertEngineEpoch): a retry of a key the ledger already holds answers 201
   //     whether the cache is warm or cold, even though the epoch has moved since that first write was accepted.
   // `core.void` is included: an outdated phone's undo would void against a ledger it folds differently.
+  const answerReplay = async (replayed: ScoreOutcome): Promise<ScoreOutcome> => {
+    await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
+    if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
+    return replayed;
+  };
   const clientEpoch = input.engine_epoch;
   if (clientEpoch !== undefined && sport !== null) {
-    const replayed = await assertEngineEpoch(auth.orgId, fixtureId, sport, clientEpoch, input.idempotency_key);
-    if (replayed) {
-      await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
-      if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
-      return replayed;
-    }
+    const replayed = await assertEngineEpoch(auth, fixtureId, sport, clientEpoch, input.idempotency_key);
+    if (replayed) return answerReplay(replayed);
   }
-  if (input.type === "core.void") await assertUndoTarget(auth, fixtureId, input);
+  if (input.type === "core.void") {
+    // Review 1f F4: a KEYED void's retry meets a target the first void already undid, so assertUndoTarget would refuse it
+    // 409 UNDO_ALREADY_VOIDED before appendEvent's own durable replay (its catch, below) is ever reached — with the cache cold
+    // (TTL, Redis down) the pad would be told "nothing to undo" for an undo that landed. Ask the ledger first: one query,
+    // and only for a keyed void. An unkeyed double-void, or a key the ledger does not hold, still reaches the 409.
+    if (input.idempotency_key) {
+      const replayed = await replayOutcomeFor(auth.orgId, fixtureId, input.idempotency_key);
+      if (replayed) return answerReplay(replayed);
+    }
+    await assertUndoTarget(auth, fixtureId, input);
+  }
 
   let result;
   try {
@@ -642,7 +653,7 @@ interface FixtureSport {
  * sport or a pinned version this build no longer ships, so an unknown sport can never reach `foldEpochOf`.
  */
 async function assertEngineEpoch(
-  orgId: string,
+  auth: AuthCtx,
   fixtureId: string,
   sport: FixtureSport,
   got: number,
@@ -652,9 +663,15 @@ async function assertEngineEpoch(
   const required = foldEpochOf(sportKey);
   if (got >= required) return null;
   if (idempotencyKey) {
-    const replayed = await replayOutcomeFor(orgId, fixtureId, idempotencyKey);
+    const replayed = await replayOutcomeFor(auth.orgId, fixtureId, idempotencyKey);
     if (replayed) return replayed;
   }
+  // Ops visibility (review 1f F5): a refusal is a scorer locked out of a match, and the v1 kernel logs only 5xx. One structured
+  // line per 426 — ids and numbers only, no names or tokens; requestId / orgId / userId arrive through the logger's mixin.
+  log.warn(
+    { code: "ENGINE_OUTDATED", sport: sportKey, required, got, via: auth.via, deviceLinkId: auth.deviceLinkId ?? null, fixtureId },
+    "scoring: ENGINE_OUTDATED — a client's fold epoch is behind the server's",
+  );
   throw new HttpError(
     426,
     `This app's scoring rules for ${sportKey} are out of date — update the app to keep scoring`,

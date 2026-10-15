@@ -26,6 +26,7 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { EngineError } from "@seazn/engine/core";
 import { divisionScoringClosed } from "@/lib/division-phase";
+import { log } from "@/server/logger";
 import { v1 } from "@/server/api-v1/http";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -251,6 +252,96 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     expect(cold).toEqual(first);
     expect(cold.event_id).toBe(first.event_id);
     expect(await rows(s.fixtureId), "one row: the retry wrote nothing").toBe(1);
+  });
+
+  it("7b. a KEYED core.void accepted at the current epoch is replayed to a behind phone's retry, cache cold (review F1)", async () => {
+    // The void is the one event whose retry the gate's durable replay alone answers on a fall-through: assertUndoTarget would
+    // refuse the already-voided target 409 UNDO_ALREADY_VOIDED before appendEvent's own replay path is ever reached.
+    const s = await seed(BADMINTON);
+    const phoneEpoch = foldEpochOf(BADMINTON);
+    const started = await start(s);
+    const key = `epoch-${randomUUID()}`;
+    const undo = (extra: Record<string, unknown>) =>
+      scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.void", payload: { event_id: started.event_id }, ...extra });
+    const first = await undo({ engine_epoch: phoneEpoch, idempotency_key: key });
+    expect(first.seq).toBe(2);
+
+    bump.set(BADMINTON, 1);
+    // The control that makes the replay below non-vacuous: a NEW write from the now-outdated phone is refused.
+    const fresh = await refusal(
+      scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "new" }, engine_epoch: phoneEpoch, idempotency_key: `epoch-${randomUUID()}` }),
+    );
+    expect(fresh.status).toBe(426);
+
+    idemCache.store.clear();
+    const misses = idemCache.misses;
+    const cold = await undo({ engine_epoch: phoneEpoch, idempotency_key: key });
+    expect(idemCache.misses, "the retry missed the cache").toBe(misses + 1);
+    expect(cold).toEqual(first);
+    expect(cold.event_id).toBe(first.event_id);
+    expect(await rows(s.fixtureId), "one row: the retry wrote nothing").toBe(2);
+  });
+
+  it("7c. a KEYED core.void's retry replays with the cache cold whatever the epoch: absent, equal or ahead (review F4); an unkeyed double-void is still 409", async () => {
+    const s = await seed(BADMINTON);
+    await start(s);
+    const notes: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const n = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1 + i, type: "core.note", payload: { text: `n${i}` } });
+      notes.push(n.event_id);
+    }
+    const current = foldEpochOf(BADMINTON);
+    // [what the retry carries] — one target and one key per variant.
+    const variants: [string, Record<string, unknown>][] = [
+      ["no epoch", {}],
+      ["equal epoch", { engine_epoch: current }],
+      ["ahead epoch", { engine_epoch: current + 1 }],
+    ];
+    let checked = 0;
+    for (const [i, [what, extra]] of variants.entries()) {
+      const key = `epoch-${randomUUID()}`;
+      const seq = 5 + i;
+      const undo = () =>
+        scoreEvent(s.auth, s.fixtureId, { expected_seq: seq, type: "core.void", payload: { event_id: notes[i] }, idempotency_key: key, ...extra });
+      const first = await undo();
+      expect([what, first.seq]).toEqual([what, seq + 1]);
+      idemCache.store.clear();
+      const retry = await undo();
+      expect([what, retry.event_id], `${what}: the cold retry is the original answer`).toEqual([what, first.event_id]);
+      expect(retry, what).toEqual(first);
+      checked++;
+    }
+    expect(checked, "every epoch state was checked").toBe(variants.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(await rows(s.fixtureId), "start + 4 notes + 3 voids, and no retry wrote").toBe(8);
+
+    // The refusal is still there for what is NOT a retry: a double-void with no key, and one with a key the ledger does not hold.
+    for (const extra of [{}, { idempotency_key: `epoch-${randomUUID()}` }]) {
+      const err = await refusal(
+        scoreEvent(s.auth, s.fixtureId, { expected_seq: 8, type: "core.void", payload: { event_id: notes[0] }, ...extra }),
+      );
+      expect([err.status, err.code], JSON.stringify(extra)).toEqual([409, "UNDO_ALREADY_VOIDED"]);
+    }
+  });
+
+  it("7d. the gate's own durable replay answers a behind phone's retry of the event that LOCKED the fixture (appendEvent would say ALREADY_DECIDED)", async () => {
+    // A finalized fixture is refused by appendEvent BEFORE its seq check, so appendEvent's replay catch (SEQ_CONFLICT / 23505)
+    // never sees the retry: only the gate's replay can answer it. This is what makes that replay a guard of its own (review F1).
+    const s = await seed("generic");
+    const phoneEpoch = foldEpochOf("generic");
+    await start(s);
+    await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "generic.result", payload: { winnerId: s.entrants[0] } });
+    const key = `epoch-${randomUUID()}`;
+    const finalize = () =>
+      scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.finalize", payload: {}, engine_epoch: phoneEpoch, idempotency_key: key });
+    const first = await finalize();
+    expect(first.status, "premise: the fixture is now finalized").toBe("finalized");
+
+    bump.set("generic", 1);
+    idemCache.store.clear();
+    const cold = await finalize();
+    expect(cold).toEqual(first);
+    expect(await rows(s.fixtureId), "one finalize: the retry wrote nothing").toBe(3);
   });
 
   it("8. a second call: two lower calls are two 426s and zero rows", async () => {
@@ -523,5 +614,55 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     expect(okB.seq).toBe(2);
     expect(okB.event_id).not.toBe(onA.event_id);
     expect(await rows(fixtureB!)).toBe(2);
+  });
+
+  it("16. every 426 logs ONE structured warning (ops can see a lockout); accepted, ahead, absent and replayed writes log none (review F5)", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const s = await seed(BADMINTON);
+      const phoneEpoch = foldEpochOf(BADMINTON);
+      const key = `epoch-${randomUUID()}`;
+      const accepted = await start(s, { engine_epoch: phoneEpoch, idempotency_key: key });
+      await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "ahead" }, engine_epoch: phoneEpoch + 1 });
+      await scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "absent" } });
+      expect(warn, "equal, ahead and absent are accepted silently").not.toHaveBeenCalled();
+
+      bump.set(BADMINTON, 1);
+      // A replayed retry of an accepted key answers 201 even though the phone is behind: not a lockout, so not logged.
+      await start(s, { engine_epoch: phoneEpoch, idempotency_key: key });
+      expect(warn, "a replay is not a refusal").not.toHaveBeenCalled();
+
+      const deviceLinkId = randomUUID();
+      const device: AuthCtx = { ...s.auth, via: "device_link", deviceLinkId };
+      const refused = [
+        { auth: s.auth, via: "session", deviceLinkId: null },
+        { auth: device, via: "device_link", deviceLinkId },
+      ];
+      let logged = 0;
+      for (const r of refused) {
+        warn.mockClear();
+        const err = await refusal(
+          scoreEvent(r.auth, s.fixtureId, { expected_seq: 3, type: "core.note", payload: { text: "behind" }, engine_epoch: phoneEpoch }),
+        );
+        expect(err.status).toBe(426);
+        expect(warn, `${r.via}: one warning per 426`).toHaveBeenCalledTimes(1);
+        const [fields, message] = warn.mock.calls[0] as [Record<string, unknown>, string];
+        expect(fields).toEqual({
+          code: "ENGINE_OUTDATED",
+          sport: BADMINTON,
+          required: foldEpochOf(BADMINTON),
+          got: phoneEpoch,
+          via: r.via,
+          deviceLinkId: r.deviceLinkId,
+          fixtureId: s.fixtureId,
+        });
+        expect(message).toContain("ENGINE_OUTDATED");
+        logged++;
+      }
+      expect(logged, "both credential kinds were checked").toBe(refused.length);
+      expect(accepted.seq).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

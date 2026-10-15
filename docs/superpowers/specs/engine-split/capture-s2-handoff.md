@@ -43,6 +43,9 @@ until the first bump. Test the 426 path with a faked epoch, as the server's own 
 - `sport` is the fixture's sport key, `required` the server's epoch for it, `got` the epoch the request carried.
 - `message` is English prose and **English only**, by the API's convention (the web pad's `components/v2/scorepad/refusal-copy.ts`
   maps the wire CODE to its own 4-locale copy and "never falls through to server prose"). Map `error.code`, never show `message`.
+- **Key on `error.code`, never on the status alone.** The 426 carries no `Upgrade` header (it is not a protocol upgrade, and
+  HTTP/2 forbids the header), so a generic HTTP stack that treats 426 as "retry with a different protocol" has nothing to act on.
+  `ENGINE_OUTDATED` is the only 426 this API sends.
 - A sport the server does not know, or a division pinned to a module version this build no longer ships, is `422 MODULE_NOT_FOUND`,
   not a 426 and not a 500.
 
@@ -54,8 +57,9 @@ withdrawal cascade) carry none and are never refused.
 **Ordering guarantees.** Tests are in `apps/web/src/server/usecases/__tests__/scoring-engine-epoch.test.ts` (case numbers below); a
 guarantee NOT pinned by a test is marked.
 
-1. A retry the idempotency cache already answered returns `201` with the original answer before anything else is looked at (case 7,
-   cache warm).
+1. The route's authentication runs FIRST, and for a `dl_` device link it also meters the link (`dlv1:<link>`, 10 per second per
+   link, spent by every write including one that ends in a 426). Then, in scoring, a retry the idempotency cache already answered
+   returns `201` with the original answer before the entitlement, phase and epoch checks are looked at (case 7, cache warm).
 2. **Authorisation, entitlement and DIVISION-phase refusals outrank the 426.** All three are raised by `assertEntitledToScore`, which
    runs before the epoch check; an outdated phone that may not write at all is told that, not "update". Tested: a device link that may
    not write the event gets `403` (case 13); a division not yet started (`setup` / `scheduled`) gets `WRONG_PHASE` (case 13b); a frozen
@@ -67,11 +71,15 @@ guarantee NOT pinned by a test is marked.
 3. **An already-accepted key stays 201 after a bump** (case 7, cache warm AND cold). If the phone is behind but the ledger already
    holds that `idempotency_key` for this fixture, the server answers `201` with the ORIGINAL event. A lost ack's retry never turns
    into an "update the app" it cannot act on. The lookup is scoped to the fixture: a key accepted on fixture A never answers a NEW
-   write on fixture B (case 15; the same key on B at the current epoch is a new write there).
+   write on fixture B (case 15; the same key on B at the current epoch is a new write there). A keyed `core.void` is covered too, at
+   EVERY epoch state and with the cache cold (cases 7b, 7c; before review F4 a cold-cache retry of an accepted keyed undo was refused
+   `409 UNDO_ALREADY_VOIDED` instead of replayed). One exception, pre-existing and NOT fixed in 1f: see §4, "keyed retry of the event
+   that finalized the fixture".
 4. **A refusal burns nothing** (cases 4, 6, 8). It writes no row and caches nothing under the key: the same key K resent after the
    app updated is a new write, accepted exactly once. Two refusals in a row are two 426s and zero rows.
 5. Only the moved sport is refused; every other sport at its own epoch still writes (cases 5, 9).
-6. **Each 426 spends one slot of the fixture's shared write bucket** (`scorev1:{fixtureId}`, 10 per second, shared by EVERY device
+6. **Each 426 spends TWO rate-limit slots**: the sender's own (`dlv1:<link>` for a `dl_` device link, 10 per second per link, taken at
+   the door before scoring) and the fixture's shared write bucket (`scorev1:{fixtureId}`, 10 per second, shared by EVERY device
    scoring that match). See §3: a retry loop starves the other scorers.
 
 ## 2. What the phone bundles
@@ -102,12 +110,15 @@ before they update. There is no grace window, so this ordering is the only prote
 - Show a clear "Update required" screen with a store link, in the app's own 4 locales. **The app must NOT render the server's
   `error.message`**: it is English-only prose. Map the CODE `ENGINE_OUTDATED` to the app's own localised copy, exactly as the web pad's
   `refusal-copy.ts` maps codes and never falls through to server prose. `sport`, `required` and `got` are safe to show or log.
-- Treat it as **terminal**: STOP, show the update prompt, and do not auto-retry until the app is updated. A resend is refused
-  identically, and each refusal spends a slot of the fixture's shared write bucket (`scorev1:<fixture>`, 10 per second, shared by
-  every device scoring that match), starving the other devices on that fixture. (The web pad's `transport.ts` already classifies
-  every non-408/429, non-409 4xx as permanent; the native queue needs the same rule, or one outdated phone wedges its own queue head.)
-- **Keep the unsent events queued. Never drop them**, and do not resend them automatically before the app is updated. After the
-  update, resend them (same `idempotency_key`s; guarantees 3 and 4 make that safe). That recovery assumes the updated app folds the same ledger, which is what the epoch exists to ensure.
+- A 426 is a THIRD class of failure, **"parked until update"**: it is neither a transient failure (network, 408, 429, 5xx: retried
+  with backoff) nor a permanent refusal (a 403 or 404: the write is reported "not recorded" and DROPPED, as the web pad's
+  `transport.ts` does for every other 4xx). Parked means: STOP, show the update prompt, never drop the write, never auto-retry it
+  until the app is updated. A resend is refused identically, and each refusal spends two rate-limit slots (§1, guarantee 6),
+  starving the other devices on that fixture. The native queue therefore needs its own state for it; copying the web pad's
+  permanent-4xx rule would silently lose the scorer's taps, and treating it as transient would loop.
+- **Keep the unsent events queued, in order. Never drop them**, and do not resend them automatically before the app is updated.
+  After the update, resend them (same `idempotency_key`s; guarantees 3 and 4 make that safe). That recovery assumes the updated app
+  folds the same ledger, which is what the epoch exists to ensure.
 - Only the bumped sport is affected: the app keeps scoring other sports.
 
 **Major / minor (engine-split owner; IN FLIGHT, not merged).** On branch `feat/engine-split-1e-minor` the fold version splits in two:
@@ -116,8 +127,17 @@ update and at most an optional "update available" prompt. **Pending merge; re-ch
 lands.** This file describes `main` plus 1f as they are today (`foldEpochOf(sport): number`). Whatever the final shape: send the
 MAJOR as `engine_epoch`.
 
-**Option recorded, NOT decided.** After each sync the server could return the official state, so a phone that ever disagrees with
-the server self-corrects instead of silently scoring on a divergent fold. Not built, not scoped; for S2's own design.
+**The server's state is already returned, and is the record (exists today; S2 should use it).** Every `201` carries the server's
+own fold of the ledger up to that event: `state_summary`, `outcome`, `status`. `GET /api/v1/fixtures/{id}/state` serves the full
+state. The web pad reconciles its optimistic fold against the server's on EVERY ack (`apps/web/src/components/v2/scorepad/
+use-pad-pipeline.ts`, header comment). S2 should do the same, so a phone whose fold ever disagrees with the server's self-corrects
+instead of scoring on a divergent fold. Nothing new needs building server-side for this.
+
+**The ahead window (consequences of the release order above).** Between the app update and the server deploy, phones at epoch N+1
+score against a server still at N. That is accepted on purpose, and it means: (1) the phone folds the bumped sport DIFFERENTLY from
+the server, so its optimistic state and the server's `state_summary` can disagree, and the server's is the record (reconcile to it);
+(2) an event that only the NEW rules allow (a rule-widening change) can be accepted by the phone's fold but REFUSED by the server's
+older one with a `422` until the server deploys. S2 must surface that refusal to the scorer, not hide it or treat it as parked.
 
 **Owed to S2's own design, recorded not decided (D26).** What a match ALREADY in progress does when its sport's epoch moves. With no
 grace window the answer today is "the scorer is blocked until the app updates, and the queue waits"; whether to finish under the old
@@ -132,12 +152,19 @@ rules instead needs an epoch per division or fixture, which does not exist.
   result), stoppage, and `forfeit-credit.ts`. A rule change there moves no golden and does NOT force a bump: it owes a MANUAL bump of
   every sport it reaches. See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
 - A bump is also forced by deltas-only or harness-only rewrites of a corpus; each locks out every older phone of that sport.
+  (In flight on `feat/engine-split-1e-minor`, pending merge: a standings-only change becomes a MINOR bump that locks nobody out.)
+- **A keyed retry of the event that finalized the fixture** (or otherwise left it `finalized` / `cancelled`), with the idempotency
+  cache cold, is answered `ALREADY_DECIDED` by `appendEvent`, which checks the fixture's lock BEFORE its seq check and so never
+  reaches its replay catch. Pre-existing (measured on the 1f branch with an up-to-date phone and no epoch involved), not fixed in 1f. A
+  BEHIND phone's retry of the same event is answered `201` by the epoch gate's own replay (case 7d). The pad should read
+  `ALREADY_DECIDED` on a keyed retry of its own finalize as "already done", and reconcile from `GET .../state`.
 
 ## 5. Checklist for S2
 
 - [ ] `engine_epoch = foldEpochOf(fixture's sport)` on every `POST .../events`, `core.void` and retries included.
 - [ ] 426 / `ENGINE_OUTDATED` mapped by code to localised "Update required" copy (4 locales) with a store link.
-- [ ] 426 is terminal: no retry loop, queue kept, resent after update.
+- [ ] 426 is "parked until update": never dropped, never auto-retried, queue kept in order, resent after the update.
+- [ ] Reconcile the optimistic fold against the `201` body's `state_summary` / `outcome` / `status` on every ack.
 - [ ] Only the named `sport` blocked; other sports keep scoring.
 - [ ] A test that drives the real queue through a faked epoch bump (the usecase tests' way), not a mocked transport.
 - [ ] Re-read this file against `main` once 1f merges, and against `feat/engine-split-1e-minor` once it merges.

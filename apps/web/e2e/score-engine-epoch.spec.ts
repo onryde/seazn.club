@@ -11,9 +11,11 @@ import { dismissCookieBanner } from "./scorepad-a11y-kit";
 // the other half, and this file is that half:
 //   (a) a request carrying the server's own epoch is written through the real route, and the SPECTATOR sees the point;
 //   (b) an epoch the schema refuses never reaches the ledger;
-//   (c) a client AHEAD of the server is accepted (owner ruling 2026-10-15), and an absent epoch still is (D31, the web pad).
+//   (c) a client AHEAD of the server is accepted (owner ruling 2026-10-15), and an absent epoch still is (D31, the web pad);
+//   (d) the capture phone's own door: the same through a `dl_` device-link bearer with NO session cookie (review 1f F7).
 // The expected epoch is read off the engine (`foldEpochOf`), never typed.
 const SPORT = "badminton";
+const BASE = process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000";
 
 interface Rig {
   fixtureId: string;
@@ -122,4 +124,41 @@ test("(c) a client AHEAD of the server is accepted, and so is a request with no 
   });
   expect(absent.status, JSON.stringify(absent.error)).toBe(201);
   expect((await ledger(page.request, r.fixtureId)).map((e) => e.type)).toEqual(["core.start", "badminton.rally"]);
+});
+
+test("(d) through a dl_ device-link bearer (no cookie): the server's epoch and one ahead are written, and epoch 0 is a 400 that writes nothing", async ({ page, playwright }) => {
+  const r = await rig(page);
+  const minted = await apiJson<{ id: string; secret: string }>(page.request, `/api/v1/fixtures/${r.fixtureId}/device-links`, "POST", { label: "Epoch phone" });
+  expect(minted.status, JSON.stringify(minted.error)).toBe(201);
+  const secret = minted.data!.secret;
+  expect(secret.startsWith("dl_"), "the credential under test is a device link").toBe(true);
+
+  // An explicit empty storage state: a bare context inherits the organiser's cookie from the config, and a success claim made
+  // with it would measure the cookie, not the link (device-links.spec.ts, 2026-09-03).
+  const dl = await playwright.request.newContext({
+    baseURL: BASE,
+    storageState: { cookies: [], origins: [] },
+    extraHTTPHeaders: { Authorization: `Bearer ${secret}` },
+  });
+  try {
+    const post = (body: Record<string, unknown>) =>
+      dl.post(`/api/v1/fixtures/${r.fixtureId}/events`, { data: body }).then(async (res) => ({
+        status: res.status(),
+        body: (await res.json()) as { data?: { seq: number }; error?: { code?: string } },
+      }));
+    const engine_epoch = foldEpochOf(SPORT);
+    const start = await post({ expected_seq: 0, type: "core.start", payload: {}, engine_epoch });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const ahead = await post({ expected_seq: start.body.data!.seq, type: "badminton.rally", payload: { wonBy: r.home }, engine_epoch: engine_epoch + 1 });
+    expect(ahead.status, JSON.stringify(ahead.body)).toBe(201);
+    expect((await ledger(page.request, r.fixtureId)).map((e) => e.type)).toEqual(["core.start", "badminton.rally"]);
+
+    // The refusal the schema owns, through the same door: 400, and the ledger does not move. (A BEHIND epoch is not reachable
+    // here — every sport's epoch is 1 and the minimum is 1 — it is the usecase tests' branch.)
+    const bad = await post({ expected_seq: ahead.body.data!.seq, type: "badminton.rally", payload: { wonBy: r.home }, engine_epoch: 0 });
+    expect([bad.status, bad.body.error?.code]).toEqual([400, "VALIDATION"]);
+    expect((await ledger(page.request, r.fixtureId)).length, "the refused request wrote nothing").toBe(2);
+  } finally {
+    await dl.dispose();
+  }
 });
