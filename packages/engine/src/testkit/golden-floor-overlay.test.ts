@@ -1,19 +1,25 @@
-// The golden floor's "recorded, overlay unpinned" class (GF-1 review finding 1, option b).
+// The golden floor's "recorded, overlay unpinned" class (GF-1 review finding 1, option b; retired in part by GF-2 T3).
 //
-// The floor checks that a corpus RECORDS each core event. It cannot check that recording one PINS it: the harness stores
-// the module's state, outcome, summary and deltas and not the kernel overlay (stoppage clock, squads, settlement), so a
-// kernel-owned event — or one a module folds as `return state` — can sit in a stream and move nothing the epoch guard
-// compares. Those events are CLASSED, not hidden: each claim below says which events are inert in which sports and why,
-// the inertness is DERIVED by a probe (ablate the event, compare every recorded field), and a claim whose probe starts
-// finding movement is stale (the day the harness records the overlay, every claim here goes red and is deleted).
+// The floor checks that a corpus RECORDS each core event. It cannot check that recording one PINS it: an event a module folds as
+// `return state` can sit in a stream and move nothing the epoch guard compares. Those events are CLASSED, not hidden: each claim
+// says which events are inert and why, the inertness is DERIVED by a probe (ablate the event, compare every recorded field), and
+// a claim whose probe starts finding movement is stale.
 //
-// Expected values come from the engine's own declarations (`module.onLineup`, CORE_EVENT_SCHEMAS) and from the probe,
-// never from a table typed here.
+// Before GF-2 the class also held every kernel-owned event, because the harness recorded the module's answers only. Format 2
+// records the overlay and a summary digest after every event, the probe compares those too, and two claims flipped under the real
+// recorder: `stoppage` (11 sports) and `lineup` (boardgame, carrom, generic, and football's position change). This file holds
+// the flip: the SAME probe over the SAME corpora answers "unpinned" under the module-only recorder (what the harness recorded
+// before, the control that shows the claim was true) and "pinned" under the real one.
+//
+// Expected values come from the engine's own declarations (`module.onLineup`, CORE_EVENT_SCHEMAS) and from the probe, and the
+// list of what flipped is the policy text of record before this task (GOLDEN-POLICY.md, "What the guard cannot see") — never a
+// table read off the code under test.
 import { describe, expect, it } from "vitest";
-import { CORE_EVENT_SCHEMAS, foldMatchWithStoppage, isKernelOwnedEventType, outcomeOf } from "../core/events.ts";
+import { CORE_EVENT_SCHEMAS } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
-import { readCorpus, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import { readCorpus, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
+import { FLOOR_SEED_STRIDE } from "./golden-floor-streams.ts";
 import {
   ablateEvents,
   CORE_TYPES,
@@ -22,16 +28,17 @@ import {
   OVERLAY_CONTROLS,
   eventToken,
   floorRequirement,
+  kernelRecorder,
   moduleRecorder,
   recordedTokens,
   overlayVerdicts,
   staleOverlayClaims,
   uncoveredUnpinned,
   type FloorToken,
+  type OverlayClaim,
+  type OverlayVerdict,
   type Recorder,
 } from "./golden-floor.ts";
-import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
-import { resolvePositions } from "../sport/catalog.ts";
 
 const corpora = new Map(builtinModules.map((m) => [m.key, readCorpus(m.key)] as const));
 const corpusOf = (key: string): GoldenCorpus => {
@@ -41,13 +48,47 @@ const corpusOf = (key: string): GoldenCorpus => {
 };
 
 /** How many claimed tokens the sport's own policy leaves possible: the ones a claim is held over. */
-const claimedTokens = (module: (typeof builtinModules)[number], corpus: GoldenCorpus): number => {
+const claimedTokens = (module: (typeof builtinModules)[number], corpus: GoldenCorpus, claims: readonly OverlayClaim[] = OVERLAY_CLAIMS): number => {
   const impossible = floorRequirement(module, corpus).impossible;
-  return OVERLAY_CLAIMS.filter((c) => c.assertedFor(module)).reduce((n, c) => n + c.tokens.filter((t) => !impossible.has(t)).length, 0);
+  return claims.filter((c) => c.assertedFor(module)).reduce((n, c) => n + c.tokens.filter((t) => !impossible.has(t)).length, 0);
+};
+
+/** The two claims GF-2 T3 retired, as they stood (the control of the flip: the probe, under the module-only recorder, still holds
+ *  them). They are test fixtures now: the production table no longer carries them. */
+const RETIRED_STOPPAGE: OverlayClaim = {
+  id: "stoppage",
+  tokens: [eventToken("core.suspend"), eventToken("core.resume")],
+  mode: "together",
+  assertedFor: () => true,
+  covers: (_m, _t, verdict) => verdict === "unpinned",
+  reason: "kernel-owned: core.suspend / core.resume never reach module.apply, and the stoppage clock lives in the overlay the harness did not record",
+};
+const RETIRED_LINEUP: OverlayClaim = {
+  id: "lineup",
+  tokens: LINEUP_TYPES.map(eventToken),
+  mode: "chain",
+  assertedFor: (module) => module.onLineup === undefined,
+  covers: (_m, _t, verdict) => verdict === "unpinned",
+  reason: "kernel-owned squads: a module reacts to a lineup change only through onLineup, so one that declares none never sees it",
+};
+const RETIRED = [RETIRED_STOPPAGE, RETIRED_LINEUP];
+
+/** The verdict of every recorded token of a claim, per sport, under one recorder. */
+const verdictsOf = (key: string, record: Recorder, claims: readonly OverlayClaim[]): Map<FloorToken, { verdict: OverlayVerdict; streams: number }> => {
+  const module = builtinModules.find((m) => m.key === key)!;
+  return overlayVerdicts(module, corpusOf(key), record, claims);
 };
 
 describe("golden floor — the overlay-unpinned class is declared, reasoned and derived", () => {
-  it("every claim row names real core types, a reason, and applies to at least one sport", () => {
+  it("the table holds exactly the two classes no recorded fact depends on, and the two GF-2 retired are gone", () => {
+    // typed from the retirement ruling: a pause and a lineup change are in the recorded overlay since format 2
+    expect(OVERLAY_CLAIMS.map((c) => c.id)).toEqual(["note", "award"]);
+    expect(OVERLAY_CLAIMS.flatMap((c) => c.tokens)).not.toContain(eventToken("core.suspend"));
+    expect(OVERLAY_CLAIMS.flatMap((c) => c.tokens)).not.toContain(eventToken("core.resume"));
+    for (const type of LINEUP_TYPES) expect(OVERLAY_CLAIMS.flatMap((c) => c.tokens), type).not.toContain(eventToken(type));
+  });
+
+  it("every claim row names real core types, a reason, and applies to at least one sport; the note claim says nothing computes from a note (Q4)", () => {
     expect(OVERLAY_CLAIMS.length).toBeGreaterThan(0);
     const allTokens = new Set(CORE_TYPES.map(eventToken));
     let applied = 0;
@@ -59,7 +100,8 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       expect(sports.length, `${claim.id} applies to no sport`).toBeGreaterThan(0);
       applied += sports.length;
     }
-    expect(applied).toBeGreaterThanOrEqual(builtinModules.length * 3);
+    expect(applied).toBe(builtinModules.length * OVERLAY_CLAIMS.length);
+    expect(OVERLAY_CLAIMS.find((c) => c.id === "note")!.reason).toContain("nothing computes from a note");
   });
 
   it("the shipped corpora hold every claim: each claimed event is recorded and inert in each sport it applies to (swept, counted)", () => {
@@ -70,48 +112,78 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       for (const claim of OVERLAY_CLAIMS) if (claim.assertedFor(module)) holds += claim.tokens.length;
     });
     expect(stale).toEqual([]);
-    expect(holds).toBeGreaterThan(builtinModules.length * 4);
+    expect(holds).toBe(builtinModules.length * OVERLAY_CLAIMS.flatMap((c) => c.tokens).length);
   }, 30_000);
 
-  it("pause is unpinned in EVERY sport: suspend and resume move no recorded golden anywhere (the review's finding 1)", () => {
-    let sports = 0;
-    forEachSport(({ module, key }) => {
-      const verdicts = overlayVerdicts(module, corpusOf(key));
-      for (const type of ["core.suspend", "core.resume"]) {
-        const v = verdicts.get(eventToken(type));
-        expect(v?.verdict, `${key} ${type}`).toBe("unpinned");
-        expect(v?.streams, `${key} ${type} streams probed`).toBeGreaterThan(0);
-      }
-      sports++;
-    });
-    expect(sports).toBe(builtinModules.length);
-  });
-
-  // ASSERTED, not exhaustive: without onLineup every lineup type is unpinned; with it the probe must SEE some movement. Which
-  // types a hook-declaring module still ignores (football's position) is the per-token sweep below, not this `some`.
-  it("a lineup event is unpinned in EVERY recorded type where the module declares no onLineup; where it declares one, the probe sees movement in at least one type", () => {
-    let withHook = 0;
-    let withoutHook = 0;
-    forEachSport(({ module, key }) => {
-      const verdicts = overlayVerdicts(module, corpusOf(key));
-      const recorded = LINEUP_TYPES.map(eventToken).filter((t) => (verdicts.get(t)?.streams ?? 0) > 0);
-      expect(recorded.length, `${key} records lineup events`).toBeGreaterThan(0);
-      if (module.onLineup === undefined) {
-        for (const t of recorded) expect(verdicts.get(t)?.verdict, `${key} ${t}`).toBe("unpinned");
-        withoutHook++;
-      } else {
-        expect(
-          recorded.some((t) => verdicts.get(t)?.verdict === "pinned"),
-          `${key} declares onLineup, so some lineup event must move a recorded golden`,
-        ).toBe(true);
-        withHook++;
+  it("RETIRED stoppage: suspend and resume are unpinned under the module-only recorder and PINNED under the real format-2 recorder, in EVERY sport", () => {
+    let flipped = 0;
+    forEachSport(({ key }) => {
+      const before = verdictsOf(key, moduleRecorder, [RETIRED_STOPPAGE]);
+      const after = verdictsOf(key, kernelRecorder, [RETIRED_STOPPAGE]);
+      for (const token of RETIRED_STOPPAGE.tokens) {
+        expect(before.get(token)?.streams, `${key} ${token}: recorded`).toBeGreaterThan(0);
+        expect(before.get(token)?.verdict, `${key} ${token} under the module-only recorder`).toBe("unpinned");
+        expect(after.get(token)?.verdict, `${key} ${token} under the real recorder`).toBe("pinned");
+        expect(after.get(token)?.streams, `${key} ${token}: same streams probed`).toBe(before.get(token)?.streams);
+        flipped++;
       }
     });
-    expect(withHook).toBeGreaterThan(0);
-    expect(withoutHook).toBeGreaterThan(0);
-  });
+    expect(flipped).toBe(builtinModules.length * 2);
+  }, 60_000);
 
-  it("EVERY recorded core event whose ablation says 'unpinned' is covered by a claim: swept per sport x token, counted (review N1)", () => {
+  it("RETIRED lineup: exactly boardgame, carrom and generic (every recorded type) and football's position change flip from unpinned to pinned; the other sports were pinned already", () => {
+    // The set that was unpinned is the policy of record before this task: "inert in boardgame, carrom and generic (no onLineup,
+    // every type), and core.lineup.position is inert in football too". It is typed here from that text, and the probe must agree.
+    const wasUnpinned = (key: string, type: string): boolean => key === "boardgame" || key === "carrom" || key === "generic" || (key === "football" && type === "core.lineup.position");
+    const flips: string[] = [];
+    let probed = 0;
+    forEachSport(({ key }) => {
+      const before = verdictsOf(key, moduleRecorder, [RETIRED_LINEUP]);
+      const after = verdictsOf(key, kernelRecorder, [RETIRED_LINEUP]);
+      for (const type of LINEUP_TYPES) {
+        const token = eventToken(type);
+        const was = before.get(token)!;
+        const now = after.get(token)!;
+        if (was.verdict === "unrecorded") {
+          expect(now.verdict, `${key} ${type}: recorded under neither`).toBe("unrecorded");
+          continue; // a type the sport's policy never lets a stream record
+        }
+        probed++;
+        expect(was.verdict === "unpinned", `${key} ${type}: unpinned under the module-only recorder iff the policy of record listed it`).toBe(wasUnpinned(key, type));
+        expect(now.verdict, `${key} ${type} under the real recorder`).toBe("pinned");
+        if (was.verdict === "unpinned") flips.push(`${key} ${type}`);
+      }
+    });
+    expect(probed, "every recorded lineup type of every sport was probed").toBeGreaterThan(builtinModules.length * 3);
+    expect(new Set(flips.map((f) => f.split(" ")[0])), "the sports that flip").toEqual(new Set(["boardgame", "carrom", "generic", "football"]));
+    expect(flips.filter((f) => f.startsWith("football ")), "football flips on its position change only").toEqual(["football core.lineup.position"]);
+    expect(flips.length).toBeGreaterThanOrEqual(7);
+  }, 120_000);
+
+  it("the retirement is DETECTED by the staleness check itself: under the real recorder every retired claim is stale in every sport it applied to, under the module-only recorder none is", () => {
+    let stale = 0;
+    let held = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const under = (record: Recorder) => staleOverlayClaims(module, corpus, record, RETIRED);
+      expect(under(moduleRecorder), `${key}: the retired claims were true before GF-2`).toEqual([]);
+      const messages = under(kernelRecorder);
+      const impossible = floorRequirement(module, corpus).impossible;
+      for (const claim of RETIRED) {
+        if (!claim.assertedFor(module)) continue;
+        for (const token of claim.tokens) {
+          if (impossible.has(token)) continue;
+          expect(messages.filter((m) => m.includes(` ${token}: moves a recorded golden`)), `${key} ${token} goes stale`).toHaveLength(1);
+          stale++;
+        }
+      }
+      held += claimedTokens(module, corpus, RETIRED);
+    });
+    expect(stale).toBe(held);
+    expect(stale).toBeGreaterThan(builtinModules.length * 2);
+  }, 120_000);
+
+  it("EVERY recorded core event whose ablation says 'unpinned' is covered by a claim, and the unpinned ones are exactly a note and an award (swept per sport x token, counted)", () => {
     let probed = 0;
     let unpinned = 0;
     forEachSport(({ module, key }) => {
@@ -121,36 +193,19 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       // the sweep reached EVERY core event the corpus records (read off the corpus, not off the probe)
       const recordedCore = [...recordedTokens(corpus)].filter((t) => t.startsWith("event:core."));
       expect(r.probed, `${key}: probed every recorded core event`).toBe(recordedCore.length);
-      expect(r.unpinned, `${key}: pause, note and award at least`).toBeGreaterThanOrEqual(4);
+      // typed from the retirement ruling: what is still unpinned is what nothing computes from
+      const sheet = overlayVerdicts(module, corpus, kernelRecorder, [], "all");
+      const loose = [...sheet].filter(([, v]) => v.verdict === "unpinned").map(([t]) => t).sort();
+      expect(loose, `${key}: the events no recorded fact depends on`).toEqual(["event:core.award", "event:core.note"]);
+      expect(r.unpinned, key).toBe(2);
       probed += r.probed;
       unpinned += r.unpinned;
     });
     expect(probed).toBeGreaterThan(builtinModules.length * 8);
-    expect(unpinned).toBeGreaterThan(builtinModules.length * 4);
-  }, 30_000);
+    expect(unpinned).toBe(builtinModules.length * 2);
+  }, 120_000);
 
-  it("football declares onLineup yet its position change moves no golden: the claim COVERS it by the verdict, though it is not asserted for football", () => {
-    const football = builtinModules.find((m) => m.key === "football")!;
-    expect(football.onLineup, "football reacts to lineup changes").toBeDefined();
-    const position = eventToken("core.lineup.position");
-    const verdicts = overlayVerdicts(football, corpusOf("football"));
-    expect(verdicts.get(position)?.verdict).toBe("unpinned");
-    expect(verdicts.get(position)?.streams).toBeGreaterThan(0);
-    // and the rest of football's lineup changes DO move it (the class is not 'all lineups' there)
-    expect(["core.lineup.substitution", "core.lineup.retirement", "core.lineup.entry"].map((t) => verdicts.get(eventToken(t))?.verdict)).toEqual(["pinned", "pinned", "pinned"]);
-    const lineup = OVERLAY_CLAIMS.find((c) => c.id === "lineup")!;
-    expect(lineup.assertedFor(football)).toBe(false);
-    expect(lineup.covers(football, position, "unpinned")).toBe(true);
-    expect(lineup.covers(football, eventToken("core.lineup.substitution"), "pinned")).toBe(false);
-    expect(uncoveredUnpinned(football, corpusOf("football")).uncovered).toEqual([]);
-  });
-
-  it("the sweep has teeth: the old declaration-only rule (lineups claimed where onLineup is undefined) leaves football's position change uncovered, by name", () => {
-    const football = builtinModules.find((m) => m.key === "football")!;
-    const declarationOnly = OVERLAY_CLAIMS.map((c) => (c.id === "lineup" ? { ...c, covers: (m: typeof football) => m.onLineup === undefined } : c));
-    const r = uncoveredUnpinned(football, corpusOf("football"), undefined, declarationOnly);
-    expect(r.uncovered).toEqual([expect.stringMatching(/^football event:core\.lineup\.position: moves no recorded golden/)]);
-    // and a claim table that forgets a whole class names it in every sport
+  it("the sweep has teeth: a claim table that forgets a class names it in every sport", () => {
     const withoutNote = OVERLAY_CLAIMS.filter((c) => c.id !== "note");
     let named = 0;
     forEachSport(({ module, key }) => {
@@ -159,7 +214,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       named++;
     });
     expect(named).toBe(builtinModules.length);
-  }, 30_000);
+  }, 60_000);
 
   it("the controls are NOT in the class: finalize, abandon and forfeit each move a recorded golden in every sport (the probe can answer 'pinned')", () => {
     expect(OVERLAY_CONTROLS.length).toBeGreaterThanOrEqual(3);
@@ -178,13 +233,15 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(checked).toBe(builtinModules.length * OVERLAY_CONTROLS.length);
   });
 
+  // The probe answers both ways whatever the claim table holds: these use the retired lineup row only as a CHAIN definition, under
+  // the module-only recorder, because they are about how `overlayVerdicts` credits each type with what it adds.
   it("the probe answers 'pinned' for a lineup event once a module reacts to it (a boardgame given an onLineup that writes state)", () => {
     const boardgame = builtinModules.find((m) => m.key === "boardgame")!;
     expect(boardgame.onLineup).toBeUndefined();
     // (the kernel also offers the hook the INITIAL squads, so a hook that merely stamps the state is equal at every step;
     // one that writes the squads it was handed differs exactly when a lineup event changed them)
     const reacting = { ...boardgame, onLineup: (state: object, squads: unknown) => ({ ...state, squadDigest: JSON.stringify(squads) }) } as unknown as typeof boardgame;
-    const verdicts = overlayVerdicts(reacting, corpusOf("boardgame"));
+    const verdicts = overlayVerdicts(reacting, corpusOf("boardgame"), moduleRecorder, [RETIRED_LINEUP]);
     const recorded = LINEUP_TYPES.map(eventToken).filter((t) => (verdicts.get(t)?.streams ?? 0) > 0);
     expect(recorded.length).toBeGreaterThan(0);
     for (const t of recorded) expect(verdicts.get(t)?.verdict, t).toBe("pinned");
@@ -201,7 +258,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
         onField: [...squads.home.members, ...squads.away.members].filter((m) => m.onField).map((m) => m.personId).join(","),
       }),
     } as unknown as typeof boardgame;
-    const verdicts = overlayVerdicts(onFieldOnly, corpusOf("boardgame"));
+    const verdicts = overlayVerdicts(onFieldOnly, corpusOf("boardgame"), moduleRecorder, [RETIRED_LINEUP]);
     const verdictOf = (type: string) => verdicts.get(eventToken(type))?.verdict;
     expect(verdictOf("core.lineup.position"), "a position change moves nobody on or off the field").toBe("unpinned");
     expect(verdictOf("core.lineup.substitution")).toBe("pinned");
@@ -210,6 +267,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
   });
 
   it("an unrecorded event is 'unrecorded', never 'unpinned' (an empty corpus claims nothing, so no claim can hold vacuously)", () => {
+    let checked = 0;
     forEachSport(({ module, key }) => {
       const empty: GoldenCorpus = { ...corpusOf(key), streams: [] };
       const verdicts = overlayVerdicts(module, empty);
@@ -217,58 +275,11 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       const stale = staleOverlayClaims(module, empty);
       const applicable = claimedTokens(module, empty);
       expect(stale.length, `${key}: every claimed, possible token is stale when nothing is recorded`).toBe(applicable);
+      expect(applicable, key).toBeGreaterThan(0);
+      checked++;
     });
+    expect(checked).toBe(builtinModules.length);
   });
-
-  it("the day the harness records the kernel overlay, the KERNEL-OWNED claims go stale and the module-folded ones do not (an overlay-recording harness, injected)", () => {
-    // The future this class waits for: `recomputeStream` storing what the kernel READS (stoppage, squads, settlement)
-    // beside module state. Injected here as a recorder whose per-step record includes the overlay. A pause and a lineup
-    // change are kernel-owned (`isKernelOwnedEventType`), so recording the overlay pins them; a note or an award reaches the
-    // module, which folds it as `return state`, so recording the overlay changes nothing for them — they stay unpinned
-    // until a module starts folding them. The split is read off the kernel's own declaration, not typed here.
-    let kernelStale = 0;
-    let moduleHeld = 0;
-    forEachSport(({ module, key }) => {
-      const overlayRecorder: Recorder = (m, raw, events, lineups) => {
-        const cfg = m.configSchema.parse(raw) as unknown;
-        const base = moduleRecorder(m, raw, events, lineups);
-        const pair = lineups ?? defaultLineupPair(resolvePositions(m, cfg));
-        const states = events.map((_, i) => {
-          const folded = foldMatchWithStoppage(m as never, cfg as never, pair, events.slice(0, i + 1).map((e, j) => makeEnvelope(j, e, e.voids)), { strictFromSeq: 0 });
-          return JSON.stringify({ state: folded.state, stoppage: folded.stoppage, squads: folded.squads, effective: outcomeOf(m as never, folded as never) });
-        });
-        return { ...base, states };
-      };
-      const corpus = corpusOf(key);
-      expect(staleOverlayClaims(module, corpus), `${key} (real harness)`).toEqual([]);
-      const messages = staleOverlayClaims(module, corpus, overlayRecorder);
-      const impossible = floorRequirement(module, corpus).impossible;
-      const kernelTokens: FloorToken[] = [];
-      const moduleTokens: FloorToken[] = [];
-      for (const claim of OVERLAY_CLAIMS) {
-        if (!claim.assertedFor(module)) continue;
-        for (const token of claim.tokens) {
-          if (impossible.has(token)) continue;
-          (isKernelOwnedEventType(token.slice("event:".length)) ? kernelTokens : moduleTokens).push(token);
-        }
-      }
-      expect(kernelTokens.length, `${key} claims a kernel-owned event`).toBeGreaterThan(0);
-      expect(moduleTokens.length, `${key} claims a module-folded event`).toBeGreaterThan(0);
-      for (const token of kernelTokens) {
-        expect(messages.filter((m) => m.includes(` ${token}: moves a recorded golden`)), `${key} ${token} goes stale`).toHaveLength(1);
-        kernelStale++;
-      }
-      for (const token of moduleTokens) {
-        expect(messages.filter((m) => m.includes(` ${token}:`)), `${key} ${token} is still unpinned`).toEqual([]);
-        moduleHeld++;
-      }
-      expect(messages.length, `${key}: nothing else goes stale`).toBe(kernelTokens.length);
-    });
-    expect(kernelStale).toBeGreaterThan(builtinModules.length * 2);
-    expect(moduleHeld).toBe(builtinModules.length * 2);
-    // (4.8 s under the CI coverage run: an explicit budget, not the 5 s default, for a sweep that folds every prefix of every
-    // recorded stream twice)
-  }, 30_000);
 
   it("a claimed event that cannot be probed (a recorder that throws) is stale, never silently held", () => {
     const module = builtinModules[0]!;
@@ -285,6 +296,86 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     const claimed = new Set<FloorToken>(OVERLAY_CLAIMS.flatMap((c) => [...c.tokens]));
     expect(claimed.size).toBeGreaterThan(0);
     for (const token of claimed) expect(declared.has(token), token).toBe(true);
+  });
+});
+
+describe("ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested)", () => {
+  const badminton = builtinModules.find((m) => m.key === "badminton")!;
+  const corpus = corpusOf("badminton");
+  const noted = corpus.streams.find((s) => s.events.some((e) => e.type === "core.note"))!;
+  const noteAt = noted.events.findIndex((e) => e.type === "core.note");
+  const only = (stream: typeof noted): GoldenCorpus => ({ ...corpus, streams: [stream] });
+  const noteClaim = OVERLAY_CLAIMS.filter((c) => c.id === "note");
+  const verdictOf = (recorder: Recorder, c: GoldenCorpus = only(noted)) => overlayVerdicts(badminton, c, recorder, noteClaim).get(eventToken("core.note"))!;
+  /** The real recorder, with one field of the recording that CONTAINS the event under test perturbed (the ablated ledger is
+   *  recorded unperturbed, so any difference the probe sees is the perturbation). */
+  const perturbed = (patch: (rec: Recomputed) => Recomputed): Recorder => (m, raw, events, lineups) => {
+    const rec = kernelRecorder(m, raw, events, lineups);
+    return events.some((e) => e.type === "core.note") ? patch(rec) : rec;
+  };
+  const withSummary = (index: number): Recorder => perturbed((rec) => ({ ...rec, summaries: rec.summaries!.map((d, i) => (i === index ? "#0000000000000000" : d)) }));
+  const withColumn = (column: "squads" | "stoppage", index: number, value: string): Recorder =>
+    perturbed((rec) => ({ ...rec, dense: { ...rec.dense!, steps: { ...rec.dense!.steps, [column]: rec.dense!.steps[column].map((v, i) => (i === index ? value : v)) } } }));
+
+  it("precondition: the note stream has steps before the note (retained) and the unperturbed probe says 'unpinned' over it", () => {
+    expect(noteAt).toBeGreaterThan(0);
+    expect(noted.events.length).toBeGreaterThan(noteAt + 1);
+    const v = verdictOf(kernelRecorder);
+    expect(v.streams).toBe(1);
+    expect(v.verdict).toBe("unpinned");
+  });
+
+  it("a summary digest that differs at a RETAINED step moves the verdict", () => {
+    expect(verdictOf(withSummary(0)).verdict).toBe("pinned");
+    expect(verdictOf(withSummary(noteAt + 1)).verdict, "a step after the note").toBe("pinned");
+  });
+
+  it("a summary digest that differs at the ablated event's OWN step moves the verdict (the event is not neutral)", () => {
+    expect(verdictOf(withSummary(noteAt)).verdict).toBe("pinned");
+  });
+
+  it("an overlay column that differs at a RETAINED step moves the verdict, whichever column", () => {
+    expect(verdictOf(withColumn("squads", 0, `"#0000000000000000"`)).verdict).toBe("pinned");
+    expect(verdictOf(withColumn("stoppage", noteAt + 1, `{"eventId":"e-99"}`)).verdict).toBe("pinned");
+  });
+
+  it("an overlay column that differs at the ablated event's OWN step moves the verdict (a note that opened a stoppage would not be inert)", () => {
+    expect(verdictOf(withColumn("stoppage", noteAt, `{"eventId":"e-99"}`)).verdict).toBe("pinned");
+  });
+
+  it("a stoppage that the removal RENUMBERS is not a difference: the suspend sits at e-4 with a note in front of it and at e-3 without, and the probe maps the id", () => {
+    const walk = corpus.streams.find((s) => s.seed < FLOOR_SEED_STRIDE && s.events.length >= 6 && s.events.every((e) => !e.type.startsWith("core.") || e.type === "core.start"))!;
+    const note: GoldenEvent = { type: "core.note", payload: { text: "before the pause" } };
+    const ledger: GoldenEvent[] = [
+      walk.events[0]!,
+      note,
+      walk.events[1]!,
+      walk.events[2]!,
+      { type: "core.suspend", payload: { reason: "floodlight failure" } },
+      { type: "core.resume", payload: {} },
+      ...walk.events.slice(3),
+    ];
+    const rec = kernelRecorder(badminton, corpus.configs[walk.config], ledger, walk.lineups);
+    expect(rec.dense!.steps.stoppage[4], "the stoppage names the suspend at e-4").toContain(`"eventId":"e-4"`);
+    const v = verdictOf(kernelRecorder, only({ ...walk, events: ledger }));
+    expect(v.streams).toBe(1);
+    expect(v.verdict, "ablating the note moves the suspend from e-4 to e-3 and nothing else").toBe("unpinned");
+  });
+
+  it("a note BEFORE the start sits at step 0, where the neutral reference is the pre-match headline: unperturbed it is inert, and a digest that is not the pre-match one at step 0 is a difference", () => {
+    const walk = corpus.streams.find((s) => s.seed < FLOOR_SEED_STRIDE && s.events.length >= 3)!;
+    const ledger: GoldenEvent[] = [{ type: "core.note", payload: { text: "before anything" } }, ...walk.events];
+    const lone = only({ ...walk, events: ledger });
+    const v = verdictOf(kernelRecorder, lone);
+    expect(v.streams).toBe(1);
+    expect(v.verdict, "a note at step 0 changes neither the state, the overlay nor the headline").toBe("unpinned");
+    expect(verdictOf(withSummary(0), lone).verdict, "its own step is step 0: compared with the pre-match headline, not with step -1 of nothing").toBe("pinned");
+  });
+
+  it("but an id whose event is GONE is a difference: ablating the suspend itself is pinned", () => {
+    const suspend = [{ id: "stoppage", tokens: [eventToken("core.suspend"), eventToken("core.resume")] as const, mode: "together" as const, assertedFor: () => true, covers: () => true, reason: "x".repeat(50) }];
+    const v = overlayVerdicts(badminton, only(noted), kernelRecorder, suspend).get(eventToken("core.suspend"))!;
+    expect(v.verdict).toBe("pinned");
   });
 });
 
