@@ -178,8 +178,11 @@ line says `N newly recorded stream(s) while the change touches fold source: <pat
 moved in the same change is changed whatever the source did (D34, owner ruling Q6:
 a harness-only rewrite of an existing field stays a **major**). The report has a
 `recorded N` column (the newly recorded streams of the sport). The format never
-falls: a stream that recorded the fields at the baseline and does not now is a
-violation (`corpus format fell (2 -> 1)`) that no bump settles. A corpus that
+falls: a corpus that was format 2 at the baseline and is format 1 now is a
+violation (`corpus format fell (2 -> 1)`) that no bump settles. It is decided on the
+**corpus**, not on the streams that happen to match: a corpus rewritten as format 1
+with every stream re-recorded matches nothing, owes the major (which a bump pays), and
+is still red. A corpus that
 declares a format other than 1 and 2, a format-2 stream without one summary digest
 per event and an overlay that is a JSON object, or a format-1 stream that already
 holds either, is refused (exit 2). A guard that is not told what changed (the pure
@@ -215,7 +218,7 @@ depending on who computes what moved:
 | format 2: a recorded `summaries` digest (or the list's length) or `overlay` differs, on a stream both sides record | **major** |
 | format 2: the stream gains `summaries` and `overlay` for the first time, nothing it held moved, and the change touches no fold source | nothing |
 | the same, but the change touches fold source (see "Corpus format 2") | **major** |
-| format 2 -> 1: a stream stops recording them | red; no bump settles it |
+| format 2 -> 1: the corpus is format 1 where the baseline's was format 2 (its streams matched or re-recorded alike) | red; no bump settles it |
 | streams only appended (`EXTEND_GOLDEN`) | nothing |
 
 The **major is the one the server gates on** (batch 1f): native clients send

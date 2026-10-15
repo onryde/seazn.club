@@ -175,8 +175,12 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
   a guard not told what changed fails closed (fold source touched); `src/sport/fold-epoch.ts` IS fold source, so paying ONE sport's bump in
   the PR that reformats leaves every other sport's newly recorded streams owing (the reformat lands alone, or every sport is bumped);
   a pre-existing field that moves during a reformat is a major whatever the source did (Q6); the format never falls (exit 1, no bump
-  settles it); malformed formats and hybrids exit 2. 40 guard mutants: 39 killed, 1 equivalent (`typeof s.overlay !== "string"`, redundant
-  with `JSON.parse` throwing).
+  settles it), judged on the CORPUS (baseline format 2, current format 1) and not on the streams that happen to match, so a format-1
+  rewrite with every stream re-recorded is red too; malformed formats and hybrids exit 2. Guard mutants: the 40 of the first pass all
+  killed (the one first called equivalent, dropping `typeof s.overlay !== "string"`, is NOT: `JSON.parse` coerces its argument, so an
+  array holding the text of an object, `["{}"]`, passes without the check; the `overlay: ["{}"]` row in the CLI malformed list kills
+  it), plus the review's survivors (the path classifier through `includes` instead of `startsWith`/`endsWith` for `src/`, the
+  `src/testkit/` slash, `.test.ts`, `.schema.json` and `.md`; the matched-streams-only format fall) each killed by a named row.
 - **The reformat commit** (data only): 11 sports, 381 streams, 4,973 steps, 2,722,041 -> 2,866,061 bytes (+144,020, +5.3%); every one of the
   2,687 pre-existing stream fields byte-identical; `fold-epoch:check --against <parent>`: `changed 0`, `recorded 381`, 0 violations.
 - **Teeth, measured (real kernel mutant, throwaway branch):** dropping `reason` from the open stoppage in `foldMatchWithStoppage`, then
