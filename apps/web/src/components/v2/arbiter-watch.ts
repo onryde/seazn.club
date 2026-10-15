@@ -3,6 +3,11 @@
 // awaited, and only then is the next join POSTed. React does not await an effect's cleanup, so that order cannot live in
 // the panel's effect; it lives here, in a promise chain every open and close is queued on.
 //
+// Every step is bounded - the join POST, the SDK join, the leave and the DELETE - because the chain is module-level
+// (the panel's `browserSerial`) and `apiV1` has no timeout of its own: one step that never answers would otherwise hold
+// every later open for the life of the page. A step that is given up on is left running; what it later produces (a mint,
+// cameras) is handed back or left at once.
+//
 // What this proves, and what it does not: on the happy path an arbiter holds at most ONE live participant. A DELETE that
 // fails does NOT hold the next join hostage - the view is not kept waiting on a vendor error - so on that path the
 // leftover (receive-only) participant stays until the sweep removes it. The claim is not made for the failure path.
@@ -101,7 +106,21 @@ export function makeArbiterSerial(deps: ArbiterSerialDeps) {
         // Closed before its turn (an earlier open was still starting): no POST at all.
         if (closed) return;
         try {
-          const answer = await deps.join(fixtureId, side);
+          // The POST is bounded like every other step (review I1): the chain is the page's, so one POST that never answers
+          // would hold every later open, switch and board change for as long as the page lives.
+          const posting = deps.join(fixtureId, side);
+          const answer = await within(posting);
+          if (answer === TIMED_OUT) {
+            // Whatever the POST mints later is handed back at once, never used.
+            posting.then(
+              (late) => {
+                void watch.minted(late.participantId);
+                return watch.release();
+              },
+              () => undefined,
+            );
+            throw new Error("The video connection timed out.");
+          }
           // The mint is recorded the moment it lands; a pane closed meanwhile has its DELETE queued behind this job.
           void watch.minted(answer.participantId);
           if (closed) return;

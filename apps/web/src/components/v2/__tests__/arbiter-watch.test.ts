@@ -44,6 +44,8 @@ function rig(
     failDelete?: Set<string>;
     failPost?: Set<ArbiterSide>;
     connectFails?: Set<string>;
+    /** A connect (by the mint's label) that does not answer until its gate is opened: an SDK join that goes silent. */
+    holdConnect?: Record<string, Gate>;
     stepTimeoutMs?: number;
   } = {},
 ) {
@@ -77,6 +79,8 @@ function rig(
       const label = a.authToken.slice(2);
       log.push(`connect ${label}`);
       if (o.connectFails?.has(label)) throw new ArbiterGuardError(new Error("audio"));
+      const held = o.holdConnect?.[label];
+      if (held) await held.promise;
       return fakeCameras(log, label, o.holdLeave?.[label]);
     },
     async send(url, init) {
@@ -187,6 +191,59 @@ describe("shape (b): a switch leaves, then deletes, then joins - each awaited", 
     await flush();
     expect(r.log, "the DELETE still went out after the leave was abandoned").toContain("DELETE home1");
     expect(r.log.filter((e) => e.startsWith("POST"))).toEqual(["POST fx home", "POST fx away"]);
+  });
+});
+
+describe("every step of an open is bounded, so one silent step cannot wedge the page's whole chain (review I1)", () => {
+  it("a join POST that never answers is given up on after the step timeout: the pane gets an error, the next open still POSTs, and a mint that lands LATE is handed back at once", async () => {
+    const post = gate(); // the first POST goes silent
+    const r = rig({ holdPost: { home: post } });
+    const a = r.open("fx", "home");
+    r.open("fx", "away"); // the board is changed meanwhile; this open queues BEHIND the silent one
+    await flush();
+    expect(r.log, "premise: wedged on the first POST, the second is behind it").toEqual(["POST fx home"]);
+    expect(r.timeouts.length, "premise: the POST is racing a timer").toBe(1);
+    expect(r.errors, "premise: nothing has failed yet").toEqual([]);
+    r.timeouts[0]!.open();
+    await flush();
+    expect(r.errors, "the silent POST is the pane's one error").toHaveLength(1);
+    expect((r.errors[0] as Error).message).toMatch(/timed out/);
+    expect(r.log.filter((e) => e.startsWith("POST")), "the chain moved on: the next open POSTed").toEqual(["POST fx home", "POST fx away"]);
+    expect(r.cameras, "and its cameras arrived").toEqual(["fx:away"]);
+    // The silent POST finally answers: it minted a participant nobody is going to use.
+    post.open();
+    await flush();
+    expect(r.log, "the late mint is handed back at once").toContain("DELETE answered home1");
+    expect(r.live.has("p-home1"), "the abandoned mint is gone").toBe(false);
+    expect(r.live.size, "only the pane that is showing holds a participant").toBe(1);
+    a.close();
+    await flush();
+    expect(r.log.filter((e) => e === "DELETE home1"), "closing the abandoned open sends no second DELETE").toHaveLength(1);
+  });
+
+  it("an SDK join that never answers is given up on after the step timeout: the pane gets an error, the next open still goes, and the late join is left at once", async () => {
+    const connecting = gate(); // the first connect goes silent
+    const r = rig({ holdConnect: { home1: connecting } });
+    const a = r.open("fx", "home");
+    r.open("fx", "away");
+    await flush();
+    expect(r.log, "premise: the first POST is minted and connecting, the second open is behind it").toEqual(["POST fx home", "connect home1"]);
+    expect(r.timeouts.length, "premise: the POST's timer and the connect's own are both racing").toBe(2);
+    expect(r.errors, "premise: nothing has failed yet").toEqual([]);
+    r.timeouts[1]!.open();
+    await flush();
+    expect(r.errors).toHaveLength(1);
+    expect((r.errors[0] as Error).message).toMatch(/timed out/);
+    expect(r.log.filter((e) => e.startsWith("POST")), "the chain moved on").toEqual(["POST fx home", "POST fx away"]);
+    expect(r.cameras).toEqual(["fx:away"]);
+    // The silent connect finally lands: those cameras are never shown and are left at once.
+    connecting.open();
+    await flush();
+    expect(r.cameras, "the late cameras are never handed to the pane").toEqual(["fx:away"]);
+    expect(r.log, "the late join is left").toContain("left home1");
+    a.close();
+    await flush();
+    expect(r.log, "closing the abandoned open hands its participant back").toContain("DELETE answered home1");
   });
 });
 
