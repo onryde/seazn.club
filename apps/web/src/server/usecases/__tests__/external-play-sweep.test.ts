@@ -2111,6 +2111,19 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
       expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at !== null]), "stamped, kept").toEqual([[m, true]]);
     });
 
+    it("an UNPAIRED board's rooms are not the retire's: before the deadline they are left alone (an unpair and a same-pair re-pair keeps them); past it the window rule ends and stamps them, rows kept", async () => {
+      const b = await openedBoard({ checkedIn: [] });
+      const m = await meetingFor(b);
+      await sql`update fixtures set home_entrant_id = null, away_entrant_id = null where id = ${b.fixtureId}`;
+      const { ended, end } = recordingEnd();
+      const early = await sweep(b, { now: b.at(5), endMeeting: end });
+      expect([ended, early.meetingsEnded], "premise: nothing ended before the deadline").toEqual([[], 0]);
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at])).toEqual([[m, null]]);
+      const late = await sweep(b, { now: b.at(45), endMeeting: end });
+      expect([ended, late.meetingsEnded], "past the deadline the window rule ends it").toEqual([[m], 1]);
+      expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at !== null]), "stamped, not deleted").toEqual([[m, true]]);
+    });
+
     it("a room made for the board's CURRENT pair is not stale: before the deadline the sweep leaves it alone", async () => {
       const b = await openedBoard({ checkedIn: [] });
       const m = await meetingFor(b);

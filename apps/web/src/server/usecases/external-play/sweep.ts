@@ -647,7 +647,9 @@ type TeardownCandidate = BridgeFacts & {
   meetingId: string;
   fixtureStatus: string;
   openedAt: Date | null;
-  /** Made for another pairing than the fixture's, with no game behind it: the retire's own judgement (gameEvidenceOn). */
+  /** Made for another pairing than the fixture's CURRENT one, with no game behind it: the retire's own judgement (gameEvidenceOn).
+   *  Only on a board that HAS a pairing: an unpaired board's rooms are left to the window rules below (ended at the deadline,
+   *  stamped), as before - an organiser who unpairs and re-pairs the same players a minute later keeps their rooms. */
   retirable: boolean;
 };
 
@@ -656,7 +658,8 @@ async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
     select m.fixture_id as "fixtureId", m.side, m.meeting_id as "meetingId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
            ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt",
-           ((m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
+           (f.home_entrant_id is not null and f.away_entrant_id is not null
+            and (m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
             and not coalesce(${gameEvidenceOn(pass.now)}, false)) as "retirable"
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id

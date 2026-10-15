@@ -1604,9 +1604,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
           // it (external-play-sweep.test.ts, in a parallel run) would skip this one, and this one would skip theirs.
           const report = await sweepExternalPlay({ now: later, orgIds: [s.orgId], endMeeting: rtk.end, serialise: false });
           expect(report.meetingsEnded, `${label}: premise — the sweep ended each of the unpaired board's two meetings`).toBe(2);
-          // D16 review G1: an unpaired board's rooms are stale (made for a pairing the board no longer has) and no game stands behind
-          // them, so the sweep ENDS each at the vendor and then DELETES its row - there is nothing left for the re-open to retire.
-          expect(await meetingsOf(fixtureId), `${label}: premise — both ended, and their rows retired`).toEqual([]);
+          expect((await meetingsOf(fixtureId)).map((m) => m.ended_at === null), `${label}: premise — both ended`).toEqual([false, false]);
         }
         await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
         const reopenAt = new Date(later.getTime() + MIN);
