@@ -43,6 +43,11 @@ const MATCH_RULES_DIR = "apps/web/src/lib/match-rules";
 // copy. Its value imports are the engine's core and sport barrels, bare packages @seazn/matrix depends on (pinned below),
 // so plain node loads it with no alias.
 const STAGE_DECIDER_OFF = "apps/web/src/lib/stage-decider-off.ts";
+// W2c Task 13b finish-up (R-13b-1), pinned in batch 4: top-level-stage-deciders.ts is the engine-derived set of whole
+// deciders a stage's config refuses at its top level. The bench's validate-pack.ts reads it (the bench's second apps/web
+// import, with stage-decider-off.ts), and apps/web's schema and create door read it too, so it must stay loadable by plain
+// node: bare engine barrels only. The matrix itself does not load it.
+const TOP_LEVEL_STAGE_DECIDERS = "apps/web/src/lib/top-level-stage-deciders.ts";
 const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
@@ -174,6 +179,21 @@ describe("tools/matrix import boundary", () => {
     const sportCfg = readFileSync(join(MATRIX, "lib/sport-cfg.ts"), "utf8");
     const body = /export function stageCfg\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(sportCfg)?.[1] ?? "";
     expect(body.trim(), "stageCfg delegates whole to the product").toBe("return postedStageCfg(sportModule(sportKey), cfg, stageKind, variantKey, rules);");
+  });
+
+  it("the product's top-level decider set is a file plain node can load: it exists, loads only the engine's sport barrels (a package the bench depends on), and only the bench's validate-pack names it", () => {
+    const file = join(REPO, TOP_LEVEL_STAGE_DECIDERS);
+    expect(existsSync(file), TOP_LEVEL_STAGE_DECIDERS).toBe(true);
+    const imports = importsOf(file);
+    expect(imports.map((i) => i.spec).sort(), `${TOP_LEVEL_STAGE_DECIDERS} must import nothing but the engine's sport barrels, not even as a type`).toEqual(["@seazn/engine/sport", "@seazn/engine/sports"]);
+    const deps = (JSON.parse(readFileSync(join(REPO, "tools/bench/package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
+    expect(Object.keys(deps), "@seazn/bench depends on the engine the file imports").toContain("@seazn/engine");
+    const namedBy = (modules: readonly string[]) =>
+      modules.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === TOP_LEVEL_STAGE_DECIDERS)).map((m) => relative(REPO, m));
+    const benchModules = shipped(join(REPO, "tools/bench/lib")).sort();
+    expect(benchModules.length, "anti-vacuity: the bench's shipped modules were scanned").toBeGreaterThan(0);
+    expect(namedBy(benchModules)).toEqual(["tools/bench/lib/validate-pack.ts"]);
+    expect(namedBy(MODULES), "the matrix does not load it").toEqual([]);
   });
 
   // W2c Task 1: lib/match-rules/ became a directory, and the matrix CLIs (`matrix:*`) load it under plain

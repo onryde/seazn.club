@@ -163,10 +163,12 @@
 // Runtime constraints (B02 GLOBAL.md): no TS `enum`, no `namespace`, no
 // emit-dependent syntax — `tools/bench` runs under
 // `node --experimental-strip-types`. Every relative import carries `.ts`;
-// engine imports use SUBPATHS only. The one module imported from `apps/web` is
+// engine imports use SUBPATHS only. Two modules are imported from `apps/web`:
 // `lib/stage-decider-off.ts` (the product's stage-cfg composition, W2c Task
-// 13b), which imports nothing but the engine's barrels, so plain node loads it
-// (tools/matrix/__tests__/boundary.test.ts pins its imports).
+// 13b) and `lib/top-level-stage-deciders.ts` (the engine-derived set of deciders
+// a stage's config refuses at its top level, R-13b-1). Each imports nothing but
+// the engine's barrels, so plain node loads it; tools/matrix/__tests__/boundary.test.ts
+// pins both files' imports.
 import {
   EngineError,
   foldMatchWithStoppage,
