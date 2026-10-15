@@ -120,81 +120,6 @@
     ]
   },
   {
-    "id": "t16-pl-score-array",
-    "file": "apps/web/src/lib/points-line.ts",
-    "find": "if (Array.isArray(score) && score.length === 2",
-    "replace": "if (score !== undefined && score !== null && (score as unknown[]).length === 2",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/points-line.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16-pl-score-length",
-    "file": "apps/web/src/lib/points-line.ts",
-    "find": "score.length === 2",
-    "replace": "score.length >= 2",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/points-line.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16-pl-score-first",
-    "file": "apps/web/src/lib/points-line.ts",
-    "find": "&& isNum(score[0]) && isNum(score[1]))",
-    "replace": "&& isNum(score[1]))",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/points-line.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16-pl-score-second",
-    "file": "apps/web/src/lib/points-line.ts",
-    "find": "&& isNum(score[0]) && isNum(score[1]))",
-    "replace": "&& isNum(score[0]))",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/points-line.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16-pl-score-params",
-    "file": "apps/web/src/lib/points-line.ts",
-    "find": "params: { winner: score[0], loser: score[1] }",
-    "replace": "params: { winner: score[1], loser: score[0] }",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/points-line.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
     "id": "t16-pl-bonus-one",
     "file": "apps/web/src/lib/points-line.ts",
     "find": "if (bonuses === 1)",
@@ -229,21 +154,6 @@
     "file": "apps/web/src/lib/points-line.ts",
     "find": "Array.isArray(r?.bonuses) ? r.bonuses.length : 0",
     "replace": "Array.isArray(r?.bonuses) ? r.bonuses.length : 1",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/points-line.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16-pl-score-nested-in-forfeit",
-    "file": "apps/web/src/lib/points-line.ts",
-    "find": "    const score = forfeit.awardScore;",
-    "replace": "    const score = undefined as unknown;",
     "killers": [
       {
         "cwd": "apps/web",
@@ -317,7 +227,7 @@
   {
     "id": "t16-dr-innings-entry",
     "file": "apps/web/src/server/public-site/describe-rules.ts",
-    "find": "innings: (_k, _m, c) => describeInnings(c),",
+    "find": "innings: (_k, m, c) => describeInnings(m, c),",
     "replace": "innings: () => null,",
     "killers": [
       {
@@ -683,38 +593,6 @@
     ]
   },
   {
-    "id": "t16-dr-innings-whole-overs",
-    "file": "apps/web/src/server/public-site/describe-rules.ts",
-    "find": "if (perOver !== undefined && balls % perOver === 0)",
-    "replace": "if (perOver !== undefined)",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/describe-rules-families.test.ts",
-          "src/server/public-site/__tests__/describe-rules.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16-dr-innings-per-over",
-    "file": "apps/web/src/server/public-site/describe-rules.ts",
-    "find": "if (perOver !== undefined && balls % perOver === 0)",
-    "replace": "if (balls % 6 === 0)",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/describe-rules-families.test.ts",
-          "src/server/public-site/__tests__/describe-rules.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
     "id": "t16-dr-innings-multi",
     "file": "apps/web/src/server/public-site/describe-rules.ts",
     "find": "if (innings !== undefined && innings > 1)",
@@ -749,8 +627,8 @@
   {
     "id": "t16-dr-innings-bowler",
     "file": "apps/web/src/server/public-site/describe-rules.ts",
-    "find": "if (bowler !== undefined) out.push",
-    "replace": "if (false) out.push",
+    "find": "  if (bowler !== undefined) {\n    if (perOver",
+    "replace": "  if (false) {\n    if (perOver",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1706,6 +1584,209 @@
         "cwd": "apps/web",
         "files": [
           "src/server/public-site/__tests__/public-fixture-stage-rules-label.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-pl-award-said",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "    out.push({ key: \"format.points.forfeit\", params: { winner: forfeit.winnerPoints, loser: forfeit.loserPoints } });\n  }\n",
+    "replace": "    out.push({ key: \"format.points.forfeit\", params: { winner: forfeit.winnerPoints, loser: forfeit.loserPoints } });\n    const score = forfeit.awardScore;\n    if (Array.isArray(score) && score.length === 2) out.push({ key: \"format.points.forfeitScore\", params: { winner: score[0], loser: score[1] } });\n  }\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dict-en-nb-dash",
+    "file": "apps/web/src/dictionaries/en/public.json",
+    "find": "{winner}‑{loser}",
+    "replace": "{winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dict-es-nb-dash",
+    "file": "apps/web/src/dictionaries/es/public.json",
+    "find": "{winner}‑{loser}",
+    "replace": "{winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dict-fr-nb-dash",
+    "file": "apps/web/src/dictionaries/fr/public.json",
+    "find": "{winner}‑{loser}",
+    "replace": "{winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dict-nl-nb-dash",
+    "file": "apps/web/src/dictionaries/nl/public.json",
+    "find": "{winner}‑{loser}",
+    "replace": "{winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-positive-finite",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return typeof value === \"number\" && Number.isFinite(value) && value > 0 ? value : undefined;",
+    "replace": "return typeof value === \"number\" && value > 0 ? value : undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-standard-over",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (standardOver && balls % perOver === 0)",
+    "replace": "if (standardOver)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-whole-overs",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (standardOver && balls % perOver === 0)",
+    "replace": "if (perOver !== undefined && balls % perOver === 0)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-standard-derive",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "const standardOver = perOver !== undefined && perOver === standardOverLength(module_, c);",
+    "replace": "const standardOver = perOver !== undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-standard-eq",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "perOver === standardOverLength(module_, c);",
+    "replace": "perOver !== standardOverLength(module_, c);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-standard-strip",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "filter(([key]) => key !== \"ballsPerOver\")",
+    "replace": "filter(() => true)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-bowler-balls",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (perOver !== undefined && !standardOver) out.push",
+    "replace": "if (false) out.push",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16-dr-innings-bowler-mult",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "params: { balls: bowler * perOver }",
+    "replace": "params: { balls: bowler }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts",
+          "src/server/public-site/__tests__/describe-rules.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
         ]
       }
     ]
