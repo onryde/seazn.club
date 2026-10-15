@@ -17,7 +17,7 @@ import { sql, withTenant } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { CreateStage, StageConfig } from "@/server/api-v1/schemas";
+import { CreateStage, STAGE_DECIDER_MOVED, StageConfig } from "@/server/api-v1/schemas";
 import { appendEvent, type AppendResult } from "@/server/engine-db";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { createCompetition } from "../competitions";
@@ -276,14 +276,19 @@ describe("the API takes config.rules and refuses a top-level stage decider (gree
   });
 
   // The assumption the door's engine-derived set rests on, as a guard: no decider any sport declares is a stage config
-  // key of its own (a sport declaring a decider named `rounds` would make the door refuse every Swiss stage). The only
-  // overlap is the API's two named refusals, `z.never` in StageConfig.
-  it("guard: the engine's deciders never collide with a stage config key; only the two named refusals share a name", () => {
-    const deciders = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))];
+  // key of its own (a sport declaring a decider named `rounds` would make the door refuse every Swiss stage). R-13b-1
+  // (Task 13b finish-up): the API schema's named refusals ARE that set — every decider is in StageConfig's shape, and
+  // only as a refusal saying where it moved. The schema spreads its refusals FIRST, so a real config key of a decider's
+  // name would win the shape and show here as a decider that is not refused.
+  it("guard: the engine's deciders never collide with a stage config key; StageConfig's named refusals are exactly the engine's deciders", () => {
+    const deciders = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))].sort();
     const shape = StageConfig.unwrap().shape as Record<string, unknown>;
     expect(Object.keys(shape).length, "anti-vacuity: the stage config declares keys").toBeGreaterThan(5);
-    expect(deciders.filter((k) => Object.hasOwn(shape, k)).sort()).toEqual(["extraTime", "shootout"]);
-    for (const k of ["shootout", "extraTime"]) expect(StageConfig.safeParse({ [k]: false }).success, `${k} is refused`).toBe(false);
+    expect(deciders.length, "anti-vacuity: the engine declares deciders").toBeGreaterThan(2);
+    const refusals = Object.keys(shape)
+      .filter((k) => StageConfig.safeParse({ [k]: false }).error?.issues.some((i) => i.message === STAGE_DECIDER_MOVED) === true)
+      .sort();
+    expect(refusals, "every decider is refused by name, and nothing else is").toEqual(deciders);
   });
 });
 

@@ -20,7 +20,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
 import { pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -31,7 +31,7 @@ import es from "@/dictionaries/es/ui.json";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { PUT as putRulesRoute } from "@/app/api/v1/stages/[id]/rules/route";
-import { POST as postStagesRoute } from "@/app/api/v1/divisions/[id]/stages/route";
+import { POST as postStagesRoute, PUT as putStagesRoute } from "@/app/api/v1/divisions/[id]/stages/route";
 import { createApiKey } from "../api-keys";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
@@ -760,5 +760,53 @@ describe.skipIf(!HAS_DB)("ST-G8 over the real HTTP route", () => {
     expect(((await generic.json()) as Body).error!.message).toBe("Invalid input");
     expect(await stageConfig(s), "nothing written").toEqual(before);
     expect(await stageCount(divisionId)).toBe(1);
+  });
+
+  // W2c Task 13b finish-up (R-13b-1 at the HTTP layer): the zod refusal's set is the ENGINE's deciders, the one the
+  // create door uses, so a decider that is neither `shootout` nor `extraTime` gets the same named 400 over the real
+  // routes, never zod's "Invalid input" (which would leave the door's named refusal unreachable: M-6 pt4).
+  it("R-13b-1 a top-level decider only the engine declares (superOver, tiebreakRungs, tieBoard, overtime) is refused NAMING the key on all three routes; nothing written", async () => {
+    const auth = await seedOrg("enterprise");
+    const secret = await keyFor(auth);
+    const { divisionId } = await seedDivision(auth, "cricket", "t20");
+    const s = await seedStage(auth, divisionId, 1, "knockout");
+    const before = await stageConfig(s);
+    const engineOnly = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))].filter(
+      (k) => k !== "shootout" && k !== "extraTime",
+    );
+    expect(engineOnly, "the premise: deciders the API never named before").toEqual(expect.arrayContaining(["superOver", "tiebreakRungs", "tieBoard", "overtime"]));
+    let checked = 0;
+    for (const key of engineOnly) {
+      const put = await putRulesRoute(keyed(secret, "PUT", `/stages/${s}/rules`, { [key]: false }), ctx(s));
+      const putBody = (await put.json()) as Body;
+      expect(put.status, `PUT rules ${key}`).toBe(400);
+      expect(putBody.error, `PUT rules ${key}`).toMatchObject({ code: "VALIDATION", field: key });
+      expect(putBody.error!.message, `PUT rules ${key}: says where it goes`).toContain(`rules.${key}`);
+
+      const post = await postStagesRoute(
+        keyed(secret, "POST", `/divisions/${divisionId}/stages`, { seq: 2, kind: "knockout", name: "Two", config: { [key]: false } }),
+        ctx(divisionId),
+      );
+      const postBody = (await post.json()) as Body;
+      expect(post.status, `POST ${key}`).toBe(400);
+      expect(postBody.error, `POST ${key}`).toMatchObject({ code: "VALIDATION", field: `config.${key}` });
+      expect(postBody.error!.message, `POST ${key}`).toContain(`config.rules.${key}`);
+
+      const replace = await putStagesRoute(
+        keyed(secret, "PUT", `/divisions/${divisionId}/stages`, [{ seq: 1, kind: "knockout", name: "One", config: { [key]: false } }]),
+        ctx(divisionId),
+      );
+      const replaceBody = (await replace.json()) as Body;
+      expect(replace.status, `PUT stages ${key}`).toBe(400);
+      expect(replaceBody.error, `PUT stages ${key}`).toMatchObject({ code: "VALIDATION", field: `[0].config.${key}` });
+      expect(replaceBody.error!.message, `PUT stages ${key}`).toContain(`[0].config.rules.${key}`);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every engine-only decider over the three routes").toBe(engineOnly.length);
+    expect(await stageConfig(s), "nothing written").toEqual(before);
+    expect(await stageCount(divisionId)).toBe(1);
+    // The positive pair: the same key under `rules` is a match rule the cricket knockout takes.
+    const ok = await putRulesRoute(keyed(secret, "PUT", `/stages/${s}/rules`, { rules: { superOver: false } }), ctx(s));
+    expect(ok.status, "superOver under rules saves").toBe(200);
   });
 });
