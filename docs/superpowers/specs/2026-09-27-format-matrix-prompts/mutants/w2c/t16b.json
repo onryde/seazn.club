@@ -341,32 +341,6 @@
         "files": [
           "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
         ]
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16b-rewrite-ignores-award-change",
-    "file": "apps/web/src/server/usecases/award-rewrite.ts",
-    "find": "canonicalJson({ cfg: now.cfg, award: now.forfeitAward ?? null }) === canonicalJson({ cfg: h.cfg, award: h.forfeitAward ?? null })",
-    "replace": "canonicalJson({ cfg: now.cfg }) === canonicalJson({ cfg: h.cfg })",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
-        ]
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
-        ]
       }
     ]
   },

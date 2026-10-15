@@ -115,10 +115,11 @@ export type AwardFitVerdict =
  *    the fold deciding another award is the "result" reason; a different credited score is the "score" reason.
  *  - Anything else thrown is a module bug, not a verdict, and propagates.
  *
- * The stage rule's walkover award (X-WO-1 B) is deliberately NOT offered here: the fit asks what the corrected FORMAT does
- * to the credited score, and a rule's award is the same number under every format, while the only keys a per-fixture
- * correction may set are rule-scope (a score key such as `awardScore` is table-scope and refused by name, `overrideFor`),
- * so the two folds always agree on it. A format SAVE, which does write the folded state, offers it (`awardFoldsUnder`).
+ * The stage rule's walkover award (X-WO-1 B) is deliberately NOT offered to either fold here, nor in `awardFoldsUnder`:
+ * both answer only "does the award hold under this format" (`ok`, and for the fit the headline), and a rule's award is
+ * the same number under every format, never the reason one holds or fails (the only keys a per-fixture correction may
+ * set are rule-scope - a score key such as `awardScore` is table-scope and refused by name, `overrideFor`). The write
+ * that stores the folded state (`writeAwardedMatchState`) is the one that offers it.
  */
 /** Does the stored award hold under `cfg`? Its walkover folded there (`awardedMatchState`), or the reason it will not
  *  hold: the engine refusing the forfeit (its own message) or the fold deciding another award (the "result" reason). A
@@ -131,10 +132,9 @@ export function awardFoldsUnder(
   lineups: LineupPair,
   outcome: MatchOutcome,
   at: { fixtureId: string; recordedAt: string },
-  forfeitAward?: ForfeitAward,
 ): { ok: true; state: ReturnType<typeof awardedMatchState> } | { ok: false; reason: string } {
   try {
-    return { ok: true, state: awardedMatchState(module, cfg, lineups, outcome, at, forfeitAward) };
+    return { ok: true, state: awardedMatchState(module, cfg, lineups, outcome, at) };
   } catch (err) {
     if (EngineError.is(err)) return { ok: false, reason: err.message };
     if (err instanceof AwardFoldMismatch) return { ok: false, reason: FORMAT_FIT_REASONS.result };
