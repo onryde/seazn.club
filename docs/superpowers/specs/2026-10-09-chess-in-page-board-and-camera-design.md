@@ -341,8 +341,9 @@ peer's join, then refuses). Samples are never required.
 could forge it; this closes the honest-browser gap, not a determined forger.
 
 **Amended 2026-10-15 (D21 and D21-fix-3: the seat inside the vendor's call budget).** Four
-rules in `preflight.ts` change what the gate spends and how a claim that the budget cut short
-recovers. None of them changes what the gate proves. Find each by its symbol.
+rules change what the gate spends and how a claim that the budget cut short recovers: the first
+two live in `preflight.ts`, the stranded-board arm in `sweep.ts`, and the optional camera's retry
+in `room.ts` (the route) and `use-room.ts` (the timer). None of them changes what the gate proves. Find each by its symbol.
 - **Cache first, token last.** A claim asks the evidence cache (`judgeSeat`,
   `claimEvidenceRead`) before it spends anything, and refreshes the participant's token only
   when its answer must carry one. A `camera_starting` answer to a browser that sent the
@@ -575,7 +576,7 @@ the player's own meeting: the opponent is not in it. It is NOT read from the ven
   seats deferred instead, which is no better.)
 
 So the pill comes from the opponent's OWN client, which already knows its camera state
-(`useOwnCamera`: live / off / failed / recovering). The heartbeat that carries it belongs
+(`useOwnCamera`; `CameraStatus` has seven values, and "The client" below maps each). The heartbeat that carries it belongs
 to D16, built together with its one consumer, this pill; no seam ships without a consumer.
 
 **The route.** A new `POST /fixtures/{id}/external-play/room/camera-report`, beside
@@ -998,8 +999,10 @@ budget, and each new call site keeps the deferral rule:
   carry one: the claim that seats the player, a refused camera, or a browser that holds no
   token. A `camera_starting` answer to a browser that holds its token carries none, so the
   polling claims on the way cost the 3.
-- A later claim inside the back-off (1, 2, 4, 8 s, `CAMERA_EVIDENCE_BACKOFF_MS`): 0. It is
-  answered from the cache (the V446 `seat_read_*` columns).
+- A later claim inside the back-off (1, 2, 4, 8 s, `CAMERA_EVIDENCE_BACKOFF_MS`): 0 for a browser
+  that holds its token, answered from the cache (the V446 `seat_read_*` columns). A browser that
+  holds none (a reload, a second tab) is handed a refreshed token on every answer, so its claim in
+  the back-off costs 1.
 - T9's re-verify before creating the game: 0 when the player's pass was read within
   `SEAT_RECHECK_TRUST_MS`; otherwise up to 3 reads, and never a token.
 
@@ -1021,13 +1024,19 @@ the last of them seats the player.
   486 calls, 24.3 a board. At 30 boards the delta is +120, and at 50 boards +200. The create's
   +1 lands in the check-in burst, the stretch where the bucket is busiest; the teardown's +2
   and the evidence's +1 come after the games.
+- The baseline 24 holds only for a board whose second check-in lands inside the 10 s trust window
+  (`SEAT_RECHECK_TRUST_MS`), so T9's re-verify costs nothing. Outside a burst, where the second
+  player arrives later, the re-verify reads both cameras again (up to 3 calls each) and a board
+  costs 24 to 30, with the same +4 on top. A claim inside the back-off costs 0 only for a browser
+  holding its token (above); a reload or a second tab pays 1.
 - The dominant term is NOT this change: it is the players' own claims, 16 of the 24, and the
   table's player row does not move. Before D21 a `camera_starting` wait that re-asked once a
   second could reach `k ≈ 20`, which D21's own figure puts at about 6,000 calls in five
   minutes with 50 boards checking in at once. D21 bounded it (the back-off above, the cache,
   and `CAMERA_EVIDENCE_MAX_POLLS`, 5 reads) and put every call under the bucket. D21-fix-3
   then stopped spending the token before the cache (D22 found 75% of the calls were token
-  refreshes) and stopped T9's re-verify spending a token and three reads per player. The seat
+  refreshes) and stopped T9's re-verify spending a token, and the three reads per player whenever
+  the pass it trusts is under ten seconds old (outside that window it still reads). The seat
   gate's spend is D21's to own; this table counts what D16 changes.
 
 **What the budget can carry: OWNER-OPEN, and not fixed.** D21 bounds what the platform
@@ -1062,9 +1071,11 @@ appeared re-claim on a back-off, so a stranded board waits for a player's next a
 for the cron. The owner's choice is to accept the ceiling, build some of those, raise the
 budget, or stagger a round's opening. This spec does not claim the ceiling is closed.
 
-D16 puts 4 more calls on a board of about 24, about a sixth. The ceiling can only fall; by how
-much is for the load re-run to say, not for this arithmetic, because the cost per player is
-not constant near the cap.
+D16 puts 4 more calls on a board of about 24. Where it bites is the check-in ceiling: the
+create's +1 lands in the burst, about 17 to 20 more calls (one per board) on D22's busiest minute
+of 342 calls for 20 boards, 5 to 6%. The teardown's +2 and the evidence's +1 come after the games
+and do not touch the burst. The ceiling can only fall; by how much is for the load re-run to say,
+not for this arithmetic, because the cost per player is not constant near the cap.
 
 **Tests owed** (with the build), each against the RealtimeKit fixture server
 (`e2e/realtimekit-fixture-server.ts`, which models several meetings and counts calls), each
