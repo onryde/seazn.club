@@ -12,7 +12,9 @@ const SECRET = "sekrit-9f3a1c";
 /** The fields R2 adds to the beat, typed from compositor spec 2026-10-14 §5.3 / C06 `HealthReport` / C07 `heartbeat_wire`,
  *  and the final beat's exit reason (owner scope addition 2026-10-15; C06 `ExitReason`). */
 const R2_BEAT_FIELDS = ["programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps", "rung", "scoreStale",
-  "exitReason", "exitDetail"];
+  "exitReason", "exitDetail",
+  // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from.
+  "phaseChannel"];
 /** A hand-written vector of the relay-job.v1 contract (docs/contracts/fixtures/relay-job.v1). */
 const contractFixture = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/relay-job.v1", `${name}.json`), "utf8")) as Record<string, unknown>;
@@ -53,7 +55,7 @@ describe("sanitise — allowlist", () => {
     expect(sanitise(written)).toEqual(written);
     expect(Object.keys(written).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
   });
-  it("the allowlist holds no key that names a credential (the list is the guard; this pins it) — every key, the R2 beat's ten included", () => {
+  it("the allowlist holds no key that names a credential (the list is the guard; this pins it) — every key, the R2 beat's thirteen included", () => {
     let checked = 0;
     for (const k of ALLOWED_KEYS) {
       expect(k).not.toMatch(/key|secret|pass|token|auth|cookie|env/i);
@@ -62,6 +64,7 @@ describe("sanitise — allowlist", () => {
     expect(checked, "anti-vacuity: the whole list was read").toBe(ALLOWED_KEYS.size);
     // R2002 enlarged the list: the pin above covers the new keys only if they are IN it.
     expect(R2_BEAT_FIELDS.filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
+    expect(R2_BEAT_FIELDS).toHaveLength(13);
   });
 
   // R2002: ruling 13 keeps "the whole body in raw (sanitised)", and C14, C15 and C17 read the R2 fields there over time.

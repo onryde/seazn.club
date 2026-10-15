@@ -18,5 +18,6 @@
   "pipelineRebuilds": 2,
   "sinkSwaps": 1,
   "rung": "overlay_half_rate",
-  "scoreStale": true
+  "scoreStale": true,
+  "phaseChannel": "web"
 }

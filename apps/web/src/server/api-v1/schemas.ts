@@ -77,6 +77,12 @@ import { isValidIana } from "../../lib/tz.ts";
 // D6 (fixture-page stream, 2026-09-30) — the platforms a NEW destination may name. RELATIVE with `.ts`, never `@/`,
 // for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
 import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
+// R2007 PR B — the compositor's programme phases, the overlay page's phase channels and the loopback phase endpoint's
+// constants. RELATIVE with `.ts` for the same reason; lib/relay-phase.ts is deliberately import-free.
+import {
+  PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT,
+  type RelayPhaseReply as RelayPhaseReplyWire,
+} from "../../lib/relay-phase.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -1686,7 +1692,8 @@ export const RelayHeartbeat = z
     // HealthReport (C06), as C07's `heartbeat_wire` writes it. All OPTIONAL and nullable for the A29 reason: the
     // compositor omits what it has not measured, and a present 0 is a MEASURED zero. Stored as sent — in
     // `last_heartbeat` whole, and in each sample's `raw` through sanitise's allowlist (every key below is on it).
-    programmePhase: z.enum(["waiting", "live", "frozen", "reconnecting"]).nullish(),
+    // R2007 PR B: `final` is C06's final hold, and the final exit beat carries it too (owner ruling 2026-10-15).
+    programmePhase: z.enum(PROGRAMME_PHASES).nullish(),
     input: z.enum(["connecting", "connected", "backoff"]).nullish(),
     output: z.enum(["connecting", "connected", "backoff"]).nullish(),
     graphics: z.enum(["starting", "ready", "restarting", "failed"]).nullish(),
@@ -1696,6 +1703,9 @@ export const RelayHeartbeat = z
     sinkSwaps: z.number().int().min(0).nullish(),
     rung: z.enum(["full", "overlay_half_rate", "fast_preset"]).nullish(),
     scoreStale: z.boolean().nullish(),
+    // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from — the
+    // compositor's loopback endpoint, or this beat through its data poll. R2005 reports it; stored as sent, like the rest.
+    phaseChannel: z.enum(PHASE_CHANNELS).nullish(),
     // The FINAL beat's why (owner, 2026-10-15): C06's `ExitReason`, snake_case. A record of what the Machine said, kept
     // in the two beat stores only — never the runner's exit columns (A5: those are persisted from the OBSERVED exit), and
     // nothing here reacts to it (R2003 owns what a stopped beat does). exitDetail is compositor-redacted human text,
@@ -1716,6 +1726,20 @@ export const RelayHeartbeat = z
 export type RelayHeartbeat = z.infer<typeof RelayHeartbeat>;
 export const RelayHeartbeatReply = z.object({ desiredState: z.enum(["live", "ending"]) });
 export type RelayHeartbeatReply = z.infer<typeof RelayHeartbeatReply>;
+
+/** R2007 PR B (overlay templates spec 2026-10-15 §4.3): the compositor's loopback `GET /phase?after=<seq>` reply, which
+ *  the overlay page reads when `host=compositor`. The compositor serves it, never web; this twin exists so
+ *  docs/contracts/relay-job.v1.json publishes it as `$defs.phaseReply` for both repos to pin. STRICT.
+ *  The TYPE and the page's reader live in lib/relay-phase.ts (client-safe; a client component must never import this
+ *  file), and relay-contract.test.ts sweeps that reader against this twin and the published bytes (review M3). */
+export const RelayPhaseReply = z.object({ phase: z.enum(PROGRAMME_PHASES), seq: z.number().int().min(0) }).strict();
+export type RelayPhaseReply = RelayPhaseReplyWire;
+/** …and where that endpoint listens, as consts (`$defs.phaseEndpoint`): lib/relay-phase.ts is the authority, and the
+ *  compositor drift-tests its own copies against the vendored file (C12). STRICT. */
+export const RelayPhaseEndpoint = z
+  .object({ port: z.literal(RELAY_PHASE_PORT), path: z.literal(RELAY_PHASE_PATH), longPollMaxMs: z.literal(RELAY_PHASE_LONG_POLL_MAX_MS) })
+  .strict();
+export type RelayPhaseEndpoint = z.infer<typeof RelayPhaseEndpoint>;
 
 /** R2002: a composed session's camera — Cloudflare Input A slot 0's SRT PLAYBACK (spec §5.3; R2004 serves it). The
  *  url is bare `srt://host:port` — the guard below, not a comment: the stream id and passphrase are credentials and

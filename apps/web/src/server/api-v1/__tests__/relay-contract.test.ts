@@ -1,11 +1,13 @@
 // The relay-job.v1 web↔compositor contract (compositor spec 2026-10-14 §5.3; R2002).
 //
 // docs/contracts/relay-job.v1.json is the cross-repo authority: the compositor vendors it byte for byte (C07). Its zod
-// twins are RelayJobSession, RelayHeartbeat and RelayHeartbeatReply (schemas.ts). This file pins:
+// twins are RelayJobSession, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply and RelayPhaseEndpoint (schemas.ts).
+// This file pins:
 //   * the file's sha256 — a change is a deliberate bump that moves the constant in the same commit, and C07 re-vendors;
-//   * the BARE root: only $schema, $id, title, description and $defs {session, heartbeat, heartbeatReply} — no schema
-//     twin at the root (the one way this file differs from the capture contracts). C07 validates against #/$defs/<name>;
-//   * parity, each $def ↔ z.toJSONSchema of its twin (both directions for the two strict shapes);
+//   * the BARE root: only $schema, $id, title, description and $defs {session, heartbeat, heartbeatReply, phaseReply,
+//     phaseEndpoint} — no schema twin at the root (the one way this file differs from the capture contracts). C07
+//     validates against #/$defs/<name>;
+//   * parity, each $def ↔ z.toJSONSchema of its twin (both directions for the four strict shapes);
 //   * every hand-written fixture: a named one is admitted, an `*-invalid-*` one refused — by the twin AND by the published
 //     bytes under ajv; a `*-refused-*` one is admitted by the bytes and refused by the twin, on the overlayUrl `delay=`
 //     rule the file states in prose (JSON Schema cannot state it);
@@ -13,11 +15,13 @@
 //     refuses a session where it is absent or differs), the output profiles of the compositor's Global Constraints, the
 //     spec's heartbeat interval; the passthrough session carries none of the composed-only keys;
 //   * the beat's vocabularies, typed here from the compositor's own declarations, against the file and the twin;
-//   * optional-versus-null and absent-versus-zero for every field R2 adds to the beat.
+//   * optional-versus-null and absent-versus-zero for every field R2 adds to the beat;
+//   * R2007 PR B: the programme phase's `final` (C06's final hold), the beat's phaseChannel, and the loopback phase
+//     endpoint's reply and constants (overlay templates spec 2026-10-15 §4.3), typed here from the plan's declarations.
 // Every sweep counts what it checked, and the counts are pinned: a skipped fixture, field or def fails the run.
 //
 // Pure — no DB. No sport: the relay is sport-agnostic, nothing on this contract reads one.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -25,6 +29,10 @@ import { z } from "zod";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import * as S from "../schemas";
+import {
+  PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT, parseRelayPhaseReply,
+  type RelayPhaseReply as LibPhaseReply,
+} from "@/lib/relay-phase";
 
 type Json = Record<string, unknown>;
 type Twin = z.ZodType;
@@ -40,18 +48,26 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "98bc8491979fe540bb4c8ec25251fb9014164d963aa0bea79c9ebc97105f289c";
+const SHA256 = "7091c0c4e10ad627e2aea34e85af085f31c391cbb7d2d8a8003b21c2a9ed6037";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
 // ---------------------------------------------------------------------------------------------------------------
 /** Each $def and its twin, exactly. */
-const DEFS: Record<string, Twin> = { session: S.RelayJobSession, heartbeat: S.RelayHeartbeat, heartbeatReply: S.RelayHeartbeatReply };
+const DEFS: Record<string, Twin> = {
+  session: S.RelayJobSession, heartbeat: S.RelayHeartbeat, heartbeatReply: S.RelayHeartbeatReply,
+  // R2007 PR B: the compositor's loopback phase endpoint — its reply, and where it listens.
+  phaseReply: S.RelayPhaseReply, phaseEndpoint: S.RelayPhaseEndpoint,
+};
+/** The shapes a reader must refuse an unknown key on (input mode publishes `additionalProperties: false` for each). */
+const STRICT_DEFS = ["session", "heartbeat", "phaseReply", "phaseEndpoint"];
 /** Spec §5.3's beat, as C07's `heartbeat_wire` writes the compositor's enums (C06 health.rs `BeatState`, `LinkStatus`,
  *  `GraphicsStatus`; C03 `ProgrammePhase`; C05 `Rung`): lower-case words, the rung in snake_case. */
 const SPEC_BEAT: Record<string, string[]> = {
   state: ["starting", "playing", "stalled", "stopped"],
-  programmePhase: ["waiting", "live", "frozen", "reconnecting"],
+  // C03 `ProgrammePhase`, plus C06's final hold (overlay templates spec 2026-10-15 §4.2, §6 R2002 row; R2007 PR B):
+  // `final` is sent during the hold AND on the final exit beat (owner ruling 2026-10-15).
+  programmePhase: ["waiting", "live", "frozen", "reconnecting", "final"],
   input: ["connecting", "connected", "backoff"],
   output: ["connecting", "connected", "backoff"],
   graphics: ["starting", "ready", "restarting", "failed"],
@@ -59,12 +75,22 @@ const SPEC_BEAT: Record<string, string[]> = {
   // The final beat's why (owner scope addition 2026-10-15): C06 lifecycle.rs `ExitReason { Ended, Deadline, Signalled,
   // SessionGone, Refused, Fatal }`, snake_case on the wire.
   exitReason: ["ended", "deadline", "signalled", "session_gone", "refused", "fatal"],
+  // Overlay templates spec 2026-10-15 §4.3 (D10): the page reads its phase from the compositor's loopback endpoint (A),
+  // or from this beat through its data poll (B, `web`); R2005 reports which one is live.
+  phaseChannel: ["loopback", "web"],
 };
+/** The plan's phase endpoint (compositor `_INDEX.md` 2026-10-15: "`127.0.0.1:7419` `GET /phase?after=<seq>`, long-poll
+ *  ≤ 10 s"; spec §4.3 "held ≤ 10 s"). */
+const PLAN_PHASE_ENDPOINT = { port: 7419, path: "/phase", longPollMaxMs: 10_000 };
+/** The brief's rule for that port: unprivileged, and below Linux's default ephemeral range (32768–60999). */
+const PRIVILEGED_MAX = 1023, EPHEMERAL_MIN = 32768;
 /** The fields R2 adds to the beat (spec §5.3; C06 `HealthReport`; C07 `heartbeat_wire`). Every one optional and
  *  nullable: a compositor OMITS what it did not measure, never sends 0 (Global Constraints, "Heartbeat"). */
 const ADDED = ["programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps", "rung", "scoreStale",
   // owner scope addition 2026-10-15: the final beat carries the exit reason.
-  "exitReason", "exitDetail"];
+  "exitReason", "exitDetail",
+  // R2007 PR B (overlay templates spec 2026-10-15 §4.3): the channel the overlay page reads its phase from.
+  "phaseChannel"];
 /** Owner scope addition 2026-10-15: "exitDetail: z.string().max(200)" — compositor-redacted human text. zod's max counts
  *  UTF-16 code units (JS string length). */
 const EXIT_DETAIL_MAX = 200;
@@ -102,8 +128,10 @@ const OVERLAY_PATH = (fixtureId: string) => `/overlay/fixtures/${fixtureId}`;
 /** Per fixture prefix: its $def, its twin and the exact count (never 0). First match wins. */
 const ROUTES: [prefix: string, def: string, count: number][] = [
   ["session-", "session", 6],
-  ["heartbeat-", "heartbeat", 7],
+  ["heartbeat-", "heartbeat", 9],
   ["reply-", "heartbeatReply", 2],
+  // R2007 PR B: the compositor's loopback reply (never "reply-": that prefix is the web heartbeat's 200).
+  ["phase-reply-", "phaseReply", 2],
 ];
 /** The `*-refused-*` fixtures: admitted by the published bytes, refused by the twin on ONE field, each a one-field
  *  edit of `sibling`. The rule is the overlayUrl `delay=` agreement, which the file states in this field's prose. */
@@ -185,7 +213,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     expect(readdirSync(resolve(CONTRACTS, "fixtures")).filter((f) => f.startsWith("relay-"))).toEqual([DIR]);
   });
 
-  it("the root is BARE — $schema, $id, title, description and $defs {session, heartbeat, heartbeatReply}; no schema twin at the root", () => {
+  it("the root is BARE — $schema, $id, title, description and $defs {session, heartbeat, heartbeatReply, phaseReply, phaseEndpoint}; no schema twin at the root", () => {
     const file = contract();
     expect(Object.keys(file).sort()).toEqual(["$defs", "$id", "$schema", "description", "title"]);
     expect(file.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
@@ -197,11 +225,11 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(typeof defOf(file, name).description, name).toBe("string");
       described++;
     }
-    expect(described).toBe(3);
+    expect(described).toBe(5);
     expect(typeof file.description).toBe("string");
   });
 
-  it("parity: each $def equals z.toJSONSchema of its twin; the two strict shapes in BOTH directions (a stripping object differs in input mode)", () => {
+  it("parity: each $def equals z.toJSONSchema of its twin; the four strict shapes in BOTH directions (a stripping object differs in input mode)", () => {
     const file = contract();
     let checked = 0;
     for (const [name, twin] of Object.entries(DEFS)) {
@@ -211,12 +239,12 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     // The beat (a request) and the session (a response C07 refuses to improvise on) are STRICT: input mode publishes
     // `additionalProperties: false` only for a strict object, so equality there proves the twin refuses unknown keys.
     // The reply is the web's own output (it never parses one), so output mode is its wire shape.
-    for (const name of ["session", "heartbeat"]) {
+    for (const name of STRICT_DEFS) {
       expect(normalise(defOf(file, name)), `${name} (input)`).toEqual(normalise(asPublished(name, zodJson(DEFS[name]!, "input"))));
       expect(defOf(file, name).additionalProperties, `${name} is closed`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(5 + 4);
   });
 
   it("fixtures: a named one is admitted, an `*-invalid-*` one refused — by the twin AND the published bytes under ajv; a `*-refused-*` one only by the twin — counted per shape", () => {
@@ -252,7 +280,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       total += count;
     }
     expect(names.length, "every fixture was routed").toBe(total);
-    expect(total).toBe(15);
+    expect(total).toBe(19);
     // Every REFUSED entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(refusedSeen).toBe(Object.keys(REFUSED).length);
     expect(refusedSeen).toBe(2);
@@ -273,6 +301,19 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     for (const name of ["heartbeat-final-fatal", "heartbeat-invalid-exit-reason", "heartbeat-invalid-exit-while-playing"]) expect(existsSync(resolve(FIXTURES, `${name}.json`)), name).toBe(true);
     expect(fixture("heartbeat-final-fatal")).toEqual({ state: "stopped", exitReason: "fatal", exitDetail: "programme start failed: cefsrc not found" });
     expect(fixture("heartbeat-invalid-exit-reason")).toMatchObject({ exitReason: "crashed" });
+    // R2007 PR B's four, by name and content: the final hold on the primary channel; a channel outside the two words (a
+    // one-field edit of the hold, so its refusal is that field's alone); the loopback reply in `final`, and one with a
+    // key the strict reply refuses.
+    let r2007 = 0;
+    for (const name of ["heartbeat-final-hold", "heartbeat-invalid-phase-channel", "phase-reply-final", "phase-reply-invalid-unknown-field"]) {
+      expect(existsSync(resolve(FIXTURES, `${name}.json`)), name).toBe(true);
+      r2007++;
+    }
+    expect(r2007).toBe(4);
+    expect(fixture("heartbeat-final-hold")).toEqual({ state: "playing", programmePhase: "final", phaseChannel: "loopback" });
+    expect(fixture("heartbeat-invalid-phase-channel")).toEqual({ ...fixture("heartbeat-final-hold"), phaseChannel: "wifi" });
+    expect(fixture("phase-reply-final")).toEqual({ phase: "final", seq: 5 });
+    expect(Object.keys(fixture("phase-reply-invalid-unknown-field")).filter((k) => !(k in fixture("phase-reply-final"))), "one key the reply does not declare").toHaveLength(1);
     const readme = readFileSync(resolve(FIXTURES, "README.md"), "utf8");
     expect(readme).toContain("a present 0 is a measured zero");
     expect(readme).toContain("never sent as 0");
@@ -363,7 +404,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       const outsider = field === "state" ? { state: "healthy" } : { state: EXIT_FIELDS.includes(field) ? "stopped" : "playing", [field]: "Live" };
       expect(parses(S.RelayHeartbeat, outsider), `${field}: an outsider`).toBe(false);
     }
-    expect(words).toBe(4 + 4 + 3 + 3 + 4 + 3 + 6);
+    expect(words).toBe(4 + 5 + 3 + 3 + 4 + 3 + 6 + 2);
   });
 
   it("optional-versus-null and absent-versus-zero: each field R2 adds is optional and nullable (file and twin); counters are whole and non-negative, a present 0 admitted; only `state` is required", () => {
@@ -377,7 +418,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(parses(S.RelayHeartbeat, { state: "playing", [field]: null }), `${field}: the twin admits null`).toBe(true);
       checked++;
     }
-    expect(checked).toBe(12);
+    expect(checked).toBe(13);
     // exitDetail's bound: the twin's 200 UTF-16 units, the file's 100 code points (review M1). Each refuses one past its
     // own bound, and a longer one is refused, never cut by the server.
     const fileAdmits = fileValidator();
@@ -486,5 +527,146 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     expect((bad.input as Json).url as string).toContain("?");
     const result = S.RelayJobSession.safeParse(bad);
     expect(result.error?.issues.map((i) => i.path.join(".")), "refused on input.url alone").toEqual(["input.url"]);
+  });
+});
+
+// R2007 PR B (overlay templates spec 2026-10-15 §6, R2002 row): the compositor reports `final` during the final hold
+// (C06) and on the final exit beat (owner ruling 2026-10-15); the page reports which phase channel is live (§4.3).
+describe("R2007 PR B: the programme phase gains `final`, the beat carries its phase channel, and the loopback endpoint is published", () => {
+  it("lib/relay-phase declares exactly the plan's phases and channels — and every phase parses inside RelayHeartbeat, in the twin AND the file (counted); `paused` is refused by both", () => {
+    expect([...PROGRAMME_PHASES], "the phases, in the compositor's order").toEqual(SPEC_BEAT.programmePhase);
+    expect([...PHASE_CHANNELS]).toEqual(SPEC_BEAT.phaseChannel);
+    const fileAdmits = fileValidator();
+    let phases = 0;
+    for (const phase of PROGRAMME_PHASES) {
+      expect(parses(S.RelayHeartbeat, { state: "playing", programmePhase: phase }), `the twin: ${phase}`).toBe(true);
+      expect(fileAdmits("heartbeat", { state: "playing", programmePhase: phase }), `the file: ${phase}`).toBe(true);
+      phases++;
+    }
+    console.log(`phases checked: ${phases}`);
+    expect(phases, "anti-vacuity: zero phases checked is a failure").toBeGreaterThan(0);
+    expect(phases).toBe(5);
+    // An unknown phase is still refused, by both — `final` widened the enum, it did not open it.
+    for (const outsider of ["paused", "Final", "ending"]) {
+      expect(parses(S.RelayHeartbeat, { state: "playing", programmePhase: outsider }), `the twin: ${outsider}`).toBe(false);
+      expect(fileAdmits("heartbeat", { state: "playing", programmePhase: outsider }), `the file: ${outsider}`).toBe(false);
+    }
+    // The owner's case: the final EXIT beat, still in `final`, carrying its reason — admitted, so the reason is not lost.
+    const exitBeat = { state: "stopped", programmePhase: "final", phaseChannel: "loopback", exitReason: "ended" };
+    expect(parses(S.RelayHeartbeat, exitBeat), "the twin: the final exit beat").toBe(true);
+    expect(fileAdmits("heartbeat", exitBeat), "the file: the final exit beat").toBe(true);
+    // The prose names the hold, so a reader learns what `final` means from the file — and it states C06's rules (its
+    // 2026-10-15 amendment): the hold starts on the FIRST end request (an `ending` reply, SIGINT, the deadline), and a
+    // SIGTERM before any hold drains at once, so its exit beat does not carry `final` (review M1).
+    const prose = propOf(defOf(contract(), "heartbeat"), "programmePhase").description as string;
+    let rules = 0;
+    for (const words of ["`final`", "final hold", "FIRST end request", "`ending`", "SIGINT", "deadline", "SIGTERM", "no hold", "does not carry `final`"]) {
+      expect(prose, words).toContain(words);
+      rules++;
+    }
+    expect(rules).toBe(9);
+  });
+
+  it("phaseChannel takes only its two words: each admitted, `wifi` (heartbeat-invalid-phase-channel) refused at phaseChannel alone; a beat from a compositor built before R2007 PR B (no `final`, no phaseChannel) still validates", () => {
+    const fileAdmits = fileValidator();
+    let channels = 0;
+    for (const phaseChannel of PHASE_CHANNELS) {
+      expect(parses(S.RelayHeartbeat, { state: "playing", phaseChannel }), `the twin: ${phaseChannel}`).toBe(true);
+      expect(fileAdmits("heartbeat", { state: "playing", phaseChannel }), `the file: ${phaseChannel}`).toBe(true);
+      channels++;
+    }
+    expect(channels).toBe(2);
+    const bad = fixture("heartbeat-invalid-phase-channel");
+    const result = S.RelayHeartbeat.safeParse(bad);
+    expect(result.error?.issues.map((i) => i.path.join(".")), "refused on phaseChannel alone").toEqual(["phaseChannel"]);
+    expect(fileAdmits("heartbeat", bad), "the file refuses it").toBe(false);
+    // The positive pair on the same edit: the hold it was cut from is admitted by both.
+    expect(parses(S.RelayHeartbeat, fixture("heartbeat-final-hold"))).toBe(true);
+    expect(fileAdmits("heartbeat", fixture("heartbeat-final-hold"))).toBe(true);
+    // Backward compatible: what an older compositor sends — no phaseChannel key, a pre-`final` phase — is admitted.
+    let old = 0;
+    for (const beat of [fixture("heartbeat-minimal"), { state: "playing", programmePhase: "live" }, { state: "stopped", exitReason: "fatal" }]) {
+      expect(beat, "premise: no phaseChannel key").not.toHaveProperty("phaseChannel");
+      expect(parses(S.RelayHeartbeat, beat), JSON.stringify(beat)).toBe(true);
+      expect(fileAdmits("heartbeat", beat), `the file: ${JSON.stringify(beat)}`).toBe(true);
+      old++;
+    }
+    expect(old).toBe(3);
+  });
+
+  it("$defs.phaseEndpoint publishes the plan's port, path and long-poll bound as consts equal to lib/relay-phase's; the port is unprivileged and below the ephemeral range; any other value is refused", () => {
+    expect({ port: RELAY_PHASE_PORT, path: RELAY_PHASE_PATH, longPollMaxMs: RELAY_PHASE_LONG_POLL_MAX_MS }, "lib/relay-phase").toEqual(PLAN_PHASE_ENDPOINT);
+    expect(RELAY_PHASE_PORT).toBeGreaterThan(PRIVILEGED_MAX);
+    expect(RELAY_PHASE_PORT).toBeLessThan(EPHEMERAL_MIN);
+    const endpoint = defOf(contract(), "phaseEndpoint");
+    expect(propOf(endpoint, "port").const, "the committed contract's port").toBe(RELAY_PHASE_PORT);
+    expect(propOf(endpoint, "path").const).toBe(RELAY_PHASE_PATH);
+    expect(propOf(endpoint, "longPollMaxMs").const).toBe(RELAY_PHASE_LONG_POLL_MAX_MS);
+    expect([...(endpoint.required as string[])].sort()).toEqual(Object.keys(PLAN_PHASE_ENDPOINT).sort());
+    const fileAdmits = fileValidator();
+    expect(parses(S.RelayPhaseEndpoint, PLAN_PHASE_ENDPOINT), "the twin admits the plan's endpoint").toBe(true);
+    expect(fileAdmits("phaseEndpoint", PLAN_PHASE_ENDPOINT), "the file admits it").toBe(true);
+    // Each field one off, refused by both: a const, not a range.
+    let refused = 0;
+    for (const off of [{ port: 7420 }, { path: "/phase/" }, { longPollMaxMs: 10_001 }]) {
+      const value = { ...PLAN_PHASE_ENDPOINT, ...off };
+      expect(parses(S.RelayPhaseEndpoint, value), `the twin: ${JSON.stringify(off)}`).toBe(false);
+      expect(fileAdmits("phaseEndpoint", value), `the file: ${JSON.stringify(off)}`).toBe(false);
+      refused++;
+    }
+    expect(refused).toBe(3);
+  });
+
+  it("$defs.phaseReply: `{ phase, seq }`, strict — every phase admitted (counted), seq whole and non-negative, an unknown key or phase refused, by the twin AND the file", () => {
+    const fileAdmits = fileValidator();
+    let phases = 0;
+    for (const phase of SPEC_BEAT.programmePhase!) {
+      expect(parses(S.RelayPhaseReply, { phase, seq: 0 }), `the twin: ${phase}`).toBe(true);
+      expect(fileAdmits("phaseReply", { phase, seq: 0 }), `the file: ${phase}`).toBe(true);
+      phases++;
+    }
+    expect(phases).toBe(5);
+    let refused = 0;
+    for (const bad of [{ phase: "paused", seq: 1 }, { phase: "final", seq: -1 }, { phase: "final", seq: 1.5 }, { phase: "final" }, { seq: 1 }, fixture("phase-reply-invalid-unknown-field")]) {
+      expect(parses(S.RelayPhaseReply, bad), `the twin: ${JSON.stringify(bad)}`).toBe(false);
+      expect(fileAdmits("phaseReply", bad), `the file: ${JSON.stringify(bad)}`).toBe(false);
+      refused++;
+    }
+    expect(refused).toBe(6);
+    expect(defOf(contract(), "phaseReply").description as string).toContain("?after=");
+  });
+
+  // Review M3: the overlay page is a client component and cannot import schemas.ts (it reaches the engine's scheduler),
+  // so the loopback reply's client-safe reader lives in lib/relay-phase.ts. It must agree with the twin AND the published
+  // bytes on every vector, or the page would act on a reply the contract refuses (or drop one it admits).
+  it("lib/relay-phase's parseRelayPhaseReply agrees with the twin and the file on every vector (counted, both answers witnessed), and returns the twin's own parse", () => {
+    expectTypeOf<z.infer<typeof S.RelayPhaseReply>>().toEqualTypeOf<LibPhaseReply>();
+    expectTypeOf<S.RelayPhaseReply>().toEqualTypeOf<LibPhaseReply>();
+    const fileAdmits = fileValidator();
+    const vectors: unknown[] = [
+      ...fixtureNames().filter((n) => n.startsWith("phase-reply-")).map(fixture),
+      ...SPEC_BEAT.programmePhase!.map((phase) => ({ phase, seq: 0 })),
+      { phase: "live", seq: Number.MAX_SAFE_INTEGER }, { phase: "live", seq: 2 ** 53 }, { phase: "live", seq: 7 },
+      { phase: "paused", seq: 1 }, { phase: "Final", seq: 1 }, { phase: "final", seq: -1 }, { phase: "final", seq: 1.5 },
+      { phase: "final", seq: "5" }, { phase: "final" }, { seq: 1 }, {}, { phase: "final", seq: 5, extra: true },
+      [{ phase: "final", seq: 5 }], null, "final", 5,
+    ];
+    let admitted = 0, refused = 0;
+    for (const v of vectors) {
+      const label = JSON.stringify(v);
+      const twin = S.RelayPhaseReply.safeParse(v);
+      const lib = parseRelayPhaseReply(v);
+      expect(lib !== null, `lib vs twin: ${label}`).toBe(twin.success);
+      expect(fileAdmits("phaseReply", v), `file vs twin: ${label}`).toBe(twin.success);
+      if (twin.success) {
+        expect(lib, `lib returns the twin's parse: ${label}`).toEqual(twin.data);
+        admitted++;
+      } else refused++;
+    }
+    console.log(`phase-reply vectors checked: ${admitted + refused} (admitted ${admitted}, refused ${refused})`);
+    expect(admitted + refused).toBe(vectors.length);
+    expect(admitted, "anti-vacuity: some admitted").toBeGreaterThan(0);
+    expect(refused, "anti-vacuity: some refused").toBeGreaterThan(0);
+    expect([admitted, refused]).toEqual([1 + 5 + 2, 1 + 1 + 13]);
   });
 });
