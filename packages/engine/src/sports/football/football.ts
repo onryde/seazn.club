@@ -39,6 +39,7 @@ import {
   EntrantId,
   type AwardReason,
   type DisciplineCard,
+  type ForfeitAward,
   type ForfeitBy,
   type ForfeitCredit,
   type ForfeitPhase,
@@ -642,6 +643,13 @@ export interface FootballState {
    * overlay. Orthogonal to `core.suspend`.
    */
   clockRunning?: boolean;
+  /**
+   * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the stage PointsRule's award for the forfeit that decided this match,
+   * winner first. Present ONLY when the fold was offered one and the forfeit had nothing played
+   * (`FoldContext.forfeitAward`), so `init` and every other state serialise exactly as before. `footballForfeitCredit`
+   * reads it - the table's credit and the headline (`displayedGoals`) share that one reading.
+   */
+  forfeitAward?: ForfeitAward;
 }
 
 interface PenaltyRecord {
@@ -1664,7 +1672,7 @@ function applyShootoutKick(
 // W2b (spec §5.2) — a forfeit decides `award{winner, loser, reason}`, or `double_walkover` when both sides are
 // absent. The PLAYED goals stay in state: what the table credits (FB-WO-1's 3-0, FB-RT-1's max of awarded and real)
 // is `forfeitCredit`'s, read by `standingsDelta` — overwriting `goals` here made a 0-5 retirement read 0-3 (F-16).
-function applyForfeit(state: FootballState, by: string, reason: ForfeitReason): FootballState {
+function applyForfeit(state: FootballState, by: string, reason: ForfeitReason, forfeitAward?: ForfeitAward): FootballState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
@@ -1677,6 +1685,7 @@ function applyForfeit(state: FootballState, by: string, reason: ForfeitReason): 
     ...sweepEndOfMatch(state), // W4a — the match is over, whatever phase it was in
     phase: "done",
     outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
+    ...(forfeitAward === undefined ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),
   };
 }
 
@@ -1747,7 +1756,14 @@ function footballForfeitCredit(cfg: FootballCfg, state: FootballState, reason: A
   if (by === "both") return doubleWalkoverCredit(played[0], played[1], FOOTBALL_METRIC_KEYS);
   if (reason === "bye") return { perSide: played, excluded: [] };
   const winner = opponent(by);
-  const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });
+  // W2c Task 16b: a stage rule's award, held in state by the fold for a forfeit with nothing played (P-3 "A"), is the
+  // credit - the same figure the table's rule overlay writes, so the headline and the table cannot differ. Every other
+  // forfeit keeps `awardScore`-0, or the real score where it is worse for the offender (FB-RT-1).
+  const award = state.forfeitAward;
+  const credited =
+    award === undefined
+      ? goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] })
+      : { winner: award[0], offender: award[1] };
   const record = (gf: number, ga: number) => ({ gf, ga, gd: gf - ga });
   return {
     perSide: creditFor(by, record(credited.winner, credited.offender), record(credited.offender, credited.winner)),
@@ -2215,7 +2231,7 @@ function applyEvent(
       return applyShot(state, parsePayload(FootballShot, ev.payload, ev.type));
     case "core.forfeit": {
       const { by, reason } = forfeitOf(ev.payload);
-      return applyForfeit(state, by, reason);
+      return applyForfeit(state, by, reason, ctx?.forfeitAward);
     }
     case "core.abandon":
       return applyAbandon(state);

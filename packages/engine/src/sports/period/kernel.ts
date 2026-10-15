@@ -28,6 +28,7 @@ import {
   type DisciplineCard,
   type DisciplineModel,
   type AwardReason,
+  type ForfeitAward,
   type ForfeitBy,
   type ForfeitCredit,
   type ForfeitPhase,
@@ -628,6 +629,13 @@ export interface PeriodState {
    * forbidden, exactly as for `goalLog` and `setPieces` above.
    */
   squads?: SquadState;
+  /**
+   * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the stage PointsRule's award for the forfeit that decided this match,
+   * winner first. Present ONLY when the fold was offered one and the forfeit had nothing played
+   * (`FoldContext.forfeitAward`), so `init` and every other state serialise exactly as before. `creditedGoals` reads
+   * it - the table's credit and the headline (`officialScore`) share that one reading.
+   */
+  forfeitAward?: ForfeitAward;
 }
 
 function opponent(side: Side): Side {
@@ -1463,7 +1471,7 @@ function periodForfeitPhase(state: PeriodState): ForfeitPhase {
 // W2b (spec §5.2) — a forfeit decides `award{winner, loser, reason}`, or `double_walkover` when both sides are
 // absent. The PLAYED goals stay in state; the table's credit is `forfeitCredit`'s (W2b Task 4), read by
 // `standingsDelta` — overwriting `goals` here made a retirement's real margin unreadable (F-16).
-function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason): PeriodState {
+function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason, forfeitAward?: ForfeitAward): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
@@ -1474,6 +1482,7 @@ function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason): Pe
     ...sweepEndOfMatch(state),
     phase: "done",
     outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
+    ...(forfeitAward === undefined ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),
   };
 }
 
@@ -2434,7 +2443,12 @@ export function makePeriodModule(
    */
   const creditedGoals = (cfg: PeriodCfg, state: PeriodState, by: Side): { home: number; away: number } => {
     const winner = opponent(by);
-    const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });
+    // W2c Task 16b: a stage rule's award, held in state for a forfeit with nothing played (P-3 "A"), is the credit.
+    const award = state.forfeitAward;
+    const credited =
+      award === undefined
+        ? goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] })
+        : { winner: award[0], offender: award[1] };
     return winner === "home"
       ? { home: credited.winner, away: credited.offender }
       : { home: credited.offender, away: credited.winner };
@@ -2508,6 +2522,7 @@ export function makePeriodModule(
     state: PeriodState,
     ev: EventEnvelope<PeriodEv | CoreEv>,
     strict: boolean,
+    forfeitAward?: ForfeitAward,
   ): PeriodState => {
     switch (ev.type) {
       case "core.start":
@@ -2535,7 +2550,7 @@ export function makePeriodModule(
         return applyShot(state, parsePayload(PeriodShot, ev.payload, ev.type), shotTracking);
       case "core.forfeit": {
         const { by, reason } = forfeitOf(ev.payload);
-        return applyForfeit(state, by, reason);
+        return applyForfeit(state, by, reason, forfeitAward);
       }
       case "core.abandon":
         return applyAbandon(state);
@@ -2656,7 +2671,7 @@ export function makePeriodModule(
       // the release, so that one applies first and sweeps after.
       const sweepsFirst = at !== null && ev.type !== suspEndType;
       const base = sweepsFirst ? sweepExpired(state, at) : state;
-      const applied = applyEvent(base, ev, isStrictFold(ctx));
+      const applied = applyEvent(base, ev, isStrictFold(ctx), ctx?.forfeitAward);
       if (at === null) return applied;
       const swept = ev.type === suspEndType ? sweepExpired(applied, at) : applied;
       // §6 obligation 3 — as of when everything above is true.

@@ -22,6 +22,7 @@ import {
   FORFEIT_REASONS,
   forbidsLevelResult,
   isLevelOutcome,
+  type ForfeitAward,
   type ForfeitPhase,
   type ForfeitReason,
   type LineupPair,
@@ -569,6 +570,26 @@ export interface FoldContext {
    * must therefore handle its absence — the fold always supplies it.
    */
   readonly squads?: SquadState;
+  /**
+   * W2c Task 16b (X-WO-1 part B) - the stage PointsRule's award for THIS forfeit, present ONLY when the kernel has
+   * decided it is a forfeit with nothing played (`unplayedForfeitEvent`) and the caller offered one
+   * (`FoldOptions.forfeitAward`). A module that reads it keeps it in its own state, where its forfeit credit and its
+   * summary read it. Absent for every other event, so no state it does not apply to moves.
+   */
+  readonly forfeitAward?: ForfeitAward;
+}
+
+/**
+ * W2c Task 16b (P-3 "A") - does a stage rule's award land on THIS forfeit event? Exactly when nothing was played before
+ * it (`playRecorded` of the active ledger, ruling 112) or when it is a walkover (a side that never arrived played
+ * nothing, whatever the ledger holds - chess's Start is play and a no-show after it is still a walkover), and never for
+ * a double walkover (nobody forfeited TO anyone). This is `isUnplayedForfeit`'s rule (competition/points.ts, the table's
+ * reading of the decided outcome) stated for the EVENT, because the kernel decides before the module has an outcome;
+ * sport/forfeit-award.test.ts holds the two together across every sport, reason and ledger shape.
+ */
+export function unplayedForfeitEvent(payload: unknown, playedBefore: boolean): boolean {
+  const { by, reason } = forfeitOf(payload);
+  return by !== "both" && (reason === "walkover" || !playedBefore);
 }
 
 /**
@@ -589,6 +610,15 @@ export interface FoldContext {
  */
 export interface FoldOptions<State = unknown> {
   readonly strictFromSeq?: number;
+  /**
+   * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the stage PointsRule's `forfeit.awardScore`, winner first, offered to
+   * a fold of that stage's matches. The kernel withholds it from every forfeit that is not one with nothing played
+   * (`unplayedForfeitEvent`) and hands it to the module through `FoldContext.forfeitAward` for the rest, so a forfeit
+   * after play keeps the module's own credit. Absent means no rule awards a score: every state is exactly what it was
+   * before this option existed. Only a module that declares `awardScoreKeys` reads it; offering it to another sport
+   * is harmless (it is ignored), so a caller need not branch on the sport.
+   */
+  readonly forfeitAward?: ForfeitAward;
   /**
    * Called once for every ACTIVE event — after `resolveVoids`, so never for a
    * voided event or the void itself — AFTER the kernel has folded it, with the
@@ -890,6 +920,7 @@ export function foldMatchWithStoppage<Cfg, State>(
 } {
   const active = resolveVoids(events);
   const strictFromSeq = opts?.strictFromSeq;
+  const forfeitAward = opts?.forfeitAward;
   const onFolded = opts?.onFolded;
   const postDecision = new Set([...POST_DECISION_CORE, ...(module.postDecisionTypes ?? [])]);
   const deciderTypes = new Set(module.deciderTypes); // absent ⇒ empty
@@ -1148,7 +1179,13 @@ export function foldMatchWithStoppage<Cfg, State>(
       // apply() directly — and nested/kernel refuses an interruption against a
       // cfg allowance. Each is the same fixture-bricking shape as the guard
       // above and needs the same signal; the other eight ignore the argument.
-      state = module.apply(state, event, { strict, squads });
+      // W2c Task 16b: the stage rule's award reaches the module only for a forfeit with nothing played - decided HERE,
+      // from the active ledger before this event (the one `playRecorded` reading), never by the module.
+      const award =
+        forfeitAward !== undefined && event.type === "core.forfeit" && unplayedForfeitEvent(event.payload, playRecorded(active.slice(0, index), module))
+          ? forfeitAward
+          : undefined;
+      state = module.apply(state, event, award === undefined ? { strict, squads } : { strict, squads, forfeitAward: award });
       if (event.type === "core.start") started = true;
       if (event.type === "core.abandon") {
         abandonActive = true;

@@ -4,13 +4,14 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope, type FoldContext } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
   type AwardReason,
+  type ForfeitAward,
   type ForfeitBy,
   type ForfeitCredit,
   type ForfeitPhase,
@@ -103,6 +104,13 @@ export interface GenericState {
   // W4 — the live tally. Absent until a generic.score event lands, so a
   // result-only stream folds to exactly the state it always did.
   running?: { home: number; away: number };
+  /**
+   * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the stage PointsRule's award for the forfeit that decided this match,
+   * winner first. Present ONLY when the fold was offered one and the forfeit had nothing played
+   * (`FoldContext.forfeitAward`), so every other state serialises exactly as before. `genericForfeitCredit` reads it,
+   * and a decided walkover then shows the rule's score instead of the "W/O" marker - the table credits that score.
+   */
+  forfeitAward?: ForfeitAward;
 }
 
 type Side = "home" | "away";
@@ -227,7 +235,20 @@ function applyScore(state: GenericState, payload: GenericScore): GenericState {
  *  with the result's own chip ("ret." / "DQ") naming how — the "W/O" every award used to read misnamed both. */
 const AWARD_WINNER_MARK: Record<AwardReason, "W/O" | "W"> = { walkover: "W/O", withdrew: "W/O", bye: "W/O", retired: "W", disqualified: "W" };
 
+/** W2c Task 16b - a decided forfeit that holds a stage rule's award reads the credited figure (the table's), the one
+ *  case where a generic walkover has a score of its own to show. Null where there is none. */
+function awardedLine(state: GenericState, side: Side): string | null {
+  const outcome = state.outcome;
+  if (state.forfeitAward === undefined || outcome?.kind !== "award") return null;
+  const reason = awardReasonOf(outcome);
+  if (reason === "bye") return null;
+  const credit = genericForfeitCredit(state.cfg, state, reason, awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id)));
+  return String(credit.perSide[side === "home" ? 0 : 1].for);
+}
+
 function sideLine(state: GenericState, side: Side): string {
+  const awarded = awardedLine(state, side);
+  if (awarded !== null) return awarded;
   if (state.score && !creditReplacesCard(state)) return String(state.score[side]);
   const outcome = state.outcome;
   // A live tally renders while the fixture is undecided; a decided fixture
@@ -277,7 +298,12 @@ function genericForfeitCredit(_cfg: GenericCfg, state: GenericState, reason: Awa
   if (reason === "bye") return { perSide: played, excluded: [] };
   const recorded = reason === "walkover" ? null : (state.score ?? state.running ?? null);
   const winner = opponent(by);
-  const credited = goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 });
+  // W2c Task 16b: a stage rule's award, held in state for a forfeit with nothing played (P-3 "A"), is the credit.
+  const award = state.forfeitAward;
+  const credited =
+    award === undefined
+      ? goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 })
+      : { winner: award[0], offender: award[1] };
   const record = (forScore: number, against: number) => ({ for: forScore, against, diff: forScore - against });
   return { perSide: creditFor(by, record(credited.winner, credited.offender), record(credited.offender, credited.winner)), excluded: [] };
 }
@@ -611,7 +637,7 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     };
   },
 
-  apply(state, ev: EventEnvelope<GenericEv | CoreEv>): GenericState {
+  apply(state, ev: EventEnvelope<GenericEv | CoreEv>, ctx?: FoldContext): GenericState {
     switch (ev.type) {
       case "core.start": {
         if (state.phase !== "pre") throw new EngineError("WRONG_PHASE", "already started");
@@ -644,7 +670,12 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
         if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
         const loserSide = sideOf(state, by);
         const winner = state.entrants[opponent(loserSide)];
-        return { ...state, phase: "done", outcome: { kind: "award", winner, loser: state.entrants[loserSide], reason } };
+        return {
+          ...state,
+          phase: "done",
+          outcome: { kind: "award", winner, loser: state.entrants[loserSide], reason },
+          ...(ctx?.forfeitAward === undefined ? {} : { forfeitAward: [...ctx.forfeitAward] as ForfeitAward }),
+        };
       }
       case "core.abandon": {
         if (state.phase !== "pre" && state.phase !== "live") {
