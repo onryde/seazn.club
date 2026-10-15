@@ -5,8 +5,9 @@
 ruling of yours. Put each position below to your own owner before building on it.
 
 - Written for: engine-split batch 1f, Task 1f-2 (spec §5.6, D15, D26, D31). Plan: `docs/superpowers/plans/2026-10-13-engine-split-phase1.md`.
-- Server side: commits `287295d9d` and `a7fb39b13` on `feat/engine-split-1f`, **in review and NOT merged to `main` at the time of writing**.
-  Everything under "The server contract" was verified against that branch (usecase tests, a prod-build e2e, smoke), not against `main`.
+- Server side: commits `287295d9d` and `a7fb39b13`, merged to `main` with batch 1f (PR #961, merge `eff5f5f4b`). Everything under "The
+  server contract" was verified on the 1f branch (usecase tests, a prod-build e2e, smoke). Batch 1e-M (D34) then added `FOLD_MINOR`
+  beside `FOLD_EPOCH`; the server's gate is unchanged and still compares only the major.
 - `docs/contracts/` holds no scoring-events contract today (D32c). This file is the stand-in until S2 writes one; vendor from it, then
   move it there.
 
@@ -89,12 +90,14 @@ guarantee NOT pinned by a test is marked.
 Only these `@seazn/engine` subpaths, which are the phone-safe closure (no `node:*`, no `process`, nothing from `scheduling`):
 `@seazn/engine/core`, `@seazn/engine/sport`, `@seazn/engine/sports`, `@seazn/engine/sports/<dir>`. **The authority is
 `@seazn/engine/phone-subpaths.json`** (`subpaths`, plus the pinned module closure and the date it was measured); a subpath not in
-it is not phone-safe. `foldEpochOf` and `FOLD_EPOCH` live in `@seazn/engine/sport` and import nothing. The package is published as
+it is not phone-safe. `foldEpochOf` / `FOLD_EPOCH` (the MAJOR) and `foldMinorOf` / `FOLD_MINOR` (the MINOR, §3) live in
+`@seazn/engine/sport`, in one file that imports nothing. The package is published as
 `@onryde/seazn-engine` and imported as `@seazn/engine` through an alias (D19); canaries publish from `main`, while the production
 server deploys from tags, so the engine a phone bundles can be newer than the one the server runs (see §3, release order).
 
-The epoch moves with the fold: a sport's number is bumped in the SAME change that makes an existing event sequence fold
-differently for it (CI: `fold-epoch:check --against HEAD^1`). It is per sport, so a badminton bump never touches a cricket scorer.
+The version moves with the fold: a sport's MAJOR (`FOLD_EPOCH`) is raised in the SAME change that makes an existing event sequence
+fold differently for it on the phone, and its MINOR (`FOLD_MINOR`) when only the server's standings output moved (CI:
+`fold-epoch:check --against HEAD^1`, D34). It is per sport, so a badminton bump never touches a cricket scorer.
 
 ## 3. Positions to put to your owner
 
@@ -123,11 +126,20 @@ before they update. There is no grace window, so this ordering is the only prote
   folds the same ledger, which is what the epoch exists to ensure.
 - Only the bumped sport is affected: the app keeps scoring other sports.
 
-**Major / minor (engine-split owner; IN FLIGHT, not merged).** On branch `feat/engine-split-1e-minor` the fold version splits in two:
-`FOLD_EPOCH` = MAJOR, which the server gates and which needs an app update; `FOLD_MINOR` = standings-only changes, which need no app
-update and at most an optional "update available" prompt. **Pending merge; re-check names and shapes against that branch when it
-lands.** This file describes `main` plus 1f as they are today (`foldEpochOf(sport): number`). Whatever the final shape: send the
-MAJOR as `engine_epoch`.
+**Major / minor (engine-split owner; D34, merged with batch 1e-M).** The fold version is a pair per sport:
+- **MAJOR** = `FOLD_EPOCH`, read with `foldEpochOf(sport): number` (unchanged by the split). It is what a PHONE computes: a state, an outcome
+  or a summary. **The phone sends the MAJOR as `engine_epoch`**, and it is the only number the server gates on; a MAJOR bump needs an app
+  update (everything above).
+- **MINOR** = `FOLD_MINOR`, read with `foldMinorOf(sport): number`. It moves when only the server's standings output moved (a stream's
+  deltas, with its states, outcome and summary byte for byte the same). **It never refuses a phone** and is never sent to the server: no
+  app update is needed. S2 may read it to show an optional, dismissible "update available" prompt; nothing may block on it.
+- What raises which: a deltas-only change raises the MINOR. A changed default VALUE (it is embedded in every module's state, so it moves
+  states), a harness-only rewrite that moves a state string, a removed or re-recorded golden stream, and anything the guard cannot see
+  (§4) are MAJOR. Anything ambiguous is a MAJOR. The pair goes up lexicographically, and a MAJOR bump may reset the minor to 0.
+- **The phone contract this rests on (recommendation; put it to your owner).** The app must not compute or render `standingsDelta`,
+  `supportsDraws`, or credit on any metric the match summary does not show. `standingsDelta` is exported from the same `./sport` closure,
+  so no type stops a phone from calling it. If the app ever does, a MINOR stops meaning "no app update" and D34 has to be revisited
+  before it does. The statement is also in the header of `packages/engine/src/sport/fold-epoch.ts`.
 
 **The server's state is already returned, and is the record (exists today; S2 should use it).** Every `201` carries the server's
 own fold of the ledger up to that event: `state_summary`, `outcome`, `status`. `GET /api/v1/fixtures/{id}/state` serves the full
@@ -153,15 +165,23 @@ rules instead needs an epoch per division or fixture, which does not exist.
 - **Kernel overlays are not pinned**: the kernel's `outcomeOf` / `summaryOf` (settlement, expunge, withdrawal over a held level
   result), stoppage, and `forfeit-credit.ts`. A rule change there moves no golden and does NOT force a bump: it owes a MANUAL bump of
   every sport it reaches. See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
-- A bump is also forced by deltas-only or harness-only rewrites of a corpus; each locks out every older phone of that sport.
-  (In flight on `feat/engine-split-1e-minor`, pending merge: a standings-only change becomes a MINOR bump that locks nobody out.)
+- A harness-only rewrite of a corpus (a state string that moves without changing its meaning) is a MAJOR bump and locks out every
+  older phone of that sport; the guard cannot tell it from a real change. A deltas-only
+  change is a MINOR bump (D34) and locks nobody out.
+- Also invisible to both halves, and so owed a MANUAL MAJOR: mid-match summaries (the corpus records `summary(finalState)` only; the pad
+  recomputes it after every event) and player-statistics folds (`src/stats/stats.ts`). See `GOLDEN-POLICY.md`, "What the guard cannot see".
 
 ## 5. Checklist for S2
 
-- [ ] `engine_epoch = foldEpochOf(fixture's sport)` on every `POST .../events`, `core.void` and retries included.
+- [ ] `engine_epoch = foldEpochOf(fixture's sport)` (the MAJOR) on every `POST .../events`, `core.void` and retries included. Never send
+      `foldMinorOf`.
 - [ ] 426 / `ENGINE_OUTDATED` mapped by code to localised "Update required" copy (4 locales) with a store link.
 - [ ] 426 is "parked until update": never dropped, never auto-retried, queue kept in order, resent after the update.
 - [ ] Reconcile the optimistic fold against the `201` body's `state_summary` / `outcome` / `status` on every ack.
 - [ ] Only the named `sport` blocked; other sports keep scoring.
 - [ ] A test that drives the real queue through a faked epoch bump (the usecase tests' way), not a mocked transport.
-- [ ] Re-read this file against `main` once 1f merges, and against `feat/engine-split-1e-minor` once it merges.
+- [ ] The app never computes or renders `standingsDelta`, `supportsDraws` or non-headline credit (the phone contract in §3); if it must,
+      put D34 back in front of your owner first.
+- [ ] A MINOR change never blocks scoring; at most an optional "update available" prompt.
+- [ ] Re-read this file against `main` when S2 starts: 1f is merged (#961), and 1e-M (D34) is merged once its PR lands, so check that
+      `foldMinorOf` / `FOLD_MINOR` exist in `@seazn/engine/sport` before relying on §3's MINOR text.
