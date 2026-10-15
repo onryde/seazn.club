@@ -25,7 +25,9 @@ vi.mock("next/navigation", () => ({
 }));
 
 const confirmMock = vi.hoisted(() => ({
-  fn: vi.fn(async (_opts: { title: string; body: unknown; confirmLabel: string; tone?: string }) => true),
+  fn: vi.fn<(opts: { title: string; body: unknown; confirmLabel: string; tone?: string }) => Promise<boolean>>(
+    async () => true,
+  ),
 }));
 vi.mock("@/components/ui/confirm-provider", () => ({
   useConfirm: () => confirmMock.fn,

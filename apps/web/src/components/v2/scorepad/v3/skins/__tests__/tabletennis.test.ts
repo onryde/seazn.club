@@ -720,7 +720,7 @@ describe("refusedEventTypes()", () => {
   it("keeps the More sheet free of every dead end — the two exclusion sets, together", () => {
     const v = view({ events: stream(anchor("H", "A")) });
     const tiles = buildTiles(v);
-    const sheets = buildSheets(v, t);
+    const sheets = buildSheets(v);
     const scorebug = buildScorebug(v, t);
     const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
     expect(dedicated).toContain(RALLY_TYPE);
@@ -742,7 +742,7 @@ describe("refusedEventTypes()", () => {
 describe("sheets()", () => {
   it("prefills the Set score sheet from the CURRENT game, titled Points, and clamps to the uncapped margin", () => {
     const v = view({ events: stream(summary(11, 7)) });
-    const sheet = buildSheets(v, t)[SET_SCORE_TILE_ID]!;
+    const sheet = buildSheets(v)[SET_SCORE_TILE_ID]!;
     expect(sheet.event).toBe(SUMMARY_TYPE);
     const [home, away] = sheet.steps;
     expect(home!.title).toBe("pad.tabletennis.sheet.setScore.home.title");
@@ -755,16 +755,16 @@ describe("sheets()", () => {
 
   it("clamps to a custom cap when the cfg sets one, never the uncapped margin", () => {
     const capped = tabletennis.configSchema.parse({ cap: 15 });
-    const sheet = buildSheets(view({ cfg: capped }), t)[SET_SCORE_TILE_ID]!;
+    const sheet = buildSheets(view({ cfg: capped }))[SET_SCORE_TILE_ID]!;
     expect((sheet.steps[0] as { max: number }).max).toBe(15);
   });
 
   it("asks a PAIR who was carded and stamps a SINGLES side's sole player without asking", () => {
-    const singles = buildSheets(view(), t)[sanctionSheetKey("home")]!;
+    const singles = buildSheets(view())[sanctionSheetKey("home")]!;
     expect(singles.steps.map((step) => step.id)).toEqual(["level"]);
     expect(singles.buildPayload({ level: "warning" })).toEqual({ by: "H", level: "warning", person: "H1" });
 
-    const doubles = buildSheets(view({ lineups: DOUBLES }), t)[sanctionSheetKey("away")]!;
+    const doubles = buildSheets(view({ lineups: DOUBLES }))[sanctionSheetKey("away")]!;
     expect(doubles.steps.map((step) => step.id)).toEqual(["level", "person"]);
     const personStep = doubles.steps[1] as { candidates: readonly string[]; side: string };
     expect(personStep.candidates).toEqual(["A-first", "A-second"]);
@@ -777,7 +777,7 @@ describe("sheets()", () => {
   });
 
   it("tones the ladder — yellow is a caution, red is the dismissal end", () => {
-    const sheet = buildSheets(view(), t)[sanctionSheetKey("home")]!;
+    const sheet = buildSheets(view())[sanctionSheetKey("home")]!;
     const level = sheet.steps[0] as { options: { id: string; tone?: readonly string[] }[] };
     expect(level.options.map((option) => option.id)).toEqual([...SANCTION_LEVELS]);
     expect(level.options.find((option) => option.id === "warning")!.tone).toEqual(["caution"]);
@@ -785,7 +785,7 @@ describe("sheets()", () => {
   });
 
   it("the serve anchor sheet asks BOTH facts independently, and its payload is a REAL rally the fold accepts", () => {
-    const sheet = buildSheets(view(), t)[SERVE_ANCHOR_TILE_ID]!;
+    const sheet = buildSheets(view())[SERVE_ANCHOR_TILE_ID]!;
     expect(sheet.event).toBe(RALLY_TYPE);
     expect(sheet.steps.map((step) => step.id)).toEqual(["serving", "wonBy"]);
     // Server and winner independent — away served, home won.
@@ -799,7 +799,7 @@ describe("sheets()", () => {
   });
 
   it("the serve anchor omits attribution for a PAIR — nobody is nameable from a side alone", () => {
-    const sheet = buildSheets(view({ lineups: DOUBLES }), t)[SERVE_ANCHOR_TILE_ID]!;
+    const sheet = buildSheets(view({ lineups: DOUBLES }))[SERVE_ANCHOR_TILE_ID]!;
     const payload = sheet.buildPayload({ serving: "home", wonBy: "away" });
     expect(payload).toEqual({ wonBy: "A", serving: "H" });
   });
@@ -807,7 +807,7 @@ describe("sheets()", () => {
   it("every tile that opens a sheet names a sheet this skin actually declares", () => {
     for (const band of [0, 1, 2, 3] as const) {
       const v = view({ band });
-      const sheets = buildSheets(v, t);
+      const sheets = buildSheets(v);
       for (const tile of buildTiles(v)) {
         if (!("sheet" in tile.action)) continue;
         if (tile.action.sheet.startsWith("__pad-host/")) continue;
@@ -1144,7 +1144,7 @@ describe("copy truth", () => {
         keys.add(tile.label);
         if (tile.sublabel !== undefined) keys.add(tile.sublabel);
       }
-      for (const sheet of Object.values(buildSheets(v, t))) {
+      for (const sheet of Object.values(buildSheets(v))) {
         for (const step of sheet.steps) {
           keys.add(step.title);
           if (step.kind === "choice") for (const option of step.options) keys.add(option.label);

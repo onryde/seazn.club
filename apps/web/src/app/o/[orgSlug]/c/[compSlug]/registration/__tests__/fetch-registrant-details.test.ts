@@ -15,7 +15,7 @@ const txCalls = { count: 0, firsts: [] as string[] };
 
 vi.mock("@/lib/db", () => ({
   withTenant: async (_orgId: string, fn: (tx: unknown) => unknown) => {
-    const tx = (strings: unknown, ..._values: unknown[]) => {
+    const tx = (strings: unknown) => {
       // A fragment-builder call (`${tx(idsArray)}`) — a plain array, no
       // `.raw` — same split page.test.tsx's own @/lib/db fake already uses.
       if (!Array.isArray(strings) || !("raw" in (strings as object))) {

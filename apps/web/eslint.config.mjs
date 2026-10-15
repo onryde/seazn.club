@@ -15,8 +15,12 @@ const eslintConfig = defineConfig([
       // readability more than it helps.
       "react/no-unescaped-entities": "off",
       // React-Compiler-era rules (new defaults in eslint-config-next 16).
-      // Existing components predate them; kept visible as warnings until the
-      // refactor tracked in development/DEFERRED.md.
+      // The components that predated them were refactored to zero (ESLint
+      // zero-warnings programme, 2026-10-14) with no suppression comment; the
+      // `lint` script's `--max-warnings 0` turns any new finding into a failed
+      // run, and src/lib/__tests__/compiler-rules-no-disables.test.ts refuses
+      // a directive that silences them. They stay "warn" only so a violation
+      // reads as a warning in the editor.
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/purity": "warn",
       "react-hooks/static-components": "warn",

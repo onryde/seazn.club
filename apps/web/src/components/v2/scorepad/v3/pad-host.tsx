@@ -43,6 +43,7 @@ import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/c
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { useLocalStorageItem, writeLocalStorageItem } from "@/lib/use-client-snapshot";
 import { type MsgFn } from "@/lib/scoring-vocab";
 import { deepEqual } from "../pipeline";
 import { refusalText } from "../refusal-copy";
@@ -222,6 +223,66 @@ export function resolveInitialBand(stored: string | null, fidelity: PadSpec["fid
   if (stored === "2") return 2;
   if (stored === "3") return 3;
   return defaultBandFor(fidelity);
+}
+
+/**
+ * THE RECORDING BAND (W1 / Task 4) — the scorer's pick of how much to record,
+ * remembered per device and per fixture. Owned by `PadHostV3`, the component
+ * that filters the tiles with it; a hook of its own so the storage/pick rules
+ * can be driven without mounting a whole pad.
+ */
+export function usePadBand(
+  fixtureId: string,
+  fidelity: PadSpec["fidelity"],
+): [FidelityBand, (next: FidelityBand) => void] {
+  // THE FIRST RENDER NEVER TOUCHES STORAGE (W1/Task 4 review, I-2). This used
+  // to read `localStorage` in the `useState` initializer. `<ScorePad/>` SERVER
+  // -RENDERS — `fixture-console.tsx` mounts it unconditionally, no `mounted`
+  // gate and no `ssr: false` — so the server rendered the default band while a
+  // returning scorer's hydration render read their stored one, and React threw
+  // the whole tree away and re-rendered it client-side on every fixture page
+  // view. With a stored "1" on football the server emits nine tiles and the
+  // client's first render has three. That is the exact regression class
+  // `__tests__/fixture-console-ssr.test.tsx` was written for, and it is
+  // invisible to a node test because there IS no `window` there — the guard
+  // that made the old code "safe" on the server is what hid it.
+  //
+  // The stored band is read through `useLocalStorageItem`
+  // (`useSyncExternalStore`, server snapshot null): the server AND the
+  // hydration render both see "nothing stored" and agree on the default, and
+  // the stored band lands on the render after hydration. (ESLint L3: this was
+  // a mount `useEffect` copying storage into state — the same timing, minus
+  // the effect.) Storage reads never throw (Safari private mode throws on the
+  // accessor itself, and a scoring pad must not fail to mount because a
+  // preference could not be read). A pick made here wins for THIS fixture,
+  // even when storage refuses to remember it; another fixture re-seeds from
+  // its own key, and the sport's band map re-validates the stored value.
+  //
+  // PER DEVICE, AND THAT IS THE OWNER'S DECISION — NOT A DEFECT TO FIX
+  // (ruling, fix round 2). `bandStorageKey` is `localStorage`, so a handed-over
+  // device and a `/score/[token]` kiosk each start at `defaultBandFor` with no
+  // memory of what the previous scorer picked. That was raised as a gap: a
+  // match deliberately recorded at "Result only" continues at the sport
+  // default on the second device. The owner ruled it INTENDED — the band is
+  // how much detail THIS scorer wants to record, and one volunteer's choice
+  // must not silently constrain the next one. Do not "fix" this by moving the
+  // band to per-fixture server state; that is a different product, and it
+  // would need its own ruling.
+  const bandKey = bandStorageKey(fixtureId);
+  const storedBand = useLocalStorageItem(bandKey);
+  const [pickedBand, setPickedBand] = useState<{ key: string; band: FidelityBand } | null>(null);
+  const band =
+    pickedBand?.key === bandKey ? pickedBand.band : resolveInitialBand(storedBand, fidelity);
+  const onBandChange = useCallback(
+    (next: FidelityBand) => {
+      setPickedBand({ key: bandKey, band: next });
+      // A pad whose band cannot be REMEMBERED still has to be a pad whose
+      // band can be CHANGED — the pick above is already set.
+      writeLocalStorageItem(bandKey, String(next));
+    },
+    [bandKey],
+  );
+  return [band, onBandChange];
 }
 
 /**
@@ -1664,66 +1725,8 @@ export function PadHostV3(props: PadHostV3Props) {
   // from the Recording chip, and this is the component that filters the tiles
   // with it — one owner, so a picked band and a rendered grid cannot drift.
   //
-  // THE FIRST RENDER NEVER TOUCHES STORAGE (W1/Task 4 review, I-2). This used
-  // to read `localStorage` in the `useState` initializer. `<ScorePad/>` SERVER
-  // -RENDERS — `fixture-console.tsx` mounts it unconditionally, no `mounted`
-  // gate and no `ssr: false` — so the server rendered the default band while a
-  // returning scorer's hydration render read their stored one, and React threw
-  // the whole tree away and re-rendered it client-side on every fixture page
-  // view. With a stored "1" on football the server emits nine tiles and the
-  // client's first render has three. That is the exact regression class
-  // `__tests__/fixture-console-ssr.test.tsx` was written for, and it is
-  // invisible to a node test because there IS no `window` there — the guard
-  // that made the old code "safe" on the server is what hid it.
-  //
-  // The house pattern instead (`schedule-board.tsx`'s density modes): default
-  // in `useState`, storage in a mount `useEffect`. Both renders agree, and the
-  // stored band lands one frame later.
-  //
-  // PER DEVICE, AND THAT IS THE OWNER'S DECISION — NOT A DEFECT TO FIX
-  // (ruling, fix round 2). `bandStorageKey` is `localStorage`, so a handed-over
-  // device and a `/score/[token]` kiosk each start at `defaultBandFor` with no
-  // memory of what the previous scorer picked. That was raised as a gap: a
-  // match deliberately recorded at "Result only" continues at the sport
-  // default on the second device. The owner ruled it INTENDED — the band is
-  // how much detail THIS scorer wants to record, and one volunteer's choice
-  // must not silently constrain the next one. Do not "fix" this by moving the
-  // band to per-fixture server state; that is a different product, and it
-  // would need its own ruling.
-  const bandKey = bandStorageKey(props.fixtureId);
-  const [band, setBand] = useState<FidelityBand>(() => defaultBandFor(spec.fidelity));
-  useEffect(() => {
-    // Inside a try: Safari private mode throws on the accessor itself, and a
-    // scoring pad must not fail to mount because a preference could not be
-    // read. Re-runs only when the FIXTURE or the sport's own band map changes,
-    // both of which are re-seeds rather than clobbers — and `onBandChange`
-    // writes through, so a re-run reads back the scorer's own latest pick.
-    let stored: string | null = null;
-    try {
-      stored = window.localStorage.getItem(bandKey);
-    } catch {
-      stored = null;
-    }
-    const seeded = resolveInitialBand(stored, spec.fidelity);
-    // `react-hooks/set-state-in-effect` warns here, as it does on
-    // `schedule-board.tsx:856` — the same mount-time storage read, and the same
-    // accepted cost: a preference that cannot be read on the server has to
-    // arrive one frame after mount or not at all. The functional update keeps
-    // the second render a no-op when storage agrees with the default.
-    setBand((current) => (current === seeded ? current : seeded));
-  }, [bandKey, spec.fidelity]);
-  const onBandChange = useCallback(
-    (next: FidelityBand) => {
-      setBand(next);
-      try {
-        if (typeof window !== "undefined") window.localStorage.setItem(bandKey, String(next));
-      } catch {
-        // A pad whose band cannot be REMEMBERED still has to be a pad whose
-        // band can be CHANGED — the state above is already set.
-      }
-    },
-    [bandKey],
-  );
+  // THE RECORDING BAND's storage and pick: `usePadBand`, below the component.
+  const [band, onBandChange] = usePadBand(props.fixtureId, spec.fidelity);
 
   const [phase, setPhase] = useState<PadPhase>("live");
   const [held, setHeld] = useState<HeldTap | null>(null);

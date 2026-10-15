@@ -141,7 +141,7 @@ describe.skipIf(!process.env.DATABASE_URL)("sweepOrphanGroups (#375)", () => {
   it("does not cancel a subscription Stripe still calls live — it raises it", async () => {
     const warn = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
-      const { id, stripeId } = await seedOrphan("incomplete", { stripeStatus: "active" });
+      const { id } = await seedOrphan("incomplete", { stripeStatus: "active" });
 
       const res = await sweepOrphanGroups();
 

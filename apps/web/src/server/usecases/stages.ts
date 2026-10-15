@@ -85,7 +85,7 @@ import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
+import type { CreateStages } from "@/server/api-v1/schemas";
 import { z } from "zod";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";

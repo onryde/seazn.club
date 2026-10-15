@@ -3,9 +3,10 @@
 // Cards ⇄ compact list toggle (v3/03 §2, for orgs with >20 comps). The grid
 // itself is server-rendered; this wrapper only flips a data attribute the
 // .ecard styles respond to, and remembers the choice per browser.
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { LayoutGrid, Rows3 } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocalStorageItem, writeLocalStorageItem } from "@/lib/use-client-snapshot";
 
 type View = "cards" | "list";
 
@@ -20,16 +21,19 @@ export function ViewToggleContainer({
   children: ReactNode;
 }) {
   const msg = useMsg();
-  const [view, setView] = useState<View>("cards");
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey);
-    if (saved === "list" || saved === "cards") setView(saved);
-  }, [storageKey]);
+  // The remembered choice, read through a store: "cards" on the server and the
+  // hydration render (the server cannot see it), the saved view from the
+  // render after. A pick in THIS tab is held in state too — `storage` events
+  // only reach other tabs, and a browser that refuses the write must still
+  // switch views.
+  const saved = useLocalStorageItem(storageKey);
+  const [picked, setPicked] = useState<{ key: string; view: View } | null>(null);
+  const view: View =
+    picked?.key === storageKey ? picked.view : saved === "list" || saved === "cards" ? saved : "cards";
 
   function pick(next: View) {
-    setView(next);
-    window.localStorage.setItem(storageKey, next);
+    setPicked({ key: storageKey, view: next });
+    writeLocalStorageItem(storageKey, next);
   }
 
   return (

@@ -176,6 +176,15 @@ export function previewScaleFor(stripWidth: number): number {
   return Math.min(w, PREVIEW_MAX_W_PX) / CANVAS_W;
 }
 
+/** True when stream code `a` was issued AFTER `b` (both ISO instants off the same server). An instant that does not
+ *  parse falls back to "they differ" — the safe reading, since the card then re-asks rather than trusts a code it
+ *  cannot order. Exported for its test. */
+export function codeIsNewer(a: string, b: string): boolean {
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  return Number.isNaN(x) || Number.isNaN(y) ? a !== b : x > y;
+}
+
 /** What the panel needs off the row. Structurally a subset of
  *  `RunSheetFixture`, declared narrowly so the panel does not import the run
  *  sheet's own shape and become un-mountable anywhere else. */
@@ -855,6 +864,15 @@ export function PhoneTab({
   const [targets, setTargets] = useState<TargetsState>({ status: "loading" });
   // Bumped by Retry: re-runs the list's read.
   const [targetsTry, setTargetsTry] = useState(0);
+  // A LOUD read (the mount, Retry, another org) shows "loading", never the last answer — decided here, in render, from
+  // the read's identity: a new (org, try) resets the list to loading in the same render that asks for it, instead of an
+  // effect setting it after the paint.
+  const targetsRead = `${orgId}|${targetsTry}`;
+  const [targetsReadFor, setTargetsReadFor] = useState(targetsRead);
+  if (targetsReadFor !== targetsRead) {
+    setTargetsReadFor(targetsRead);
+    setTargets({ status: "loading" });
+  }
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [createError, setCreateError] = useState<CreateError | null>(null);
   // The purchase: the chooser, its one Checkout Session, the embedded sheet and a plan refusal (C22 / D12) — the ONE
@@ -900,15 +918,27 @@ export function PhoneTab({
     setSelectedTargetId(next);
     return next;
   }, []);
-  const readTargets = useCallback(
-    async (loud: boolean): Promise<StreamTarget[] | null> => {
-      const seq = ++listSeq.current;
-      listInFlight.current = true;
-      if (loud) setTargets({ status: "loading" });
+  // The ask and the landing are two halves so an effect can start a read without setting state: `askTargets` only
+  // takes the sequence number and asks; `landTargets` is what sets state, from the answer's own callback.
+  const askTargets = useCallback(async (): Promise<{ seq: number; list: StreamTarget[] | null }> => {
+    const seq = ++listSeq.current;
+    listInFlight.current = true;
+    try {
+      // created_at order (listStreamTargets), so the first is the org's oldest destination.
+      return { seq, list: await apiV1<StreamTarget[]>(`/api/v1/orgs/${orgId}/stream-targets`) };
+    } catch {
+      return { seq, list: null };
+    }
+  }, [orgId]);
+  const landTargets = useCallback(
+    ({ seq, list }: { seq: number; list: StreamTarget[] | null }, loud: boolean): StreamTarget[] | null => {
       try {
-        // created_at order (listStreamTargets), so the first is the org's oldest destination.
-        const list = await apiV1<StreamTarget[]>(`/api/v1/orgs/${orgId}/stream-targets`);
         if (seq !== listSeq.current) return null;
+        if (list === null) {
+          // Spec §3.3: an unreadable list is an ERROR with Retry — never "none" (the silent catch this replaces).
+          setTargets((cur) => (loud || cur.status !== "ok" ? { status: "error" } : cur));
+          return null;
+        }
         setTargets({ status: "ok", list });
         listShown.current = list;
         const next = settleSelection();
@@ -921,23 +951,21 @@ export function PhoneTab({
         // says what to do, and a "removed" line kept past it would later sit beside an enabled Go live.
         if (list.length === 0) setCreateError((e) => (e?.code === TARGET_REMOVED ? null : e));
         return list;
-      } catch {
-        if (seq !== listSeq.current) return null;
-        // Spec §3.3: an unreadable list is an ERROR with Retry — never "none" (the silent catch this replaces).
-        setTargets((cur) => (loud || cur.status !== "ok" ? { status: "error" } : cur));
-        return null;
       } finally {
         if (seq === listSeq.current) listInFlight.current = false;
       }
     },
-    [orgId, settleSelection],
+    [settleSelection],
   );
-  // The mount and each Retry: a loud read. No cleanup is owed — another org's read (a new `readTargets`) takes a newer
+  const readTargets = useCallback(
+    async (loud: boolean): Promise<StreamTarget[] | null> => landTargets(await askTargets(), loud),
+    [askTargets, landTargets],
+  );
+  // The mount and each Retry: a loud read. No cleanup is owed — another org's read (a new `askTargets`) takes a newer
   // sequence number, so the old answer is dropped by the rule above, and React ignores a set after unmount.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the loud read shows "loading" before it asks (as before I1)
-    void readTargets(true);
-  }, [readTargets, targetsTry]);
+    void askTargets().then((answer) => landTargets(answer, true));
+  }, [askTargets, landTargets, targetsTry]);
   // Capture QR v2 §6.12: the phone's read model, polled every STREAM_POLL_MS while the tab is open — beside the session's
   // own poll, which idles at Ready. A failed read keeps the last answer (the next poll tries again); the first answer, or
   // its failure, is what lets the body render — a Ready state drawn before it would flash "no phone" at a paired one.
@@ -949,33 +977,44 @@ export function PhoneTab({
   // Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone clears on the first present answer to a read
   // sent after the refusal (`readClearsW5`); the watch lives in a ref so the interval's callback never reads a stale one.
   const presence = useRef<PresenceWatch>(PRESENCE_WATCH_START);
-  const readPhone = useCallback(async () => {
+  // Ask and land are two halves (as for the destination list): `askPhone` takes the sequence number and asks, and sets
+  // nothing; `landPhone` is what sets state, from the answer's own callback — so the mount effect starts a read
+  // without calling a state setter, and the poll and the actions read through `readPhone`.
+  const askPhone = useCallback(async (): Promise<{ seq: number; got: StreamPhone | null }> => {
     const seq = ++phoneSeq.current;
     try {
-      const got = await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`);
-      if (seq !== phoneSeq.current) return;
-      setPhone(got);
-      if (readClearsW5(presence.current, { seq, present: got.phone?.present === true })) {
-        setCreateError((e) => (e !== null && isW5Refusal(e.code) ? null : e));
-      }
-      const answer = got.destination?.id ?? null;
-      // B8 final re-review n-6: "couldn't save" is news only while the server's answer is the one it was said beside —
-      // an answer that CHANGES (saved from another device or tab) retires it. A poll answering the same keeps it.
-      if (answer !== serverPick.current) setPickFailed(false);
-      serverPick.current = answer;
-      settleSelection();
+      return { seq, got: await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`) };
     } catch {
       // transient — the poll asks again
-    } finally {
-      setPhoneLoaded(true);
+      return { seq, got: null };
     }
-  }, [fixtureId, settleSelection]);
+  }, [fixtureId]);
+  const landPhone = useCallback(
+    ({ seq, got }: { seq: number; got: StreamPhone | null }) => {
+      try {
+        if (got === null || seq !== phoneSeq.current) return;
+        setPhone(got);
+        if (readClearsW5(presence.current, { seq, present: got.phone?.present === true })) {
+          setCreateError((e) => (e !== null && isW5Refusal(e.code) ? null : e));
+        }
+        const answer = got.destination?.id ?? null;
+        // B8 final re-review n-6: "couldn't save" is news only while the server's answer is the one it was said beside —
+        // an answer that CHANGES (saved from another device or tab) retires it. A poll answering the same keeps it.
+        if (answer !== serverPick.current) setPickFailed(false);
+        serverPick.current = answer;
+        settleSelection();
+      } finally {
+        setPhoneLoaded(true);
+      }
+    },
+    [settleSelection],
+  );
+  const readPhone = useCallback(async () => landPhone(await askPhone()), [askPhone, landPhone]);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- every setState in readPhone runs after its await
-    void readPhone();
+    void askPhone().then(landPhone);
     const id = setInterval(() => void readPhone(), STREAM_POLL_MS);
     return () => clearInterval(id);
-  }, [readPhone]);
+  }, [askPhone, landPhone, readPhone]);
 
   // PR-2 T10 (§7.1): the switch writes `PUT …/stream-settings { autoStream }` — the switch ALONE (the route writes only the
   // fields a PUT names, so the pick is untouched) — then reads the read model again: its `auto.enabled` is the answer the
@@ -1050,35 +1089,61 @@ export function PhoneTab({
   type Code = { status: "idle" } | { status: "loading" } | { status: "error" } | { status: "ok"; qr: CaptureQrV2; issuedAt: string };
   const [code, setCode] = useState<Code>({ status: "idle" });
   const [codeOpen, setCodeOpen] = useState(false);
-  const ensureCode = useCallback(async () => {
-    setCode({ status: "loading" });
+  // `askCode` only asks (and sets nothing); the answer is landed by `landCode`, from its own callback — which is how the
+  // effect below starts an ask without calling a state setter. `ensureCode` is the event-handler form (Retry): it shows
+  // the ask in flight first.
+  const askCode = useCallback(async (): Promise<{ qr: CaptureQrV2; issuedAt: string } | null> => {
     try {
       const got = await apiV1<{ qr: CaptureQrV2; issuedAt: string }>(`/api/v1/fixtures/${fixtureId}/stream-code`, { method: "POST" });
-      setCode({ status: "ok", qr: got.qr, issuedAt: got.issuedAt });
+      return { qr: got.qr, issuedAt: got.issuedAt };
     } catch {
-      setCode({ status: "error" });
+      return null;
     }
   }, [fixtureId]);
+  const landCode = useCallback((got: { qr: CaptureQrV2; issuedAt: string } | null) => {
+    setCode(got === null ? { status: "error" } : { status: "ok", qr: got.qr, issuedAt: got.issuedAt });
+  }, []);
+  const ensureCode = useCallback(async () => {
+    setCode({ status: "loading" });
+    landCode(await askCode());
+  }, [askCode, landCode]);
   const wantCode = phoneLoaded && !legacy && ready !== "code_ended" && (ready === "no_phone" ? state === "idle" : codeOpen);
   // The read model names the code the server holds NOW. One the card does not show — reissued from another tab, or the
   // shown one ended (expired) on a match no longer finished (C5) — is asked for again, ONCE per such answer, so a stale
   // read can never spin the ensure.
   const codeSeen = phone?.code ? `${phone.code.issuedAt}|${phone.code.state === "ended" ? "ended" : "open"}` : null;
+  // A shown code the read model has moved past is stale: reissued from another tab it is already REVOKED, and an ended
+  // one on a match still going is dead. One predicate for the card (it draws `loading` for a stale code — a revoked code
+  // must never stay scannable, with "Reissue" enabled, until the new one lands) and for the re-ask below. "Moved past"
+  // is ORDERED: a read model that names an OLDER code than the card holds is only lagging (the answer to our own
+  // reissue or re-ask lands before the next poll does), and blanking a fresh code until the poll catches up would be a
+  // spinner the organiser did nothing to deserve.
+  const codeStale =
+    code.status === "ok" &&
+    !!phone?.code &&
+    (codeIsNewer(phone.code.issuedAt, code.issuedAt) || (phone.code.state === "ended" && !phone.finished && !codeIsNewer(code.issuedAt, phone.code.issuedAt)));
   const askedFor = useRef<string | null>(null);
+  // The FIRST ask is in flight (a poll can re-run the effect before it answers). While it is, `code` is still `idle`
+  // — and the card already draws `idle` as loading, so no state needs setting to show the ask.
+  const firstAskOpen = useRef(false);
   useEffect(() => {
     if (!wantCode) return;
     if (code.status === "idle") {
+      if (firstAskOpen.current) return;
+      firstAskOpen.current = true;
       askedFor.current = codeSeen;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- the card shows the ask in flight before it answers
-      void ensureCode();
+      void askCode().then((got) => {
+        firstAskOpen.current = false;
+        landCode(got);
+      });
       return;
     }
-    if (code.status !== "ok" || codeSeen === null || askedFor.current === codeSeen || !phone?.code) return;
-    const stale = phone.code.issuedAt !== code.issuedAt || (phone.code.state === "ended" && !phone.finished);
-    if (!stale) return;
+    if (!codeStale || codeSeen === null || askedFor.current === codeSeen) return;
     askedFor.current = codeSeen;
-    void ensureCode();
-  }, [wantCode, code, codeSeen, phone, ensureCode]);
+    // The card already draws `loading` for the stale code (derived, above); the answer replaces it — a new code, or the
+    // error card when the ask is refused.
+    void askCode().then(landCode);
+  }, [wantCode, code.status, codeStale, codeSeen, askCode, landCode]);
   const codeText = code.status === "ok" ? captureQrV2Text(code.qr) : null;
   const [codeImage, setCodeImage] = useState<{ text: string; qr: SeaznQr } | null>(null);
   useEffect(() => {
@@ -1097,7 +1162,7 @@ export function PhoneTab({
     };
   }, [codeText]);
   const codeCard: CodeCard =
-    code.status === "ok"
+    code.status === "ok" && !codeStale
       ? { status: "ok", text: codeText!, image: codeImage && codeImage.text === codeText ? codeImage.qr : null }
       : code.status === "error"
         ? { status: "error" }

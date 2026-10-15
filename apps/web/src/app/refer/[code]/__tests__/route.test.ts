@@ -4,7 +4,7 @@
 // no cookie, straight to /start.
 import { it, expect, vi, beforeEach } from "vitest";
 
-const resolveReferralCode = vi.fn(async (_code: string) => null as { orgId: string } | null);
+const resolveReferralCode = vi.fn<(code: string) => Promise<{ orgId: string } | null>>(async () => null);
 vi.mock("@/lib/referral", () => ({
   REFERRAL_COOKIE: "ref",
   resolveReferralCode: (...a: [string]) => resolveReferralCode(...a),

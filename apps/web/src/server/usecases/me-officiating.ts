@@ -15,6 +15,7 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 // cross-org twin of schedule.ts's `courtNamesById`; see that helper's own
 // doc comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";
+import { omit } from "@/lib/omit";
 import { unseatedForfeitLoserName, unseatedWithdrew } from "@/lib/forfeit-tag";
 
 // refreshOfficialsCache is typed for the tenant tx; it only uses the tagged
@@ -200,7 +201,7 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
   const resolveCourt = (
     r: Omit<MyOfficiatingAssignment, "court_name"> & { org_id: string },
   ): MyOfficiatingAssignment => {
-    const { org_id: _orgId, ...rest } = r;
+    const rest = omit(r, "org_id");
     return {
       ...rest,
       court_name: rest.court_id !== null ? (courtNames.get(rest.court_id) ?? rest.court_id) : null,

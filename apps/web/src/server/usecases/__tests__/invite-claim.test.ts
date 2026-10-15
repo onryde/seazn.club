@@ -48,9 +48,9 @@ afterAll(async () => {
 
 describe("inviteLanding (pure)", () => {
   it("every join lands on /dashboard", () => {
-    expect(inviteLanding("viewer", "joined")).toBe("/dashboard");
-    expect(inviteLanding("admin", "joined")).toBe("/dashboard");
-    expect(inviteLanding("viewer", "already_member")).toBe("/dashboard");
+    // Role and outcome were (unused) arguments until the landing stopped
+    // depending on them; the signature now says so.
+    expect(inviteLanding()).toBe("/dashboard");
   });
 });
 

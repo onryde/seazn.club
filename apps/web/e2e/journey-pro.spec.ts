@@ -7,7 +7,6 @@ import {
   createCompetitionViaUi,
   createDivisionViaUi,
   createStageAndGenerate,
-  scoreFixture,
   scoreRemainingFixtures,
   divisionPath,
 } from "./helpers";

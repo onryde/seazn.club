@@ -9,11 +9,12 @@
 // Youth guard (v3/11 gap 8): when the surface contains youth divisions,
 // leaving Private first raises a consent-responsibility interstitial — the
 // organiser confirms they hold guardian consent before names go public.
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { useOrigin } from "@/lib/use-client-snapshot";
 
 export type VisibilityKey = "private" | "unlisted" | "public";
 
@@ -42,8 +43,7 @@ export function VisibilityPicker({
   const msg = useMsg();
   const confirm = useConfirm();
   const [copied, setCopied] = useState(false);
-  const [origin, setOrigin] = useState("");
-  useEffect(() => setOrigin(window.location.origin), []);
+  const origin = useOrigin();
   const shareUrl = sharePath ? `${origin}${sharePath}` : null;
 
   async function pick(next: VisibilityKey) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import posthog from "posthog-js";
@@ -13,7 +13,8 @@ import {
   type ConsentChoice,
 } from "@/lib/consent";
 import { readActiveLocale, clientCommon } from "@/lib/client-dict";
-import { DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
+import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
+import { subscribeToStorage } from "@/lib/use-client-snapshot";
 
 /** The one route prefix that renders no chrome at all. Named rather than
  *  inlined so a future overlay route cannot forget it. */
@@ -43,6 +44,13 @@ function isKioskBoard(pathname: string | null | undefined): boolean {
   return parts[0] === "shared" && parts.at(-1) === KIOSK_SEGMENT && (parts.length === 4 || parts.length === 5);
 }
 
+const noPromptOnServer = () => false;
+/** The page's locale is the path's (or the cookie's): read once per render on
+ *  the client, `DEFAULT_LOCALE` on the server. The banner only ever renders on
+ *  the client, after hydration, so the server value never reaches the screen. */
+const localeNeverNotifies = () => () => {};
+const defaultLocaleOnServer = () => DEFAULT_LOCALE;
+
 /**
  * Consent banner. Essential cookies (login) always run; analytics (PostHog) is
  * opt-in per GDPR. "Accept" opts PostHog into capturing; "Reject" keeps it
@@ -53,17 +61,23 @@ function isKioskBoard(pathname: string | null | undefined): boolean {
  * on load to decide whether to capture before hydration.
  */
 export function CookieConsent() {
-  const [visible, setVisible] = useState(false);
-  const [locale, setLocale] = useState<Locale>(DEFAULT_LOCALE);
+  // Show on first visit, or when the policy version moved on since the
+  // visitor last chose (policy change / new third party → re-consent). Read
+  // from storage through a store — false on the server and the hydration
+  // render, the visitor's real answer from the render after — instead of being
+  // copied into state by a mount effect. Another tab's choice arrives as a
+  // `storage` event and hides this tab's banner too.
+  const prompt = useSyncExternalStore(subscribeToStorage, needsConsentPrompt, noPromptOnServer);
+  // An explicit open (Cookie settings) or close (a choice) in THIS tab; null
+  // until one happens, which leaves the stored answer in charge.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const visible = override ?? prompt;
+  const locale = useSyncExternalStore(localeNeverNotifies, readActiveLocale, defaultLocaleOnServer);
   const pathname = usePathname();
 
   useEffect(() => {
-    setLocale(readActiveLocale());
-    // Show on first visit, or when the policy version moved on since the
-    // visitor last chose (policy change / new third party → re-consent).
-    if (needsConsentPrompt()) setVisible(true);
     // Re-open on demand so users can withdraw/change consent at any time.
-    const reopen = () => setVisible(true);
+    const reopen = () => setOverride(true);
     window.addEventListener(CONSENT_REOPEN_EVENT, reopen);
     return () => window.removeEventListener(CONSENT_REOPEN_EVENT, reopen);
   }, []);
@@ -90,7 +104,7 @@ export function CookieConsent() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ choice, policy_version: COOKIE_POLICY_VERSION }),
     }).catch(() => {});
-    setVisible(false);
+    setOverride(false);
   }
 
   // The overlay segment renders no banner (owner answer 13, Q2). OBS

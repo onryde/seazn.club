@@ -11,7 +11,7 @@
 // Date.now stubbed. The hook's own test (match-centre/__tests__/use-live-fixture.test.ts)
 // uses vi.useFakeTimers; a 1 Hz clock is easier to witness by capturing the
 // callback, so this file keeps the captured-setInterval form on purpose.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { useOverlayClock, NO_CLOCK_STATUSES } from "../use-overlay-clock";
 import { VOID_STATUSES } from "@/components/v2/stages-panel";
@@ -69,7 +69,10 @@ const ANCHOR: NonNullable<Clock> = {
   nominalSeconds: HALF_SECONDS,
 };
 
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// A push re-reads the wall clock from a zero-delay timer (see the hook), so the
+// timers are faked for the whole file: nothing may fire after its test ended.
+beforeEach(() => { vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("useOverlayClock", () => {
   it("shows the anchor at mount and advances by wall time on each 1 Hz tick", () => {
@@ -111,6 +114,49 @@ describe("useOverlayClock", () => {
     expect(h.read()).toBe("45:00");
   });
 
+  // ESLint L3: the label is now derived from (the clock being shown, the last
+  // tick's wall time). The hold must therefore arm NOTHING and drop the running
+  // timer — a live interval during half-time would creep the held reading.
+  // `stubTick` above never really clears, so this case tracks clears itself.
+  it("half-time HOLD clears the running timer and arms none — the held reading cannot creep; a no-clock status ends the hold", () => {
+    let cb: (() => void) | null = null;
+    let armed = 0;
+    let lastId = 0;
+    const cleared: number[] = [];
+    vi.stubGlobal("setInterval", ((fn: () => void) => {
+      cb = fn;
+      armed += 1;
+      lastId += 1;
+      return lastId as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval);
+    vi.stubGlobal("clearInterval", ((id: number) => {
+      cleared.push(id);
+      if (id === lastId) cb = null;
+    }) as unknown as typeof clearInterval);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const h = harness(ANCHOR, "in_play");
+    now.mockReturnValue(1_005_000);
+    (cb as (() => void) | null)?.();
+    expect(h.read()).toBe("12:46");
+
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    expect(cleared, "the running timer must stop at the whistle").toEqual([1]);
+    now.mockReturnValue(1_600_000);
+    (cb as (() => void) | null)?.(); // only a still-armed interval could fire here
+    expect(h.read()).toBe("12:46");
+    // A second absent push holds the same reading.
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    expect(h.read()).toBe("12:46");
+    expect(armed, "nothing re-armed during the hold").toBe(1);
+
+    // A status with no clock ends the hold for good: back in play without a
+    // clock shows nothing, never the stale pre-whistle reading.
+    h.island.rerender({ clock: undefined, status: "finalized", offset: 0 });
+    expect(h.read()).toBeNull();
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    expect(h.read()).toBeNull();
+  });
+
   it("shows nothing before kick-off and after the decision, whatever the anchor says", () => {
     stubTick();
     vi.spyOn(Date, "now").mockReturnValue(1_000_000);
@@ -150,6 +196,57 @@ describe("useOverlayClock", () => {
     now.mockReturnValue(1_061_000);
     t.tick();
     expect(h.read()).toBe("13:42");
+  });
+});
+
+// A push is read against NOW, not against the last tick. `tickAt` is set only by
+// the 1 Hz interval, and the interval is not armed while a clock is absent,
+// paused or unbounded — so a first live push, or a resume, was read against a
+// tick minutes old, clamped to elapsed-zero, and showed the anchor ("45:00" for
+// a true "45:03") until the next tick came a second later.
+describe("useOverlayClock — a push is read against the wall clock now", () => {
+  it("a first live push (no clock, then a clock) shows the elapsed time at once, not the bare anchor", () => {
+    stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const h = harness(undefined, "scheduled");
+    expect(h.read()).toBeNull();
+    // Three seconds pass with nothing armed — no tick has run since mount.
+    now.mockReturnValue(1_003_000);
+    h.island.rerender({ clock: ANCHOR, status: "in_play", offset: 0 });
+    vi.advanceTimersByTime(0);
+    // 761 s anchor + 3 s since it was stamped = 764 s = 12:44 (the bare anchor is 12:41).
+    expect(h.read()).toBe("12:44");
+  });
+
+  it("a resume push (paused, then running) shows the elapsed time at once", () => {
+    stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const paused = { ...ANCHOR, running: false as const };
+    const h = harness(paused, "in_play");
+    expect(h.read()).toBe("12:41");
+    // Ten minutes of pause, then the resume is stamped and reaches us 3 s later.
+    now.mockReturnValue(1_600_000);
+    h.island.rerender({
+      clock: { ...ANCHOR, running: true, anchorAtWallMs: 1_597_000 },
+      status: "in_play",
+      offset: 0,
+    });
+    vi.advanceTimersByTime(0);
+    expect(h.read()).toBe("12:44");
+  });
+
+  it("the re-read is cancelled when the push is withdrawn first — a held reading cannot creep", () => {
+    stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const h = harness(undefined, "scheduled");
+    now.mockReturnValue(1_003_000);
+    h.island.rerender({ clock: ANCHOR, status: "in_play", offset: 0 });
+    // The whistle blows before the re-read fires: the clock is absent again.
+    h.island.rerender({ clock: undefined, status: "in_play", offset: 0 });
+    now.mockReturnValue(1_600_000);
+    vi.advanceTimersByTime(0);
+    // Held at what was last shown (anchor + 0 s against the unmoved tick), not 22:44.
+    expect(h.read()).toBe("12:41");
   });
 });
 

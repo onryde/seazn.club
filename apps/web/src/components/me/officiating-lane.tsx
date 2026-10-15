@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { useNow } from "@/components/public-site/match-centre/use-now";
 import { Zoned } from "@/components/client-time";
 import { routes } from "@/lib/routes";
 import { MarkBadge } from "@/components/officials/mark-badge";
@@ -35,6 +36,12 @@ const RAIL: Record<OfficiatingResponse, string> = {
  * (and accept) their very first invite. `isOfficial` gates the
  * assignments/blackouts sections; pendingClaims renders independently of it.
  */
+/** How often the lane re-reads the clock, so Accept leaves a declined card
+ *  once its match has started without a reload. Kick-offs are whole minutes,
+ *  so a minute is as fresh as the rule can be. Read ONCE here and handed to
+ *  every card, not one interval per card. */
+const NOW_TICK_MS = 60_000;
+
 export function OfficiatingLane({
   isOfficial,
   assignments,
@@ -53,6 +60,7 @@ export function OfficiatingLane({
   myAverage?: { average: number; count: number } | null;
 }) {
   const msg = useMsg();
+  const now = useNow(NOW_TICK_MS);
   return (
     <section className="mb-8" aria-label={msg("me.off.title")}>
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -77,7 +85,7 @@ export function OfficiatingLane({
           ) : (
             <ul className="space-y-2">
               {assignments.map((a) => (
-                <AssignmentCard key={`${a.fixture_id}:${a.official_id}:${a.role_key}`} a={a} />
+                <AssignmentCard key={`${a.fixture_id}:${a.official_id}:${a.role_key}`} a={a} now={now} />
               ))}
             </ul>
           )}
@@ -276,7 +284,7 @@ function PendingInvites({ claims }: { claims: PendingOfficiatingClaim[] }) {
   );
 }
 
-function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
+function AssignmentCard({ a, now }: { a: MyOfficiatingAssignment; now: number }) {
   const msg = useMsg();
   const router = useRouter();
   const [response, setResponse] = useState<OfficiatingResponse>(a.response);
@@ -304,7 +312,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
   }
 
   const matchdayPassed =
-    a.scheduled_at !== null && new Date(a.scheduled_at).getTime() <= Date.now();
+    a.scheduled_at !== null && new Date(a.scheduled_at).getTime() <= now;
 
   return (
     <li

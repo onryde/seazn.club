@@ -1744,7 +1744,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     });
     drainInFlight.current = run;
     await run;
-  }, [store, transport, fixtureId, identity, refreshDepth, commitLedgerEvents, commitPendingEnvelopes, reconcileAfterAck]);
+  }, [store, transport, fixtureId, identity, refreshDepth, commitLedgerEvents, commitPendingEnvelopes, reconcileAfterAck, markOwn]);
 
   // Resume a leftover queue from a previous session (tab death/reload) —
   // seeding `pendingEnvelopes` from whatever the durable store already held

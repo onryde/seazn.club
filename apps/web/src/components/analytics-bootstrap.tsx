@@ -54,9 +54,9 @@ export function AnalyticsBootstrap() {
   const pathname = usePathname();
 
   // Effect-only on purpose (SSR-safe: the server render and the first client
-  // paint both yield null; sessionStorage/fetch happen strictly post-mount) —
-  // the react-hooks/set-state-in-effect warning on this pattern remains a
-  // deliberate, accepted exception (task-8 report, Concern 2).
+  // paint both yield null; sessionStorage/fetch happen strictly post-mount).
+  // No react-hooks/set-state-in-effect exception is owed: the only setState is
+  // in the resolution's own `.then` callback, never in the effect body.
   useEffect(() => {
     if (pathname?.startsWith(OVERLAY_SEGMENT)) return; // OBS source — never identify, see OVERLAY_SEGMENT above
     if (!posthog.__loaded) return; // no key configured, or impersonation-suppressed

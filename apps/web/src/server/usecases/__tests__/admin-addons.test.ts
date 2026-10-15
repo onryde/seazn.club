@@ -66,7 +66,6 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("grantAddon", () => {
   it("writes one granted row (stripe_item_id null) and lifts the cap by delta_each*qty", async () => {
     const org = await createOrgForUser(await makeUser(), "Addon Grant Org");
-    const walletId = await walletIdFor(org.id);
     const base = await getLimit(org.id, FEATURE);
     expect(base).not.toBeNull();
 

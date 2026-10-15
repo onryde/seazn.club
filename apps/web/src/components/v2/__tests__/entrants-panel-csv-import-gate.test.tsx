@@ -11,7 +11,6 @@ import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { EntrantsPanel, type EntrantsPanelEligibility } from "@/components/v2/entrants-panel";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
-import { ApiV1Error } from "@/lib/client-v1";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
 vi.mock("next/navigation", () => ({

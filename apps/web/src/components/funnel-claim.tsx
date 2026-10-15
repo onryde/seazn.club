@@ -16,11 +16,7 @@ export function FunnelClaim({ token }: { token: string | null }) {
   useEffect(() => {
     if (ran.current) return;
     ran.current = true;
-    if (!token) {
-      setStatus("error");
-      setError("Missing setup token.");
-      return;
-    }
+    if (!token) return; // nothing to claim — the error is derived below
     api<{ redirect: string }>("/api/funnel/claim", {
       method: "POST",
       json: { token },
@@ -36,9 +32,14 @@ export function FunnelClaim({ token }: { token: string | null }) {
       });
   }, [token, router]);
 
+  // No token is known on the very first render (the server's included): show
+  // the error straight away instead of a "Creating…" frame an effect replaces.
+  const shownStatus = token ? status : "error";
+  const shownError = token ? error : "Missing setup token.";
+
   return (
     <div className="card p-6 text-center" data-funnel-claim>
-      {status === "working" && (
+      {shownStatus === "working" && (
         <>
           <div className="mb-3 text-4xl">🏗️</div>
           <p className="font-semibold text-slate-800">Creating your competition…</p>
@@ -47,14 +48,14 @@ export function FunnelClaim({ token }: { token: string | null }) {
           </p>
         </>
       )}
-      {status === "ok" && (
+      {shownStatus === "ok" && (
         <p className="text-sm text-slate-600">Done — taking you inside…</p>
       )}
-      {status === "error" && (
+      {shownStatus === "error" && (
         <>
           <div className="mb-3 text-4xl">⛔</div>
           <p className="font-semibold text-slate-800">This link didn’t work</p>
-          <p className="mt-1 text-sm text-red-600">{error}</p>
+          <p className="mt-1 text-sm text-red-600">{shownError}</p>
           <p className="mt-4 text-sm text-slate-500">
             Setup links work once and expire after 7 days.{" "}
             <Link href="/start" className="font-medium text-purple-700 underline">

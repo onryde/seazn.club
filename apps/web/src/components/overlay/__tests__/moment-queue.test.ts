@@ -9,8 +9,7 @@ import { describe, expect, it } from "vitest";
 import { INITIAL, momentQueueReducer as reduce, nextDeadline } from "../moment-queue";
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../moment-timing";
 import type { OverlayMoment } from "@/lib/overlay-moments";
-import { slabPlacementFor } from "../theme-registry";
-import { builtinModules } from "@seazn/engine/sports";
+import { OVERLAY_THEMES, slabPlacementFor, type ThemeId } from "../theme-registry";
 
 const m = (seq: number, kind = "goal"): OverlayMoment => ({
   seq,
@@ -155,18 +154,16 @@ describe("momentQueueReducer", () => {
 
 describe("slabPlacementFor — which scorebug the slab attaches to", () => {
   it("bar and bug answer for themselves", () => {
-    expect(slabPlacementFor("bar", "cricket")).toBe("bar");
-    expect(slabPlacementFor("bug", "cricket")).toBe("bug");
-    expect(slabPlacementFor("bar", "football")).toBe("bar");
-    expect(slabPlacementFor("bug", "football")).toBe("bug");
+    expect(slabPlacementFor("bar")).toBe("bar");
+    expect(slabPlacementFor("bug")).toBe("bug");
   });
 
-  it("every sport the registry serves resolves to a placement the CSS defines", () => {
-    for (const style of ["bar", "bug"] as const) {
-      for (const sport of builtinModules.map((m) => m.key)) {
-        expect(["bar", "bug"]).toContain(slabPlacementFor(style, sport));
-      }
-    }
+  // The sport used to be a (dead) second argument; placement is by style
+  // alone, so the sweep is over every theme the registry declares.
+  it("every theme the registry declares resolves to a placement the CSS defines", () => {
+    const themes = Object.keys(OVERLAY_THEMES) as ThemeId[];
+    expect(themes.length, "anti-vacuity: the registry declares no themes").toBeGreaterThan(0);
+    for (const style of themes) expect(["bar", "bug"]).toContain(slabPlacementFor(style));
   });
 });
 

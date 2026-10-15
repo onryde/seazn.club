@@ -13,7 +13,6 @@
 // Presentational only: the console owns the network (officials roster + ai-last)
 // and passes derived numbers down, so this file has no fetches of its own.
 import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
-import type { MessageKey } from "@/lib/messages";
 import { track, EVENTS } from "@/lib/analytics";
 import type { AiLastResult } from "@/server/api-v1/schemas";
 

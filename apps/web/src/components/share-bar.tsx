@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { EVENTS, track } from "@/lib/analytics";
+import { useOrigin } from "@/lib/use-client-snapshot";
 
 /**
  * Pure helper (regression-tested in node env — no window/DOM needed): builds
@@ -47,6 +48,10 @@ export interface ShareBarLabels {
 // refuses a caller that forgets. Public pages pass
 // `shareLabels(dict)` (`components/public-site/share-labels.ts`).
 
+const capabilityNeverChanges = () => () => {};
+const readCanShare = () => typeof navigator !== "undefined" && "share" in navigator;
+const cannotShareOnServer = () => false;
+
 /** Fan-facing share row (PLG L3): native share on mobile, WhatsApp + copy
  *  everywhere. Grassroots sport runs on WhatsApp. An optional `postShare` adds
  *  news-post context (SPEC-2): each share ALSO fires POST_SHARED{kind,channel}
@@ -62,13 +67,12 @@ export function ShareBar({
   postShare?: { kind: string };
   labels: ShareBarLabels;
 }) {
-  const [origin, setOrigin] = useState("");
+  const origin = useOrigin();
   const [copied, setCopied] = useState(false);
-  const [canShare, setCanShare] = useState(false);
-  useEffect(() => {
-    setOrigin(window.location.origin);
-    setCanShare(typeof navigator !== "undefined" && "share" in navigator);
-  }, []);
+  // Read through a store, not copied into state by a mount effect: false on
+  // the server and the hydration render (so the native button never
+  // mismatches), the device's real answer from the render after.
+  const canShare = useSyncExternalStore(capabilityNeverChanges, readCanShare, cannotShareOnServer);
   const { url, wa } = shareLinks(origin, path, title);
 
   function fire(channel: string) {

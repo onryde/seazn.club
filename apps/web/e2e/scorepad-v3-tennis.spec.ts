@@ -78,10 +78,6 @@ function v3Tile(page: Page, id: string) {
   return pad(page).locator(`[data-tile-id="${id}"]`);
 }
 
-function v3Sheet(page: Page) {
-  return pad(page).locator('[data-role="v3-sheet"]');
-}
-
 function v3Dock(page: Page) {
   return pad(page).locator('[data-role="v3-dock"]');
 }

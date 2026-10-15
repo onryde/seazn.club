@@ -31,7 +31,6 @@
 //     npx vitest run --testTimeout=30000 \
 //       src/server/usecases/__tests__/registration-currency.live.test.ts
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
 
 import { sql } from "@/lib/db";
 import { getStripe } from "@/lib/stripe";

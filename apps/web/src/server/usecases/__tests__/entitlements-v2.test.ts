@@ -21,7 +21,6 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createApiKey } from "../api-keys";
 import { feePercentFor } from "../registrations";
-import { platformFeeDefault } from "@/lib/platform-settings";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 

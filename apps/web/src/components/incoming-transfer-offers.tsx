@@ -62,24 +62,36 @@ export function incomingOnly<T extends { direction: "made_by_me" | "made_to_me" 
   return offers.filter((o) => o.direction === "made_to_me");
 }
 
+/** The offers addressed to this user, as data — no state. */
+async function fetchIncoming(): Promise<IncomingOffer[]> {
+  const res = await fetch("/api/billing/group/transfer");
+  const json = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    data?: IncomingOffer[];
+  };
+  return incomingOnly(json.ok ? (json.data ?? []) : []);
+}
+
 export function IncomingTransferOffers() {
   const msg = useMsg();
   const [incoming, setIncoming] = useState<IncomingOffer[]>([]);
   // The incoming offer whose card form is open (setup_intent_id), if any.
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
+  /** Re-read after an accept (an event, so awaiting in place is fine). */
   async function load() {
-    const res = await fetch("/api/billing/group/transfer");
-    const json = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      data?: IncomingOffer[];
-    };
-    const offers = json.ok ? (json.data ?? []) : [];
-    setIncoming(incomingOnly(offers));
+    setIncoming(await fetchIncoming());
   }
 
+  // The first read: set from the request's own callback (never synchronously
+  // in the effect). It carries no stale-response guard on purpose: the card
+  // renders nothing until an offer is in `incoming`, and the Accept control —
+  // the only thing that leads to a second read, `load()` — lives inside it, so
+  // a later read can never be overtaken by this one; and a set after unmount is
+  // ignored by React. A guard here would be protection for a race the UI cannot
+  // produce.
   useEffect(() => {
-    void load();
+    void fetchIncoming().then(setIncoming);
   }, []);
 
   // Nothing to hand you: the recipient card only exists while a live offer does.

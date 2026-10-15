@@ -14,6 +14,7 @@ import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
 import { awardedMatchState, clearAwardedMatchState, writeAwardedMatchState } from "../awarded-state";
 import { seedBracket } from "./helpers/seed-bracket";
+import { omit } from "@/lib/omit";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => {
@@ -177,8 +178,8 @@ describe.skipIf(!HAS_DB)("R116-2: a reset award takes its score with it, and onl
     // The positive pair: the row as the take-back wrote it is put back as it was.
     await sql`update match_states set summary = ${sql.json(takenBack!.summary as never)} where fixture_id = ${id}`;
     await withTenant(s.auth.orgId, (tx) => clearAwardedMatchState(tx, id));
-    const { updated_at: _a, ...after } = (await fullRow(id))!;
-    const { updated_at: _b, ...want } = takenBack!;
+    const after = omit((await fullRow(id))!, "updated_at");
+    const want = omit(takenBack!, "updated_at");
     expect(after, "the ledger's own fold over its own sides").toEqual(want);
   });
 });

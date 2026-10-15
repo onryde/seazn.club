@@ -1,6 +1,7 @@
 import { v1 } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
+import { omit } from "@/lib/omit";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -24,20 +25,20 @@ export async function GET(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "division", id, "read");
     const rows = await listDivisionFixtures(auth, id);
-    return rows.map(
-      ({
-        venue: _venue,
-        court_label: _court_label,
-        winner_to_fixture: _wtf,
-        winner_to_slot: _wts,
-        loser_to_fixture: _ltf,
-        loser_to_slot: _lts,
+    return rows.map((row) =>
+      omit(
+        row,
+        "venue",
+        "court_label",
+        "winner_to_fixture",
+        "winner_to_slot",
+        "loser_to_fixture",
+        "loser_to_slot",
         // W2b loop-F I-2: the console's qualification read, not part of the published `Fixture` contract.
-        expunged: _expunged,
+        "expunged",
         // W2b Task 13: the run sheet's abandon tag read, not part of the published `Fixture` contract either.
-        abandon_reason: _abandonReason,
-        ...fixture
-      }) => fixture,
+        "abandon_reason",
+      ),
     );
   });
 }

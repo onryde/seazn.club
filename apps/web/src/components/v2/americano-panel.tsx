@@ -10,6 +10,16 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+import type { MessageKey } from "@/lib/messages";
+
+/** A failure as it happened — the server's own sentence, or the KEY of the
+ *  fallback when the throw carried none — translated at render. Storing the
+ *  translated string made `load` read `msg`, and `load` is the mount effect's
+ *  only dep: listing `msg` would re-run the fetch whenever the copy catalog
+ *  object changes, and leaving it out kept a stale catalog's sentence. */
+type Failure = { text: string } | { key: MessageKey };
+const failureOf = (err: unknown, fallback: MessageKey): Failure =>
+  err instanceof Error ? { text: err.message } : { key: fallback };
 
 interface Team {
   entrant_id: string;
@@ -51,7 +61,7 @@ export function AmericanoPanel({
 }) {
   const msg = useMsg();
   const [view, setView] = useState<View | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const [paywall, setPaywall] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
@@ -62,7 +72,7 @@ export function AmericanoPanel({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywall(String(err.extra.feature_key ?? "formats.advanced"));
       } else {
-        setError(err instanceof Error ? err.message : msg("americano.failedLoad"));
+        setError(failureOf(err, "americano.failedLoad"));
       }
     }
   }, [stageId]);
@@ -73,7 +83,12 @@ export function AmericanoPanel({
   }, [load]);
 
   if (paywall) return <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />;
-  if (error) return <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>;
+  if (error)
+    return (
+      <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
+        {"text" in error ? error.text : msg(error.key)}
+      </p>
+    );
   if (!view) return <p className="text-sm text-slate-500">{msg("americano.loading")}</p>;
 
   return (
@@ -128,7 +143,7 @@ export function AmericanoPanel({
                       await scoreMatch(m.fixture_id, s1, s2);
                       await load();
                     } catch (err) {
-                      setError(err instanceof Error ? err.message : msg("americano.saveFailed"));
+                      setError(failureOf(err, "americano.saveFailed"));
                     } finally {
                       setSavingId(null);
                     }

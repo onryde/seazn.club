@@ -39,7 +39,7 @@ export async function POST(
       org_name: result.org_name,
       role: result.role,
       outcome: result.outcome,
-      landing: inviteLanding(result.role, result.outcome),
+      landing: inviteLanding(),
     };
   });
 }

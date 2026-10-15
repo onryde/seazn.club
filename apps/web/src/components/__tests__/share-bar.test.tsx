@@ -101,7 +101,8 @@ describe("ShareBar labels", () => {
 });
 
 // The two labels NO server render can reach, and the reason they need their own
-// harness: `share` renders only after the mount effect finds `navigator.share`
+// harness (in its `hydrate` mode — the after-hydration read is what reaches
+// them): `share` renders only after hydration finds `navigator.share`
 // (deliberately — it is the hydration-safety contract pinned above), and
 // `copied` only after a click resolves. Both are therefore invisible to
 // `renderToStaticMarkup` and to a desktop reviewer, which is exactly why the
@@ -111,7 +112,7 @@ describe("ShareBar labels that only exist after mount", () => {
   const origWin = (globalThis as { window?: unknown }).window;
 
   beforeEach(() => {
-    // The mount effect reads `window.location.origin`; there is no DOM here.
+    // The origin store reads `window.location.origin`; there is no DOM here.
     (globalThis as { window?: unknown }).window = { location: { origin: "https://seazn.club" } };
   });
 
@@ -125,14 +126,16 @@ describe("ShareBar labels that only exist after mount", () => {
     vi.useRealTimers();
   });
 
-  it("uses the `share` label on the native-share button once the effect finds navigator.share", () => {
+  it("uses the `share` label on the native-share button once hydration finds navigator.share", () => {
     Object.defineProperty(globalThis, "navigator", {
       value: { share: () => {} },
       configurable: true,
       writable: true,
     });
 
-    const island = renderIsland(ShareBar, { path: "/x", title: "Y", labels: LABELS });
+    const island = renderIsland(ShareBar, { path: "/x", title: "Y", labels: LABELS }, undefined, {
+      hydrate: true,
+    });
 
     expect(textOf(island.tree())).toContain("S-NATIVE");
     expect(textOf(island.tree())).not.toContain("Share on WhatsApp");
@@ -147,7 +150,9 @@ describe("ShareBar labels that only exist after mount", () => {
       writable: true,
     });
 
-    const island = renderIsland(ShareBar, { path: "/x", title: "Y", labels: LABELS });
+    const island = renderIsland(ShareBar, { path: "/x", title: "Y", labels: LABELS }, undefined, {
+      hydrate: true,
+    });
     expect(textOf(island.tree())).toContain("COPY-IDLE");
 
     const button = island

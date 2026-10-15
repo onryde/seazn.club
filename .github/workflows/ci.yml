@@ -181,9 +181,13 @@ jobs:
       # advisory: an advisory gate on a repo that already had 31 errors just
       # prints 32 next week.
       #
-      # Errors only. The 73 warnings are deliberately not gated — clearing them
-      # is a separate piece of work, and failing on them today would mean either
-      # a mass rewrite in this PR or a gate nobody can keep green.
+      # Warnings are gated too (ESLint zero-warnings programme, owner ruling
+      # 2026-10-14): every `lint` script runs `eslint --max-warnings 0`, because
+      # eslint's exit code ignores warnings otherwise. The tree was cleared to
+      # zero FIRST — without a suppression comment and without loosening a rule
+      # — so this is a gate somebody can keep green. It is pinned by
+      # tools/matrix/__tests__/lint-warnings-gate.test.ts, which also refuses a
+      # workflow line that calls eslint directly and bypasses the scripts.
       #
       # A react-hooks/exhaustive-deps suppression should be rare and should
       # name the issue it exists for. This comment used to point at the
@@ -207,7 +211,7 @@ jobs:
       # which is its only caller and which CI never invokes, so it ran for
       # nobody. Found 2026-09-06 with the bench carrying 13 errors and
       # `scripts/i18n` 4 — same shape as #344's finding above, and gated the
-      # same way: blocking, errors only.
+      # same way: blocking, and (since 2026-10-14) warnings fail it too.
       #
       # Since ruling 56 it also lints `tools/` (`lint:scripts` is
       # `eslint scripts tools`): the matrix (tools/matrix, @seazn/matrix) and

@@ -78,7 +78,6 @@ import {
   retiredClaimFaults,
   valueClauses,
   riderClaimShape,
-  wholeNumber,
 } from "@/lib/copy-truth";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -2343,13 +2342,6 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries match plan_entitlements",
       (out[row.feature_key] ??= {})[row.plan_key] = row.bool_value === true;
     }
     return out;
-  };
-
-  const monthlyCredits = async (): Promise<Record<string, number | null>> => {
-    const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
-      select plan_key, int_value from plan_entitlements
-      where feature_key = 'ai.credits.monthly'`;
-    return Object.fromEntries(rows.map((r) => [r.plan_key, r.int_value]));
   };
 
   // Five tests lived here, all about the Pro Plus card and the FAQ answer under

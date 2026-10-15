@@ -27,7 +27,6 @@ import {
   boardMetrics,
   buildSchedule,
   calendarDaysCovering,
-  conflictKey,
   dayKeyInTz,
   deltaConflicts,
   isBlockingConflict,

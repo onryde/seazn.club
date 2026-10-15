@@ -42,11 +42,28 @@ export function OpeningTrainer({ opening }: { opening: string }) {
   const [selIdx, setSelIdx] = useState(-1);
   const [mistakes, setMistakes] = useState(0);
   const [done, setDone] = useState(false);
-  const [highlights, setHighlights] = useState<Partial<Record<number, Highlight>>>({});
   const [pop, setPop] = useState<{ idx: number; n: number } | null>(null);
-  const [popN, setPopN] = useState(0);
   const [shake, setShake] = useState(0);
-  const [status, setStatus] = useState(() => promptFor(0));
+
+  // ESLint L3: the board's glow and the status line used to be set from an
+  // effect driven by `ply`. They are now DERIVED from the ply, with only what
+  // the learner's own taps add held in state, each tagged with the ply it was
+  // made on — so moving to the next ply drops them in the same render:
+  //  - `marks`: the selection glow (or a mistake's hint) on THIS ply;
+  //  - `note`: a mistake message on this ply, or the finish line at the end.
+  // Otherwise: the learner's ply glows its book from-square and prompts the
+  // move; the opponent's ply glows nothing and says "watch the reply…".
+  const [marks, setMarks] = useState<{ ply: number; hl: Partial<Record<number, Highlight>> } | null>(null);
+  const [note, setNote] = useState<{ ply: number; text: string } | null>(null);
+  const learnerTurn = ply < op.line.length && learnerPly(ply);
+  const highlights: Partial<Record<number, Highlight>> = done
+    ? {}
+    : marks?.ply === ply
+      ? marks.hl
+      : learnerTurn
+        ? { [sqIdx(op.line[ply].from)]: "hint" }
+        : {};
+  const status = note?.ply === ply ? note.text : promptFor(ply);
 
   const learnerMovesTotal = op.line.filter((_, i) => learnerPly(i)).length;
 
@@ -59,73 +76,66 @@ export function OpeningTrainer({ opening }: { opening: string }) {
     setSelIdx(-1);
     setMistakes(0);
     setDone(false);
-    setHighlights({});
-    setStatus(promptFor(0));
-  }, [clearPending, promptFor]);
+    setMarks(null);
+    setNote(null);
+  }, [clearPending]);
 
   useEffect(() => () => clearPending(), [clearPending]);
 
+  /** The line is complete. Called from whatever completed it — the learner's
+   *  own move or the opponent's reply — so lines ending on either finish. */
   const finish = useCallback(() => {
     setDone(true);
-    setHighlights({});
     const stars = STAR_RULES.openingTrainer(mistakes);
     progress.setGameStars("openingTrainer", stars);
-    setStatus(`<strong>${op.name}</strong> — you played the whole line! ${"★".repeat(stars)}`);
+    setNote({
+      ply: op.line.length,
+      text: `<strong>${op.name}</strong> — you played the whole line! ${"★".repeat(stars)}`,
+    });
     voice.say(`${op.name}. You played the whole line!`);
     celebrate();
-  }, [mistakes, op.name, progress]);
+  }, [mistakes, op.line.length, op.name, progress]);
 
-  // Drive the sequence off `ply`: finish the line, auto-play opponent replies,
-  // or glow the learner's from-square. Completion runs here (not in
-  // onLearnerMove) so lines that end on an opponent move also finish.
+  // The opponent's ply: play the book reply after a beat. Every state change
+  // happens in the timer's callback; the cleanup cancels a pending reply, so a
+  // re-run (or a Restart, or leaving the game) can never play it twice.
   useEffect(() => {
-    if (done) return;
-    if (ply >= op.line.length) {
-      finish();
-      return;
-    }
-    if (!learnerPly(ply)) {
-      later(() => {
-        const mv = op.line[ply];
-        setPosition((pos) => applyMove(pos, sqIdx(mv.from), sqIdx(mv.to)));
-        setPop({ idx: sqIdx(mv.to), n: popN + 1 });
-        setPopN((v) => v + 1);
-        sfx.move();
-        setPly((p) => p + 1);
-      }, 550);
-    } else {
-      setHighlights({ [sqIdx(op.line[ply].from)]: "hint" });
-      setStatus(promptFor(ply));
-    }
-    // ply drives the sequence; the setters/refs are stable
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ply, done]);
+    if (done || ply >= op.line.length || learnerPly(ply)) return;
+    const mv = op.line[ply];
+    later(() => {
+      setPosition((pos) => applyMove(pos, sqIdx(mv.from), sqIdx(mv.to)));
+      setPop((prev) => ({ idx: sqIdx(mv.to), n: (prev?.n ?? 0) + 1 }));
+      sfx.move();
+      setPly(ply + 1);
+      if (ply + 1 >= op.line.length) finish();
+    }, 550);
+    return clearPending;
+  }, [ply, done, op.line, learnerPly, later, clearPending, finish]);
 
   function onLearnerMove(from: number, to: number) {
     const mv = op.line[ply];
     if (from === sqIdx(mv.from) && to === sqIdx(mv.to)) {
       setPosition(applyMove(position, from, to));
-      setPop({ idx: to, n: popN + 1 });
-      setPopN((v) => v + 1);
+      setPop((prev) => ({ idx: to, n: (prev?.n ?? 0) + 1 }));
       sfx.move();
       setSelIdx(-1);
-      // Completion is handled by the ply-driven effect (covers opponent-ending
-      // lines too), so just advance.
       setPly(ply + 1);
+      if (ply + 1 >= op.line.length) finish();
     } else {
       setSelIdx(-1);
       setMistakes((x) => x + 1);
       setShake((s) => s + 1);
       sfx.bad();
-      setStatus(
-        `Not the book move — the ${op.name} plays <strong>${mv.san}</strong> here. Follow the glowing piece.`,
-      );
-      setHighlights({ [sqIdx(mv.from)]: "hint" });
+      setNote({
+        ply,
+        text: `Not the book move — the ${op.name} plays <strong>${mv.san}</strong> here. Follow the glowing piece.`,
+      });
+      setMarks({ ply, hl: { [sqIdx(mv.from)]: "hint" } });
     }
   }
 
   function onTap(idx: number) {
-    if (done || ply >= op.line.length || !learnerPly(ply)) return;
+    if (done || !learnerTurn) return;
     const pos = position;
     const p = pos[idx];
     const mine = p !== "" && isWhitePiece(p) === (op.learnerSide === "white");
@@ -134,7 +144,7 @@ export function OpeningTrainer({ opening }: { opening: string }) {
       const hl: Partial<Record<number, Highlight>> = { [idx]: "sel" };
       for (const t of legalTargets(pos, idx)) hl[t] = pos[t] === "" ? "move" : "cap";
       hl[sqIdx(op.line[ply].from)] = "hint";
-      setHighlights(hl);
+      setMarks({ ply, hl });
       return;
     }
     if (selIdx >= 0 && legalTargets(pos, selIdx).includes(idx)) {

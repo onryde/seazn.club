@@ -11,6 +11,7 @@ import { Info, X } from "lucide-react";
 import { TIPS, type TipId } from "@/config/tips";
 import { helpUrl } from "@/lib/help";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { useHydrated, useLocalStorageItem, writeLocalStorageItem } from "@/lib/use-client-snapshot";
 
 export function Tip({
   id,
@@ -96,13 +97,15 @@ export function TipCallout({ id, className = "" }: { id: TipId; className?: stri
   const body = msg(`tips.${id}.body`);
   const href = helpUrl(helpSlug);
   const storageKey = `seazn.tip.${id}`;
-  // Start hidden; show after the dismissed check so a dismissed callout
-  // never flashes.
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    if (window.localStorage.getItem(storageKey) !== "1") setVisible(true);
-  }, [storageKey]);
+  // Hidden on the server and through hydration (the server cannot see the
+  // dismissal), then shown from the render after unless dismissed — so a
+  // dismissed callout never flashes. Read through a store rather than copied
+  // into state by a mount effect. `dismissedNow` covers a browser that
+  // refuses the write: the ✕ still closes it for this page view.
+  const stored = useLocalStorageItem(storageKey);
+  const hydrated = useHydrated();
+  const [dismissedNow, setDismissedNow] = useState(false);
+  const visible = hydrated && stored !== "1" && !dismissedNow;
 
   if (!visible) return null;
 
@@ -125,8 +128,8 @@ export function TipCallout({ id, className = "" }: { id: TipId; className?: stri
         type="button"
         aria-label={msg("tips.dismiss")}
         onClick={() => {
-          window.localStorage.setItem(storageKey, "1");
-          setVisible(false);
+          writeLocalStorageItem(storageKey, "1");
+          setDismissedNow(true);
         }}
         className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-purple-400 transition hover:bg-purple-100 hover:text-purple-700"
       >

@@ -32,6 +32,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { applySchedule, autoSchedule, putScheduleSettings } from "../schedule";
 import { patchFixture } from "../fixtures";
 import { createVenue, createCourt } from "../venues";
+import { omit } from "@/lib/omit";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const T0 = "2026-08-01T09:00:00.000Z";
@@ -246,7 +247,7 @@ describe.skipIf(!HAS_DB)(
       // suite — but this test's job is the WIRE SHAPE, not the prose.
       // Snake_case (`entrant_ids`) — `ScheduleConflict`'s house style, unlike
       // the engine's own camelCase `ConflictDetail`.
-      const stripDetail = <T extends { detail?: string }>({ detail: _detail, ...rest }: T) => rest;
+      const stripDetail = <T extends { detail?: string }>(conflict: T) => omit(conflict, "detail");
       const expected = [first.id, clashing.id]
         .map((id) => ({
           fixture_id: id,
@@ -518,7 +519,7 @@ describe.skipIf(!HAS_DB)(
         key(x).localeCompare(key(y));
       // `detail` is stripped before the `toEqual` (C3, 2026-08-13) — see the
       // identical comment on the `entrant_below_rest` case above in this file.
-      const stripDetail = <T extends { detail?: string }>({ detail: _detail, ...rest }: T) => rest;
+      const stripDetail = <T extends { detail?: string }>(conflict: T) => omit(conflict, "detail");
       const expected = [
         [a.id, b.id],
         [b.id, a.id],

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 
@@ -24,6 +24,22 @@ function cookieLocale(): Locale | null {
   return m && (LOCALES as readonly string[]).includes(m[1]) ? (m[1] as Locale) : null;
 }
 
+/** The cookie as an external store. A cookie has no change event, so this tab's
+ *  own write notifies the switchers itself (`writeCookieLocale`). */
+const cookieListeners = new Set<() => void>();
+function subscribeToCookieLocale(onChange: () => void): () => void {
+  cookieListeners.add(onChange);
+  return () => {
+    cookieListeners.delete(onChange);
+  };
+}
+function writeCookieLocale(next: Locale): void {
+  document.cookie = `seazn_locale=${next}; path=/; max-age=31536000; samesite=lax`;
+  for (const notify of [...cookieListeners]) notify();
+}
+/** The server cannot see the browser's cookie jar from here: the path decides. */
+const noCookieOnServer = () => null;
+
 /**
  * Language picker (v5 i18n §9). Writes the `seazn_locale` cookie — which
  * resolveLocale() reads first, so the pick drives locale for anon and signed-in
@@ -33,19 +49,18 @@ function cookieLocale(): Locale | null {
 export function LocaleSwitcher() {
   const router = useRouter();
   const pathname = usePathname();
-  // Initialize from the path only so server and client agree at hydration. The
-  // effect then reflects the cookie: on unprefixed routes the URL has no locale,
-  // and this also re-runs when router.refresh() remounts the subtree — without
-  // it the select snaps back to en while the page is already localized.
-  const [value, setValue] = useState<Locale>(() => pathLocale(pathname));
-  useEffect(() => {
-    setValue(cookieLocale() ?? pathLocale(pathname));
-  }, [pathname]);
+  // The path alone on the server and the hydration render, so the two agree;
+  // the cookie from the render after hydration. On unprefixed routes the URL
+  // has no locale, and a router.refresh() remount reads the cookie on its FIRST
+  // render — without it the select snaps back to en while the page is already
+  // localized. Read, never copied into state, so the cookie stays the one
+  // source of truth.
+  const fromCookie = useSyncExternalStore(subscribeToCookieLocale, cookieLocale, noCookieOnServer);
+  const value: Locale = fromCookie ?? pathLocale(pathname);
 
   function onChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const next = e.target.value as Locale;
-    setValue(next);
-    document.cookie = `seazn_locale=${next}; path=/; max-age=31536000; samesite=lax`;
+    writeCookieLocale(next);
     const seg = pathname.split("/")[1] ?? "";
     if ((LOCALES as readonly string[]).includes(seg)) {
       router.push(`/${next}${pathname.replace(/^\/[^/]+/, "")}`);

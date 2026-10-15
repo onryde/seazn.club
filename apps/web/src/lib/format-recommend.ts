@@ -1,6 +1,7 @@
 // Format recommendation (v3/06 §4): a pure function over entrant count,
 // courts and the time budget → the 2–3 families that actually fit, each with
 // a one-sentence trade-off. No AI, no I/O — the golden test pins the ranking.
+import { omit } from "./omit";
 
 export interface RecommendInput {
   entrants: number;
@@ -105,5 +106,5 @@ export function recommendFormats(input: RecommendInput): Recommendation[] {
     return a.matches - b.matches;
   });
 
-  return scored.slice(0, 3).map(({ fits: _fits, ...r }) => r);
+  return scored.slice(0, 3).map((r) => omit(r, "fits"));
 }

@@ -854,7 +854,7 @@ describe.skipIf(!HAS_DB)("moveFixture officials change-notice email resolves slo
   async function noticeLabel(locale: "en" | "fr"): Promise<string> {
     const { auth } = await seedOfficialsOrg("pro");
     await sql`update organizations set default_locale = ${locale} where id = ${auth.orgId}`;
-    const { division, fixtures } = await seedFutureDivision(auth);
+    const { fixtures } = await seedFutureDivision(auth);
     const fixtureId = fixtures[0]!.id;
     // Day-one placeholder: null entrant ids with a real home_slot_label
     // (the shape stage-seeding.ts's descriptorLabel() actually produces),

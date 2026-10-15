@@ -58,7 +58,7 @@ function farFutureDate(daysFromNow = 60): string {
 // though it works at runtime — and vitest does NOT typecheck test files, so
 // this only shows up in the tsc gate.
 const sendSpy = vi.hoisted(() =>
-  vi.fn(async (_opts: { teamName?: string; playerName?: string }) => true),
+  vi.fn<(opts: { teamName?: string; playerName?: string }) => Promise<boolean>>(async () => true),
 );
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),

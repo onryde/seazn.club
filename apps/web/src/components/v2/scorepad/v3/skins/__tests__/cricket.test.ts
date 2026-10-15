@@ -2642,7 +2642,6 @@ describe("buildSheets — wicket flow (D-15)", () => {
   });
 
   it("picking a non-next incoming names them on the payload — mutation target if buildPayload dropped incoming", () => {
-    const spec = wicketSpec();
     const v = view({
       state: state({
         orders: { home: ["h1", "h2", "h3", "h4"], away: ["a1", "a2", "a3"] },

@@ -9,7 +9,17 @@
 // looped for ever. Any assertion about how many times an island fetched, or
 // about state that an effect writes, was measuring the harness.
 import { describe, expect, it } from "vitest";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, walk } from "./_hook-harness";
 
@@ -746,5 +756,181 @@ describe("_hook-harness commit re-entrancy (review MINOR 4)", () => {
     }
 
     expect(() => renderIsland(Island, {})).toThrow(/commit/i);
+  });
+});
+
+describe("_hook-harness useSyncExternalStore hydrate mode (L3 set-state-in-effect batch)", () => {
+  // A tiny external store the test owns: a value, and the listeners React
+  // subscribed. The live snapshot differs from the server one on purpose, or
+  // "it read the live value" and "it read the server value" look the same.
+  function makeStore(initial: string) {
+    let value = initial;
+    const listeners = new Set<() => void>();
+    return {
+      subscribe: (onChange: () => void) => {
+        listeners.add(onChange);
+        return () => void listeners.delete(onChange);
+      },
+      get: () => value,
+      set(next: string) {
+        value = next;
+        for (const l of [...listeners]) l();
+      },
+      listeners,
+    };
+  }
+
+  function islandOf(store: ReturnType<typeof makeStore>, seen: string[]) {
+    return function Island() {
+      const v = useSyncExternalStore(store.subscribe, store.get, () => "server");
+      seen.push(v);
+      return <button type="button">{v}</button>;
+    };
+  }
+
+  it("default mode is unchanged: the server snapshot for ever, never subscribed", () => {
+    const store = makeStore("live");
+    const seen: string[] = [];
+    const island = renderIsland(islandOf(store, seen), {});
+    store.set("later");
+    island.rerender({});
+    expect(seen).toEqual(["server", "server"]);
+    expect(store.listeners.size).toBe(0);
+  });
+
+  it("hydrate: first render reads the server snapshot, then re-renders with the live one", () => {
+    const store = makeStore("live");
+    const seen: string[] = [];
+    const island = renderIsland(islandOf(store, seen), {}, undefined, { hydrate: true });
+    expect(seen, "hydration render must match the server markup first").toEqual(["server", "live"]);
+    expect(island.text()).toBe("live");
+  });
+
+  it("hydrate: no extra render when the live snapshot equals the server one", () => {
+    const store = makeStore("server");
+    const seen: string[] = [];
+    renderIsland(islandOf(store, seen), {}, undefined, { hydrate: true });
+    expect(seen).toEqual(["server"]);
+  });
+
+  it("hydrate: a store change after hydration re-renders through the subscription; unmount unsubscribes", () => {
+    const store = makeStore("live");
+    const seen: string[] = [];
+    const island = renderIsland(islandOf(store, seen), {}, undefined, { hydrate: true });
+    expect(store.listeners.size).toBe(1);
+    store.set("changed");
+    expect(island.text()).toBe("changed");
+    island.unmount();
+    expect(store.listeners.size, "a leaked subscription would re-render an unmounted island").toBe(0);
+  });
+});
+
+describe("_hook-harness useId (ESLint L3 — PhoneDisclosure's aria-controls)", () => {
+  function TwoIds({ n }: { n: number }) {
+    const a = useId();
+    const b = useId();
+    return <i data-a={a} data-b={b} data-n={n} />;
+  }
+  it("each call site gets its own id, and it is stable across re-renders", () => {
+    const island = renderIsland(TwoIds, { n: 1 });
+    const read = () => propsOf(island.tree().find((e) => e.type === "i")!);
+    const first = read();
+    expect(first["data-a"]).toMatch(/\S/);
+    expect(first["data-a"]).not.toBe(first["data-b"]);
+    island.rerender({ n: 2 });
+    expect(read()["data-n"], "the re-render happened").toBe(2);
+    expect(read()["data-a"]).toBe(first["data-a"]);
+    expect(read()["data-b"]).toBe(first["data-b"]);
+  });
+});
+
+describe("_hook-harness batch (ESLint L4 — React batches an event's updates, the harness did not)", () => {
+  // In a browser the two setStates of ONE event land in ONE render, so an effect
+  // or a render-phase adjustment sees only the SETTLED state. The harness
+  // rendered after every setter, so a handler that dispatches twice (the
+  // register stepper's solo signup: ADD_ENTRY, then UPDATE_ENTRY) showed code
+  // the intermediate state no browser ever renders.
+  function Island() {
+    const [a, setA] = useState(0);
+    const [b, setB] = useState(0);
+    seen.push(`${a}/${b}`);
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setA(1);
+          setB(1);
+        }}
+      >
+        {`${a}/${b}`}
+      </button>
+    );
+  }
+  const seen: string[] = [];
+
+  it("without batch, every setter renders (the intermediate state IS seen); inside batch, the event renders once with the settled state", () => {
+    seen.length = 0;
+    const island = renderIsland(Island, {});
+    expect(seen).toEqual(["0/0"]);
+
+    clickButton(island.tree());
+    expect(seen, "unbatched: the 1/0 state was rendered").toEqual(["0/0", "1/0", "1/1"]);
+
+    seen.length = 0;
+    const second = renderIsland(Island, {});
+    seen.length = 0;
+    second.batch(() => clickButton(second.tree()));
+    expect(seen, "batched: one render, the settled state only").toEqual(["1/1"]);
+    expect(second.text()).toBe("1/1");
+  });
+
+  it("an empty batch renders nothing, and a batch that throws still re-enables rendering", () => {
+    seen.length = 0;
+    const island = renderIsland(Island, {});
+    seen.length = 0;
+    island.batch(() => {});
+    expect(seen, "nothing was set: nothing renders").toEqual([]);
+    expect(() =>
+      island.batch(() => {
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+    clickButton(island.tree());
+    expect(seen, "after a throwing batch, updates render again").toEqual(["1/0", "1/1"]);
+  });
+});
+
+describe("_hook-harness useSyncExternalStore clientMount (ESLint L4 — a component mounted on the client after hydration)", () => {
+  // `hydrate: true` models a HYDRATING client: server snapshot first, live
+  // snapshot after the commit. A component mounted later (a client navigation, a
+  // dialog) reads the LIVE snapshot on its very first render — React says so in
+  // use-client-snapshot.ts — and a render-phase adjustment keyed on it runs in
+  // that first pass, which the hydrating model can never reach.
+  const live = { value: "live" };
+  const store = {
+    subscribe: () => () => {},
+    live: () => live.value,
+    server: () => "server",
+  };
+  function Island() {
+    const v = useSyncExternalStore(store.subscribe, store.live, store.server);
+    seen.push(v);
+    return <p>{v}</p>;
+  }
+  const seen: string[] = [];
+
+  it("reads the live snapshot on the first render; hydrate reads the server one first; the default never leaves the server one", () => {
+    seen.length = 0;
+    renderIsland(Island, {}, undefined, { clientMount: true });
+    expect(seen, "first render is already live").toEqual(["live"]);
+
+    seen.length = 0;
+    renderIsland(Island, {}, undefined, { hydrate: true });
+    expect(seen[0], "a hydrating client starts on the server snapshot").toBe("server");
+    expect(seen.at(-1)).toBe("live");
+
+    seen.length = 0;
+    renderIsland(Island, {}, undefined);
+    expect(seen, "default: server snapshot for ever").toEqual(["server"]);
   });
 });

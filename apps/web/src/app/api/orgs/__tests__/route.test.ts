@@ -1,13 +1,15 @@
 import { it, expect, vi, beforeEach } from "vitest";
 
-const createOrgForUser = vi.fn(async (_u: string, name: string, _opts?: unknown) => ({ id: "org-9", name, slug: "s" }));
+const createOrgForUser = vi.fn<
+  (userId: string, name: string, opts?: unknown) => Promise<{ id: string; name: string; slug: string }>
+>(async (_u, name) => ({ id: "org-9", name, slug: "s" }));
 vi.mock("@/lib/auth", () => ({
   requireUser: vi.fn(async () => ({ id: "user-1" })),
   createOrgForUser: (...a: [string, string, unknown?]) => createOrgForUser(...a),
   setActiveOrgId: vi.fn(async () => {}),
   getUserOrgs: vi.fn(async () => []),
 }));
-const consumeReferralCookie = vi.fn(async (_userId: string) => null as string | null);
+const consumeReferralCookie = vi.fn<(userId: string) => Promise<string | null>>(async () => null);
 vi.mock("@/lib/referral", () => ({ consumeReferralCookie: (...a: [string]) => consumeReferralCookie(...a) }));
 const attachOrgToGroup = vi.fn();
 vi.mock("@/server/usecases/billing-groups", () => ({ attachOrgToGroup: (...a: unknown[]) => attachOrgToGroup(...a) }));

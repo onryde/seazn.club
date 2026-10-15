@@ -26,6 +26,7 @@ import { scoreEvent } from "@/server/usecases/scoring";
 import { getStandings } from "@/server/usecases/stages";
 import { recomputeStandings } from "../competition";
 import { seedBracket } from "./helpers/seed-bracket";
+import { omit } from "@/lib/omit";
 
 vi.mock("next/cache", () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
@@ -59,8 +60,7 @@ async function table(auth: AuthCtx, stageId: string, ids: readonly string[]) {
   return ids.map((id) => {
     const r = rows.find((x) => x.entrantId === id);
     if (r === undefined) throw new Error(`no standings row for ${id}`);
-    const { rank: _rank, ...rest } = r;
-    return rest;
+    return omit(r, "rank");
   });
 }
 

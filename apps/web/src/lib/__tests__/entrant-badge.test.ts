@@ -5,7 +5,6 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://cdn.example");
 
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports
 let resolveEntrantBadge: typeof import("../entrant-badge").resolveEntrantBadge;
 beforeAll(async () => {
   ({ resolveEntrantBadge } = await import("../entrant-badge"));

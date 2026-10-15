@@ -8,6 +8,16 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+import type { MessageKey } from "@/lib/messages";
+
+/** A failure as it happened — the server's own sentence, or the KEY of the
+ *  fallback when the throw carried none — translated at render. Storing the
+ *  translated string made `load` read `msg`, and `load` is the mount effect's
+ *  only dep: listing `msg` would re-run the fetch whenever the copy catalog
+ *  object changes, and leaving it out kept a stale catalog's sentence. */
+type Failure = { text: string } | { key: MessageKey };
+const failureOf = (err: unknown, fallback: MessageKey): Failure =>
+  err instanceof Error ? { text: err.message } : { key: fallback };
 
 interface Metric {
   key: string;
@@ -44,7 +54,7 @@ export function StatsPanel({
   const [metric, setMetric] = useState<string | null>(null);
   const [sort, setSort] = useState<"desc" | "asc">("desc");
   const [view, setView] = useState<"all" | "discipline">("all");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const [paywall, setPaywall] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -63,7 +73,7 @@ export function StatsPanel({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywall(String(err.extra.feature_key ?? "stats.player"));
       } else {
-        setError(err instanceof Error ? err.message : msg("stats.failed"));
+        setError(failureOf(err, "stats.failed"));
       }
     } finally {
       setLoading(false);
@@ -76,7 +86,12 @@ export function StatsPanel({
   }, [load]);
 
   if (paywall) return <UpgradeGate feature={paywall} viewerPlan={viewerPlan} />;
-  if (error) return <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>;
+  if (error)
+    return (
+      <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
+        {"text" in error ? error.text : msg(error.key)}
+      </p>
+    );
   if (loading && !board) return <p className="text-sm text-slate-500">{msg("stats.loading")}</p>;
   if (!board) return null;
 

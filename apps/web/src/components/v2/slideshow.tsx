@@ -12,7 +12,7 @@
 // vars (Pro dashboard.branding passes themeStyle from the page), scoreboard
 // type (Barlow Condensed via the slideshow layout), an accent keel under the
 // masthead, and scorebug strips sized for a TV across the hall.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import Link from "@/components/ui/console-link";
 import { ArrowLeft } from "lucide-react";
@@ -102,12 +102,19 @@ export function Slideshow({
   // slideAt interleaves it every other step while matches are live.
   const [step, setStep] = useState(0);
   const index = slideAt(step, slides);
-  const setIndex = (target: number | ((i: number) => number)) =>
-    setStep((s) => {
-      const current = slideAt(s, slides);
-      const next = typeof target === "function" ? target(current) : target;
-      return stepFor(((next % Math.max(slides.length, 1)) + Math.max(slides.length, 1)) % Math.max(slides.length, 1), slides);
-    });
+  // Memoised on `slides` so the keyboard effect below can list it: a refresh
+  // that hands down new slides (a match going live PINS its slide) must reach
+  // the arrow keys, and the effect's `slides.length` alone cannot see a
+  // same-length change.
+  const setIndex = useCallback(
+    (target: number | ((i: number) => number)) =>
+      setStep((s) => {
+        const current = slideAt(s, slides);
+        const next = typeof target === "function" ? target(current) : target;
+        return stepFor(((next % Math.max(slides.length, 1)) + Math.max(slides.length, 1)) % Math.max(slides.length, 1), slides);
+      }),
+    [slides],
+  );
   const [clock, setClock] = useState<string | null>(null);
   const [subscribed, setSubscribed] = useState(false);
 
@@ -188,7 +195,7 @@ export function Slideshow({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [router, backHref, slides.length]);
+  }, [router, backHref, slides.length, setIndex]);
 
   const slide = slides[Math.min(index, Math.max(slides.length - 1, 0))];
   // The builder sets `pointRatio` on every row of a slide whose division ranks

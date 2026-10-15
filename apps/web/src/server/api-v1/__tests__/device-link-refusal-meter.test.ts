@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const rateLimit = vi.fn(
-  async (_key: string, _cfg: { max: number; windowSeconds: number; failClosed?: boolean }) => {},
-);
+const rateLimit = vi.fn<
+  (key: string, cfg: { max: number; windowSeconds: number; failClosed?: boolean }) => Promise<void>
+>(async () => {});
 vi.mock("@/lib/rate-limit", () => ({ rateLimit }));
 
 const resolveDeviceLinkToken = vi.fn();

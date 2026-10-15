@@ -59,6 +59,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { autoSchedule, putScheduleSettings } from "../schedule";
 import { patchFixture } from "../fixtures";
 import { createVenue, createCourt } from "../venues";
+import { omit } from "@/lib/omit";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const T0 = "2026-11-05T09:00:00.000Z";
@@ -289,7 +290,7 @@ describe.skipIf(!HAS_DB)("the auto pass honours feed order (#452)", () => {
       x: { details?: { other_fixture_id?: string } },
       y: { details?: { other_fixture_id?: string } },
     ) => (x.details?.other_fixture_id ?? "").localeCompare(y.details?.other_fixture_id ?? "");
-    const stripDetail = <T extends { detail?: string }>({ detail: _detail, ...rest }: T) => rest;
+    const stripDetail = <T extends { detail?: string }>(conflict: T) => omit(conflict, "detail");
     const expected = [...b.feeders]
       .map((feeder) => ({
         fixture_id: b.final,

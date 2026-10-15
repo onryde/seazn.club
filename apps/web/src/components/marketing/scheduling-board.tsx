@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { createBoard, isFull, place, type BoardState } from "@/lib/marketing/board-logic";
 import { useT } from "@/components/i18n/dict-provider";
+import { useMediaQuery } from "@/lib/use-client-snapshot";
 
 const COURTS = 3;
 
@@ -25,24 +26,27 @@ export function SchedulingBoard() {
     t("sched.board.fixture.2"),
     t("sched.board.fixture.3"),
   ]);
-  const [mode, setMode] = useState<"replay" | "play" | "published">("replay");
+  const [chosenMode, setMode] = useState<"replay" | "play" | "published">("replay");
+  // Reduced motion skips the replay outright: derived, not set from an effect.
+  // False on the server and the hydration render (the server cannot know), so
+  // both render the replay and agree; the visitor's preference applies from
+  // the render after hydration — the same moment the old mount effect did.
+  const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const mode = reduced && chosenMode === "replay" ? "play" : chosenMode;
   const [board, setBoard] = useState<BoardState>(() => createBoard(fixtures, COURTS));
   const [armed, setArmed] = useState<number | null>(null);
   const [status, setStatus] = useState(() => t("sched.board.status.initial"));
   const replayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Attract mode: skip straight to play under reduced motion; otherwise hand
-  // over when the CSS replay (~3.2s) finishes or on first pointer/key contact.
+  // Attract mode: hand over when the CSS replay (~3.2s) finishes or on first
+  // pointer/key contact. No timer under reduced motion — there is no replay.
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setMode("play");
-      return;
-    }
+    if (reduced) return;
     replayTimer.current = setTimeout(() => setMode("play"), 3400);
     return () => {
       if (replayTimer.current) clearTimeout(replayTimer.current);
     };
-  }, []);
+  }, [reduced]);
   const takeover = () => {
     if (mode === "replay") {
       if (replayTimer.current) clearTimeout(replayTimer.current);

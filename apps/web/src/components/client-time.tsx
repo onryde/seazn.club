@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useMemo, useSyncExternalStore } from "react";
 import { useLocaleOrDefault } from "@/components/i18n/dict-provider";
 import { fmtDate, fmtTime, fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
+import { useHydrated } from "@/lib/use-client-snapshot";
 
 /**
  * Viewer timezone (spec 2026-07-14). A logged-in user's saved `users.timezone`
@@ -24,18 +25,26 @@ export function ViewerTzProvider({
   return <ViewerTzContext.Provider value={tz}>{children}</ViewerTzContext.Provider>;
 }
 
-/** The viewer's zone: saved preference if present, else browser-detected. */
+/** The browser's own zone, or null when the engine cannot resolve one. A
+ *  string, so two reads compare equal and `useSyncExternalStore` is stable. */
+function readBrowserZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null; // → UTC
+  }
+}
+const noBrowserZone = () => null;
+const zoneNeverChanges = () => () => {};
+
+/** The viewer's zone: saved preference if present, else browser-detected.
+ *  The browser zone is read through `useSyncExternalStore` (server snapshot
+ *  null → "UTC"), so the server and the hydration render agree and the
+ *  detected zone arrives on the render after hydration — the same moment the
+ *  old mount effect delivered it, minus the effect's extra render. */
 export function useViewerTz(): string {
   const pref = useContext(ViewerTzContext);
-  const [detected, setDetected] = useState<string | null>(null);
-  useEffect(() => {
-    if (pref) return; // an explicit preference wins; no need to detect
-    try {
-      setDetected(Intl.DateTimeFormat().resolvedOptions().timeZone || null);
-    } catch {
-      /* leave null → UTC */
-    }
-  }, [pref]);
+  const detected = useSyncExternalStore(zoneNeverChanges, readBrowserZone, noBrowserZone);
   return pref || detected || "UTC";
 }
 
@@ -71,26 +80,20 @@ export function Zoned({
   you?: "off" | "subtitle" | "hover";
 }) {
   const viewerTz = useViewerTz();
-  const [main, setMain] = useState("");
-  const [local, setLocal] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!value) {
-      setMain("");
-      setLocal(null);
-      return;
-    }
+  // Empty on the server and through hydration (Node ICU and the browser spell
+  // zones differently), then derived in render — never copied into state.
+  const hydrated = useHydrated();
+  const { main, local } = useMemo(() => {
+    if (!hydrated || !value) return { main: "", local: null };
     const fmtMain = mode === "date" ? fmtDate : mode === "time" ? fmtTime : fmtDateTime;
     const label = fmtMain(tz, value);
-    setMain(showZone ? `${label} ${fmtZoneAbbrev(tz, value)}` : label);
-
+    const shown = showZone ? `${label} ${fmtZoneAbbrev(tz, value)}` : label;
     if (you !== "off" && viewerTz && !zonesAgree(tz, viewerTz, value)) {
       const lt = mode === "date" ? fmtDate(viewerTz, value) : fmtTime(viewerTz, value);
-      setLocal(`${lt} ${fmtZoneAbbrev(viewerTz, value)}`);
-    } else {
-      setLocal(null);
+      return { main: shown, local: `${lt} ${fmtZoneAbbrev(viewerTz, value)}` };
     }
-  }, [value, tz, mode, showZone, you, viewerTz]);
+    return { main: shown, local: null };
+  }, [hydrated, value, tz, mode, showZone, you, viewerTz]);
 
   if (you === "hover" && local) {
     return (
@@ -120,7 +123,11 @@ export function Zoned({
  * Renders a locale/timezone-formatted time on the client only. The first
  * render (server + client hydration) is an empty span, so the markup matches
  * and React doesn't report a hydration mismatch; the formatted value fills in
- * after mount using the viewer's local timezone.
+ * on the render after hydration (`useHydrated`), using the viewer's local
+ * timezone — and on the FIRST render of a ClientTime mounted client-side
+ * later, which the old mount effect painted empty for a frame. A value that
+ * goes back to null empties the span (the effect used to leave the last time
+ * on screen).
  */
 export function ClientTime({
   value,
@@ -152,10 +159,9 @@ export function ClientTime({
   // `useLocaleOrDefault` degrades to English outside a `DictProvider` (this
   // component renders bare in several component tests) rather than throwing.
   const locale = useLocaleOrDefault();
-  const [text, setText] = useState("");
-
-  useEffect(() => {
-    if (!value) return;
+  const hydrated = useHydrated();
+  const text = useMemo(() => {
+    if (!hydrated || !value) return "";
     const d = value instanceof Date ? value : new Date(value);
     const zone: Intl.DateTimeFormatOptions = {
       ...(tz ? { timeZone: tz } : {}),
@@ -170,13 +176,13 @@ export function ClientTime({
             : d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", ...zone });
       const abbrev =
         showZone && mode !== "date" ? ` ${fmtZoneAbbrev(tz ?? UTC_LOCAL(), d)}` : "";
-      setText(base + abbrev);
+      return base + abbrev;
     } catch {
       // Unknown zone string — fall back to the viewer's local time, still in
       // the app's own locale.
-      setText(mode === "date" ? d.toLocaleDateString(locale) : d.toLocaleString(locale));
+      return mode === "date" ? d.toLocaleDateString(locale) : d.toLocaleString(locale);
     }
-  }, [value, mode, tz, showZone, locale, hourCycle]);
+  }, [hydrated, value, mode, tz, showZone, locale, hourCycle]);
 
   return <span suppressHydrationWarning>{text}</span>;
 }
@@ -205,10 +211,9 @@ export function ClientDateRange({
   to: string | Date | null;
   tz?: string;
 }) {
-  const [text, setText] = useState("");
-
-  useEffect(() => {
-    if (!from) return;
+  const hydrated = useHydrated();
+  const text = useMemo(() => {
+    if (!hydrated || !from) return "";
     const a = from instanceof Date ? from : new Date(from);
     const b = to ? (to instanceof Date ? to : new Date(to)) : a;
     const opts: Intl.DateTimeFormatOptions = { day: "numeric", month: "short" };
@@ -216,11 +221,11 @@ export function ClientDateRange({
     try {
       const fa = a.toLocaleDateString([], opts);
       const fb = b.toLocaleDateString([], opts);
-      setText(fa === fb ? fa : `${fa} – ${fb}`);
+      return fa === fb ? fa : `${fa} – ${fb}`;
     } catch {
-      setText(a.toLocaleDateString());
+      return a.toLocaleDateString();
     }
-  }, [from, to, tz]);
+  }, [hydrated, from, to, tz]);
 
   return <span suppressHydrationWarning>{text}</span>;
 }

@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, setDateTime, seedVenueWithCourts } from "./helpers";
 
 // C1 task 2 item 2 — owner-demanded browser e2e. The owner explicitly

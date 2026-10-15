@@ -18,6 +18,7 @@ import { createVenue, createCourt } from "../venues";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { seedOrg } from "./_seed";
+import { omit } from "@/lib/omit";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1451,7 +1452,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     expect(Array.isArray(payload.courtDetails)).toBe(true);
     expect((payload.courtDetails as unknown[]).length).toBe(pack.settings.courts.length);
     // Everything else survives the trim byte-for-byte.
-    const { courtDetails: _courtDetails, ...payloadRest } = payload;
+    const payloadRest = omit(payload, "courtDetails");
     const trimmed = Object.fromEntries(
       Object.entries(pack).filter(
         ([k]) =>
@@ -1590,8 +1591,7 @@ const OPTS = { mode: "generate" as const, instruction: "", now: NOW };
 // the anchor moves. A function, not a constant (P9 pass 3b): courts are real
 // per-org ids, resolved by whichever seedRrBoard() call the test already ran.
 function noAnchorConfig(court1: string, court2: string) {
-  const { startAt: _startAt, ...rest } = settingsConfig(court1, court2);
-  return { ...rest, sessionWindows: [] };
+  return { ...omit(settingsConfig(court1, court2), "startAt"), sessionWindows: [] };
 }
 
 describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {

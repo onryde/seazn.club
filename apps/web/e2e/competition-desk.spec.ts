@@ -519,7 +519,6 @@ test.describe("competition desk", () => {
     expect(created.status).toBe(201);
 
     await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
-    const masthead = page.getByTestId("desk-masthead-pill");
     const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
     // The row raises it...
     // The row renders its pill TWICE (mobile card + desktop row, one hidden

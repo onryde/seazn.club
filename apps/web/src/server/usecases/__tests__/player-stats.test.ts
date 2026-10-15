@@ -354,7 +354,7 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
 
   it("lineup read model carries squad numbers (Jul3/07 §5)", async () => {
     const { auth } = await seedOrg();
-    const { fixtures, entrants, teamA } = await seedDivision(auth);
+    const { fixtures, entrants } = await seedDivision(auth);
     const f = fixtures[0]!;
     const entrantId = entrants[0]!.id;
     const lineup = await getLineup(auth, f.id, entrantId);

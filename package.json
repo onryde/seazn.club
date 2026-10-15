@@ -69,7 +69,7 @@
     "check:rls": "node --experimental-strip-types scripts/check-rls.ts",
     "check:build-chunks": "node --experimental-strip-types scripts/check-build-chunks.ts",
     "backfill:pass-credit-redemptions": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/backfill-pass-credit-redemptions.ts",
-    "lint:scripts": "eslint scripts tools"
+    "lint:scripts": "eslint --max-warnings 0 scripts tools"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.4",
