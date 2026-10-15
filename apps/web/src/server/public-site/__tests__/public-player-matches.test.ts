@@ -2063,7 +2063,8 @@ describe("scoreLineFor — every registered sport, over its recorded golden ledg
   interface GoldenCorpus {
     key: string;
     configs: Record<string, unknown>;
-    streams: { config: string; events: ModuleEvent[]; lineups?: LineupPair }[];
+    // `voids`: a recorded core.void names its target (the envelope field; the payload is strictly empty)
+    streams: { config: string; events: (ModuleEvent & { voids?: string })[]; lineups?: LineupPair }[];
   }
   // The payloads that name a side by POSITION, listed by type. The swapped fold
   // is only the oracle once these are turned, so each is turned here by hand;

@@ -210,7 +210,9 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     });
     expect(kernelStale).toBeGreaterThan(builtinModules.length * 2);
     expect(moduleHeld).toBe(builtinModules.length * 2);
-  });
+    // (4.8 s under the CI coverage run: an explicit budget, not the 5 s default, for a sweep that folds every prefix of every
+    // recorded stream twice)
+  }, 60_000);
 
   it("a claimed event that cannot be probed (a recorder that throws) is stale, never silently held", () => {
     const module = builtinModules[0]!;
