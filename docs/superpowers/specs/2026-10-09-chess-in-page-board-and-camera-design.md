@@ -49,7 +49,7 @@ fix names above:
 | C4 | **A first-come check-in line** when the vendor-call budget is short: seats are granted in arrival order, and the player is told where they stand and about how long |
 | C5 | **A seat 429 says "wait a moment"**: a countdown from `Retry-After`, then the button re-enables |
 | C6 | **Raising Cloudflare's API limit is an owner action** before big events. Nothing is built for it (§13) |
-| C7 | **The no-show deadline is 10 minutes after the board's start, not 20** (owner proposal, 2026-10-15): `DEADLINE_AFTER_MS` goes from 20 to 10 minutes, so the walkover is at `T + 10`, and with batches at `T_batch + 10`. Check-in still opens at `T − 10` (`WINDOW_OPEN_LEAD_MS` is unchanged). Every minute count in this spec is derived from the constants. What pins the old 20 is listed in §3.2.1 |
+| C7 | **The no-show deadline is 10 minutes after the board's start, not 20** (owner proposal, 2026-10-15): `DEADLINE_AFTER_MS` goes from 20 to 10 minutes, so the walkover is at `T + 10`, and with batches at `T_batch + 10`. Check-in still opens at `T − 10` in the code (`WINDOW_OPEN_LEAD_MS` is unchanged), **but that lead is a no-op in the in-page flow**: `openRound` stamps `opened_at = now`, so a player's real check-in window is `DEADLINE_AFTER_MS`, **10 minutes from the Open press** for batch 0 and 10 minutes from `T_batch` for each later batch. It is NOT the 20 minutes (T − 10 to T + 10) that reading "T − 10" suggests (§3.2.1). The owner is asked to confirm that 10 minutes from the press is the intent (§13); `DEADLINE_AFTER_MS` stays ONE constant and its value is the owner's to change. Every minute count in this spec is derived from the constants. What pins the old 20 is listed in §3.2.1 |
 
 ---
 
@@ -145,7 +145,7 @@ scheduled time. The scheduled time is what players are *shown*; it is not the tr
 A fixture with no `round_opened_at` is not yet playable and says so. *(Amended 2026-10-15,
 C1/C2: "T" in every sentence of this spec that times a window is the BOARD's batch start
 `T_batch`, which is `round_opened_at` for the first ten boards of a round and later for the rest,
-§3.2.1. T−10 is a lead on the first batch only. And the deadline is `T+10`, not the `T+20` this
+§3.2.1. T−10 is a lead on the first batch only, and a no-op there in the in-page flow (the window, below). And the deadline is `T+10`, not the `T+20` this
 paragraph first said: the owner's proposal of 2026-10-15, C7.)*
 
 Check-in stamps the fixture. Under policy `Required`, the seat is granted only after
@@ -198,8 +198,9 @@ the round's open row, below), and a player can read when they are due.
   it to 60 s, which is a change to one number.
 - **The deadline is `DEADLINE_AFTER_MS`, and it is 10 minutes (C7).** The owner's proposal of
   2026-10-15 moves the no-show from `T+20` to `T+10`: `window.ts:6` changes from `20 * 60_000` to
-  `10 * 60_000`, and the build types no other number of minutes. Check-in still opens at `T − 10`
-  (`WINDOW_OPEN_LEAD_MS` unchanged). The invite mail needs no new minutes: it names a time, `opened_at
+  `10 * 60_000`, and the build types no other number of minutes. The check-in lead is unchanged in the code (`WINDOW_OPEN_LEAD_MS`, `T − 10`) but is a no-op in the
+  in-page flow, so the window a player really has is 10 minutes from the Open press (the window, below).
+  The invite mail needs no new minutes: it names a time, `opened_at
   + DEADLINE_AFTER_MS` (`external-play-invite.ts`'s `deadlineLabel`), and the organiser's confirm
   copy is parameterised, `runsheet.round.confirmWindow` with `{minutes}` from `windowMinutes:
   DEADLINE_AFTER_MS / 60_000` (`open-round-view.ts:215`, drawn at `open-round-control.tsx:137`), so
@@ -208,14 +209,31 @@ the round's open row, below), and a player can read when they are due.
   - Code: `window.ts` (`windowFor`), `sweep.ts` (`playableWindow`; the comment at `:181`),
     `open-round-view.ts:215`, `lib/open-round.ts:70` (the doc of `windowMinutes`), and the stale
     comments naming "T+20" in `room-snapshot.ts:209` and `:368`.
+  - **User-visible API text (the re-review's m-a):** `api-v1/openapi.ts:148` ("T−10/T+20 hang off
+    this") and `:207` ("WINDOW_CLOSED after its T+20 deadline") are reworded to name the window by
+    the constants' values, and `openapi/v1.json`, which carries both strings (`v1.public.json` neither),
+    is regenerated with `pnpm openapi:gen`, or CI's OpenAPI drift check goes red.
+  - **Comments that still say "T+20"** (found by `grep -a 'T+20'` over `apps/web/src` at `00e5179b6`;
+    comments only, each reworded to name `DEADLINE_AFTER_MS` so the next change of the value leaves
+    none behind): `sweep.ts:6,8,19,173,335,520,627`, `preflight.ts:189`, `open-round.ts:6,287`,
+    `create-game.ts:358,441,511`, `invite.ts:221`, `round-open.ts:4`,
+    `app/api/cron/external-play/route.ts:10`, `lib/open-round.ts:115` and
+    `video/realtimekit.ts:289,728`.
   - Tests that derive from the constant and need only their titles and comments read (they pass
-    for any value, so by themselves they do not prove the new one): `window.test.ts`,
+    for any value, so by themselves they do not prove the new one):
     `open-round.test.ts`, `invite.test.ts`, `open-round-property.test.ts`, `open-round-view.test.ts:154`,
     `external-play-create-game.test.ts`, `external-play-room.test.ts`, `external-play-sweep.test.ts`,
     `open-round-control.test.tsx:52,173,196`, `room-snapshot.test.ts:259-262`, and the walkthrough
     `e2e/walkthrough/chess-external-play.spec.ts` (`:448` and `:932` derive; the comment at `:446`
     names "T+20").
-  - Tests that TYPE the number and go red or vacuous at 10: `external-play-preflight.test.ts`
+  - Tests that TYPE the number and go red or vacuous at 10: `window.test.ts:18`, which is
+    `expect([EMAIL_LEAD_MS, WINDOW_OPEN_LEAD_MS, DEADLINE_AFTER_MS]).toEqual([900_000, 600_000,
+    1_200_000])` under the title "pins the owner-approved values" (the re-review's m-a: the first
+    draft listed this file as deriving from the constant, and this line does not). It is changed to
+    `600_000` with a comment citing C7, and it is the one typed number that is right: its job is to
+    pin the OWNER's value, copied from the ruling and not derived from the code under test, so that
+    changing the constant is deliberate. The others below are not pins and become the constant.
+    Then `external-play-preflight.test.ts`
     (`:380` and `:388` are `20 * 60_000` either side of the deadline, `:980` adds `20 * 60_000`
     past it, `:1282` is `21 * 60_000`), the fixtures `windowMinutes: 20` in
     `open-round-control-actions.test.tsx:65` and `stages-panel-open-round.test.tsx:28`, and
@@ -227,8 +245,12 @@ the round's open row, below), and a player can read when they are due.
     `invite.test.ts:307`). A test that stays green when the constant changes was not pinning it.
 - **The start.** `T_batch(i) = round_opened_at + i × CHECKIN_BATCH_GAP_MS`. A round of ten boards
   or fewer has one batch, `T_batch = round_opened_at`, and nothing about it changes.
-- **The window.** Batch 0 keeps today's window shape: opens `T − 10 min`, closes `T + 10 min`
-  (`DEADLINE_AFTER_MS`, C7). Batch i ≥ 1 opens at `T_batch(i)` and closes at `T_batch(i) + 10 min`.
+- **The window.** Batch 0 keeps today's window shape in the code: opens `T − 10 min`, closes `T + 10 min`
+  (`DEADLINE_AFTER_MS`, C7). **Stated plainly for the owner (the re-review's m-b): in the in-page flow
+  batch 0's real check-in window is `DEADLINE_AFTER_MS`, 10 minutes from the Open press, not 20.**
+  `openRound` stamps `opened_at = now` (next bullet), so `T − 10 min` is already in the past when the
+  round opens and the first half of the 20 minutes the shape suggests is never available to a player.
+  Batch i ≥ 1 opens at `T_batch(i)` and closes at `T_batch(i) + 10 min`: the same 10 minutes.
   **Each batch has its own full `DEADLINE_AFTER_MS`**: a batch that opens late loses none of it.
 - **The T−10 lead does not apply to a later batch (a finding, not in the brief).** `windowFor`
   opens a window `WINDOW_OPEN_LEAD_MS` (10 min) before its anchor. Fed `T_batch(i)` it would open
@@ -284,8 +306,16 @@ the round's open row, below), and a player can read when they are due.
   idle poll. The invite mail names the board's own deadline (`T_batch + 10`) and, for batch 1
   onwards, when check-in opens; its body, "is ready to play now", is false for a later batch and
   gets a variant that says when (`externalPlayInvite.bodyLater`, four locales).
-- **What the organiser sees.** The open-round confirmation says how long the stagger runs ("Check-in
-  is staggered over N minutes", `(batches − 1) × gap`) before the press, and the view lists the
+- **What the organiser sees.** The open-round confirmation says how long the stagger runs before the press, and the existing
+  copy has to change to say it (the re-review's m-c): `runsheet.round.confirmWindow` reads "They can
+  check in straight away. If a player has not taken their seat {minutes} minutes after you open, that
+  board comes to you to decide.", which is true only for a round of ONE batch. A staggered round (the
+  stored `staggered` flag and more than one batch) shows a new key, `runsheet.round.confirmWindowStaggered`,
+  in four locales: "Boards open for check-in in groups, so the last group opens {span} minutes after
+  you press Open. A board's players have {minutes} minutes from when their group opens; after that the
+  board comes to you to decide.", with `{minutes}` = `DEADLINE_AFTER_MS / 60_000` and `{span}` =
+  `(batches − 1) × gap` in minutes, rounded up (never less than the truth). `confirmWindowReinvite`
+  names a time and needs no variant. The view lists the
   batches (boards a to b, opens at, closes at). A round of 100 boards is ten batches and its last
   opens `9 × gap` after Open: 18 minutes at the starting 120 s, 9 at 60 s. That is the price of the stagger and
   the organiser is shown it before pressing. This is an organiser surface, not `/admin`: it keeps
@@ -1336,6 +1366,13 @@ zero deferrals and an arrival-to-seated p95 within twice the clean 20-board p95 
 load A: 6.3 s, so within about 16 s). If 120 s itself defers, the batch is too big for the bucket:
 record it and the owner picks a smaller `CHECKIN_BATCH_SIZE`.
 
+*The bucket assumption, stated once (the re-review's N4).* Every drain and capacity figure in this
+spec (here, §5.7.6, §5.7.8 and §13 Q4) assumes **a full bucket when the burst begins
+(`RTK_BUDGET_BURST` = 300 tokens), nothing else spending from it, and instant cameras**. The first two
+are the bucket's side. The third is the line's: the head's stay is held through its camera's warm-up
+(§5.7.5), so a real camera adds a serial wait per place that none of these figures contains. B-slow
+(below) measures it.
+
 *What the line cannot do: the drain floor.* The bucket gives at most `300 + 2 × t` calls in t
 seconds, so draining D calls takes at least `max(0, D − RTK_BUDGET_BURST) /
 RTK_BUDGET_REFILL_PER_S` seconds. At `D = RTK_CALLS_PER_WINDOW` (900) that is exactly
@@ -1345,12 +1382,18 @@ starved** (22 a player, D ≈ 1,330). Test B reports D, computes the floor from 
 drain time beside it. It never asserts a number of minutes.
 
 *The floor against the deadline (C7).* The deadline is now 10 minutes, and the line protects a
-queued player for at most `LINE_DEADLINE_GRACE_MS` = 5 min past it (§5.7.8), so a player who joins
-at the deadline has 300 s. That covers the clean drain (153 s for 60 players, the last of them) and
-does **not** cover the worst starved late burst (about 515 s): there a player still queued 5 minutes
-past their deadline takes the normal walkover, and the line card has warned them (the estimate
-exceeded the time left, §6.1). That is the trade the 5-minute cap makes, stated for the owner (§13,
-Q4); a longer cap is one constant.
+queued player for at most `LINE_DEADLINE_GRACE_MS` = 5 min past it (§5.7.8), the cap. In the cap's
+300 s the bucket gives `RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S × 300` = 900 calls
+(`RTK_CALLS_PER_WINDOW`), so the cap fits `900 / LINE_PLAYER_COST` = **90 players at the clean cost**
+and `900 / 22` = **about 41 at the starved cost**. That covers the clean 60-player drain (153 s,
+D ≈ 606 ≤ 900) and does **not** cover the worst starved late burst (about 515 s, D ≈ 1,330 > 900):
+there about 19 of the 60 (the 430 calls over, at 22 a player) are still queued at the cap and take
+the normal walkover, and the line card has warned them (the estimate exceeded the time left, §6.1).
+The first draft said a player at the deadline was served if fewer than about 60 (clean) or 27
+(starved) were ahead: that divided 300 s by a per-place time and left out the 300-token burst, a
+different bucket assumption from the drain figures above, and it is retired. That is the trade the
+5-minute cap makes, stated for the owner (§13, Q4), with the camera caveat above; a longer cap is one
+constant.
 
 *The line costs the vendor nothing.* A queued claim makes no vendor call; what it costs the
 database is in §5.7.9. The budget's total does not change; what changes is who spends the next
@@ -1389,11 +1432,18 @@ game. The word is retired here because it covers two different failures.
   minutes. The result picks the gap (above).
 - **B, "late burst".** Every batch already open (the burst starts after the last batch's start, so
   no cap is in play); 60 players (30 Required boards) arrive within 60 s. Pass: 0 never created, 0
-  late creates, 0 wrong refusals, 0 inversions. A late create here means the completing claim's
+  late creates, 0 wrong refusals, 0 inversions, 0 unexcused position rises. A late create here means the completing claim's
   threshold (`LINE_COMPLETING_COST`, §5.7.3) is too low, and that is the constant to raise.
-  Recorded: both-seated-to-game p95 and maximum; the line position each player was shown (it must
-  never rise for a player who stayed: checked on every poll, the count of polls reported); the
-  total drain time beside the floor computed from the run's own D (above); the busiest five
+  Recorded: both-seated-to-game p95 and maximum; the line position each player was shown, checked on
+  every poll (the count of polls reported). **A position must not rise for a player who stayed,
+  with one excused class (the re-review's N3).** A rise is EXCUSED when a stay with an EARLIER order
+  key was first held after the player's previous poll: that stay arrived before them, passed the gate
+  on an empty line (its `queued_at` was null), and the budget first held it later, for instance in the
+  second claim of a slow camera, so it now stands ahead of them. The cause is read from the
+  harness's own timeline of each stay's first `queued_at`, never from the code under test. Excused
+  rises are counted and reported APART, each with its cause; a rise with no such cause is a failure.
+  The checker is itself tested on seeded timelines, one excused and one unexplained (test 13(e)), so
+  the class cannot be silently empty or silently total; the total drain time beside the floor computed from the run's own D (above); the busiest five
   minutes; the claim route's peak requests a second and database statements a second; and the
   bucket's level at every `queued` answer (a median above `LINE_CLAIM_COST` means the head-only
   gate left budget idle, and windowed admission, §12, is owed). It counts deferred MINTS and
@@ -1409,14 +1459,33 @@ game. The word is retired here because it covers two different failures.
   arrivals are less than `ARRIVAL_JITTER_MS` = 50 ms apart, which is network reordering and not a
   decision. The harness samples the table at least every 500 ms and keeps each stay's timeline,
   because a restarted stay overwrites its row. What is left must be 0, and the number of pairs
-  checked is reported (zero pairs is a failure). The harness's players have instant cameras, so
-  camera pace adds none: the line orders who may SPEND, not whose camera comes on first, and a slow
-  camera can seat a later arrival first without breaking it.
+  checked is reported (zero pairs is a failure). B's players have instant cameras (every camera
+  reports `on` at its join), so camera pace adds nothing to B and its figures are the bucket's
+  alone: that is the assumption stated above, and B-slow exists to test it. The line orders who may
+  SPEND, not whose camera comes on first.
 - **B-end, "the burst at the deadline".** As B, but the 60 players arrive in the last 60 s before
   their board's deadline. Recorded, not a pass bar of its own: how many are seated, how many take a
   walkover caused by the line, the position and ETA each was shown, against the cap of 300 s. At
-  the clean cost the drain (153 s) fits inside the cap and the count is expected to be 0; at a starved
+  the clean cost, on the bucket assumption above, the drain (153 s) fits inside the cap and the count is expected to be 0; at a starved
   cost it is not, which is the trade stated above.
+- **B-slow, "late burst at real camera pace" (the re-review's N4).** As B, with one change: each
+  player's camera is `pending` at its join (the fixture server's `setLivePublisher(participantId, true,
+  { camera: "pending" })`) and the harness turns it `on` `CAMERA_WARMUP_S` after the join with
+  `reportCamera(participantId, "on")`. It runs at 5 s (the bucket's own per-place pace, so the camera
+  should not bind) and at 10 s (a slow phone); the server itself waits up to
+  `CAMERA_EVIDENCE_DEADLINE_MS` = 15 s from a peer's join before it refuses, so 15 s is the longest a
+  camera can take and still seat. The seam exists (`pending` and `reportCamera`, written for D22's late
+  camera), so no fixture-server behaviour is owed. Same pass bars as B (0 never created, 0 late
+  creates, 0 wrong refusals, 0 inversions, 0 unexcused position rises). **Recorded, per place:** the
+  time from a stay's gate pass to its `served_at` (p50, p95, maximum: the PER-PLACE TIME); the burst's
+  drain time against the camera-bound model `n × max(LINE_PLAYER_COST / RTK_BUDGET_REFILL_PER_S,
+  CAMERA_WARMUP_S)` and against B's; how many players were served inside the cap and how many took a
+  walkover caused by the line; and, for each player, the ETA first shown against the wait that
+  happened. **The decision it feeds, for the owner:** if the per-place p50 exceeds the bucket's 5 s,
+  the camera and not the bucket sets the line's pace, the cap serves about `300 / CAMERA_WARMUP_S`
+  players whatever the budget (30 at 10 s) and not the 90 and 41 above, and the ETA, which counts the
+  bucket's cost only, undercounts. Windowed admission (§12) is then owed before the line is relied on
+  for a large late burst. It is not designed here.
 - **Regressions.** 20 Required boards (two batches): about 605 calls, 0 deferrals, 0 never
   created, 0 late creates, and **0 rows with `queued_at`**: the line stays inert when it is not
   needed, which is the evidence for "the line empties, back to today's path". Mixed 10 Required +
@@ -1531,8 +1600,8 @@ line makes it an order: **first come, first served, one place per player.**
   deferred read: both are the same `RealtimeKitDeferred` caught in `verifyRequiredSeat`.
 - **A place is kept until the player is served, not only while the budget is holding them.** A
   Required check-in is several claims (the mint, then reads), and the budget may hold only the
-  first. A player the budget has held once is IN LINE from then until they are served, refused by
-  their camera, or silent (§5.7.2, the one predicate). Without that, a place would evaporate
+  first. A player the budget has held once is IN LINE from then until they are served, ended by a camera
+  no wait can fix (`camera_blocked`, `video_unavailable`), or silent (§5.7.2, the one predicate). Without that, a place would evaporate
   between the mint and the read: the player would lose their deadline protection mid-check-in
   (§5.7.8), skip the head's token threshold on their next claim (§5.7.3), and be overtaken (the
   review's I1).
@@ -1566,25 +1635,59 @@ renumbered at merge, as V446 to V448 are). It does three things.
   line from `queued_at`.**
 - `released_at timestamptz null`: the last time the gate let a claim spend.
 - `served_at timestamptz null`: stamped when service ends in a seat (§5.7.3). `ended_at timestamptz
-  null`: stamped when a claim that passed the gate was answered with a camera refusal (blocked,
-  required, lost, unavailable). A stay has at most one of the two.
+  null`: stamped when a claim that passed the gate was answered `camera_blocked` or
+  `video_unavailable`, the two answers no wait can fix (§5.7.3 step 5: `camera_required` and
+  `camera_lost` do NOT end a stay). A stay has at most one of the two.
 - Checks: `queued_at >= first_claim_at`, `served_at >= first_claim_at`, `ended_at >= first_claim_at`,
   and not both `served_at` and `ended_at`.
 - Index `(budget_key, first_claim_at, fixture_id, person_id) where queued_at is not null and
   served_at is null and ended_at is null`: the line's order.
-- **The one predicate, `inLine`**, as ONE SQL fragment (`lineLiveSql`) read by every consumer: `queued_at
-  is not null and served_at is null and ended_at is null and now − last_seen_at < (case last_gate
-  when 'held' then LINE_ABANDON_AFTER_MS else LINE_RELEASE_GRACE_MS end)`. The gate's `ahead` count,
-  the position shown, the seat gate's past-deadline admission, `noShow`'s skip, the create's allowance
-  and the room's phase (§5.7.8) all use it, so the carve-out and the skip cannot disagree. A **source
-  guard** forbids any other query from reading `queued_at`, `last_seen_at` or `last_gate`, and
-  reports how many consumers it found (zero is a failure; a consumer in §5.7.8's list that the scan
-  no longer finds is one too).
-- **A stay ends** when it is served, ended, or no longer live. The next gated claim finds it and starts
-  a NEW stay in the same upsert (`first_claim_at = now`, `queued_at` and the rest cleared, `last_gate =
-  'passed'`), and the answer carries `left: true` if the old stay had been in line, so the card says
-  "you left the line". That is how a re-opened round, a re-pair and a returning player all start
-  clean without a delete.
+- **Two named SQL fragments in `seat-line.ts` are the only readers of `queued_at`, `last_seen_at` and
+  `last_gate`.**
+  - `stayLapsedSql`, the **lapse clause**, TIME ONLY: `now − last_seen_at >= (case last_gate when
+    'held' then LINE_ABANDON_AFTER_MS else LINE_RELEASE_GRACE_MS end)`. It reads no `queued_at`, so it
+    gives the same answer for a stay the budget never held as for one it did.
+  - `lineLiveSql`, **the one predicate, `inLine`**: `queued_at is not null and served_at is null and
+    ended_at is null and not (stayLapsedSql)`.
+
+  The stay upsert (below) is the one other statement that reads them, through `stayLapsedSql`, and the
+  guard allow-lists it by name. A **source guard** forbids any other query from reading the three
+  columns and reports how many readers it found (the two fragments and the upsert: 3). Zero is a
+  failure, and so is an allow-listed reader, or a consumer of the list below, that the scan no longer
+  finds.
+- **The consumers of `inLine`: seven, listed once (the re-review's m-d).** The first draft counted
+  five in one place and six in another, and left teardown and the optional yield out of both. Every
+  place that asks whether a player is in line is one of these, and 7 is the number test 15(d) and
+  test 33 use:
+  1. the gate's `ahead` count and, from the same count, the position shown (`ahead + 1`);
+  2. seat admission past the deadline (§5.7.8);
+  3. `noShow`'s skip, with its `not_started` hold;
+  4. the create's allowance (`createGameIfReady`, `createAtDequeue`, `mintRetry`'s deadline test and
+     the `ready` row's `expires_at`: one consumer, four call sites);
+  5. the room's phase, per viewer;
+  6. teardown (`meetingIsDone`);
+  7. the optional yield (§5.7.1): an optional claim or camera-token ask makes no vendor call while the
+     bucket's line is non-empty.
+
+  Consumers 2 to 6 reach it through `boardPhase` / `lineHoldsBoard` (§5.7.8), 1 and 7 through
+  `lineLiveSql` directly, so all seven agree on one stay by construction. The tests drive all seven
+  for one stay and fail if the number they drive is not the number here.
+- **A stay ends** when it is served, ended (`ended_at`), or LAPSED (`stayLapsedSql`). The next gated
+  claim finds it and starts a NEW stay in the same upsert (`first_claim_at = now`, `queued_at` and the
+  rest cleared, `last_gate = 'passed'`), and the answer carries `left: true` if the old stay had been in
+  line, so the card says "you left the line". That is how a re-opened round, a re-pair and a returning
+  player all start clean without a delete.
+- **The restart reads time, never `queued_at` (the re-review's N2).** A stay the budget has NEVER held
+  is not in line, and it has not ended. The upsert restarts a stay on `served_at is not null or
+  ended_at is not null or stayLapsedSql`, and on nothing else. So a stay that passes the gate on an
+  empty line keeps its `first_claim_at` across its claims (the mint, then the reads), which makes its
+  arrival its first claim whenever the budget first holds it: that is its order key, and condition 2 of
+  §5.7.8. A never-held stay that is silent for the release grace is over like any other, and its next
+  claim is a new stay. The first draft restarted anything "no longer live", and "live" reads
+  `queued_at`: a stay the budget had not yet held was "not live" on every claim, so each claim moved
+  its arrival to now, and a player first held on their second claim queued behind everyone who had
+  arrived after their first, an inversion by construction that load test B's zero bar could never have
+  met. Test 20 pins it.
 - **Sealed like V439, V446 and V447:** RLS enabled AND forced, no policy, no grant for `app_user`;
   only the privileged client reaches it, and `online-chess-video-schema.test.ts` reads the
   catalogue (its sealed-table count rises by one). No `org_id`: it is not a tenant table. Two small
@@ -1619,7 +1722,7 @@ not an arrival). The order key is `(first_claim_at, fixture_id, person_id)`, tot
 claim, in one short sequence:
 
 1. Upsert the stay (arrival and liveness), one statement; it restarts a stay that is ended,
-   served or not live (§5.7.2).
+   served or lapsed, and no other (§5.7.2).
 2. `ahead` = the in-line rows of the same `budget_key` whose order key is below this stay's.
    Position is `ahead + 1`.
 3. Decide:
@@ -1649,10 +1752,19 @@ claim, in one short sequence:
 5. **Service ends after the whole claim, create included (the review's I2).** The stay stays in line
    until `claimRoomSeat` has finished everything that spends for this player's seat: the seat, the
    check-in, AND `createGameIfReady` when this claim completes the board (its re-verify reads, up to
-   3). Only then: a seat granted → `served_at = now`; a camera refusal (any answer that is neither a
-   seat, `camera_starting` nor `queued`) → `ended_at = now`, so a blocked or dead camera does not
-   hold the line; a `camera_starting` from the camera → the stay stays in line, `last_gate =
-   'passed'`. **Why:** `LINE_COMPLETING_COST` is a level check at the gate and not a reservation.
+   3). Only then: a seat granted → `served_at = now`; `camera_blocked` or `video_unavailable` →
+   `ended_at = now`, so a camera no wait can fix does not hold the line; every other answer that is not
+   a seat (`camera_starting`, `camera_required`, `camera_lost`) → the stay stays in line, `last_gate =
+   'passed'`, bounded by the release grace (§5.7.5). **Why `camera_required` and `camera_lost` do not
+   end it (the re-review's N1).** `camera_required` is the NORMAL answer to a first claim: a claim that
+   mints a participant reads nothing, because nobody holds its token yet (`verifyRequiredSeat`), so it
+   answers `camera_required` with the token, and only afterwards does the player's camera join and the
+   room claim again to read it (`room-shell.tsx:229-239`, the re-claim once the camera is live). Ending
+   the stay there would make every player's second claim a new stay at the back, which is the review's
+   I1 one step later, and would make test 15's mint-then-read sequence unpassable through the real
+   route. `camera_lost` is a read that finds a camera that was on and is not, which a restart or a
+   lagging presence makes ordinary. **Why the stay stays in line until the create has returned:**
+   `LINE_COMPLETING_COST` is a level check at the gate and not a reservation.
    What makes the create's tokens hold for line traffic is that the stay is still in line while the
    create runs, so the next head is blocked and cannot spend them between the seat and the re-verify.
    The traffic that can still take them is not the line's: housekeeping and the sweep's own creates
@@ -1702,16 +1814,43 @@ The order is over **players**.
   every `LINE_POLL_SLOW_MS` = 5 s behind them, never faster than `LINE_POLL_MIN_MS` = 2 s (§5.7.9), so
   an honest client must miss four slow polls to lose its place.
 - **Release: silent after a pass.** An entry whose last gate event was a pass is in line for
-  `LINE_RELEASE_GRACE_MS` = 15 s after it, not 20: the client's next claim after a pass comes on
-  the camera's back-off (1, 2, 4, 8 s) or the retry (1.5 s), so the grace must outlast the longest of
-  those gaps plus a poll. A test derives that floor from the exported client constants
-  (`LINE_RELEASE_GRACE_MS` at least `max(CAMERA_EVIDENCE_BACKOFF_MS) + LINE_POLL_MS`, 11 s) and
-  fails if the grace is shorter. After the client's last camera poll (`CAMERA_EVIDENCE_MAX_POLLS`) a
-  player who stops claiming lapses in 15 s and stops holding anyone. This is the price of "a place is
-  kept until served": a slow camera holds the line for its warm-up and a bounded 15 s after. The
-  clean per-place time is 5 s (the bucket), about the camera's own start, so it rarely binds; where
-  it does, test B's bucket-level metric shows idle budget and windowed admission (§12) is the
-  answer.
+  `LINE_RELEASE_GRACE_MS` = 35 s after it, not 20. After a pass the client's next claim waits for the
+  CAMERA, so the grace must outlast the camera's longest honest wait, and there are two:
+  - **After a `camera_starting`:** the camera's back-off, 1, 2, 4 or 8 s (`CAMERA_EVIDENCE_BACKOFF_MS`;
+    the longest is 8 s).
+  - **After a mint (the re-review's N1):** the mint's answer is `camera_required` with the token, and
+    the READ comes only once the camera is live. The path, from the real code: the token arrives and
+    `useOwnCamera` starts the join; the browser asks for the camera and a person reads the prompt and
+    answers (`CAMERA_PROMPT_ALLOWANCE_MS` = 20 s); the SDK joins (`CAMERA_JOIN_ALLOWANCE_MS` = 10 s);
+    and `room-shell.tsx:229-239` claims again only once `camera.status` is `live`, `SEAT_RETRY_MS` =
+    1.5 s later. So `MINT_TO_READ_MS = CAMERA_PROMPT_ALLOWANCE_MS + CAMERA_JOIN_ALLOWANCE_MS +
+    SEAT_RETRY_MS` = 31.5 s. The first draft's 15 s covered the back-off (8 + 3 = 11 s) and not this
+    path, so a player who had to answer a permission prompt lost their place between the mint and the
+    read.
+
+  The grace is the longer of the two plus one poll for the claim itself: `LINE_RELEASE_GRACE_MS` at
+  least `max(max(CAMERA_EVIDENCE_BACKOFF_MS), MINT_TO_READ_MS) + LINE_POLL_MS` = 34.5 s, declared as
+  35 s. The three camera constants are exported from `room-snapshot.ts` beside `SEAT_RETRY_MS` and
+  `CAMERA_EVIDENCE_BACKOFF_MS`, and test 19 derives its floor from them and fails if the grace is
+  shorter. **The two allowances are assumptions, not measurements**: no cold-prompt or slow-phone join
+  time is recorded anywhere in the repo, and a real-device measurement is owed (§13). A player slower
+  than the allowance loses the PLACE and not the seat: the next claim is a new stay at the back and the
+  card says so. After the client's last camera poll (`CAMERA_EVIDENCE_MAX_POLLS`) a player who stops
+  claiming lapses in 35 s and stops holding anyone.
+
+  **What this costs.** A player who vanishes after a pass holds the line for up to 35 s, seven places
+  at the clean 5 s. The bucket keeps refilling meanwhile and loses tokens only at its 300 cap, so
+  the cost is DELAY for those behind and not budget. A player whose camera never comes on and who
+  keeps pressing Check in inside the grace holds the head until they stop or the cap closes the
+  board: the room's own re-claims are bounded (`SEAT_RETRIES` = 3) and the `line` door's limit bounds
+  a manual press. Accepted, as ruled; if production shows it, the bound is a count of
+  passed-and-refused claims per stay, which is not designed here.
+
+  **The line serves ONE place at a time, through the camera's warm-up** (the head's stay stays in
+  line until it is seated), so the per-place time is the larger of the bucket's 5 s
+  (`LINE_PLAYER_COST / RTK_BUDGET_REFILL_PER_S`) and the camera's warm-up. The figures of §5.6.8 and
+  §5.7.8 assume instant cameras. B-slow (§5.6.8) measures the real per-place time, and windowed
+  admission (§12) is the answer if the camera sets the pace.
 - **Coming back late.** The first claim after either lapse starts a new stay at the back, and the
   card says so ("You left the line, so you are at the back again", `left: true`). The line card asks
   for a screen wake lock while queued (best effort), says "Keep this page open", and the claim fires
@@ -1729,8 +1868,10 @@ production it is one line for the whole platform and every club shares it** (Q2,
 FIFO); in dev, e2e and the load test each fixture vendor is its own bucket and its own line, as it is
 its own bucket today.
 - **Fairness is arrival order across clubs.** A club that opens a 40-board round and whose 80
-  players arrive before another club's four makes those four wait behind them: 5 s a place
-  (`LINE_PLAYER_COST` 10 over the refill of 2 a second), so number 81 waits about 7 minutes. That
+  players arrive before another club's four makes those four wait behind them: a place costs
+  `LINE_PLAYER_COST` = 10 calls, 5 s of refill at 2 a second, and a full bucket's 300 tokens pay for
+  the first 30, so number 81 waits about `(81 × 10 − 300) / 2` = 255 s, a little over 4 minutes (the
+  bucket assumption of §5.6.8: a full bucket, instant cameras). That
   is the honest price of one shared resource and of first come, first served, the only order a
   player can check against their own clock. Past the cap that wait is also a walkover risk for the
   four, which is why batches exist: a single club's own wave is spread before it reaches the line
@@ -1779,7 +1920,10 @@ skip**, and **the create**.
    affordable, or deferred), and they have not been served, ended or lapsed;
 2. they **arrived in time**: `first_claim_at` is not after the board's deadline;
 3. `now` is before the cap.
-A refusal for a blocked or dead camera ends the stay (`ended_at`), so it never extends anything.
+Only `camera_blocked` and `video_unavailable` end a stay (`ended_at`), so a camera no wait can fix never
+extends anything. A `camera_required` or `camera_lost` answer leaves the stay in line, and so
+protected, but only while it is live: for at most `LINE_RELEASE_GRACE_MS` after the player's last
+claim, so a player who stops turning the camera on stops being protected.
 A player the budget never held (`queued_at` null) is not protected: a slow camera is not the
 platform's delay. A player who first arrives after the deadline gets `window_closed`, line or no
 line.
@@ -1820,16 +1964,34 @@ existing >= opensAt and existing < deadline then existing else <at> end`). `clai
 the board's window, and, for a seat granted under the protection after the deadline, `at =
 first_claim_at`, which is inside the window by condition 2. In every other case `at` is `now()` as
 before. The QR self check-in (`checkInToFixture`) passes no window and keeps today's behaviour; if it
-can reach an online board the build passes the same window there.
+can reach an online board the build passes the same window there. One consequence, harmless and
+stated (the re-review's m-e): a seat granted under the protection is stamped at `first_claim_at`,
+which is old, so the stranded-board arm's debounce (`STRANDED_CREATE_AFTER_MS` = 10 s, the
+`max(fa.checked_in_at) <= now − 10 s` test at `sweep.ts:568`) is satisfied at once, and the sweep may
+try a create while the completing claim's own inline create is still running. That is safe: a create is
+claim-then-call, one claimant per fixture, and the loser is `lost` (`sweep.ts`, at
+`STRANDED_CREATE_AFTER_MS`). The worst case is one wasted attempt, never a second game.
 
-**The trade-off, stated.** The cap is 5 minutes. At the clean cost a place is 5 s, so a player who
-joins at the deadline can be served if fewer than about 60 players are ahead (300 s / 5 s); at the
-starved cost (11 s a place) fewer than about 27. The clean drain for 60 players (153 s) fits; the worst
-starved late burst (about 515 s) does not, and a player still queued 5 minutes past their deadline
-takes the normal walkover. The line card warns them as soon as the estimate exceeds the time left
-(`mayTimeOut`, §6.1). A longer cap is one constant; an owner who wants "never a walkover caused by
-the line" must raise it or the budget (§13, C6). A player in line well before the deadline has all
-the time before it as well.
+**The trade-off, stated.** The cap is 5 minutes. On the bucket assumption of §5.6.8 (a full bucket
+when the burst begins, nothing else spending, instant cameras) the cap gives
+`RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S × 300` = 900 calls, so a player who joins at the deadline
+is served if fewer than about **90** players are ahead at the clean cost (900 / 10) and about **41** at
+the starved cost (900 / 22). The clean drain for 60 players (153 s) fits; the worst starved late burst
+(about 515 s) does not, about 19 of the 60 are still queued at the cap, and a player still queued 5
+minutes past their deadline takes the normal walkover. (The first draft's "about 60 clean, about 27
+starved" divided 300 s by a per-place time and left out the 300-token burst: a different bucket
+assumption from the drain figures. It is retired.)
+
+**It assumes instant cameras (the re-review's N4).** The line holds the head's place through its
+camera's warm-up (§5.7.5), so with a camera that takes `w` seconds the cap serves about `300 / w`
+players whatever the budget: 30 at 10 s, 20 at the server's own limit of 15 s
+(`CAMERA_EVIDENCE_DEADLINE_MS`). Those are model figures, not measurements. B-slow (§5.6.8) measures
+them, and if the camera sets the pace the choice is windowed admission (§12), a longer cap, or
+accepting the walkovers: the owner's call, on the measurement. The line card warns a player as soon as
+the estimate exceeds the time left (`mayTimeOut`, §6.1), and the estimate counts the bucket's cost
+only, so in the camera-bound case it undercounts. A longer cap is one constant; an owner who wants
+"never a walkover caused by the line" must raise it, raise the budget (§13, C6), or fund windowed
+admission. A player in line well before the deadline has all the time before it as well.
 
 **Sized against the window, re-checked for the 10-minute deadline (C7).**
 - **The held participant token (the D22-fix-3 review's m6).** A browser keeps the token it was
@@ -1843,7 +2005,8 @@ the time before it as well.
   token by design (§5.2).
 - **The sweep cadence (`SWEEP_CADENCE_MS` 5 min).** The window is 10 minutes, so the no-show arm gets
   two passes in it, and the cap equals one cadence, so a board that strands after the deadline gets
-  AT MOST ONE sweep pass before the cap. The inline create in the completing claim is the main path
+  at most one sweep pass before the cap, and one that strands LATE in the grace (the usual case: the
+  tail of a long line) usually gets none. The inline create in the completing claim is the main path
   and the sweep is the net, which is now thinner: a board stranded late falls to the organiser's
   `not_started` hold. The late-create metric (§5.6.8) is the signal, and the cap is the knob. The
   first draft's `LINE_CREATE_GRACE_MS` (two cadences) is retired: the cap replaces it.
@@ -1855,8 +2018,10 @@ the time before it as well.
 
 - **The estimate.** `etaS` = `ceil(max(0, position × LINE_PLAYER_COST − tokens) /
   RTK_BUDGET_REFILL_PER_S)`, with `LINE_PLAYER_COST` = 10 (the D16-measured 10.1 a player, §5.6.8)
-  and `tokens` the bucket's level at the answer. It is an estimate: "about". The card rounds up to
-  the next 5 s, and shows minutes above 90 s. `mayTimeOut` is `etaS` greater than the seconds to
+  and `tokens` the bucket's level at the answer. It is an estimate: "about". It counts the bucket's cost
+  only, so it assumes instant cameras (§5.7.8); B-slow records the ETA each player was shown against
+  the wait they had, which decides whether it needs a per-place camera term (not designed). The card
+  rounds up to the next 5 s, and shows minutes above 90 s. `mayTimeOut` is `etaS` greater than the seconds to
   `closesAt`.
 - **The cadence, with a floor (the review's I5).** The server sends `pollMs`: `LINE_POLL_MS` for places
   1 to 5, `LINE_POLL_SLOW_MS` behind them, and for the head the time until the bucket holds what its
@@ -1899,7 +2064,11 @@ the time before it as well.
 | `DEADLINE_AFTER_MS` | 10 min (was 20) | owner proposal, C7 |
 | `LINE_DEADLINE_GRACE_MS` | 5 min | §5.7.8: one cap for admission, the no-show skip and the create |
 | `LINE_ABANDON_AFTER_MS` | 20,000 | four missed slow polls |
-| `LINE_RELEASE_GRACE_MS` | 15,000 | at least the longest gap after a pass: `max(CAMERA_EVIDENCE_BACKOFF_MS)` + `LINE_POLL_MS`; a test derives the floor |
+| `LINE_RELEASE_GRACE_MS` | 35,000 | at least the longest gap after a pass: `max(max(CAMERA_EVIDENCE_BACKOFF_MS), MINT_TO_READ_MS) + LINE_POLL_MS` = 34.5 s (§5.7.5); a test derives the floor from the exported client constants |
+| `CAMERA_PROMPT_ALLOWANCE_MS` | 20,000 | ASSUMPTION: the longest a person takes to answer the browser's camera prompt before the line lets the place go; exported from `room-snapshot.ts`; measurement owed (§13) |
+| `CAMERA_JOIN_ALLOWANCE_MS` | 10,000 | ASSUMPTION: the SDK's join on a slow phone; same file; measurement owed |
+| `MINT_TO_READ_MS` | 31,500 (derived) | `CAMERA_PROMPT_ALLOWANCE_MS + CAMERA_JOIN_ALLOWANCE_MS + SEAT_RETRY_MS`: a mint's answer to the read that follows it (`room-shell.tsx:229-239`) |
+| `CAMERA_WARMUP_S` | 5 and 10 | B-slow's camera delays: a harness parameter, not product code |
 | `LINE_POLL_MS` / `LINE_POLL_SLOW_MS` / `LINE_NEAR_POSITIONS` | 3,000 / 5,000 / 5 | the cadence above |
 | `LINE_POLL_MIN_MS` | 2,000 | the floor under every `pollMs`, server and client |
 | `LINE_CLAIM_COST` | 6 | the largest one claim spends: a re-pair mint, 2 × 2 + 1 + 1; a test asserts it is at least the largest count the fixture server sees for any claim shape |
@@ -2146,17 +2315,26 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
     before, no request; at it, one request). Mutants: round down; re-read on the idle poll: red.
 12. **The mail and the organiser's copy.** The invite names the board's own deadline and, for batch 1
     onwards, its opens-at time, from `DEADLINE_AFTER_MS` (no typed minutes), with the `bodyLater`
-    variant in four locales (count). The organiser's confirm copy `runsheet.round.confirmWindow` shows
-    `DEADLINE_AFTER_MS / 60_000` in four locales, and the round view shows the stagger length (100
-    boards at the gap: `9 × gap`). Mutant: the mail uses the round's deadline for a later batch: red.
+    variant in four locales (count). The organiser's confirm copy: a round of one batch shows
+    `runsheet.round.confirmWindow`, a staggered round shows `runsheet.round.confirmWindowStaggered`, and
+    the staggered copy never says "straight away" or counts its minutes from the press (four locales,
+    count checked); both show `DEADLINE_AFTER_MS / 60_000`, and the round view shows the stagger length
+    (100 boards at the gap: `9 × gap`). Mutants: the mail uses the round's deadline for a later batch:
+    red; a staggered round shows the unstaggered key: red.
 
 **The line (§5.7)**
 13. **FIFO with tokens one at a time, polled out of order.** Drive the real claim route with N
     players arriving in a known order, the bucket refilled one token at a time, and the clients
     polling in REVERSED and in SHUFFLED order (not arrival order), so the outcome cannot follow the
     polling order. The order of `served_at` equals the order of `first_claim_at`: **inversion count 0,
-    pairs checked reported** (zero pairs is a failure). Mutant: delete the "an earlier in-line entry
-    blocks this claim" predicate: inversions rise above 0: red.
+    pairs checked reported** (zero pairs is a failure). **(e) The excused rise (the re-review's N3).**
+    An arrival X passes on an empty line and is never held; Y arrives and is held at position 1; X's
+    next claim is then deferred mid-claim, so X is first held AFTER Y and its order key is earlier: Y's
+    shown position rises to 2, once. The harness's position checker classes that rise EXCUSED with its
+    cause; a rise injected with no such cause is reported UNEXCUSED. Both counts are asserted (1 and 1),
+    so the excused class cannot be empty or total. Mutants: delete the "an earlier in-line entry blocks
+    this claim" predicate: inversions rise above 0: red; make the checker excuse every rise: the
+    injected unexplained rise goes unreported: red.
 14. **The head waits for its cost, on every claim of an in-line stay.** The head does not spend until
     the bucket holds `LINE_CLAIM_COST`, and a completing claim until `LINE_COMPLETING_COST`; a bucket
     one token under produces `queued` with zero calls, at the cost it goes. Both constants are asserted
@@ -2164,15 +2342,19 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
     board (end two stale meetings, create, add), a reading claim, and a completing claim with the
     opponent's re-verify (m4). Mutants: release at one token: red; threshold only when the last gate
     event was a hold (the I1 hole): red for a stay that passed once.
-15. **A place survives the pass (the review's I1).** Starve the bucket so the MINT is deferred, then
-    let the mint pass and the READ come. (a) Between them the stay is in line: a later arrival is
-    blocked, not overtaking. (b) The read claim meets the head threshold. (c) Past the deadline and
-    inside the cap the read is admitted, seated, dated `first_claim_at`, counted, and the game is
-    created; at `cap − 1 ms` all of that holds, at `cap` the read is `window_closed`. (d)
-    `noShow`'s skip, the seat admission, the create allowance, the room's phase and the position
-    shown answer the same question for the same stay, swept over the five consumers (count
-    reported). Mutants: clear the stay on a pass (the old `waiting` rule): (a), (b), (c) red;
-    `noShow` reads its own predicate instead of `lineLiveSql`: (d) red.
+15. **A place survives the pass: mint, then read, through the real route (the review's I1 and the
+    re-review's N1).** Drive `claimRoomSeat` against the fixture server with a camera that comes on
+    late (`reportCamera`), never a hand-set row. Starve the bucket so the MINT is deferred (`queued`);
+    let it pass: the answer is the real `camera_required` with a token (asserted, as what a minting
+    claim answers), and the stay is STILL in line (`ended_at` null, `last_gate = 'passed'`); the camera
+    comes on and the READ claim arrives `MINT_TO_READ_MS` after the mint's answer. (a) Between them a
+    later arrival is blocked, not overtaking. (b) The read claim meets the head threshold. (c) Past the
+    deadline and inside the cap the read is admitted, seated, dated `first_claim_at`, counted, and the
+    game is created; at `cap − 1 ms` all of that holds, at `cap` the read is `window_closed`. (d) The
+    seven consumers of §5.7.2's list answer the same question for the same stay (the number driven is
+    reported and must be 7). Mutants: end the stay on every camera refusal (the first draft's rule): (a),
+    (b), (c) red; clear the stay on a pass (the old `waiting` rule): (a), (b), (c) red; `noShow` reads
+    its own predicate instead of `lineLiveSql`: (d) red.
 16. **Service ends after the create (the review's I2).** A completing claim: the next head polls
     BETWEEN the seat and T9's re-verify and is `queued`, not spending; the re-verify finds its
     tokens; the game is created at once (late-create count 0). Mutant: stamp `served_at` at the
@@ -2187,16 +2369,35 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
 19. **Abandonment and release at the boundary.** Held: silent for `LINE_ABANDON_AFTER_MS − 1` ms
     still blocks the line behind it, at `LINE_ABANDON_AFTER_MS` it does not. Passed: silent for
     `LINE_RELEASE_GRACE_MS − 1` ms still holds, at it does not. `LINE_RELEASE_GRACE_MS` is asserted at
-    least `max(CAMERA_EVIDENCE_BACKOFF_MS) + LINE_POLL_MS`, from the exported client constants, and a
-    stay that polls at the slowest back-off step keeps its place. A player who returns after either
-    lapse is a new stay at the back, with `left: true`. Mutants: `<` for `<=` in each; use the abandon
-    constant after a pass: red.
-20. **Reload and a second tab are one entry**: same `first_claim_at`, same position; two first
-    claims racing at once make one row. Mutant: insert without the conflict clause: red.
-21. **A camera refusal ends the stay and extends nothing.** A queued player whose next claim is
-    answered `camera_blocked` (or any camera refusal) has `ended_at`, no longer holds the line behind
-    them, and is NOT protected after the deadline; their next press is a new stay at the back.
-    Mutant: leave the stay in line on a refusal: red.
+    least `max(max(CAMERA_EVIDENCE_BACKOFF_MS), MINT_TO_READ_MS) + LINE_POLL_MS`, where `MINT_TO_READ_MS`
+    is computed in the test as `CAMERA_PROMPT_ALLOWANCE_MS + CAMERA_JOIN_ALLOWANCE_MS + SEAT_RETRY_MS`
+    from the exported client constants (`room-snapshot.ts`), never typed. A stay that polls at the
+    slowest back-off step keeps its place, AND a stay whose read comes `MINT_TO_READ_MS` after the
+    mint's answer keeps its place (the case the first draft's 15 s lost). A player who returns after
+    either lapse is a new stay at the back, with `left: true`. Mutants: `<` for `<=` in each; use the
+    abandon constant after a pass: red; set the grace to the first draft's 15 s: the mint-to-read stay
+    is lost and the floor assertion is red.
+20. **Reload, a second tab and a never-held stay are one entry.** Same `first_claim_at`, same
+    position; two first claims racing at once make one row. **A stay the budget never held keeps its
+    `first_claim_at` across its claims (the re-review's N2):** with the line empty, a player's mint
+    claim and two reads (3 claims, each inside the release grace; the count reported) leave
+    `first_claim_at` as the first claim made it and `queued_at` null; and a player the budget first
+    holds on the third claim is then ordered by their FIRST claim, ahead of a player who arrived
+    between the first and the third (the case where the wrong answer is not the right one's
+    constant). Mutants: insert without the conflict clause: red; restart a stay that is "not in line"
+    (a restart that reads `queued_at`, the first draft's rule): the first-claim assertion is red.
+21. **Only a camera no wait can fix ends the stay, and it extends nothing.** A lookup, total over the
+    seat answers (a compile-time check, and a runtime count of the answers covered, reported), says
+    what each does to a stay: a seat → served; `camera_blocked` and `video_unavailable` → ended;
+    `camera_required`, `camera_lost` and `camera_starting` → the stay stays in line. Each is driven
+    through the real route and the fixture server (a denied camera; an unreadable report past
+    `CAMERA_EVIDENCE_DEADLINE_MS`; a participant that never joined; a camera that was on and went
+    off; a camera still starting) and the row is read back. A queued player whose next claim is
+    `camera_blocked` has `ended_at`, no longer holds the line behind them, is NOT protected after the
+    deadline, and their next press is a new stay at the back; a player whose claim is `camera_required`
+    or `camera_lost` still holds their place, still blocks the line behind them, and is protected only
+    while live (at the release grace, not). Mutants: end the stay on `camera_required`: red; leave it
+    in line on `camera_blocked`: red.
 22. **Off and the override never enter**: no row, no `queued`, with a line pre-seeded and non-empty,
     for the D11 override too. **Optional never queues and spends nothing** while the line is
     non-empty, answering `cameraRetry`; with the line empty it spends as before. Swept over every
@@ -2241,10 +2442,12 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
     `REFUSAL_SCREEN` stays total (a compile-time check, plus a runtime count of the reasons covered).
     The card warns when the estimate exceeds the time to `closesAt` and not otherwise (a pair).
     Mutant: invert `mayTimeOut`: red.
-33. **One predicate.** A source guard: no query outside `lineLiveSql` reads `queued_at`,
-    `last_seen_at` or `last_gate`; it reports the consumers found and fails on zero or on a consumer
-    of §5.7.8's list that it no longer finds. Mutant: add a raw `last_seen_at` read to one consumer:
-    red.
+33. **One predicate.** A source guard: no query outside `lineLiveSql`, `stayLapsedSql` and the
+    allow-listed stay upsert reads `queued_at`, `last_seen_at` or `last_gate`; it reports the readers
+    found (3) and the consumers found (the seven of §5.7.2's list), and fails on zero, or on a reader or
+    consumer of those lists that it no longer finds. Mutants: add a raw `last_seen_at` read to one
+    consumer: red; delete the upsert's allow-list entry: red (the upsert is then a forbidden reader,
+    which proves the guard sees it).
 
 **The seat 429 wait (§6.1)**
 34. With fake timers: after a 429 with `Retry-After: 23` the button is disabled at 22.999 s and
@@ -2257,8 +2460,12 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
 - **The held token (the D22-fix-3 review's m6).** A stg measurement that a minted participant token
   stays joinable for `DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS` (15 minutes) from the mint. Not
   verified; the amendment lowers the bar it must meet (§5.7.8).
-- **The load re-run (§5.6.8)** is the acceptance for the whole amendment: scenarios A, B and B-end,
-  the regressions, and the metrics defined there, with the number of players, claims and boards each
+- **The mint-to-read gap (the re-review's N1).** A real-device measurement, with a cold camera
+  permission and a slow phone, of the time from a mint's answer to the read claim that follows it
+  (p99), against `MINT_TO_READ_MS` (31.5 s). Not measured: `CAMERA_PROMPT_ALLOWANCE_MS` and
+  `CAMERA_JOIN_ALLOWANCE_MS` are assumptions, and a player slower than them loses the place.
+- **The load re-run (§5.6.8)** is the acceptance for the whole amendment: scenarios A, B, B-slow and
+  B-end, the regressions, and the metrics defined there, with the number of players, claims and boards each
   checked. Then, as for every UI change, the e2e spec for the match room (`match-room.spec.ts`
   states for the batch wait, the line and the 429 wait), its walkthrough, and screenshots at 1280,
   320 and 768 with no horizontal scroll.
@@ -2338,9 +2545,9 @@ Out of scope for the capacity amendment (2026-10-15), each with the reason it is
 - **A server push for "your turn"** (SSE, realtime): the client polls; Redis and realtime are inert
   in dev and the load test, and a poll of 3 to 5 s is within the estimate's error.
 - **Windowed admission** (K claimants spend at once instead of the head alone): built only if test
-  B's median bucket level at `queued` answers shows the head-only gate left budget idle (§5.6.8).
-  A place held until service ends (§5.7.5) makes a slow camera a real cause of that, so the metric
-  is the trigger, not a guess.
+  B's median bucket level at `queued` answers shows the head-only gate left budget idle, or B-slow's
+  per-place p50 exceeds the bucket's 5 s (§5.6.8). A place held until service ends (§5.7.5) makes a
+  slow camera a real cause of both, so the metrics are the trigger, not a guess.
 - **Ordering by board** instead of by player (§5.7.4): argued against there.
 - **Several Cloudflare API tokens** to multiply the limit (§13, C6): not designed around.
 
@@ -2394,17 +2601,31 @@ Out of scope for the capacity amendment (2026-10-15), each with the reason it is
   `LINE_DEADLINE_GRACE_MS` = 5 minutes past the board's deadline (`T_batch + DEADLINE_AFTER_MS`, 10
   minutes), as ONE cap for line admission, the no-show skip and the create (§5.7.8). It applies
   only to a player the budget held and who arrived in time; a blocked or dead camera never extends
-  it, and a counted check-in is never re-stamped. **The trade:** the clean drain for 60 players
-  (about 153 s) fits inside it; the worst starved late burst (about 515 s) does not, and a player
-  still queued 5 minutes past their deadline takes the normal walkover, warned by the line's
-  estimate. It is one constant: shorter keeps the deadline stricter, longer means fewer
+  it, and a counted check-in is never re-stamped. **The trade, on one assumption** (a full
+  bucket when the burst begins, nothing else spending, **instant cameras**; §5.6.8): in the cap the
+  bucket serves about 90 players at the clean cost and about 41 at the starved one. The clean drain
+  for 60 players (about 153 s) fits inside it; the worst starved late burst (about 515 s) does not
+  (about 19 of the 60 take the walkover after 5 minutes), warned by the line's estimate. **The
+  instant-camera assumption is the weak one:** the line holds the head's place through its camera's
+  warm-up, so with a camera that takes `w` seconds the cap serves about 300 / `w` players whatever the
+  budget: 30 at 10 s. B-slow (§5.6.8) measures the real per-place time before launch; if the camera
+  sets the pace the choice is windowed admission, a longer cap, or accepting the walkovers, and it is
+  the owner's, on the measurement. The cap is one constant: shorter keeps the deadline stricter, longer means fewer
   walkovers the line caused. The same cap lets a create the budget deferred run until it for a
   board whose both players were seated in time, which the deadline alone refused.
 - **C7, the 10-minute deadline, is the owner's proposal as relayed and is applied as written**
-  (§3.2.1 lists what pins the old 20 minutes, for the build to derive from the constant). One
-  consequence is recorded for the owner: the sweep's stranded-board net now gets at most one pass
-  past the deadline (§5.7.8), so a board that strands late falls to the organiser's
-  `not_started` hold sooner than before.
+  (§3.2.1 lists what pins the old 20 minutes, for the build to derive from the constant).
+  **To confirm (the re-review's m-b): the window is 10 minutes from the Open press, not 20.**
+  `openRound` stamps `opened_at = now`, so the `T − 10` lead is a no-op and batch 0's real check-in
+  window is `DEADLINE_AFTER_MS`; every later batch has the same 10 minutes from its own start. If the
+  owner wants a longer window it is the one constant. One consequence is recorded for the owner: the
+  sweep's stranded-board net now gets at most one pass past the deadline and, for a board that
+  strands late in the grace, usually none (§5.7.8), so a board that strands late falls to the
+  organiser's `not_started` hold sooner than before.
+- **Owed: the mint-to-read measurement** (the capacity re-review's N1): the real time from a mint's
+  answer to the read that follows it, on a real device with a cold camera permission and on a slow
+  phone, against `MINT_TO_READ_MS` (§5.7.5). The two allowances it is built from are assumptions
+  until then, and a player slower than them loses the place, not the seat.
 - **Owed: the m6 stg measurement** (the D22-fix-3 review): that a minted participant token stays
   joinable for the whole check-in. Unverified; its bar is now `DEADLINE_AFTER_MS +
   LINE_DEADLINE_GRACE_MS` from the mint (§5.7.8).
