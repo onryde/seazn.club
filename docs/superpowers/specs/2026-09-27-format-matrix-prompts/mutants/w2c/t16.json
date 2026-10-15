@@ -1502,7 +1502,7 @@
   {
     "id": "t16-sf-points",
     "file": "apps/web/src/server/public-site/stage-format-lines.ts",
-    "find": "const points = pointsLine(stage.points_rule as PointsRule);",
+    "find": "const points = pointsLine(stage.points_rule as PointsRule, { awardReaches: module_ ? pointsRuleAwardReachesTable(module_) : false });",
     "replace": "const points: ReturnType<typeof pointsLine> = [];",
     "killers": [
       {
@@ -1589,25 +1589,10 @@
     ]
   },
   {
-    "id": "t16-pl-award-said",
-    "file": "apps/web/src/lib/points-line.ts",
-    "find": "    out.push({ key: \"format.points.forfeit\", params: { winner: forfeit.winnerPoints, loser: forfeit.loserPoints } });\n  }\n",
-    "replace": "    out.push({ key: \"format.points.forfeit\", params: { winner: forfeit.winnerPoints, loser: forfeit.loserPoints } });\n    const score = forfeit.awardScore;\n    if (Array.isArray(score) && score.length === 2) out.push({ key: \"format.points.forfeitScore\", params: { winner: score[0], loser: score[1] } });\n  }\n",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/points-line.test.ts",
-          "src/server/public-site/__tests__/stage-format-lines.test.ts"
-        ]
-      }
-    ]
-  },
-  {
     "id": "t16-dict-en-nb-dash",
     "file": "apps/web/src/dictionaries/en/public.json",
-    "find": "{winner}‑{loser}",
-    "replace": "{winner}–{loser}",
+    "find": "walkover pays {winner}‑{loser} points",
+    "replace": "walkover pays {winner}–{loser} points",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1621,8 +1606,8 @@
   {
     "id": "t16-dict-es-nb-dash",
     "file": "apps/web/src/dictionaries/es/public.json",
-    "find": "{winner}‑{loser}",
-    "replace": "{winner}–{loser}",
+    "find": "el walkover otorga {winner}‑{loser} puntos",
+    "replace": "el walkover otorga {winner}–{loser} puntos",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1636,8 +1621,8 @@
   {
     "id": "t16-dict-fr-nb-dash",
     "file": "apps/web/src/dictionaries/fr/public.json",
-    "find": "{winner}‑{loser}",
-    "replace": "{winner}–{loser}",
+    "find": "le walk-over rapporte {winner}‑{loser} points",
+    "replace": "le walk-over rapporte {winner}–{loser} points",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1651,8 +1636,8 @@
   {
     "id": "t16-dict-nl-nb-dash",
     "file": "apps/web/src/dictionaries/nl/public.json",
-    "find": "{winner}‑{loser}",
-    "replace": "{winner}–{loser}",
+    "find": "walkover levert {winner}‑{loser} punten op",
+    "replace": "walkover levert {winner}–{loser} punten op",
     "killers": [
       {
         "cwd": "apps/web",
