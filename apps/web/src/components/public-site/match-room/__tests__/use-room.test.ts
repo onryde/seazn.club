@@ -2,7 +2,7 @@
 // when a clock that reached zero is reported. The hook's wiring (the poll
 // effect, the realtime channel, the calls) is the room e2e's.
 import { describe, expect, it } from "vitest";
-import { CLOCK_ZERO_MAX_SPACING_MS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, SETTLED_POLL_MS, nextClockZeroReport, pollIntervalMs, reReadDelayMs } from "../use-room";
+import { CAMERA_RETRY_BASE_MS, CAMERA_RETRY_MAX_MS, cameraAskOutcome, cameraRetryDelayMs, CLOCK_ZERO_MAX_SPACING_MS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, SETTLED_POLL_MS, nextClockZeroReport, pollIntervalMs, reReadDelayMs } from "../use-room";
 
 describe("pollIntervalMs", () => {
   it("a live game with no realtime channel polls fast; everything else slow", () => {
@@ -93,5 +93,56 @@ describe("reReadDelayMs (review I2: a refused act re-reads and carries on, backi
     }
     expect(checked, "anti-vacuity: streaks").toBe(61);
     expect(reReadDelayMs(60), "a long run sits at the cap").toBe(IDLE_POLL_MS);
+  });
+});
+
+// D21-fix-3 (owner decision, 2026-10-15): an optional camera seated with no token because the call budget was spent asks
+// again "2/4/8/16 s, capped at about 30 s". The numbers are the ruling's, not read off the code.
+describe("cameraRetryDelayMs", () => {
+  it("2, 4, 8, 16 seconds, then every 30 - the ruling's schedule, counted", () => {
+    const want = [2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000];
+    expect(want.map((_, attempt) => cameraRetryDelayMs(attempt))).toEqual(want);
+    expect(want.length, "anti-vacuity").toBe(7);
+  });
+
+  it("never shorter than the last, never past the cap, and a nonsense attempt is still bounded", () => {
+    let prev = 0;
+    for (let a = 0; a < 40; a += 1) {
+      const d = cameraRetryDelayMs(a);
+      expect(d).toBeGreaterThanOrEqual(prev);
+      expect(d).toBeLessThanOrEqual(CAMERA_RETRY_MAX_MS);
+      prev = d;
+    }
+    expect(cameraRetryDelayMs(-5), "below zero reads as the first").toBe(CAMERA_RETRY_BASE_MS);
+    expect(cameraRetryDelayMs(1e9), "an absurd attempt does not overflow").toBe(CAMERA_RETRY_MAX_MS);
+  });
+});
+
+describe("cameraAskOutcome (D21-fix-3): what the room does with one answer from the camera door", () => {
+  const ok = (participant: { participantId: string; authToken: string } | null, retry: boolean) => ({ ok: true as const, data: { participant, retry } });
+  const failed = (status: number) => ({ ok: false as const, status, code: null });
+  const TOKEN = { participantId: "pt", authToken: "jwt" };
+
+  it("a token ends the asking; so does the server's own 'stop' (no token, retry false); 'still deferred' asks again", () => {
+    expect(cameraAskOutcome(ok(TOKEN, false))).toBe("done");
+    expect(cameraAskOutcome(ok(null, false)), "final null: Off, an override, an outage, a refused seat").toBe("done");
+    expect(cameraAskOutcome(ok(null, true)), "the budget is still spent").toBe("later");
+    // A token with retry:true cannot be sent, but a token is a token: never asked about again.
+    expect(cameraAskOutcome(ok(TOKEN, true))).toBe("done");
+  });
+
+  it("a refusal of the REQUEST is final unless it is the rate limit; the network and a 5xx are asked again - every status counted", () => {
+    const finals = [400, 401, 403, 404, 409, 422];
+    const laters = [0, 429, 500, 502, 503, 504];
+    let checked = 0;
+    for (const status of finals) {
+      expect(cameraAskOutcome(failed(status)), String(status)).toBe("final");
+      checked += 1;
+    }
+    for (const status of laters) {
+      expect(cameraAskOutcome(failed(status)), String(status)).toBe("later");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every status of the table").toBe(finals.length + laters.length);
   });
 });

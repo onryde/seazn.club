@@ -620,7 +620,9 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer under each camera policy"
     expect(got.seated).toBe(false);
     expect(!got.seated && got.reason).toBe("camera_required");
     await expectOwnToken(s, "home", got);
-    expect(count(rtk.adapter, "seatCameraEvidence"), "the meeting is asked, every time").toBe(1);
+    // D21-fix-3 (F1): a participant THIS claim made cannot have been joined - nobody had its token - so the first claim
+    // reads nothing; the way in is the answer. Every claim after it asks the meeting (the next test, and the forged-claim one).
+    expect(count(rtk.adapter, "seatCameraEvidence"), "a first claim reads nothing: the participant was made by it").toBe(0);
     expect((await participantRows(s.fixtureId))[0]?.last_publisher_seen_at).toBeNull();
   });
 
@@ -706,18 +708,21 @@ describe.skipIf(!process.env.DATABASE_URL)("a RealtimeKit outage is video_unavai
   const down = json(503, { success: false, errors: [{ code: 10000, message: "upstream" }] });
   const html200 = new Response("<html>gateway</html>", { status: 200, headers: { "content-type": "text/html" } });
 
-  it("first-claim failure points under required, swept and counted", async () => {
-    const points: { name: string; rule: FailRule }[] = [
+  it("failure points of a player's first two claims under required, swept and counted", async () => {
+    // D21-fix-3 (F1): the FIRST claim makes the meeting and the participant and reads nothing, so the reads are the SECOND
+    // claim's - `afterFirst` lets the first claim through and fails the second.
+    const points: { name: string; rule: FailRule; afterFirst?: boolean }[] = [
       { name: "create meeting 503", rule: (m, p) => (m === "POST" && p === "/meetings" ? down.clone() : null) },
       { name: "create meeting network", rule: (m, p) => (m === "POST" && p === "/meetings" ? "network" : null) },
       { name: "add participant 503", rule: (m, p) => (m === "POST" && p.endsWith("/participants") ? down.clone() : null) },
-      { name: "active session 503", rule: (m, p) => (m === "GET" && p.endsWith("/active-session") ? down.clone() : null) },
-      { name: "active session HTML 200", rule: (m, p) => (m === "GET" && p.endsWith("/active-session") ? html200.clone() : null) },
+      { name: "active session 503", afterFirst: true, rule: (m, p) => (m === "GET" && p.endsWith("/active-session") ? down.clone() : null) },
+      { name: "active session HTML 200", afterFirst: true, rule: (m, p) => (m === "GET" && p.endsWith("/active-session") ? html200.clone() : null) },
     ];
     let checked = 0;
     for (const pt of points) {
       const s = await seed({ cameraPolicy: "required" });
       const rtk = fakeRealtimeKit();
+      if (pt.afterFirst) expect((await claim(s, "home", rtk)).seated, `${pt.name}: premise, the first claim made the participant`).toBe(false);
       rtk.failWhen(pt.rule);
       vi.mocked(captureError).mockClear();
       const got = await claim(s, "home", rtk);
@@ -726,7 +731,7 @@ describe.skipIf(!process.env.DATABASE_URL)("a RealtimeKit outage is video_unavai
       expect(vi.mocked(captureError), `${pt.name}: the outage is reported`).toHaveBeenCalledTimes(1);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: five first-claim failure points").toBe(5);
+    expect(checked, "anti-vacuity: five failure points (three on the first claim, two on the second)").toBe(5);
   });
 
   it("a player who HAD passed, then an outage: video_unavailable, never camera_lost — swept and counted", async () => {
@@ -1275,6 +1280,7 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     {
       const s = await req();
       const rtk = fakeRealtimeKit();
+      await claim(s, "home", rtk); // the first claim makes the participant and reads nothing; the SECOND reads (D21-fix-3)
       rtk.failWhen((m, p) => (m === "GET" && p.endsWith("/active-session") ? json(503, { success: false }) : null));
       seen.set("video_unavailable", await claim(s, "home", rtk));
     }
@@ -1424,6 +1430,10 @@ describe.skipIf(!process.env.DATABASE_URL)("a forged camera claim is inert", () 
       fixtureId: string;
       personId: string;
     };
+    // The first claim makes the participant (D21-fix-3: and reads nothing); the second is the one that asks the meeting.
+    const first = await seatPlayer(forged, { now: NOW, video: rtk.video });
+    expect(!first.seated && first.reason).toBe("camera_required");
+    expect(count(rtk.adapter, "seatCameraEvidence"), "premise: a first claim reads nothing").toBe(0);
     const got = await seatPlayer(forged, { now: NOW, video: rtk.video });
     expect(!got.seated && got.reason).toBe("camera_required");
     expect(count(rtk.adapter, "seatCameraEvidence"), "the meeting was asked — that is the point").toBe(1);
@@ -1480,6 +1490,7 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
   it("SEQUENCE: outage ⇒ video_unavailable, organiser overrides, the same player is then seated", async () => {
     const s = await seed({ cameraPolicy: "required" });
     const rtk = fakeRealtimeKit();
+    await claim(s, "home", rtk); // the first claim makes the participant and reads nothing (D21-fix-3)
     rtk.failWhen((m, p) => (m === "GET" && p.endsWith("/active-session") ? json(503, { success: false }) : null));
     expect(await claim(s, "home", rtk)).toEqual({ seated: false, reason: "video_unavailable" });
     await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });

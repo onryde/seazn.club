@@ -65,7 +65,8 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
 import type { NeedsReason } from "@/server/external-play/types";
 import { createGameIfReady } from "../external-play/create-game";
-import { isPlayableFixtureStatus } from "../external-play/preflight";
+import { isPlayableFixtureStatus, seatPlayer } from "../external-play/preflight";
+import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { openRound } from "../external-play/open-round";
 import { act } from "../external-play/play";
 import { FLAG_SETTLE_HOLD_MS, FLAG_UNASKED_HOLD_MS, FLAG_UNSETTLED_HOLD_MS, reconcile } from "../external-play/reconcile";
@@ -82,6 +83,7 @@ import {
   SWEEP_PASS_BUDGET_MS,
   SWEEP_RECONCILE_BUDGET_MS,
   SWEEP_SETTLING_READS_PER_PASS,
+  STRANDED_CREATE_AFTER_MS,
   NO_SHOW_REFUSALS_BEFORE_HOLD,
   expectedEndAt,
   playableWindow,
@@ -635,6 +637,15 @@ describe.runIf(HAS_DB)("the sweep never touches a round the organiser has not op
 /** T9's REAL createGameIfReady at `min` minutes after the open: White's
  *  token challenges, Black's accepts (Board API module-mocked). 'ready'. */
 async function readyGame(b: Board, min = 5): Promise<string> {
+  // D21-fix-3 (F2a): T9's re-verify mints nothing and hands no token - it asks about a participant the player's own
+  // seat claim made. The helper stamps the check-ins directly (openedBoard), so under a camera that is not OFF the players
+  // claim their seats first, as the room does: the first claim mints (an optional seat is seated by it), the second, under
+  // a required camera, reads the camera and passes.
+  if ((await fixtureCameraPolicy(b.fixtureId)) !== "off") {
+    for (const side of ["home", "away"] as const) {
+      for (let claim = 0; claim < 2; claim += 1) await seatPlayer({ fixtureId: b.fixtureId, personId: b[side].personId }, { now: b.at(min) });
+    }
+  }
   const gameId = `gm-${randomUUID().slice(0, 12)}`;
   board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: gameId });
   board.acceptChallenge.mockResolvedValueOnce({ ok: true });
@@ -725,7 +736,9 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
   it("C2 at the edge: both present a millisecond BEFORE the deadline is nobody's yet; AT it, held", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     const { deadline } = playableWindow(b.opened);
-    const early = await sweep(b, { now: new Date(deadline.getTime() - 1) });
+    // D21-fix-3 (F2b): a board with both players in and no game is now the mint retry's before the deadline - this test is
+    // about the no-show edge, so the create is a recorded no-op (the retry arm has its own describe).
+    const early = await sweep(b, { now: new Date(deadline.getTime() - 1), createGameIfReady: async () => ({ created: false, reason: "not_ready" }) });
     expect(early.heldForOrganiser).toBe(0);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "pending", needs_reason: null });
     const at = await sweep(b, { now: deadline });
@@ -1480,10 +1493,12 @@ describe.runIf(HAS_DB)("job 2 — retry a create that lost to Lichess's 429 wall
     expect(await bridgeStatus(b.fixtureId)).toEqual({ status: "ready", challenge_id: gameId });
   });
 
-  it("a pending board that was never throttled is not the retry's — check-in mints it", async () => {
+  it("a pending board that was never throttled, whose second check-in is only seconds old, is not the retry's — the room's own create is still in flight (D21-fix-3 F2b: the grace)", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = b.at(5);
+    await sql`update fixture_availability set checked_in_at = ${new Date(now.getTime() - 1_000)} where fixture_id = ${b.fixtureId}`;
     const { tried, createGame } = recordingCreate();
-    const report = await sweep(b, { now: b.at(5), createGameIfReady: createGame });
+    const report = await sweep(b, { now, createGameIfReady: createGame });
     expect(tried).toEqual([]);
     expect(report.mintRetries).toBe(0);
   });
@@ -1524,6 +1539,223 @@ describe.runIf(HAS_DB)("job 2 — retry a create that lost to Lichess's 429 wall
     const { tried, createGame } = recordingCreate();
     await sweep(b, { now: new Date(retryAt.getTime() + 1_000), createGameIfReady: createGame });
     expect(tried).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Job 2, second arm (T17B fix 2, D21-fix-3, F2b) - a board STRANDED with both players in.
+//
+// D22 found it: both players seated, the game never created. createGameIfReady re-verifies both seats; the call budget
+// deferred that re-verify; "not ready" was all it said and nothing recorded, the client ignores the `create` field of
+// its claim answer, and a seated player never claims again. The mint retry only picked a Lichess 429's marker, so
+// nothing came back for the board. Now it also picks a pending board with BOTH check-ins counted, no create in flight
+// (no live claim, no sent marker, no game) and no error on file, once the second check-in is old enough that the room's
+// own create (which has not claimed yet) must have finished.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("job 2 - a board stranded with both players in is created by the sweep (D21-fix-3, F2b)", () => {
+  function recordingCreate() {
+    const tried: { fixtureId: string; now: Date }[] = [];
+    const createGame: NonNullable<SweepDeps["createGameIfReady"]> = async (fixtureId, d) => {
+      tried.push({ fixtureId, now: d.now });
+      return createGameIfReady(fixtureId, { now: d.now, publish: async () => {} });
+    };
+    return { tried, createGame };
+  }
+  /** Both check-ins at `ago` ms before `now` (the later of the two is what the grace judges). */
+  const checkedInAgo = (b: Board, now: Date, ago: number) =>
+    sql`update fixture_availability set checked_in_at = ${new Date(now.getTime() - ago)} where fixture_id = ${b.fixtureId}`;
+  const bridge = async (fixtureId: string) => {
+    const [r] = await sql<{ status: string; challenge_id: string | null; last_error: string | null; mint_claimed_at: Date | null }[]>`
+      select status, challenge_id, last_error, mint_claimed_at from fixture_external_play where fixture_id = ${fixtureId}`;
+    return r ?? null;
+  };
+
+  it("the premise: the grace is positive and is not the claim's staleness (a different thing)", () => {
+    expect(STRANDED_CREATE_AFTER_MS).toBeGreaterThan(0);
+    expect(STRANDED_CREATE_AFTER_MS).toBeLessThan(MINT_CLAIM_STALE_MS);
+  });
+
+  it("both in, no bridge row at all (the deferral came before any claim): the sweep creates the game — through the real T9 — and counts it", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = b.at(5);
+    await checkedInAgo(b, now, STRANDED_CREATE_AFTER_MS + 1);
+    await sql`delete from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect(await bridge(b.fixtureId), "premise: no row at all (the deferral came before any claim)").toBeNull();
+    const gameId = `gm-${randomUUID().slice(0, 12)}`;
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: gameId });
+    board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+    const { tried, createGame } = recordingCreate();
+    const report = await sweep(b, { now, createGameIfReady: createGame });
+    expect(tried).toEqual([{ fixtureId: b.fixtureId, now }]);
+    expect(report.mintRetries).toBe(1);
+    expect(await bridge(b.fixtureId)).toMatchObject({ status: "ready", challenge_id: gameId, last_error: null });
+  });
+
+  it("both in, a pending row nobody claimed: created too — and the SECOND pass finds nothing to do (a second call is quiet)", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = b.at(5);
+    await checkedInAgo(b, now, STRANDED_CREATE_AFTER_MS + 1);
+    await ensureBridgeRow((await loadOnlinePlayFixture(b.fixtureId))!);
+    expect((await bridge(b.fixtureId))?.status, "premise: pending").toBe("pending");
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
+    board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+    const { tried, createGame } = recordingCreate();
+    expect((await sweep(b, { now, createGameIfReady: createGame })).mintRetries).toBe(1);
+    const again = await sweep(b, { now: new Date(now.getTime() + SWEEP_CADENCE_MS), createGameIfReady: createGame });
+    expect([tried.length, again.mintRetries], "the game is on file: not a candidate any more").toEqual([1, 0]);
+  });
+
+  it("THE GRACE: the second check-in's age decides — one millisecond short waits, the grace itself creates", async () => {
+    let checked = 0;
+    for (const [ago, want] of [
+      [STRANDED_CREATE_AFTER_MS - 1, 0],
+      [STRANDED_CREATE_AFTER_MS, 1],
+    ] as const) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const now = b.at(5);
+      await checkedInAgo(b, now, ago);
+      board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
+      board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+      const { tried, createGame } = recordingCreate();
+      await sweep(b, { now, createGameIfReady: createGame });
+      expect(tried.length, `second check-in ${ago} ms old`).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both sides of the grace").toBe(2);
+  });
+
+  it("the LATER of the two check-ins is judged: one old and one fresh waits", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = b.at(5);
+    await checkedInAgo(b, now, 60_000);
+    await sql`update fixture_availability set checked_in_at = ${new Date(now.getTime() - 1_000)} where fixture_id = ${b.fixtureId} and person_id = ${b.away.personId}`;
+    const { tried, createGame } = recordingCreate();
+    await sweep(b, { now, createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+  });
+
+  it("EMPTY and PARTIAL: nobody in, or one player in, is not stranded — the board is waiting for its opponent, not stuck", async () => {
+    let checked = 0;
+    for (const who of [[], ["home"], ["away"]] as const) {
+      const b = await openedBoard({ checkedIn: who });
+      const now = b.at(5);
+      await checkedInAgo(b, now, 5 * 60_000);
+      const { tried, createGame } = recordingCreate();
+      const report = await sweep(b, { now, createGameIfReady: createGame });
+      expect([tried.length, report.mintRetries], `checked in: [${who.join(",")}]`).toEqual([0, 0]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a create IN FLIGHT is left alone: a live claim waits, a stale one (T9's takeover bound) is picked up", async () => {
+    let checked = 0;
+    for (const [ageMs, want] of [
+      [MINT_CLAIM_STALE_MS - 1_000, 0],
+      [MINT_CLAIM_STALE_MS + 1_000, 1],
+    ] as const) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const now = b.at(5);
+      await checkedInAgo(b, now, 5 * 60_000);
+      await ensureBridgeRow((await loadOnlinePlayFixture(b.fixtureId))!);
+      await sql`update fixture_external_play set mint_claimed_at = ${new Date(now.getTime() - ageMs)} where fixture_id = ${b.fixtureId}`;
+      board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
+      board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+      const { tried, createGame } = recordingCreate();
+      await sweep(b, { now, createGameIfReady: createGame });
+      expect(tried.length, `claim ${ageMs} ms old`).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a SENT create (T9's marker) or a recorded game is never the retry's: a game may exist", async () => {
+    let checked = 0;
+    for (const set of [
+      (id: string) => sql`update fixture_external_play set create_sent_at = now() where fixture_id = ${id}`,
+      (id: string) => sql`update fixture_external_play set status = 'ready', challenge_id = ${`gm-${randomUUID().slice(0, 12)}`} where fixture_id = ${id}`,
+    ]) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const now = b.at(5);
+      await checkedInAgo(b, now, 5 * 60_000);
+      await ensureBridgeRow((await loadOnlinePlayFixture(b.fixtureId))!);
+      await set(b.fixtureId);
+      const { tried, createGame } = recordingCreate();
+      await sweep(b, { now, createGameIfReady: createGame });
+      expect(tried).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a board with an error on file is not this arm's: a throttle's hold (retry_at) is still the first arm's to honour, and any other error is the organiser's to read", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = b.at(5);
+    await checkedInAgo(b, now, 5 * 60_000);
+    await ensureBridgeRow((await loadOnlinePlayFixture(b.fixtureId))!);
+    const future = new Date(now.getTime() + 60_000).toISOString();
+    await sql`update fixture_external_play set last_error = ${`create:rate_limited (lichess_429) retry_at=${future}`} where fixture_id = ${b.fixtureId}`;
+    const { tried, createGame } = recordingCreate();
+    await sweep(b, { now, createGameIfReady: createGame });
+    expect(tried, "inside Lichess's hold: waits").toEqual([]);
+    await sql`update fixture_external_play set last_error = 'create:403: forbidden' where fixture_id = ${b.fixtureId}`;
+    await sweep(b, { now, createGameIfReady: createGame });
+    expect(tried, "some other error: not retried blind").toEqual([]);
+  });
+
+  it("a check-in from BEFORE the window opened does not count (D12): the exact judgement, not the loose pre-filter", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = b.at(5);
+    await sql`update fixture_availability set checked_in_at = ${new Date(b.opened.getTime() - 60 * 60_000)} where fixture_id = ${b.fixtureId}`;
+    const { tried, createGame } = recordingCreate();
+    await sweep(b, { now, createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+  });
+
+  it("past T+20 it is the no-show job's: not retried, and both-in-no-game goes to the organiser as not_started", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = b.at(45);
+    const { tried, createGame } = recordingCreate();
+    const report = await sweep(b, { now, createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+    expect(report.heldForOrganiser).toBe(1);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
+  });
+
+  it("a held board, a withdrawn board and a board the guard no longer serves are not retried", async () => {
+    const held = await openedBoard({ checkedIn: ["home", "away"] });
+    const gone = await openedBoard({ checkedIn: ["home", "away"] });
+    const off = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = held.at(5);
+    for (const b of [held, gone, off]) await checkedInAgo(b, now, 5 * 60_000);
+    await ensureBridgeRow((await loadOnlinePlayFixture(held.fixtureId))!);
+    await sql`update fixture_external_play set status = 'needs_organiser', needs_reason = 'provider_error' where fixture_id = ${held.fixtureId}`;
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(gone.orgId), gone.away.entrantId);
+    await sql`update divisions set config = config || '{"onlinePlay":"off"}'::jsonb where id = ${off.divisionId}`;
+    const { tried, createGame } = recordingCreate();
+    await sweep([held, gone, off], { now, createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+  });
+
+  it("the failure of one stranded board's create is that board's alone: listed, counted, and the next board is still created", async () => {
+    const bad = await openedBoard({ checkedIn: ["home", "away"] });
+    const good = await openedBoard({ checkedIn: ["home", "away"] });
+    const now = bad.at(5);
+    for (const b of [bad, good]) await checkedInAgo(b, now, 5 * 60_000);
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
+    board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+    const tried: string[] = [];
+    const report = await sweep([bad, good], {
+      now,
+      createGameIfReady: async (id, d) => {
+        tried.push(id);
+        if (id === bad.fixtureId) throw new HttpError(503, "Lichess is down", "LICHESS_UNAVAILABLE");
+        return createGameIfReady(id, { now: d.now, publish: async () => {} });
+      },
+    });
+    expect(tried.sort()).toEqual([bad.fixtureId, good.fixtureId].sort());
+    expect(report.failures).toEqual([{ job: "mint_retry", fixtureId: bad.fixtureId, code: "LICHESS_UNAVAILABLE" }]);
+    expect((await bridge(good.fixtureId))?.status).toBe("ready");
   });
 });
 
@@ -2874,6 +3106,9 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     retry_waits: [C("home"), C("away"), THROTTLED, S(0.5)],
     retry_lands: [C("home"), C("away"), THROTTLED, S(1)],
     retry_too_late: [C("home"), C("away"), THROTTLED, S(25)],
+    // D21-fix-3 (F2b): both in, nobody ever created the game, a pass inside the window creates it (and ends that board's
+    // quiet: the next move is a game's).
+    stranded_created: [C("home"), C("away"), S(1)],
     accept_failed_unread: [C("home"), C("away"), { kind: "create", outcome: "acceptFails" }, { kind: "truth", truth: "ended" }, S(3)],
     aborted_ready_held: [C("home"), C("away"), CREATE, { kind: "truth", truth: "aborted" }, S(25)],
     m4_held: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5)],
@@ -2900,7 +3135,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
   const counters = {
     steps: 0, skipped_precondition: 0, passes: 0, reads: 0, backoff_skips: 0, empty_counted: 0, truth_reset: 0,
     forfeit_one: 0, forfeit_both: 0, not_started_held: 0, quiet_before_deadline: 0,
-    retry_landed: 0, retry_waited: 0, retry_too_late: 0, held_by_create_unread: 0,
+    retry_landed: 0, retry_waited: 0, retry_too_late: 0, stranded_created: 0, held_by_create_unread: 0,
     aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, held_read_counted: 0, t11_held: 0, finished_by_truth: 0, closed_unplayable: 0, creates: 0, moves: 0, withdrawals: 0,
     refused_held: 0,
   };
@@ -3005,6 +3240,14 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
         counters.retry_waited++;
       }
     }
+    // Job 2, second arm (D21-fix-3, F2b): both came, the board is still pending with no error on file (no throttle's marker)
+    // and the window is open: the create was never made or never landed (a deferred re-verify) - the sweep makes it. The
+    // check-ins are old by the time any pass here runs (the model's clock starts two minutes in), so the grace has passed.
+    if (m.bridge === "pending" && m.throttledUntil === null && m.playable && m.t < DEADLINE && m.came.home && m.came.away) {
+      p.mintRetries = 1;
+      m.bridge = "ready";
+      counters.stranded_created++;
+    }
     // Job 1: no game on file at the deadline, someone absent.
     if (m.bridge === "pending" && m.playable && m.t < DEADLINE && !(m.came.home && m.came.away)) {
       counters.quiet_before_deadline++;
@@ -3051,6 +3294,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
       case "both_came_no_game": return last !== null && last.forfeitBy === null && last.held === 1 && m.reason === "not_started" && m.t >= DEADLINE;
       case "retry_waits": return last?.mintRetries === 0 && m.bridge === "pending" && m.throttledUntil !== null;
       case "retry_lands": return last?.mintRetries === 1 && m.bridge === "ready";
+      case "stranded_created": return last?.mintRetries === 1 && m.bridge === "ready" && m.throttledUntil === null && m.t < DEADLINE && m.came.home && m.came.away;
       case "retry_too_late": return last?.mintRetries === 0 && m.throttledUntil !== null && m.reason === "not_started" && m.t >= DEADLINE;
       case "accept_failed_unread": return last?.reconciled === 0 && m.bridge === "held" && m.heldBy === "create" && m.truth === "ended";
       case "aborted_ready_held": return last?.held === 1 && m.reason === "aborted";

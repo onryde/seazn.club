@@ -70,7 +70,7 @@ import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
 import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } from "./play";
 import { fenAfter } from "@/server/external-play/fen";
-import { isPlayableFixtureStatus, seatPlayer, storedPlayerParticipant, type SeatResult } from "./preflight";
+import { cameraTokenForSeat, isPlayableFixtureStatus, seatPlayer, storedPlayerParticipant, type CameraToken, type SeatResult } from "./preflight";
 import { lichessGrantDowngraded } from "../external-accounts";
 import { RECONCILED_WHILE_HELD, reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
@@ -82,6 +82,7 @@ export type RoomIdentity = { kind: "session"; userId: string } | { kind: "token"
 export type RoomDeps = {
   now?: Date;
   seat?: typeof seatPlayer;
+  cameraToken?: typeof cameraTokenForSeat;
   create?: (fixtureId: string) => Promise<CreateOutcome>;
   publish?: (fixtureId: string) => Promise<void>;
   offered?: (asker: OnlineChessAsker) => Promise<boolean>;
@@ -95,7 +96,9 @@ export type RoomDeps = {
 /** A seat answer as the CLIENT receives it: the caller's own participant
  *  token (to join the meeting and publish their camera) and nothing else. */
 export type SeatWire =
-  | { seated: true; participant: ParticipantToken | null }
+  // `cameraRetry`: an OPTIONAL camera's token was held back by the platform's call budget - ask for it again at
+  // POST …/room/camera (D21-fix-3). Present on that seat and no other: a tokenless seat without it is final.
+  | { seated: true; participant: ParticipantToken | null; cameraRetry?: true }
   | { seated: false; reason: SeatRefusal; participant: ParticipantToken | null };
 
 export type RoomClaim = {
@@ -504,7 +507,11 @@ export async function readRoom(identity: RoomIdentity, fixtureId: string, deps: 
 }
 
 function seatWire(seat: SeatResult): SeatWire {
-  if (seat.seated) return { seated: true, participant: seat.participant };
+  if (seat.seated) {
+    return seat.cameraRetry === true
+      ? { seated: true, participant: seat.participant, cameraRetry: true }
+      : { seated: true, participant: seat.participant };
+  }
   // The camera refusals, and only they, carry the caller's own token (preflight CameraRefusal).
   if ("participant" in seat) return { seated: false, reason: seat.reason, participant: seat.participant };
   return { seated: false, reason: seat.reason, participant: null };
@@ -520,7 +527,13 @@ function seatWire(seat: SeatResult): SeatWire {
  * camera token back; their check-in is never re-stamped, because a stamp
  * outside the window would read as never having come.
  */
-export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<RoomClaim> {
+export async function claimRoomSeat(
+  identity: RoomIdentity,
+  fixtureId: string,
+  deps: RoomDeps = {},
+  /** D21-fix-3 (F1): the participant whose token the caller's browser already holds (preflight SeatAsk). */
+  ask: { heldParticipantId?: string | null } = {},
+): Promise<RoomClaim> {
   const now = deps.now ?? new Date();
   let r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   await resetStaleBridge(r.f);
@@ -535,7 +548,7 @@ export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, d
     if (!offered) return { snapshot: await compose(r, now, deps), seat: null, create: null };
   }
 
-  const seat = await (deps.seat ?? seatPlayer)({ fixtureId, personId: r.player.personId }, { now });
+  const seat = await (deps.seat ?? seatPlayer)({ fixtureId, personId: r.player.personId, heldParticipantId: ask.heldParticipantId ?? null }, { now });
   // Seated again (a reload's way back after a guard fault): our gap is over,
   // even if the page that opened it never said so (I-1).
   if (seat.seated && (await closeGuardFault(sql, { fixtureId, personId: r.player.personId, at: now }))) {
@@ -555,6 +568,22 @@ export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, d
   // word on it, whatever the room's own read raced to (review m3).
   const refusedOff = create !== null && !create.created && create.reason === "online_chess_disabled";
   return { snapshot: refusedOff ? { ...snapshot, onlineChessOff: true } : snapshot, seat: seatWire(seat), create };
+}
+
+/** The camera door's answer as the CLIENT receives it (D21-fix-3): the caller's own token, if there is one yet, and whether
+ *  asking again can still bring it. */
+export type CameraWire = CameraToken;
+
+/**
+ * POST camera (D21-fix-3, owner decision) - an OPTIONAL camera's token, asked for again. A player seated under an optional
+ * camera whose token the platform's call budget held back (`cameraRetry` on the seat answer) has no tile; the room asks
+ * here, on a back-off, until it holds one. The token and NOTHING else - no check-in stamped, no lobby published, no game
+ * asked for, no guard fault closed: those are the seat claim's, and a retry loop must not re-run them. Identity as every
+ * other room route (the stranger's 404); whether to ask again is the server's answer (`retry`), never the client's guess.
+ */
+export async function requestRoomCamera(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<CameraWire> {
+  const r = await resolveRoom(identity, fixtureId);
+  return (deps.cameraToken ?? cameraTokenForSeat)({ fixtureId, personId: r.player.personId }, { now: deps.now });
 }
 
 /** The answers after which the game is over at Lichess, so T11 must read it

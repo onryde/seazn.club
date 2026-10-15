@@ -93,8 +93,9 @@ async function seed(cameraPolicy: "required" | "optional" = "required") {
 type Seeded = Awaited<ReturnType<typeof seed>>;
 type Side = "home" | "away";
 
-const claim = (s: Seeded, now = new Date(), side: Side = "home", video?: PreflightDeps["video"]) =>
-  seatPlayer({ fixtureId: s.fixtureId, personId: s[side].personId }, { now, ...(video ? { video } : {}) });
+/** `held`: the participant id the caller's browser holds a token for (D21-fix-3, F1) - the room sends it with every claim. */
+const claim = (s: Seeded, now = new Date(), side: Side = "home", video?: PreflightDeps["video"], held: string | null = null) =>
+  seatPlayer({ fixtureId: s.fixtureId, personId: s[side].personId, heldParticipantId: held }, { now, ...(video ? { video } : {}) });
 const reasonOf = (r: SeatResult) => (r.seated ? "seated" : r.reason);
 const tokenOf = (r: SeatResult) => ("participant" in r ? r.participant : null);
 
@@ -125,11 +126,12 @@ async function cacheRow(s: Seeded, side: Side = "home") {
 describe.skipIf(!DB)("the evidence cache: a starting camera is read on the back-off schedule, not on every claim (D21)", () => {
   it("THE HAMMER: a claim every second for 30 s on a camera that never reports reads the vendor on the ruling's schedule inside the deadline, and at most once a second after it — and answers the same either side of a read", async () => {
     const s = await seed();
-    const { after } = await joinWith(s, "pending");
+    const { pid, after } = await joinWith(s, "pending");
     const before = { reads: evidenceReads(), refreshes: tokenRefreshes() };
     const seconds = Array.from({ length: 31 }, (_, t) => t);
     const answers: string[] = [];
-    for (const t of seconds) answers.push(reasonOf(await claim(s, new Date(after + t * 1_000))));
+    // The browser joined with the token its first claim was handed, and sends that participant's id with every claim.
+    for (const t of seconds) answers.push(reasonOf(await claim(s, new Date(after + t * 1_000), "home", undefined, pid)));
     const reads = evidenceReads() - before.reads;
     const deadlineS = CAMERA_EVIDENCE_DEADLINE_MS / 1_000;
     const want = ruledReads(seconds);
@@ -141,7 +143,13 @@ describe.skipIf(!DB)("the evidence cache: a starting camera is read on the back-
     // The differential the cache exists for, where it applies: the 15 claims inside the deadline made 4 reads, not 15.
     const insideDeadline = want.filter((t) => t < deadlineS).length;
     expect(insideDeadline, "…against the 15 a once-a-second poll would have made inside the deadline").toBeLessThan(deadlineS / 3);
-    expect(tokenRefreshes() - before.refreshes, "a claim between reads still costs its one token refresh").toBe(seconds.length);
+    // D21-fix-3 (F1): a browser that already holds the token its camera joined with is handed none while the camera is still
+    // starting - the 15 claims inside the wait cost reads (the schedule above) and not one token refresh. The refusal past
+    // the deadline carries a token (the way in for a retry), so those claims - and only those - cost one each.
+    expect(
+      tokenRefreshes() - before.refreshes,
+      "a claim answered camera_starting costs no token for a browser that holds one; the refusals past the wait cost one each",
+    ).toBe(seconds.filter((t) => t >= deadlineS).length);
     // Answers: starting inside the wait, the camera refusal past it - on a cached claim exactly as on a read (no flapping).
     expect(answers).toEqual(seconds.map((t) => (t < deadlineS ? "camera_starting" : "camera_required")));
   });
@@ -351,16 +359,32 @@ describe.skipIf(!DB)("the evidence cache: a starting camera is read on the back-
   it("D21-fix m5: a claim refused its read whose participant row is GONE (the board was re-paired, its meeting retired) is VIDEO_MEETING_REPLACED - not `camera_starting` for ever", async () => {
     const s = await seed();
     const { after } = await joinWith(s, "pending");
-    // The retire lands between the token and the claim: the second claim's token refresh deletes the row after it returns.
-    const retired: Video = {
-      ...grantAll,
-      refreshParticipantToken: async (a) => {
-        const token = await refreshParticipantToken(a);
-        await sql`delete from fixture_video_participants where fixture_id = ${s.fixtureId} and participant_id = ${a.participantId}`;
-        return token;
-      },
-    };
-    await expect(claim(s, new Date(after), "home", retired)).rejects.toMatchObject({ code: "VIDEO_MEETING_REPLACED" });
+    // The retire lands between the claim finding its participant and the claim for the read: a transaction holds the row,
+    // the claim's UPDATE queues behind it (waited for, not slept for), and the transaction deletes the row and commits.
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const isLocked = new Promise<void>((r) => (locked = r));
+    const retire = sql.begin(async (tx) => {
+      await tx`select 1 from fixture_video_participants where fixture_id = ${s.fixtureId} and preset = 'player' for update`;
+      locked();
+      await hold;
+      await tx`delete from fixture_video_participants where fixture_id = ${s.fixtureId}`;
+    });
+    await isLocked;
+    const outcome = claim(s, new Date(after)).then(
+      (r) => ({ r }),
+      (e: unknown) => ({ e }),
+    );
+    await vi.waitFor(async () => {
+      const [w] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+         where wait_event_type = 'Lock' and pid <> pg_backend_pid() and query like '%set seat_read_at%'`;
+      expect(w?.n, "premise: the claim's read slot is queued behind the retire").toBeGreaterThan(0);
+    });
+    release();
+    await retire;
+    expect(await outcome).toMatchObject({ e: { code: "VIDEO_MEETING_REPLACED" } });
     expect(await sql`select 1 from fixture_video_participants where fixture_id = ${s.fixtureId}`, "premise: the row really is gone").toHaveLength(0);
   });
 });
@@ -387,21 +411,33 @@ function refusingRequest(n: number): { budget: () => Promise<boolean>; asked: ()
 const grantAll = metered(async () => true);
 
 describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a claim, never `no camera`, never an outage (D21)", () => {
-  // A fresh board's first claim makes three requests in order: create the meeting, add the participant, read the session.
-  // A claim after the join makes four: refresh the token, read the session, its participants, the peer report.
+  // D21-fix-3 (F1): a fresh board's first claim makes TWO requests - create the meeting, add the participant - and no read
+  // (a participant this very claim made cannot have been joined: nobody had its token), so a refusal of either leaves the
+  // caller no token. A claim after the join asks the cache first and the vendor only when it may: the live session, its
+  // participants, the peer report - and the token LAST, only once the verdict is in. A browser that holds no token (a
+  // reload) is therefore handed none by a claim the budget cut short.
   const FIRST_CLAIM = [
     { n: 1, what: "create the meeting", token: false },
     { n: 2, what: "add the participant", token: false },
-    { n: 3, what: "read the live session", token: true },
   ];
   const LATER_CLAIM = [
-    { n: 1, what: "refresh the token", token: false },
-    { n: 2, what: "read the live session", token: true },
-    { n: 3, what: "read the session participants", token: true },
-    { n: 4, what: "read the peer report", token: true },
+    { n: 1, what: "read the live session", token: false, verdictMade: false },
+    { n: 2, what: "read the session participants", token: false, verdictMade: false },
+    { n: 3, what: "read the peer report", token: false, verdictMade: false },
+    { n: 4, what: "refresh the token (after the verdict)", token: false, verdictMade: true },
   ];
 
-  it("sweep, the FIRST claim: a refusal of each of its three requests answers camera_starting — with the caller's token exactly when one was already minted — and the retry says the truth", async () => {
+  it("a FIRST claim's whole cost is two requests - the meeting and the participant - and it reads nothing, whatever the camera (D21-fix-3, F1)", async () => {
+    const s = await seed();
+    const gate = refusingRequest(Number.MAX_SAFE_INTEGER);
+    const got = await claim(s, new Date(), "home", metered(gate.budget));
+    expect(reasonOf(got)).toBe("camera_required");
+    expect(tokenOf(got)?.participantId, "the way in is handed").toBeTruthy();
+    expect(gate.asked(), "create the meeting + add the participant").toBe(2);
+    expect(evidenceReads(), "no read of the live session").toBe(0);
+  });
+
+  it("sweep, the FIRST claim: a refusal of each of its two requests answers camera_starting with no token (none was minted), and the retry says the truth", async () => {
     let checked = 0;
     for (const step of FIRST_CLAIM) {
       const s = await seed();
@@ -420,7 +456,7 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
     expect(checked, "anti-vacuity: every request of the first claim").toBe(FIRST_CLAIM.length);
   });
 
-  it("sweep, a LATER claim: a refusal of each of its four requests answers camera_starting - counted in the log, once - and the retry seats the player", async () => {
+  it("sweep, a LATER claim (a browser holding no token): a refusal of each of its four requests answers camera_starting with no token - counted in the log, once - and the retry seats the player", async () => {
     // D22: the load test counts the platform's deferrals from this line (a deferral is otherwise invisible: the request
     // is never made, the player is told "starting"), so a claim the budget refused leaves exactly one, and a granted one none.
     const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
@@ -437,7 +473,12 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
       expect(!!tokenOf(got), `refused: ${step.what} — token`).toBe(step.token);
       expect(gate.asked()).toBe(step.n);
       expect(vi.mocked(captureError), `${step.what}: not an outage`).not.toHaveBeenCalled();
-      expect(await sql`select 1 from fixture_video_participants where fixture_id = ${s.fixtureId} and last_publisher_seen_at is not null`, `${step.what}: nothing stamped`).toHaveLength(0);
+      // A refused READ finds nothing, so stamps nothing. The refused token (n=4) comes after a read that did find the camera on:
+      // that pass is on file - a verdict the budget cost nobody - and the retry seats on a read of its own all the same.
+      expect(
+        await sql`select 1 from fixture_video_participants where fixture_id = ${s.fixtureId} and last_publisher_seen_at is not null`,
+        `${step.what}: stamped exactly when the verdict was made`,
+      ).toHaveLength(step.verdictMade ? 1 : 0);
       const retry = await claim(s, new Date(after + 1_000), "home", grantAll);
       expect(reasonOf(retry), `${step.what}: the camera was on all along`).toBe("seated");
       expect(deferrals() - before, `${step.what}: the granted retry logged nothing more`).toBe(1);
@@ -450,8 +491,8 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
     const s = await seed();
     const { after } = await joinWith(s, "on");
     const seen = fx.calls.length;
-    await claim(s, new Date(after), "home", metered(refusingRequest(2).budget)); // refresh granted, session read refused
-    expect(fx.calls.length - seen, "one request made (the refresh), the refused one not").toBe(1);
+    await claim(s, new Date(after), "home", metered(refusingRequest(2).budget)); // session read granted, participants read refused
+    expect(fx.calls.length - seen, "one request made (the session read), the refused one not").toBe(1);
   });
 
   it("a deferral is never `camera_required` / `camera_lost` / `video_unavailable`, even for a player who HAD passed and past every deadline", async () => {
@@ -479,9 +520,9 @@ describe.skipIf(!DB)("a deferral is `camera_starting`: at EVERY request of a cla
     for (const n of [1, 2]) {
       const s = await seed("optional");
       const got = await claim(s, new Date(), "home", metered(refusingRequest(n).budget));
-      expect(got, `request ${n} refused`).toEqual({ seated: true, participant: null });
+      expect(got, `request ${n} refused`).toEqual({ seated: true, participant: null, cameraRetry: true });
       expect(vi.mocked(captureError), `request ${n}: a deferral is not an outage`).not.toHaveBeenCalled();
-      // D21-fix m2: seated:true ends the room's polling, so the player has no tile until they reload - counted in the log.
+      // D21-fix m2: the lost tile is counted in the log. (D21-fix-3: and the seat says so - `cameraRetry` - so the room asks again.)
       expect(tileLost(), `request ${n}: the lost tile is logged, once`).toBe(checked + 1);
       checked += 1;
     }
@@ -547,7 +588,11 @@ describe.skipIf(!DB)("thirty boards check in: the vendor's account limit is neve
           if (p.seated || p.nextAt > t) continue;
           // The room's server clock for this claim is the simulated one; the fixture stamps peers on the REAL clock, so the
           // seat's wait (judged from the peer's join) is only ever shorter than real — never a spurious deadline.
-          const got = await seatPlayer({ fixtureId: p.s.fixtureId, personId: p.s[p.side].personId }, { now: new Date(t - 0), video });
+          // Like the real room: the id of the participant whose token the browser holds goes with every claim (D21-fix-3).
+          const got = await seatPlayer(
+            { fixtureId: p.s.fixtureId, personId: p.s[p.side].personId, heldParticipantId: p.pid },
+            { now: new Date(t - 0), video },
+          );
           p.claims += 1;
           const reason = reasonOf(got);
           reasons.set(reason, (reasons.get(reason) ?? 0) + 1);

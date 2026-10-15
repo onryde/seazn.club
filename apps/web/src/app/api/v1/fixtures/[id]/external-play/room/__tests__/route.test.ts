@@ -28,6 +28,7 @@ import { GET as roomGet, POST as roomPost } from "@/app/api/v1/fixtures/[id]/ext
 import { POST as actPost } from "@/app/api/v1/fixtures/[id]/external-play/room/act/route";
 import { POST as clockZeroPost } from "@/app/api/v1/fixtures/[id]/external-play/room/clock-zero/route";
 import { POST as cameraFaultPost } from "@/app/api/v1/fixtures/[id]/external-play/room/camera-fault/route";
+import { POST as cameraPost } from "@/app/api/v1/fixtures/[id]/external-play/room/camera/route";
 import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -73,7 +74,7 @@ afterAll(async () => {
 
 describe("match-room routes — structure", () => {
   it("no route module reaches Lichess or accepts a camera claim (design §3.4, spec §10 do-not-copy)", () => {
-    const files = ["../route.ts", "../act/route.ts", "../clock-zero/route.ts", "../camera-fault/route.ts"];
+    const files = ["../route.ts", "../act/route.ts", "../clock-zero/route.ts", "../camera-fault/route.ts", "../camera/route.ts"];
     let checked = 0;
     for (const f of files) {
       const src = readFileSync(new URL(f, import.meta.url), "utf8");
@@ -81,7 +82,7 @@ describe("match-room routes — structure", () => {
       expect(src, f).not.toContain("cameraOk");
       checked += 1;
     }
-    expect(checked, "anti-vacuity: route modules read").toBe(4);
+    expect(checked, "anti-vacuity: route modules read").toBe(5);
   });
 });
 
@@ -220,5 +221,31 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/room/camera-fault (I
     const mine = await read(await cameraFaultPost(post(url(s.fixtureId, "/camera-fault", t), { state: "start", participantId: part.home }), ctx(s.fixtureId)));
     expect([mine.status, mine.body.data]).toEqual([200, { open: true }]);
     expect(await faults(s.fixtureId)).toEqual([{ person_id: s.home.personId, ended_at: null }]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/room/camera (D21-fix-3)", () => {
+  it("no session and no link ⇒ 401; an API key alone is not an identity; a stranger and a bad link are the room's 404", async () => {
+    const s = await seed();
+    expect((await read(await cameraPost(post(url(s.fixtureId, "/camera")), ctx(s.fixtureId)))).status).toBe(401);
+    const keyed = post(url(s.fixtureId, "/camera"), undefined, { authorization: "Bearer sk_live_whatever" });
+    expect((await cameraPost(keyed, ctx(s.fixtureId))).status).toBe(401);
+    authState.userId = randomUUID();
+    const stranger = await read(await cameraPost(post(url(s.fixtureId, "/camera")), ctx(s.fixtureId)));
+    const badLink = await read(await cameraPost(post(url(s.fixtureId, "/camera", "not-a-token")), ctx(s.fixtureId)));
+    expect([stranger.status, stranger.body.error?.code]).toEqual([404, "NOT_FOUND"]);
+    expect([badLink.status, badLink.body.error?.code]).toEqual([404, "NOT_FOUND"]);
+  });
+
+  it("a player's link answers { participant, retry } in the envelope; camera Off is { null, false } - final - and writes nothing", async () => {
+    const s = await seed();
+    const t = await s.tokenFor(s.home.personId);
+    const r = await read(await cameraPost(post(url(s.fixtureId, "/camera", t)), ctx(s.fixtureId)));
+    expect([r.status, r.body.ok, r.body.data]).toEqual([200, true, { participant: null, retry: false }]);
+    const rows = await sql`select 1 from fixture_availability where fixture_id = ${s.fixtureId} and checked_in_at is not null`;
+    expect(rows.length, "this door never checks anyone in").toBe(0);
+    // The SAME link on the same door twice: a second call is the same final answer, not an error.
+    const again = await read(await cameraPost(post(url(s.fixtureId, "/camera", t)), ctx(s.fixtureId)));
+    expect(again.body.data).toEqual({ participant: null, retry: false });
   });
 });

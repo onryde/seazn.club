@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { Chess } from "chess.js";
 import {
+  cameraRetryDue,
   canMove,
   initialRoomState,
   moveNotice,
@@ -338,6 +339,100 @@ describe("a camera_starting answer with no token (the call budget was spent) kee
   it("a camera_starting answer BETWEEN seated answers does not leak the token into a later tokenless one", () => {
     let s = roomReducer(holding(), answer({ seated: false, reason: "camera_starting", participant: null }, 2));
     s = roomReducer(s, answer({ seated: false, reason: "window_closed", participant: null }, 3));
+    expect(s.seat?.participant).toBeNull();
+  });
+});
+
+// D21-fix-3 (owner decision): an optional camera seated with no tile because the platform's call budget was spent must get
+// its tile later WITHOUT a reload. The seat ANSWER says so with an explicit field (`cameraRetry`); a null token alone is
+// never read as "retry" - for Off and for an organiser's video override it is final. These are the client's pure halves:
+// the reducer and the decision. (The timer is use-room's; its wiring is the room e2e's.)
+describe("an optional camera seated with no token because the budget was spent asks again (D21-fix-3)", () => {
+  const TOKEN = { authToken: "own-token", participantId: "p-own" };
+  const seatAnswer = (seat: unknown, at = 1) => ({
+    type: "seat_answered" as const,
+    answer: { snapshot: snap({ serverNow: iso(T0 + at), cameraPolicy: "optional" }), seat: seat as never, create: null },
+    receivedAt: T0,
+  });
+  const deferred = () => roomReducer(initialRoomState(snap({ cameraPolicy: "optional" }), T0), seatAnswer({ seated: true, participant: null, cameraRetry: true }));
+
+  it("the empty case: a seat with no answer yet owes nothing", () => {
+    expect(cameraRetryDue(initialRoomState(snap({ cameraPolicy: "optional" }), T0))).toBe(false);
+  });
+
+  it("the explicit field, and only it: the deferred seat is due; every other tokenless seat is final (Off, an override, a refusal) - counted", () => {
+    expect(cameraRetryDue(deferred()), "the deferred optional seat").toBe(true);
+    const finals: { name: string; seat: unknown; policy: "off" | "optional" | "required" }[] = [
+      { name: "camera Off: seated, no token, no field", seat: { seated: true, participant: null }, policy: "off" },
+      { name: "organiser's override on an optional board: seated, no token, no field", seat: { seated: true, participant: null }, policy: "optional" },
+      { name: "optional, outage: seated, no token, no field", seat: { seated: true, participant: null }, policy: "optional" },
+      { name: "a refusal with no token", seat: { seated: false, reason: "window_closed", participant: null }, policy: "optional" },
+      { name: "camera_starting with no token (required's own poll)", seat: { seated: false, reason: "camera_starting", participant: null }, policy: "required" },
+    ];
+    let checked = 0;
+    for (const f of finals) {
+      const s = roomReducer(initialRoomState(snap({ cameraPolicy: f.policy }), T0), seatAnswer(f.seat));
+      expect(cameraRetryDue(s), f.name).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(finals.length);
+  });
+
+  it("the flag alone is not enough: the policy must still be optional, the token absent, and the game not over", () => {
+    const base = deferred();
+    expect(cameraRetryDue(base)).toBe(true);
+    const cases: { name: string; s: RoomState }[] = [
+      { name: "policy relaxed to off", s: { ...base, snap: snap({ cameraPolicy: "off" }) } },
+      { name: "policy tightened to required", s: { ...base, snap: snap({ cameraPolicy: "required" }) } },
+      { name: "a token is held", s: { ...base, seat: { seated: true, participant: TOKEN, cameraRetry: true } } },
+      { name: "the result is written", s: { ...base, snap: snap({ cameraPolicy: "optional", result: { outcome: "won", method: "resign", score: "1–0" } }) } },
+      { name: "the game is over", s: { ...base, snap: snap({ cameraPolicy: "optional", game: game(4, true) }) } },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      expect(cameraRetryDue(c.s), c.name).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+    // …and the pair: a live game does not stop it (the tile can still come up mid-game).
+    expect(cameraRetryDue({ ...base, snap: snap({ cameraPolicy: "optional", game: game(4, false) }) }), "a live game").toBe(true);
+  });
+
+  it("the token arrives: it is held, the flag is gone, nothing is owed - and a second answer changes nothing", () => {
+    let s = roomReducer(deferred(), { type: "camera_answered", answer: { participant: TOKEN, retry: false } });
+    expect(s.seat).toEqual({ seated: true, participant: TOKEN });
+    expect(cameraRetryDue(s)).toBe(false);
+    const again = roomReducer(s, { type: "camera_answered", answer: { participant: null, retry: true } });
+    expect(again, "a late tokenless answer is not this seat's to rewrite").toBe(s);
+    s = roomReducer(s, { type: "camera_answered", answer: { participant: { authToken: "x", participantId: "y" }, retry: false } });
+    expect(s.seat?.participant, "the token already held is not replaced").toEqual(TOKEN);
+  });
+
+  it("still deferred: the answer changes nothing (same state object); a final null quiets the tile and stops", () => {
+    const s = deferred();
+    expect(roomReducer(s, { type: "camera_answered", answer: { participant: null, retry: true } })).toBe(s);
+    const stopped = roomReducer(s, { type: "camera_answered", answer: { participant: null, retry: false } });
+    expect(stopped.seat).toEqual({ seated: true, participant: null });
+    expect(cameraRetryDue(stopped)).toBe(false);
+  });
+
+  it("an answer for a seat that has since moved on is ignored: refused, or never taken", () => {
+    const refused = roomReducer(deferred(), seatAnswer({ seated: false, reason: "window_closed", participant: null }, 2));
+    expect(roomReducer(refused, { type: "camera_answered", answer: { participant: TOKEN, retry: false } })).toBe(refused);
+    const none = initialRoomState(snap({ cameraPolicy: "optional" }), T0);
+    expect(roomReducer(none, { type: "camera_answered", answer: { participant: TOKEN, retry: false } })).toBe(none);
+  });
+
+  it("a re-claim the budget cut short keeps the token the room holds, as camera_starting does - and then owes nothing", () => {
+    const holding = roomReducer(initialRoomState(snap({ cameraPolicy: "optional" }), T0), seatAnswer({ seated: true, participant: TOKEN }));
+    const s = roomReducer(holding, seatAnswer({ seated: true, participant: null, cameraRetry: true }, 2));
+    expect(s.seat?.participant).toEqual(TOKEN);
+    expect(cameraRetryDue(s)).toBe(false);
+  });
+
+  it("a tokenless seated answer WITHOUT the field still drops a held token (Off/override are final, nothing is inherited)", () => {
+    const holding = roomReducer(initialRoomState(snap({ cameraPolicy: "optional" }), T0), seatAnswer({ seated: true, participant: TOKEN }));
+    const s = roomReducer(holding, seatAnswer({ seated: true, participant: null }, 2));
     expect(s.seat?.participant).toBeNull();
   });
 });

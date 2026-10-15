@@ -2646,3 +2646,155 @@ test("T17B fix 2, D24 (re-review I1, I2): a move dropped in time and still in fl
   expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
   await ctx.close();
 });
+
+test("T17B fix 2, D21-fix-3 (owner decision): an optional camera seated with NO tile because the call budget was spent asks again for its token on a back-off - 'Connecting your camera' meanwhile, never 'off' - and the camera starts WITHOUT a reload; a tokenless seat that does not say so (Off, an override) never asks", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const room = await seedMatchRoom(page.request, {
+    names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
+    cameraPolicy: "optional",
+  });
+  // A fake capture device, so the camera the player grants is real and the room's SDK has something to join with.
+  const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+  const ctx = await cold(camBrowser);
+  await ctx.grantPermissions(["camera"]);
+  // The seat is the REAL one - the real check-in, the real participant at the fixture vendor - with its answer rewritten
+  // to the case the platform's call budget makes: seated, no token, and the explicit field that says one can still come.
+  // The camera route then refuses twice (the budget is still spent) and hands over the real token on the third ask.
+  let claims = 0;
+  await ctx.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      claims += 1;
+      const res = await route.fetch();
+      const body = (await res.json()) as { data: { seat: unknown } };
+      body.data.seat = { seated: true, participant: null, cameraRetry: true };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    },
+  );
+  const asks: number[] = [];
+  await ctx.route(
+    (u) => /\/external-play\/room\/camera$/.test(u.pathname),
+    async (route: Route) => {
+      asks.push(Date.now());
+      // The third ask gets a token the SDK will refuse, as it refuses the kit's own (the fixture vendor is not a RealtimeKit
+      // the browser can reach): the refusal is the proof that the late token reached the camera.
+      const data = asks.length < 3 ? { participant: null, retry: true } : { participant: { participantId: "e2e-part-late", authToken: "e2e-rtk" }, retry: false };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data, requestId: "e2e" }) });
+    },
+  );
+  const p = await openRoom(ctx, room, room.white.token);
+  let navigations = 0;
+  p.on("framenavigated", (f) => {
+    if (f === p.mainFrame()) navigations += 1;
+  });
+  const connecting = p.getByTestId("room-own-tile-connecting");
+  await expect(connecting, "premise: before the seat, nothing says 'connecting'").toHaveCount(0);
+
+  await p.getByTestId("room-checkin-cta").click();
+  await expect(p.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
+  expect(claims, "one seat call").toBe(1);
+  // The tile says the camera is on its way, in the words it already has for that - quiet: no banner, no error.
+  await expect(connecting).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+  await expect(p.getByTestId("room-own-tile-announce"), "announced once, for a screen reader").toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+  await expect(p.getByTestId("room-camera-off"), "never 'camera off'").toHaveCount(0);
+  await expect(p.getByTestId("room-own-tile")).toHaveAttribute("data-stream", "off");
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "d21f3-connecting");
+
+  // The ruling's schedule: 2 s, then 4, then 8 (typed here from the ruling, not read from the code). Each answered
+  // "still deferred" until the third, and no seat call repeats meanwhile - only the token is asked for.
+  await expect.poll(() => asks.length, { timeout: 40_000, message: "the room asked for its token twice, both times answered 'still deferred'" }).toBe(2);
+  expect(claims, "two asks in, no seat call was repeated: the camera route is the token's only door").toBe(1);
+  await expect(connecting, "still waiting, still quiet").toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+  await expect(p.getByTestId("room-camera-off")).toHaveCount(0);
+  await expect.poll(() => asks.length, { timeout: 40_000, message: "the room asked a third time" }).toBe(3);
+  expect(asks[1]! - asks[0]!, "the second ask waits ~4 s after the first").toBeGreaterThanOrEqual(3_500);
+  expect(asks[2]! - asks[1]!, "the third ask waits ~8 s after the second").toBeGreaterThanOrEqual(7_500);
+
+  // The token arrived: the cover is gone and the camera session started with it - the SDK refuses the fixture's token,
+  // which is what shows it was tried - with the page never reloaded.
+  await expect(connecting).toHaveCount(0);
+  await expect.poll(() => consoleErrors.some((e) => /^Invalid auth token provided\. /.test(e)), { timeout: 15_000, message: "the camera joined with the delivered token" }).toBe(true);
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
+  expect(navigations, "no reload").toBe(0);
+  const settled = asks.length;
+  await p.waitForTimeout(3_000);
+  expect(asks.length, "holding a token, the room stops asking").toBe(settled);
+  await ctx.unrouteAll({ behavior: "ignoreErrors" });
+  await ctx.close();
+  await camBrowser.close();
+
+  // The pair: a tokenless seat that does NOT carry the field (camera Off, an organiser's override - the null is final)
+  // is never asked about again, and its tile says nothing about connecting.
+  const room2 = await seedMatchRoom(page.request, {
+    names: [`Cy Mora ${Date.now() % 1e5}`, `Di Vance ${Date.now() % 1e5}`],
+    cameraPolicy: "optional",
+  });
+  const ctx2 = await cold(browser);
+  let asks2 = 0;
+  await ctx2.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const res = await route.fetch();
+      const body = (await res.json()) as { data: { seat: unknown } };
+      body.data.seat = { seated: true, participant: null };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    },
+  );
+  await ctx2.route(
+    (u) => /\/external-play\/room\/camera$/.test(u.pathname),
+    async (route: Route) => {
+      asks2 += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data: { participant: null, retry: false }, requestId: "e2e" }) });
+    },
+  );
+  const q = await openRoom(ctx2, room2, room2.white.token);
+  await q.getByTestId("room-checkin-cta").click();
+  await expect(q.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
+  await q.waitForTimeout(2_000 + 3_000); // past the first ask's 2 s, with room to spare
+  expect(asks2, "no explicit field, no ask: a null token alone is never read as 'try again'").toBe(0);
+  await expect(q.getByTestId("room-own-tile-connecting")).toHaveCount(0);
+  await ctx2.unrouteAll({ behavior: "ignoreErrors" });
+  await ctx2.close();
+
+  // …and the field is the server's to withdraw: flagged, asked once, answered "no token, and stop" (the budget has nothing to
+  // do with it any more - the board was torn down, the policy changed) - the cover goes and the room never asks again, past
+  // the next back-off step.
+  const room3 = await seedMatchRoom(page.request, {
+    names: [`Ev Sato ${Date.now() % 1e5}`, `Fay Ibe ${Date.now() % 1e5}`],
+    cameraPolicy: "optional",
+  });
+  const ctx3 = await cold(browser);
+  let asks3 = 0;
+  await ctx3.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const res = await route.fetch();
+      const body = (await res.json()) as { data: { seat: unknown } };
+      body.data.seat = { seated: true, participant: null, cameraRetry: true };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    },
+  );
+  await ctx3.route(
+    (u) => /\/external-play\/room\/camera$/.test(u.pathname),
+    async (route: Route) => {
+      asks3 += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data: { participant: null, retry: false }, requestId: "e2e" }) });
+    },
+  );
+  const w = await openRoom(ctx3, room3, room3.white.token);
+  await w.getByTestId("room-checkin-cta").click();
+  await expect(w.getByTestId("room-own-tile-connecting")).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+  await expect.poll(() => asks3, { timeout: 10_000, message: "asked once, at the ruled 2 s" }).toBe(1);
+  await expect(w.getByTestId("room-own-tile-connecting"), "the final null clears the cover").toHaveCount(0);
+  await w.waitForTimeout(5_000); // past the 4 s step that would have been the second ask
+  expect(asks3, "a final answer is final").toBe(1);
+  await ctx3.unrouteAll({ behavior: "ignoreErrors" });
+  await ctx3.close();
+});

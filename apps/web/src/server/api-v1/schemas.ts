@@ -1475,6 +1475,28 @@ export const RoomCameraFault = z
   .strict();
 export type RoomCameraFault = z.infer<typeof RoomCameraFault>;
 
+/** POST /fixtures/{id}/external-play/room (D21-fix-3, F1) — the seat claim's OPTIONAL body. `heldParticipantId` is the
+ *  participant whose token this browser already holds (the room sends it with every claim once it has one). A claim
+ *  answered `camera_starting` then carries no token: the browser keeps the one it has, and the server saves a vendor
+ *  request. A hint about what to SAVE, never a credential and never an authority: the server compares it with the
+ *  caller's own participant on file, and no body (or null) means "I hold none" — the safe answer, which hands one. */
+export const RoomSeatClaim = z
+  .object({ heldParticipantId: z.string().min(1).max(200).nullable().optional() })
+  .strict();
+export type RoomSeatClaim = z.infer<typeof RoomSeatClaim>;
+
+/** POST /fixtures/{id}/external-play/room/camera (D21-fix-3) - an OPTIONAL camera's token, asked for again by a player
+ *  seated without one because the platform's call budget was spent (the seat answer said `cameraRetry`). No body. The
+ *  answer: the caller's own participant token if there is one yet, and whether asking again can still bring one -
+ *  `retry: false` with no token is FINAL (camera Off, an organiser's override, a vendor outage, a refused seat). */
+export const RoomCameraAnswer = z
+  .object({
+    participant: z.object({ participantId: z.string(), authToken: z.string() }).strict().nullable(),
+    retry: z.boolean(),
+  })
+  .strict();
+export type RoomCameraAnswer = z.infer<typeof RoomCameraAnswer>;
+
 /** Every reason T10 answers `reconcile: true` with: a Board API failure
  *  class, or a ledger that no longer replays. Typed both ways against the
  *  source unions, so a new code there fails compilation here. */

@@ -3,17 +3,19 @@
 // COMPILATION (tsc, not vitest) when a mirror drifts from its source. The
 // runtime block pins the envelope reading against v1's real envelope shape.
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { RoomAct, RoomActOut, RoomCameraFault } from "@/server/api-v1/schemas";
-import type { SeatWire, RoomClaim, CameraFaultReport } from "@/server/usecases/external-play/room";
+import type { RoomAct, RoomActOut, RoomCameraAnswer, RoomCameraFault } from "@/server/api-v1/schemas";
+import type { SeatWire, RoomClaim, CameraFaultReport, CameraWire } from "@/server/usecases/external-play/room";
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
 import {
   claimSeat,
   deliverCameraFault,
   fetchRoom,
+  requestCamera,
   roomApiPath,
   sendAct,
   sendCameraFault,
   sendClockZero,
+  type CameraAnswer,
   type CameraFaultBody,
   type ParticipantWire,
   type RoomActAnswer,
@@ -35,6 +37,10 @@ describe("the wire mirrors match their server sources (type level)", () => {
   });
   it("the POST answer IS RoomClaim — T9's `create` included (review m3: the route no longer drops it)", () => {
     expectTypeOf<RoomClaimAnswer>().toEqualTypeOf<RoomClaim>();
+  });
+  it("D21-fix-3: the camera door's answer IS the route's schema type and the usecase's wire - the retry flag included", () => {
+    expectTypeOf<CameraAnswer>().toEqualTypeOf<RoomCameraAnswer>();
+    expectTypeOf<CameraAnswer>().toEqualTypeOf<CameraWire>();
   });
   it("the camera-fault body IS the route's schema type and the usecase's report (I-1)", () => {
     expectTypeOf<CameraFaultBody>().toEqualTypeOf<RoomCameraFault>();
@@ -66,10 +72,10 @@ describe("roomApiPath", () => {
 });
 
 describe("the calls", () => {
-  it("GET reads the envelope's data; POST seat and clock-zero are POSTs with no body", async () => {
+  it("GET reads the envelope's data; POST seat (holding no token) and clock-zero are POSTs with no body", async () => {
     const { f, seen } = fakeFetch(() => envelope({ any: 1 }));
     expect(await fetchRoom("f-1", "tok", f)).toEqual({ ok: true, data: { any: 1 } });
-    expect(await claimSeat("f-1", null, f)).toEqual({ ok: true, data: { any: 1 } });
+    expect(await claimSeat("f-1", null, null, f)).toEqual({ ok: true, data: { any: 1 } });
     expect(await sendClockZero("f-1", null, f)).toEqual({ ok: true, data: { any: 1 } });
     expect(seen.map((s) => [s.init.method, s.url, s.init.body ?? null])).toEqual([
       ["GET", "/api/v1/fixtures/f-1/external-play/room?t=tok", null],
@@ -77,6 +83,24 @@ describe("the calls", () => {
       ["POST", "/api/v1/fixtures/f-1/external-play/room/clock-zero", null],
     ]);
     for (const s of seen) expect([s.init.credentials, s.init.cache]).toEqual(["same-origin", "no-store"]);
+  });
+
+  it("D21-fix-3 (F1): a seat claim says which participant's token the browser holds - JSON {heldParticipantId} - and says nothing when it holds none", async () => {
+    const { f, seen } = fakeFetch(() => envelope({ any: 1 }));
+    await claimSeat("f-1", "tok", "pt-7", f);
+    await claimSeat("f-1", "tok", null, f);
+    expect([seen[0]!.init.method, seen[0]!.url]).toEqual(["POST", "/api/v1/fixtures/f-1/external-play/room?t=tok"]);
+    expect(JSON.parse(String(seen[0]!.init.body))).toEqual({ heldParticipantId: "pt-7" });
+    expect(new Headers(seen[0]!.init.headers).get("content-type")).toBe("application/json");
+    expect(seen[1]!.init.body ?? null, "holding none: no body at all (the server reads an absent body as 'none held')").toBeNull();
+  });
+
+  it("D21-fix-3: requestCamera is a POST with no body to /room/camera, the link as ?t=; the answer is the envelope's data", async () => {
+    const { f, seen } = fakeFetch(() => envelope({ participant: null, retry: true }));
+    expect(await requestCamera("f-1", "tok", f)).toEqual({ ok: true, data: { participant: null, retry: true } });
+    expect(seen.map((s) => [s.init.method, s.url, s.init.body ?? null])).toEqual([["POST", "/api/v1/fixtures/f-1/external-play/room/camera?t=tok", null]]);
+    expect([seen[0]!.init.credentials, seen[0]!.init.cache]).toEqual(["same-origin", "no-store"]);
+    expect(roomApiPath("f-1", "/camera", null), "no link, no query").toBe("/api/v1/fixtures/f-1/external-play/room/camera");
   });
 
   it("camera-fault posts {state, participantId} as JSON, kept alive past an unload (the page closing mid-recovery still ends our stamp)", async () => {

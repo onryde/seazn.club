@@ -53240,7 +53240,7 @@
         ]
       },
       "post": {
-        "summary": "Take the seat for this fixture: under policy `required` the camera gate is read from RealtimeKit (presence, and the current peer's own report showing the camera granted and on), never from a claim sent to this API. Seat refusals `camera_starting` (joined, the camera's report not in yet — or RealtimeKit's call budget was spent so the claim could not look: ask again after the back-off of 1, 2, 4 then 8 seconds; asking sooner is answered from the last read without calling the vendor) and `camera_blocked` (the browser refused the camera) carry the caller's own participant token, as `camera_required` and `camera_lost` do — except a `camera_starting` that could not look, whose participant may be null: keep the token already held. Stamps the check-in inside the round's window; once both players are in, the Lichess game is created. Answers { snapshot, seat }. 409 ROOM_BEING_REPAIRED as the GET",
+        "summary": "Take the seat for this fixture: under policy `required` the camera gate is read from RealtimeKit (presence, and the current peer's own report showing the camera granted and on), never from a claim sent to this API. Seat refusals `camera_starting` (joined, the camera's report not in yet — or RealtimeKit's call budget was spent so the claim could not look: ask again after the back-off of 1, 2, 4 then 8 seconds; asking sooner is answered from the last read without calling the vendor) and `camera_blocked` (the browser refused the camera) carry the caller's own participant token, as `camera_required` and `camera_lost` do — except a `camera_starting` whose participant is null: it is answered to a browser that says it holds this participant's token (optional body `{ heldParticipantId }`, the id it holds; absent or null means it holds none, and a token is handed on every answer), or the claim could not look — keep the token already held. An `optional` camera whose token the call budget held back is seated with `participant: null` and `cameraRetry: true`: ask POST …/room/camera for the token on a back-off (a tokenless seat WITHOUT `cameraRetry` - camera Off, an organiser's override, a vendor outage - is final). Stamps the check-in inside the round's window; once both players are in, the Lichess game is created. Answers { snapshot, seat }. 409 ROOM_BEING_REPAIRED as the GET",
         "tags": [
           "fixtures"
         ],
@@ -53256,6 +53256,34 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "heldParticipantId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "heldParticipantId": "example"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -53288,7 +53316,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -53928,6 +53956,239 @@
                   "ok": true,
                   "data": {
                     "reconciled": true
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/external-play/room/camera": {
+      "post": {
+        "summary": "An optional camera's token, asked for again: a player seated under camera policy `optional` whose token the platform's RealtimeKit call budget held back (the seat answer carried `cameraRetry: true`) asks here, on a back-off of 2, 4, 8 then 16 seconds (30 at most), until it holds one. Answers the token and nothing else - no check-in is stamped, no lobby published, no game asked for. `retry: true` with no token: the budget is still spent, ask again later; `retry: false` with no token is final (camera Off, an organiser's override, a vendor outage, a refused seat). No body. Never key-reachable. Identity as the room's other routes (a stranger is the same 404 NOT_FOUND)",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "participant": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "participantId": {
+                                  "type": "string"
+                                },
+                                "authToken": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "participantId",
+                                "authToken"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "retry": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "participant",
+                        "retry"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "participant": {
+                      "participantId": "example",
+                      "authToken": "example"
+                    },
+                    "retry": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

@@ -362,6 +362,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /fixtures/:id/external-play/room/act",
   "POST /fixtures/:id/external-play/room/clock-zero",
   "POST /fixtures/:id/external-play/room/camera-fault",
+  "POST /fixtures/:id/external-play/room/camera",
   // F2 (T14), T16: the lobby is a signed-in player's door into their room (it
   // names a player's seat — the room read's reasoning); there is no POST, the
   // check-in is the room's. A resolve writes a result under organiser

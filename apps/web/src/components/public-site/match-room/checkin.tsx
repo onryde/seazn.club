@@ -38,6 +38,9 @@ type Props = {
     register: (el: HTMLVideoElement | null) => void;
     onSdkFrame: (stream: MediaStream) => void;
   } | null;
+  /** D21-fix-3: an optional camera seated with no token because the platform's call budget was spent, the room asking
+   *  again (cameraRetryDue): the tile says "Connecting your camera…" - nothing is wrong, the token is late. */
+  cameraPending?: boolean;
   onCheckIn: () => void;
   t: RoomT;
   plural: RoomPlural;
@@ -53,6 +56,7 @@ export function Checkin({
   checkingCamera = false,
   cameraTest = null,
   handover = null,
+  cameraPending = false,
   onCheckIn,
   t,
   plural,
@@ -98,7 +102,7 @@ export function Checkin({
             onFrame={testStream !== null ? test?.onFrame : covered?.onSdkFrame}
             videoRef={handover?.register}
             frozen={covered?.view.frame ?? null}
-            connecting={covered?.view.status === "connecting"}
+            connecting={covered?.view.status === "connecting" || cameraPending}
             t={t}
           />
           {test !== null ? <CameraTestRow view={test.view} onTest={test.onTest} t={t} /> : null}

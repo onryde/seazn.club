@@ -53,7 +53,7 @@ import {
 } from "./room-cards";
 import { HeldSeam } from "./room-seams";
 import { cameraEnds, roomScreen } from "./room-screen";
-import { canMove, moveNotice, ownMeetingRetired, plyOf, type RoomState } from "./room-state";
+import { canMove, cameraRetryDue, moveNotice, ownMeetingRetired, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useFlagFallen, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
@@ -320,6 +320,7 @@ function TileStrip({
   camera,
   presence,
   handover,
+  cameraPending = false,
   t,
 }: {
   snap: RoomSnapshot;
@@ -327,6 +328,10 @@ function TileStrip({
   presence: boolean | null;
   /** D23: a quick check-in can reach the board before the SDK's video does — the cover follows the tile. */
   handover: ReturnType<typeof useCameraHandover>;
+  /** D21-fix-3: an optional camera seated with no token because the platform's call budget was spent, and the room is
+   *  asking again (cameraRetryDue). The tile says so in the words it already has for a camera on its way - never "camera
+   *  off", never an error: nothing is wrong, the token is late. */
+  cameraPending?: boolean;
   t: RoomT;
 }) {
   const covering = isHandoverActive(handover.view) ? handover.view : null;
@@ -338,7 +343,7 @@ function TileStrip({
         onFrame={covering !== null ? handover.onSdkFrame : undefined}
         videoRef={handover.register}
         frozen={covering?.frame ?? null}
-        connecting={covering?.status === "connecting"}
+        connecting={covering?.status === "connecting" || cameraPending}
         t={t}
       />
       {/* null is "unknown" — not joined, not settled, connection down: no
@@ -531,7 +536,7 @@ export function Screen({
             <div className="order-2 min-w-0">
               {mine ? <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} t={t} /> : <SeatHeldNotice t={t} />}
             </div>
-            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} t={t} /> : null}
+            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} cameraPending={cameraRetryDue(state)} t={t} /> : null}
             <BackToFixture href={snap.links.fixture} className="order-7" t={t} />
             {cameraDuty ? (
               <div className="order-8">
@@ -573,6 +578,7 @@ export function Screen({
             checkingCamera={checkingCamera}
             cameraTest={cameraDuty && !snap.you.checkedIn ? { ...camTest, view: meetingJoined ? HANDED : camTest.view, onHandOver: handOver } : null}
             handover={handover}
+            cameraPending={cameraRetryDue(state)}
             onCheckIn={tryAgain}
             t={t}
             plural={plural}
@@ -675,7 +681,7 @@ export function Screen({
             ) : notice !== null ? (
               <MoveNoticeView kind={notice} className={notice === "invalid" ? "order-5" : "order-2"} t={t} />
             ) : null}
-            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} t={t} /> : null}
+            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} cameraPending={cameraRetryDue(state)} t={t} /> : null}
             <div data-testid="room-controls" className="order-7">
               <RoomControls
                 ply={plyOf(g)}

@@ -396,8 +396,26 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — taking the seat", () 
     const seat = vi.fn(async () => ({ seated: false as const, reason: "camera_required" as const, participant }));
     const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ seat: seat as never }));
     expect(c.seat).toEqual({ seated: false, reason: "camera_required", participant });
-    expect(seat).toHaveBeenCalledWith({ fixtureId: s.fixtureId, personId: s.home.personId }, { now });
+    expect(seat).toHaveBeenCalledWith({ fixtureId: s.fixtureId, personId: s.home.personId, heldParticipantId: null }, { now });
     expect((await rows(s.fixtureId)).availability, "a refused seat is not a check-in").toEqual([]);
+  });
+
+  it("D21-fix-3 (F1): the participant id the browser HOLDS rides to the seat; a browser that holds none sends none - and a second claim is told apart", async () => {
+    const s = await seed();
+    const seat = vi.fn(async () => ({ seated: false as const, reason: "camera_starting" as const, participant: null }));
+    let checked = 0;
+    for (const held of ["pt-held", null] as const) {
+      seat.mockClear();
+      await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ seat: seat as never }), { heldParticipantId: held });
+      expect(seat, `held ${held}`).toHaveBeenCalledWith({ fixtureId: s.fixtureId, personId: s.home.personId, heldParticipantId: held }, { now });
+      checked += 1;
+    }
+    // …and a claim made with no ask at all (the route's body was absent) holds nothing.
+    seat.mockClear();
+    await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ seat: seat as never }));
+    expect(seat).toHaveBeenCalledWith({ fixtureId: s.fixtureId, personId: s.home.personId, heldParticipantId: null }, { now });
+    checked += 1;
+    expect(checked, "anti-vacuity: held, none, no ask").toBe(3);
   });
 });
 

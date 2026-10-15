@@ -384,10 +384,12 @@ describe.skipIf(!process.env.DATABASE_URL)("readiness", () => {
     // Each seat is re-verified against THIS call's clock: the seat's window
     // check and creation's must read the same instant (T8 re-entry, D12).
     expect(preflight.seatPlayer).toHaveBeenCalledTimes(2);
+    // D21-fix-3 (F2a): and both as T9's RE-VERIFY (`recheck`) - the server reads the answer alone, so the seat mints nothing,
+    // hands no token and trusts a pass read a moment ago.
     expect(preflight.seatPlayer).toHaveBeenCalledWith(
-      { fixtureId: s.fixtureId, personId: s.home.personId }, { now: NOW });
+      { fixtureId: s.fixtureId, personId: s.home.personId, recheck: true }, { now: NOW });
     expect(preflight.seatPlayer).toHaveBeenCalledWith(
-      { fixtureId: s.fixtureId, personId: s.away.personId }, { now: NOW });
+      { fixtureId: s.fixtureId, personId: s.away.personId, recheck: true }, { now: NOW });
     noHttp();
   });
 

@@ -109,7 +109,8 @@ const EXEMPT: readonly Exemption[] = [
   },
   {
     file: "src/server/usecases/external-play/preflight.ts",
-    fn: "issuePlayerToken",
+    // D21-fix-3: the lock check moved with the mint into playerParticipant (issuePlayerToken now only adds the token).
+    fn: "playerParticipant",
     sites: 1,
     reason:
       "final re-review 2, R2-2: under the meeting row's lock, is this person still a member of one of the board's two entrants NOW — a video participant is stored only for the pairing the meeting was made for; who appeared is never asked, credits nothing",

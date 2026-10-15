@@ -26,8 +26,16 @@ export type ParticipantWire = { participantId: string; authToken: string };
 export type CameraFaultBody = { state: "start" | "end"; participantId: string };
 
 export type SeatAnswer =
-  | { seated: true; participant: ParticipantWire | null }
+  /** `cameraRetry` (D21-fix-3, owner decision): present, and true, ONLY when an optional camera was seated with no token
+   *  because the platform's RealtimeKit call budget was spent - a token can still come (`requestCamera`). Absent on
+   *  every other tokenless seat (camera Off, an organiser's video override): there the null is final, and no
+   *  inference from a null token may say otherwise. */
+  | { seated: true; participant: ParticipantWire | null; cameraRetry?: true }
   | { seated: false; reason: SeatRefusal; participant: ParticipantWire | null };
+
+/** The camera route's answer (`RoomCameraAnswer`, api-v1/schemas.ts): the token, or null; `retry` says whether to ask
+ *  again (the budget was spent again) or to stop (null and final: the policy, an override or a closed window). */
+export type CameraAnswer = { participant: ParticipantWire | null; retry: boolean };
 
 /** T9's `CreateOutcome` (create-game.ts), mirrored. */
 export type CreateAnswer =
@@ -52,7 +60,7 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; 
 
 export type Fetcher = typeof fetch;
 
-export function roomApiPath(fixtureId: string, tail: "" | "/act" | "/clock-zero" | "/camera-fault", token: string | null): string {
+export function roomApiPath(fixtureId: string, tail: "" | "/act" | "/clock-zero" | "/camera-fault" | "/camera", token: string | null): string {
   const q = token ? `?t=${encodeURIComponent(token)}` : "";
   return `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/room${tail}${q}`;
 }
@@ -79,8 +87,20 @@ export function fetchRoom(fixtureId: string, token: string | null, f: Fetcher = 
   return call<RoomSnapshot>(f, roomApiPath(fixtureId, "", token), { method: "GET" });
 }
 
-export function claimSeat(fixtureId: string, token: string | null, f: Fetcher = fetch) {
-  return call<RoomClaimAnswer>(f, roomApiPath(fixtureId, "", token), { method: "POST" });
+/** `heldParticipantId` (D21-fix-3, F1): the participant whose token this browser already holds. Sent so a claim the
+ *  server answers `camera_starting` need not hand over another (a vendor request the call budget would rather spend on
+ *  a read); a browser that holds none sends no body, which the server reads as "none held" and hands one. */
+export function claimSeat(fixtureId: string, token: string | null, heldParticipantId: string | null = null, f: Fetcher = fetch) {
+  return call<RoomClaimAnswer>(f, roomApiPath(fixtureId, "", token), {
+    method: "POST",
+    ...(heldParticipantId === null ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify({ heldParticipantId }) }),
+  });
+}
+
+/** D21-fix-3: an optional camera seated with no tile because the call budget was spent asks again for its token - and
+ *  only for that: no seat checks re-run, no check-in, no lobby ping, no game create. */
+export function requestCamera(fixtureId: string, token: string | null, f: Fetcher = fetch) {
+  return call<CameraAnswer>(f, roomApiPath(fixtureId, "/camera", token), { method: "POST" });
 }
 
 export function sendAct(fixtureId: string, token: string | null, action: RoomActBody, f: Fetcher = fetch) {

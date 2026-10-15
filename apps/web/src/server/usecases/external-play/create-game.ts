@@ -209,13 +209,17 @@ export async function createGameIfReady(
   const tc = playableTimeControl(f);
   if (!tc) return { created: false, reason: "unplayable" };
 
-  // Re-verified HERE, immediately before creating, and not read off a stored
-  // stamp: seatPlayer re-asks the meeting on every call, which is what makes
-  // a pass that went stale since preflight unable to let creation through
-  // (Review Focus 3). Both seats read THIS call's clock.
+  // Re-verified HERE, immediately before creating: seatPlayer re-asks the meeting, which is what makes a pass that went
+  // stale since preflight unable to let creation through (Review Focus 3). Both seats read THIS call's clock.
+  //
+  // D21-fix-3 (F2): `recheck` - nobody joins with this answer, so no token is minted or refreshed for it (D22: a token and
+  // three reads per player, twice a board, were the calls the budget deferred), and a camera read ON within
+  // SEAT_RECHECK_TRUST_MS stands (preflight.ts states the cost). A re-verify the budget could not afford is
+  // `camera_starting` -> "not ready" below, which writes NOTHING (a deferral is not a failure of the board and must not
+  // look like one: no last_error, no claim) - the sweep's mint retry (sweep.ts) creates the game on its next pass.
   const seats = await Promise.all([
-    seatPlayer({ fixtureId, personId: homePersonId }, { now }),
-    seatPlayer({ fixtureId, personId: awayPersonId }, { now }),
+    seatPlayer({ fixtureId, personId: homePersonId, recheck: true }, { now }),
+    seatPlayer({ fixtureId, personId: awayPersonId, recheck: true }, { now }),
   ]);
   // A seat refused on the grant keeps its name (an unlink between our gate
   // and the seat); every other seat refusal is "not ready yet".

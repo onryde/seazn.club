@@ -22,6 +22,14 @@ export const LOAD_LIMITS = {
  *  SEAT_RETRIES is not exported, so only the first is pinned - load-stats.test.ts). */
 export const CLIENT_SEAT = { maxPolls: 5, seatRetries: 3 } as const;
 
+/** D21-fix-3: how an optional camera seated with no token (the budget was spent) asks again - use-room.ts
+ *  CAMERA_RETRY_BASE_MS / CAMERA_RETRY_MAX_MS, the owner's "2/4/8/16 s, capped at about 30 s". The same copy-and-pin. */
+export const CLIENT_CAMERA_RETRY = { baseMs: 2_000, maxMs: 30_000 } as const;
+/** The wait before the `attempt`-th ask (0-based), typed from the ruling's schedule - not imported from the room. */
+export function cameraRetryWaitMs(attempt: number): number {
+  return Math.min(CLIENT_CAMERA_RETRY.baseMs * 2 ** Math.max(0, attempt), CLIENT_CAMERA_RETRY.maxMs);
+}
+
 /** Nearest-rank percentile: the smallest value with at least p% of the sample at or below it. Refuses an empty sample
  *  (a percentile of nothing would be a vacuous 0 in a report) and a p outside (0, 100]. */
 export function percentile(sample: readonly number[], p: number): number {

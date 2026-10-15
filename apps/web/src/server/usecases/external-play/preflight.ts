@@ -71,11 +71,14 @@ export const SEAT_REFUSAL_REASONS = [
 export type { GrantRefusal };
 
 export type SeatResult =
-  | { seated: true; participant: ParticipantToken | null }
-  | { seated: false; reason: Exclude<CameraRefusal, "camera_starting">; participant: ParticipantToken }
-  // D21: `camera_starting` is also what a DEFERRED request answers (the platform's RealtimeKit call budget was spent, so
-  // the claim could not look) — and the caller's token may not have been issued yet, or refreshed: null then.
-  | { seated: false; reason: "camera_starting"; participant: ParticipantToken | null }
+  // `cameraRetry` (D21-fix-3): an OPTIONAL camera seated with no token because the platform's call budget was spent - and
+  // for that alone. Absent on every other tokenless seat (camera Off, an organiser's override, a vendor outage, T9's
+  // re-verify): those are final, and the room must not read a missing token as "ask again".
+  | { seated: true; participant: ParticipantToken | null; cameraRetry?: true }
+  // The camera refusals carry the caller's own token - except where there is none to hand: a `camera_starting` answered
+  // to a browser that already holds this participant's (D21-fix-3, F1), one a deferral cut short (D21), and any answer to
+  // T9's re-verify (`recheck`), which nobody joins with.
+  | { seated: false; reason: CameraRefusal; participant: ParticipantToken | null }
   | {
       seated: false;
       reason:
@@ -130,10 +133,35 @@ export function isPlayableFixtureStatus(status: string): boolean {
   return status === "scheduled" || status === "in_play";
 }
 
-export async function seatPlayer(
-  a: { fixtureId: string; personId: string },
-  deps: PreflightDeps = {},
-): Promise<SeatResult> {
+/** Who is asking for a seat, and what they already have in hand.
+ *
+ *  D21-fix-3 (F1): `heldParticipantId` is the participant whose token the caller's browser already holds - the room sends
+ *  the id it holds with every claim. A claim answered `camera_starting` (a camera still coming up) hands such a browser
+ *  NO token: it keeps joining with the one it has, and a refresh is a vendor request the budget would rather spend on a
+ *  read. A browser that holds none (a first visit, a reload) or another participant's (a re-pair moved the seat) is
+ *  handed one on every answer. The id is a hint about what to SAVE, never an authority for anything: it is compared with
+ *  the participant on file, so naming someone else's gets nothing and costs only the caller their own token.
+ *
+ *  D21-fix-3 (F2): `recheck` is T9's re-verify, immediately before it creates the game. Its answer is read by the server
+ *  alone, so no token is ever handed (or minted) for it, and a pass of THIS participant's camera read within
+ *  SEAT_RECHECK_TRUST_MS stands without asking the vendor again. */
+export type SeatAsk = {
+  fixtureId: string;
+  personId: string;
+  heldParticipantId?: string | null;
+  recheck?: boolean;
+};
+
+/** D21-fix-3 (F2): how long a camera read as ON stands for T9's re-verify. Both players' check-ins read their camera, and
+ *  creating the game then asked the vendor about both again (a token and three reads each) - the calls that, under the
+ *  call budget, were deferred and stranded boards. Ten seconds covers the check-ins that arrive together; a board whose
+ *  first player has waited longer is read afresh. THE COST, stated: a camera that goes dark inside the window is seated
+ *  into a game it should not have started. The sweep's camera evidence catches it afterwards from the vendor's own peer
+ *  reports - `camera_lost`, a flag the organiser decides on (spec §5.2, D10) - exactly as it catches a camera that goes
+ *  dark one second after the game is created, which no re-verify can prevent. */
+export const SEAT_RECHECK_TRUST_MS = 10_000;
+
+export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<SeatResult> {
   const now = deps.now ?? new Date();
 
   const f = await loadOnlinePlayFixture(a.fixtureId);
@@ -185,6 +213,8 @@ export async function seatPlayer(
 
   const video = deps.video ?? REAL_VIDEO;
   if (policy === "optional") {
+    // T9's re-verify (D21-fix-3): an optional camera never blocks a seat, and nobody joins with the answer - no vendor call.
+    if (a.recheck) return { seated: true, participant: null };
     // Shown if the player grants camera; NEVER blocks a seat — not even when
     // RealtimeKit is down. The publisher is deliberately not asked: a question
     // whose answer is ignored is how a later refactor turns `optional` into
@@ -196,13 +226,14 @@ export async function seatPlayer(
       if (!(err instanceof RealtimeKitError)) throw err;
       // D21: a deferral (the call budget is spent) is not an outage, and is not reported as one.
       if (err instanceof RealtimeKitDeferred) {
-        // Seated with no tile: `seated: true` ends the room's polling, so the player sees no camera until they reload.
-        // Not an outage (nothing is wrong at the vendor) and not worth Sentry - but not silent either: this counts how
-        // often the platform's call budget costs a player their tile.
+        // Seated with no tile YET: the answer says so (`cameraRetry`), and the room asks for just the token on a back-off
+        // (cameraTokenForSeat, D21-fix-3) - without it a seated answer ends the room's polling and the player would have
+        // no camera until they reload. Not an outage (nothing is wrong at the vendor) and not worth Sentry - but not
+        // silent either: this counts how often the platform's call budget costs a player their tile at the seat.
         log.info({ fixtureId: a.fixtureId, orgId: f.orgId }, "seat: RealtimeKit call budget spent; optional camera seated with no tile");
-      } else {
-        reportOutage(err, f.orgId, a.fixtureId, policy);
+        return { seated: true, participant: null, cameraRetry: true };
       }
+      reportOutage(err, f.orgId, a.fixtureId, policy);
       return { seated: true, participant: null };
     }
   }
@@ -220,6 +251,37 @@ export async function seatPlayer(
     reportOutage(err, f.orgId, a.fixtureId, policy);
     return { seated: false, reason: "video_unavailable" };
   }
+}
+
+/** What the camera door answers (D21-fix-3): the caller's token if there is one to hand, and whether asking again can
+ *  still bring one. `retry: true` only while an OPTIONAL camera's token is being held back by the platform's call budget. */
+export type CameraToken = { participant: ParticipantToken | null; retry: boolean };
+
+/**
+ * D21-fix-3 (owner decision) - the token-only door for an OPTIONAL camera seated without one.
+ *
+ * A player seated under an optional camera when the platform's call budget was spent has `cameraRetry` on their seat
+ * answer and no tile. The seat route is the wrong door to ask again by: every claim stamps a check-in, publishes the lobby
+ * and may ask T9 for the game. This is the right one - the same seat, judged by the same rules, and then ONLY the token:
+ *
+ *   - only an OPTIONAL camera is ever asked again. Off has no camera; an organiser's override (D11) is the way round a
+ *     vendor that may be broken; a vendor outage is final (retrying every tab's back-off would hammer a vendor that is
+ *     down); and Required has its own door (its camera refusals carry the token). The policy is read FIRST, so a
+ *     Required seat never reaches the vendor from here;
+ *   - everything else is seatPlayer's, unchanged: a stranger, an abandoned board and a closed window are refused, and a
+ *     refusal is `retry: false`;
+ *   - each vendor request spends one token from the platform's bucket and a refused one spends none, so a spent budget
+ *     costs nothing to ask about, and the work that did get through (the meeting made, the participant stored) is kept for
+ *     the next ask.
+ */
+export async function cameraTokenForSeat(a: SeatAsk, deps: PreflightDeps = {}): Promise<CameraToken> {
+  if ((await fixtureCameraPolicy(a.fixtureId)) !== "optional") return { participant: null, retry: false };
+  // Not the caller's `recheck` or `heldParticipantId`: this door asks for a token, which is what a recheck never wants and
+  // what a held id would only save.
+  const seat = await seatPlayer({ fixtureId: a.fixtureId, personId: a.personId }, deps);
+  if (!seat.seated) return { participant: null, retry: false };
+  if (seat.participant) return { participant: seat.participant, retry: false };
+  return { participant: null, retry: seat.cameraRetry === true };
 }
 
 /** Controller ruling I1 (fix round 1, amending Q1): after the window, a
@@ -267,66 +329,106 @@ function isReentry(f: OnlinePlayFixture, player: SidePlayer): boolean {
  *  schedule (readSlot), not on every claim: a claim between reads is answered from what the last read found, judged
  *  against THIS claim's clock, so the answer never flaps either side of a read. And a request the platform's call budget
  *  refuses is `camera_starting` too — "we could not look", never "no camera" and never an outage. */
-async function verifyRequiredSeat(
-  a: { fixtureId: string; personId: string },
-  now: Date,
-  video: Video,
-): Promise<SeatResult> {
-  let participant: ParticipantToken | null = null;
+async function verifyRequiredSeat(a: SeatAsk, now: Date, video: Video): Promise<SeatResult> {
   try {
     const meeting = await video.ensureMeeting(a.fixtureId);
-    participant = await issuePlayerToken(a, meeting.meetingId, video);
-    const [prior] = await sql<{ last_publisher_seen_at: Date | null }[]>`
-      select last_publisher_seen_at from fixture_video_participants
-       where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
+    const have = await playerParticipant(a, meeting.meetingId, video, !a.recheck);
+    // T9's re-verify of a player who never joined: nothing was ever read for them and nobody will join with a token.
+    if (have === null) return { seated: false, reason: "camera_required", participant: null };
+    const { participantId, minted } = have;
 
-    const mine = { fixtureId: a.fixtureId, participantId: participant.participantId };
-    let camera: SeatCamera;
-    let cached = false;
-    if (await claimEvidenceRead(mine, now)) {
-      camera = await video.seatCameraEvidence({ meetingId: meeting.meetingId, participantId: participant.participantId });
-      await recordEvidence(mine, camera);
-    } else {
-      camera = await cachedEvidence(mine, now);
-      cached = true;
-    }
+    // D21-fix-3 (F1): ask the cache FIRST and spend a token LAST. A participant this very claim made cannot have been
+    // joined by a peer - nobody had its token - so there is no camera to read: the answer is the way in, and the claim
+    // costs the vendor the mint and nothing else.
+    const verdict: SeatVerdict =
+      minted !== null ? { seated: false, reason: "camera_required" } : await judgeSeat(a, { fixtureId: a.fixtureId, participantId }, meeting.meetingId, now, video);
 
-    if (camera.state === "blocked") return { seated: false, reason: "camera_blocked", participant };
-    if (camera.state === "starting" || camera.state === "unreadable") {
-      // Waited from the peer's OWN join; a vendor clock ahead of ours is a
-      // negative wait, which is still inside it.
-      const waited = now.getTime() - camera.since.getTime();
-      if (waited < CAMERA_EVIDENCE_DEADLINE_MS) return { seated: false, reason: "camera_starting", participant };
-      // Past the deadline an unreadable report is an outage. A claim answered from the cache says so without reporting it
-      // again: the read that found it already did.
-      if (camera.state === "unreadable") {
-        if (cached) return { seated: false, reason: "video_unavailable" };
-        throw camera.error;
-      }
+    if (verdict.seated === false && verdict.reason === "video_unavailable") return verdict;
+    // T9's re-verify is read by the server alone: no token, nobody joins with it.
+    if (a.recheck) return { ...verdict, participant: null };
+    // A camera still starting, asked by a browser that holds this participant's token: it keeps joining with it. Every
+    // other answer carries the token - a seat, a refused camera, and a browser that holds none - refreshed NOW, after the
+    // verdict, so a claim the budget cut short (or one the cache answered) has spent nothing on it.
+    if (verdict.seated === false && verdict.reason === "camera_starting" && a.heldParticipantId === participantId) {
+      return { ...verdict, participant: null };
     }
-    if (camera.state === "on") {
-      await sql`
-        update fixture_video_participants set last_publisher_seen_at = ${now}
-         where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
-      return { seated: true, participant };
-    }
-    // `last_publisher_seen_at` is EVIDENCE — when this participant was last
-    // verified live — and never a pass: nothing seats on it (every claim above
-    // re-asks the meeting) and nothing clears it. Clearing it on a loss (the
-    // brief's design) made a repeat claim with the camera still off answer
-    // camera_required, telling a player who HAD passed that they never had.
-    const hadPassed = prior?.last_publisher_seen_at != null;
-    return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required", participant };
+    const participant = minted ?? (await video.refreshParticipantToken({ meetingId: meeting.meetingId, participantId }));
+    return { ...verdict, participant };
   } catch (err) {
-    // D21: the call budget refused a request. The token we hold (if any) rides along so the caller's camera stays joined.
+    // D21: the call budget refused a request.
     if (err instanceof RealtimeKitDeferred) {
       // The only trace a deferral leaves: the request was never made and the player is told "starting". One line a
       // claim, so how often the platform's call budget holds a check-in back can be counted (D22).
       log.info({ fixtureId: a.fixtureId }, "seat: RealtimeKit call budget spent; the seat answered camera_starting, the player asks again");
-      return { seated: false, reason: "camera_starting", participant };
+      // No token: a deferral can only come before the claim has one - the mint is the claim's own token, and the refresh
+      // runs only after a verdict (a claim that minted makes no read, so a deferral never meets a minted token).
+      return { seated: false, reason: "camera_starting", participant: null };
     }
     throw err;
   }
+}
+
+/** What the camera's evidence says, before any token is attached to it. */
+type SeatVerdict =
+  | { seated: true }
+  | { seated: false; reason: CameraRefusal }
+  | { seated: false; reason: "video_unavailable" };
+
+/** The camera's verdict for a participant that has been on file since an earlier claim: a read the cache allows, or the
+ *  cache's word. May throw: a RealtimeKit failure (the outage path), a deferral (the budget). */
+async function judgeSeat(a: SeatAsk, mine: SeatRead, meetingId: string, now: Date, video: Video): Promise<SeatVerdict> {
+  const [prior] = await sql<{ last_publisher_seen_at: Date | null; seat_reads: number }[]>`
+    select last_publisher_seen_at, seat_reads from fixture_video_participants
+     where fixture_id = ${mine.fixtureId} and participant_id = ${mine.participantId}`;
+
+  // D21-fix-3 (F2): T9's re-verify trusts a pass read a moment ago, without a vendor call - provided no later read has
+  // left a not-yet verdict outstanding (`seat_reads > 0`: the camera restarted since). The pass is the stamp the seat
+  // itself wrote when it read the camera ON; a trusted pass writes nothing, so it can never make itself younger.
+  if (
+    a.recheck &&
+    prior?.last_publisher_seen_at != null &&
+    prior.seat_reads === 0 &&
+    Math.abs(now.getTime() - prior.last_publisher_seen_at.getTime()) <= SEAT_RECHECK_TRUST_MS
+  ) {
+    return { seated: true };
+  }
+
+  let camera: SeatCamera;
+  let cached = false;
+  if (await claimEvidenceRead(mine, now)) {
+    camera = await video.seatCameraEvidence({ meetingId, participantId: mine.participantId });
+    await recordEvidence(mine, camera);
+  } else {
+    camera = await cachedEvidence(mine, now);
+    cached = true;
+  }
+
+  if (camera.state === "blocked") return { seated: false, reason: "camera_blocked" };
+  if (camera.state === "starting" || camera.state === "unreadable") {
+    // Waited from the peer's OWN join; a vendor clock ahead of ours is a
+    // negative wait, which is still inside it.
+    const waited = now.getTime() - camera.since.getTime();
+    if (waited < CAMERA_EVIDENCE_DEADLINE_MS) return { seated: false, reason: "camera_starting" };
+    // Past the deadline an unreadable report is an outage. A claim answered from the cache says so without reporting it
+    // again: the read that found it already did.
+    if (camera.state === "unreadable") {
+      if (cached) return { seated: false, reason: "video_unavailable" };
+      throw camera.error;
+    }
+  }
+  if (camera.state === "on") {
+    await sql`
+      update fixture_video_participants set last_publisher_seen_at = ${now}
+       where fixture_id = ${mine.fixtureId} and participant_id = ${mine.participantId}`;
+    return { seated: true };
+  }
+  // `last_publisher_seen_at` is EVIDENCE — when this participant was last
+  // verified live — and never a pass: nothing seats on it (every claim above
+  // re-asks the meeting) and nothing clears it. Clearing it on a loss (the
+  // brief's design) made a repeat claim with the camera still off answer
+  // camera_required, telling a player who HAD passed that they never had.
+  const hadPassed = prior?.last_publisher_seen_at != null;
+  return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required" };
 }
 
 type SeatRead = { fixtureId: string; participantId: string };
@@ -399,13 +501,14 @@ async function cachedEvidence(r: SeatRead, now: Date): Promise<SeatCamera> {
   return { state: "starting", since: row.since ?? now };
 }
 
-/** THE one place a player's RealtimeKit token is issued — so the
- *  reuse-versus-regenerate policy lives here and nowhere else.
+/** THE one place a player's RealtimeKit participant is found or made - and with it the reuse-versus-regenerate policy,
+ *  which lives here and nowhere else.
  *
  *  ONE participant per player per fixture: the first claim mints it (its
- *  token comes with it); every later claim — a reload, a second tab, T9's
- *  freshness check — REGENERATES a token for that same participant, so peer
- *  discovery stays on one `user_id`. Measured 2026-10-09
+ *  token comes with it, `minted`); every later claim - a reload, a second tab, T9's
+ *  freshness check - finds that same participant, so peer discovery stays on one
+ *  `user_id`, and REGENERATES a token for it only when its answer needs one (issuePlayerToken; verifyRequiredSeat decides
+ *  after the verdict). Measured 2026-10-09
  *  (rtk-token-regen.log): a regenerated token is a different JWT and does not
  *  invalidate the earlier one, so a second tab does not knock out the first.
  *  Tokens are never stored: a token at rest is a token to leak.
@@ -416,14 +519,17 @@ async function cachedEvidence(r: SeatRead, now: Date): Promise<SeatCamera> {
  *  (an open transaction across an HTTP call holds the lock for the round
  *  trip), then, under a short `for update` on the meeting row, store ours
  *  only if nobody stored one first. The loser's minted participant is never
- *  stored and never handed out; the loser gets a token for the winner's. */
-async function issuePlayerToken(
-  a: { fixtureId: string; personId: string },
-  meetingId: string,
-  video: Video,
-): Promise<ParticipantToken> {
+ *  stored and never handed out; the loser finds the winner's (`minted` is null for it).
+ *
+ *  `mint: false` (T9's re-verify): a player with no participant is `null` - nothing is minted, because nobody would
+ *  join with the token. */
+type HaveParticipant = { participantId: string; minted: ParticipantToken | null };
+async function playerParticipant(a: SeatAsk, meetingId: string, video: Video, mint: true): Promise<HaveParticipant>;
+async function playerParticipant(a: SeatAsk, meetingId: string, video: Video, mint: boolean): Promise<HaveParticipant | null>;
+async function playerParticipant(a: SeatAsk, meetingId: string, video: Video, mint: boolean): Promise<HaveParticipant | null> {
   const stored = await storedPlayerParticipant(sql, a);
-  if (stored) return video.refreshParticipantToken({ meetingId, participantId: stored });
+  if (stored) return { participantId: stored, minted: null };
+  if (!mint) return null;
 
   const minted = await video.addParticipant({ meetingId, subject: a.personId, preset: "player" });
   const kept = await sql.begin(async (tx) => {
@@ -447,8 +553,13 @@ async function issuePlayerToken(
       values (${a.fixtureId}, ${a.personId}, 'player', ${minted.participantId})`;
     return minted.participantId;
   });
-  if (kept === minted.participantId) return minted;
-  return video.refreshParticipantToken({ meetingId, participantId: kept });
+  return { participantId: kept, minted: kept === minted.participantId ? minted : null };
+}
+
+/** The caller's token for their participant: the one a first claim minted, else a regenerated one. */
+async function issuePlayerToken(a: SeatAsk, meetingId: string, video: Video): Promise<ParticipantToken> {
+  const have = await playerParticipant(a, meetingId, video, true);
+  return have.minted ?? video.refreshParticipantToken({ meetingId, participantId: have.participantId });
 }
 
 /** R2-2: the board was re-paired, or its meeting replaced, while this seat minted a participant. Nothing was stored;

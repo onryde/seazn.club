@@ -5,8 +5,9 @@
 // half-open window as closed, or a percentile that rounded the wrong way, would put a wrong number in a report that
 // decides whether the platform's vendor budget holds.
 import { describe, expect, it } from "vitest";
-import { CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "../../../../e2e/load/load-stats";
+import { CLIENT_CAMERA_RETRY, CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitMs, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "../../../../e2e/load/load-stats";
 import { CAMERA_EVIDENCE_MAX_POLLS } from "../../../components/public-site/match-room/room-snapshot";
+import { CAMERA_RETRY_BASE_MS, CAMERA_RETRY_MAX_MS, cameraRetryDelayMs } from "../../../components/public-site/match-room/use-room";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S, RTK_BUDGET_WINDOW_MS, RTK_CALLS_PER_WINDOW, RTK_VENDOR_LIMIT_PER_WINDOW } from "../video/budget";
 
 describe("percentile (nearest-rank)", () => {
@@ -158,5 +159,18 @@ describe("CLIENT_SEAT: the player the load test models stops polling where the r
   it("the poll bound is the room's own CAMERA_EVIDENCE_MAX_POLLS (a runner cannot import it into a Playwright file, so the copy is pinned here)", () => {
     expect(CLIENT_SEAT.maxPolls).toBe(CAMERA_EVIDENCE_MAX_POLLS);
     expect(CLIENT_SEAT.maxPolls, "anti-vacuity: a real bound").toBeGreaterThan(0);
+  });
+});
+
+describe("CLIENT_CAMERA_RETRY: the load test's optional-camera player asks for its token on the room's own schedule (D21-fix-3)", () => {
+  it("the base and the cap are the room's (copied because a Playwright file cannot import a client hook), and every attempt waits the same", () => {
+    expect(CLIENT_CAMERA_RETRY).toEqual({ baseMs: CAMERA_RETRY_BASE_MS, maxMs: CAMERA_RETRY_MAX_MS });
+    let checked = 0;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      expect(cameraRetryWaitMs(attempt), `attempt ${attempt}`).toBe(cameraRetryDelayMs(attempt));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(12);
+    expect([0, 1, 2, 3, 4].map(cameraRetryWaitMs), "the ruling's 2/4/8/16 s then the ~30 s cap").toEqual([2_000, 4_000, 8_000, 16_000, 30_000]);
   });
 });

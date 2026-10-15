@@ -11,8 +11,8 @@
 //   - the player's own seat, act and clock-zero calls.
 // The token in `?t=` rides every call; with none, the session cookie does.
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { claimSeat, fetchRoom, sendAct, sendClockZero, type RoomActBody, type RoomClaimAnswer } from "./room-api";
-import { initialRoomState, parseRoomBroadcast, plyOf, roomReducer } from "./room-state";
+import { claimSeat, fetchRoom, requestCamera, sendAct, sendClockZero, type ApiResult, type CameraAnswer, type RoomActBody, type RoomClaimAnswer } from "./room-api";
+import { cameraRetryDue, initialRoomState, parseRoomBroadcast, plyOf, roomReducer } from "./room-state";
 import type { RoomSnapshot } from "./room-snapshot";
 
 export const LIVE_POLL_MS = 3_000;
@@ -29,6 +29,27 @@ export const LOBBY_CHANGED_EVENT = "lobby_changed";
 export const CLOCK_ZERO_SPACING_MS = 3_000;
 /** T17B fix 2, D11 (controller ruling): the longest gap between two reports for one (game, ply). */
 export const CLOCK_ZERO_MAX_SPACING_MS = 30_000;
+
+/** D21-fix-3 (owner decision): an optional camera seated with no tile because the call budget was spent asks for its token
+ *  again - 2, 4, 8, 16 s, then every 30 s - until it holds one, the game finishes, or the server says stop. The budget
+ *  refills at two calls a second, so the first asks usually land; the cap keeps a long outage to a call every half minute. */
+export const CAMERA_RETRY_BASE_MS = 2_000;
+export const CAMERA_RETRY_MAX_MS = 30_000;
+/** The wait before the `attempt`-th ask (0-based). */
+export function cameraRetryDelayMs(attempt: number): number {
+  return Math.min(CAMERA_RETRY_BASE_MS * 2 ** Math.min(Math.max(attempt, 0), 16), CAMERA_RETRY_MAX_MS);
+}
+
+/** What the room does with one answer from the camera door (D21-fix-3):
+ *  - `done`: a token came, or the server said stop (`retry: false`) - nothing more to ask;
+ *  - `final`: the request itself is refused in a way that will answer the same again (not a player, not found, not
+ *    signed in) - the null is final, and the room stays quiet;
+ *  - `later`: the budget is still spent (`retry: true`), the rate limit (429), the network or a 5xx - ask again on the
+ *    back-off. */
+export function cameraAskOutcome(r: ApiResult<CameraAnswer>): "done" | "final" | "later" {
+  if (r.ok) return r.data.participant !== null || !r.data.retry ? "done" : "later";
+  return r.status >= 400 && r.status < 500 && r.status !== 429 ? "final" : "later";
+}
 
 export type ClockZeroReport = { key: string; attempts: number; at: number };
 
@@ -162,7 +183,9 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
   const claim = useCallback(async (): Promise<RoomClaimAnswer | null> => {
     if (stateRef.current.pending !== null) return null;
     dispatch({ type: "seat_sent" });
-    const r = await claimSeat(fixtureId, token);
+    // The participant whose token this browser holds, if any (D21-fix-3, F1): the room keeps it across a
+    // `camera_starting` answer (roomReducer), so the server need not hand it over again.
+    const r = await claimSeat(fixtureId, token, stateRef.current.seat?.participant?.participantId ?? null);
     if (!r.ok) {
       dispatch({ type: "seat_failed", status: r.status, code: r.code });
       return null;
@@ -170,6 +193,37 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
     dispatch({ type: "seat_answered", answer: r.data, receivedAt: Date.now() });
     return r.data;
   }, [fixtureId, token]);
+
+  // ── camera token, asked again (D21-fix-3) ───────────────────────────────
+  // The seat said, explicitly, that an optional camera has no token YET (the platform's call budget was spent): ask for
+  // just the token, on a bounded back-off, until it comes or the server says stop. No seat call is repeated.
+  const retrying = cameraRetryDue(state);
+  useEffect(() => {
+    if (!retrying) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const ask = async () => {
+      const r = await requestCamera(fixtureId, token);
+      if (cancelled) return;
+      if (r.ok) dispatch({ type: "camera_answered", answer: r.data });
+      // A token, or a final null, ends `retrying` and with it this effect; anything else - a refusal by the budget, a
+      // network error - asks again later.
+      const outcome = cameraAskOutcome(r);
+      if (outcome === "done") return;
+      if (outcome === "final") {
+        dispatch({ type: "camera_answered", answer: { participant: null, retry: false } });
+        return;
+      }
+      attempt += 1;
+      timer = setTimeout(() => void ask(), cameraRetryDelayMs(attempt));
+    };
+    timer = setTimeout(() => void ask(), cameraRetryDelayMs(0));
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [retrying, fixtureId, token]);
 
   // ── act ────────────────────────────────────────────────────────────────
   // Every answer re-reads: the read says what the board now is. A failed or

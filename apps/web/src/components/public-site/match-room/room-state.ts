@@ -14,7 +14,7 @@
 //   - polling, once stopped (online chess off for the club, or the room not
 //     found), stays stopped — T20 re-review n1: with the flag off, every read
 //     re-runs token, seat and Lichess reads, so the poll must stop on it.
-import type { RoomActAnswer, RoomActBody, RoomClaimAnswer, SeatAnswer } from "./room-api";
+import type { CameraAnswer, RoomActAnswer, RoomActBody, RoomClaimAnswer, SeatAnswer } from "./room-api";
 import { optimisticAfterDrop, type OptimisticClock } from "./clock-math";
 import { ROOM_BEING_REPAIRED, type Colour, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 
@@ -115,6 +115,8 @@ export type RoomEvent =
   | { type: "seat_sent" }
   | { type: "seat_answered"; answer: RoomClaimAnswer; receivedAt: number }
   | { type: "seat_failed"; status: number; code?: string | null }
+  /** D21-fix-3: the camera route's answer for an optional seat that was seated with no token (the budget was spent). */
+  | { type: "camera_answered"; answer: CameraAnswer }
   /** `at` is the sender's wall clock (Date.now()) when the act was sent: the reducer stays pure, so the instant arrives
    *  with the event, and the viewer's skew turns it into the server's clock. */
   | { type: "act_sent"; action: RoomActBody; at: number }
@@ -127,6 +129,18 @@ import { plyOf, plyOfFen } from "./ply";
 
 function stopsPolling(snap: RoomSnapshot): boolean {
   return snap.onlineChessOff;
+}
+
+/** D21-fix-3 (owner decision): whether the room should keep asking for the camera token. ONLY when the server said so,
+ *  explicitly (`cameraRetry`: an optional camera seated with no token because the call budget was spent) - never inferred
+ *  from a null token, which for Off and for an organiser's video override is final. Stops once a token is held, the
+ *  policy is no longer optional, or the game is over. */
+export function cameraRetryDue(s: RoomState): boolean {
+  const seat = s.seat;
+  if (seat === null || !seat.seated || seat.cameraRetry !== true || seat.participant !== null) return false;
+  if (s.snap.cameraPolicy !== "optional") return false;
+  if (s.snap.result !== null) return false;
+  return !(s.snap.game !== null && s.snap.game.over);
 }
 
 export function initialRoomState(snap: RoomSnapshot, receivedAt: number, grantRefused = false): RoomState {
@@ -233,13 +247,24 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       // D21: `camera_starting` with no token is the platform's RealtimeKit call budget being spent before the server could
       // refresh one — "not yet", never "no camera". The camera has already joined with the token the room holds, so the
       // answer keeps it (and ONLY this answer does: every other tokenless answer means there is none).
+      // D21-fix-3: the same for an optional camera seated with no token because the budget was spent (`cameraRetry`): the
+      // claim could not look, so a token the room already holds stays (and then nothing is owed - cameraRetryDue).
       const heldToken = s.seat?.participant ?? null;
-      const seat =
-        e.answer.seat !== null && !e.answer.seat.seated && e.answer.seat.reason === "camera_starting" && e.answer.seat.participant === null
-          ? { ...e.answer.seat, participant: heldToken }
-          : e.answer.seat;
+      const a = e.answer.seat;
+      const couldNotLook =
+        a !== null && a.participant === null && (a.seated ? a.cameraRetry === true : a.reason === "camera_starting");
+      const seat = couldNotLook ? { ...a, participant: heldToken } : a;
       const relink = seat !== null && !seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required");
       return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false };
+    }
+    case "camera_answered": {
+      // Only the seat that asked is changed: a seat that has since been refused, or replaced by a claim that carried its
+      // own token, is not this answer's to rewrite.
+      if (s.seat === null || !s.seat.seated || s.seat.cameraRetry !== true) return s;
+      if (e.answer.participant !== null) return { ...s, seat: { seated: true, participant: e.answer.participant } };
+      // Null and final: the policy changed, an override was pressed, the window closed - stop asking, and stay quiet.
+      if (!e.answer.retry) return { ...s, seat: { seated: true, participant: null } };
+      return s;
     }
     case "seat_failed":
       return {
