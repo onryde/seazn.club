@@ -354,7 +354,7 @@
     "files": [
      "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
     ],
-    "name": "covers every permanently-refusing 4xx status"
+    "name": "gives every terminal conflict refusal"
    }
   ]
  },

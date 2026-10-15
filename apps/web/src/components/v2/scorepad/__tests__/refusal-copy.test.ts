@@ -19,7 +19,7 @@ import nl from "@/dictionaries/nl/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
 import { matchRef } from "@/lib/slot-label";
 import { REFUSAL_FALLBACK, REFUSAL_KEY, refusalText } from "../refusal-copy";
-import { CHROME_TERMINAL_CODES, isPermanentRefusal } from "../transport";
+import { CHROME_TERMINAL_CODES, TERMINAL_CONFLICT_CODES, isPermanentRefusal } from "../transport";
 
 const identityMsg = ((key: string) => key) as MsgFn;
 const dict = en as Record<string, string>;
@@ -72,6 +72,20 @@ describe("refusalText", () => {
     expect(refusalText({ code: "RESULT_CARRIED_FORWARD", message: "server prose" }, identityMsg)).toBe(
       "scorepad.refusal.carriedForward",
     );
+  });
+
+  // W2c Task 15: a terminal 409 is DROPPED from the queue (`TERMINAL_CONFLICT_CODES`), so its line is the only thing
+  // that tells the scorer the tap did not land — each one reads its own words (the engine's or the pad's), never the
+  // generic fallback. FIXTURE_RULES_CHANGED is the one the rules check added.
+  it("gives every terminal conflict refusal (dropped, never resent) its own words, not the fallback (counted)", () => {
+    let checked = 0;
+    for (const code of TERMINAL_CONFLICT_CODES) {
+      expect(refusalText({ code, message: "server prose" }, identityMsg), `${code} reads the fallback`).not.toBe(REFUSAL_FALLBACK);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the terminal set was read").toBe(TERMINAL_CONFLICT_CODES.size);
+    expect(checked).toBeGreaterThan(0);
+    expect(refusalText({ code: "FIXTURE_RULES_CHANGED", message: "server prose" }, identityMsg)).toBe("scorepad.refusal.rulesChanged");
   });
 
   it("gives an unknown code the generic fallback rather than the server's string", () => {
