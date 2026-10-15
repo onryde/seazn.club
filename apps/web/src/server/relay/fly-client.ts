@@ -88,6 +88,19 @@ export type Machine = z.infer<typeof MachineSchema>;
 export const WaitResultSchema = z.object({ ok: z.boolean().optional(), state: z.string().optional(), event_id: z.string().optional(), version: z.string().optional() }).passthrough();
 export type WaitResult = z.infer<typeof WaitResultSchema>;
 
+/** Fly's spelling of a duration, for the two places one crosses the wire: the stop request's `timeout` and the Machine
+ *  config's `stop_config.timeout`. The docs type the second as an integer of NANOSECONDS ("How long in nanoseconds to wait,
+ *  after signaling the entrypoint process, before hard-shutdown of the Machine"), and Fly accepts one — but MEASURED
+ *  (R2004 PR 0 live probe, 2026-10-15, app seazn-relay-spike): `timeout: 20_000_000_000` came back from both the create
+ *  response and a GET as `"20s"`, while `"20s"` came back as `"20s"`. Only the string round-trips, so it is the one form
+ *  sent, and fly-client.live.test.ts leg 5 re-reads it. Whole seconds ≥ 1 only: a grace that is not one is a config bug,
+ *  and "0s" / "NaNs" / "1.5s" would reach Fly as a kill sooner than the grace or a 400 — refused here, by name. */
+export type FlyDuration = `${number}s`;
+export function flyDuration(seconds: number): FlyDuration {
+  if (!Number.isSafeInteger(seconds) || seconds < 1) throw new RangeError(`fly: a duration is a whole number of seconds ≥ 1, not ${seconds}`);
+  return `${seconds}s`;
+}
+
 export interface MachineCreateInput {
   name: string; region: string;
   config: {
@@ -95,6 +108,11 @@ export interface MachineCreateInput {
     // R2003: the adapter sends on-failure with a bound (runner-fly.ts, ADR 0004; runner-fly.test.ts pins the body). "no"
     // stays for the client's own live probes, whose throwaway Machines must not be restarted. Never "always".
     auto_destroy: true; restart: { policy: "no" } | { policy: "on-failure"; max_retries: number }; env: Record<string, string>;
+    /** R2004 PR 0 (docs.fly.io/machines/api/machines-resource, "Machine `config` object properties"): the signal and the
+     *  wait before SIGKILL for a stop that does not name its own — every stop Fly itself starts. Both default to nil, and
+     *  then Fly uses SIGINT with a 5 s timeout (`kill_signal` / `kill_timeout`, docs.fly.io/reference/configuration).
+     *  Optional: the client's own live probes create without it; the adapter always sends it (runner-fly.test.ts). */
+    stop_config?: { signal: "SIGINT" | "SIGTERM"; timeout: FlyDuration };
     /** The session key is REQUIRED, not merely conventional: it is the only thing
      *  `createMachine`'s ambiguity lookup can find the Machine by, and a create
      *  that cannot be looked up cannot report a trustworthy `retryable` (C1).
@@ -461,13 +479,17 @@ export class FlyClient {
   }
 
   /** The stop sequence's first step: POST /machines/{id}/stop { signal, timeout }
-   *  (spec: signal defaults to SIGINT; timeout is seconds before SIGKILL). 404
-   *  and an already-stopped Machine are success — the caller observes. */
+   *  (docs.fly.io/machines/api/machines-resource, "Stop a Machine": `signal` "Signal to stop the Machine with. (default:
+   *  SIGINT)", `timeout` "Seconds to wait before sending SIGKILL"). 404 and an already-stopped Machine are success — the
+   *  caller observes. The signal is REQUIRED here on purpose (R2004 PR 0): a stop that names none gets the Machine's
+   *  `stop_config.signal` instead (measured, fly-client.live.test.ts leg 5), which on ours is the PLATFORM's SIGTERM. The
+   *  duration is spelled before the first attempt, so a refused one never reaches Fly and is never retried. */
   async stopMachine(id: string, opts: { signal: "SIGINT" | "SIGTERM"; timeoutSeconds: number }): Promise<void> {
     const meta: CallMeta = { operation: "stopMachine", ids: [id], subjectId: id };
+    const timeout = flyDuration(opts.timeoutSeconds);
     await this.withRetry(async (attempt) => {
       try {
-        await this.once("POST", `/machines/${encodeURIComponent(id)}/stop`, { signal: opts.signal, timeout: `${opts.timeoutSeconds}s` }, null, attempt, meta);
+        await this.once("POST", `/machines/${encodeURIComponent(id)}/stop`, { signal: opts.signal, timeout }, null, attempt, meta);
       } catch (e) {
         if (e instanceof FlyApiError && e.status === 404) return;
         throw e;

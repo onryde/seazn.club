@@ -13,9 +13,10 @@
 // (performance-4x / 8 GB), auto_destroy: true, restart.policy "on-failure" with
 // max_retries RUNNER_INPLACE_RESTARTS (R2003, ADR 0004: a crashed compositor is
 // restarted IN PLACE, the same Machine and the same attempt — never a second
-// Machine, so never two compositors on one stream key), the deterministic
-// attempt-carrying name and the session metadata (the client's idempotency), and
-// RELAY_DEADLINE_AT (the Machine-side hard stop). The adapter is tested through a
+// Machine, so never two compositors on one stream key), stop_config { SIGTERM,
+// the grace } (R2004 PR 0, coordinator decision I4: a stop the PLATFORM starts),
+// the deterministic attempt-carrying name and the session metadata (the client's
+// idempotency), and RELAY_DEADLINE_AT (the Machine-side hard stop). The adapter is tested through a
 // FlyClient whose fetch is scripted — the retry/redaction claims are the client's
 // own tests; what is proved here is that `FlyRunner` routes through them.
 import { describe, expect, it, vi } from "vitest";
@@ -187,6 +188,10 @@ describe("FlyRunner", () => {
         auto_destroy: true,
         // R2003 (ADR 0004 / 0007): Fly restarts a crashed compositor in place, at most RUNNER_INPLACE_RESTARTS times
         restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
+        // R2004 PR 0 (coordinator decision I4): a stop FLY starts (deploy, `fly machine stop`, host work) arrives as SIGTERM
+        // — C06 drains at once — and waits the whole grace before SIGKILL, not Fly's 5 s kill_timeout. The timeout is the
+        // spelling that round-trips (live probe 2026-10-15: 20_000_000_000 ns is accepted and read back as "20s").
+        stop_config: { signal: "SIGTERM", timeout: `${RUNNER_STOP_GRACE_SECONDS}s` },
         env: { SESSION_ID: SPEC.sessionId, JOB_TOKEN: "jwt-SECRET", APP_URL: "https://seazn.club", RELAY_DEADLINE_AT: "2026-09-14T15:00:00.000Z" },
         // I1: the environment that created it rides in the metadata — the sweep's only licence to destroy it later
         metadata: { [SESSION_METADATA_KEY]: SPEC.sessionId, [ENV_METADATA_KEY]: "stg" },
@@ -259,6 +264,69 @@ describe("FlyRunner", () => {
     // `failReasonFromExit` ignores it — so the consumer side stays owed by Task 10.
     expect(await runner.observe("m_1")).toEqual({ state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true }, restarting: false, restartingSince: null, restartCount: null });
     expect(await runner.observe("m_gone")).toEqual({ state: "destroyed", exit: null, restarting: false, restartingSince: null, restartCount: null });
+  });
+
+  // R2004 PR 0 (coordinator decision I4): OUR stop is SIGINT, so C06 holds the Final scene; a stop Fly starts is SIGTERM
+  // (the create's stop_config), so C06 drains at once. Driven from the domain's own STOP effect — the producer — through
+  // the adapter to the wire, the way stream-sessions.ts's `stop_machine` arm hands it over ({ signal, timeoutSeconds }).
+  // The empty case first: a runner with no Machine yet (`creating`) owes NO signal stop — the create's return tears it down.
+  it("R2004 PR 0: our stop, from the domain's STOP effect to the wire — booting or playing × the organiser's stop or the deadline POSTs { signal: SIGINT, timeout: <grace>s } once; a second stop sends nothing; creating sends none", async () => {
+    const T = new Date("2026-10-15T20:00:00Z");
+    let checked = 0;
+    for (const state of ["creating", "booting", "playing"] as const) {
+      for (const trigger of [{ type: "session_stop" }, { type: "deadline" }] as const) {
+        const s = scripted(() => ({ status: 200 }));
+        const runner = new FlyRunner({ client: s.client, image: "img" });
+        const r = { state, attempt: 1, name: NAME, machineId: state === "creating" ? null : "m_1", stopRequestedAt: null, lastExit: null };
+        const first = stepRunner(r, trigger, T);
+        const stops = first.effects.flatMap((e) => (e.type === "stop_machine" ? [e] : []));
+        for (const e of stops) await runner.stop("m_1", { signal: e.signal, timeoutSeconds: e.timeoutSeconds });
+        // the second stop (and a deadline after it) on the runner the first one left: no effect, so no second POST
+        for (const again of [{ type: "session_stop" }, { type: "deadline" }] as const) {
+          const second = stepRunner(first.next, again, new Date(T.getTime() + 1_000));
+          expect(second.effects.filter((e) => e.type === "stop_machine"), `${state} × ${trigger.type} → ${again.type}`).toEqual([]);
+        }
+        const label = `${state} × ${trigger.type}`;
+        if (state === "creating") {
+          expect(stops, label).toEqual([]);
+          expect(s.calls, label).toEqual([]);
+        } else {
+          expect(first.next.state, label).toBe("stopping");
+          expect(s.calls.map((c) => c.url), label).toEqual([`${FLY_MACHINES_BASE}/apps/seazn-relay/machines/m_1/stop`]);
+          expect(JSON.parse(String(s.calls[0]!.init.body)), label).toEqual({ signal: "SIGINT", timeout: `${RUNNER_STOP_GRACE_SECONDS}s` });
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  // Fly falls back to stop_config.signal for a stop that names NO signal (live probe 2026-10-15, seazn-relay-spike: a Machine
+  // created with stop_config SIGTERM and trapping INT→3 / TERM→4 exited 3 on `POST /stop {signal: "SIGINT"}` and 4 on
+  // `POST /stop {}`). So the explicit signal is load-bearing on EVERY attempt of our stop: one that dropped it would arrive
+  // as SIGTERM and the Final card would never show.
+  it("R2004 PR 0: the platform's stop vs ours — the create's stop_config names SIGTERM, and our stop names SIGINT explicitly on every attempt (a retried stop too), both with the grace", async () => {
+    let stopPosts = 0;
+    const s = scripted((url) => {
+      if (url.endsWith("/stop")) return ++stopPosts === 1 ? { status: 503, body: { error: "busy" } } : { status: 200 };
+      return { status: 200, body: { id: "m_1", name: NAME, state: "created" } };
+    });
+    const runner = new FlyRunner({ client: s.client, image: "img" });
+    await runner.create(SPEC);
+    const platform = (JSON.parse(String(s.calls[0]!.init.body)) as { config: { stop_config: { signal: string; timeout: string } } }).config.stop_config;
+    expect(platform).toEqual({ signal: "SIGTERM", timeout: `${RUNNER_STOP_GRACE_SECONDS}s` });
+    const effect = stepRunner({ state: "playing", attempt: 1, name: NAME, machineId: "m_1", stopRequestedAt: null, lastExit: null }, { type: "session_stop" }, new Date(0))
+      .effects.find((e) => e.type === "stop_machine");
+    if (effect?.type !== "stop_machine") throw new Error("premise: playing × session_stop issues the STOP effect");
+    await runner.stop("m_1", { signal: effect.signal, timeoutSeconds: effect.timeoutSeconds });
+    const ours = s.calls.filter((c) => c.url.endsWith("/stop")).map((c) => JSON.parse(String(c.init.body)) as Record<string, unknown>);
+    expect(ours, "the 503 was retried — two attempts on the wire").toHaveLength(2);
+    for (const [i, body] of ours.entries()) {
+      expect(Object.hasOwn(body, "signal"), `attempt ${i + 1} names its signal`).toBe(true);
+      expect(body, `attempt ${i + 1}`).toEqual({ signal: "SIGINT", timeout: `${RUNNER_STOP_GRACE_SECONDS}s` });
+      expect(body.signal, `attempt ${i + 1}: ours is not the platform's`).not.toBe(platform.signal);
+      expect(body.timeout, `attempt ${i + 1}: one grace for both stops`).toBe(platform.timeout);
+    }
   });
 
   it("a DESTROYED Machine answers GET 200, not 404 (C1, measured) — observe still reads its exit off the events", async () => {

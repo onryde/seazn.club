@@ -6,7 +6,7 @@
 // exactly Retry-After"; drop the pre-retry lookup → "timeout then lookup";
 // drop the redaction → "redaction"; treat destroy 404 as an error → "destroy".
 import { describe, expect, it, vi } from "vitest";
-import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, exitInfoFrom, isRetryable, redact } from "../fly-client";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, exitInfoFrom, flyDuration, isRetryable, redact } from "../fly-client";
 import type { MachineCreateInput } from "../fly-client";
 import { ENDING_TIMEOUT_SECONDS, PROVISION_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { FakeRecorder } from "../fakes";
@@ -334,6 +334,37 @@ describe("FlyClient — the lifecycle endpoints (stop, signal, events)", () => {
     expect(JSON.parse(String(r.calls[0]!.init.body))).toEqual({ signal: "SIGINT", timeout: "10s" });
     await expect(r.client.stopMachine("m_gone", { signal: "SIGINT", timeoutSeconds: 10 })).resolves.toBeUndefined();
     await expect(r.client.stopMachine("m_bad", { signal: "SIGINT", timeoutSeconds: 10 })).rejects.toBeInstanceOf(FlyApiError);
+  });
+  // R2004 PR 0: ONE spelling for a duration on the wire — the stop's `timeout` and the config's `stop_config.timeout`. The
+  // form is the MEASURED one (live probe 2026-10-15, seazn-relay-spike): `stop_config.timeout: 20_000_000_000` (the docs'
+  // nanoseconds) was accepted and read back as "20s"; "20s" read back as "20s". Only the second round-trips.
+  it("flyDuration spells whole seconds as Fly reads them back (\"20s\"); anything else is refused BEFORE a request leaves", async () => {
+    expect(flyDuration(20)).toBe("20s");
+    expect(flyDuration(1)).toBe("1s");
+    let refused = 0;
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => flyDuration(bad), String(bad)).toThrow(RangeError);
+      refused++;
+    }
+    expect(refused).toBe(5);
+    // …and the stop routes through it: a grace no whole second spells never reaches Fly as "NaNs" or "0s".
+    const r = rig([]);
+    await expect(r.client.stopMachine("m_1", { signal: "SIGINT", timeoutSeconds: 0 })).rejects.toThrow(RangeError);
+    expect(r.calls).toHaveLength(0);
+  });
+  it("createMachine sends stop_config exactly as given — the adapter's own body (runner-fly.test.ts pins what it sends)", async () => {
+    const r = rig([{ status: 200, body: { id: "m_1", name: "relay-s-r1", state: "created" } }]);
+    const input: MachineCreateInput = {
+      name: "relay-s-r1", region: "lhr",
+      config: {
+        image: "img", guest: { cpus: 1, memory_mb: 256, cpu_kind: "shared" }, auto_destroy: true, restart: { policy: "no" }, env: {},
+        stop_config: { signal: "SIGTERM", timeout: flyDuration(20) }, metadata: { seazn_session: "s" },
+      },
+    };
+    await r.client.createMachine(input);
+    const sent = JSON.parse(String(r.calls[0]!.init.body)) as MachineCreateInput;
+    expect(sent).toEqual(input);
+    expect(sent.config.stop_config).toEqual({ signal: "SIGTERM", timeout: "20s" });
   });
   it("signalMachine POSTs the spec's enum value", async () => {
     const r = rig([{ status: 200 }]);
