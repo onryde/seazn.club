@@ -16,6 +16,8 @@ import {
   GUARDED_WRITE_MODES,
   buildCorpus,
   REFORMAT_GOLDEN,
+  corpusWriteRefusal,
+  corpusWriteVerdict,
   corpusFormat,
   corpusStateDiff,
   extendCorpus,
@@ -27,16 +29,22 @@ import {
   recomputeStream,
   storedFields,
   verifyStream,
+  writeRefusal,
   type GoldenCorpus,
   type GoldenEvent,
   type GoldenStream,
 } from "./golden.ts";
-import { reformatCorpus } from "./golden-reformat.ts";
+import { asFormatOne, reformatAll, reformatCorpus } from "./golden-reformat.ts";
 import { defaultLineupPair } from "./helpers.ts";
 
 const sport = (key: string): AnySportModule => builtinModules.find((m) => m.key === key)!;
 const ev = (type: string, payload: unknown = {}): GoldenEvent => ({ type, payload });
 const bytesOf = (corpus: GoldenCorpus): string => `${JSON.stringify(corpus, null, 0)}\n`;
+
+/** The committed corpus as FORMAT 1: the same bytes whether the file on disk is still format 1 or already format 2. Everything
+ *  below that reasons about "what a reformat does to a format-1 corpus" starts here, so these tests do not change meaning the
+ *  day the corpora are reformatted. */
+const formatOneOf = (key: string): GoldenCorpus => asFormatOne(readCorpus(key));
 
 // ------------------------------------------------------------------------------------------------ the format marker
 
@@ -50,15 +58,47 @@ describe("corpusFormat", () => {
     }
   });
 
-  it("every committed corpus is format 1 today (T1 writes no corpus byte)", () => {
+  it("every committed corpus declares a valid format and carries exactly the fields that format owns (counted)", () => {
     let checked = 0;
+    let streams = 0;
+    const formats = new Set<number>();
     forEachSport(({ key }) => {
       const corpus = readCorpus(key);
-      expect(corpusFormat(corpus), key).toBe(1);
-      expect("format" in corpus, key).toBe(false);
+      const format = corpusFormat(corpus);
+      formats.add(format);
+      expect("format" in corpus, key).toBe(format === 2);
       for (const stream of corpus.streams) {
-        expect("summaries" in stream || "overlay" in stream, `${key} ${stream.config}#${stream.seed}`).toBe(false);
+        const label = `${key} ${stream.config}#${stream.seed}`;
+        expect("summaries" in stream, label).toBe(format === 2);
+        expect("overlay" in stream, label).toBe(format === 2);
+        streams++;
       }
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+    expect(streams).toBeGreaterThan(0);
+    // one format per tree: a half-reformatted tree is not a state anyone reviews (REFORMAT is all sports or none)
+    expect(formats.size, `committed corpora mix formats: ${[...formats].join(",")}`).toBe(1);
+  });
+
+  it("recomputeStream has no default format: five required parameters (a silent default 1 once let a caller record the wrong format)", () => {
+    // `Function.length` stops at the first defaulted parameter, so a restored `format = 1` reads 4 here
+    expect(recomputeStream.length).toBe(5);
+  });
+
+  it("formatOneOf is a format-1 corpus whichever format is committed, and drops nothing else", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const committed = readCorpus(key);
+      const one = formatOneOf(key);
+      expect(corpusFormat(one), key).toBe(1);
+      expect("format" in one, key).toBe(false);
+      expect(one.streams.length, key).toBe(committed.streams.length);
+      one.streams.forEach((was, i) => {
+        const now = committed.streams[i]!;
+        expect(Object.keys(was), `${key} #${i}`).toEqual(Object.keys(now).filter((k) => k !== "summaries" && k !== "overlay"));
+        expect(JSON.stringify(was.states), `${key} #${i}`).toBe(JSON.stringify(now.states));
+      });
       checked++;
     });
     expect(checked).toBe(builtinModules.length);
@@ -88,6 +128,47 @@ describe("guarded write modes — REFORMAT_GOLDEN shares REBASELINE's dirty-tree
   });
 });
 
+describe("writeRefusal — the gate golden.test.ts runs before any guarded write mode (pure: env, porcelain, writable paths)", () => {
+  const writable = ["packages/engine/src/sports/generic/generic.golden.json"];
+  const dirty = [" M packages/engine/src/sports/generic/generic.ts"];
+  const corpusOnly = [" M packages/engine/src/sports/generic/generic.golden.json"];
+
+  it("the same dirty tree is refused by EVERY guarded mode, and by no run that asks for none (counted)", () => {
+    // the control: this tree really is dirty, so a null below is the mode check speaking and not an accident of the fixture
+    expect(corpusWriteVerdict(dirty, writable).ok).toBe(false);
+    let refused = 0;
+    for (const mode of GUARDED_WRITE_MODES) {
+      const reason = writeRefusal({ [mode]: "1" }, dirty, writable);
+      expect(reason, mode).toMatch(/refusing to rewrite the golden corpus/);
+      expect(reason, mode).toContain("packages/engine/src/sports/generic/generic.ts");
+      refused++;
+    }
+    expect(refused).toBe(GUARDED_WRITE_MODES.length);
+    expect(refused).toBe(3);
+    // REFORMAT is the mode a hand-copied `UPDATE || REBASELINE` pair would leave unguarded: it is named on its own
+    expect(writeRefusal({ REFORMAT_GOLDEN: "1" }, dirty, writable)).not.toBeNull();
+    // no guarded mode on: nothing to refuse, however dirty the tree (EXTEND only ever appends and is deliberately not guarded)
+    for (const env of [{}, { EXTEND_GOLDEN: "1" }, { REFORMAT_GOLDEN: "0" }, { REBASELINE_GOLDEN: "true" }]) {
+      expect(writeRefusal(env, dirty, writable), JSON.stringify(env)).toBeNull();
+    }
+  });
+
+  it("a guarded mode runs from a tree holding only corpus changes or nothing, and fails closed outside a git checkout", () => {
+    for (const mode of GUARDED_WRITE_MODES) {
+      expect(writeRefusal({ [mode]: "1" }, corpusOnly, writable), `${mode} corpus-only tree`).toBeNull();
+      expect(writeRefusal({ [mode]: "1" }, [], writable), `${mode} clean tree`).toBeNull();
+      expect(writeRefusal({ [mode]: "1" }, null, []), `${mode} not a checkout`).toMatch(/not a git checkout/);
+    }
+    // not a checkout is only a problem when a mode asks to write
+    expect(writeRefusal({}, null, [])).toBeNull();
+  });
+
+  it("the real-environment wrapper asks git only when a guarded mode is on (a plain run never shells out to git)", () => {
+    expect(corpusWriteRefusal({})).toBeNull();
+    expect(corpusWriteRefusal({ EXTEND_GOLDEN: "1" })).toBeNull();
+  });
+});
+
 // ----------------------------------------------------------------------------------------------------- REFORMAT
 
 /** One reformatted corpus per sport, built once: the registry sweep below and the tamper tests both read it. */
@@ -95,7 +176,7 @@ const reformatted = new Map<string, GoldenCorpus>();
 const reformattedOf = (key: string): GoldenCorpus => {
   let corpus = reformatted.get(key);
   if (corpus === undefined) {
-    corpus = reformatCorpus(sport(key), readCorpus(key));
+    corpus = reformatCorpus(sport(key), formatOneOf(key));
     reformatted.set(key, corpus);
   }
   return corpus;
@@ -106,7 +187,7 @@ describe("reformatCorpus — adds the format-2 fields and moves nothing the corp
   let stepsSeen = 0;
   for (const module of builtinModules) {
     it(`${module.key}: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op`, () => {
-      const before = readCorpus(module.key);
+      const before = formatOneOf(module.key);
       const after = reformattedOf(module.key);
       expect(corpusFormat(after)).toBe(2);
       // corpus level: the same keys in the same order with `format` slotted in just before `streams`, which stays LAST
@@ -152,9 +233,43 @@ describe("reformatCorpus — adds the format-2 fields and moves nothing the corp
   });
 });
 
+describe("reformatAll — all sports or none: one refusal writes nothing", () => {
+  it("every sport reformats: one plan entry per module, each the same corpus reformatCorpus gives on its own", () => {
+    const plan = reformatAll([sport("generic")], formatOneOf);
+    expect(plan.length).toBe(1);
+    expect(plan[0]!.module.key).toBe("generic");
+    expect(bytesOf(plan[0]!.after)).toBe(bytesOf(reformattedOf("generic")));
+    expect(corpusFormat(plan[0]!.before)).toBe(1);
+  }, 120_000);
+
+  it("one sport refusing throws for the whole run and names it: the sports that DID reformat are never handed out to be written", () => {
+    const tampered = (c: GoldenCorpus): GoldenCorpus => ({ ...c, streams: [{ ...c.streams[0]!, outcome: `{"kind":"draw"}` }, ...c.streams.slice(1)] });
+    const read = (key: string): GoldenCorpus => (key === "carrom" ? tampered(formatOneOf(key)) : formatOneOf(key));
+    let thrown: Error | undefined;
+    try {
+      reformatAll([sport("generic"), sport("carrom")], read);
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown, "a refusal in the second sport must throw, not return the first").toBeDefined();
+    expect(thrown!.message).toMatch(/wrote nothing: 1 of 2 sport\(s\) refused/);
+    expect(thrown!.message).toContain("carrom config=");
+    expect(thrown!.message).not.toContain("generic config=");
+  }, 120_000);
+
+  it("every refusing sport is named, not only the first", () => {
+    const tampered = (c: GoldenCorpus): GoldenCorpus => ({ ...c, streams: [{ ...c.streams[0]!, outcome: `{"kind":"draw"}` }, ...c.streams.slice(1)] });
+    expect(() => reformatAll([sport("carrom"), sport("volleyball")], (key) => tampered(formatOneOf(key)))).toThrow(/2 of 2 sport\(s\) refused[\s\S]*carrom config=[\s\S]*volleyball config=/);
+  }, 120_000);
+
+  it("an empty module list is refused (a reformat of nothing proves nothing)", () => {
+    expect(() => reformatAll([], formatOneOf)).toThrow(/no sport to reformat/);
+  });
+});
+
 describe("reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change", () => {
   const module = sport("generic");
-  const corpus1 = readCorpus("generic");
+  const corpus1 = formatOneOf("generic");
   const cfgName = Object.keys(corpus1.configs)[0]!;
   const raw = corpus1.configs[cfgName];
   const withStream = (stream: GoldenStream): GoldenCorpus => ({ ...corpus1, streams: [...corpus1.streams, stream] });
@@ -163,7 +278,7 @@ describe("reformatCorpus — it is NEVER a re-baseline: it refuses when anything
   it("a stream recorded under format 1 whose EFFECTIVE outcome differs from the module's (a settle): the stored outcome would move", () => {
     const { home } = defaultLineupPair(resolvePositions(module, module.configSchema.parse(raw)));
     const events = [ev("core.start"), ev("core.abandon", { reason: "rain" }), ev("core.settle", { winner: home.entrantId, method: "organiser" })];
-    const legacy: GoldenStream = { config: cfgName, seed: 99_999, events, ...storedFields(recomputeStream(module, raw, events)) };
+    const legacy: GoldenStream = { config: cfgName, seed: 99_999, events, ...storedFields(recomputeStream(module, raw, events, undefined, 1)) };
     expect(legacy.outcome, "precondition: format 1 recorded the module's bare outcome").toBe("null");
     expect(() => reformatCorpus(module, withStream(legacy))).toThrow(/generic config=\w+ seed=99999 outcome: recorded null, replayed .*settled_organiser/s);
     expect(() => reformatCorpus(module, withStream(legacy))).toThrow(/re-baseline/);
@@ -244,14 +359,16 @@ describe("verifyStream under format 2 — each recorded field is compared, and a
     expect(verifyStream(module, corpus, noOverlay as GoldenStream)[0]).toMatch(/\(has summaries, no overlay\)/);
     expect(verify({ summaries: stream.summaries!.slice(1) }).join("\n")).toMatch(/summary digests recorded for \d+ events/);
     const four = recomputeStream(module, corpus.configs[stream.config], stream.events, stream.lineups, 1);
-    expect(verify({}, four).join("\n")).toMatch(/the replay produced no summaries\/overlay/);
+    // a CALLER error (replayed in the wrong format), not a finding about the corpus: it throws instead of returning a message a
+    // suite that collects messages could read as clean
+    expect(() => verify({}, four)).toThrow(/the replay produced no summaries\/overlay/);
     // a replay that produced the fields but the wrong number of digests (reachable only by injection: both derive from the events)
     const short = { ...four, summaries: [] as string[], overlay: "{}" };
     expect(verify({}, short).join("\n")).toMatch(/summaries: recorded \d+ digests, the replay produced 0/);
   });
 
   it("a format-1 corpus stream that holds a format-2 field is refused", () => {
-    const committed = readCorpus("carrom");
+    const committed = formatOneOf("carrom");
     const hybrid = { ...committed.streams[0]!, summaries: [] };
     expect(verifyStream(module, committed, hybrid).join("\n")).toMatch(/format-1 stream carries summaries\/overlay/);
   });
@@ -284,7 +401,7 @@ describe("buildCorpus (UPDATE_GOLDEN, a corpus from nothing) writes the current 
 describe("rebaselineCorpus keeps the corpus's format", () => {
   it("format 1 stays format 1 (no field appears), format 2 stays format 2 and re-records both fields", () => {
     const module = sport("generic");
-    const one = readCorpus("generic");
+    const one = formatOneOf("generic");
     const rebased1 = rebaselineCorpus(module, one);
     expect(bytesOf(rebased1)).toBe(bytesOf(one));
     expect("format" in rebased1).toBe(false);
@@ -310,7 +427,7 @@ describe("extendCorpus and extendFloor append in the corpus's format", () => {
 
   it("extendCorpus: a format-2 corpus gets format-2 streams, a format-1 corpus gets format-1 streams, and each verifies", () => {
     let appendedTotal = 0;
-    for (const base of [readCorpus(key), reformattedOf(key)]) {
+    for (const base of [formatOneOf(key), reformattedOf(key)]) {
       const dropped = walks(base).at(-1)!;
       const trimmed: GoldenCorpus = { ...base, streams: base.streams.filter((s) => s !== dropped) };
       const { corpus, appended } = extendCorpus(module, trimmed);
@@ -345,7 +462,7 @@ describe("extendCorpus and extendFloor append in the corpus's format", () => {
 
 describe("corpusStateDiff — the new fields are part of the reviewed diff", () => {
   const module = sport("generic");
-  const before1 = readCorpus("generic");
+  const before1 = formatOneOf("generic");
   let after2!: GoldenCorpus;
   beforeAll(() => {
     after2 = reformattedOf("generic");

@@ -27,6 +27,7 @@
 import type { AnySportModule } from "../sport/module.ts";
 import {
   anchorSteps,
+  corpusFormat,
   jsonObjectMembers,
   recomputeStream,
   slimStates,
@@ -332,6 +333,7 @@ export const CORPUS_MUTATIONS: CorpusMutation[] = [
           ctx.corpus.configs[ctx.stream.config],
           events,
           ctx.stream.lineups,
+          corpusFormat(ctx.corpus),
         );
       } catch (error) {
         return [`the mutated ledger no longer folds: ${String(error)}`];
@@ -432,6 +434,7 @@ export function mutationContext(
     corpus.configs[stream.config],
     stream.events,
     stream.lineups,
+    corpusFormat(corpus),
   );
   return {
     module,

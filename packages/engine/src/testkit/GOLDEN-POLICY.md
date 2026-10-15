@@ -56,7 +56,12 @@ Prose in a comment enforced none of this, so the harness now does.
    paths. Outside a git checkout the run **fails closed** — with no diff there
    is nothing to review, so the run cannot satisfy the clause it is gated on.
    The check is `corpusWriteVerdict`, a pure function over a
-   `git status --porcelain` listing; `corpusWriteGuard` wires the real probe in.
+   `git status --porcelain` listing; `writeRefusal(env, porcelain, writable)` is the
+   pure gate over it (which modes are on comes from `GUARDED_WRITE_MODES` alone) and
+   `corpusWriteRefusal` wires the real environment and the real probe in. A reformat
+   is **all sports or none**: `reformatAll` computes every sport first and throws
+   one error naming every refusing sport, so a refusal in the fifth sport leaves no
+   half-reformatted tree.
 
    The practical consequence: commit or stash your work first, run the
    re-baseline into a clean tree, and commit the corpus **alone**.
@@ -117,9 +122,13 @@ a withdrawal over a held level result on the module's answer (`outcomeOf` /
 decider beside module state. A **format 2** corpus records those. The format is
 the corpus's `format` key (`2`, written just before `streams`, which stays the last
 key); **absent means format 1**, every corpus written before GF-2. `recomputeStream`
-takes the format as its fifth argument (default 1: the harness-internal callers that
-pair no corpus with a recomputation keep asking the question they were written for;
-every caller that does pair one passes `corpusFormat(corpus)`).
+takes the format as its fifth argument and it is **required: there is no default**
+(a default 1 was a silent choice, and a caller that forgot it recorded the wrong
+format without a word). A caller that pairs a recomputation with a corpus passes
+`corpusFormat(corpus)`; one that asks what the *module* alone says passes `1` and
+says so (the golden floor's settle exemption and overlay probes pass 1 through
+`moduleRecorder` until GF-2 T3 moves them onto format 2). `verifyStream` throws,
+rather than returning a message, when a format-2 stream is replayed in format 1.
 
 | field | format 1 | format 2 |
 |---|---|---|

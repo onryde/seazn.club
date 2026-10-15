@@ -21,13 +21,12 @@ import {
   UPDATE_GOLDEN,
   buildCorpus,
   corpusStateDiff,
-  corpusWriteGuard,
+  corpusWriteRefusal,
   declaredOptionalConfigFields,
   declaredOptionalFields,
   eventTypesIn,
   extendCorpus,
   formatCorpusStateDiff,
-  guardedWriteModes,
   isStateDigest,
   payloadParseFailures,
   readCorpus,
@@ -47,9 +46,10 @@ import {
   unreachableStatePathsGoneStale,
   verifyStream,
   writeCorpus,
+  type GoldenCorpus,
 } from "./golden.ts";
 import { extendFloor } from "./golden-floor-streams.ts";
-import { reformatCorpus } from "./golden-reformat.ts";
+import { reformatAll } from "./golden-reformat.ts";
 
 // #429 — the corpus-write guard. Every mode that rewrites a committed corpus (UPDATE, REBASELINE, and GF-2's REFORMAT: see
 // `GUARDED_WRITE_MODES`) is
@@ -59,16 +59,12 @@ import { reformatCorpus } from "./golden-reformat.ts";
 // landed on top of a half-finished branch produces a commit in which no reader
 // can tell which state moved because the fold changed. The guard runs BEFORE any
 // writing test is registered, so a refusal cannot half-write the corpus.
-const corpusWriteRefusal =
-  guardedWriteModes(process.env).length > 0 ? (() => {
-    const verdict = corpusWriteGuard();
-    return verdict.ok ? null : verdict.reason;
-  })() : null;
+const corpusWriteRefusalReason = corpusWriteRefusal(process.env);
 
-if (corpusWriteRefusal !== null) {
+if (corpusWriteRefusalReason !== null) {
   describe("golden corpus write guard (#429)", () => {
     it("refuses to rewrite the corpus from a dirty working tree", () => {
-      expect.fail(corpusWriteRefusal);
+      expect.fail(corpusWriteRefusalReason);
     });
   });
 } else if (UPDATE_GOLDEN) {
@@ -134,24 +130,27 @@ if (corpusWriteRefusal !== null) {
     }
   });
 } else if (REFORMAT_GOLDEN) {
-  // GF-2: add the format-2 fields (summaries, overlay) to every stream. NOT a re-baseline: `reformatCorpus` refuses to run if
-  // any field, event or config the corpus already holds would change, and the printout below must say "nothing moved".
+  // GF-2: add the format-2 fields to every stream of every sport, or to none. NOT a re-baseline: `reformatCorpus` refuses to run if
+  // any field, event or config the corpus already holds would change, and `reformatAll` computes EVERY sport before it writes the
+  // first one, so a refusal in one sport leaves all eleven corpora as they were (a half-reformatted tree is not a state to review).
   describe("golden corpus reformat (REFORMAT_GOLDEN=1)", () => {
-    for (const module of builtinModules) {
-      it(`records the kernel overlay of ${module.key} without moving anything it holds`, () => {
-        const before = readCorpus(module.key);
-        const after = reformatCorpus(module, before);
-        expect(after.streams.map((s) => s.events)).toEqual(before.streams.map((s) => s.events));
+    it("reformats every sport, or none: nothing is written unless all of them reformat", () => {
+      const bytes = (c: GoldenCorpus): number => `${JSON.stringify(c, null, 0)}\n`.length;
+      const plan = reformatAll(builtinModules, readCorpus);
+      const lines: string[] = [];
+      for (const { module, before, after } of plan) {
+        expect(after.streams.map((s) => s.events), `${module.key}: a reformat must keep the ledger`).toEqual(before.streams.map((s) => s.events));
         expect(after.configs).toEqual(before.configs);
         const diff = corpusStateDiff(before, after, module);
         expect(diff.eventsMoved, `${module.key}: a reformat must keep the ledger`).toBe(false);
         expect(diff.changedStreams, `${module.key}: a reformat must move no state, outcome, summary or deltas`).toBe(0);
-        const bytes = (c: typeof before): number => `${JSON.stringify(c, null, 0)}\n`.length;
-        // eslint-disable-next-line no-console
-        console.log(`${formatCorpusStateDiff(diff)}\n[reformat] ${module.key}: format ${before.format ?? 1} -> ${after.format}, ${bytes(before)} -> ${bytes(after)} bytes (+${bytes(after) - bytes(before)})`);
-        writeCorpus(after);
-      }, 300_000);
-    }
+        lines.push(`${formatCorpusStateDiff(diff)}\n[reformat] ${module.key}: format ${before.format ?? 1} -> ${after.format}, ${bytes(before)} -> ${bytes(after)} bytes (+${bytes(after) - bytes(before)})`);
+      }
+      expect(plan.length, "every registered sport was reformatted").toBe(builtinModules.length);
+      for (const { after } of plan) writeCorpus(after);
+      // eslint-disable-next-line no-console
+      console.log(lines.join("\n"));
+    }, 600_000);
   });
 } else {
   // Every builtin gets a golden — a module added without one fails here rather

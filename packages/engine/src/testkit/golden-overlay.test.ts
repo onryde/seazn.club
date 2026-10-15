@@ -16,11 +16,14 @@ import {
   summaryOf,
   type EventEnvelope,
 } from "../core/events.ts";
+import { initSquads } from "../core/lineup.ts";
 import { resolvePositions } from "../sport/catalog.ts";
+import type { LineupPair } from "../core/types.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import {
+  corpusFormat,
   readCorpus,
   recomputeKernel,
   recomputeStream,
@@ -37,6 +40,8 @@ import {
   type DenseOverlay,
   type OverlayColumn,
 } from "./golden-overlay.ts";
+import { LINEUP_TYPES } from "./golden-floor.ts";
+import { asFormatOne } from "./golden-reformat.ts";
 import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -46,6 +51,8 @@ const rawOf = (m: AnySportModule): unknown => Object.values(m.variants as Record
 const linesOf = (m: AnySportModule, raw: unknown) => defaultLineupPair(resolvePositions(m, m.configSchema.parse(raw)));
 const text = (v: unknown): string => JSON.stringify(v ?? null);
 const jsonOf = (s: string): unknown => JSON.parse(s);
+/** The MODULE's own answer for a ledger (corpus format 1): what the effective recording is compared with. */
+const bareOf = (m: AnySportModule, raw: unknown, events: readonly GoldenEvent[]) => recomputeStream(m, raw, events, undefined, 1);
 
 /** A dense overlay whose columns are all at the kernel default for `n` steps. */
 const flat = (n: number): DenseOverlay => ({
@@ -166,7 +173,7 @@ describe("recomputeStream format 2 — a settle (X-ST-1), in every sport", () =>
       const { home, away } = linesOf(module, raw);
       const ledger = [ev("core.start"), ev("core.abandon", { reason: "rain" }), ev("core.settle", { winner: home.entrantId, method: "organiser" })];
       const effective = recomputeKernel(module, raw, ledger);
-      const bare = recomputeStream(module, raw, ledger);
+      const bare = bareOf(module, raw, ledger);
       const settled = { kind: "win", winner: home.entrantId, loser: away.entrantId, method: "settled_organiser" };
       expect(jsonOf(effective.outcome), module.key).toEqual(settled);
       if (effective.outcome !== bare.outcome) differs++;
@@ -203,7 +210,7 @@ describe("recomputeStream format 2 — an expunge (D5), where the module still a
     for (const { module, raw } of rows) {
       const ledger = [ev("core.start"), ev("core.abandon", { reason: "x", expunge: true })];
       const effective = recomputeKernel(module, raw, ledger);
-      const bare = recomputeStream(module, raw, ledger);
+      const bare = bareOf(module, raw, ledger);
       expect(bare.outcome, `${module.key}: precondition — the module's bare outcome is an answer`).not.toBe("null");
       expect(effective.outcome, module.key).toBe("null");
       if (effective.outcome !== bare.outcome) differs++;
@@ -215,41 +222,118 @@ describe("recomputeStream format 2 — an expunge (D5), where the module still a
     expect(differs, ">= 2 sports where the effective outcome differs from the module's").toBeGreaterThanOrEqual(2);
     expect(differs).toBe(rows.length);
   });
+
+  it("a void of the expunging abandon returns the flag, the outcome and the deltas to the live match, and both moves are change points", () => {
+    let checked = 0;
+    for (const { module, raw } of rows) {
+      const ledger = [ev("core.start"), ev("core.abandon", { reason: "x", expunge: true }), ev("core.void", {}, "e-1")];
+      const rec = recomputeKernel(module, raw, ledger);
+      expect(rec.dense.steps.expunged, module.key).toEqual(["false", "true", "false"]);
+      expect(JSON.parse(rec.overlay), module.key).toEqual({ expunged: [[1, true], [2, false]] });
+      // the abandon is struck, so the match is live again: no outcome, as after the start
+      expect(rec.dense.steps.outcome[2], module.key).toBe(rec.dense.steps.outcome[0]);
+      expect(rec.dense.steps.outcome[2], module.key).toBe("null");
+      expect(rec.outcome, module.key).toBe("null");
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("recomputeStream format 2 — a withdrawal over a held level result (X-WD-1)", () => {
-  // A level result per sport that can end level (the set sports and tennis never draw): forfeit-guard.test.ts's own rows.
-  const LEVEL: Record<string, { raw: unknown; events: GoldenEvent[] }> = {
-    football: { raw: {}, events: [ev("football.period", { phase: "HT" }), ev("football.period", { phase: "FT" })] },
-    boardgame: { raw: {}, events: [ev("boardgame.result", { winner: null, method: "agreement" })] },
-    generic: { raw: { resultMode: "score", allowDraws: true }, events: [ev("generic.result", { p1Score: 1, p2Score: 1 })] },
-  };
+  /** `events` is the WHOLE ledger up to and including the level result (a committed cricket ledger does not open with core.start). */
+  interface LevelRow { key: string; raw: unknown; events: GoldenEvent[]; lineups?: LineupPair }
+  // A level result per sport that can end level (the set sports and tennis never draw): forfeit-guard.test.ts's own rows for the
+  // three it names, and the committed corpus's own ledgers cut at their first draw/tie for the sports it does not.
+  const HAND: LevelRow[] = [
+    { key: "football", raw: {}, events: [ev("core.start"), ev("football.period", { phase: "HT" }), ev("football.period", { phase: "FT" })] },
+    { key: "boardgame", raw: {}, events: [ev("core.start"), ev("boardgame.result", { winner: null, method: "agreement" })] },
+    { key: "generic", raw: { resultMode: "score", allowDraws: true }, events: [ev("core.start"), ev("generic.result", { p1Score: 1, p2Score: 1 })] },
+    // carrom: ICF play always produces a winner; only the tieBoard 'draw' house rule lets a game, then a match, end level
+    // (carrom.test.ts "'draw' policy": eight tied boards is a drawn game, then one game each: 1-1 plus a drawn game is a drawn match)
+    {
+      key: "carrom",
+      raw: { tieBoard: "draw" },
+      events: [
+        ev("core.start"),
+        ...[["H", 3], ["A", 3], ["H", 3], ["A", 3], ["H", 3], ["A", 3], ["H", 3], ["A", 3], ["H", 9], ["H", 9], ["H", 9], ["A", 9], ["A", 9], ["A", 9]].map(([w, c]) =>
+          ev("carrom.board.summary", { winner: w, opponentCoinsLeft: c, queenTo: null }),
+        ),
+      ],
+    },
+  ];
+  /** The first ledger of the committed corpus that reaches a DRAW or TIE, cut right there (an independent fold says where). */
+  function levelFromCorpus(key: string): LevelRow | null {
+    const module = builtinModules.find((m) => m.key === key)!;
+    const corpus = readCorpus(key);
+    for (const stream of corpus.streams) {
+      const raw = corpus.configs[stream.config];
+      const cfg = module.configSchema.parse(raw);
+      const lines = stream.lineups ?? defaultLineupPair(resolvePositions(module, cfg));
+      const envelopes = envelopesOf(stream.events);
+      for (let i = 0; i < envelopes.length; i++) {
+        const kind = (outcomeOf(module, foldMatchWithStoppage(module, cfg, lines, envelopes.slice(0, i + 1), STRICT_ALL)) as { kind?: string } | null)?.kind;
+        if (kind === "draw" || kind === "tie") return { key, raw, events: stream.events.slice(0, i + 1), lineups: stream.lineups };
+      }
+    }
+    return null;
+  }
+  const ROWS = (): LevelRow[] => [...HAND, ...["hockey", "icehockey", "cricket"].map((k) => levelFromCorpus(k)).filter((r): r is LevelRow => r !== null)];
+
+  it("every sport that can end level has a row: the committed corpora reach a draw or tie in hockey, icehockey and cricket", () => {
+    expect(ROWS().map((r) => r.key)).toEqual(["football", "boardgame", "generic", "carrom", "hockey", "icehockey", "cricket"]);
+  });
+
   it("records the award (reason withdrew) as the outcome and the withdrawal beside it; the summary is the module's own, laid over the award", () => {
     let checked = 0;
     let summaryDiffers = 0;
-    for (const [key, row] of Object.entries(LEVEL)) {
-      const module = builtinModules.find((m) => m.key === key)!;
-      const { home, away } = linesOf(module, row.raw);
-      const level = [ev("core.start"), ...row.events];
+    for (const row of ROWS()) {
+      const module = builtinModules.find((m) => m.key === row.key)!;
+      const { home, away } = row.lineups ?? linesOf(module, row.raw);
+      const level = row.events;
       const wdIndex = level.length;
       const ledger = [...level, ev("core.forfeit", { by: away.entrantId, reason: "withdrew" })];
-      const effective = recomputeKernel(module, row.raw, ledger);
-      const bare = recomputeStream(module, row.raw, ledger);
-      expect(["draw", "tie", "no_result"], `${key}: precondition — the held result is level`).toContain((jsonOf(bare.outcome) as { kind: string }).kind);
+      const effective = recomputeKernel(module, row.raw, ledger, row.lineups);
+      const bare = recomputeStream(module, row.raw, ledger, row.lineups, 1);
+      expect(["draw", "tie", "no_result"], `${row.key}: precondition — the held result is level`).toContain((jsonOf(bare.outcome) as { kind: string }).kind);
       const award = { kind: "award", winner: home.entrantId, loser: away.entrantId, reason: "withdrew" };
-      expect(jsonOf(effective.outcome), key).toEqual(award);
-      expect(JSON.parse(effective.overlay).levelWithdrawal, key).toEqual([[wdIndex, { winner: home.entrantId, loser: away.entrantId, eventId: `e-${wdIndex}` }]]);
+      expect(jsonOf(effective.outcome), row.key).toEqual(award);
+      expect(JSON.parse(effective.overlay).levelWithdrawal, row.key).toEqual([[wdIndex, { winner: home.entrantId, loser: away.entrantId, eventId: `e-${wdIndex}` }]]);
       // the summary: the kernel's own `summaryOf` over an independent fold (the module never saw the withdrawal)
-      const folded = foldMatchWithStoppage(module, module.configSchema.parse(row.raw), linesOf(module, row.raw), envelopesOf(ledger), STRICT_ALL);
-      expect(effective.summary, key).toBe(text(summaryOf(module, folded)));
+      const folded = foldMatchWithStoppage(module, module.configSchema.parse(row.raw), row.lineups ?? linesOf(module, row.raw), envelopesOf(ledger), STRICT_ALL);
+      expect(effective.summary, row.key).toBe(text(summaryOf(module, folded)));
       if (effective.summary !== bare.summary) summaryDiffers++;
       // the digest per step moves exactly where the headline does
-      expect(effective.summaries.length, key).toBe(ledger.length);
-      expect(effective.summaries[wdIndex], key).toBe(textDigest(text(summaryOf(module, folded))));
+      expect(effective.summaries.length, row.key).toBe(ledger.length);
+      expect(effective.summaries[wdIndex], row.key).toBe(textDigest(text(summaryOf(module, folded))));
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(7);
     expect(summaryDiffers, "the withdrawal changes the headline in at least two level sports").toBeGreaterThanOrEqual(2);
+  });
+
+  it("a void of the withdrawal returns the held LEVEL result: the column, the outcome and the deltas go back, and both moves are change points", () => {
+    let checked = 0;
+    for (const row of ROWS()) {
+      const module = builtinModules.find((m) => m.key === row.key)!;
+      const { away } = row.lineups ?? linesOf(module, row.raw);
+      const level = row.events;
+      const wdIndex = level.length;
+      const ledger = [...level, ev("core.forfeit", { by: away.entrantId, reason: "withdrew" }), ev("core.void", {}, `e-${wdIndex}`)];
+      const rec = recomputeKernel(module, row.raw, ledger, row.lineups);
+      const steps = rec.dense.steps;
+      expect(steps.levelWithdrawal[wdIndex], `${row.key}: the withdrawal is held`).not.toBe("null");
+      expect(steps.levelWithdrawal[wdIndex + 1], `${row.key}: the void reopened it`).toBe("null");
+      expect(steps.outcome[wdIndex], `${row.key}: the award decided it`).not.toBe(steps.outcome[wdIndex - 1]);
+      expect(steps.outcome[wdIndex + 1], `${row.key}: the level result is back`).toBe(steps.outcome[wdIndex - 1]);
+      const lw = (JSON.parse(rec.overlay) as Record<string, [number, unknown][]>).levelWithdrawal!;
+      expect(lw.map(([step]) => step), row.key).toEqual([wdIndex, wdIndex + 1]);
+      expect(lw[1]![1], row.key).toBeNull();
+      expect(rec.outcome, row.key).toBe(steps.outcome[wdIndex - 1]);
+      checked++;
+    }
+    expect(checked).toBe(7);
   });
 });
 
@@ -278,12 +362,43 @@ describe("recomputeStream format 2 — a void REOPENS what it struck", () => {
   });
 });
 
+describe("recomputeKernel — the decider column is `deciderPending`, not the module's `awaitingDecider` (D-C5)", () => {
+  const module = builtinModules.find((m) => m.key === "boardgame")!;
+  // a knockout board: a drawn game owes a decider (BG-KO-1, ruling 73). The raw config is the module's own bracket overlay.
+  const raw = module.bracketDeciders(module.configSchema.parse({}));
+  const { home } = linesOf(module, raw);
+  const level = [ev("core.start"), ev("boardgame.result", { winner: null, method: "agreement" })];
+  const settle = ev("core.settle", { winner: home.entrantId, method: "lot" });
+
+  it("a drawn knockout game owes the decider (true at the draw), a settle pays it although the module's phase stays 'tiebreak' (false), and voiding the settle owes it again (true)", () => {
+    const ledger = [...level, settle, ev("core.void", {}, "e-2")];
+    const rec = recomputeKernel(module, raw, ledger);
+    expect(rec.dense.steps.decider).toEqual(["false", "true", "false", "true"]);
+    expect(JSON.parse(rec.overlay).decider).toEqual([[1, true], [2, false], [3, true]]);
+    // the discriminating fact: after the settle the MODULE alone still says a decider is awaited. A recorder that read
+    // `awaitingDecider` directly would record `true` at step 2 and this test would not otherwise tell
+    const cfg = module.configSchema.parse(raw);
+    const settled = foldMatchWithStoppage(module, cfg, linesOf(module, raw), envelopesOf([...level, settle]), STRICT_ALL);
+    expect(module.awaitingDecider!(settled.state as never), "precondition: the module's phase is still tiebreak after the settle").toBe(true);
+    expect(deciderPending(module, settled)).toBe(false);
+    // and the dense column at the settle is the kernel's answer, not the module's
+    expect(rec.dense.steps.decider[2]).toBe(text(deciderPending(module, settled)));
+    expect(rec.dense.steps.decider[2]).not.toBe(text(module.awaitingDecider!(settled.state as never)));
+  });
+
+  it("the empty case: a league board that draws owes nothing, and an undecided knockout board owes nothing before the draw", () => {
+    const league = recomputeKernel(module, {}, level);
+    expect(league.dense.steps.decider).toEqual(["false", "false"]);
+    expect(league.overlay).toBe(JSON.stringify({ outcome: [[1, { kind: "draw" }]] }));
+    expect(recomputeKernel(module, raw, [ev("core.start")]).dense.steps.decider).toEqual(["false"]);
+  });
+});
+
 describe("recomputeStream — the two formats", () => {
-  it("format 1 (the default) is the legacy four fields and nothing else; format 2 adds summaries, overlay and the dense form", () => {
+  it("format 1 is the legacy four fields and nothing else; format 2 adds summaries, overlay and the dense form", () => {
     const module = builtinModules[0]!;
     const raw = rawOf(module);
     const ledger = [ev("core.start")];
-    expect(Object.keys(recomputeStream(module, raw, ledger))).toEqual(["states", "outcome", "summary", "deltas"]);
     expect(Object.keys(recomputeStream(module, raw, ledger, undefined, 1))).toEqual(["states", "outcome", "summary", "deltas"]);
     expect(Object.keys(recomputeStream(module, raw, ledger, undefined, 2))).toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay", "dense"]);
   });
@@ -293,7 +408,7 @@ describe("recomputeStream — the two formats", () => {
     const raw = rawOf(module);
     const { home } = linesOf(module, raw);
     const ledger = [ev("core.start"), ev("core.abandon", { reason: "rain" }), ev("core.settle", { winner: home.entrantId, method: "organiser" })];
-    expect(recomputeStream(module, raw, ledger).outcome).toBe("null");
+    expect(bareOf(module, raw, ledger).outcome).toBe("null");
     expect(jsonOf(recomputeStream(module, raw, ledger, undefined, 2).outcome)).toMatchObject({ kind: "win", method: "settled_organiser" });
   });
 
@@ -315,7 +430,7 @@ describe("recomputeStream — the two formats", () => {
 // ----------------------------------------------------------------------- every committed stream, swept and counted
 
 /** What an independent fold of `stream` says, per step, for every overlay column and the summary digest. */
-function independentSteps(module: AnySportModule, raw: unknown, stream: GoldenStream): { dense: Record<OverlayColumn, string[]>; summaries: string[] } {
+function independent(module: AnySportModule, raw: unknown, stream: GoldenStream): { dense: Record<OverlayColumn, string[]>; summaries: string[] } {
   const cfg = module.configSchema.parse(raw);
   const lineups = stream.lineups ?? defaultLineupPair(resolvePositions(module, cfg));
   const envelopes = envelopesOf(stream.events);
@@ -336,18 +451,23 @@ function independentSteps(module: AnySportModule, raw: unknown, stream: GoldenSt
 }
 
 describe("recomputeStream format 2 over every committed stream (swept, counted)", () => {
-  const totals = { streams: 0, steps: 0, changePoints: 0, interesting: 0 };
+  const totals = { streams: 0, steps: 0, changePoints: 0, interesting: 0, customLineups: 0, recorded: 0 };
   const columnPoints: Record<OverlayColumn, number> = { outcome: 0, stoppage: 0, settlement: 0, expunged: 0, levelWithdrawal: 0, decider: 0, squads: 0 };
   const sports = builtinModules.map((m) => m.key);
 
   for (const module of builtinModules) {
     it(`${module.key}: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold`, () => {
-      const corpus = readCorpus(module.key);
+      const committed = readCorpus(module.key);
+      // Q3 is stated against the committed four fields, whichever format the files are in: the format-1 view of the corpus is
+      // the same bytes in both (the new fields dropped), and a format-2 corpus's own new fields are compared below
+      const corpus = asFormatOne(committed);
       let streams = 0;
       let steps = 0;
       let points = 0;
       let interesting = 0;
-      for (const stream of corpus.streams) {
+      let customLineups = 0;
+      let recorded = 0;
+      corpus.streams.forEach((stream, index) => {
         const raw = corpus.configs[stream.config];
         const rec = recomputeKernel(module, raw, stream.events, stream.lineups);
         // (1) Q3: the effective values are byte-identical to what the corpus holds today, on every existing stream
@@ -355,6 +475,12 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
           verifyStream(module, corpus, stream, { states: rec.states, outcome: rec.outcome, summary: rec.summary, deltas: rec.deltas }),
           `${module.key} ${stream.config}#${stream.seed}`,
         ).toEqual([]);
+        // a corpus already in format 2 also holds the summaries and the overlay: they are what this recorder produces, to the byte
+        if (corpusFormat(committed) === 2) {
+          expect(committed.streams[index]!.summaries, `${module.key} ${stream.config}#${stream.seed} summaries`).toEqual(rec.summaries);
+          expect(committed.streams[index]!.overlay, `${module.key} ${stream.config}#${stream.seed} overlay`).toBe(rec.overlay);
+          recorded++;
+        }
         // (2) summaries: one digest per step
         expect(rec.summaries.length).toBe(stream.events.length);
         for (const digest of rec.summaries) expect(digest).toMatch(/^#[0-9a-f]{16}$/);
@@ -369,6 +495,27 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
           columnPoints[column] += n;
           points += n;
         }
+        // (3b) the RECORDED lineups feed the kernel defaults: expand the stored form with an initial built independently from the
+        //      stream's own team sheets (`initSquads`), never from the recorder's dense form. A recorder that took the default
+        //      sheets instead would record a squads change at step 0 for a stream whose sheets are not the default, and this
+        //      expansion would then disagree with the independent fold.
+        if (stream.lineups !== undefined && stream.events.length > 0) {
+          customLineups++;
+          const cfg = module.configSchema.parse(raw);
+          const independentInitial = {
+            outcome: "null", stoppage: "null", settlement: "null", expunged: "false", levelWithdrawal: "null", decider: "false",
+            squads: text(textDigest(text(initSquads(stream.lineups)))),
+          } as const;
+          expect(independentInitial.squads, `${module.key} ${stream.config}#${stream.seed}: precondition — the recorded sheets are not the default ones`).not.toBe(
+            text(textDigest(text(initSquads(defaultLineupPair(resolvePositions(module, cfg)))))),
+          );
+          expect(expandOverlay(rec.overlay, stream.events.length, independentInitial), `${module.key} ${stream.config}#${stream.seed}: expanded from the recorded sheets`).toEqual(independent(module, raw, stream).dense);
+          const squadsPoints = (parsed.squads ?? []) as [number, unknown][];
+          const first = stream.events[0]!.type;
+          if (!LINEUP_TYPES.includes(first)) {
+            expect(squadsPoints.find(([step]) => step === 0), `${module.key} ${stream.config}#${stream.seed}: nothing changes the squads at step 0 unless event 0 is a lineup event (it is ${first})`).toBeUndefined();
+          }
+        }
         // (4) the final overlay outcome is the stream's recorded outcome
         if (stream.events.length > 0) expect(dense.steps.outcome.at(-1)).toBe(rec.outcome);
         // (5) an INDEPENDENT fold (the kernel's own functions, not the recorder) agrees, step for step — on every stream whose
@@ -376,23 +523,27 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
         const nonOutcome = OVERLAY_COLUMNS.some((c) => c !== "outcome" && parsed[c] !== undefined);
         if (nonOutcome) {
           interesting++;
-          const independent = independentSteps(module, raw, stream);
-          expect(dense.steps, `${module.key} ${stream.config}#${stream.seed}`).toEqual(independent.dense);
-          expect(rec.summaries, `${module.key} ${stream.config}#${stream.seed}`).toEqual(independent.summaries);
+          const ind = independent(module, raw, stream);
+          expect(dense.steps, `${module.key} ${stream.config}#${stream.seed}`).toEqual(ind.dense);
+          expect(rec.summaries, `${module.key} ${stream.config}#${stream.seed}`).toEqual(ind.summaries);
         }
         streams++;
         steps += stream.events.length;
-      }
+      });
       // anti-vacuity: this sport's sweep looked at something, and found overlay moves worth the name
       expect(streams, `${module.key} streams`).toBe(corpus.streams.length);
       expect(streams).toBeGreaterThan(0);
       expect(steps).toBeGreaterThan(0);
       expect(points, `${module.key} change points`).toBeGreaterThan(0);
       expect(interesting, `${module.key}: streams with a stoppage, a squad change or a decider`).toBeGreaterThan(0);
+      expect(customLineups, `${module.key}: streams recorded with non-default team sheets (the floor's bench streams) — zero checked is a failure`).toBeGreaterThan(0);
+      if (corpusFormat(committed) === 2) expect(recorded, `${module.key}: a format-2 corpus's own fields were compared`).toBe(streams);
       totals.streams += streams;
       totals.steps += steps;
       totals.changePoints += points;
       totals.interesting += interesting;
+      totals.customLineups += customLineups;
+      totals.recorded += recorded;
     }, 120_000);
   }
 
@@ -407,6 +558,9 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
     expect(columnPoints.stoppage, "stoppage").toBeGreaterThan(0);
     expect(columnPoints.squads, "squads").toBeGreaterThan(0);
     expect(columnPoints.decider, "decider (boardgame only: single-sport by nature)").toBeGreaterThan(0);
+    // streams that carry recorded team sheets (the floor's bench streams): the recorder must feed them to the kernel defaults
+    expect(totals.customLineups, "streams recorded with non-default team sheets").toBeGreaterThan(0);
+    expect(totals.recorded === 0 || totals.recorded === totals.streams, "format-2 fields are compared on all streams or on none").toBe(true);
     // (settlement, expunged and levelWithdrawal move in no committed stream today: the hand-built ledgers above are what pins
     // them until the floor appends streams that do)
   });

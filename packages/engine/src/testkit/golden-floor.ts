@@ -39,7 +39,7 @@ import {
 import { DRAW_KINDS, FORFEIT_REASONS, type LineupPair, type LineupSlot } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
-import { recomputeStream, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import { recomputeStream, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 // ------------------------------------------------------------------------------------------------------------ tokens
@@ -362,7 +362,12 @@ export const NATURAL_OUTCOMES: Readonly<Record<string, Readonly<Record<string, s
 
 /** The harness function that turns a recorded ledger into a stream's recorded half. Injectable so the settle exemption's
  *  staleness is testable against a harness that records the kernel's overlays — the future the exemption waits for. */
-export type Recorder = typeof recomputeStream;
+export type Recorder = (module: AnySportModule, rawConfig: unknown, events: readonly GoldenEvent[], lineups?: LineupPair) => Recomputed;
+
+/** The floor's own recorder: the MODULE-ONLY question (corpus format 1) its settle exemption and its overlay-unpinned probes were
+ *  written to ask. Named and explicit, not a default left in `recomputeStream`: the corpora are format 2 from GF-2 T2, and these
+ *  probes deliberately do not follow them yet — GF-2 T3 moves them onto the format-2 recorder and retires what that flips. */
+export const moduleRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStream(module, rawConfig, events, lineups, 1);
 
 export interface FloorExemption {
   readonly token: FloorToken;
@@ -397,7 +402,7 @@ export const FLOOR_EXEMPTIONS: readonly FloorExemption[] = [
 ];
 
 /** The recorded outcome of [start, abandon, settle] against the outcome the kernel reads from the same ledger. */
-export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = recomputeStream): { recorded: string; effective: string } | string {
+export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = moduleRecorder): { recorded: string; effective: string } | string {
   const [name, raw] = Object.entries(corpus.configs)[0] ?? [];
   if (name === undefined) return "the corpus records no config";
   const cfg = module.configSchema.parse(raw) as unknown;
@@ -595,7 +600,7 @@ function ablationProbe(
 export function overlayVerdicts(
   module: AnySportModule,
   corpus: GoldenCorpus,
-  record: Recorder = recomputeStream,
+  record: Recorder = moduleRecorder,
   claims: readonly OverlayClaim[] = OVERLAY_CLAIMS,
   scope: "claims" | "all" = "claims",
 ): Map<FloorToken, OverlayResult> {
@@ -633,7 +638,7 @@ export interface UncoveredReport {
 export function uncoveredUnpinned(
   module: AnySportModule,
   corpus: GoldenCorpus,
-  record: Recorder = recomputeStream,
+  record: Recorder = moduleRecorder,
   claims: readonly OverlayClaim[] = OVERLAY_CLAIMS,
 ): UncoveredReport {
   const verdicts = overlayVerdicts(module, corpus, record, claims, "all");

@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { CORE_EVENT_SCHEMAS, foldMatchWithStoppage, isKernelOwnedEventType, outcomeOf } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
-import { readCorpus, recomputeStream, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import { readCorpus, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
 import {
   ablateEvents,
   CORE_TYPES,
@@ -22,11 +22,13 @@ import {
   OVERLAY_CONTROLS,
   eventToken,
   floorRequirement,
+  moduleRecorder,
   recordedTokens,
   overlayVerdicts,
   staleOverlayClaims,
   uncoveredUnpinned,
   type FloorToken,
+  type Recorder,
 } from "./golden-floor.ts";
 import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
 import { resolvePositions } from "../sport/catalog.ts";
@@ -227,9 +229,9 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     let kernelStale = 0;
     let moduleHeld = 0;
     forEachSport(({ module, key }) => {
-      const overlayRecorder: typeof recomputeStream = (m, raw, events, lineups) => {
+      const overlayRecorder: Recorder = (m, raw, events, lineups) => {
         const cfg = m.configSchema.parse(raw) as unknown;
-        const base = recomputeStream(m, raw, events, lineups);
+        const base = moduleRecorder(m, raw, events, lineups);
         const pair = lineups ?? defaultLineupPair(resolvePositions(m, cfg));
         const states = events.map((_, i) => {
           const folded = foldMatchWithStoppage(m as never, cfg as never, pair, events.slice(0, i + 1).map((e, j) => makeEnvelope(j, e, e.voids)), { strictFromSeq: 0 });
@@ -270,7 +272,7 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
 
   it("a claimed event that cannot be probed (a recorder that throws) is stale, never silently held", () => {
     const module = builtinModules[0]!;
-    const broken: typeof recomputeStream = () => {
+    const broken: Recorder = () => {
       throw new Error("recorder exploded");
     };
     const messages = staleOverlayClaims(module, corpusOf(module.key), broken);

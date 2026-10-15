@@ -6,7 +6,7 @@ import { DEFAULT_LINEUP_POLICY, type LineupRejectionReason } from "../core/lineu
 import { FORFEIT_REASONS } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
-import { readCorpus, recomputeStream, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import { readCorpus, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
 import {
   CORE_TYPES,
   FLOOR_EXEMPTIONS,
@@ -20,6 +20,7 @@ import {
   impossibleReason,
   lineupOffers,
   lineupTypesOf,
+  moduleRecorder,
   outcomeToken,
   outcomeTokenOf,
   planLineupEvents,
@@ -32,6 +33,7 @@ import {
   staleFloorExemptions,
   staleNaturalOutcomes,
   unrequiredObservedOutcomes,
+  type Recorder,
 } from "./golden-floor.ts";
 import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
 import { resolvePositions } from "../sport/catalog.ts";
@@ -392,7 +394,7 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
         { type: "core.abandon", payload: { reason: "floodlight failure" } },
         { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } },
       ];
-      const made = { config: cfgName, seed: 99_999, events, ...recomputeStream(module, corpus.configs[cfgName], events, lineups) };
+      const made = { config: cfgName, seed: 99_999, events, ...moduleRecorder(module, corpus.configs[cfgName], events, lineups) };
       const withSettle: GoldenCorpus = { ...corpus, streams: [...corpus.streams, made] };
       const messages = staleFloorExemptions(module, withSettle);
       expect(messages.join("\n"), key).toMatch(/records core\.settle/);
@@ -408,10 +410,10 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
     let stale = 0;
     forEachSport(({ module, key }) => {
       const corpus = corpusOf(key);
-      const overlayRecorder: typeof recomputeStream = (m, raw, events, lineups) => {
+      const overlayRecorder: Recorder = (m, raw, events, lineups) => {
         const cfg = m.configSchema.parse(raw) as unknown;
         const folded = foldMatchWithStoppage(m as never, cfg as never, lineups!, events.map((e, i) => makeEnvelope(i, e)), { strictFromSeq: 0 });
-        return { ...recomputeStream(m, raw, events, lineups), outcome: JSON.stringify(outcomeOf(m as never, folded as never) ?? null) };
+        return { ...moduleRecorder(m, raw, events, lineups), outcome: JSON.stringify(outcomeOf(m as never, folded as never) ?? null) };
       };
       // the real harness: the exemption holds
       expect(staleFloorExemptions(module, corpus), key).toEqual([]);
@@ -426,7 +428,7 @@ describe("golden floor — exemptions and the reasoned list cannot go stale", ()
 
   it("the settle exemption goes STALE when its probe cannot run (a recorder that throws), never silently holds", () => {
     const module = builtinModules[0]!;
-    const broken: typeof recomputeStream = () => {
+    const broken: Recorder = () => {
       throw new Error("recorder exploded");
     };
     const messages = staleFloorExemptions(module, corpusOf(module.key), broken);

@@ -74,3 +74,43 @@ function withFormat2(corpus: GoldenCorpus, streams: GoldenStream[]): GoldenCorpu
   out.streams = streams;
   return out as unknown as GoldenCorpus;
 }
+
+/** One sport of a reformat: the corpus as it was and as it would be written. */
+export interface ReformatPlanned {
+  readonly module: AnySportModule;
+  readonly before: GoldenCorpus;
+  readonly after: GoldenCorpus;
+}
+
+/** `reformatCorpus` for every module, ALL-OR-NOTHING: every sport is computed before the caller is handed a single corpus to write,
+ *  and if any sport refuses, this throws one error naming every refusing sport and the caller has written nothing. (Writing sport
+ *  by sport left a tree half in format 2 when the fifth sport refused: no state anyone can review or revert by `git diff`.) */
+export function reformatAll(
+  modules: readonly AnySportModule[],
+  read: (key: string) => GoldenCorpus,
+): ReformatPlanned[] {
+  if (modules.length === 0) throw new Error("REFORMAT_GOLDEN refuses: no sport to reformat, and a reformat of nothing proves nothing");
+  const planned: ReformatPlanned[] = [];
+  const refusals: string[] = [];
+  for (const module of modules) {
+    const before = read(module.key);
+    try {
+      planned.push({ module, before, after: reformatCorpus(module, before) });
+    } catch (error) {
+      refusals.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (refusals.length > 0) {
+    throw new Error(`REFORMAT_GOLDEN wrote nothing: ${refusals.length} of ${modules.length} sport(s) refused, and a reformat is all sports or none.\n${refusals.join("\n")}`);
+  }
+  return planned;
+}
+
+/** The inverse of the field-adding half of `reformatCorpus`: the corpus as FORMAT 1 (no `format` marker; no `summaries`, no
+ *  `overlay`), every other key and byte in place. A corpus already in format 1 comes back equal. It exists so a test can state
+ *  what a reformat does to "a format-1 corpus" without caring which format the committed files are in today, and it is not a
+ *  downgrade path: nothing writes its result. */
+export function asFormatOne(corpus: GoldenCorpus): GoldenCorpus {
+  const { format: _format, ...rest } = corpus;
+  return { ...rest, streams: corpus.streams.map(({ summaries: _summaries, overlay: _overlay, ...old }) => old) };
+}

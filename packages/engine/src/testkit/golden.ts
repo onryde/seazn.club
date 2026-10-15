@@ -240,19 +240,19 @@ function deltasOf(module: AnySportModule, cfg: unknown, outcome: MatchOutcome | 
  *  simply stores it. Deliberately never calls arbitraryEvent — a recorded
  *  corpus must be independent of the generator.
  *
- *  `format` is the corpus format the result is recorded under (GF-2). 1, the default, is exactly what every corpus held
- *  before: the MODULE's outcome, summary and deltas of the final state, four fields. 2 records what a phone computes — the
- *  EFFECTIVE outcome, summary and deltas (`outcomeOf` / `summaryOf`, a settlement, an expunge and a withdrawal over a held
- *  level result laid over the module's answer), a digest of the effective summary after every event (`summaries`), the kernel
- *  overlay as change points (`overlay`) and, for the ablation probe, the dense per-step overlay (`dense`, never stored). The
- *  default stays 1 on purpose: every caller that pairs a recomputation with a corpus passes `corpusFormat(corpus)`, and a
- *  harness-internal caller that does not (the golden floor's settle probe) keeps asking the question it was written for. */
+ *  `format` is the corpus format the result is recorded under (GF-2), and it is REQUIRED: there is no default, because a default
+ *  was a silent choice. A caller that pairs a recomputation with a corpus passes `corpusFormat(corpus)`; one that does not
+ *  (a hand-built ledger asking what the MODULE says) passes the format it means. 1 is exactly what every corpus held before:
+ *  the MODULE's outcome, summary and deltas of the final state, four fields. 2 records what a phone computes — the EFFECTIVE
+ *  outcome, summary and deltas (`outcomeOf` / `summaryOf`, a settlement, an expunge and a withdrawal over a held level
+ *  result laid over the module's answer), a digest of the effective summary after every event (`summaries`), the kernel
+ *  overlay as change points (`overlay`) and, for the ablation probe, the dense per-step overlay (`dense`, never stored). */
 export function recomputeStream(
   module: AnySportModule,
   rawConfig: unknown,
   events: readonly GoldenEvent[],
-  recordedLineups?: LineupPair,
-  format: CorpusFormat = 1,
+  recordedLineups: LineupPair | undefined,
+  format: CorpusFormat,
 ): Recomputed {
   if (format === 2) return recomputeKernel(module, rawConfig, events, recordedLineups);
   const cfg = module.configSchema.parse(rawConfig);
@@ -1490,11 +1490,25 @@ export function gitRepoRoot(cwd: string): string | null {
   }
 }
 
-/** The verdict for THIS checkout — the impure half, wired for the harness. */
-export function corpusWriteGuard(): WorkingTreeVerdict {
+/** Why a write mode must NOT run now, or `null` when it may. Pure: `env` is the environment, `porcelain` and `writablePaths`
+ *  are what `corpusWriteVerdict` takes. A refusal only ever applies to a GUARDED mode (`GUARDED_WRITE_MODES`: UPDATE,
+ *  REBASELINE, REFORMAT); with none of them on there is nothing to refuse, however dirty the tree, and EXTEND alone is not one. */
+export function writeRefusal(
+  env: Readonly<Record<string, string | undefined>>,
+  porcelain: readonly string[] | null,
+  writablePaths: readonly string[],
+): string | null {
+  if (guardedWriteModes(env).length === 0) return null;
+  const verdict = corpusWriteVerdict(porcelain, writablePaths);
+  return verdict.ok ? null : verdict.reason;
+}
+
+/** `writeRefusal` for the real environment and the real working tree (git is asked only when a guarded mode is on). This is the
+ *  ONE call `golden.test.ts` makes: the list of modes lives in `GUARDED_WRITE_MODES` and nowhere else. */
+export function corpusWriteRefusal(env: Readonly<Record<string, string | undefined>> = process.env): string | null {
+  if (guardedWriteModes(env).length === 0) return null;
   const root = gitRepoRoot(HERE);
-  if (root === null) return corpusWriteVerdict(null, []);
-  return corpusWriteVerdict(gitPorcelain(HERE), corpusWritablePaths(root));
+  return writeRefusal(env, root === null ? null : gitPorcelain(HERE), root === null ? [] : corpusWritablePaths(root));
 }
 
 // ------------------------------------------- re-baseline state-diff summary
@@ -2454,7 +2468,9 @@ function kernelFieldMismatches(label: string, stream: GoldenStream, result: Repl
     out.push(`${label}: ${stream.summaries.length} summary digests recorded for ${stream.events.length} events`);
   }
   if (result.summaries === undefined || result.overlay === undefined) {
-    return [...out, `${label}: the replay produced no summaries/overlay, so a format-2 stream cannot be verified (replay it with format 2)`];
+    // not a finding about the corpus: the CALLER replayed in the wrong format, and returning it as a message let a suite that
+    // collects messages read the stream as unverified-but-clean (or count the message as a mutation kill)
+    throw new Error(`${label}: the replay produced no summaries/overlay, so a format-2 stream cannot be verified: replay it with recomputeStream(..., ${format}) (corpusFormat(corpus))`);
   }
   if (result.summaries.length !== stream.summaries.length) {
     out.push(`${label} summaries: recorded ${stream.summaries.length} digests, the replay produced ${result.summaries.length}`);
