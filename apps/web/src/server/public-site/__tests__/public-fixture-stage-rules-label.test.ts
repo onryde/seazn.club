@@ -27,6 +27,7 @@ vi.mock("next/cache", () => ({
 }));
 
 import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { decidersOffRules } from "@/lib/stage-decider-off";
 import { sql } from "@/lib/db";
 import { t } from "@/lib/i18n-runtime";
 import { msgFor } from "@/lib/messages-i18n";
@@ -181,5 +182,34 @@ describe.skipIf(!HAS_DB)("a bracket fixture's public label names the deciders of
     expect(presetName, "the Pool names no deciders").not.toBe(expected);
     expect(String(presetName)).not.toMatch(/shoot-out|penalties|extra time|level matches/);
     expect(infoFormat(await pageDoc(s, s.leagueFixtureId))).toBe(presetName);
+  }, 90_000);
+});
+
+// The stage KIND is what lets the label say "level matches wait for the organiser": without it the describer cannot
+// tell a knockout from a table, and an all-off Cup would read as the bare period line - the spectator told nothing about
+// a match that cannot end level. (Both numbers and words come from the engine's declarations and the dictionary.)
+describe.skipIf(!HAS_DB)("a bracket fixture whose stage switched every decider off says what happens to a level match", () => {
+  it("football: a Cup with shorter halves and no decider reads its period line and 'level matches wait for the organiser' on BOTH loaders; the Pool does not", async () => {
+    const m = resolveLatestModule("football");
+    const cfg = m.configSchema.parse(m.variants["11-a-side"]) as Record<string, unknown>;
+    const off = decidersOffRules(m, "11-a-side", "knockout");
+    expect(Object.keys(off).length, "premise: football has deciders to switch off").toBeGreaterThan(0);
+    // The Cup also plays shorter halves than the division, so it DIFFERS (a stage that changed nothing keeps the preset
+    // name, which is the division-level rule - "none" is only said once there is a line to put it on).
+    const halfMinutes = (cfg.halfMinutes as number) - 5;
+    const expected = [
+      t(enPublic, "format.rules.period.halves", { minutes: halfMinutes }),
+      t(enPublic, "format.rules.decider.none"),
+    ].join(", ");
+    const s = await seedDecidersScene({ sportKey: "football", variantKey: "11-a-side", cupRules: { ...off, halfMinutes } });
+    for (const [loader, doc] of [
+      ["getPublicFixture", await pageDoc(s, s.cupFixtureId)],
+      ["publicFixture", await pollDoc(s.cupFixtureId)],
+    ] as const) {
+      expect(infoFormat(doc), `${loader}: Info tab format row`).toBe(expected);
+      expect(doc.header.metaLine, `${loader}: header meta line`).toContain(expected);
+    }
+    // The empty case: the table stage is a league, where a drawn match is a result - it never says "level matches".
+    expect(String(infoFormat(await pollDoc(s.leagueFixtureId)))).not.toMatch(/level matches/);
   }, 90_000);
 });

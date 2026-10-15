@@ -103,6 +103,8 @@ export async function seedDecidersScene(opts: {
   sportKey: string;
   variantKey: string;
   leaguePoints?: Parameters<typeof putStageRules>[2]["points"];
+  /** The Cup's own rules (e.g. every decider switched off), stored before its fixtures are generated. */
+  cupRules?: Parameters<typeof putStageRules>[2]["rules"];
 }): Promise<DecidersScene> {
   const { auth } = await seedOrg("pro");
   const competition = await createCompetition(auth, {
@@ -131,6 +133,7 @@ export async function seedDecidersScene(opts: {
   const [league] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "Pool", config: {} });
   const [cup] = await createStages(auth, division.id, { seq: 2, kind: "knockout", name: "Cup", config: {} });
   if (opts.leaguePoints !== undefined) await putStageRules(auth, league!.id, { points: opts.leaguePoints });
+  if (opts.cupRules !== undefined) await putStageRules(auth, cup!.id, { rules: opts.cupRules });
   const leagueFixtures = await generateStageFixtures(auth, league!.id);
   const cupFixtures = await generateStageFixtures(auth, cup!.id);
 
