@@ -77,6 +77,8 @@ interface Row {
   runner_attempts: number;
   runner_state: Session["runner"]["state"]; runner_name: string | null; runner_stop_requested_at: string | null;
   runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
+  // R2003b (V449): the crash tally (domain/runner.ts CrashTally) — the session's count, this attempt's two bounds, the newest exit's instant
+  runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number; runner_crash_exit_at: string | null;
   created_by: string; created_at: string;
   output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)
   start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
@@ -91,7 +93,7 @@ const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
   runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at,
-  ingest_read_failed`;
+  ingest_read_failed, runner_crash_count, runner_crash_beats, runner_crash_exits, runner_crash_exit_at`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -128,6 +130,9 @@ function toSession(r: Row): Session {
       // and every retry test fails with InvalidTransition.
       state: r.runner_state, attempt: r.runner_attempts, name: r.runner_name,
       machineId: r.machine_id, stopRequestedAt: d(r.runner_stop_requested_at), lastExit: exitOf(r),
+      // R2003b: dropping a column here (or from cols()) is silent to tsc — undefined reads as no crashes, and the cap never
+      // fires; relay-internal-routes.test.ts "R2003b … the SEQUENCE" is the witness (its count crosses requests).
+      crashes: { count: r.runner_crash_count, beats: r.runner_crash_beats, exits: r.runner_crash_exits, exitAt: d(r.runner_crash_exit_at) },
     },
   };
 }
@@ -166,6 +171,8 @@ async function persist(tx: Tx, s: Session): Promise<void> {
            runner_state = ${s.runner.state}, runner_name = ${s.runner.name}, runner_stop_requested_at = ${s.runner.stopRequestedAt},
            runner_exit_code = ${s.runner.lastExit?.exitCode ?? null}, runner_oom_killed = ${s.runner.lastExit?.oomKilled ?? null},
            runner_requested_stop = ${s.runner.lastExit?.requestedStop ?? null},
+           runner_crash_count = ${s.runner.crashes.count}, runner_crash_beats = ${s.runner.crashes.beats},
+           runner_crash_exits = ${s.runner.crashes.exits}, runner_crash_exit_at = ${s.runner.crashes.exitAt},
            started_at = ${s.startedAt}, ended_at = ${s.endedAt}, beat_window_at = ${s.beatWindowAt}
      where id = ${s.id}`;
   // G1: beat_window_at IS written — the stale-beat arm and the retry arm move it, and nothing else can persist it.
@@ -720,7 +727,9 @@ export async function reconcileSession(sessionId: string, deps: SessionDeps): Pr
   }
   if (!r.machineId) return s;
   const observed = await deps.drivers.runner.observe(r.machineId);
-  return apply(sessionId, { type: "runner", trigger: { type: "observed", state: observed.state, exit: observed.exit, restarting: observed.restarting, restartingSince: observed.restartingSince } }, deps);
+  return apply(sessionId, { type: "runner", trigger: { type: "observed", state: observed.state, exit: observed.exit, restarting: observed.restarting, restartingSince: observed.restartingSince,
+    // R2003b: the exit's identity and the provider's restart count — what the crash cap counts an observed crash by
+    exitAt: observed.exitAt, restartCount: observed.restartCount } }, deps);
 }
 
 async function runEffects(session: Session, effects: Effect[], deps: SessionDeps): Promise<Session> {
@@ -2162,14 +2171,19 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
       ? { type: "runner", trigger: { type: "callback_playing" } } : null), deps)) ?? s;
   }
   // R2003: a COMPOSED stopped beat is routed by its exit reason (stoppedBeatTrigger): `ended` / `deadline` end the
-  // session (I2), `refused` fails it, no reason is today's lost → retry. null = record only — a fatal or
-  // signalled run is Fly's to restart in place on the SAME attempt (runner-fly.ts, on-failure), and if the restarted
-  // process never beats, the composed stale window takes the runner lost → destroyed → the one retry. A record-only beat
-  // applies nothing (the lifecycle has no trigger for it); its reason stays in last_heartbeat and the sample, and it never
-  // writes the runner exit facts (A5). A passthrough stopped beat is untouched.
+  // session (I2), `refused` fails it, no reason is today's lost → retry. null = record only — a signalled run is a stop
+  // someone else asked for, and a session_gone one is already over. A record-only beat applies nothing (the lifecycle
+  // has no trigger for it); its reason stays in last_heartbeat and the sample, and it never writes the runner exit facts
+  // (A5). A passthrough stopped beat is untouched.
+  // R2003b: `fatal` is `callback_crashed` — one crash, counted toward RUNNER_CRASH_CAP. Below it the runner stays as it
+  // was (Fly restarts it in place on the SAME attempt, runner-fly.ts on-failure; if the restarted process never beats,
+  // the composed stale window takes it lost → destroyed → the one retry); the crash that reaches the cap fails the session
+  // machine_crash and tears the Machine down. It is not a teardown trigger, so it reaches a still-running session only:
+  // `decide` refuses it on a terminal one (it would 500 the Machine's beat).
   const stopped = s.mode === "composed" && body.state === "stopped" ? stoppedBeatTrigger(body.exitReason) : null;
   if (stopped && (s.runner.state === "stopping" || s.runner.state === "playing" || s.runner.state === "booting")) {
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && (cur.runner.state === "stopping" || cur.runner.state === "playing" || cur.runner.state === "booting")
+      && (stopped.type !== "callback_crashed" || !isTerminal(cur.state))
       ? { type: "runner", trigger: stopped } : null), deps)) ?? s;
   }
   return { desiredState: s.desiredState };

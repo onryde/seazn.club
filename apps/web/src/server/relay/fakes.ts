@@ -292,11 +292,14 @@ export class FakeRecorder implements ProviderCallRecorder {
 }
 
 type FakeRestart = { since: Date; count: number } | "unrecorded";
-type FakeObserved = Pick<RunnerObservation, "state" | "exit"> & { restart?: FakeRestart };
+type FakeObserved = Pick<RunnerObservation, "state" | "exit"> & { restart?: FakeRestart; exitAt?: Date };
+/** R2003b `exitAt`: the exit's instant — given, or a restart's own `since` (runner-fly.ts: a restarting exit's instant IS
+ *  the restart's), else null (an exit with no instant counts nothing). Unrecorded: no exit, so none. */
 const observation = (o: FakeObserved): RunnerObservation =>
   o.restart === "unrecorded"
-    ? { state: o.state, exit: o.exit, restarting: null, restartingSince: null, restartCount: null }
-    : { state: o.state, exit: o.exit, restarting: o.restart !== undefined, restartingSince: o.restart?.since ?? null, restartCount: o.restart?.count ?? null };
+    ? { state: o.state, exit: o.exit, restarting: null, restartingSince: null, restartCount: null, exitAt: null }
+    : { state: o.state, exit: o.exit, restarting: o.restart !== undefined, restartingSince: o.restart?.since ?? null, restartCount: o.restart?.count ?? null,
+        exitAt: o.exitAt ?? o.restart?.since ?? null };
 
 export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
@@ -364,7 +367,7 @@ export class FakeRunner implements RunnerProvider {
   async observe(runnerId: string): Promise<RunnerObservation> {
     this.record("getMachine", "GET", `/machines/${runnerId}`, runnerId);
     const o = this.observed.get(runnerId);
-    if (!o || !this.alive.has(runnerId)) return observation({ state: "destroyed", exit: o?.exit ?? null });
+    if (!o || !this.alive.has(runnerId)) return observation({ state: "destroyed", exit: o?.exit ?? null, ...(o?.exitAt ? { exitAt: o.exitAt } : {}) });
     if (o.state === "stopped" && o.exit?.requestedStop) {
       // auto_destroy: a cleanly stopped Machine is gone by the next look
       this.alive.delete(runnerId);
@@ -389,9 +392,9 @@ export class FakeRunner implements RunnerProvider {
   /** Test controls. */
   /** `restart` (F-007): the provider is restarting this runner in place since `since` — what runner-fly.ts reads off
    *  Fly's latest exit event; `"unrecorded"` — down before the provider recorded the exit (`restarting: null`). Absent:
-   *  not restarting. */
-  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null, restart?: FakeRestart): void {
-    this.observed.set(runnerId, { state, exit, restart });
+   *  not restarting. `exitAt` (R2003b): the exit's instant when it is not a restart's (a final exit Fly will not restart). */
+  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null, restart?: FakeRestart, exitAt?: Date): void {
+    this.observed.set(runnerId, { state, exit, restart, ...(exitAt ? { exitAt } : {}) });
     if (state === "destroyed") this.alive.delete(runnerId);
   }
   /** Fail the next `create`. The ARGUMENT is the proof the failure carries (lane C A3, owner-confirmed 2026-09-28; A23):

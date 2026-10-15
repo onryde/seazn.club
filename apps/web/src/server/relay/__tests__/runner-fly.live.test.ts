@@ -28,7 +28,7 @@ import { resolve } from "node:path";
 import { FlyClient, SESSION_METADATA_KEY } from "../fly-client";
 import { FlyRunner } from "../runner-fly";
 import { RUNNER_STOP_GRACE_SECONDS } from "../config";
-import { machineNameFor, stepRunner } from "../domain/runner";
+import { CRASHES_NONE, machineNameFor, stepRunner } from "../domain/runner";
 import type { ProviderCallRecord, RunnerSpec } from "../ports";
 import { liveFlyGate } from "./_live-fly-gate";
 
@@ -184,7 +184,7 @@ describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", 
     expect(back).toEqual({ signal: "SIGTERM", timeout: `${RUNNER_STOP_GRACE_SECONDS}s` });
 
     await client.waitMachine(h.runnerId, "started", 60);
-    const effect = stepRunner({ state: "playing", attempt: 1, name: machineNameFor(session, 1), machineId: h.runnerId, stopRequestedAt: null, lastExit: null }, { type: "session_stop" }, new Date())
+    const effect = stepRunner({ state: "playing", attempt: 1, name: machineNameFor(session, 1), machineId: h.runnerId, stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE }, { type: "session_stop" }, new Date())
       .effects.find((e) => e.type === "stop_machine");
     if (effect?.type !== "stop_machine") throw new Error("premise: playing × session_stop issues the STOP effect");
     await runner.stop(h.runnerId, { signal: effect.signal, timeoutSeconds: effect.timeoutSeconds });
