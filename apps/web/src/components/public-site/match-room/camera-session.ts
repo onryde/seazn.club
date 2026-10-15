@@ -51,7 +51,7 @@
 // state and a heartbeat after, judged when it is SENT: a change the server did not take is sent again as a change after a wait
 // and then dropped (the next beat is still a change, since nothing was acknowledged); a lost heartbeat is simply dropped. A
 // queued report whose state has moved on by the time its turn comes is not sent: what it said is no longer true.
-import { D7GuardError, type JoinOwnCamera, type MeetingLink, type OwnCamera } from "./camera-loader";
+import { D7GuardError, type JoinOwnCamera, type OwnCamera } from "./camera-loader";
 import { CAMERA_REPORT_HEARTBEAT_MS } from "./room-snapshot";
 
 export type CameraStatus = "idle" | "joining" | "live" | "off" | "failed" | "recovering" | "gave_up";
@@ -114,12 +114,6 @@ export function cameraSession(join: JoinOwnCamera, emitView: (v: CameraView) => 
   const sleep = opts.sleep ?? realSleep;
   let cam: OwnCamera | null = null;
   let release: (() => void) | null = null;
-  // The meeting link (review I8) is relayed to listeners that subscribed
-  // before the camera joined — the presence pill's hook mounts first.
-  const linkListeners = new Set<() => void>();
-  const linkChanged = () => {
-    for (const cb of [...linkListeners]) cb();
-  };
   // The camera report (D16): see the header. `current` is the state a heartbeat repeats (null between states), `acked` the
   // last state the server took.
   let current: CameraReportState | null = null;
@@ -199,17 +193,14 @@ export function cameraSession(join: JoinOwnCamera, emitView: (v: CameraView) => 
   const attach = (joined: OwnCamera, joinedFor: string | null) => {
     cam = joined;
     joinedKey = joinedFor;
-    const unlink = joined.onLinkChange(linkChanged);
     const unchange = joined.onChange((enabled, track) => {
       if (!stopped) emit({ status: enabled && track ? "live" : "off", track: enabled ? track : null });
     });
     const unfault = joined.onFault(() => void recover(joined));
     release = () => {
-      unlink();
       unchange();
       unfault();
     };
-    linkChanged();
     gaveUp = false;
     stamp("end");
     const track = joined.track();
@@ -221,7 +212,6 @@ export function cameraSession(join: JoinOwnCamera, emitView: (v: CameraView) => 
     release = null;
     const c = cam;
     cam = null;
-    if (c !== null) linkChanged();
     return c;
   };
 
@@ -321,16 +311,6 @@ export function cameraSession(join: JoinOwnCamera, emitView: (v: CameraView) => 
       // we gave up, when the re-seat after the reload is its closer (I-2).
       if (!gaveUp) stamp("end");
       await c?.leave().catch(() => undefined);
-    },
-    /** The meeting as the camera's join sees it; null without one. */
-    link(): MeetingLink | null {
-      return cam?.link() ?? null;
-    },
-    onLinkChange(cb: () => void): () => void {
-      linkListeners.add(cb);
-      return () => {
-        linkListeners.delete(cb);
-      };
     },
   };
 }

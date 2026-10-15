@@ -3,8 +3,8 @@
 // is not a room — never downloads it.
 //
 // What the player's browser does with it, and nothing more (design §5): join
-// the fixture's meeting with the caller's OWN participant token, audio off,
-// and publish their camera.
+// the player's OWN meeting (one per player, D16: `(fixture, side)`) with the
+// caller's OWN participant token, audio off, and publish their camera.
 //
 // D7 (spec §5.3, review NEW-1, re-2 M1): a player never RECEIVES another
 // participant's video or audio — not hidden, not received. The SDK's default
@@ -19,11 +19,11 @@
 //     either, for all four kinds (camera, screen share, microphone, screen
 //     audio). The cap alone is not enough in 2.0.2: for a viewer
 //     on stage the SDK's selection computes `cap - 1` and keeps one peer when
-//     the server has selected two or more (the opponent and an arbiter); and
+//     the server has selected two or more (an arbiter and a second tab); and
 //     after a socket rejoin that selection runs before `roomJoined` fires, so
 //     only a watch on the map itself is in time. Every participant starts
 //     with every kind allowed (the SDK's TC default), so unsubscribing
-//     "video" alone would leave the opponent subscribed for a screen share.
+//     "video" alone would leave a peer subscribed for a screen share.
 //     See __tests__/_fake-realtimekit.ts for the SDK lines.
 //   - listens to `participantJoined` only (re-2 M2): every addition to a
 //     subscribed map emits it (ClientMap.set l.14229 — selections at
@@ -42,24 +42,19 @@
 //     publishing and retries quietly on D7_QUIET_RETRY_MS. A failure to cap
 //     before the join rejects the join with D7GuardError: ours, never the
 //     player's.
-// The player preset's `max_video_streams` = 0 on stg and prod is the
-// server-held half (owner, Cloudflare dashboard). A tampered client can still
-// subscribe in a shared meeting; that is the owner's per-player-meeting
-// question, not something a client can enforce.
+// D16 (design §5.6): each player has a meeting of their OWN, so the opponent is
+// never in it and a tampered client has none of theirs to subscribe to; the
+// other participants a player's meeting can hold are the arbiter (who joins
+// receive-only) and this player's own second tab. The guard is what keeps even
+// those from being received. The player preset's `max_video_streams` = 0 on
+// stg and prod is the server-held half (owner, Cloudflare dashboard).
 //
-// Presence (review I8): the opponent's pill is read from THIS join's own
-// signalling — who is in the meeting, and whether they have a live camera
-// producer — at zero network cost. Membership and producers arrive without
-// any media subscription; `participant.videoEnabled` does NOT (it changes only
-// through consumer events, which D7 forbids), so it is never read.
+// The opponent's pill is NOT read from this join: the opponent is in another
+// meeting, so nothing of them reaches this client. The pill is the opponent's
+// own camera report, sent by camera-session (the room's camera-report) and
+// read back from the room read (§5.6.3).
 import type RealtimeKitClient from "@cloudflare/realtimekit";
 import * as Sentry from "@sentry/nextjs";
-
-/** Another participant as this client's signalling holds them. */
-export type PeerView = { userId: string; videoLive: boolean };
-/** What the pill reads: the other participants, and when this client last
- *  (re)joined the meeting (the pill waits for the peer list to settle). */
-export type MeetingLink = { joinedAt: number; peers: PeerView[] };
 
 export type OwnCamera = {
   /** The local camera track while publishing, else null. */
@@ -69,12 +64,6 @@ export type OwnCamera = {
   /** Turn the camera back on after it was turned off or dropped. */
   enable(): Promise<void>;
   leave(): Promise<void>;
-  /** The meeting as this client sees it, or null while it is not in it:
-   *  before the join completes, with the socket down, after leaving. */
-  link(): MeetingLink | null;
-  /** Called whenever someone joins or leaves, or this client's own
-   *  connection changes. Producer changes emit nothing — read on a timer. */
-  onLinkChange(cb: () => void): () => void;
   /** The guard left the meeting (D7): a remote peer was subscribed and could
    *  not be refused. This camera is over — join a fresh one. Called once; at
    *  once (next microtask) for a listener added after it happened. */
@@ -218,26 +207,12 @@ export function makeJoinOwnCamera(
     participants.videoSubscribed.on("participantJoined", watch);
     participants.audioSubscribed.on("participantJoined", watch);
 
-    // ── presence ─────────────────────────────────────────────────────────
-    let joinedAt: number | null = null;
-    const linkListeners = new Set<() => void>();
-    const changed = () => {
-      for (const cb of [...linkListeners]) cb();
-    };
+    // Every socket (re)join ends in roomJoined (a socket drop or failure and a media-node drop all emit roomLeft first, SDK
+    // l.24413, l.24419, l.24423): the SDK has reset the view by then, so the guard runs again.
     self.on("roomJoined", () => {
       if (closed) return;
-      joinedAt = Date.now();
       void enforce();
-      changed();
     });
-    // A socket drop or failure and a media-node drop all emit roomLeft (SDK
-    // l.24413, l.24419, l.24423); every rejoin ends in roomJoined.
-    self.on("roomLeft", () => {
-      joinedAt = null;
-      changed();
-    });
-    participants.joined.on("participantJoined", changed);
-    participants.joined.on("participantLeft", changed);
 
     // ── fail closed ──────────────────────────────────────────────────────
     // A FAULT for the owner to heal (a fresh join), never the camera going
@@ -248,8 +223,6 @@ export function makeJoinOwnCamera(
       // A quiet retry still waiting finds the camera closed and does nothing.
       closed = true;
       report("d7_fail_closed", err);
-      joinedAt = null;
-      changed();
       // The owner hears it FIRST (it stamps our fault on the server before
       // the leave, so no stretch of the gap is unstamped); the leave runs on
       // the next microtask — still before the SDK's consumer sync, a
@@ -262,7 +235,6 @@ export function makeJoinOwnCamera(
     }
 
     await meeting.join();
-    if (joinedAt === null && !closed) joinedAt = Date.now();
     await enforce();
     if (closed) {
       // Failed closed during the join itself: no camera to hand back.
@@ -290,8 +262,6 @@ export function makeJoinOwnCamera(
           // After a fail-close the meeting is already being left: the same leave.
           if (leaving !== null) return await leaving;
           await meeting.leave();
-          joinedAt = null;
-          changed();
         } finally {
           // T17B fix 2 (D8a): the camera light goes off whatever the SDK's leave reached. Its own cleanup stops these
           // too (SDK l.24549 cleanupSelf → l.20470 cleanUpTracks), but only once its leave gets that far.
@@ -308,20 +278,6 @@ export function makeJoinOwnCamera(
         return () => {
           live = false;
           faultListeners.delete(relay);
-        };
-      },
-      link() {
-        if (joinedAt === null) return null;
-        const peers = [...participants.joined.values()].map((p) => ({
-          userId: p.userId,
-          videoLive: p.producers.some((x) => x.kind === "video" && !x.screenShare && !x.pause),
-        }));
-        return { joinedAt, peers };
-      },
-      onLinkChange(cb) {
-        linkListeners.add(cb);
-        return () => {
-          linkListeners.delete(cb);
         };
       },
     };

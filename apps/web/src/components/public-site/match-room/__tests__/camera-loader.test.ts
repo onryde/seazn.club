@@ -295,7 +295,7 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
   it("a call that throws once is reported once and retried — nothing received, still in the meeting", async () => {
     const { seen, report } = reports();
     const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), camera(m, OPP.peer), mic(m, OPP.peer)) });
-    const cam = await makeJoinOwnCamera(rtk.load, report)("own-token");
+    await makeJoinOwnCamera(rtk.load, report)("own-token");
     const m = rtk.meetings[0]!;
     await settle();
     m.failNext.unsubscribe = 1;
@@ -305,7 +305,6 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(received(m)).toEqual(NOTHING);
     expect(seen).toEqual([{ event: "d7_enforce_failed", message: "injected unsubscribe failure" }]);
     expect(m.calls, "not left").not.toContain("leave");
-    expect(cam.link(), "still in the meeting").not.toBeNull();
   });
 
   it("reports are rate-limited: a second failing episode on the same camera is not reported again", async () => {
@@ -341,7 +340,6 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(fault.n, "the owner heard it once — and re-joins (camera-session)").toBe(1);
     expect(leavesWhenTold, "told BEFORE the leave: its stamp leaves no stretch of the gap unstamped").toEqual([0]);
     expect(received(m).consumed + received(m).audioConsumed, "nothing consumed").toBe(0);
-    expect(cam.link(), "out of the meeting").toBeNull();
     expect(cam.track(), "this camera is gone").toBeNull();
     await expect(cam.enable(), "never back into THAT meeting — a fresh join replaces it").rejects.toThrow(/fresh join/);
     await cam.leave();
@@ -398,7 +396,7 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     await m.reconnect({ inWindow: (x) => x.peerMediaJoined(OPP.peer) });
     await settle();
     expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed", "d7_fail_closed"]);
-    expect(cam.link()).toBeNull();
+    expect(m.calls, "the meeting was left").toContain("leave");
     expect(fault.n).toBe(1);
     expect(received(m).consumed + received(m).audioConsumed).toBe(0);
   });
@@ -420,11 +418,11 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     }
     expect(episodes, "anti-vacuity: episodes").toBe(D7_MAX_ATTEMPTS);
     expect(m.calls, "never left").not.toContain("leave");
-    expect(cam.link()).not.toBeNull();
+    expect(cam.track(), "still publishing").not.toBeNull();
     expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed"]);
   });
 
-  it("a leave that fails while failing closed is reported, not swallowed — and the camera still reads out of the meeting", async () => {
+  it("a leave that fails while failing closed is reported, not swallowed — and the camera is still gone", async () => {
     const { seen, report } = reports();
     const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), camera(m, OPP.peer), mic(m, OPP.peer)) });
     const cam = await makeJoinOwnCamera(rtk.load, report)("own-token");
@@ -440,8 +438,7 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
       { event: "d7_fail_closed", message: "injected unsubscribe failure" },
       { event: "d7_leave_failed", message: "injected leave failure" },
     ]);
-    expect(cam.link(), "no roomLeft arrived, and still nothing is claimed").toBeNull();
-    expect(cam.track()).toBeNull();
+    expect(cam.track(), "no roomLeft arrived, and the camera is still gone").toBeNull();
   });
 
   it("the fail-close is a FAULT, never the player's camera going off: the camera listener hears nothing, the fault listener once — and one added afterwards hears it at once", async () => {
@@ -474,7 +471,6 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(m.failNext.setViewMode, "premise: the join's attempts all failed").toBe(6 - D7_MAX_ATTEMPTS);
     expect([m.calls.includes("leave"), fault.n], "not left: nothing to refuse").toEqual([false, 0]);
     expect(cam.track(), "still publishing").not.toBeNull();
-    expect(cam.link(), "still in the meeting").not.toBeNull();
     let fired = 0;
     while (m.participants.viewMode !== "MANUAL" && (await timer.fireNext())) fired += 1;
     expect(fired, "the quiet retries it took: one per remaining failure, plus the one that worked").toBe(6 - D7_MAX_ATTEMPTS + 1);
@@ -545,64 +541,6 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(received(m).consumed + received(m).audioConsumed, "left before the consumer sync").toBe(0);
     expect(timer.pending(), "the quiet retry is cancelled").toBe(0);
     expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed", "d7_fail_closed"]);
-  });
-});
-
-describe("the meeting link the presence pill reads (review I8: zero network)", () => {
-  it("null until joined; the opponent's camera from producers (video, not a screen share, not paused); null with the socket down; a NEW join instant after a reconnect; null after leaving", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      vi.setSystemTime(1_000);
-      const rtk = fakeRealtimeKit();
-      const cam = await makeJoinOwnCamera(rtk.load)("own-token");
-      const m = rtk.meetings[0]!;
-      const live = () => cam.link()?.peers.find((p) => p.userId === OPP.user)?.videoLive ?? null;
-      expect(cam.link()?.joinedAt).toBe(1_000);
-      expect(cam.link()?.peers).toEqual([]);
-
-      let notified = 0;
-      const off = cam.onLinkChange(() => (notified += 1));
-      m.peerJoins(OPP.peer, OPP.user);
-      expect(notified, "a peer joining notifies").toBeGreaterThan(0);
-      expect(live(), "in the meeting, no producer").toBe(false);
-      camera(m, OPP.peer);
-      expect(live(), "a camera producer").toBe(true);
-      m.toggle(OPP.peer, `${OPP.peer}-cam`, true);
-      expect(live(), "paused").toBe(false);
-      m.toggle(OPP.peer, `${OPP.peer}-cam`, false);
-      expect(live()).toBe(true);
-      m.closeProducer(OPP.peer, `${OPP.peer}-cam`);
-      m.produce(OPP.peer, { producerId: "opp-screen", kind: "video", screenShare: true });
-      expect(live(), "a screen share is not the camera").toBe(false);
-      m.produce(OPP.peer, { producerId: "opp-mic", kind: "audio", screenShare: false });
-      expect(live(), "nor is a microphone").toBe(false);
-
-      vi.setSystemTime(5_000);
-      const n0 = notified;
-      m.dropSocket();
-      expect(cam.link(), "socket down: nothing is known").toBeNull();
-      expect(notified).toBeGreaterThan(n0);
-      vi.setSystemTime(9_000);
-      const rejoined = m.reconnect();
-      expect(cam.link(), "SOCKET_PEERS is in, the media join is not: still nothing").toBeNull();
-      await rejoined;
-      expect(cam.link()?.joinedAt, "a rejoin restarts the settle").toBe(9_000);
-      vi.setSystemTime(12_000);
-      const media = m.mediaReconnect();
-      expect(cam.link(), "the media node dropped: nothing is known").toBeNull();
-      await media;
-      expect(cam.link()?.joinedAt, "a media-node rejoin restarts the settle too").toBe(12_000);
-      m.peerLeaves(OPP.peer);
-      expect(cam.link()?.peers.some((p) => p.userId === OPP.user), "left").toBe(false);
-      off();
-      const n1 = notified;
-      m.peerJoins(ARB.peer, ARB.user);
-      expect(notified, "unsubscribed listeners hear nothing").toBe(n1);
-      await cam.leave();
-      expect(cam.link(), "left the meeting").toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
 

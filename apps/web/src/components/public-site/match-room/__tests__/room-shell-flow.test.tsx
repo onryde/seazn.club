@@ -22,7 +22,7 @@ import { CameraBlockedCard, CameraGaveUpNotice } from "../room-cards";
 import { initialRoomState } from "../room-state";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, STAMP_RETRY_MS } from "../camera-session";
 import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_REPORT_HEARTBEAT_MS, cameraEvidenceDelayMs, type RoomSnapshot } from "../room-snapshot";
-import type { MeetingLink, OwnCamera } from "../camera-loader";
+import type { OwnCamera } from "../camera-loader";
 import { IDLE_POLL_MS, SETTLED_POLL_MS } from "../use-room";
 
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
@@ -123,8 +123,6 @@ function liveCamera(): OwnCamera {
     onChange: () => () => {},
     enable: async () => {},
     leave: async () => {},
-    link: () => null,
-    onLinkChange: () => () => {},
     onFault: () => () => {},
   };
 }
@@ -143,32 +141,6 @@ function faultingCamera() {
     },
   };
   return { cam, left, fault: () => listener?.() };
-}
-/** A camera whose meeting link the test moves, as the SDK's signalling would. */
-function meetingCamera() {
-  let current: MeetingLink | null = null;
-  const listeners = new Set<() => void>();
-  const cam: OwnCamera = {
-    ...liveCamera(),
-    link: () => current,
-    onLinkChange(cb) {
-      listeners.add(cb);
-      return () => {
-        listeners.delete(cb);
-      };
-    },
-  };
-  return {
-    cam,
-    set(l: MeetingLink | null) {
-      current = l;
-      for (const cb of [...listeners]) cb();
-    },
-    /** A producer change: the SDK emits nothing for it (review I8). */
-    setSilently(l: MeetingLink | null) {
-      current = l;
-    },
-  };
 }
 type Island = { tree: () => ReturnType<typeof walk> };
 const screenOf = (island: Island) => {
@@ -897,17 +869,16 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
 // Final re-review 3, R3-1: a re-pair's newcomer retires the meeting the player who STAYED is seated in (R2-2), and
 // its participants go with it. Their room — open, untouched — must re-claim the seat by itself, once, and move the
 // camera to the new meeting. The trigger is the SERVER's word (the snapshot's ownParticipantId), never a guess from
-// the camera's own link: a drop or a kick the server did not retire leaves the participant on file.
+// the camera's own state: a drop or a kick the server did not retire leaves the participant on file.
 describe("R3-1: the meeting is retired under a seated player — one quiet re-claim, the camera moves, never a loop", () => {
   const NEW = { participantId: "p-new", authToken: "new-rtk-token" };
   const seatedSnap = (own: string | null, over: Partial<RoomSnapshot> = {}) =>
     snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, ownParticipantId: own, ...over });
-  /** A live camera that counts its leaves and can drop its own meeting link (a roomLeft). */
+  /** A live camera that counts its leaves. */
   function trackedCamera() {
     const left = { n: 0 };
-    const m = meetingCamera();
-    const cam: OwnCamera = { ...m.cam, leave: async () => void (left.n += 1) };
-    return { cam, left, drop: () => m.set(null) };
+    const cam: OwnCamera = { ...liveCamera(), leave: async () => void (left.n += 1) };
+    return { cam, left };
   }
   /** Mount a seated player (the re-entry claim seats them on the meeting `p-own`). */
   async function seatedRoom(first: OwnCamera, ...later: OwnCamera[]) {
@@ -952,12 +923,12 @@ describe("R3-1: the meeting is retired under a seated player — one quiet re-cl
     island.unmount();
   });
 
-  it("a drop or a kick the server did not retire — the camera's own link gone, the participant still on file — never re-claims; nor does the sweep's end of the meeting (same participant)", async () => {
+  it("a participant the server still holds never re-claims, however long the room reads on; nor does the sweep's end of the meeting (same participant)", async () => {
+    // The client has no meeting link to read (a drop or a kick is invisible to it): the trigger is the SERVER's word only.
     const cam = trackedCamera();
     const island = await seatedRoom(cam.cam);
-    cam.drop(); // roomLeft: a socket drop, a media-node drop, an arbiter's kick — the client cannot tell them apart
     for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
-    expect(cam.left.n, "a drop is not a leave").toBe(0);
+    expect(cam.left.n, "reading on is not a leave").toBe(0);
     getAnswer = () => seatedSnap("p-own", { phase: "closed" }); // the sweep ended the meeting: its row and participant stay
     for (let i = 0; i < 2; i += 1) await settle(IDLE_POLL_MS);
     expect(seatPosts(), "no re-claim").toBe(1);
@@ -1177,8 +1148,8 @@ describe("the game ends: the camera leaves at once (T17B fix 2, D8a)", () => {
     getAnswer = () => open();
     seatAnswers = [() => ({ snapshot: open(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } })];
     const first = counted();
-    const second = meetingCamera();
-    join.fn.mockResolvedValueOnce(first.cam).mockResolvedValueOnce(second.cam);
+    const second = liveCamera();
+    join.fn.mockResolvedValueOnce(first.cam).mockResolvedValueOnce(second);
     const island = renderIsland(RoomShell, { initial: open(), token: "tok", selfPath: "/x" });
     await roomOf(island).claim();
     await settle();

@@ -15,8 +15,6 @@ function fakeCamera() {
   let onChange: ((enabled: boolean, track: MediaStreamTrack | null) => void) | null = null;
   let onFault: (() => void) | null = null;
   const cam: OwnCamera = {
-    link: () => null,
-    onLinkChange: () => () => {},
     track: () => TRACK,
     onChange(cb) {
       onChange = cb;
