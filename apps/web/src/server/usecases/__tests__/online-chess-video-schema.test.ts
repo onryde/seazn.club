@@ -584,6 +584,18 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
         create unique index fixture_video_guard_faults_open_idx
           on fixture_video_guard_faults (fixture_id, person_id) where ended_at is null;`;
       const TABLES = ["fixture_video_meetings", "fixture_video_participants", "fixture_video_guard_faults"] as const;
+      /** The tables the replica's foreign keys point at, as STUBS inside the scratch schema, holding just the rows this file
+       *  seeded from. A replica whose keys named the LIVE tables took SHARE ROW EXCLUSIVE on them as it was created, and the
+       *  delta's drop-constraint takes ACCESS EXCLUSIVE on `fixtures` and `persons`: for as long as that transaction was open it
+       *  blocked, and in a parallel run deadlocked, every other test file writing to fixtures, organizations, persons or users. */
+      const STUBS = (live: string) => `
+        create table fixtures (id uuid primary key, home_entrant_id uuid, away_entrant_id uuid);
+        create table organizations (id uuid primary key);
+        create table persons (id uuid primary key);
+        create table users (id uuid primary key);
+        insert into fixtures select id, home_entrant_id, away_entrant_id from "${live}".fixtures where id = '${fixtureId}';
+        insert into organizations values ('${orgId}');
+        insert into persons values ('${personId}');`;
 
       /** Every column, constraint and index of a table, as one sorted list of words: its shape. */
       async function shapeOf(tx: typeof sql, schema: string, table: string): Promise<string[]> {
@@ -626,6 +638,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
             const scratch = `v448_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
             await tx.unsafe(`create schema "${scratch}"`);
             await tx.unsafe(`set local search_path to "${scratch}", "${live}"`);
+            await tx.unsafe(STUBS(live));
             await tx.unsafe(OLD_SHAPE);
             out = { value: await body(tx, live, scratch) };
             throw ROLLBACK;
@@ -654,7 +667,8 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
         const got = await onOldShape(async (tx) => {
           await seedOld(tx, { ended: false });
           // A savepoint: the failed delta must not poison the transaction the checks below read in.
-          const refused = await tx.savepoint(async (sp) => (sp as unknown as typeof sql).unsafe(delta())).then(
+          const savepoint = (tx as unknown as { savepoint: (f: (sp: typeof sql) => Promise<unknown>) => Promise<unknown> }).savepoint.bind(tx);
+          const refused = await savepoint(async (sp) => sp.unsafe(delta())).then(
             () => null,
             (err: { code?: string; message?: string }) => ({ code: err.code, message: err.message }),
           );
@@ -692,6 +706,22 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
           compared += got.applied[t]!.length;
         }
         expect(compared).toBeGreaterThan(40);
+      });
+
+      it("the replica and the delta lock only the scratch schema: no strong lock on a LIVE table (a parallel test file is never blocked or deadlocked by this one)", async () => {
+        const got = await onOldShape(async (tx, live, scratch) => {
+          await seedOld(tx, { ended: true });
+          await tx.unsafe(delta());
+          return tx<{ schema: string; mode: string }[]>`
+            select n.nspname as schema, l.mode
+              from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
+             where l.pid = pg_backend_pid() and l.locktype = 'relation' and n.nspname in (${live}, ${scratch})`;
+        });
+        const STRONG = new Set(["ShareRowExclusiveLock", "ShareLock", "ExclusiveLock", "AccessExclusiveLock"]);
+        const scratchStrong = got.filter((l) => l.schema.startsWith("v448_") && STRONG.has(l.mode));
+        expect(scratchStrong.length, "control: the probe sees the strong locks the delta takes - in the scratch schema").toBeGreaterThan(0);
+        const liveStrong = got.filter((l) => !l.schema.startsWith("v448_") && STRONG.has(l.mode));
+        expect(liveStrong, "and none on a live table").toEqual([]);
       });
 
       it("a seat claim still in flight when the delta starts is SEEN: the delta waits for it on the table lock, then the guard raises (and had it rolled back, the delta applies)", async () => {
@@ -743,6 +773,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
         try {
           await sql.begin(async (tx) => {
             await tx.unsafe(`set local search_path to "${scratch}", "${live}"`);
+            await tx.unsafe(STUBS(live));
             await tx.unsafe(OLD_SHAPE);
           });
           expect(await outcomeWhen("commits"), "the committed claim is an unended row the guard now sees").toMatch(/chess-end-shared-meetings/);
