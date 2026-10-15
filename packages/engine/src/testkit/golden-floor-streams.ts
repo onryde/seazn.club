@@ -475,10 +475,10 @@ const settleEvent = (winner: string, method: "organiser" | "lot"): GoldenEvent =
 /** Whether a settle story's ledger is read by the kernel the way the story says, prefix by prefix (`n` = the index of its first
  *  kernel event: the withdrawal on the level route, the abandon on the other). Every step is asked of the FOLD, never of the
  *  builder's belief, and each prefix is asked its own fact, so a step that folds but did not take effect (a settle in front of
- *  a match the module already decided, a void that struck nothing) refuses the whole story. Each fact is asked ONCE, at the
- *  prefix that can show it: a fact a neighbouring read already implies is not asked twice (two reads that cover for each other
- *  are each untested). "Nothing is settled yet" is the read after the settle's void, which would still find a settlement
- *  standing if one had been there from the start; "no withdrawal is left" is the read after its void.
+ *  a match the module already decided) refuses the whole story. Each fact is asked once, at the prefix that can show it, and a
+ *  read the kernel's own refusals already make is not repeated: a void that did not take effect leaves its target standing, and
+ *  the NEXT kernel event is then refused by the strict fold (a settle over a standing withdrawal, a settle over a standing
+ *  settle: pinned in the story test), so "its void took effect" is the next read's success, not a read of its own.
  *
  *  A settle that stands is a WIN for the side it names (X-ST-1): that is the kernel's law, read per sport and per step by the
  *  story test (golden-floor-streams.test.ts), so no outcome token is asked here. */
@@ -487,28 +487,14 @@ export function settleStoryHolds(ctx: Ctx, cfg: unknown, lineups: LineupPair, le
   if (route === "level") {
     return (
       readsAs(ctx, cfg, lineups, at(n + 1), { withdrawn: true }) && //  the withdrawal is laid over the level result
-      readsAs(ctx, cfg, lineups, at(n + 2), { withdrawn: false }) && // its void takes it away (and nothing puts it back)
-      readsAs(ctx, cfg, lineups, at(n + 3), { settled: true }) && //    the settle decides
-      readsAs(ctx, cfg, lineups, at(n + 4), { settled: false }) && //   its void takes that away
-      readsAs(ctx, cfg, lineups, ledger, { settled: true }) //          said again by lot
+      readsAs(ctx, cfg, lineups, at(n + 3), { settled: true }) && //   the withdrawal's void, then the settle that decides
+      readsAs(ctx, cfg, lineups, ledger, { settled: true }) //         the settle's void, then a settle by lot
     );
   }
   return (
     readsAs(ctx, cfg, lineups, at(n + 2), { settled: true }) && //   the settle decides an abandoned match
-    readsAs(ctx, cfg, lineups, at(n + 3), { settled: false }) && //  its void takes that away
-    readsAs(ctx, cfg, lineups, ledger, { settled: true }) //         said again by lot
+    readsAs(ctx, cfg, lineups, ledger, { settled: true }) //         its void, then a settle by lot
   );
-}
-
-/** Whether a ledger with an expunging abandon spliced into it plays on to the SAME result as the bare walk it came from. An
- *  expunged match has no outcome, so a result equal to the walk's (which was decided) means no expunge is left standing. A
- *  ledger the fold refuses plays on to nothing. */
-export function playsOnToTheSameResult(ctx: Ctx, cfg: unknown, lineups: LineupPair, spliced: readonly GoldenEvent[], token: string): boolean {
-  try {
-    return effectiveToken(ctx, cfg, lineups, spliced) === token;
-  } catch {
-    return false;
-  }
 }
 
 /** Where the sport can end level: a level result, a withdrawal laid over it (X-WD-1: an award the kernel keeps beside module
@@ -578,8 +564,8 @@ function buildExpunge(ctx: Ctx): Built | null {
       if (walk === null) continue;
       const spliced = strikeKernelEvent(ctx, cfg, lineups, walk.events, expungeStrike(), 1);
       if (spliced === null) continue;
-      // The tail plays on exactly as the bare walk did: the same result, no expunge left standing.
-      if (!playsOnToTheSameResult(ctx, cfg, lineups, spliced, walk.token)) continue;
+      // (The tail plays on exactly as the bare walk did - strikeKernelEvent folds the reopened ledger to the very state it
+      // held before the strike - and the story test reads the result of every committed stream against its bare walk's.)
       return { config: cfgName, seed: 10 * FLOOR_SEED_STRIDE + seed, events: spliced };
     }
   }

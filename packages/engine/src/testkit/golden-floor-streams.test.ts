@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, recomputeStream, corpusFormat, slimStream, storedFields, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles as holesOf, floorRequirement, outcomeTokenOf, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
+import { eventToken, floorHoles as holesOf, floorRequirement, overlayToken, undoToken, type FloorToken } from "./golden-floor.ts";
 import {
   corpusBefore,
   expungeStrike,
@@ -15,7 +15,6 @@ import {
   FLOOR_SEED_STRIDE,
   isFloorStream as isFloor,
   kernelStrikes,
-  playsOnToTheSameResult,
   readsAs,
   reproduceFloorBatch,
   SCENARIOS,
@@ -513,7 +512,7 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
     const cfg = module.configSchema.parse(corpus.configs[stream.config]) as unknown;
     const lineups = (stream.lineups as never) ?? defaultLineupPair(resolvePositions(module, cfg));
     const folded = (count: number) => foldMatchWithStoppage(module as never, cfg as never, lineups, stream.events.slice(0, count).map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 });
-    return { module, lineups: lineups as { home: { entrantId: string }; away: { entrantId: string } }, folded, effective: (count: number) => outcomeOf(module as never, folded(count) as never) };
+    return { module, cfg, lineups: lineups as { home: { entrantId: string }; away: { entrantId: string } }, folded, effective: (count: number) => outcomeOf(module as never, folded(count) as never) };
   };
 
   it("the scenario order is the order a floor is reproduced in: settle and expunge are APPENDED after the GF-1 stories", () => {
@@ -568,7 +567,7 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
       const found = stories(key, 10);
       expect(found.length, `${key}: one expunge stream`).toBe(1);
       const stream = found[0]!;
-      const { folded, effective } = readingOf(key, stream);
+      const { module, cfg, lineups, folded, effective } = readingOf(key, stream);
       const at = stream.events.findIndex((e) => e.type === "core.abandon");
       expect(at, `${key}: an abandon`).toBeGreaterThan(0);
       expect(stream.events[at]!.payload, key).toMatchObject({ expunge: true });
@@ -579,6 +578,11 @@ describe("the settle and expunge stories (GF-2 T3) — each step is the kernel's
       expect(folded(at + 2).expunged, `${key}: the void puts it back`).toBe(false);
       expect(stream.events.length, `${key}: play resumes`).toBeGreaterThan(at + 2);
       expect(effective(stream.events.length), `${key}: to a result`).not.toBeNull();
+      // ...the result the bare walk (the story without its abandon and the abandon's void) always had: the kernel's own fold of it
+      const bare = stream.events.filter((_, i) => i !== at && i !== at + 1);
+      const bareOutcome = outcomeOf(module as never, foldMatchWithStoppage(module as never, cfg as never, lineups as never, bare.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 }) as never);
+      expect(bareOutcome, `${key}: the bare walk is decided`).not.toBeNull();
+      expect(effective(stream.events.length), `${key}: the same result as the bare walk`).toEqual(bareOutcome);
       proofs++;
     });
     expect(proofs).toBe(builtinModules.length);
@@ -660,7 +664,7 @@ describe("readsAs — a story step is kept only when the kernel's own fold says 
   });
 });
 
-describe("settleStoryHolds and playsOnToTheSameResult — a story is kept only when EVERY step took effect (each step is defeated alone)", () => {
+describe("settleStoryHolds — a story is kept only when EVERY step took effect (each step is defeated alone)", () => {
   const rig = (key: string, scenarioIndex: number) => {
     const module = builtinModules.find((m) => m.key === key)!;
     const corpus = readCorpus(key);
@@ -699,6 +703,28 @@ describe("settleStoryHolds and playsOnToTheSameResult — a story is kept only w
     expect(refused, "anti-vacuity: all four steps were defeated").toBe(4);
   });
 
+  it("why a void needs no read of its own: a void that did not happen leaves its target standing, and the NEXT kernel event is refused by the strict fold", () => {
+    const level = rig("football", 9);
+    const nl = level.stream.events.findIndex((e) => e.type === "core.forfeit");
+    // the withdrawal's void did not happen: a settle over a standing withdrawal
+    const overWithdrawal = defeated(level.stream.events, nl + 1).slice(0, nl + 3);
+    expect(overWithdrawal.map((e) => e.type).slice(nl), "precondition").toEqual(["core.forfeit", "core.note", "core.settle"]);
+    expect(readsAs(level.ctx, level.cfg, level.lineups, overWithdrawal.slice(0, nl + 2), {}), "the ledger up to the note folds").toBe(true);
+    expect(readsAs(level.ctx, level.cfg, level.lineups, overWithdrawal, {}), "a settle over a standing withdrawal is refused").toBe(false);
+    // the settle's void did not happen: a second settle over a standing settle
+    const overSettle = defeated(level.stream.events, nl + 3);
+    expect(overSettle.map((e) => e.type).slice(nl), "precondition").toEqual(["core.forfeit", "core.void", "core.settle", "core.note", "core.settle"]);
+    expect(readsAs(level.ctx, level.cfg, level.lineups, overSettle.slice(0, nl + 4), {}), "the ledger up to the note folds").toBe(true);
+    expect(readsAs(level.ctx, level.cfg, level.lineups, overSettle, {}), "a settle over a standing settle is refused").toBe(false);
+    // and on the abandon route
+    const abandon = rig("badminton", 9);
+    const na = abandon.stream.events.findIndex((e) => e.type === "core.abandon");
+    const abandonOverSettle = defeated(abandon.stream.events, na + 2);
+    expect(abandonOverSettle.map((e) => e.type).slice(na), "precondition").toEqual(["core.abandon", "core.settle", "core.note", "core.settle"]);
+    expect(readsAs(abandon.ctx, abandon.cfg, abandon.lineups, abandonOverSettle.slice(0, na + 3), {}), "the ledger up to the note folds").toBe(true);
+    expect(readsAs(abandon.ctx, abandon.cfg, abandon.lineups, abandonOverSettle, {}), "a settle over a standing settle is refused").toBe(false);
+  });
+
   it("a route is not interchangeable: the level story read as the abandon story (or the reverse) is refused", () => {
     const level = rig("football", 9);
     const nl = level.stream.events.findIndex((e) => e.type === "core.forfeit");
@@ -707,30 +733,6 @@ describe("settleStoryHolds and playsOnToTheSameResult — a story is kept only w
     const na = abandon.stream.events.findIndex((e) => e.type === "core.abandon");
     expect(settleStoryHolds(abandon.ctx, abandon.cfg, abandon.lineups, abandon.stream.events, na, "level")).toBe(false);
   });
-
-  it("expunge tail (swept, counted): the committed story plays on to the result of its bare walk; a standing expunge, a different result and a refused ledger do not", () => {
-    let checked = 0;
-    forEachSport(({ key }) => {
-      const { ctx, cfg, lineups, stream } = rig(key, 10);
-      const at = stream.events.findIndex((e) => e.type === "core.abandon");
-      expect(at, `${key}: the expunging abandon`).toBeGreaterThan(0);
-      // the bare walk is the story with the abandon and its void taken out; ITS result is the token the tail must reach
-      const bare = stream.events.filter((_, i) => i !== at && i !== at + 1);
-      const result = outcomeOf(ctx.module as never, foldMatchWithStoppage(ctx.module as never, cfg as never, lineups, bare.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 }) as never);
-      expect(result, `${key}: the bare walk is decided`).not.toBeNull();
-      const token = outcomeTokenOf(JSON.stringify(result));
-      expect(token, `${key}: and has a token`).not.toBeNull();
-      expect(playsOnToTheSameResult(ctx, cfg, lineups, stream.events, token!), `${key}: control`).toBe(true);
-      expect(playsOnToTheSameResult(ctx, cfg, lineups, stream.events, `${token}-not`), `${key}: a different result`).toBe(false);
-      // the expunge left standing (the void taken out): an expunged match has no outcome, so it plays on to nothing
-      const standing = stream.events.filter((_, i) => i !== at + 1);
-      expect(playsOnToTheSameResult(ctx, cfg, lineups, standing, token!), `${key}: expunge left standing`).toBe(false);
-      // a ledger the strict fold refuses: a void of an event that is not there
-      expect(playsOnToTheSameResult(ctx, cfg, lineups, [...stream.events, { type: "core.void", payload: {}, voids: "e-9999" }], token!), `${key}: refused`).toBe(false);
-      checked++;
-    });
-    expect(checked).toBe(builtinModules.length);
-  }, 60_000);
 });
 
 describe("every overlay, undo and settle token the floor can require is SERVED by some scenario (a token no scenario serves can never be extended)", () => {

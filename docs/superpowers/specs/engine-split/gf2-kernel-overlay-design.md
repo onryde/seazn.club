@@ -169,8 +169,8 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
 
 ## 7. Implementation status
 
-- **T1 done** (recorder, format 2, `REFORMAT_GOLDEN`; reviewed, fixes below). **T2 done** (guard + the reformat commit). **T3 open** (floor
-  streams, claim and exemption retirements, apps/web lists, the real-kernel teeth tests). **T4 open** (Q2 player stats).
+- **T1 done** (recorder, format 2, `REFORMAT_GOLDEN`; reviewed, fixes below). **T2 done** (guard + the reformat commit). **T3 done** (below;
+  awaiting review). **T4 open** (Q2 player stats).
 - **Guard (T2).** As §3/§4, plus: the changed-path list comes from `git diff --name-only --no-renames` and untracked files, prefix-aware;
   a guard not told what changed fails closed (fold source touched); `src/sport/fold-epoch.ts` IS fold source, so paying ONE sport's bump in
   the PR that reformats leaves every other sport's newly recorded streams owing (the reformat lands alone, or every sport is bumped);
@@ -190,8 +190,82 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
 - **Review fixes to T1** (test-only): the decider column pinned against the module's `awaitingDecider`; the recorded lineups pinned by an
   independent `initSquads` initial (20 streams across the 11 sports carry non-default sheets); `recomputeStream`'s `format` is a REQUIRED
   parameter and a wrong-format replay throws; the write gate is the pure `writeRefusal`; a reformat is all sports or none (`reformatAll`).
-- **Deviation from §4 for T3 to settle:** the floor's settle exemption and overlay-unpinned probes run on `moduleRecorder` (format 1) until
-  T3 moves them onto the format-2 recorder and retires what that flips; the corpora being format 2 changes none of their behaviour.
+- **Deviation from §4 for T3, settled:** the floor's settle exemption and overlay-unpinned probes ran on `moduleRecorder` (format 1) until T3.
+  T3 moves them onto `kernelRecorder` (format 2) and retires what that flips (below); `moduleRecorder` stays only as the CONTROL that shows
+  each retired claim was true before.
 - **Found while doing this:** the guard CLI fixtures held the table's current values as literals (boardgame epoch 1) and would have reddened
   at the first real bump; they now read the live table (proven with boardgame: 2, football: 3 and a raised minor).
 
+
+### T3 — the floor requires the kernel overlay (done; awaiting review)
+
+- **Floor tokens.** `overlay:<fact>:set|cleared` is required for every kernel overlay fact a fold computes (`stoppage`, `squads`, `settlement`,
+  `expunged`, `levelWithdrawal`), read off the recorded streams' change points alone (`overlayTransitions`, golden-overlay.ts: no fold, so
+  the floor can read a corpus it cannot fold). The set of facts is typed by `FOLD_OVERLAY_KEYS` (a new fold key without a rule row is a
+  compile error). `levelWithdrawal` is required only where the sport can end level (football, cricket, boardgame, generic, icehockey,
+  hockey); a squads `cleared` is never required (its default is a digest only a fold can compute). `undo:core.settle` joins
+  `UNDOABLE_KERNEL`.
+- **Two stories, appended** (`SCENARIOS` indices 9 and 10; the order is the reproduction contract): *settle* (the level route where the
+  floor still wants a withdrawal over a level result: walk to a level result, withdrew, void, settle by the organiser, void, settle by
+  lot; the abandon route elsewhere: a live match abandoned, settle, void, settle) and *expunge* (the withdrawal cascade's expunging
+  abandon spliced into a walk, struck at once, play carrying on to the result it always had). Every step is read back from the kernel's own
+  fold (`readsAs`, exported and tested) before a ledger is kept. The stoppage story now serves the stoppage overlay tokens and the
+  withdrew story the squads token (`wantsLineup` includes it).
+- **Batches.** A floor that grows is reproduced one BATCH at a time (`floorBatches`: a maximal run of floor streams; `corpusBefore`: the
+  streams before it and only the configs they reference; `reproduceFloorBatch`). A batch is the FIRST thing today's rules append to its
+  base, because a later batch exists exactly because the floor grew. Zero batches is a failure; per-batch counts are reported. The
+  synthetic that proves the rule: a carrom corpus whose draw-capable config arrived after the first batch reds the old all-configs rule
+  and reproduces under the new one.
+- **Corpora.** `EXTEND_GOLDEN` appended 2 streams per sport (settle `9 * FLOOR_SEED_STRIDE + n`, expunge `10 * FLOOR_SEED_STRIDE + n`): 381
+  to 403 streams, 2,866,061 to 3,069,649 bytes (+203,588, +7.1%). Every pre-existing stream byte-identical (script-checked: key order and
+  every field); `fold-epoch:check --against origin/main`: 0 violations, the new streams are "newly recorded".
+- **Retirements** (flip proven in both directions, per sport, counted): `FLOOR_EXEMPTIONS` is now empty (the settle row is a test fixture,
+  `RETIRED_SETTLE_ROW`; `settleProbe` under `moduleRecorder` reads recorded != effective in all 11, under `kernelRecorder` equal);
+  `OVERLAY_CLAIMS` holds only `note` ("nothing computes from a note") and `award` (player stats, T4); the `stoppage` row (11 sports) and the
+  `lineup` row (boardgame, carrom, generic every type; football's position change) are fixtures that read "unpinned" under the module-only
+  recorder and "pinned" under the real one. The probes default to `kernelRecorder` (the deviation T2 left for T3 is settled).
+- **The probe is wider under format 2.** `ablationProbe` compares the dense overlay columns and the summary digests at every retained step and
+  at the ablated event's own step (the event must be neutral where it sits). Three things the format-1 probe never needed: a void that
+  struck a removed event goes with it (`ablateEvents` drops it and returns `origin`, the original index of each kept event); a recorded
+  `eventId: "e-N"` in an overlay value is renumbered through the near-to-far map before comparing, or a note in front of a pause would
+  read as a difference; the voids sweep reads ids in the ORIGINAL numbering. A format-1 recorder cannot hold a settle stream (the module
+  alone never sees it), so the format-1 rebaseline test sets that stream aside by property, not by name.
+- **apps/web readers.** `outcome-readers.test.ts` (the corpus scan is now "every settle stream is in a format-2 corpus and ends on a settled
+  win", the methods taken from the engine's `SETTLE_METHODS`) and `timeline.test.ts` (the kernel types a corpus records are now all of them)
+  were the only readers that moved; the other corpus readers (public-player-matches, player-matches, forfeit-vocabulary-scan, the skin tests) re-ran green.
+- **Teeth, measured (real kernel mutants on a throwaway branch, `REBASELINE_GOLDEN=1`, guard `--against` the pre-mutation commit; every red
+  is MAJOR owed, and bumping the sports named settles it):**
+
+  | mutant | sports the guard names |
+  |---|---|
+  | `core.suspend` drops its `reason` | 11 (1-2 streams each) |
+  | `outcomeOf` ignores the expunge | **1 (cricket)** |
+  | the fold never sets `expunged` | 11 |
+  | `outcomeOf` ignores a settlement | 11 |
+  | `outcomeOf` ignores a level withdrawal | 6 (boardgame, cricket, football, generic, hockey, icehockey) |
+  | `summaryOf` drops the overlay | 5 (boardgame, football, generic, hockey, icehockey) |
+  | the position reducer is a no-op | 11 (incl. the four sports the old floor left unpinned) |
+  | `awaitingDecider` also true when live | 1 (boardgame, 84 streams) |
+  | football headline suffix only in phase H1 | 1 (football; the final `summary` moved in 0 of 37 streams, the digests in 37 streams / 163 steps) |
+
+  Two premises of the plan did not survive the measurement. (1) "An expunge reaches every sport": `outcomeOf` ignoring `expunged` is seen in
+  cricket alone, because only cricket's module answers an outcome after an abandon; football would, but only under
+  `abandonPolicy: "award"`, and no corpus config carries it. That is owed coverage, named in GOLDEN-POLICY's cannot-see section (a config
+  the corpora do not exercise), not a defect. The `expunged` column pins the fact in all 11 sports regardless. (2) `summaryOf` dropping the
+  overlay is not seen in cricket: its summary is the scorecard, which does not read the award, so that mutant is inert there. Making
+  `awaitingDecider` constantly false is caught earlier than the guard: the re-baseline REFUSES (boardgame's recorded tiebreak no longer folds,
+  `TIEBREAK_NOT_APPLICABLE`), which is why the table's decider row is the "also true when live" variant.
+- **Mutation sweep of the new floor code** (a driver of 68 mutants over `overlayTransitions`, the floor tokens and probe, the streams file and
+  the voids sweep; one at a time, restored from a backup): 57 killed on the first pass; the 11 survivors were each either killed by a new
+  test or removed. Overlay shape check: two copies of one validation made 6 mutants ambiguous and let two clauses hide behind each other, so
+  there is one (`overlayPairs`) and a table test asks every malformed shape of both readers (`null` among them: it was a TypeError out of
+  `Object.keys`, not a refusal). `ablationProbe`: a state that differs alone, a void that went with its target, and the default recorder
+  each got a witness. The settle story's readback became `settleStoryHolds` with each fact asked ONCE and a test that defeats every
+  kernel step alone (replaced by a note) on both routes; the reads the kernel's own refusals already make (a void that did not happen
+  leaves its target standing and the next settle is refused, pinned) and the win-token check (a settle that stands is a win, X-ST-1, asserted
+  per sport by the story test) were removed rather than left as guards nothing could kill. The expunge tail check likewise: the story test
+  now compares every committed expunge stream's result with the kernel's fold of its bare walk.
+  Final tally: 69 mutants in the driver, 69 killed, 0 survivors, 0 argued equivalent (the 5 mutants of removed code left the table, 6 for
+  the new `settleStoryHolds` joined it). A second mutation pass found three more reads that only covered for a neighbour (a void's read and
+  the next settle's refusal) and one guard (the expunge tail check) whose helper was tested but whose call site nothing killed; both went the
+  same way.
