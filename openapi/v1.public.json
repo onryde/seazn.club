@@ -14286,10 +14286,14 @@
                 "kind": "league",
                 "name": "example",
                 "config": {
-                  "extraTime": null,
-                  "overtime": null,
-                  "shootout": null,
-                  "superOver": null
+                  "legs": 1,
+                  "pools": {
+                    "count": 1
+                  },
+                  "thirdPlace": true,
+                  "byes": [
+                    "example"
+                  ]
                 }
               }
             }
@@ -15604,10 +15608,14 @@
                 "kind": "league",
                 "name": "example",
                 "config": {
-                  "extraTime": null,
-                  "overtime": null,
-                  "shootout": null,
-                  "superOver": null
+                  "legs": 1,
+                  "pools": {
+                    "count": 1
+                  },
+                  "thirdPlace": true,
+                  "byes": [
+                    "example"
+                  ]
                 }
               }
             }
@@ -19142,10 +19150,29 @@
                 "additionalProperties": false
               },
               "example": {
-                "extraTime": null,
-                "overtime": null,
-                "shootout": null,
-                "superOver": null
+                "rules": {},
+                "points": {
+                  "base": {
+                    "win": 1,
+                    "draw": 1,
+                    "loss": 1
+                  },
+                  "bonuses": [
+                    {
+                      "when": "loss_margin_lte",
+                      "param": 1,
+                      "points": 1
+                    }
+                  ],
+                  "forfeit": {
+                    "winnerPoints": 1,
+                    "loserPoints": 1,
+                    "awardScore": [
+                      1,
+                      1
+                    ]
+                  }
+                }
               }
             }
           }
@@ -19313,7 +19340,8 @@
                         "winnerPoints": 1,
                         "loserPoints": 1,
                         "awardScore": [
-                          null
+                          1,
+                          1
                         ]
                       }
                     }
@@ -41187,13 +41215,28 @@
                           "live": true,
                           "status": "scheduled",
                           "sides": [
-                            null
+                            {
+                              "entrantId": "example",
+                              "name": "example",
+                              "short": "example",
+                              "colour": null,
+                              "badgeUrl": null
+                            },
+                            {
+                              "entrantId": "example",
+                              "name": "example",
+                              "short": "example",
+                              "colour": null,
+                              "badgeUrl": null
+                            }
                           ],
                           "scoreLines": [
-                            null
+                            "example",
+                            "example"
                           ],
                           "subLines": [
-                            null
+                            "example",
+                            "example"
                           ],
                           "battingIndex": 0,
                           "statusLine": {
@@ -44272,13 +44315,28 @@
                         "live": true,
                         "status": "scheduled",
                         "sides": [
-                          null
+                          {
+                            "entrantId": "example",
+                            "name": "example",
+                            "short": "example",
+                            "colour": "example",
+                            "badgeUrl": "example"
+                          },
+                          {
+                            "entrantId": "example",
+                            "name": "example",
+                            "short": "example",
+                            "colour": "example",
+                            "badgeUrl": "example"
+                          }
                         ],
                         "scoreLines": [
-                          null
+                          "example",
+                          "example"
                         ],
                         "subLines": [
-                          null
+                          "example",
+                          "example"
                         ],
                         "battingIndex": 0,
                         "statusLine": {
@@ -44403,7 +44461,12 @@
                           "example"
                         ],
                         "rows": [
-                          null
+                          [
+                            null
+                          ],
+                          [
+                            null
+                          ]
                         ],
                         "closedMask": [
                           true

@@ -793,6 +793,14 @@ function pathParams(path: string): object[] {
 // hand-maintaining ~100 of them.
 // ---------------------------------------------------------------------------
 
+/** `{not: {}}`: the JSON Schema `z.never()` emits, which no value satisfies. */
+function refusesEverything(schema: unknown): boolean {
+  if (typeof schema !== "object" || schema === null) return false;
+  const s = schema as Record<string, unknown>;
+  const not = s.not;
+  return Object.keys(s).length === 1 && typeof not === "object" && not !== null && Object.keys(not).length === 0;
+}
+
 function exampleOf(schema: unknown, depth = 0): unknown {
   if (depth > 6 || typeof schema !== "object" || schema === null) return null;
   const s = schema as Record<string, unknown>;
@@ -810,6 +818,10 @@ function exampleOf(schema: unknown, depth = 0): unknown {
       const props = (s.properties ?? {}) as Record<string, unknown>;
       const required = new Set((s.required as string[]) ?? []);
       for (const [name, prop] of Object.entries(props)) {
+        // A property that accepts nothing (`z.never()`, emitted `{not: {}}`: the top-level stage deciders a stage's
+        // config refuses by name, W2c Task 13b) is documented only so a client learns where the key went. Any value in
+        // an example would make the example a body its own route refuses.
+        if (refusesEverything(prop)) continue;
         // Keep examples focused: required fields plus the first few optionals.
         if (required.has(name) || Object.keys(out).length < 4) {
           out[name] = exampleOf(prop, depth + 1);
@@ -818,6 +830,9 @@ function exampleOf(schema: unknown, depth = 0): unknown {
       return out;
     }
     case "array":
+      // A tuple (`z.tuple`, emitted `prefixItems` with no `items`: a stage forfeit's `awardScore` pair) is one example
+      // per position; `[exampleOf(undefined)]` would publish `[null]`, which the tuple refuses.
+      if (Array.isArray(s.prefixItems)) return (s.prefixItems as unknown[]).map((item) => exampleOf(item, depth + 1));
       return [exampleOf(s.items, depth + 1)];
     case "string":
       if (s.format === "uuid") return "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b";
