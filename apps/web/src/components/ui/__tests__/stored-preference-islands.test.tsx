@@ -114,4 +114,25 @@ describe("ViewToggleContainer", () => {
     press(island, 1);
     expect(viewOf(island)).toBe("list");
   });
+
+  it("a pick belongs to the storage key it was made under: another key shows its OWN saved view", () => {
+    // The differential is deliberate: the pick is "cards" and the other key
+    // saved "list", so a pick that leaked across keys shows cards, and the
+    // saved view shows list. (Same value on both sides would pass either way.)
+    const OTHER = "seazn.view.divisions";
+    store.set(OTHER, "list");
+    const island = mount();
+    press(island, 0); // cards, under KEY — held in state as well as written
+    expect(viewOf(island)).toBe("cards");
+    island.rerender({ storageKey: OTHER, toggle: true, children: null });
+    expect(viewOf(island), "the other key's saved view, not the pick made under KEY").toBe("list");
+    // ...and the empty case for the new key: nothing saved reads as cards, even
+    // though the pick made under KEY was "list" this time.
+    store.delete(OTHER);
+    island.rerender({ storageKey: KEY, toggle: true, children: null });
+    press(island, 1); // list, under KEY
+    expect(viewOf(island)).toBe("list");
+    island.rerender({ storageKey: OTHER, toggle: true, children: null });
+    expect(viewOf(island)).toBe("cards");
+  });
 });
