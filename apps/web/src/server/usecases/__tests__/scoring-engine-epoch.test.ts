@@ -12,7 +12,7 @@
 // the real table's value plus a per-sport bump this file sets, and nothing else changes. Every expectation below is derived
 // from `foldEpochOf` (the engine's own declaration), never a typed number.
 //
-// THE CACHE. `@/lib/cache`'s idempotency keys (`idemv2:*`) are served from an in-memory fake here, because case 7 must pin
+// THE CACHE. `@/lib/cache`'s idempotency keys (`idemv3:*`, W2c Task 15) are served from an in-memory fake here, because case 7 must pin
 // BOTH the warm and the cold path of a retry; every other key delegates to the real module (no REDIS_URL, so a no-op).
 // `scoring-durable-idempotency.test.ts` stays the no-cache witness for the database guarantee itself.
 import { randomUUID } from "node:crypto";
@@ -44,7 +44,7 @@ vi.mock("@seazn/engine/sport", async (importOriginal) => {
 
 vi.mock("@/lib/cache", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/cache")>();
-  const isIdem = (k: string) => k.startsWith("idemv2:");
+  const isIdem = (k: string) => k.startsWith("idemv3:");
   return {
     ...actual,
     cacheGet: async (k: string) => {
