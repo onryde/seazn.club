@@ -275,9 +275,10 @@ export async function sweepStreamSessions(
     else out.outputReleasesFailed++;
   }
 
-  // 2. ORPHANS. The provider is asked only once a composed session in scope has EVER held a runner: composed is disabled
-  //    this wave and a live server may have no FLY_API_TOKEN (drivers.ts lazyRunner), so a passthrough-only account never
-  //    calls Fly. A listing that fails is reported and the pass goes on — retention must not wait on Fly.
+  // 2. ORPHANS. The provider is asked only once a composed session in scope has EVER held a runner: a composed start is
+  //    refused where the runner could not be built (drivers.ts `composedUnavailable()`) and a live server may have no
+  //    FLY_API_TOKEN (drivers.ts lazyRunner), so a passthrough-only account never calls Fly. A listing that fails is
+  //    reported and the pass goes on — retention must not wait on Fly.
   const [{ needed }] = await sql<{ needed: boolean }[]>`
     select exists (select 1 from fixture_stream_sessions where mode = 'composed' and runner_state <> 'none' ${inScope()}) as needed`;
   let listed: RunnerListing[] = [];

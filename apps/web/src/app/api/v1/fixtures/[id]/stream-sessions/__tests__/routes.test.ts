@@ -257,8 +257,9 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
 
   // R2001 (the composed hazard): a composed Go live on a deployment with no compositor image used to be ADMITTED — the
   // session row written, the Cloudflare input opened, provisioning begun — and only then failed at the runner's
-  // constructor. It is refused at the start path's entry now, before any read for the plan and before any write.
-  it("R2001 over HTTP: composed with no RELAY_IMAGE → 503 composed_unavailable, documented on the route, and NOTHING is made — no session row, no pre-pick, no Cloudflare input (nor even the storage read), no runner create; a second ask answers the same; with the image set the same POST → 201 and every count moves", async () => {
+  // constructor. It is refused at the start path's entry now, before any read for the plan: no session row, input,
+  // credit or runner is created.
+  it("R2001 over HTTP: composed with no RELAY_IMAGE → 503 composed_unavailable, documented on the route, and no session row, input, credit or runner is created — no pre-pick, no Cloudflare input (nor even the storage read), no runner create; a second ask answers the same; with the image set the same POST → 201 and every count moves", async () => {
     const o = await organiser();
     const createInput = vi.spyOn(o.ingest, "createLiveInput");
     const storageRead = vi.spyOn(o.ingest, "storageUsage");

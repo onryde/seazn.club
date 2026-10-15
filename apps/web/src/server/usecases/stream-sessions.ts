@@ -1309,9 +1309,10 @@ export async function startBroadcast(
     throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
   }
   // R2001: a composed start on a deployment with no compositor runner is refused HERE — admission's FIRST gate, asked
-  // alone (`admitMode`) because nothing later on the ladder can change its answer. Before it nothing is written: no
-  // expiry, no destination teardown, no monthly grant, no storage read, no row, no Cloudflare input, no runner call. It
-  // used to be admitted and fail at the runner's constructor with the row, the input and provisioning already made.
+  // alone (`admitMode`) because nothing later on the ladder can change its answer. No session row, input, credit or
+  // runner is created: it comes before the expiry, the destination teardown, the monthly grant, the storage read, the
+  // row, the Cloudflare input and the runner call. It used to be admitted and fail at the runner's constructor with the
+  // row, the input and provisioning already made.
   const byMode = admitMode({ mode: body.mode, composedUnavailable: composedRunnerDown });
   if (!byMode.ok) {
     log.warn({ fixtureId, orgId }, "stream session: composed mode is unavailable on this deployment — start refused");

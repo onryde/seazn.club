@@ -19552,8 +19552,8 @@ async function captureV2Suite(): Promise<void> {
         `a paired phone gone silent → Go live 409 phone_not_responding, no session row; its next beat → 200 (pairings moved ${moved.count}, Go live ${silent.status} ${silent.json.error?.code ?? ""}, rows ${rows}, beat ${back.status})`,
         moved.count === 1 && silent.status === 409 && silent.json.error?.code === "phone_not_responding" && rows === 0 && back.status === 200,
       );
-      // 2c. R2001: a COMPOSED Go live on a deployment with no compositor image is 503 composed_unavailable, refused before
-      // anything is written — no session row. A smoke server sets no RELAY_IMAGE (CI's smoke job, ci-local.sh and
+      // 2c. R2001: a COMPOSED Go live on a deployment with no compositor image is 503 composed_unavailable, refused at the
+      // start's entry — no session row, input, credit or runner is created. A smoke server sets no RELAY_IMAGE (CI's smoke job, ci-local.sh and
       // seazn-env alike); a smoke environment that starts naming one owes this step its positive answer instead. The phone
       // is paired and answering again, so the passthrough Go live in step 3 is what admits.
       const composed = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "composed", targetId });

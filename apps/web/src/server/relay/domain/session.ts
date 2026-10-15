@@ -102,8 +102,8 @@ export interface AdmitInput {
  *  was admitted, wrote its session row, opened its Cloudflare input and only then failed at the runner's constructor. A
  *  configuration fact about the whole deployment, so it outranks every per-org and per-match gate: whatever the plan, the
  *  phone, the credits or the storage say, the organiser is told the mode itself cannot run here. Exported so the usecase
- *  can ask it at startBroadcast's ENTRY, before anything is read for the plan or written — nothing later on the ladder can
- *  change its answer. A passthrough start never reads the flag. */
+ *  can ask it at startBroadcast's ENTRY, before anything is read for the plan, so no session row, input, credit or runner
+ *  is created — nothing later on the ladder can change its answer. A passthrough start never reads the flag. */
 export function admitMode(i: Pick<AdmitInput, "mode" | "composedUnavailable">): { ok: true } | { ok: false; refusal: "composed_unavailable" } {
   if (i.mode === "composed" && i.composedUnavailable) return { ok: false, refusal: "composed_unavailable" };
   return { ok: true };
