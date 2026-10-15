@@ -1372,17 +1372,23 @@ export type PatchFixture = z.infer<typeof PatchFixture>;
 export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict();
 export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
 
-/** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3) — the
- *  arbiter's OWN RealtimeKit token for the board's meeting (preset `arbiter`,
+/** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3; D16, §5.6.4) — the request names ONE PLAYER's meeting by the
+ *  ENTRANT side (a board has a meeting per player, and nothing reads a meeting by colour, which a pairing card can swap).
+ *  Strict: a missing side, another value or an extra key is a 400. */
+export const ArbiterJoinInput = z.object({ side: z.enum(["home", "away"]) }).strict();
+export type ArbiterJoinInput = z.infer<typeof ArbiterJoinInput>;
+
+/** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3; D16, §5.6.4) — the
+ *  arbiter's OWN RealtimeKit token for that player's meeting (preset `arbiter`,
  *  receive-only), a FRESH participant per open (fix round 1, I2) whose id
- *  the client hands back when it leaves, and the two players' participant
- *  ids by colour, which its client subscribes to. Never a player's token
- *  (spec §10). */
+ *  the client hands back when it leaves, the side joined, and the participant
+ *  ids of the PLAYERS in that meeting (usually one), which its client subscribes
+ *  to and refuses every other peer for. Never a player's token (spec §10). */
 export const ArbiterJoinOut = z.object({
   authToken: z.string(),
   participantId: z.string(),
-  white: z.array(z.string()),
-  black: z.array(z.string()),
+  side: z.enum(["home", "away"]),
+  players: z.array(z.string()),
 });
 
 /** DELETE /fixtures/{id}/external-play/arbiter/{participantId} (T15 fix
@@ -1474,6 +1480,15 @@ export const RoomCameraFault = z
   .object({ state: z.enum(["start", "end"]), participantId: z.string().min(1).max(200) })
   .strict();
 export type RoomCameraFault = z.infer<typeof RoomCameraFault>;
+
+/** POST /fixtures/{id}/external-play/room/camera-report (D16, §5.6.3) — the caller's own camera, as THEIR browser last saw
+ *  it: `live` (the camera is on) or `off`. `heartbeat` is true for a repeat of an unchanged state (the keep-alive that stops a
+ *  live camera reading as unknown) and false for a CHANGE; the server stamps its own clock either way. The opponent's pill
+ *  is the only thing that reads it. Strict. */
+export const RoomCameraReport = z
+  .object({ state: z.enum(["live", "off"]), heartbeat: z.boolean() })
+  .strict();
+export type RoomCameraReport = z.infer<typeof RoomCameraReport>;
 
 /** POST /fixtures/{id}/external-play/room (D21-fix-3, F1) — the seat claim's OPTIONAL body. `heldParticipantId` is the
  *  participant whose token this browser already holds (the room sends it with every claim once it has one). A claim

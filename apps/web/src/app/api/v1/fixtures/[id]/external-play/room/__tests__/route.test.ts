@@ -23,13 +23,16 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 });
 
 import { sql } from "@/lib/db";
+import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import { GET as roomGet, POST as roomPost } from "@/app/api/v1/fixtures/[id]/external-play/room/route";
 import { POST as actPost } from "@/app/api/v1/fixtures/[id]/external-play/room/act/route";
 import { POST as clockZeroPost } from "@/app/api/v1/fixtures/[id]/external-play/room/clock-zero/route";
 import { POST as cameraFaultPost } from "@/app/api/v1/fixtures/[id]/external-play/room/camera-fault/route";
 import { POST as cameraPost } from "@/app/api/v1/fixtures/[id]/external-play/room/camera/route";
-import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
+import { POST as cameraReportPost } from "@/app/api/v1/fixtures/[id]/external-play/room/camera-report/route";
+import { CAMERA_REPORT_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { putVideoMeeting, putVideoParticipant, seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -185,11 +188,13 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/room/camera-fault (I
   /** A camera-required board's meeting, both players seated in it. */
   async function cameraSeats() {
     const s = await seed();
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${s.fixtureId}, ${s.orgId}, ${`mtg-${randomUUID()}`}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
-    const part = { home: `pt-h-${randomUUID().slice(0, 8)}`, away: `pt-a-${randomUUID().slice(0, 8)}` };
-    await sql`
-      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
-      values (${s.fixtureId}, ${s.home.personId}, 'player', ${part.home}), (${s.fixtureId}, ${s.away.personId}, 'player', ${part.away})`;
+    // D16: a meeting per player, each holding that player.
+    await putVideoMeeting({ fixtureId: s.fixtureId, orgId: s.orgId, side: "home" });
+    await putVideoMeeting({ fixtureId: s.fixtureId, orgId: s.orgId, side: "away" });
+    const part = {
+      home: await putVideoParticipant({ fixtureId: s.fixtureId, side: "home", personId: s.home.personId }),
+      away: await putVideoParticipant({ fixtureId: s.fixtureId, side: "away", personId: s.away.personId }),
+    };
     return { s, part };
   }
   const faults = (fixtureId: string) =>
@@ -221,6 +226,99 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/room/camera-fault (I
     const mine = await read(await cameraFaultPost(post(url(s.fixtureId, "/camera-fault", t), { state: "start", participantId: part.home }), ctx(s.fixtureId)));
     expect([mine.status, mine.body.data]).toEqual([200, { open: true }]);
     expect(await faults(s.fixtureId)).toEqual([{ person_id: s.home.personId, ended_at: null }]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/room/camera-report (D16, §5.6.3)", () => {
+  async function seats() {
+    const s = await seed();
+    await putVideoMeeting({ fixtureId: s.fixtureId, orgId: s.orgId, side: "home" });
+    await putVideoMeeting({ fixtureId: s.fixtureId, orgId: s.orgId, side: "away" });
+    const part = {
+      home: await putVideoParticipant({ fixtureId: s.fixtureId, side: "home", personId: s.home.personId }),
+      away: await putVideoParticipant({ fixtureId: s.fixtureId, side: "away", personId: s.away.personId }),
+    };
+    return { s, part };
+  }
+  const reportOf = async (fixtureId: string, side: "home" | "away") =>
+    (await sql<{ camera_reported: string | null; camera_reported_at: Date | null }[]>`
+      select camera_reported, camera_reported_at from fixture_video_participants where fixture_id = ${fixtureId} and side = ${side} and preset = 'player'`)[0]!;
+  const report = (fixtureId: string, t: string | undefined, body: unknown) =>
+    cameraReportPost(post(url(fixtureId, "/camera-report", t), body), ctx(fixtureId));
+
+  it("no session and no link is a 401; an API key alone is not an identity; a stranger and a bad link are the room's one 404 - nothing written", async () => {
+    const { s } = await seats();
+    const body = { state: "live", heartbeat: false };
+    expect((await read(await report(s.fixtureId, undefined, body))).status).toBe(401);
+    const keyed = post(url(s.fixtureId, "/camera-report"), body, { authorization: "Bearer sk_live_whatever" });
+    expect((await cameraReportPost(keyed, ctx(s.fixtureId))).status).toBe(401);
+    authState.userId = randomUUID();
+    const stranger = await read(await report(s.fixtureId, undefined, body));
+    const badLink = await read(await report(s.fixtureId, "not-a-token", body));
+    expect([stranger.status, stranger.body.error?.code]).toEqual([404, "NOT_FOUND"]);
+    expect([badLink.status, badLink.body.error?.code]).toEqual([404, "NOT_FOUND"]);
+    expect((await reportOf(s.fixtureId, "home")).camera_reported, "nothing written for home").toBeNull();
+    expect((await reportOf(s.fixtureId, "away")).camera_reported, "nothing written for away").toBeNull();
+  });
+
+  it("the schema refuses an unknown state, a missing flag, a CLIENT-sent time and extra keys - 400 before the usecase, nothing written", async () => {
+    const { s } = await seats();
+    const t = await s.tokenFor(s.home.personId);
+    const bad: unknown[] = [
+      { state: "paused", heartbeat: false },
+      { state: "live" },
+      { heartbeat: false },
+      { state: "live", heartbeat: "yes" },
+      { state: "live", heartbeat: false, at: "2026-10-12T10:00:00Z" },
+      {},
+    ];
+    let checked = 0;
+    for (const body of bad) {
+      expect((await read(await report(s.fixtureId, t, body))).status, JSON.stringify(body)).toBe(400);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: refused bodies").toBe(bad.length);
+    expect((await reportOf(s.fixtureId, "home")).camera_reported).toBeNull();
+  });
+
+  it("a link reports its OWN seat (200 { outcome }) on the server's clock, and only that seat's row - the opponent's is untouched", async () => {
+    const { s } = await seats();
+    const t = await s.tokenFor(s.home.personId);
+    const before = Date.now();
+    const got = await read(await report(s.fixtureId, t, { state: "live", heartbeat: false }));
+    expect([got.status, got.body.data]).toEqual([200, { outcome: "written" }]);
+    const home = await reportOf(s.fixtureId, "home");
+    expect(home.camera_reported).toBe("live");
+    expect(home.camera_reported_at!.getTime(), "the server's clock").toBeGreaterThanOrEqual(before - 1_000);
+    expect((await reportOf(s.fixtureId, "away")).camera_reported, "the opponent's row is not home's").toBeNull();
+    const again = await read(await report(s.fixtureId, t, { state: "live", heartbeat: true }));
+    expect([again.status, again.body.data], "a heartbeat of the stored state").toEqual([200, { outcome: "refreshed" }]);
+  });
+
+  it("past CAMERA_REPORT_LIMIT in a window the next report is a 429 RATE_LIMITED; the other seat has its own budget", async () => {
+    const counts = new Map<string, number>();
+    __setRateLimitCounterForTests(async (key, windowSeconds) => {
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return { count: n, ttlMs: windowSeconds * 1000 };
+    });
+    try {
+      const { s } = await seats();
+      const t = await s.tokenFor(s.home.personId);
+      const statuses: number[] = [];
+      for (let i = 0; i <= CAMERA_REPORT_LIMIT.max; i += 1) statuses.push((await report(s.fixtureId, t, { state: "live", heartbeat: i > 0 })).status);
+      expect(statuses).toEqual([...Array(CAMERA_REPORT_LIMIT.max).fill(200), 429]);
+      const away = await s.tokenFor(s.away.personId);
+      expect((await report(s.fixtureId, away, { state: "off", heartbeat: false })).status, "per seat").toBe(200);
+    } finally {
+      __setRateLimitCounterForTests(null);
+    }
+  });
+
+  it("the published document lists the route with the answers it can give", () => {
+    const op = (buildOpenApiDocument().paths as Record<string, { post?: { responses: Record<string, unknown> } }>)["/api/v1/fixtures/{id}/external-play/room/camera-report"]?.post;
+    expect(op, "POST …/room/camera-report is in the document").toBeDefined();
+    expect(Object.keys(op!.responses), "its answers").toEqual(expect.arrayContaining(["200", "400", "401", "404", "429"]));
   });
 });
 

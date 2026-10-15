@@ -26,6 +26,7 @@ import {
   type ArbiterBoardState,
   type ArbiterFlag,
   type ArbiterRound,
+  type ArbiterSideMeeting,
 } from "@/lib/arbiter-view";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
@@ -35,7 +36,6 @@ import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { cameraMatchWindow, matchGuardFaults, type MatchTimes } from "@/server/external-play/video/match-window";
 import {
   addParticipant,
-  ensureMeeting,
   RealtimeKitDeferred,
   RealtimeKitError,
   removeParticipant,
@@ -43,7 +43,8 @@ import {
 } from "@/server/external-play/video/realtimekit";
 import { roundOpenAt } from "@/server/external-play/round-open";
 import { EDITOR_ROLES } from "@/lib/types";
-import { ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
 import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side } from "./guard";
 import { noResultOffer } from "./no-result";
@@ -79,9 +80,16 @@ type BoardRow = {
   finishedAt: Date | null;
   gameOverAt: Date | null;
   overrideAt: Date | null;
-  hasMeeting: boolean;
-  meetingEndedAt: Date | null;
-  evidenceAt: Date | null;
+  /** D16: each player's meeting as the board's own join reads it (§5.6.4) - `Row` is whether a row is on file for the side,
+   *  `SamePair` whether it was made for the board's CURRENT pairing (a row an earlier pairing left is no meeting). */
+  homeRow: boolean;
+  homeSamePair: boolean;
+  homeEndedAt: Date | null;
+  homeEvidenceAt: Date | null;
+  awayRow: boolean;
+  awaySamePair: boolean;
+  awayEndedAt: Date | null;
+  awayEvidenceAt: Date | null;
   /** I-3: what the settle offers in place of a winner is read from the stage kind, the hold and the line's two feed
    *  edges (no-result.ts). */
   stageKind: string | null;
@@ -232,6 +240,9 @@ export async function listFlaggedExternalPlay(
 
 /** The board columns both readers paint from — the round in view and the
  *  division's flagged boards (T16) — so a board reads the same in both.
+ *  D16: a board has up to TWO meeting rows (one per player) and is listed ONCE - each side is its own join on
+ *  `(fixture_id, side)`, so the facts of the two rows stay apart (a single left join would list the board twice and
+ *  fold two rows' facts into one).
  *  `cancelled`: the Flagged list keeps a cancelled board (R4, its flags are
  *  still to review); the round in view does not. */
 function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: boolean }) {
@@ -244,13 +255,18 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            ep.move_count as "moveCount", ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
            ep.last_move_at as "lastMoveAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
            ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
-           m.fixture_id is not null as "hasMeeting", m.ended_at as "meetingEndedAt",
-           m.camera_evidence_at as "evidenceAt",
+           mh.fixture_id is not null as "homeRow",
+           (mh.home_entrant_id, mh.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "homeSamePair",
+           mh.ended_at as "homeEndedAt", mh.camera_evidence_at as "homeEvidenceAt",
+           ma.fixture_id is not null as "awayRow",
+           (ma.home_entrant_id, ma.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "awaySamePair",
+           ma.ended_at as "awayEndedAt", ma.camera_evidence_at as "awayEvidenceAt",
            s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture"
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
-      left join fixture_video_meetings m on m.fixture_id = f.id
+      left join fixture_video_meetings mh on mh.fixture_id = f.id and mh.side = 'home'
+      left join fixture_video_meetings ma on ma.fixture_id = f.id and ma.side = 'away'
      where ${where}
        and f.org_id = ${auth.orgId}
        and f.home_entrant_id is not null and f.away_entrant_id is not null
@@ -268,6 +284,34 @@ function openFlagRows(auth: AuthCtx, fixtureIds: readonly string[]): Promise<Fla
      where fixture_id in ${sql([...fixtureIds])} and org_id = ${auth.orgId}
        and closed_at is null
      order by opened_at, id`;
+}
+
+/** One side's meeting as the board list reads it (D16, §5.6.4): none (no row, or one an earlier pairing left), open or
+ *  ended - with that row's own end and evidence stamps. */
+function sideMeeting(row: boolean, samePair: boolean, endedAt: Date | null, evidenceAt: Date | null): ArbiterSideMeeting {
+  if (!row || !samePair) return { state: "none", endedAt: null, evidenceAt: null };
+  return {
+    state: endedAt === null ? "open" : "ended",
+    endedAt: endedAt?.toISOString() ?? null,
+    evidenceAt: evidenceAt?.toISOString() ?? null,
+  };
+}
+
+/** The board's camera report from its two rows (D16, §5.6.4), stating each count's answer instead of letting an empty set
+ *  read as done:
+ *  - no row at all: nothing is on file to report and nothing to wait for - null (a drop left such boards behind, and they
+ *    must not read "pending" for ever);
+ *  - a row on file that is not stamped: pending;
+ *  - settled ONLY with two rows, both stamped;
+ *  - exactly ONE row: an anomaly (a game needs both players seated, so both rows) - pending, and said so in the log. */
+function cameraReportOf(fixtureId: string, sides: { home: ArbiterSideMeeting; away: ArbiterSideMeeting }): "pending" | "settled" | null {
+  const rows = [sides.home, sides.away].filter((x) => x.state !== "none");
+  if (rows.length === 0) return null;
+  if (rows.length === 1) {
+    log.warn({ fixtureId }, "arbiter: a started Required board has one camera meeting, not two; its camera report reads pending");
+    return "pending";
+  }
+  return rows.every((x) => x.evidenceAt !== null) ? "settled" : "pending";
 }
 
 /** One board as the panel paints it: its sides, its colours, its state, its
@@ -320,8 +364,23 @@ async function boardOf(
 
   const nameOf = (personId: string | null): string | null =>
     personId === null ? null : personId === white.personId ? white.displayName : personId === black.personId ? black.displayName : null;
+  const meetings = {
+    home: sideMeeting(r.homeRow, r.homeSamePair, r.homeEndedAt, r.homeEvidenceAt),
+    away: sideMeeting(r.awayRow, r.awaySamePair, r.awayEndedAt, r.awayEvidenceAt),
+  };
+  // §5.6.4: a flag's window is its OWN player's row - the sweep judged each player over their own meeting's end, and the
+  // panel must show what job 5 judged. A flag whose player has no row (or no side on this board) is judged on the game's
+  // end alone.
+  const sideOf = (personId: string | null): Side | null =>
+    personId === null ? null : personId === sides.home.personId ? "home" : personId === sides.away.personId ? "away" : null;
   const flags: ArbiterFlag[] = await Promise.all(
-    flagRows.filter((x) => x.fixtureId === r.fixtureId).map((f) => flagView(f, { nameOf, times: r })),
+    flagRows
+      .filter((x) => x.fixtureId === r.fixtureId)
+      .map((f) => {
+        const side = sideOf(f.personId);
+        const endedAt = side === null ? null : side === "home" ? (r.homeSamePair ? r.homeEndedAt : null) : r.awaySamePair ? r.awayEndedAt : null;
+        return flagView(f, { nameOf, side, times: { ...r, meetingEndedAt: endedAt } });
+      }),
   );
 
   return {
@@ -343,12 +402,8 @@ async function boardOf(
           },
     cameraPolicy: policy,
     videoOverridden: r.overrideAt !== null,
-    cameraReport:
-      policy === "required" && r.startedAt !== null && r.overrideAt === null
-        ? r.evidenceAt !== null
-          ? "settled"
-          : "pending"
-        : null,
+    cameraReport: policy === "required" && r.startedAt !== null && r.overrideAt === null ? cameraReportOf(r.fixtureId, meetings) : null,
+    sides: meetings,
     canResync: gameOnFile && playable && r.bridgeStatus !== null && ["ready", "live", "needs_organiser"].includes(r.bridgeStatus),
     playable,
     canSettle: playable && r.bridgeStatus !== null,
@@ -366,7 +421,7 @@ async function boardOf(
 
 async function flagView(
   f: FlagRow,
-  ctx: { nameOf: (personId: string | null) => string | null; times: MatchTimes },
+  ctx: { nameOf: (personId: string | null) => string | null; side: Side | null; times: MatchTimes },
 ): Promise<ArbiterFlag> {
   const at = f.openedAt.toISOString();
   switch (f.kind) {
@@ -388,10 +443,10 @@ async function flagView(
       // what the sweep judged. No window (no first move on file now, or a
       // person-less row): no number at all, never a made-up one.
       const window = cameraMatchWindow(ctx.times);
-      if (window.kind !== "window" || f.personId === null) {
+      if (window.kind !== "window" || f.personId === null || ctx.side === null) {
         return { id: f.id, kind: "camera_connection_problems", at, personName: ctx.nameOf(f.personId), seconds: null, stamps: null };
       }
-      const { stamped } = await matchGuardFaults(sql, { fixtureId: f.fixtureId, personId: f.personId, window });
+      const { stamped } = await matchGuardFaults(sql, { fixtureId: f.fixtureId, side: ctx.side, personId: f.personId, window });
       return {
         id: f.id,
         kind: "camera_connection_problems",
@@ -430,22 +485,22 @@ async function scoreOf(r: BoardRow, whiteEntrantId: string, blackEntrantId: stri
 // ---------------------------------------------------------------------------
 
 export type ArbiterVideo = {
-  ensureMeeting: (fixtureId: string) => Promise<{ meetingId: string }>;
   addParticipant: (a: { meetingId: string; subject: string; preset: "player" | "arbiter" }) => Promise<ParticipantToken>;
   removeParticipant: (a: { meetingId: string; participantId: string }) => Promise<void>;
 };
 
 export const REAL_ARBITER_VIDEO: ArbiterVideo = {
-  ensureMeeting: (fixtureId) => ensureMeeting(fixtureId),
   addParticipant: (a) => addParticipant(a),
   removeParticipant: (a) => removeParticipant(a),
 };
 
 /** What the arbiter's browser gets: ITS OWN token for a participant made for
- *  this open alone (`participantId`, which it hands back on leaving), and
- *  which player participants are White and Black (their peers' `userId`).
+ *  this open alone (`participantId`, which it hands back on leaving), the side
+ *  it joined, and the participant ids of the PLAYERS in that meeting (their
+ *  peers' `userId` - one, though the model allows more; D16, §5.6.4: a meeting
+ *  holds one player, so there are no longer White and Black lists).
  *  Never a player's token (spec §10). */
-export type ArbiterJoin = { authToken: string; participantId: string; white: string[]; black: string[] };
+export type ArbiterJoin = { authToken: string; participantId: string; side: Side; players: string[] };
 
 /** The roles that may watch a board — the route's `write` (requireOrgAuth:
  *  owner or admin), and the role the sweep's arbiter removal keeps. One list,
@@ -467,11 +522,11 @@ function requireWatcher(auth: AuthCtx): string {
 }
 
 /**
- * One organiser joins one board's meeting receive-only (preset `arbiter`:
- * produces nothing, sees at most two video streams). The meeting is the
- * players' own — ensureMeeting is idempotent per fixture, so an arbiter who
- * arrives first creates the one both players will join, and an ended meeting
- * is never re-made (its 409 passes through). Authorisation is the route's
+ * One organiser joins ONE PLAYER's meeting receive-only (preset `arbiter`: produces nothing, sees at most two video
+ * streams). D16 (§5.6.4): a board has a meeting per player, so the request names the side (`ArbiterJoinInput`) and this
+ * joins that side's EXISTING meeting or refuses - it never creates one, so an arbiter who arrives before a player makes no
+ * room for them to join and spends no create call: 409 VIDEO_MEETING_NOT_STARTED when the side has no meeting for the
+ * board's current pairing, 409 VIDEO_MEETING_ENDED when it has ended. Authorisation is the route's
  * (requireResourceAuth on the fixture, write: owner or admin); this adds that
  * the caller is a signed-in person — a key or a scoring device has no
  * business watching a player's camera — who does not play on the board (C1),
@@ -482,23 +537,25 @@ function requireWatcher(auth: AuthCtx): string {
  * participant would keep every token ever handed out alive. The server
  * removes it — leaveAsArbiter when the panel closes, the sweep when the role
  * is gone or ARBITER_PARTICIPANT_TTL_MS has passed, endMeeting at teardown.
+ * Throttled per fixture and organiser (ARBITER_JOIN_LIMIT, 429): every flip of the panel's switch is one of these.
  */
 export async function joinAsArbiter(
   auth: AuthCtx,
   fixtureId: string,
+  side: Side,
   deps: { video?: ArbiterVideo } = {},
 ): Promise<ArbiterJoin> {
   const userId = requireWatcher(auth);
   const f = await loadOnlinePlayFixture(fixtureId);
   if (f === null || f.orgId !== auth.orgId) throw new HttpError(404, "fixture not found", "NOT_FOUND");
+  await rateLimit(`arbiter-join:${fixtureId}:${userId}`, ARBITER_JOIN_LIMIT);
   // C1 (D7 safeguarding): a player never watches their opponent's camera,
   // and an organiser who plays on this board is its player. Refused before
-  // any meeting is made or participant minted.
+  // any participant is minted.
   if (await isSeatedOn(userId, fixtureId)) {
     throw new HttpError(403, "You play on this board, so another organiser must watch it", "ARBITER_PLAYS_THIS_BOARD");
   }
-  // M2: a board that is over, or whose round was never opened, has no
-  // match to watch — and ensureMeeting would make a room for it.
+  // M2: a board that is over, or whose round was never opened, has no match to watch.
   if (!isPlayableFixtureStatus(f.fixtureStatus) || f.bridge?.status === "finished") {
     throw new HttpError(409, "this board can no longer be played", "FIXTURE_NOT_PLAYABLE");
   }
@@ -518,11 +575,23 @@ export async function joinAsArbiter(
     throw new HttpError(409, "this board was let play without video", "VIDEO_OVERRIDDEN");
   }
 
+  // The player's meeting, as it stands NOW: made for the board's current pairing (a row an earlier pairing left is no
+  // meeting for this one), and not ended. Read, never made.
+  const [meeting] = await sql<{ meetingId: string; endedAt: Date | null; samePair: boolean }[]>`
+    select m.meeting_id as "meetingId", m.ended_at as "endedAt",
+           (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair"
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where m.fixture_id = ${fixtureId} and m.side = ${side}`;
+  if (!meeting || !meeting.samePair) {
+    throw new HttpError(409, "this player has not checked in yet", "VIDEO_MEETING_NOT_STARTED");
+  }
+  if (meeting.endedAt !== null) throw new HttpError(409, "this player's video meeting has ended", "VIDEO_MEETING_ENDED");
+
   const video = deps.video ?? REAL_ARBITER_VIDEO;
   let token: ParticipantToken;
   try {
-    const { meetingId } = await video.ensureMeeting(fixtureId);
-    token = await mintArbiter({ fixtureId, userId, meetingId }, video);
+    token = await mintArbiter({ fixtureId, side, userId, meetingId: meeting.meetingId }, video);
   } catch (err) {
     if (!(err instanceof RealtimeKitError)) throw err;
     // D21: a deferral (the platform's call budget is spent) is the same 503 — try again — but it is not an error to report.
@@ -530,30 +599,28 @@ export async function joinAsArbiter(
       captureError(err, {
         orgId: f.orgId,
         route: "external-play/arbiter",
-        extra: { fixtureId, status: err.status, code: err.code },
+        extra: { fixtureId, side, status: err.status, code: err.code },
       });
     }
     throw new HttpError(503, "video is unavailable right now", "VIDEO_UNAVAILABLE");
   }
 
+  // The players in THIS meeting: the side's own player's participants (the peers' `userId`). The meeting holds no one else.
   const sides = await loadSides(f);
-  const whiteSide = f.bridge?.white_side ?? (await whiteSideOf(f));
-  const white = whiteSide === "home" ? sides.home : sides.away;
-  const black = whiteSide === "home" ? sides.away : sides.home;
-  const people = [white.personId, black.personId].filter((p): p is string => p !== null);
+  const player = side === "home" ? sides.home : sides.away;
   const players =
-    people.length === 0
+    player.personId === null
       ? []
-      : await sql<{ personId: string; participantId: string }[]>`
-          select person_id as "personId", participant_id as "participantId"
+      : await sql<{ participantId: string }[]>`
+          select participant_id as "participantId"
             from fixture_video_participants
-           where fixture_id = ${fixtureId} and preset = 'player' and person_id in ${sql(people)}
+           where fixture_id = ${fixtureId} and side = ${side} and preset = 'player' and person_id = ${player.personId}
            order by created_at, id`;
   return {
     authToken: token.authToken,
     participantId: token.participantId,
-    white: players.filter((p) => p.personId === white.personId).map((p) => p.participantId),
-    black: players.filter((p) => p.personId === black.personId).map((p) => p.participantId),
+    side,
+    players: players.map((p) => p.participantId),
   };
 }
 
@@ -561,7 +628,7 @@ export async function joinAsArbiter(
  *  handed out. A record that cannot be written leaves no participant behind:
  *  it is removed at the vendor at once, so nothing watches untracked. */
 async function mintArbiter(
-  a: { fixtureId: string; userId: string; meetingId: string },
+  a: { fixtureId: string; side: Side; userId: string; meetingId: string },
   video: ArbiterVideo,
 ): Promise<ParticipantToken> {
   // `subject` is RealtimeKit's custom_participant_id: internal ids only, never
@@ -575,8 +642,8 @@ async function mintArbiter(
   const minted = await video.addParticipant({ meetingId: a.meetingId, subject: `${a.userId}:${randomUUID()}`, preset: "arbiter" });
   try {
     await sql`
-      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, user_id)
-      values (${a.fixtureId}, null, 'arbiter', ${minted.participantId}, ${a.userId})`;
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, user_id)
+      values (${a.fixtureId}, ${a.side}, null, 'arbiter', ${minted.participantId}, ${a.userId})`;
   } catch (err) {
     // Best effort: a refusal (the call budget, D21) leaves the minted participant at the vendor with no row of ours
     // naming it - nothing retries it. It is receive-only (the arbiter preset) and holds no token we gave out.
@@ -586,7 +653,7 @@ async function mintArbiter(
     // removed).
     await sql`
       update fixture_video_participants set removed_at = now()
-       where fixture_id = ${a.fixtureId} and participant_id = ${minted.participantId}
+       where fixture_id = ${a.fixtureId} and side = ${a.side} and participant_id = ${minted.participantId}
          and preset = 'arbiter' and removed_at is null`;
     throw err;
   }
@@ -617,7 +684,7 @@ export async function leaveAsArbiter(
     select vp.id, vp.removed_at as "removedAt", m.meeting_id as "meetingId", m.ended_at as "meetingEndedAt"
       from fixture_video_participants vp
       join fixtures f on f.id = vp.fixture_id
-      join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+      join fixture_video_meetings m on m.fixture_id = vp.fixture_id and m.side = vp.side
      where vp.fixture_id = ${fixtureId} and vp.participant_id = ${participantId}
        and vp.preset = 'arbiter' and vp.user_id = ${auth.userId} and f.org_id = ${auth.orgId}`;
   if (!row) throw new HttpError(404, "no such arbiter participant", "NOT_FOUND");

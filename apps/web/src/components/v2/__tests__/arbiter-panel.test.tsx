@@ -74,6 +74,8 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     cameraPolicy: "required",
     videoOverridden: false,
     cameraReport: null,
+    // D16: a room per player; the canvas's boards are under way, so both are open.
+    sides: { home: { state: "open", endedAt: null, evidenceAt: null }, away: { state: "open", endedAt: null, evidenceAt: null } },
     canResync: true,
     playable: true,
     canSettle: true,

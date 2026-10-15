@@ -144,6 +144,9 @@ export type ArbiterBoard = {
   /** Required boards that have begun: is the sweep's camera report still to
    *  come ("pending"), or settled? null when there is none to expect. */
   cameraReport: "pending" | "settled" | null;
+  /** D16: a board has a camera meeting PER PLAYER; this says which of them can be watched, so the panel's White/Black
+   *  switch is never blind. `none` is no row, or a row an earlier pairing left. */
+  sides: { home: ArbiterSideMeeting; away: ArbiterSideMeeting };
   /** A game is on file at Lichess and the board is not over. */
   canResync: boolean;
   /** Still to be played (no result, not settled): the video override applies. */
@@ -161,6 +164,14 @@ export type ArbiterBoard = {
   noResultOffer: NoResultOffer;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
+};
+
+/** One player's camera meeting as the board list reads it (D16, §5.6.4): `open` can be watched, `ended` has been torn
+ *  down, `none` has not started (the player has not arrived). `endedAt`/`evidenceAt` are ISO, from that side's own row. */
+export type ArbiterSideMeeting = {
+  state: "none" | "open" | "ended";
+  endedAt: string | null;
+  evidenceAt: string | null;
 };
 
 export type ArbiterRound = {

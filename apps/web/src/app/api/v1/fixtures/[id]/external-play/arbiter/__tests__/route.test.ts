@@ -35,18 +35,17 @@ vi.mock("@/server/api-v1/auth", async (importOriginal) => {
     },
   };
 });
-// RealtimeKit at its module boundary: the meeting is the seeded row, a new
-// participant is minted locally. Nothing reaches Cloudflare.
-const rtk = vi.hoisted(() => ({ minted: [] as string[], removed: [] as string[] }));
+// RealtimeKit at its module boundary: the meetings are the seeded rows, a new
+// participant is minted locally. Nothing reaches Cloudflare. D16: an arbiter joins a player's EXISTING meeting and never
+// makes one, so `ensureMeeting` is a tripwire here - any call to it fails the test that made it.
+const rtk = vi.hoisted(() => ({ minted: [] as string[], removed: [] as string[], created: 0 }));
 vi.mock("@/server/external-play/video/realtimekit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/external-play/video/realtimekit")>();
-  const { sql: db } = await import("@/lib/db");
   return {
     ...actual,
-    ensureMeeting: vi.fn(async (fixtureId: string) => {
-      const [row] = await db<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${fixtureId}`;
-      if (!row) throw new actual.RealtimeKitError(503, "unavailable", "test: no meeting seeded");
-      return { meetingId: row.meeting_id };
+    ensureMeeting: vi.fn(async () => {
+      rtk.created += 1;
+      throw new Error("test: an arbiter must never create a meeting");
     }),
     addParticipant: vi.fn(async (a: { preset: string }) => {
       const id = `arb-${randomUUID().slice(0, 8)}`;
@@ -66,10 +65,10 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { POST as arbiterRoute } from "@/app/api/v1/fixtures/[id]/external-play/arbiter/route";
 import { DELETE as leaveRoute } from "@/app/api/v1/fixtures/[id]/external-play/arbiter/[participantId]/route";
-import { ARBITER_RESYNC_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { POST as resyncRoute } from "@/app/api/v1/fixtures/[id]/external-play/resync/route";
 import { POST as overrideRoute } from "@/app/api/v1/fixtures/[id]/external-play/video-override/route";
-import { seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult } from "@/server/usecases/__tests__/_external-play-seed";
+import { putVideoMeeting, putVideoParticipant, seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult } from "@/server/usecases/__tests__/_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -106,11 +105,11 @@ async function liveBoard(policy: "required" | "optional" = "required", fixtures 
         white_lichess_id, black_lichess_id, moves_uci, move_count, started_at, last_move_at, white_ms, black_ms, clock_increment_s)
       values (${b.fixtureId}, ${r.orgId}, 'live', now(), ${`g${randomUUID().slice(0, 7)}`}, 'home',
         ${b.home.lichessId}, ${b.away.lichessId}, ${sql.json(["e2e4", "e7e5"])}, 2, now(), now(), 600000, 600000, 10)`;
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
-              values (${b.fixtureId}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${b.fixtureId}), (select away_entrant_id from fixtures where id = ${b.fixtureId}))`;
-    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values
-      (${b.fixtureId}, ${b.home.personId}, 'player', ${`pw-${b.fixtureId.slice(0, 6)}`}),
-      (${b.fixtureId}, ${b.away.personId}, 'player', ${`pb-${b.fixtureId.slice(0, 6)}`})`;
+    // D16: a meeting PER PLAYER, each holding that player.
+    for (const side of ["home", "away"] as const) {
+      await putVideoMeeting({ fixtureId: b.fixtureId, orgId: r.orgId, side });
+      await putVideoParticipant({ fixtureId: b.fixtureId, side, personId: b[side].personId, participantId: `${side === "home" ? "pw" : "pb"}-${b.fixtureId.slice(0, 6)}` });
+    }
   }
   return { r, b: r.boards[0]! };
 }
@@ -123,7 +122,7 @@ const overrides = (fixtureId: string) =>
 
 type Call = { name: string; send: (r: SeedOnlineChessRoundResult, fixtureId: string, headers?: Record<string, string>) => Promise<Response> };
 const CALLS: Call[] = [
-  { name: "arbiter", send: (_r, f, h) => arbiterRoute(post(`/fixtures/${f}/external-play/arbiter`, {}, h), ctx(f)) },
+  { name: "arbiter", send: (_r, f, h) => arbiterRoute(post(`/fixtures/${f}/external-play/arbiter`, { side: "home" }, h), ctx(f)) },
   { name: "resync", send: (_r, f, h) => resyncRoute(post(`/fixtures/${f}/external-play/resync`, {}, h), ctx(f)) },
   {
     name: "video-override",
@@ -136,6 +135,7 @@ beforeEach(() => {
   door.userless = false;
   rtk.minted.length = 0;
   rtk.removed.length = 0;
+  rtk.created = 0;
   limiter.counts = new Map();
   __setRateLimitCounterForTests(async (key, windowSeconds) => {
     const n = (limiter.counts.get(key) ?? 0) + 1;
@@ -227,18 +227,64 @@ describe.skipIf(!HAS_DB)("the arbiter's routes — who may call them", () => {
 });
 
 describe.skipIf(!HAS_DB)("POST …/external-play/arbiter", () => {
-  it("the organiser gets their own token and the players' participant ids by colour — never a player's token", async () => {
+  const joinSide = (fixtureId: string, body: unknown) => arbiterRoute(post(`/fixtures/${fixtureId}/external-play/arbiter`, body), ctx(fixtureId));
+
+  it("the organiser gets their own token and the NAMED side's player - one list, never the other side's, never a player's token", async () => {
     const { r, b } = await liveBoard();
     authState.userId = r.ownerUserId;
-    const res = await read(await CALLS[0]!.send(r, b.fixtureId));
-    expect(res.status).toBe(200);
-    const data = res.body.data as { authToken: string; participantId: string; white: string[]; black: string[] };
-    expect(data.white).toEqual([`pw-${b.fixtureId.slice(0, 6)}`]);
-    expect(data.black).toEqual([`pb-${b.fixtureId.slice(0, 6)}`]);
-    expect(rtk.minted.map((m) => m.split(":")[0])).toEqual(["arbiter"]);
-    expect(data.participantId).toBe(rtk.minted[0]!.split(":")[1]);
-    expect(data.authToken).toBe(`tok-${data.participantId}`);
-    expect(Object.keys(data).sort()).toEqual(["authToken", "black", "participantId", "white"]);
+    let checked = 0;
+    for (const side of ["home", "away"] as const) {
+      const res = await read(await joinSide(b.fixtureId, { side }));
+      expect(res.status, side).toBe(200);
+      const data = res.body.data as { authToken: string; participantId: string; side: string; players: string[] };
+      expect(data.side, side).toBe(side);
+      expect(data.players, `${side}: only that side's player`).toEqual([`${side === "home" ? "pw" : "pb"}-${b.fixtureId.slice(0, 6)}`]);
+      expect(data.participantId, side).toBe(rtk.minted.at(-1)!.split(":")[1]);
+      expect(data.authToken, side).toBe(`tok-${data.participantId}`);
+      expect(Object.keys(data).sort(), side).toEqual(["authToken", "participantId", "players", "side"]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    expect(rtk.minted.map((m) => m.split(":")[0]), "one arbiter participant per join").toEqual(["arbiter", "arbiter"]);
+    expect(rtk.created, "an arbiter never makes a meeting").toBe(0);
+  });
+
+  it("the body names a side: nothing, an unknown side, a colour, extra keys, and a non-object are each a 400 before anything is written", async () => {
+    const { r, b } = await liveBoard();
+    authState.userId = r.ownerUserId;
+    const bodies: unknown[] = [{}, { side: "white" }, { side: "black" }, { side: "HOME" }, { side: "home", colour: "white" }, [], "home", null];
+    let checked = 0;
+    for (const body of bodies) {
+      const res = await read(await joinSide(b.fixtureId, body));
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(bodies.length);
+    expect(await arbiters(b.fixtureId)).toHaveLength(0);
+    expect(rtk.minted).toEqual([]);
+    // The positive pair: the same board, a valid side.
+    expect((await read(await joinSide(b.fixtureId, { side: "away" }))).status).toBe(200);
+  });
+
+  it("a side with no meeting yet is a 409 VIDEO_MEETING_NOT_STARTED, and nothing is created; the other side, with one, joins", async () => {
+    const { r, b } = await liveBoard();
+    authState.userId = r.ownerUserId;
+    await sql`delete from fixture_video_meetings where fixture_id = ${b.fixtureId} and side = 'away'`;
+    const res = await read(await joinSide(b.fixtureId, { side: "away" }));
+    expect([res.status, res.body.error?.code]).toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
+    expect(rtk.created, "ZERO create calls").toBe(0);
+    expect(rtk.minted).toEqual([]);
+    expect((await read(await joinSide(b.fixtureId, { side: "home" }))).status, "the side with a meeting").toBe(200);
+  });
+
+  it("past ARBITER_JOIN_LIMIT joins of one board by one organiser in a window the next is a 429 - another board is not throttled", async () => {
+    const { r } = await liveBoard("required", 2);
+    authState.userId = r.ownerUserId;
+    const [one, two] = r.boards;
+    const statuses: number[] = [];
+    for (let i = 0; i <= ARBITER_JOIN_LIMIT.max; i += 1) statuses.push((await joinSide(one!.fixtureId, { side: "home" })).status);
+    expect(statuses).toEqual([...Array(ARBITER_JOIN_LIMIT.max).fill(200), 429]);
+    expect((await joinSide(two!.fixtureId, { side: "home" })).status, "per fixture").toBe(200);
   });
 });
 

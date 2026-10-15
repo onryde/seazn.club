@@ -51,7 +51,10 @@ async function watchable(): Promise<{ r: SeedOnlineChessRoundResult; fixtureId: 
   await sql`
     insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
     values (${r.stageId}, ${r.orgId}, ${r.roundNo}, ${new Date(Date.now() - 5 * 60_000)}, ${r.ownerUserId})`;
-  return { r, fixtureId: r.boards[0]!.fixtureId };
+  const fixtureId = r.boards[0]!.fixtureId;
+  // D16: an arbiter joins a player's EXISTING meeting and never makes one; the home player's has been made by their arrival.
+  await ensureMeeting(fixtureId, "home");
+  return { r, fixtureId };
 }
 
 async function arbiterRows(fixtureId: string) {
@@ -63,8 +66,8 @@ async function arbiterRows(fixtureId: string) {
 describe.skipIf(!DB)("each arbiter OPEN is its own participant (T17B fix 2, D3)", () => {
   it("the defect: the same organiser opening a board twice gets two watches — both on file, both alive at the vendor", async () => {
     const { r, fixtureId } = await watchable();
-    const first = await joinAsArbiter(r.owner, fixtureId);
-    const again = await joinAsArbiter(r.owner, fixtureId);
+    const first = await joinAsArbiter(r.owner, fixtureId, "home");
+    const again = await joinAsArbiter(r.owner, fixtureId, "home");
     expect(again.participantId, "a new participant, never the first open's").not.toBe(first.participantId);
     const rows = new Map((await arbiterRows(fixtureId)).map((x) => [x.participant_id, x.removed_at]));
     expect(rows.size, "two watches on file").toBe(2);
@@ -75,8 +78,8 @@ describe.skipIf(!DB)("each arbiter OPEN is its own participant (T17B fix 2, D3)"
 
   it("closing one tab removes ONLY that tab's watch: the other stays alive at the vendor and on file", async () => {
     const { r, fixtureId } = await watchable();
-    const a = await joinAsArbiter(r.owner, fixtureId);
-    const b = await joinAsArbiter(r.owner, fixtureId);
+    const a = await joinAsArbiter(r.owner, fixtureId, "home");
+    const b = await joinAsArbiter(r.owner, fixtureId, "home");
     expect(await leaveAsArbiter(r.owner, fixtureId, a.participantId)).toEqual({ removed: true });
     expect(fx.participant(a.participantId)?.deleted).toBe(true);
     expect(fx.participant(b.participantId)?.deleted, "the other tab still watches").toBe(false);
@@ -87,8 +90,8 @@ describe.skipIf(!DB)("each arbiter OPEN is its own participant (T17B fix 2, D3)"
 
   it("the custom id is internal ids only — the organiser's user id and a nonce, never an email or a name — and differs per open", async () => {
     const { r, fixtureId } = await watchable();
-    const a = await joinAsArbiter(r.owner, fixtureId);
-    const b = await joinAsArbiter(r.owner, fixtureId);
+    const a = await joinAsArbiter(r.owner, fixtureId, "home");
+    const b = await joinAsArbiter(r.owner, fixtureId, "home");
     const subjects = [fx.participant(a.participantId)!.subject, fx.participant(b.participantId)!.subject];
     const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
     let checked = 0;
@@ -103,14 +106,13 @@ describe.skipIf(!DB)("each arbiter OPEN is its own participant (T17B fix 2, D3)"
 
   it("a mint the record refuses: the vendor's participant is removed AND every record of it is stamped removed — never a live row for a gone participant", async () => {
     const { r, fixtureId } = await watchable();
-    const held = await joinAsArbiter(r.owner, fixtureId);
+    const held = await joinAsArbiter(r.owner, fixtureId, "home");
     // The vendor answers an id already on file (its idempotency, or anything else): the unique key refuses it.
     const video = {
-      ensureMeeting: (id: string) => ensureMeeting(id),
       addParticipant: async () => ({ participantId: held.participantId, authToken: "tok-dup" }),
       removeParticipant: (a: { meetingId: string; participantId: string }) => removeParticipant(a),
     };
-    await expect(joinAsArbiter(r.owner, fixtureId, { video })).rejects.toMatchObject({ code: "23505" });
+    await expect(joinAsArbiter(r.owner, fixtureId, "home", { video })).rejects.toMatchObject({ code: "23505" });
     expect(fx.participant(held.participantId)?.deleted, "the vendor's participant was removed").toBe(true);
     const [row] = await arbiterRows(fixtureId);
     expect(row!.participant_id).toBe(held.participantId);
@@ -145,8 +147,8 @@ describe.skipIf(!DB)("the player path, the same class (T17B fix 2, D3)", () => {
     );
     expect(refused).toEqual({ code: "23514", constraint: "fixture_video_participants_removed_check" });
     // The positive pair: the same update on an arbiter's row is accepted.
-    await sql`insert into fixture_video_participants (fixture_id, preset, participant_id, user_id)
-              values (${s.fixtureId}, 'arbiter', ${`arb-${pid}`}, ${s.ownerUserId})`;
+    await sql`insert into fixture_video_participants (fixture_id, side, preset, participant_id, user_id)
+              values (${s.fixtureId}, 'home', 'arbiter', ${`arb-${pid}`}, ${s.ownerUserId})`;
     const ok = await sql`update fixture_video_participants set removed_at = now() where participant_id = ${`arb-${pid}`} returning 1`;
     expect(ok.length).toBe(1);
   });

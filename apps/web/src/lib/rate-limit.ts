@@ -142,6 +142,15 @@ export const CAPTURE_RECORD_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 3
 export const CAMERA_FAULT_PING_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
 
 /**
+ * The match room's camera REPORT (D16, §5.6.3): a player's browser tells our server what its own camera is doing so the
+ * opponent's pill can show it. Per fixture and person, across tabs. A tab sends about two a minute (every 30 s) and a
+ * flapping camera a burst of changes; twelve a minute carries both. Past it the answer is a 429 - the client drops a
+ * heartbeat (the next comes in 30 s) or sends a change again after its wait. Fail-open: a Redis blip must not blank the
+ * pill. Its own bucket: CAMERA_FAULT_PING_LIMIT throttles the lobby PING only.
+ */
+export const CAMERA_REPORT_LIMIT: RateLimitConfig = { max: 12, windowSeconds: 60 };
+
+/**
  * The arbiter panel's "Resync from Lichess" (T15 fix round 1, M3), per
  * fixture across every organiser: each one opens a Lichess stream with a
  * PLAYER's token, and Lichess's 429 stops every call the club makes for a
@@ -149,3 +158,12 @@ export const CAMERA_FAULT_PING_LIMIT: RateLimitConfig = { max: 10, windowSeconds
  * blip never withholds a resync.
  */
 export const ARBITER_RESYNC_LIMIT: RateLimitConfig = { max: 6, windowSeconds: 60 };
+
+/**
+ * The arbiter panel's join (D16, §5.6.4), per fixture and organiser. With a meeting per player the panel's white/black
+ * switch joins on every press, and each join mints a participant row and spends vendor calls (the participant's add, and
+ * its kick and delete on the way out). Twelve a minute is more than any person flips; a stuck loop stops at it, and past
+ * it the answer is a 429 the panel shows as its generic error tile with a retry. Fail-open like its neighbours, so a Redis
+ * blip never withholds a watch.
+ */
+export const ARBITER_JOIN_LIMIT: RateLimitConfig = { max: 12, windowSeconds: 60 };

@@ -51292,7 +51292,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/arbiter": {
       "post": {
-        "summary": "A signed-in organiser joins the board's video meeting receive-only (RealtimeKit preset `arbiter`): their OWN token for a FRESH participant (one per open, never reused; the server removes it when the panel closes, when the organiser's role is gone, when the organiser is now seated on the board, after 3 hours, or when the room is torn down), and the two players' participant ids by colour. Never a player's token; never an API key. 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board; 409 FIXTURE_NOT_PLAYABLE (the board is over), ROUND_NOT_OPEN, VIDEO_NOT_IN_USE (camera policy off), VIDEO_OVERRIDDEN (the board plays without video), VIDEO_MEETING_ENDED; 503 VIDEO_UNAVAILABLE when the video vendor is down",
+        "summary": "A signed-in organiser joins ONE PLAYER's video meeting receive-only (RealtimeKit preset `arbiter`; each player has a meeting of their own, so the body names the entrant `side` - `home` or `away`): their OWN token for a FRESH participant (one per open, never reused; the server removes it when the panel closes, when the organiser's role is gone, when the organiser is now seated on the board, after 3 hours, or when the room is torn down), the side joined, and the participant ids of the players in that meeting. It joins an existing meeting or refuses; it never creates one. Never a player's token; never an API key. 400 for a missing or unknown side; 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board; 409 FIXTURE_NOT_PLAYABLE (the board is over), ROUND_NOT_OPEN, VIDEO_NOT_IN_USE (camera policy off), VIDEO_OVERRIDDEN (the board plays without video), VIDEO_MEETING_NOT_STARTED (that player has not checked in yet), VIDEO_MEETING_ENDED; 429 past 12 joins a minute for one fixture and organiser; 503 VIDEO_UNAVAILABLE when the video vendor is down",
         "tags": [
           "fixtures"
         ],
@@ -51308,6 +51308,32 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "side": {
+                    "type": "string",
+                    "enum": [
+                      "home",
+                      "away"
+                    ]
+                  }
+                },
+                "required": [
+                  "side"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "side": "home"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -51333,13 +51359,14 @@
                         "participantId": {
                           "type": "string"
                         },
-                        "white": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
+                        "side": {
+                          "type": "string",
+                          "enum": [
+                            "home",
+                            "away"
+                          ]
                         },
-                        "black": {
+                        "players": {
                           "type": "array",
                           "items": {
                             "type": "string"
@@ -51349,8 +51376,8 @@
                       "required": [
                         "authToken",
                         "participantId",
-                        "white",
-                        "black"
+                        "side",
+                        "players"
                       ],
                       "additionalProperties": false
                     },
@@ -51365,10 +51392,8 @@
                   "data": {
                     "authToken": "example",
                     "participantId": "example",
-                    "white": [
-                      "example"
-                    ],
-                    "black": [
+                    "side": "home",
+                    "players": [
                       "example"
                     ]
                   },
@@ -51378,7 +51403,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -51555,6 +51580,50 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -54559,6 +54628,291 @@
                   "ok": true,
                   "data": {
                     "open": true
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/external-play/room/camera-report": {
+      "post": {
+        "summary": "The player's browser reports its own camera (`live` or `off`) so the OPPONENT's presence pill can show it: each player is in a video meeting of their own, so the opponent's browser cannot see it. `heartbeat: true` repeats an unchanged state (every 30 s, in both states); a change (`heartbeat: false`) always writes. Stamps the caller's own player participant on the server's clock; a heartbeat that disagrees with a still-fresh stored state is ignored (`outcome: ignored`). Makes no video-vendor call, and nothing but the opponent's pill reads it. Never key-reachable. 404 for anyone but one of the board's two seated players; 429 past 12 reports a minute for one fixture and person",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "live",
+                      "off"
+                    ]
+                  },
+                  "heartbeat": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "state",
+                  "heartbeat"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "state": "live",
+                "heartbeat": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "written",
+                            "refreshed",
+                            "ignored"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "outcome"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "outcome": "written"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
