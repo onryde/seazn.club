@@ -223,7 +223,6 @@ async function assertAwardFits(tx: Tx, row: LockedRow, corrected: unknown): Prom
     award.lineups,
     award.outcome,
     { fixtureId: row.id, recordedAt: new Date().toISOString() },
-    award.forfeitAward,
   );
   if (verdict.ok) return;
   throw verdict.code === "FIXTURE_FORMAT_LOCKED" ? lockedRefusal(row.id, "decided") : notFit(row.id, verdict.reason);

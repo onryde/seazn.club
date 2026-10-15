@@ -106,7 +106,7 @@ const RULE_AWARD = [7, 1] as const;
 const rule = (award: readonly [number, number] | null) => ({
   base: { win: 3, draw: 1, loss: 0 },
   bonuses: [],
-  forfeit: { winnerPoints: 3, loserPoints: 0, ...(award === null ? {} : { awardScore: [...award] }) },
+  forfeit: { winnerPoints: 3, loserPoints: 0, ...(award === null ? {} : { awardScore: [award[0], award[1]] as [number, number] }) },
 });
 const linesOf = (summary: unknown): (string | null)[] =>
   ((summary as { perSide?: { line?: string }[] } | null)?.perSide ?? []).map((p) => p.line ?? null);

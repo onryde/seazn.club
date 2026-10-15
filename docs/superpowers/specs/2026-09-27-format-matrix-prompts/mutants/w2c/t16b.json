@@ -182,7 +182,8 @@
       {
         "cwd": "packages/engine",
         "files": [
-          "src/sport/forfeit-award.test.ts"
+          "src/sport/forfeit-award.test.ts",
+          "src/sport/forfeit-credit.test.ts"
         ]
       },
       {
@@ -334,26 +335,6 @@
     "file": "apps/web/src/server/engine-db/awarded-state.ts",
     "find": "ledger, ...(forfeitAward === undefined ? {} : { forfeitAward }) };",
     "replace": "ledger };",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
-        ]
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/eventless-award-rewrite.test.ts"
-        ]
-      }
-    ]
-  },
-  {
-    "id": "t16b-assert-award-fits-drops-award",
-    "file": "apps/web/src/server/usecases/fixture-rules.ts",
-    "find": "    { fixtureId: row.id, recordedAt: new Date().toISOString() },\n    award.forfeitAward,\n  );",
-    "replace": "    { fixtureId: row.id, recordedAt: new Date().toISOString() },\n    undefined,\n  );",
     "killers": [
       {
         "cwd": "apps/web",

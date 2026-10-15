@@ -114,6 +114,11 @@ export type AwardFitVerdict =
  *  - Under the corrected format: the engine refusing the forfeit is `FORMAT_DOES_NOT_FIT_PLAY` with its own message;
  *    the fold deciding another award is the "result" reason; a different credited score is the "score" reason.
  *  - Anything else thrown is a module bug, not a verdict, and propagates.
+ *
+ * The stage rule's walkover award (X-WO-1 B) is deliberately NOT offered here: the fit asks what the corrected FORMAT does
+ * to the credited score, and a rule's award is the same number under every format, while the only keys a per-fixture
+ * correction may set are rule-scope (a score key such as `awardScore` is table-scope and refused by name, `overrideFor`),
+ * so the two folds always agree on it. A format SAVE, which does write the folded state, offers it (`awardFoldsUnder`).
  */
 /** Does the stored award hold under `cfg`? Its walkover folded there (`awardedMatchState`), or the reason it will not
  *  hold: the engine refusing the forfeit (its own message) or the fold deciding another award (the "result" reason). A
@@ -144,17 +149,16 @@ export function awardFit(
   lineups: LineupPair,
   outcome: MatchOutcome,
   at: { fixtureId: string; recordedAt: string },
-  forfeitAward?: ForfeitAward,
 ): AwardFitVerdict {
   if (!isScoredAward(outcome)) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
   let was;
   try {
-    was = awardedMatchState(module, currentCfg, lineups, outcome, at, forfeitAward);
+    was = awardedMatchState(module, currentCfg, lineups, outcome, at);
   } catch (err) {
     if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
     throw err;
   }
-  const now = awardFoldsUnder(module, correctedCfg, lineups, outcome, at, forfeitAward);
+  const now = awardFoldsUnder(module, correctedCfg, lineups, outcome, at);
   if (!now.ok) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: now.reason };
   if (now.state.summary.headline !== was.summary.headline)
     return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: FORMAT_FIT_REASONS.score };
