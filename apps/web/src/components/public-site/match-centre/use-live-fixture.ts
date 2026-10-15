@@ -174,9 +174,15 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     }
   }, [fixtureId, delayMs]);
 
-  // W2a: a held fixture (`needs_decision`) still changes — the organiser's
-  // settle decides it — so it keeps its realtime channel and its poll.
-  const live = data.status === "in_play" || data.status === "scheduled" || data.status === "needs_decision";
+  // `live` = the ledger can still move this fixture, so it keeps its realtime
+  // channel and its poll. Only a LOCKED fixture is terminal — finalized or
+  // cancelled, the set append-event.ts's LOCKED_FIXTURE_STATUSES refuses
+  // every write for. Everything else can still change: a held fixture
+  // (`needs_decision`) by the organiser's settle (W2a), and a decided,
+  // abandoned or forfeited one by an undo that reopens it (owner bug
+  // 2026-10-15: this used to stop at `decided`, so the stream overlay's end
+  // card stayed on air after the scorer undid the deciding point).
+  const live = data.status !== "finalized" && data.status !== "cancelled";
 
   // Realtime push (entitled orgs; and the OBS stream overlay, which declares
   // its purpose with its signed key — RT). Any failure — no entitlement (403), env missing,
