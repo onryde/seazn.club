@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "@/lib/db";
 import { seedOnlineChessFixture } from "./_external-play-seed";
+import { OLD_SHAPE, oldShapeStubs } from "./_v448-old-shape";
 import { SUPERUSER_ONLY } from "../../../../../../scripts/rls-exempt.ts";
 
 const CHECK_VIOLATION = "23514";
@@ -532,70 +533,9 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     describe("the delta's guard", () => {
       const DELTA = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..", "db", "migration", "deltas", "V448__video_meeting_per_player.sql");
       const delta = (): string => readFileSync(DELTA, "utf8");
-      /** V439 + V442 + V446, the three tables as they were before V448. */
-      const OLD_SHAPE = `
-        create table fixture_video_meetings (
-          fixture_id uuid primary key references fixtures(id) on delete cascade,
-          org_id     uuid not null references organizations(id) on delete cascade,
-          provider   text not null default 'realtimekit' check (provider in ('realtimekit')),
-          meeting_id text not null unique,
-          home_entrant_id uuid not null,
-          away_entrant_id uuid not null,
-          created_at timestamptz not null default now(),
-          ended_at   timestamptz null,
-          camera_evidence_at timestamptz null,
-          constraint fixture_video_meetings_camera_evidence_check check (camera_evidence_at is null or ended_at is not null)
-        );
-        create index fixture_video_meetings_org_idx on fixture_video_meetings (org_id);
-        create table fixture_video_participants (
-          id uuid primary key default gen_random_uuid(),
-          fixture_id uuid not null references fixture_video_meetings(fixture_id) on delete cascade,
-          person_id uuid null references persons(id) on delete set null,
-          preset text not null check (preset in ('player', 'arbiter')),
-          participant_id text not null,
-          last_publisher_seen_at timestamptz null,
-          created_at timestamptz not null default now(),
-          unique (fixture_id, participant_id),
-          user_id uuid null references users(id) on delete set null,
-          removed_at timestamptz null,
-          seat_read_at timestamptz null,
-          seat_reads integer not null default 0 check (seat_reads >= 0),
-          seat_read_state text null,
-          seat_read_since timestamptz null,
-          constraint fixture_video_participants_user_check check (user_id is null or preset = 'arbiter'),
-          constraint fixture_video_participants_removed_check check (removed_at is null or preset = 'arbiter'),
-          constraint fixture_video_participants_seat_read_check check (
-            seat_reads > 0 or (seat_read_at is null and seat_read_state is null and seat_read_since is null)),
-          constraint fixture_video_participants_seat_read_state_check check (
-            (seat_read_state is null and seat_read_since is null)
-            or (seat_read_state is not null and seat_read_state in ('starting', 'unreadable') and seat_read_since is not null))
-        );
-        create index fixture_video_participants_person_idx on fixture_video_participants (fixture_id, person_id);
-        create index fixture_video_participants_arbiter_open_idx
-          on fixture_video_participants (fixture_id) where preset = 'arbiter' and removed_at is null;
-        create table fixture_video_guard_faults (
-          id uuid primary key default gen_random_uuid(),
-          fixture_id uuid not null references fixture_video_meetings(fixture_id) on delete cascade,
-          person_id uuid not null references persons(id) on delete cascade,
-          started_at timestamptz not null,
-          ended_at timestamptz null,
-          constraint fixture_video_guard_faults_interval_check check (ended_at is null or ended_at >= started_at)
-        );
-        create unique index fixture_video_guard_faults_open_idx
-          on fixture_video_guard_faults (fixture_id, person_id) where ended_at is null;`;
+      /** V439 + V442 + V446, the three tables as they were before V448 (_v448-old-shape.ts). */
       const TABLES = ["fixture_video_meetings", "fixture_video_participants", "fixture_video_guard_faults"] as const;
-      /** The tables the replica's foreign keys point at, as STUBS inside the scratch schema, holding just the rows this file
-       *  seeded from. A replica whose keys named the LIVE tables took SHARE ROW EXCLUSIVE on them as it was created, and the
-       *  delta's drop-constraint takes ACCESS EXCLUSIVE on `fixtures` and `persons`: for as long as that transaction was open it
-       *  blocked, and in a parallel run deadlocked, every other test file writing to fixtures, organizations, persons or users. */
-      const STUBS = (live: string) => `
-        create table fixtures (id uuid primary key, home_entrant_id uuid, away_entrant_id uuid);
-        create table organizations (id uuid primary key);
-        create table persons (id uuid primary key);
-        create table users (id uuid primary key);
-        insert into fixtures select id, home_entrant_id, away_entrant_id from "${live}".fixtures where id = '${fixtureId}';
-        insert into organizations values ('${orgId}');
-        insert into persons values ('${personId}');`;
+      const STUBS = (live: string) => oldShapeStubs(live, { fixtureIds: [fixtureId], orgId, personId });
 
       /** Every column, constraint and index of a table, as one sorted list of words: its shape. */
       async function shapeOf(tx: typeof sql, schema: string, table: string): Promise<string[]> {
