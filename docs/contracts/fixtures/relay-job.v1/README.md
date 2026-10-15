@@ -14,6 +14,7 @@ The prefix names the shape:
 | `session-` | `#/$defs/session`: the `data` of `GET /api/internal/relay/sessions/{sid}` |
 | `heartbeat-` | `#/$defs/heartbeat`: the body of `POST …/heartbeat` |
 | `reply-` | `#/$defs/heartbeatReply`: the `data` of that POST's 200 |
+| `phase-reply-` | `#/$defs/phaseReply`: the compositor's loopback `GET /phase` reply, which the overlay page reads (R2007 PR B) |
 
 What follows the prefix says how a reader must treat the vector:
 
@@ -29,7 +30,8 @@ What follows the prefix says how a reader must treat the vector:
 ## The envelope
 
 On the wire a 200 is `{ "ok": true, "data": … }`. The `session-` and `reply-` vectors are the `data`.
-The heartbeat body is sent bare.
+The heartbeat body is sent bare. The `phase-reply-` vectors are bare too: the compositor serves that
+reply, not web, so it has no envelope.
 
 ## Absent is not zero
 
@@ -55,4 +57,9 @@ stored beat, never a `null` and never a `0`.
   the bound under which any text fits. `heartbeat-invalid-exit-reason` names a reason outside the
   vocabulary. The server records both fields with the beat, scrubbed again, and does nothing else with
   them.
+- `heartbeat-full` carries `phaseChannel: "web"`, the fallback. `heartbeat-final-hold` is a beat
+  during the final hold (compositor C06): `programmePhase: "final"` on the primary channel,
+  `phaseChannel: "loopback"`. `heartbeat-invalid-phase-channel` is a one-field edit of it, refused on
+  `phaseChannel` alone. `phase-reply-final` is the loopback reply in `final`;
+  `phase-reply-invalid-unknown-field` adds a key the strict reply does not declare.
 - Every id, key, passphrase and token here is a placeholder, never a real credential.

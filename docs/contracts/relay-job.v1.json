@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seazn.club/contracts/relay-job.v1.json",
   "title": "Seazn relay job, v1: the Machine's session facts and heartbeat",
-  "description": "The web↔Machine contract for a relay session (compositor spec 2026-10-14 §5.3, §5.4). The root is bare: validate against #/$defs/session (the GET's data), #/$defs/heartbeat (the POST body) and #/$defs/heartbeatReply (the POST's data). On the wire a 200 is the house envelope `{ \"ok\": true, \"data\": … }` and this shape is its `data`; every refusal is `{ \"ok\": false, … }` with its status. Vendored into the compositor repo (C07); its sha256, parity with its zod twins and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/relay-contract.test.ts.",
+  "description": "The web↔Machine contract for a relay session (compositor spec 2026-10-14 §5.3, §5.4). The root is bare: validate against #/$defs/session (the GET's data), #/$defs/heartbeat (the POST body) and #/$defs/heartbeatReply (the POST's data). On the wire a 200 is the house envelope `{ \"ok\": true, \"data\": … }` and this shape is its `data`; every refusal is `{ \"ok\": false, … }` with its status. Inside the Machine, the overlay page reads the compositor's loopback phase endpoint: #/$defs/phaseReply is its reply and #/$defs/phaseEndpoint where it listens (overlay templates spec 2026-10-15 §4.3). Vendored into the compositor repo (C07); its sha256, parity with its zod twins and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/relay-contract.test.ts.",
   "$defs": {
     "session": {
       "description": "GET /api/internal/relay/sessions/{sid} with `Authorization: Bearer <job token>`: the facts a Machine boots from (compositor spec 2026-10-14 §5.3; web `sessionFactsForJob`). On the wire a 200 is the house envelope `{ \"ok\": true, \"data\": … }` and this shape is its `data`; every refusal is `{ \"ok\": false, … }` with its status. Strict: no other key. A refused token is 401 (one body for every cause), an unknown session 404, a terminal one 410 with code SESSION_ENDED. The four composed-only keys (input, output, heartbeatIntervalMs, overlayUrl) are absent on a passthrough session; a compositor refuses any session that is not composed or lacks one of them.",
@@ -292,7 +292,7 @@
           ]
         },
         "programmePhase": {
-          "description": "The programme (compositor C03): `waiting` before the first camera frame, `live`, `frozen` after 0.5 s with no frame, `reconnecting` (the slate) after 3 s. Back to `live` after 1 s of continuous frames.",
+          "description": "The programme (compositor C03, C06): `waiting` before the first camera frame, `live`, `frozen` after 0.5 s with no frame, `reconnecting` (the slate) after 3 s. Back to `live` after 1 s of continuous frames. `final` is the final hold (C06): once the reply says `ending`, the compositor holds the programme for FINAL_HOLD_MS (the Final scene) before it drains and sends EOS. It is terminal and wins over every camera state, and the final exit beat (`state: \"stopped\"`) carries it too (overlay templates spec 2026-10-15 §4.2).",
           "anyOf": [
             {
               "type": "string",
@@ -300,7 +300,8 @@
                 "waiting",
                 "live",
                 "frozen",
-                "reconnecting"
+                "reconnecting",
+                "final"
               ]
             },
             {
@@ -434,6 +435,21 @@
             }
           ]
         },
+        "phaseChannel": {
+          "description": "Which channel the overlay page reads the programme phase from (overlay templates spec 2026-10-15 §4.3): `loopback`, the compositor's own endpoint (#/$defs/phaseEndpoint, the primary), or `web`, the fallback that reads programmePhase from the session's latest beat through the page's data poll (the page switches after 3 failed loopback attempts). Omitted until the page has reported.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "loopback",
+                "web"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "exitReason": {
           "description": "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400); this schema states it as its if/then. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
           "anyOf": [
@@ -525,6 +541,61 @@
       },
       "required": [
         "desiredState"
+      ],
+      "additionalProperties": false
+    },
+    "phaseReply": {
+      "description": "GET http://127.0.0.1:{port}{path}?after=<seq> (#/$defs/phaseEndpoint) inside the Machine: the compositor's loopback reply, which the overlay page reads when its URL carries host=compositor (overlay templates spec 2026-10-15 §4.3). Served by the compositor, not web, so it is bare JSON with no envelope. `?after=<seq>` long-polls: the request is held at most longPollMaxMs. Strict: no other key.",
+      "type": "object",
+      "properties": {
+        "phase": {
+          "description": "The programme phase, in heartbeat.programmePhase's words.",
+          "type": "string",
+          "enum": [
+            "waiting",
+            "live",
+            "frozen",
+            "reconnecting",
+            "final"
+          ]
+        },
+        "seq": {
+          "description": "The phase's sequence number, a whole number, never negative. A reader passes the last one it saw as `after`.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "phase",
+        "seq"
+      ],
+      "additionalProperties": false
+    },
+    "phaseEndpoint": {
+      "description": "Where the compositor's phase endpoint listens (overlay templates spec 2026-10-15 §4.3). Not a message: three constants, each published as a const. Web declares them in lib/relay-phase.ts, and a vendoring repo drift-tests its own copies against this file (C12). Loopback only (127.0.0.1) inside the Machine: never exposed outside it, and not part of the outbound-only host contract (compositor ADR 0007). The page is https and the endpoint is loopback, so the compositor answers the preflight with `Access-Control-Allow-Private-Network: true` and a CORS origin locked to the app's exact origin.",
+      "type": "object",
+      "properties": {
+        "port": {
+          "description": "The TCP port on 127.0.0.1. Unprivileged (above 1023) and below Linux's default ephemeral range (32768–60999), so no outbound socket is handed it first.",
+          "type": "number",
+          "const": 7419
+        },
+        "path": {
+          "description": "The path: GET {path}?after=<seq>.",
+          "type": "string",
+          "const": "/phase"
+        },
+        "longPollMaxMs": {
+          "description": "The longest a long-poll is held, in milliseconds.",
+          "type": "number",
+          "const": 10000
+        }
+      },
+      "required": [
+        "port",
+        "path",
+        "longPollMaxMs"
       ],
       "additionalProperties": false
     }

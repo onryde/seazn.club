@@ -499,7 +499,9 @@ const CONTRACT_FIXTURES = resolve(import.meta.dirname, "../../../../../../docs/c
 const vector = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(CONTRACT_FIXTURES, `${name}.json`), "utf8")) as Record<string, unknown>;
 /** The fields R2 adds to the beat, typed from compositor spec 2026-10-14 §5.3 / C06 `HealthReport` / C07 `heartbeat_wire`. */
-const R2_HEALTH_FIELDS = ["programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps", "rung", "scoreStale"];
+const R2_HEALTH_FIELDS = ["programmePhase", "input", "output", "graphics", "inputKicks", "inputKickAlert", "pipelineRebuilds", "sinkSwaps", "rung", "scoreStale",
+  // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from.
+  "phaseChannel"];
 /** The final beat's (owner scope addition 2026-10-15; C06 `ExitReason`) — only ever with `state: "stopped"` (review M6). */
 const EXIT_FIELDS = ["exitReason", "exitDetail"];
 const R2_BEAT_FIELDS = [...R2_HEALTH_FIELDS, ...EXIT_FIELDS];
@@ -535,7 +537,7 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
       expect(raw, `samples.raw.${k}`).toHaveProperty(k, full[k]);
       checked += 2;
     }
-    expect(checked, "anti-vacuity: ten fields, two stores (the exit fields are the final beat's test below)").toBe(20);
+    expect(checked, "anti-vacuity: eleven fields, two stores (the exit fields are the final beat's test below)").toBe(22);
     // The whole body, both stores — the R1 facts beside the R2 ones (ruling 13: the whole body in raw).
     expect(stored).toEqual(full);
     expect(raw).toEqual(full);
@@ -566,7 +568,7 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     checked += expectAbsent(await lastHeartbeat(s.sessionId), "after full, last_heartbeat");
     const newest = await newestRaw(s.sessionId);
     checked += expectAbsent(newest.raw, "after full, the newest samples.raw");
-    expect(checked, "anti-vacuity: twelve fields, four reads").toBe(48);
+    expect(checked, "anti-vacuity: thirteen fields, four reads").toBe(52);
     // The positive pair: the earlier sample still carries the full beat's fields — absence above is not a lost write.
     expect(newest.n).toBe(2);
     const [{ raw: first }] = await sql<{ raw: Record<string, unknown> }[]>`
@@ -604,6 +606,52 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     const good = await postBeat(s.sessionId, vector("heartbeat-minimal"), { token: s.jobToken });
     expect(good.status).toBe(200);
     expect(((await json(good)) as { data: unknown }).data).toEqual({ desiredState: "live" });
+    expect(await samples(s.sessionId)).toHaveLength(1);
+  });
+
+  // R2007 PR B (overlay templates spec 2026-10-15 §6, R2002 row): before it, the strict beat refused `final` AND the
+  // unknown phaseChannel key, so the whole hold — and the final exit beat after it — was a 400 and recorded nothing.
+  it("R2007 PR B: heartbeat-final-hold through the ROUTE is 200 { desiredState }; programmePhase `final` and phaseChannel `loopback` round-trip in BOTH stores — then the final EXIT beat, still in `final`, keeps its reason in both", async () => {
+    const s = await session();
+    const hold = vector("heartbeat-final-hold");
+    expect(hold, "premise: the hold, on the primary channel").toEqual({ state: "playing", programmePhase: "final", phaseChannel: "loopback" });
+    const res = await postBeat(s.sessionId, hold, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    expect(((await json(res)) as { data: unknown }).data).toEqual({ desiredState: "live" });
+    const stored = await lastHeartbeat(s.sessionId);
+    const { raw } = await newestRaw(s.sessionId);
+    let checked = 0;
+    for (const k of ["programmePhase", "phaseChannel"]) {
+      expect(stored, `last_heartbeat.${k}`).toHaveProperty(k, hold[k]);
+      expect(raw, `samples.raw.${k}`).toHaveProperty(k, hold[k]);
+      checked += 2;
+    }
+    expect(checked, "anti-vacuity: two fields, two stores").toBe(4);
+    expect(stored).toEqual(hold);
+    expect(raw).toEqual(hold);
+    // The sequence the owner ruled on: the hold, then the Machine's last beat — stopped, still `final`, with its reason.
+    const exitBeat = { state: "stopped", programmePhase: "final", phaseChannel: "loopback", exitReason: "ended" };
+    expect((await postBeat(s.sessionId, exitBeat, { token: s.jobToken })).status, "the final exit beat").toBe(200);
+    expect(await lastHeartbeat(s.sessionId), "last_heartbeat is the exit beat, whole").toEqual(exitBeat);
+    const newest = await newestRaw(s.sessionId);
+    expect(newest.raw, "the newest sample is the exit beat, whole").toEqual(exitBeat);
+    expect(newest.n, "both beats are samples").toBe(2);
+  });
+
+  it("R2007 PR B: an unknown phase is still a 400, and so is a phaseChannel outside its two words (heartbeat-invalid-phase-channel) — each writes nothing; the hold beside them is 200", async () => {
+    const s = await session();
+    let refused = 0;
+    for (const bad of [{ state: "playing", programmePhase: "paused" }, vector("heartbeat-invalid-phase-channel")]) {
+      const res = await postBeat(s.sessionId, bad, { token: s.jobToken });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect((await json(res)).ok).toBe(false);
+      refused++;
+    }
+    expect(refused).toBe(2);
+    expect(await samples(s.sessionId), "a refused body is not a sample").toEqual([]);
+    expect(await lastHeartbeat(s.sessionId), "a refused body is not the latest beat").toBeNull();
+    // The positive pair: the hold heartbeat-invalid-phase-channel was cut from (one field) is admitted and recorded.
+    expect((await postBeat(s.sessionId, vector("heartbeat-final-hold"), { token: s.jobToken })).status).toBe(200);
     expect(await samples(s.sessionId)).toHaveLength(1);
   });
 

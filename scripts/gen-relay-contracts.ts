@@ -2,10 +2,10 @@
 //   node --experimental-strip-types scripts/gen-relay-contracts.ts
 //
 // The JSON file is the cross-repo authority — the compositor vendors it byte for byte (C07) — and the zod twins
-// (RelayJobSession, RelayHeartbeat, RelayHeartbeatReply in apps/web/src/server/api-v1/schemas.ts) mirror it. Modelled
-// on gen-capture-contracts.ts, with ONE difference: the root is BARE. It carries only `$schema`, `$id`, `title`,
-// `description` and `$defs` (session, heartbeat, heartbeatReply), never a schema twin of its own: a vendoring repo
-// validates against `#/$defs/<name>`. Every STRUCTURAL key comes from z.toJSONSchema; this script adds only the prose,
+// (RelayJobSession, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply and RelayPhaseEndpoint in
+// apps/web/src/server/api-v1/schemas.ts) mirror it. Modelled on gen-capture-contracts.ts, with ONE difference: the root
+// is BARE. It carries only `$schema`, `$id`, `title`, `description` and `$defs` (session, heartbeat, heartbeatReply,
+// phaseReply, phaseEndpoint), never a schema twin of its own: a vendoring repo validates against `#/$defs/<name>`. Every STRUCTURAL key comes from z.toJSONSchema; this script adds only the prose,
 // and the prose lives here, not hand-typed into the JSON, so a re-run reproduces the file exactly.
 //
 // A run that changes the file changes its sha256: move the constant in
@@ -15,7 +15,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { RelayHeartbeat, RelayHeartbeatReply, RelayJobSession } from "../apps/web/src/server/api-v1/schemas.ts";
+import { RelayHeartbeat, RelayHeartbeatReply, RelayJobSession, RelayPhaseEndpoint, RelayPhaseReply } from "../apps/web/src/server/api-v1/schemas.ts";
 
 type Json = Record<string, unknown>;
 
@@ -28,6 +28,7 @@ interface Shape {
 
 const FILE = "relay-job.v1.json";
 const SPEC = "compositor spec 2026-10-14";
+const OVERLAY_SPEC = "overlay templates spec 2026-10-15";
 const PINNED_BY = "Vendored into the compositor repo (C07); its sha256, parity with its zod twins and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/relay-contract.test.ts.";
 const ENVELOPE = "On the wire a 200 is the house envelope `{ \"ok\": true, \"data\": … }` and this shape is its `data`; every refusal is `{ \"ok\": false, … }` with its status.";
 const ABSENT = "Omitted when not measured, never sent as 0: a present 0 is a measured zero.";
@@ -81,7 +82,7 @@ const HEARTBEAT: Shape = {
     encoderSpeed: `Encoder speed, 1.0 is real time. ${ABSENT}`,
     cpuPct: `Machine CPU, percent. ${ABSENT}`,
     memMb: `Machine memory, MB. ${ABSENT}`,
-    programmePhase: "The programme (compositor C03): `waiting` before the first camera frame, `live`, `frozen` after 0.5 s with no frame, `reconnecting` (the slate) after 3 s. Back to `live` after 1 s of continuous frames.",
+    programmePhase: `The programme (compositor C03, C06): \`waiting\` before the first camera frame, \`live\`, \`frozen\` after 0.5 s with no frame, \`reconnecting\` (the slate) after 3 s. Back to \`live\` after 1 s of continuous frames. \`final\` is the final hold (C06): once the reply says \`ending\`, the compositor holds the programme for FINAL_HOLD_MS (the Final scene) before it drains and sends EOS. It is terminal and wins over every camera state, and the final exit beat (\`state: "stopped"\`) carries it too (${OVERLAY_SPEC} §4.2).`,
     input: "The camera link, the SRT read of Input A (compositor C04): connecting, connected, or backoff between retries.",
     output: "The programme push to Input B (compositor C04): connecting, connected, or backoff between retries.",
     graphics: "The score overlay renderer (compositor C05): starting, ready, restarting, or failed (the camera goes out without the overlay).",
@@ -91,6 +92,7 @@ const HEARTBEAT: Shape = {
     sinkSwaps: "Output pipeline builds after the first, since the process started. A present 0 is a measured zero.",
     rung: "The degrade ladder's rung: full, overlay_half_rate, fast_preset. Anything but full means the encoder overran and the ladder stepped down.",
     scoreStale: "true while the overlay page cannot reach the score feed (it keeps the last score). Omitted until the page has reported either way.",
+    phaseChannel: `Which channel the overlay page reads the programme phase from (${OVERLAY_SPEC} §4.3): \`loopback\`, the compositor's own endpoint (#/$defs/phaseEndpoint, the primary), or \`web\`, the fallback that reads programmePhase from the session's latest beat through the page's data poll (the page switches after 3 failed loopback attempts). Omitted until the page has reported.`,
     exitReason: "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70. A beat in any other state that carries exitReason or exitDetail is refused (400); this schema states it as its if/then. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
     exitDetail: `Sent only with \`state: "stopped"\`, on the final beat: what went wrong, in words. The server's bound is ${EXIT_DETAIL_UTF16_MAX} UTF-16 code units. This schema's maxLength counts characters (code points), and a character is at most two UTF-16 code units, so it publishes ${EXIT_DETAIL_UTF16_MAX / 2} characters: a text within that is never refused. Redacted by the compositor before it is sent (no key, token or query). The server scrubs it again before storing it (anything JWT-shaped, the session's own job token, everything from the first \`?\`), and both stores keep the same text. Human text, never parsed.`,
   },
@@ -101,6 +103,25 @@ const REPLY: Shape = {
   description: `The \`data\` of a heartbeat's 200 (${SPEC} §5.3): what the Machine must do. A Machine takes no inbound traffic, so this reply is the only way a stop reaches it.`,
   props: {
     desiredState: "\"live\": keep going. \"ending\": flush, send EOS and exit 0.",
+  },
+};
+
+const PHASE_REPLY: Shape = {
+  twin: RelayPhaseReply,
+  description: `GET http://127.0.0.1:{port}{path}?after=<seq> (#/$defs/phaseEndpoint) inside the Machine: the compositor's loopback reply, which the overlay page reads when its URL carries host=compositor (${OVERLAY_SPEC} §4.3). Served by the compositor, not web, so it is bare JSON with no envelope. \`?after=<seq>\` long-polls: the request is held at most longPollMaxMs. Strict: no other key.`,
+  props: {
+    phase: "The programme phase, in heartbeat.programmePhase's words.",
+    seq: "The phase's sequence number, a whole number, never negative. A reader passes the last one it saw as `after`.",
+  },
+};
+
+const PHASE_ENDPOINT: Shape = {
+  twin: RelayPhaseEndpoint,
+  description: `Where the compositor's phase endpoint listens (${OVERLAY_SPEC} §4.3). Not a message: three constants, each published as a const. Web declares them in lib/relay-phase.ts, and a vendoring repo drift-tests its own copies against this file (C12). Loopback only (127.0.0.1) inside the Machine: never exposed outside it, and not part of the outbound-only host contract (compositor ADR 0007). The page is https and the endpoint is loopback, so the compositor answers the preflight with \`Access-Control-Allow-Private-Network: true\` and a CORS origin locked to the app's exact origin.`,
+  props: {
+    port: "The TCP port on 127.0.0.1. Unprivileged (above 1023) and below Linux's default ephemeral range (32768–60999), so no outbound socket is handed it first.",
+    path: "The path: GET {path}?after=<seq>.",
+    longPollMaxMs: "The longest a long-poll is held, in milliseconds.",
   },
 };
 
@@ -175,11 +196,13 @@ const doc: Json = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: `https://seazn.club/contracts/${FILE}`,
   title: "Seazn relay job, v1: the Machine's session facts and heartbeat",
-  description: `The web↔Machine contract for a relay session (${SPEC} §5.3, §5.4). The root is bare: validate against #/$defs/session (the GET's data), #/$defs/heartbeat (the POST body) and #/$defs/heartbeatReply (the POST's data). ${ENVELOPE} ${PINNED_BY}`,
+  description: `The web↔Machine contract for a relay session (${SPEC} §5.3, §5.4). The root is bare: validate against #/$defs/session (the GET's data), #/$defs/heartbeat (the POST body) and #/$defs/heartbeatReply (the POST's data). ${ENVELOPE} Inside the Machine, the overlay page reads the compositor's loopback phase endpoint: #/$defs/phaseReply is its reply and #/$defs/phaseEndpoint where it listens (${OVERLAY_SPEC} §4.3). ${PINNED_BY}`,
   $defs: {
     session: render(SESSION, `${FILE}#/$defs/session`),
     heartbeat: ((h) => (publishExitDetailInCodePoints(h), publishStoppedOnly(h), h))(render(HEARTBEAT, `${FILE}#/$defs/heartbeat`)),
     heartbeatReply: render(REPLY, `${FILE}#/$defs/heartbeatReply`),
+    phaseReply: render(PHASE_REPLY, `${FILE}#/$defs/phaseReply`),
+    phaseEndpoint: render(PHASE_ENDPOINT, `${FILE}#/$defs/phaseEndpoint`),
   },
 };
 
