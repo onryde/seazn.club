@@ -1,11 +1,12 @@
 // Golden streams for a module's OPT-IN config branches (W2c Task 16c) - the other half of "the only real gap is coverage".
 //
 // WHY. `scripts/fold-epoch-guard.ts` compares corpora, so a config key no recorded stream sets is a branch the guard cannot
-// see: W2c added football `shootoutAttempts`, hockey `abandonPolicy: "q4_stands"`, carrom and generic `abandonPolicy:
-// "share"` and the `"award"` abandon with its expunge, and their majors had to be raised BY HAND (GOLDEN-POLICY.md,
-// "Unexercised branches"). The generator never writes any of them, `extendCorpus` stops at the key being pinned (a
-// config that merely names the key satisfies its `cfg:` token), and the golden floor derives its tokens from the KERNEL's
-// events and outcomes, so none of the three append paths ever reaches the branch the key switches on.
+// see: W2c added football `shootoutAttempts`, hockey `abandonPolicy: "q4_stands"` and carrom and generic `abandonPolicy:
+// "share"`, and their majors had to be raised BY HAND (GOLDEN-POLICY.md, "Unexercised branches"). The `"award"` abandon
+// with its withdrawal expunge is not one of them: it is an existing fold (those streams replay identically under main), so
+// its stories add coverage of a fold already there, not a bump. The generator never writes any of these keys,
+// `extendCorpus` stops at the key being pinned (a config that merely names the key satisfies its `cfg:` token), and the
+// golden floor derives its tokens from the KERNEL's events and outcomes, so none of the three append paths ever reaches the branch the key switches on.
 //
 // WHAT. A table of named stories. Each says which module and config key it exercises, how to BUILD a ledger that takes the
 // branch (the module's own generator up to a point the fold confirms, then the kernel event that triggers it - nothing

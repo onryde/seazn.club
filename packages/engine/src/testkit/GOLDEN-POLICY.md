@@ -482,6 +482,15 @@ hand in the same PR; no tool will tell you):
     team official is not excluded (the ctx is passed either way).
   - Football `motm` is pinned by ONE stream (`stats:award:motm`), so the award's
     credit path has a single witness; the floor asks for one, not for more.
+- **A server-only fold input** (`FoldOptions`, e.g. `forfeitAward`, W2c Task 16b).
+  The server offers it to the fold and stores the result in module state
+  (`state.forfeitAward`); no corpus carries one, and `recomputeStream`
+  (`golden.ts`) takes no fold options, so a change to how an offered input folds
+  moves no golden (the P-3 mutant left the corpus green). It owes a manual
+  **MAJOR**, because the summary code that reads `state.forfeitAward` ships to
+  phones. Task 16b raised the epoch by hand for it. A per-stream
+  `foldOptions` corpus field is the real fix and is recommended to GF-2 - it is
+  not built here.
 
 Which `core.*` events and outcome kinds each corpus holds is no longer a gap to
 read off a table: it is a floor a test enforces (next section). Holding an event
@@ -654,10 +663,12 @@ existing stream or config changes. The ten stories today: football
 generic `share`, the `award` abandon with a withdrawal's expunge for football,
 hockey and ice hockey, football's level (draw) arm, and ice hockey's level
 abandon under the IIHF default, which is flagged for a replay because no draw
-can stand there (R16-3). Three verdicts (the two award expunge arms and the
-4th quarter) carry no replay differential: an abandon is applied only to a
-match still in play, so a ledger that ends on one and holds a result has its
-effect; the test pins that refusal per story against the engine's own error.
+can stand there (R16-3). Five verdicts (the two award expunge arms, the
+4th quarter, the flagged level award `reachesLevelAwardFlagged` and the football
+level draw `reachesAwardLevelDraw`) carry no replay differential: an abandon is
+applied only to a match still in play, so a ledger that ends on one and holds a
+result has its effect; the premise test pins that refusal per story (six
+stories) against the engine's own error.
 
 ## How the comparison actually works
 

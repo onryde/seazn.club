@@ -366,7 +366,7 @@ describe("each branch stream takes the branch it is named for (the engine's own 
   });
 });
 
-// The three verdicts that carry no replay differential (the two award ones and the 4th quarter) rest on one premise of the
+// The five verdicts that carry no replay differential (the two award expunge arms, the 4th quarter, the flagged level award and the football level draw) rest on one premise of the
 // engine's: an abandon is applied only to a match still in play, so a ledger that holds a result AND ends on an abandon has
 // the abandon's own effect. The premise is pinned here, per story, against the engine's own refusal.
 describe("an abandon after a match decided by play is refused by the engine, and so by every award and 4th-quarter verdict", () => {
