@@ -36,7 +36,10 @@ const cleanEnv = (): NodeJS.ProcessEnv => {
   for (const k of Object.keys(env)) if (k.startsWith("GIT_")) delete env[k];
   return env;
 };
+/** Every git process this file starts through `git()`: a rig's budget is checked against what it really spawned. */
+let gitSpawns = 0;
 function git(cwd: string, ...args: string[]): string {
+  gitSpawns++;
   const r = spawnSync("git", ["-C", cwd, "-c", "user.email=epoch@example.invalid", "-c", "user.name=Epoch", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=always", ...args], { encoding: "utf8", env: cleanEnv() });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
@@ -91,7 +94,15 @@ function makeRepo(name: string, prefix: string): Repo {
   git(top, "tag", "base");
   return { top, eng };
 }
-const BUILD_MS = 60_000;
+// A beforeAll's budget is derived from the work it does (AGENTS.md class 20: a flat timeout beside a derived cost is a latent red - the
+// old flat 60 s / 120 s timed out at load 100+): the repositories it builds times the git spawns each costs, at the spawn cap the other
+// tests here use.
+/** git spawns to build one scratch repository (`makeRepo`): init, one config per NO_AUTO_PACK entry, add, commit, tag. */
+const REPO_SPAWNS = 4 + NO_AUTO_PACK.length;
+/** ... and what `makeFormatRepo` adds on top of that: two `commit`s (add, commit, rev-parse each) and two tags. */
+const FORMAT_REPO_EXTRA_SPAWNS = 2 * 3 + 2;
+const BUILD_MS = spawnBudget(2 * REPO_SPAWNS); // mono and rooted
+const FORMAT_BUILD_MS = spawnBudget(2 * (REPO_SPAWNS + FORMAT_REPO_EXTRA_SPAWNS)); // fmtMono and fmtRooted
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "fold-epoch-guard-"));
   for (const f of CORPORA) {
@@ -1106,6 +1117,8 @@ const read = (repo: Repo, rel: string): string => readFileSync(join(repo.eng, re
 let fmtMono: Repo; // format-1 base `f1`, its reformat `f2`
 let fmtRooted: Repo;
 const STREAMS = new Map<string, number>();
+/** The git processes each format repository took to build (see FORMAT_BUILD_MS). */
+const formatRepoSpawns: number[] = [];
 
 function makeFormatRepo(name: string, prefix: string): Repo {
   const repo = makeRepo(name, prefix);
@@ -1145,13 +1158,20 @@ describe("fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes noth
       const c = JSON.parse(readFileSync(join(ENGINE, SPORTS_DIR, f), "utf8")) as Corpus;
       STREAMS.set(c.key, c.streams.length);
     }
-    fmtMono = makeFormatRepo("fmt-mono", "packages/engine");
-    fmtRooted = makeFormatRepo("fmt-rooted", "");
-  }, BUILD_MS * 2);
+    for (const [name, prefix] of [["fmt-mono", "packages/engine"], ["fmt-rooted", ""]] as const) {
+      const before = gitSpawns;
+      const repo = makeFormatRepo(name, prefix);
+      formatRepoSpawns.push(gitSpawns - before);
+      if (prefix === "") fmtRooted = repo;
+      else fmtMono = repo;
+    }
+  }, FORMAT_BUILD_MS);
 
   // one `git show` per corpus per tag per layout: it spawns, so it states its budget like every spawning test here (a flat 5 s default
   // measured 4.3 s on an idle machine and 5.1 s on a loaded one: a latent red, found by raising a real epoch under load)
   spawnIt(KEYS.length * 4)("the rig: the base is format 1 and its reformat is format 2, in every sport and layout (counted)", () => {
+    // the beforeAll's budget is derived from these spawn counts: a repository that costs more than the budget assumes is a latent timeout
+    expect(formatRepoSpawns, "one count per format repository").toEqual([REPO_SPAWNS + FORMAT_REPO_EXTRA_SPAWNS, REPO_SPAWNS + FORMAT_REPO_EXTRA_SPAWNS]);
     expect(STREAMS.size).toBe(realSports);
     let checked = 0;
     for (const repo of [fmtMono, fmtRooted]) {
@@ -1424,6 +1444,35 @@ describe("fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes noth
       expect(guard(fmtMono, "f2").status, "a bump does not restore a dropped pin").toBe(1);
     });
 
+    spawnIt(4)("the fall is judged on the CORPUS, not on the streams that happen to match: format 1 with every stream re-recorded, and the bump paid, is still red", () => {
+      const sport = "badminton"; // the sport of the reviewer's reproduction: 22 streams
+      expect(KEYS).toContain(sport);
+      const rerecord = (c: Corpus): void => { for (const s of c.streams) s.seed = Number(s.seed) + 1_000_003; };
+      // the control: re-recorded but still format 2, with the bump, is green - so what is red below IS the format
+      atF2(fmtMono);
+      editCorpus(fmtMono, sport, rerecord);
+      setEpoch(fmtMono, sport, realEntry("FOLD_EPOCH", sport) + 1);
+      commit(fmtMono, `${sport} re-recorded in format 2, bumped`);
+      const control = guard(fmtMono);
+      expect({ status: control.status, stderr: control.stderr, violated: violated(control.stdout) }).toEqual({ status: 0, stderr: "", violated: [] });
+      // the reproduction: format 1, every stream re-recorded (nothing matches), the epoch raised
+      atF2(fmtMono);
+      editCorpus(fmtMono, sport, (c) => {
+        rerecord(c);
+        delete c.format;
+        for (const s of c.streams) { delete s.summaries; delete s.overlay; }
+      });
+      setEpoch(fmtMono, sport, realEntry("FOLD_EPOCH", sport) + 1);
+      commit(fmtMono, `${sport} rewritten as format 1, re-recorded, bumped`);
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(violated(r.stdout)).toEqual([sport]);
+      const n = STREAMS.get(sport)!;
+      expect(lineOf(r.stdout, sport)).toMatch(new RegExp(`matched 0 changed 0 deltas-only 0 removed ${n} added ${n} recorded 0 - VIOLATION: .*corpus format fell \\(2 -> 1\\): ${n} stream\\(s\\)`));
+      // and the other sports, untouched, are not blamed
+      expect(violated(r.stdout)).not.toContain(FIRST === sport ? LAST : FIRST);
+    });
+
     const BAD: ReadonlyArray<readonly [string, (c: Corpus) => void, RegExp]> = [
       ["an unknown format", (c) => { c.format = 3; }, /declares corpus format 3; this guard reads formats 1 and 2/],
       ["a format-2 stream without summaries", (c) => { delete c.streams[1]!.summaries; }, /stream #1 is malformed \(a format-2 stream needs summaries/],
@@ -1432,6 +1481,8 @@ describe("fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes noth
       ["a non-string digest", (c) => { (c.streams[0]!.summaries as unknown[])[0] = 7; }, /stream #0 is malformed/],
       ["an overlay that is not JSON", (c) => { c.streams[0]!.overlay = "{nope"; }, /stream #0 is malformed/],
       ["an overlay that is JSON but not an object", (c) => { c.streams[0]!.overlay = "[]"; }, /stream #0 is malformed/],
+      // JSON.parse coerces its argument to a string, so an ARRAY holding the text of an object parses as that object: only the typeof check refuses it
+      ["an overlay that is an array holding the text of an object", (c) => { c.streams[0]!.overlay = ["{}"]; }, /stream #0 is malformed/],
     ];
     spawnIt(BAD.length + 2)("each malformed format-2 corpus is refused (exit 2, nothing judged), whichever side holds it", () => {
       for (const [label, edit, message] of BAD) {

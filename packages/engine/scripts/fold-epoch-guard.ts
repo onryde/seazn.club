@@ -57,7 +57,7 @@
 //      missing, does not load or is malformed (the tree's must declare FOLD_MINOR for exactly the sports of FOLD_EPOCH), a table that declares
 //      no sport, a duplicate stream identity, a stream that names no config of
 //      its corpus, a corpus format that is neither 1 nor 2, a format-2 stream without `summaries` (one per event) and `overlay` (a JSON
-//      object), a format-1 stream that has either, a baseline git cannot read, a baseline that lacks the table but already has this guard or holds no corpus (a moved table, a
+//      object), a format-1 stream that has either, git could not list the change (the paths a newly recorded stream is judged by), a baseline git cannot read, a baseline that lacks the table but already has this guard or holds no corpus (a moved table, a
 //      renamed engine directory), or a run that compared no stream (a pass over nothing proves nothing);
 //   3  a crash in the guard itself (an unexpected error is not a verdict; a bare uncaught exception would exit 1, which reads as one).
 import { spawnSync } from "node:child_process";
@@ -146,6 +146,8 @@ const sameInput = (x: unknown, y: unknown): boolean => JSON.stringify(x) === JSO
 const inputOf = (s: GoldenStream, corpus: GoldenCorpus): unknown => [get(corpus.configs, s.config) ?? null, s.events, s.lineups ?? null];
 /** Whether a stream records the format-2 fields. `parseCorpus` makes it all or nothing per corpus, so a stream has both or neither. */
 const recordsKernel = (s: GoldenStream): boolean => s.summaries !== undefined && s.overlay !== undefined;
+/** A corpus's format: 2 only when it says so, else 1 (absent is 1; `parseCorpus` has refused every other value before a CLI comparison). */
+const formatOf = (c: GoldenCorpus | undefined): 1 | 2 => (c?.format === 2 ? 2 : 1);
 /** What a phone computes: the state after every event, the outcome and the summary, and (when BOTH sides record them) the summary digest
  *  after every event and the kernel overlay. A stream that records them on one side only is compared on the rest: gaining them is a
  *  separate question (`foldSourceTouched`), losing them is `formatFell`. */
@@ -218,6 +220,10 @@ function compareSport(sport: string, before: Side, after: Side, touched: () => r
   let recorded = 0; // matched streams that GAINED the format-2 fields
   let recordedUnfrozen = 0; // ... of which, in a change that touches fold source
   let fell = 0; // matched streams that LOST them
+  // The format never falls, and that is a fact about the CORPUS, not about the streams that happen to match: a format-2 corpus rewritten as
+  // format 1 with every stream re-recorded (a new seed, other events) matches nothing, so counting the fall per matched stream saw none and
+  // a bump (which that re-record owes anyway) turned the whole thing green with every summaries/overlay pin gone.
+  const formatFell = aCorpus !== undefined && formatOf(bCorpus) === 2 && formatOf(aCorpus) < 2;
   for (const [id, b] of bStreams) {
     const a = aStreams.get(id);
     if (a === undefined) removed++;
@@ -247,8 +253,10 @@ function compareSport(sport: string, before: Side, after: Side, touched: () => r
   const aMinor = aEpoch === undefined ? null : minorOf(after, sport);
 
   const reasons: string[] = [];
-  if (fell > 0) {
-    reasons.push(`corpus format fell (2 -> 1): ${fell} stream(s) recorded their summaries and overlay at the baseline and no longer do; a corpus never goes back to format 1, and no bump restores a pin that was dropped: record them again`);
+  if (fell > 0 || formatFell) {
+    // (a baseline stream that recorded the fields; for a corpus that fell, every one of them has lost its pin, matched or not)
+    const lost = formatFell ? [...bStreams.values()].filter((x) => recordsKernel(x.stream)).length : fell;
+    reasons.push(`corpus format fell (2 -> 1): ${lost} stream(s) recorded their summaries and overlay at the baseline and no longer do; a corpus never goes back to format 1, and no bump restores a pin that was dropped: record them again`);
   }
   // (a sport is in the union because one side names it, so with neither on the current side it was on the baseline)
   if (aEpoch === undefined && aCorpus === undefined) {

@@ -652,6 +652,11 @@ describe("fold-epoch guard: GF-2 - which changed paths touch fold source (the ow
     ["tsconfig.json", false],
     ["src/core/events.ts.md", false], // a .md suffix is a doc whatever precedes it
     ["src/core/events.golden.json.ts", true], // ... and a suffix elsewhere in the name is not an exemption
+    ["src/core/events.test.ts.ts", true], // ... for .test.ts either
+    ["src/core/x.schema.json.ts", true], // ... or .schema.json
+    ["src/core/events.md.ts", true], // ... or .md
+    ["src/testkit-x/a.ts", true], // a directory that merely starts with "testkit" is not src/testkit/
+    ["pack-proof/src/x.ts", false], // a src/ that is not the engine's src/: only a path that STARTS with src/ is fold source
     ["src/core/testkit/x.ts", true], // only src/testkit/ itself is exempt
   ];
   const ELSEWHERE: ReadonlyArray<readonly [string, boolean]> = [
@@ -769,4 +774,35 @@ describe("fold-epoch guard: GF-2 - over every registered sport's real golden cor
     });
     expect(checked).toBe(builtinModules.length * 2);
   }, budget(4));
+
+  it("the fall is a fact about the CORPUS: format 1 with EVERY stream re-recorded (nothing matches) is a violation in every sport, whatever the bump", () => {
+    // New seeds: no baseline identity survives, so a count of "matched streams that lost the fields" is zero and the major the re-record
+    // owes is paid by the bump. Only the corpus-level clause sees the dropped summaries and overlay.
+    const rerecorded = (corpus: GoldenCorpus): GoldenCorpus => ({ ...corpus, streams: corpus.streams.map((s) => ({ ...s, seed: s.seed + 1_000_003 })) });
+    let checked = 0;
+    let lost = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      for (const epoch of [1, 2]) {
+        const [row] = compareSides(only(key, asFormat2(c)), only(key, rerecorded(asFormat1(c)), epoch), frozen);
+        expect(row, `${key}: precondition - nothing matched, so only the corpus-level clause can see the fall`).toMatchObject({ matched: 0, removed: c.streams.length, added: c.streams.length });
+        const v = epochViolations(only(key, asFormat2(c)), only(key, rerecorded(asFormat1(c)), epoch), frozen);
+        expect(v.map((x) => x.sport), `${key}: epoch 1 -> ${epoch}`).toEqual([key]);
+        expect(v[0]!.reason, `${key}: epoch 1 -> ${epoch}`).toContain(`corpus format fell (2 -> 1): ${c.streams.length} stream(s) recorded their summaries and overlay`);
+        lost += c.streams.length;
+        checked++;
+      }
+      // the control: the same re-record that stays format 2 is settled by the bump, so the violation above IS the format
+      expect(epochViolations(only(key, asFormat2(c)), only(key, rerecorded(asFormat2(c)), 2), frozen), `${key}: control`).toEqual([]);
+    });
+    expect(checked).toBe(builtinModules.length * 2);
+    expect(lost).toBeGreaterThan(0);
+  }, budget(5));
+
+  it("a sport that has no corpus on the current side is not also called a format fall (its own reason says it)", () => {
+    const c = asFormat2(real.get("badminton")!);
+    const v = epochViolations({ epochs: { badminton: 1 }, corpora: { badminton: c } }, { epochs: { badminton: 1 }, corpora: {} }, frozen);
+    expect(v.map((x) => x.reason)).toEqual([expect.stringContaining("no golden corpus")]);
+    expect(v[0]!.reason).not.toContain("format fell");
+  });
 });
