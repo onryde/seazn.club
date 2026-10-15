@@ -134,8 +134,8 @@ export async function getFixtureRules(
   fixtureId: string,
   dict: Dict,
 ): Promise<{ cfg: unknown; rules_version: number; format_line: string | null }> {
-  const { cfg, rulesVersion, sportKey, sportModule } = await readPadRules(auth, fixtureId);
-  return { cfg, rules_version: rulesVersion, format_line: formatLineOf(sportKey, sportModule, cfg, dict) };
+  const { cfg, rulesVersion, sportKey, sportModule, stageKind, divisionConfig } = await readPadRules(auth, fixtureId);
+  return { cfg, rules_version: rulesVersion, format_line: formatLineOf(sportKey, sportModule, cfg, stageKind, divisionConfig, dict) };
 }
 
 async function readPadRules(auth: AuthCtx, fixtureId: string) {
@@ -165,7 +165,14 @@ async function readPadRules(auth: AuthCtx, fixtureId: string) {
     // fold will apply, and the pad itself needs the kind (Task 12 threads `stageKind` on to it).
     const sportModule = resolveModule(row.sport_key, row.module_version);
     const cfg = resolveFixtureCfg(row, row.division_config, { kind: row.stage_kind, config: row.stage_config }, sportModule);
-    return { cfg, stageKind: row.stage_kind, rulesVersion: row.rules_version, sportKey: row.sport_key, sportModule };
+    return {
+      cfg,
+      stageKind: row.stage_kind,
+      rulesVersion: row.rules_version,
+      sportKey: row.sport_key,
+      sportModule,
+      divisionConfig: row.division_config,
+    };
   });
 }
 

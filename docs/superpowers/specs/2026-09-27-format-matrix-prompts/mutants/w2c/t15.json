@@ -69,8 +69,8 @@
  {
   "id": "t15-refusal-kind-dropped",
   "file": "apps/web/src/server/engine-db/append-event.ts",
-  "find": "      resolveFixtureCfg(fixture, division.config, stage, sportModule),\n      await getDictionary",
-  "replace": "      resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule),\n      await getDictionary",
+  "find": "      resolveFixtureCfg(fixture, division.config, stage, sportModule),\n      stage?.kind,",
+  "replace": "      resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule),\n      stage?.kind,",
   "killers": [
    {
     "cwd": "apps/web",

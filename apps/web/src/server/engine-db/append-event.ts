@@ -359,6 +359,8 @@ export async function appendEventInTx(
       division.sport_key,
       sportModule,
       resolveFixtureCfg(fixture, division.config, stage, sportModule),
+      stage?.kind,
+      division.config,
       await getDictionary("en", "public"),
     );
     throw new HttpError(

@@ -6,24 +6,35 @@ import "server-only";
 // no frozen cfg resolves to (`bumpMovedRules` below, the per-match override's `bumpRulesVersion`). A pad loads it with
 // the cfg it folds under and sends it with every tap; the append path refuses a version that is not the match's
 // (`append-event.ts`), and the pad reloads the rules through `GET /api/v1/fixtures/{id}/rules` and says what they now
-// are — this module's format line, in the reader's language.
+// are — this module's rules line (the public line's composer), in the reader's language.
 import type postgres from "postgres";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { canonicalJson } from "@/lib/canonical-json";
 import type { Tx } from "@/lib/db";
 import type { Dict } from "@/lib/i18n-constants";
 import { rulesLineText } from "@/lib/rules-line";
-import { describeMatchRules } from "@/server/public-site/describe-rules";
+import { matchRulesLine } from "@/server/public-site/describe-rules";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { resolveModule } from "./registry";
 
 /**
- * A match's format as the public describer says it (`describeMatchRules`, the one describer every surface uses), in
- * `dict`'s language — or null when the describer has nothing honest to say of this sport or cfg. The caller then says
- * "the format changed" without naming it.
+ * A match's rules as the public line says them (`matchRulesLine`, the one composer every surface uses): the format, then
+ * how a tied match ends in a stage of `stageKind`, then the abandon policy the stage changed from `divisionCfg`'s - in
+ * `dict`'s language. Null when the describer has nothing honest to say of this sport or cfg; the caller then says "the
+ * format changed" without naming it.
+ *
+ * Review I-1: this used to be the FORMAT alone, so a correction that moved only a decider (football's extra time
+ * switched off, a shorter shoot-out) showed the scorer a banner over a line that had not changed.
  */
-export function formatLineOf(sportKey: string, module: AnySportModule, cfg: unknown, dict: Dict): string | null {
-  const line = describeMatchRules(sportKey, module, cfg);
+export function formatLineOf(
+  sportKey: string,
+  module: AnySportModule,
+  cfg: unknown,
+  stageKind: string | null | undefined,
+  divisionCfg: unknown,
+  dict: Dict,
+): string | null {
+  const line = matchRulesLine(sportKey, module, cfg, divisionCfg, stageKind);
   return line === null ? null : rulesLineText(dict, line);
 }
 

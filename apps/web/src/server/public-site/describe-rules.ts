@@ -583,9 +583,32 @@ export function effectiveRulesLine(
   kind?: string | null,
 ): RulesLineT | null {
   if (!module_ || !rulesDifferFromDivision(sportKey, module_, effectiveCfg, divisionCfg)) return null;
-  const format = describeMatchRules(sportKey, module_, effectiveCfg);
+  return matchRulesLine(sportKey, module_, effectiveCfg, divisionCfg, kind);
+}
+
+/**
+ * The ONE composer of a match's rules as words (W2c batch-5 fix, review I-1): the format (`describeMatchRules`), then how a
+ * tied match ends in a stage of this `kind` (`describeDeciders`), then the abandon policy when it differs from the
+ * division's (`describeAbandon`; every line carrying the policy the division plays would be noise).
+ *
+ * Every surface that states what a match plays by composes it HERE, so none can say less than another: the match centre
+ * and the stage chips (through `effectiveRulesLine`, which adds the differs-from-division gate that keeps a preset NAME on
+ * a match that plays the division's rules), and the scoring pad's rules-changed banner and the 409's `format` (through
+ * `formatLineOf`, which has no preset name to keep and so always states the rules). A decider-only correction - extra time
+ * switched off, a shorter shoot-out - therefore changes the banner's line as it changes the public one.
+ *
+ * Null when the format cannot be described at all (no module, a refused config, a shape no family claims).
+ */
+export function matchRulesLine(
+  sportKey: string,
+  module_: AnySportModule,
+  cfg: unknown,
+  divisionCfg: unknown,
+  kind?: string | null,
+): RulesLineT | null {
+  const format = describeMatchRules(sportKey, module_, cfg);
   if (format === null) return null;
-  const abandon = describeAbandon(module_, effectiveCfg);
+  const abandon = describeAbandon(module_, cfg);
   const changed = canonical(abandon) !== canonical(describeAbandon(module_, divisionCfg));
-  return [...format, ...describeDeciders(module_, kind, effectiveCfg), ...(changed ? abandon : [])];
+  return [...format, ...describeDeciders(module_, kind, cfg), ...(changed ? abandon : [])];
 }

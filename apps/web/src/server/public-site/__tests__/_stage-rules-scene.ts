@@ -6,6 +6,7 @@
 // `short` division; a Swiss stage whose `rules` are exactly prod's; a League
 // stage beside it with none. Both generated.
 import { sql } from "@/lib/db";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
@@ -88,6 +89,9 @@ export async function seedStageRulesScene(): Promise<StageRulesScene> {
 // the division's format. `leaguePoints` is the Pool's own PointsRule, saved through the stage-rules usecase.
 // ---------------------------------------------------------------------------
 export interface DecidersScene {
+  /** The scene's owner, for a test that drives the writers/readers a pad uses (`getFixtureRules`, `scoreEvent`). */
+  auth: AuthCtx;
+  divisionId: string;
   orgId: string;
   orgSlug: string;
   compSlug: string;
@@ -105,6 +109,8 @@ export async function seedDecidersScene(opts: {
   leaguePoints?: Parameters<typeof putStageRules>[2]["points"];
   /** The Cup's own rules (e.g. every decider switched off), stored before its fixtures are generated. */
   cupRules?: Parameters<typeof putStageRules>[2]["rules"];
+  /** The entrants' kind; default 'team' (hockey, football). A sport that does not take it (chess, carrom: individual) says so. */
+  entrantKind?: "team" | "individual";
 }): Promise<DecidersScene> {
   const { auth } = await seedOrg("pro");
   const competition = await createCompetition(auth, {
@@ -122,9 +128,9 @@ export async function seedDecidersScene(opts: {
   await createEntrants(
     auth,
     division.id,
-    // The deciders belong to the TEAM sports (hockey, football): their divisions take team entrants only.
+    // The deciders mostly belong to the TEAM sports (hockey, football): their divisions take team entrants only.
     ["Ada", "Bo", "Cy", "Di"].map((name, i) => ({
-      kind: "team" as const,
+      kind: opts.entrantKind ?? ("team" as const),
       display_name: name,
       seed: i + 1,
       members: [],
@@ -146,6 +152,8 @@ export async function seedDecidersScene(opts: {
     join organizations o on o.id = d.org_id
     where d.id = ${division.id}`;
   return {
+    auth,
+    divisionId: division.id,
     orgId: auth.orgId,
     orgSlug: row!.org_slug,
     compSlug: row!.comp_slug,
