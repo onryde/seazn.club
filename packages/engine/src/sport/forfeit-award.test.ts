@@ -220,7 +220,7 @@ describe("X-WO-1 B: the kernel's predicate over the EVENT is the table's predica
     for (const reason of FORFEIT_REASONS) {
       for (const played of [false, true]) {
         const outcome = { kind: "award" as const, winner: H, loser: A, reason };
-        const expected = isUnplayedForfeit(outcome as never, played);
+        const expected = isUnplayedForfeit(outcome, played);
         expect(unplayedForfeitEvent({ by: A, reason }, played), `${reason}/played=${played}`).toBe(expected);
         if (expected) yes++;
         else no++;
