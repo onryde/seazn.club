@@ -148,3 +148,18 @@ EXTEND/REBASELINE on main means re-running REFORMAT after rebase. After 2b the p
   about 3 MB; a moved summary is located by step and read by re-running the fold.
 - **Q6 harness-only rewrites of EXISTING fields** under the same source freeze (would relax D34's "still a major"). Recommend not in
   GF-2. Value: no scope creep; revisit if a recorder fix ever has to lock out phones for nothing.
+
+## Owner rulings (2026-10-15)
+
+The owner answered §6 on 2026-10-15. These bind T1-T4.
+
+- **Q1 yes, with a condition.** A stream gaining the new fields for the first time owes no bump ONLY if the PR changes no
+  fold-affecting code: nothing in the engine's `src/` outside `src/testkit/**`, `*.test.ts`, `*.golden.json`, `*.schema.json` and
+  `*.md`; not the engine's `package.json`; not the root lockfile. Any other change in the PR makes every newly recorded stream
+  count as CHANGED, and a major is owed.
+- **Q2 player stats = MINOR** (T4): the final `aggregatePlayerStats` rows are a recorded field that owes a minor, never a major.
+- **Q3 yes.** `outcome`, `summary` and `deltas` record the EFFECTIVE values (`outcomeOf`, `summaryOf`, `standingsDelta` of
+  `outcomeOf`).
+- **Q4 yes.** Notes need no manual bump (the `note` claim stays as an inertness pin, reason rewritten).
+- **Q5 yes.** Live (mid-match) summaries are recorded as digests, one per step.
+- **Q6.** D34's "a harness-only rewrite of EXISTING fields is a MAJOR" is unchanged.
