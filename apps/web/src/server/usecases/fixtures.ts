@@ -28,8 +28,9 @@ import { log } from "@/server/logger";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatLineOf } from "@/server/engine-db/rules-version";
 
-/** Doc 13 §7: a device link reads fixture state/events ONLY — every other
- *  fixture surface (detail, lineups, schedule) is 403 for dl_ tokens. */
+/** Doc 13 §7: a device link reads its fixture's scoring surface ONLY — state, events and, since W2c Task 15, the
+ *  rules its pad reloads after a correction (`GET /fixtures/{id}/rules`, `getFixtureRules`) — every other fixture
+ *  surface (detail, lineups, schedule) is 403 for dl_ tokens. */
 function rejectDeviceLink(auth: AuthCtx): void {
   if (auth.via === "device_link") {
     throw new HttpError(403, "Device links can only access their fixture's scoring surface");
