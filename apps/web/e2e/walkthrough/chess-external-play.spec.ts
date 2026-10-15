@@ -585,11 +585,13 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await expect.poll(() => video.participantFor(first.personId) !== null, { message: NOT_POINTED("RealtimeKit"), timeout: 20_000 }).toBe(true);
     await expect(screen(p1), "the meeting reports nobody: the seat is refused").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     await expect(p1.getByTestId("room-state-camera-required")).toBeVisible();
-    // The server ASKED the meeting — it did not trust the page.
+    // The server made the player's OWN meeting (D16, §5.6.1: one per player) and their participant. The claim that MINTS a
+    // participant reads nothing - nobody can have joined with a token that did not exist yet (D21-fix-3, §5.6.8) - so the
+    // refusal is the server's own word, and the READ is the retry's (asserted below).
     const asked = video.calls.map((c) => c.route);
-    expect(asked).toContain("POST /meetings");
+    expect(asked.filter((r) => r === "POST /meetings"), "the first player's claim makes ONE meeting - theirs").toHaveLength(1);
     expect(asked).toContain("POST /meetings/:id/participants");
-    expect(asked).toContain("GET /meetings/:id/active-session");
+    expect(asked, "a minting claim reads no session").not.toContain("GET /meetings/:id/active-session");
     expect(await checkedInAt(boardA.fixtureId, first.personId), "a refused seat stamps nothing").toBeNull();
     expect(lichessCallsFor([first, second]).length, "one seat asks Lichess for nothing").toBe(0);
 
@@ -788,12 +790,15 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const s1 = await sweep(page);
     expect(s1.reconciled, "the pass read the board").toBeGreaterThanOrEqual(1);
     // M8 (spec §5.2): board 1's game ended at its resign, so this pass took its
-    // room down — deactivated at RealtimeKit, then stamped.
-    const [meetingA] = await withDb((sql) => sql<{ meeting_id: string; ended_at: Date | null }[]>`
-      select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${boardA.fixtureId}`);
-    expect(meetingA, "board 1 had a meeting").toBeDefined();
-    expect(video.meetingStatus(meetingA!.meeting_id), "board 1's room is closed at RealtimeKit").toBe("INACTIVE");
-    expect(meetingA!.ended_at, "and stamped ended").not.toBeNull();
+    // rooms down — deactivated at RealtimeKit, then stamped. D16 (§5.6.1): a room PER PLAYER, so both of them.
+    const meetingsA = await withDb((sql) => sql<{ side: string; meeting_id: string; ended_at: Date | null }[]>`
+      select side, meeting_id, ended_at from fixture_video_meetings where fixture_id = ${boardA.fixtureId} order by side`);
+    expect(meetingsA.map((m) => m.side), "board 1 had a meeting for each player").toEqual(["away", "home"]);
+    expect(new Set(meetingsA.map((m) => m.meeting_id)).size, "and they are two different meetings at the vendor").toBe(2);
+    for (const m of meetingsA) {
+      expect(video.meetingStatus(m.meeting_id), `board 1's ${m.side} room is closed at RealtimeKit`).toBe("INACTIVE");
+      expect(m.ended_at, `and ${m.side}'s stamped ended`).not.toBeNull();
+    }
     // T17B fix 2, D11: the first read after expiry says `started`, White at 0
     // — and a first-line read never flags it (lila flags from an OPEN stream's
     // check, 7 s in; the fixture server models that, FLAG_CHECK_MS). So the
@@ -1025,7 +1030,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
         select person_id from fixture_video_participants where fixture_id = ${fixtureId} order by created_at, id`)).map((x) => x.person_id);
 
     // The first pairing: both players of board 1 arrive. Nobody is live, so each seat is refused — but each is now
-    // a participant in board 1's meeting.
+    // a participant in a room of their OWN (D16, §5.6.1: a meeting per player).
     const board1 = r.boards[0]!;
     for (const pl of [board1.home, board1.away]) {
       expect((await claimByLink(page, board1, pl)).seat, `${pl.name}: premise — the seat waits on the camera`).toMatchObject({
@@ -1033,9 +1038,15 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
         reason: "camera_required",
       });
     }
-    const [old] = await meetingsOf(board1.fixtureId);
-    expect(old, "premise — the first pairing's meeting").toBeDefined();
-    expect(new Set(await participantsOf(board1.fixtureId)), "premise — both first players in it").toEqual(new Set([board1.home.personId, board1.away.personId]));
+    const roomsOf = (fixtureId: string) =>
+      withDb((sql) => sql<{ side: string; meeting_id: string }[]>`
+        select side, meeting_id from fixture_video_meetings where fixture_id = ${fixtureId} order by side`);
+    const oldRooms = await roomsOf(board1.fixtureId);
+    expect(oldRooms.map((x) => x.side), "premise — a room each for the first pairing's two players").toEqual(["away", "home"]);
+    expect(new Set(oldRooms.map((x) => x.meeting_id)).size, "premise — two different meetings at the vendor").toBe(2);
+    expect(new Set(await participantsOf(board1.fixtureId)), "premise — both first players on file").toEqual(new Set([board1.home.personId, board1.away.personId]));
+    expect(video.participantFor(board1.home.personId)?.meetingId, "premise — the home player is in the home room").toBe(oldRooms.find((x) => x.side === "home")!.meeting_id);
+    expect(video.participantFor(board1.away.personId)?.meetingId, "premise — the away player is in the away room").toBe(oldRooms.find((x) => x.side === "away")!.meeting_id);
 
     // The organiser unpairs and re-pairs — and does NOT re-open: the round's window stands, so the lobby still says
     // "check in" to whoever the board now names.
@@ -1054,7 +1065,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const mover = [board1.home, board1.away].find((pl) => pl.entrantId !== stayed)!;
     expect(newcomer, "premise — the re-pair put a player new to board 1 on it").toBeDefined();
     expect([now1.home, now1.away], "premise — the player who moved is no longer on board 1").not.toContain(mover.entrantId);
-    expect(video.meetingStatus(old!.meeting_id), "premise — the old room is still live before anyone comes in").toBe("ACTIVE");
+    for (const room of oldRooms) expect(video.meetingStatus(room.meeting_id), `premise — the old ${room.side} room is still live before anyone comes in`).toBe("ACTIVE");
 
     // The newcomer signs in on the public fixture page; Your board is their door.
     const ctx = await playerContext(browser);
@@ -1076,16 +1087,20 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(claim.status(), `the check-in is answered, not refused: ${claimBody.slice(0, 200)}`).toBe(200);
     await expect(screen(p), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
 
-    // (a) a fresh meeting, never the old one; (b) the old room ended at RealtimeKit, its roster gone with its row.
+    // (a) a fresh meeting for the newcomer's own side, never an old one; (b) BOTH old rooms ended at RealtimeKit (the first pairing's
+    // pair is gone, so neither room serves the new one), their rosters gone with their rows.
     const fresh = await meetingsOf(board1.fixtureId);
-    expect(fresh, "one meeting on file").toHaveLength(1);
-    expect(fresh[0]!.meeting_id, "a fresh meeting, never the first pairing's").not.toBe(old!.meeting_id);
+    expect(fresh, "one meeting on file: the newcomer's").toHaveLength(1);
+    for (const room of oldRooms) {
+      expect(fresh[0]!.meeting_id, "a fresh meeting, never the first pairing's").not.toBe(room.meeting_id);
+      expect(video.meetingStatus(room.meeting_id), `the first pairing's ${room.side} room is ended — no old token is live in it`).toBe("INACTIVE");
+    }
     expect(video.meetingStatus(fresh[0]!.meeting_id), "live at RealtimeKit").toBe("ACTIVE");
-    expect(video.meetingStatus(old!.meeting_id), "the first pairing's room is ended — no old token is live in it").toBe("INACTIVE");
     const part = video.participantFor(newcomer.personId);
     expect(part?.meetingId, "the newcomer's participant is in the new meeting").toBe(fresh[0]!.meeting_id);
     expect(await participantsOf(board1.fixtureId), "only the newcomer — the player who moved is not in it").toEqual([newcomer.personId]);
-    expect(video.participantFor(mover.personId)?.meetingId, "the mover's only participant is in the ended room").toBe(old!.meeting_id);
+    const moverRoom = oldRooms.find((x) => x.side === (mover.personId === board1.home.personId ? "home" : "away"))!;
+    expect(video.participantFor(mover.personId)?.meetingId, "the mover's only participant is in their own ended room").toBe(moverRoom.meeting_id);
 
     // The meeting reports them present; Try again seats them on its word.
     video.setLivePublisher(part!.id, true);
@@ -1197,19 +1212,29 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await passCameraTest(np);
     await np.getByTestId("room-checkin-cta").click();
     await expect(screen(np), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
-    const fresh = await meetingsOf(board1.fixtureId);
-    expect(fresh, "one meeting on file").toHaveLength(1);
-    expect(fresh[0]!.meeting_id, "premise — a fresh meeting").not.toBe(old!.meeting_id);
+    // The newcomer's claim retired the first pairing's room (the row is gone from the file, and the room is ended at the vendor).
+    const nowOn = await meetingsOf(board1.fixtureId);
+    expect(nowOn.length, "premise — the newcomer's own room is on file").toBeGreaterThanOrEqual(1);
+    expect(nowOn.map((m) => m.meeting_id), "premise — a fresh meeting, never the first pairing's").not.toContain(old!.meeting_id);
     expect(video.meetingStatus(old!.meeting_id), "premise — the stayer's room was ended under them").toBe("INACTIVE");
 
-    // ── R3-1: the stayer's page re-claims by itself, into the NEW meeting ──
+    // ── R3-1: the stayer's page re-claims by itself, into a NEW meeting of THEIR OWN (D16: a room per player) ──
     const answer = await reclaim;
     expect(answer.status(), "the stayer's quiet re-claim is answered").toBe(200);
     const seat = ((await answer.json()) as { data: { seat: { participant: { participantId: string } | null } | null } }).data.seat;
     const second = video.participantFor(stayer.personId)!;
-    expect(second.meetingId, "the stayer's new participant is in the NEW meeting").toBe(fresh[0]!.meeting_id);
+    const sideOf = (entrantId: string | null) => (now1.home === entrantId ? "home" : "away");
+    const rooms = await withDb((sql) => sql<{ side: string; meeting_id: string }[]>`
+      select side, meeting_id from fixture_video_meetings where fixture_id = ${board1.fixtureId} order by side`);
+    expect(rooms.map((x) => x.side), "a room each for the new pairing's two players").toEqual(["away", "home"]);
+    expect(rooms.map((x) => x.meeting_id), "neither is the first pairing's").not.toContain(old!.meeting_id);
+    const stayerRoom = rooms.find((x) => x.side === sideOf(stayer.entrantId))!;
+    const newcomerRoom = rooms.find((x) => x.side === sideOf(newcomer.entrantId))!;
+    expect(stayerRoom.meeting_id, "two different meetings at the vendor").not.toBe(newcomerRoom.meeting_id);
+    expect(second.meetingId, "the stayer's new participant is in the stayer's OWN new room").toBe(stayerRoom.meeting_id);
+    expect(video.participantFor(newcomer.personId)?.meetingId, "and the newcomer's in theirs").toBe(newcomerRoom.meeting_id);
     expect(seat?.participant?.participantId, "and its token is the one the page was handed").toBe(second.id);
-    expect(new Set(await participantsOf(board1.fixtureId)), "both players of the new pairing are in the new meeting").toEqual(
+    expect(new Set(await participantsOf(board1.fixtureId)), "both players of the new pairing are on file").toEqual(
       new Set([stayer.personId, newcomer.personId]),
     );
     expect(stayerClaims, "one quiet re-claim, not a loop").toHaveLength(1);
@@ -1314,7 +1339,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(answer.status(), "the landing claim is answered").toBe(200);
     await expect(screen(sp), "in the room again").not.toHaveAttribute("data-screen", "repairing");
     const fresh = await meetingsOf(board1.fixtureId);
-    expect(fresh, "one meeting on file").toHaveLength(1);
+    expect(fresh, "one meeting on file: the stayer's own").toHaveLength(1);
     expect(fresh[0]!.meeting_id, "a NEW meeting: the first pairing's is retired").not.toBe(old!.meeting_id);
     expect(video.meetingStatus(old!.meeting_id)).toBe("INACTIVE");
     const second = video.participantFor(stayer.personId)!;
@@ -1336,7 +1361,11 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await passCameraTest(np);
     await np.getByTestId("room-checkin-cta").click();
     await expect(screen(np)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
-    expect((await meetingsOf(board1.fixtureId)).map((m) => m.meeting_id), "the newcomer joins the stayer's new meeting").toEqual([fresh[0]!.meeting_id]);
+    // D16: the newcomer gets a room of their own; the stayer's is the one the landing made, untouched.
+    const both = (await meetingsOf(board1.fixtureId)).map((m) => m.meeting_id);
+    expect(both, "two rooms on file now, the stayer's among them").toHaveLength(2);
+    expect(both, "the stayer's room is still the one the landing made").toContain(fresh[0]!.meeting_id);
+    expect(video.participantFor(newcomer.personId)?.meetingId, "the newcomer is in the OTHER room").toBe(both.find((id) => id !== fresh[0]!.meeting_id));
     video.setLivePublisher(second.id, true);
     video.setLivePublisher(video.participantFor(newcomer.personId)!.id, true);
     await np.getByTestId("room-state-retry").click();
