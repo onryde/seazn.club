@@ -5106,6 +5106,26 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     ]);
   });
 
+  it("D16 fix-3: job 3b (the parked rooms) runs LAST - a read of video_rooms_to_end that throws still leaves the camera evidence settled, and the pass says so by rejecting", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    expect(await settledSides(m.b.fixtureId), "premise: nothing settled yet").toEqual(NONE_SETTLED);
+    const broken = new Error("test: relation video_rooms_to_end does not exist");
+    await expect(
+      sweepExternalPlay({
+        now: after(m, CAMERA_EVIDENCE_AFTER_MS),
+        orgIds: [m.b.orgId],
+        endMeeting: (id) => endMeeting(id, RTK),
+        realtimeKit: RTK,
+        parkedRooms: async () => {
+          throw broken;
+        },
+      }),
+      "never swallowed: the cron hears a deploy that ran before its migration",
+    ).rejects.toBe(broken);
+    expect(await settledSides(m.b.fixtureId), "both rooms settled before job 3b was reached").toEqual(BOTH_SETTLED);
+  });
+
   it("D16: a camera_lost is the player of THAT room's: one player's gap, read from their own room, is flagged to them alone", async () => {
     const m = await playedMatch();
     const x = session(m, m.startedAt - 120_000, m.endedAt);
@@ -5242,6 +5262,25 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     const next = await sweep(w.b, { now: new Date(pass.getTime() + 5 * 60_000), ...quiet });
     expect([next.arbitersRemoved, next.deferred, next.failures]).toEqual([1, 0, []]);
     expect(removals()).toHaveLength(2);
+  });
+
+  it("D16 fix-3: job 3b (the parked rooms) runs LAST - a read of video_rooms_to_end that throws still removes and stamps the due watch", async () => {
+    const w = await watched();
+    await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
+    expect(await removedAt(w.participantId), "premise: the watch is on file").toBeNull();
+    const broken = new Error("test: relation video_rooms_to_end does not exist");
+    await expect(
+      sweepExternalPlay({
+        now: new Date(w.createdAt + 60_000),
+        orgIds: [w.b.orgId],
+        ...quiet,
+        parkedRooms: async () => {
+          throw broken;
+        },
+      }),
+    ).rejects.toBe(broken);
+    expect(await removedAt(w.participantId), "removed before job 3b was reached").not.toBeNull();
+    expect(removals(), "kick, then DELETE").toHaveLength(2);
   });
 
   it("every reason the watch must end is removed at the vendor and stamped — one board each, counted; a second pass changes nothing", async () => {

@@ -140,6 +140,9 @@ export type SweepDeps = {
   /** TEST SEAM — the clock the pass budget (I-1) and reconcile's slice (D20)
    *  are measured on. Production passes none and reads Date.now. */
   wallClock?: () => number;
+  /** TEST SEAM — job 3b's read of the parked rooms (V449). Production reads `video_rooms_to_end`; a test passes a reader that
+   *  throws to prove a broken or missing table cannot starve the jobs that run before it. */
+  parkedRooms?: () => Promise<readonly ParkedRoom[]>;
 };
 
 /** Final review I-1: the pass stops STARTING network work (NETWORK_JOBS) once this much wall-clock time has gone. The
@@ -706,12 +709,14 @@ async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<Sweep
 // parking only AFTER the end succeeded, so a refused end (a failure, or the call budget) keeps its row and the next pass asks
 // again - the same "the row outlives the room" rule retireStaleMeeting keeps. Why the sweep and not the deleting call: a
 // vendor call cannot sit in the transaction that deletes, and the four writes run under the tenant role, which cannot read
-// the sealed meetings table to collect the rooms first. The cost is latency, one sweep tick (the cron fires every minute) -
+// the sealed meetings table to collect the rooms first. The cost is latency, up to one sweep tick (the cron fires every five minutes, apps/cron-worker/src/schedule.ts) -
 // the rooms are of boards that no longer exist, so nobody is waiting on them - and calls: kick-all and the INACTIVE patch,
 // two per parked room, through the same budget (D21) as every other teardown. A room RealtimeKit itself says is not there
 // (its documented not-found) is already gone: its parking is cleared without a count.
+// It runs LAST in the pass (D16 fix-3): its candidate read is outside `each`, so a table that is missing or broken makes the pass throw
+// (loudly, on purpose), and nothing may sit after it that it could starve.
 
-type ParkedRoom = { fixtureId: string; side: string; meetingId: string };
+export type ParkedRoom = { fixtureId: string; side: string; meetingId: string };
 
 async function parkedRoomCandidates(pass: Pass): Promise<ParkedRoom[]> {
   const scope = pass.orgIds === undefined ? sql`` : sql`and r.org_id in ${sql(pass.orgIds as string[])}`;
@@ -1399,12 +1404,16 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   // torn down in it.
   const end = deps.endMeeting ?? ((m) => endMeeting(m));
   await each(pass, "teardown", await teardownCandidates(pass), (c) => teardown(pass, c, end));
-  await each(pass, "teardown", await parkedRoomCandidates(pass), (c) => endParkedRoom(pass, c, end));
   // After the teardown: a room ended in THIS pass is not readable for 2 minutes.
   const rtk = deps.realtimeKit ?? {};
   await each(pass, "camera_evidence", await cameraCandidates(pass), (c) => cameraEvidence(pass, c, rtk));
   // After the teardown too: a room ended in THIS pass took its watches with it.
   await each(pass, "arbiter_revoke", await arbiterCandidates(pass), (c) => arbiterRevoke(pass, c, rtk));
+  // LAST (D16 fix-3): job 3b's candidate read is outside `each`, so a table that is missing or broken makes the pass throw, and
+  // the cron hears it (a swallowed undefined_table would hide a deploy that ran before its migration). Anything after it would
+  // never run: it must be able to starve only itself, never the camera evidence or the arbiter-watch revocation above.
+  const parked = deps.parkedRooms ?? (() => parkedRoomCandidates(pass));
+  await each(pass, "teardown", await parked(), (c) => endParkedRoom(pass, c, end));
   report.failed = report.failures.length;
   return report;
 }
