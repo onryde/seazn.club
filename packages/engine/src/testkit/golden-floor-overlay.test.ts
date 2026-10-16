@@ -28,6 +28,7 @@ import { sweepBudget } from "./golden-budget.ts";
 import {
   ablateEvents,
   CORE_TYPES,
+  DenseOverlayMissing,
   LINEUP_TYPES,
   OVERLAY_CLAIMS,
   OVERLAY_CONTROLS,
@@ -433,6 +434,28 @@ describe("ablationProbe — every clause of the format-2 comparison is reached (
     const v = verdictOf(kernelRecorder);
     expect(v.streams).toBe(1);
     expect(v.verdict).toBe("unpinned");
+  });
+
+  it("a recording with an overlay but no dense overlay, on either side of the ablation, is a named failure: it is never read as 'nothing moved' (which would turn every event unpinned)", () => {
+    const withoutDense = (rec: Recomputed): Recomputed => {
+      const { dense: _dense, ...rest } = rec;
+      return rest;
+    };
+    // the near ledger holds the note (the perturbed side of `perturbed`), the far ledger does not: drop `dense` on each side in turn
+    const nearOnly = perturbed(withoutDense);
+    const farOnly: Recorder = (m, raw, events, lineups) => {
+      const rec = kernelRecorder(m, raw, events, lineups);
+      return events.some((e) => e.type === "core.note") ? rec : withoutDense(rec);
+    };
+    expect(() => verdictOf(nearOnly), "the near ledger").toThrow(DenseOverlayMissing);
+    expect(() => verdictOf(nearOnly), "the near ledger, named").toThrow(/the near ledger of badminton .* has an overlay but no dense overlay/);
+    expect(() => verdictOf(farOnly), "the far ledger").toThrow(DenseOverlayMissing);
+    expect(() => verdictOf(farOnly), "the far ledger, named").toThrow(/the far ledger of badminton/);
+    // the controls: the real recorder and the module-only recorder (an overlay on neither: format 1 holds none) both answer
+    expect(() => verdictOf(kernelRecorder), "the real recorder is not refused").not.toThrow();
+    expect(() => verdictOf(moduleRecorder), "a recorder with neither field is not refused").not.toThrow();
+    expect(verdictOf(kernelRecorder).streams, "the real recorder reaches the stream").toBe(1);
+    expect(verdictOf(moduleRecorder).streams, "so does the module-only one").toBe(1);
   });
 
   it("a summary digest that differs at a RETAINED step moves the verdict", () => {

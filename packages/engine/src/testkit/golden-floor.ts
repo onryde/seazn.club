@@ -601,6 +601,20 @@ function renumberEventIds(value: string, place: ReadonlyMap<number, number>): st
   });
 }
 
+/** A recording that holds the kernel overlay (`overlay`) but not the dense per-step form (`dense`) the ablation probe compares. The probe
+ *  would skip its kernel comparison and read every event as "nothing moved", i.e. unpinned: a recorder built on `recomputeStream`
+ *  (which hands out stored fields only) fails this way, so it is refused by name instead. A module-only recording (format 1) has
+ *  neither field and is fine. */
+export class DenseOverlayMissing extends Error {
+  constructor(where: string) {
+    super(
+      `golden floor: the recording of ${where} has an overlay but no dense overlay, so the ablation probe would skip its kernel comparison ` +
+        `and read every event as unpinned: record with recomputeKernel / recomputeStats (a recorder built on recomputeStream hands out stored fields only)`,
+    );
+    this.name = "DenseOverlayMissing";
+  }
+}
+
 /** Whether removing `big \ small` from the ledger changes any recorded field, across every recorded stream that carries one
  *  of those events. Moved = a retained step's state differs, the outcome / summary / deltas differ, or an ablated event's OWN
  *  step already changed the state (a module that folds the event into state).
@@ -634,6 +648,9 @@ function ablationProbe(
     } catch {
       refused++;
       continue;
+    }
+    for (const [label, recording] of [["the near ledger", a], ["the far ledger", b]] as const) {
+      if (recording.overlay !== undefined && recording.dense === undefined) throw new DenseOverlayMissing(`${label} of ${module.key} ${stream.config}#${stream.seed}`);
     }
     // Where each event sits in each ledger: the pairs both keep, and the near steps that exist only because of what is ablated
     // (the events themselves, and the voids that struck them, which go with them).
