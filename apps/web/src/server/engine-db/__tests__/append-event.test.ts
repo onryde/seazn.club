@@ -498,6 +498,39 @@ describe.skipIf(!HAS_DB)("a lineup event is refused by the append path of a spor
     expect(linesNamed("scoring event refused").filter((l) => l.code === "LINEUP_NOT_SUPPORTED")).toHaveLength(refusals);
   });
 
+  it("a ledger that already holds a lineup event keeps taking play, a note and the void of that event, and a NEW lineup event is still refused (replay is lenient, the write path is not)", async () => {
+    // A generic fixture scored before the ruling: its ledger holds a substitution the engine accepted then. Raw rows, because
+    // that is how such a ledger exists - nothing can write one through the funnel any more.
+    const s = await seed();
+    const sheets = await seedSheets(s);
+    const legacyId = randomUUID();
+    const rawEvent = async (id: string, seq: number, type: string, payload: unknown) => {
+      await sql`
+        insert into score_events (id, fixture_id, seq, type, payload, recorded_by, recorded_at)
+        values (${id}, ${s.fixtureId}, ${seq}, ${type}, ${sql.json(payload as never)}, null, now())`;
+    };
+    await rawEvent(randomUUID(), 1, "core.start", {});
+    await rawEvent(legacyId, 2, "core.lineup.substitution", { side: s.home, off: sheets.homeStarter, on: { personId: sheets.homeBench, slot: "starting", orderNo: 2 } });
+    expect(await ledgerSize(s.fixtureId), "the legacy ledger is on the table").toBe(2);
+    const legacyEvent = lineupEvents(s, sheets).substitution;
+
+    // the new lineup event is refused on top of the legacy ledger: the gate judges the CANDIDATE, not history
+    await expect(appendEvent(s.orgId, s.fixtureId, 2, legacyEvent)).rejects.toMatchObject({ code: "LINEUP_NOT_SUPPORTED" });
+    expect(await ledgerSize(s.fixtureId)).toBe(2);
+
+    // play, an annotation and the undo of the legacy event are all taken: a strict fold of the stored event would refuse each of
+    // them (and brick the fixture, with no event the scorer could void)
+    await expect(appendEvent(s.orgId, s.fixtureId, 2, { type: "generic.score", payload: { by: s.home, points: 1, person: sheets.homeStarter } }), "play over a legacy lineup event").resolves.toBeDefined();
+    await expect(appendEvent(s.orgId, s.fixtureId, 3, { type: "core.note", payload: { text: "after the ruling" } }), "a note over a legacy lineup event").resolves.toBeDefined();
+    await expect(appendEvent(s.orgId, s.fixtureId, 4, { type: "core.void", payload: {}, voids: legacyId }), "the void of the legacy lineup event").resolves.toBeDefined();
+    expect(await ledgerSize(s.fixtureId), "start, legacy substitution, score, note, void").toBe(5);
+
+    // and with the legacy event struck, the new lineup event is still refused, and play still goes on
+    await expect(appendEvent(s.orgId, s.fixtureId, 5, legacyEvent)).rejects.toMatchObject({ code: "LINEUP_NOT_SUPPORTED" });
+    await expect(appendEvent(s.orgId, s.fixtureId, 5, { type: "generic.score", payload: { by: s.away, points: 1, person: sheets.awayStarter } }), "play after the void").resolves.toBeDefined();
+    expect(await ledgerSize(s.fixtureId)).toBe(6);
+  });
+
   it("every sport, by its own declaration: a retirement of a starter after the start is refused where no lineupPolicy is declared (ledger unchanged) and recorded where one is", async () => {
     let refused = 0;
     let recorded = 0;

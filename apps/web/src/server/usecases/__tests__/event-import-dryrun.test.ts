@@ -46,6 +46,46 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     expect(n).toBe(0);
   });
 
+  // Engine lineup fix (owner ruling 2026-10-15). An import folds its whole stream under the write path (`strictFromSeq: 1`), so a
+  // ledger exported from the time generic took a lineup change is refused as a stream, by name, and writes nothing. That is
+  // intended: the import is a NEW write of every event in it, and the sport no longer takes this one.
+  it("rejects a legacy generic stream that carries a lineup event: import.fold_rejected, LINEUP_NOT_SUPPORTED, at that event, and writes NOTHING", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const [fx] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${fixtureId}`;
+
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-legacy-lineup",
+      streams: [{
+        fixture: { id: fixtureId },
+        events: [
+          { type: "core.start", payload: {} },
+          { type: "core.lineup.retirement", payload: { side: fx!.home_entrant_id, personId: "p-legacy" } }, // ← index 1
+          { type: "generic.result", payload: { p1Score: 2, p2Score: 1 } },
+        ],
+      }],
+    });
+
+    expect(report.results[0]!.status).toBe("rejected");
+    expect(report.results[0]!.error).toMatchObject({ code: "import.fold_rejected", eventIndex: 1, engineCode: "LINEUP_NOT_SUPPORTED" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+    expect(n, "nothing written").toBe(0);
+
+    // the control: the same stream without the lineup event is a clean import of the same fixture
+    const clean = await importEvents(auth, divisionId, {
+      import_id: "imp-legacy-lineup-clean",
+      streams: [{
+        fixture: { id: fixtureId },
+        events: [
+          { type: "core.start", payload: {} },
+          { type: "generic.result", payload: { p1Score: 2, p2Score: 1 } },
+        ],
+      }],
+    });
+    expect(clean.results[0]!.error, "the control stream is not refused").toBeUndefined();
+    expect(clean.results[0]!.status, "the control stream is imported").not.toBe("rejected");
+  });
+
   it("rejects a fixture that already has events", async () => {
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
