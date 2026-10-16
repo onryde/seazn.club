@@ -81,8 +81,15 @@ describe("buttons show the hand (T17B fix 2, D7)", () => {
         const classes = classesOf(tag, consts);
         const where = `${f.slice(COMPONENTS.length + 1)}: ${tag.slice(0, 140).replace(/\s+/g, " ")}`;
         expect(classes, where).toMatch(/(^|[\s"`{])cursor-pointer\b/);
-        if (/\bdisabled=/.test(tag)) {
-          expect(classes, `${where} (disableable)`).toMatch(/\bdisabled:cursor-not-allowed\b/);
+        // `\bdisabled=` also matches inside `aria-disabled=`, so the two are told apart: a native-disabled button
+        // needs the `disabled:` variant, and an aria-disabled one (the arbiter's White/Black switch stays focusable to
+        // say why a side is closed) needs the `aria-disabled:` variant, since `:disabled` never matches it.
+        if (/(?<![-\w])disabled=/.test(tag)) {
+          expect(classes, `${where} (disableable)`).toMatch(/(?<![-\w])disabled:cursor-not-allowed\b/);
+          disableable++;
+        }
+        if (/\baria-disabled=/.test(tag)) {
+          expect(classes, `${where} (aria-disableable)`).toMatch(/\baria-disabled:cursor-not-allowed\b/);
           disableable++;
         }
         buttons++;

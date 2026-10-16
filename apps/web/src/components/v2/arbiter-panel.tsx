@@ -600,11 +600,11 @@ function PlayerSwitch({
             onClick={() => {
               if (!unavailable && !pressed) onSwitch(seat);
             }}
-            className={`${base} cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] ${
+            className={`${base} cursor-pointer aria-disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] ${
               pressed
                 ? "border-2 border-[#7c3aed] bg-[#f3effc] px-[11px] py-[5px]"
                 : unavailable
-                  ? "cursor-not-allowed border border-dashed border-[#c9bdf0] bg-[#faf8ff]"
+                  ? "border border-dashed border-[#c9bdf0] bg-[#faf8ff]"
                   : "border border-[#e7e3f3] bg-white"
             } ${INK}`}
           >
