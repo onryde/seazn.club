@@ -11,7 +11,9 @@
 //
 // "Observable" is the kernel's own reading: module state, the effective outcome, the open stoppage, the squads, the
 // settlement, the expunge flag, a level withdrawal, and whether an abandon is in force (probed by the refusal the kernel gives
-// a forfeit while one is). The facts that name the event that opened them are read in the numbering of the ledger as recorded.
+// a forfeit while one is), and (GF-2 T4, corpus format 3) the final player-stats rows: an award folds as no change in module state, so
+// a void of one is decoration unless the stats are read. The facts that name the event that opened them are read in the numbering of
+// the ledger as recorded.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
@@ -21,6 +23,7 @@ import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenEvent } from "./golden.ts";
+import { recordPlayerStats } from "./golden-stats.ts";
 import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 /** The ledger without `drop` (indices), the surviving voids renumbered to where their targets now sit; null when a
@@ -75,6 +78,7 @@ function read(module: AnySportModule, cfg: unknown, lineups: LineupPair, events:
         expunged: folded.expunged,
         levelWithdrawal: folded.levelWithdrawal,
         effective: outcomeOf(module as never, folded as never),
+        stats: recordPlayerStats(module, cfg, lineups, envelopes(events)),
       },
       inOriginal,
     );
@@ -174,6 +178,16 @@ describe("golden floor — every recorded void means what it says (swept, counte
       { type: "core.void", payload: {}, voids: "e-4" },
     ];
     expect(voidFailures(module, cfg, lineups, settled, 5), "a struck settle leaves the abandoned match it found").toEqual([]);
+    // a void of an AWARD: the module folds it as no change, so only the player stats show it. Read with the stats it is honest
+    // (the struck award credits nobody, the standing one credits its person); read without them (the reading before format 3) it is decoration.
+    const person = lineups.home.slots[0]!.personId;
+    const awarded: GoldenEvent[] = [{ type: "core.start", payload: {} }, { type: "core.award", payload: { person, key: "motm" } }, { type: "core.void", payload: {}, voids: "e-1" }];
+    expect(voidFailures(module, cfg, lineups, awarded, 2), "a struck motm credits nobody; standing it credits the person").toEqual([]);
+    const kernelOnly: Reader = (m, c, l, events, original) => {
+      const r = read(m, c, l, events, original);
+      return r === null ? null : { ...r, fold: JSON.stringify((({ stats: _stats, ...rest }) => rest)(JSON.parse(r.fold) as { stats: string })) };
+    };
+    expect(voidFailures(module, cfg, lineups, awarded, 2, kernelOnly), "without the stats the award's void reads as decoration").toEqual([expect.stringMatching(/core\.award left standing changes nothing: the void is decoration/)]);
     // an engine whose void strikes nothing: a reader that folds without resolving voids
     const blind: Reader = (m, c, l, events) => read(m, c, l, events.filter((e) => e.type !== "core.void"));
     // (it also finds the void decoration: with voids ignored, "target standing" and "whole ledger" are one fold)

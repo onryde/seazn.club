@@ -3,7 +3,7 @@
 Status: for owner review, 2026-10-15, off `d601f9da5` (main with #961-#963). Follows `reviews/1e.md` M2, `reviews/golden-floor.md` #1
 and `reviews/1e-minor.md`. Rules in force: D32b, D34, GOLDEN-POLICY.md, TEST-STRATEGY.md.
 
-**Implementation status (2026-10-15, branch `feat/engine-gf2-kernel-overlay`): T1 and T2 done; T3 and T4 open.** See §7 for what landed and
+**Implementation status (2026-10-16, branch `feat/engine-gf2-kernel-overlay`): T1, T2, T3 and T4 done (T3 and T4 awaiting review).** See §7 for what landed and
 what it changed in the plan.
 
 ## 0. Premises checked against the tree (each is a finding)
@@ -170,7 +170,7 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
 ## 7. Implementation status
 
 - **T1 done** (recorder, format 2, `REFORMAT_GOLDEN`; reviewed, fixes below). **T2 done** (guard + the reformat commit). **T3 done** (below;
-  awaiting review). **T4 open** (Q2 player stats).
+  awaiting review). **T4 done** (below; awaiting review).
 - **Guard (T2).** As §3/§4, plus: the changed-path list comes from `git diff --name-only --no-renames` and untracked files, prefix-aware;
   a guard not told what changed fails closed (fold source touched); `src/sport/fold-epoch.ts` IS fold source, so paying ONE sport's bump in
   the PR that reformats leaves every other sport's newly recorded streams owing (the reformat lands alone, or every sport is bumped);
@@ -269,3 +269,76 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
   the new `settleStoryHolds` joined it). A second mutation pass found three more reads that only covered for a neighbour (a void's read and
   the next settle's refusal) and one guard (the expunge tail check) whose helper was tested but whose call site nothing killed; both went the
   same way.
+
+
+### T4 - player stats as a minor field (done; awaiting review)
+
+- **Format decision: format 3 = format 2 + a REQUIRED per-stream `playerStats`.** The canonical text of the final rows the server's
+  `foldDivision` hands `aggregatePlayerStats` for one fixture: `[{"personId":..,"stats":{..}}]`, rows by personId and keys by name in
+  code-unit order (a refactor that only reorders what the fold emits moves no byte), `"[]"` when no one has a row, a non-finite value
+  refused rather than recorded as `null`. The ctx mirrors the server's `entrantFoldCtx` (the two sheets' entrant ids, of the kind the
+  sport declares through `effectiveEntrantModel`). A per-corpus marker, not an optional field, because only a marker lets "a stream lost
+  the field" be refused: formats 1 and 2 forbid it (a hybrid is exit 2), format 3 requires it, and the format never falls (3 -> 2, 3 -> 1,
+  2 -> 1 are red whatever is bumped), judged on the corpus and by the evidence its streams carry. New code: `golden-stats.ts` (pure),
+  `recomputeStream` format 3, `reformatCorpus(module, existing, target)` (one step at a time, refuses a downgrade and target 1),
+  `reformatAll(.., target)`, `CURRENT_FORMAT = 3`.
+- **Guard (Q2 and the Q1 analogue).** A stats-only difference (every state, outcome, summary, digest and overlay equal) is a MINOR owed
+  (`statsOnly`, report column ` stats-only N`, printed only when N > 0 so the existing `recorded N$` line patterns hold); the strongest
+  class owed in a sport still decides, so a stat that moves beside a state is a major. A stream that GAINS the field (baseline format 2)
+  owes nothing while the change touches no fold source and a MINOR (not a major: only the server computes it) when it does, through the
+  SAME `foldSourceTouched` classifier (there is no second one). A harness-only rewrite of an existing field stays a major (Q6). New text:
+  "corpus format fell (3 -> 2): N stream(s) recorded their player stats ...", "N newly recorded stream(s) of player stats while the change
+  touches fold source: <paths> (land the stats field alone, or raise FOLD_MINOR)".
+- **The reformat commit** (data only, `REFORMAT_GOLDEN=1` from a clean tree): 11 sports, 403 streams (329 with at least one row), 3,069,649 ->
+  3,174,795 bytes (+105,146, +3.4%); stripping `,"playerStats":"..."` and `"format":3 -> 2` reproduces each pre-reformat file byte for byte (script,
+  all 11); `fold-epoch:check --against <parent>`: `changed 0`, `recorded` = each sport's stream count, 0 violations.
+- **Floor (item 4).** New token family `stats:award:<key>` for every key a sport DECLARES in `playerStats.awards` (read off the module's own
+  declaration: football `motm`, hockey `potm`, icehockey `mvp`; the other eight declare none and owe no token), satisfied by a recorded person
+  with `<key>_awards` >= 1, required only from a format-3 corpus. A new scenario, `award` (appended, index 11): a natural decided walk, an
+  award to a home player, struck by a void, the same award to an away player; the committed streams are read back by the story test (the
+  struck award credits nobody, the standing one its person once, the ledger without the void credits both, the match ends on the bare walk's
+  result). Football's stoppage story already credits `motm`, so `EXTEND_GOLDEN` appended exactly 1 stream to hockey and 1 to icehockey (0 to
+  the other nine); every old stream byte-identical (script); +27,172 bytes; final 405 streams, 3,201,971 bytes (+132,322, +4.3% over T3).
+  `statsRecorder` (format 3) is the probe default; `kernelRecorder` and `moduleRecorder` stay as the controls that prove each retirement.
+- **Deviation from the plan: `OVERLAY_CLAIMS` does not shrink to `note` alone.** `award` stays, narrowed to the sports that declare no award
+  key (`assertedFor` reads `playerStats.awards`): there the event is still inert (every module folds it as `return state` and the stats fold
+  ignores an undeclared key), so deleting the claim would red `uncoveredUnpinned` in eight sports. In football, hockey and icehockey it flips
+  (unpinned under the module-only and format-2 recorders, pinned under the format-3 one; flip proven in both directions per sport, counted,
+  with the `RETIRED_AWARD` fixture), so a change to how those three credit an award is now a minor the guard asks for, not a manual major.
+- **Teeth, measured (real stats-rule mutants on throwaway branches, `REBASELINE_GOLDEN=1`, guard `--against` the pre-mutation commit):**
+
+  | mutant (`src/stats/stats.ts`) | sports the guard names | verdict |
+  |---|---|---|
+  | an award credits 2 (`${key}_awards`) | 3: football, hockey, icehockey (1 stream each) | MINOR owed, `changed 0`, exit 1; raising `FOLD_MINOR` of those three clears it, exit 0 |
+  | every counted metric credits 2 | all 11 (6-53 streams each) | MINOR owed everywhere, `changed 0` |
+  | every summed metric doubles (`sumField` path) | 2: cricket (26), generic (7) | MINOR owed |
+
+  No mutant produced a major. Each reaches exactly the sports whose corpora exercise the rule; the third row shows the summed-metric path
+  (`sumField` / `value`) is exercised by two sports' corpora only.
+- **Mutation sweep of the new code** (one instance at a time, restored from a backup and byte-compared): 100 mutants over `golden-stats.ts`, the
+  format-3 paths of `golden.ts`/`golden-reformat.ts`, the guard's stats classes and parsing, and the floor token, claim, probe and award
+  scenario. First pass: 94 killed, 6 survived. Fixed with witnesses: the `target === 1` refusal (a format-1 corpus; the format-2 one is
+  refused earlier), a lone stream dropping its stats beside streams that keep them (reachable only in the pure guard; the CLI refuses the
+  hybrid), and a corpus that drops its `format` marker while its streams keep every field (the format is read from the evidence). Removed
+  rather than left unkillable: the stats clause of `foldChange` (its "minor" return is never read; the caller counts deltas and stats
+  beside it) and the builder's re-ask of the stats fold (`extendFloor`'s keep-rule already requires the credit to close the hole; the story
+  test asserts the property on every committed stream). Argued equivalent: `covers: () => true` on the award claim (`uncoveredUnpinned` only
+  ever calls `covers` with a verdict of "unpinned"). Second pass over the final code (73 mutants: every pass-1 kill whose failures carried the
+  word "Timeout", plus the three fixed survivors): 73 killed, each with assertion failures only, 0 timeouts. Total live: 93 mutants, 93
+  killed.
+- **Found while doing this.** (1) `-t "GF-2 T4"` on the guard CLI test dies with `undefined.top` in every T4 test: the format repositories are
+  built in one `beforeAll` inside the earlier "corpus format 2" describe, so a CLI mutation group must select `-t "GF-2"`. (2) A failure
+  message containing "Timeout" is not a timeout: every vitest stack carries `withTimeout`; classify on the first line. (3) A second
+  mutation driver started "because `ps` showed none" raced the first (two mutations in one file); check with `pgrep -f` before and after.
+- **The recorded-void sweep read the kernel only.** `golden-floor-voids.test.ts` calls a void of `core.award` decoration unless the player stats are
+  part of what it reads (an award folds as no change in module state); the first award story reddened it in icehockey and hockey. Its reading
+  now includes the final stats rows, with a differential (the same ledger read without them names the void decoration) and a mutation check
+  (dropping the stats from the reading reds both tests).
+- **apps/web readers.** `outcome-readers.test.ts`: `scanSettles` read `format !== 2`, which reds on every format-3 corpus; it now reads
+  `(format ?? 1) < 2`, with a format-3 differential (killed by reverting: 2 tests red). The other corpus readers (timeline,
+  public-player-matches, player-matches, forfeit-vocabulary-scan, the three skin tests) re-ran green: 408 passed, 0 failed, 41 skipped
+  (Postgres-gated).
+- **Phone contract.** `capture-s2-handoff.md` now says a phone must not compute or render player stats, beside the standings sentence it
+  extends (1e-M's "must not compute or render standings"); GOLDEN-POLICY.md gained "Corpus format 3 (GF-2 T4)", the table rows and the
+  narrowed award bullet. `STATS_FOLD_VERSION` (apps/web, the cache version of stored stat snapshots) is a separate, manual obligation that
+  this guard does not drive.
