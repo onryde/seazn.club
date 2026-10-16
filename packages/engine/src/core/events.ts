@@ -310,6 +310,20 @@ export function isKernelOwnedEventType(type: string): boolean {
   return KERNEL_OWNED_CORE.includes(type) || isLineupEventType(type);
 }
 
+/**
+ * Does this module take `core.lineup.*` events at all? Owner ruling 2026-10-15: only a module that DECLARES lineup support
+ * does, and the declaration is its `lineupPolicy` (the hook that says what its variant permits a squad to do). A module with
+ * none (boardgame, carrom, generic) reads no squad, so a substitution recorded there moved the kernel's squads and nothing the
+ * sport shows: the pad kept a player who had been taken off, and a generic tap credited a point to them. Reading the hook,
+ * not a list of sport names, means a sport that declares a policy tomorrow is admitted tomorrow, and one that forgets to is
+ * refused (a test pins which of the shipped modules decline).
+ *
+ * The WRITE path's gate only (see the lineup branch of `foldMatchWithStoppage`): the question is never asked of a replayed event.
+ */
+export function admitsLineupEvents(module: { readonly lineupPolicy?: unknown }): boolean {
+  return module.lineupPolicy !== undefined;
+}
+
 /** `isKernelOwnedEventType`, plus its two CONDITIONAL members, each an event the module would refuse:
  *  - `core.finalize` on a settled fixture the module has not decided (a settled abandon, a settled pending
  *    tie-break; plan finding 21);
@@ -910,6 +924,19 @@ export function foldMatchWithStoppage<Cfg, State>(
     // stream alone, and no config edit can change its answer.
     const strict = strictFromSeq !== undefined && event.seq >= strictFromSeq;
     validateCoreEvent(event);
+    // Owner ruling 2026-10-15 (engine lineup fix). A lineup change for a sport that declares no `lineupPolicy` is refused
+    // before any other guard, because nothing about the match's state can make it admissible: the answer is the sport's, not
+    // the moment's (below it would read ALREADY_DECIDED after a result and WRONG_PHASE during a stoppage). `strict` only, like
+    // every refusal a declaration decides: a ledger that already holds such an event was accepted when it was written, and a
+    // replay that threw would brick the fixture with no event left to void (cfg and declarations are not the ledger's to
+    // police retroactively). It keeps folding exactly as before, so no recorded fixture moves.
+    if (strict && isLineupEventType(event.type) && !admitsLineupEvents(module)) {
+      throw new EngineError(
+        "LINEUP_NOT_SUPPORTED",
+        `event "${event.type}" rejected: this sport does not record line-up changes`,
+        { eventId: event.id, seq: event.seq, type: event.type },
+      );
+    }
     // GUARANTEE 4 is deliberately NOT gated on `strict`, and the reason is
     // worth recording because it looks like an oversight. It IS cfg-derived at
     // one remove — `decided` comes from `module.outcome(state)`, folded against

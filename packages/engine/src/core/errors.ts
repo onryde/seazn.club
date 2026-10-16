@@ -86,6 +86,11 @@ export const EngineErrorCode = z.enum([
   "DOUBLE_WALKOVER_NO_NEXT_MATCH",
   // A bracket or stepladder seat whose entrant departed cannot be resolved to a walkover (D-G3 corner 3).
   "STAGE_SEAT_DEPARTED",
+  // Owner ruling 2026-10-15 (engine lineup fix) — a `core.lineup.*` event recorded for a sport that declares no `lineupPolicy`
+  // (boardgame, carrom, generic: none of them reads a squad, so the change would move the kernel's squads and nothing the
+  // sport shows). The WRITE path's refusal only (core/events.ts, beside LINEUP_INVALID); a ledger that already holds one still
+  // folds. Appended last, existing order frozen.
+  "LINEUP_NOT_SUPPORTED",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 
