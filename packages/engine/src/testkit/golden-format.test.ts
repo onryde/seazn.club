@@ -267,7 +267,7 @@ describe("reformatCorpus — adds the format-2 fields and moves nothing the corp
       expect(bytesOf(again)).toBe(bytesOf(after));
       // the written file is the committed one plus the new fields: strictly longer, and every old byte is still there
       expect(bytesOf(after).length).toBeGreaterThan(bytesOf(before).length);
-    }, sweepBudget("probe", 1));
+    }, sweepBudget("probe", 2)); // cricket, the heaviest, measured 2.5-2.9 s: one unit left it at a third of the budget
   }
 
   it("the sweep covered every sport and a non-trivial number of streams and steps", () => {
@@ -609,8 +609,8 @@ describe("extendCorpus and extendFloor append in the corpus's format", () => {
       appendedTotal += fresh.length;
     }
     expect(appendedTotal).toBeGreaterThanOrEqual(2);
-  // two bases, each a generator walk (~6 s each measured at load ~25): 3 units of build work, not 2, so the budget holds above 2x
-  }, sweepBudget("build", 3));
+  // two bases, each a generator walk; the pair measured 8-12 s isolated, so 5 units of build work keep the budget at 3x or more of that
+  }, sweepBudget("build", 5));
 
   it("extendFloor: from a format-2 corpus without its floor streams, it reproduces the committed floor streams WITH the new fields", () => {
     const committed2 = reformattedOf(key);

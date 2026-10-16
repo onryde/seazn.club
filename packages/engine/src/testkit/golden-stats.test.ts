@@ -425,7 +425,7 @@ describe("reformatCorpus to format 3 — adds playerStats and moves nothing the 
       expect(after.streams.length).toBeGreaterThan(0);
       expect(bytesOf(reformatCorpus(module, after, 3))).toBe(bytesOf(after));
       expect(bytesOf(after).length).toBeGreaterThan(bytesOf(before).length);
-    }, sweepBudget("probe", 1));
+    }, sweepBudget("probe", 2)); // cricket, the heaviest, measured 2.5-2.9 s: one unit left it at a third of the budget
   }
 
   it("the sweep covered every sport, every stream, and some real rows", () => {
@@ -586,8 +586,8 @@ describe("the other writers record playerStats when the corpus is format 3", () 
       appendedTotal += fresh.length;
     }
     expect(appendedTotal).toBeGreaterThanOrEqual(2);
-  // two bases, each a generator walk (~6 s each measured at load ~25): 3 units of build work, not 2, so the budget holds above 2x
-  }, sweepBudget("build", 3));
+  // two bases, each a generator walk; the pair measured 8-12 s isolated, so 5 units of build work keep the budget at 3x or more of that
+  }, sweepBudget("build", 5));
 
   it("extendFloor, from a format-3 corpus without its floor streams, reproduces the committed floor streams WITH playerStats", () => {
     const module = sport(key);
