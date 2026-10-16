@@ -6,7 +6,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STAGE_TEMPLATES, buildTemplateStages } from "../../../apps/web/src/lib/format-templates.ts";
+import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-stage-deciders.ts";
+import { STAGE_DECIDER_MOVED, StageConfig } from "../../../apps/web/src/server/api-v1/schemas.ts";
 import {
   API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_KNOB_BOUNDS, BUILDER_PREFERRED_VARIANT, ROW_KEYS,
   SPORT_KEYS, TEMPLATE_ROW_KEYS, UnknownRow, builderDefaultVariant, builderStages, cellId, stagesForRow,
@@ -176,9 +179,10 @@ function thirdPlaceKey(): string {
   return key;
 }
 
+const SCHEMAS_TS = (): string => readFileSync(resolve(REPO, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
+
 /** The body of api-v1/schemas.ts's StageConfig — a strictObject, so the POST /stages door 400s on any key outside it. */
-function stageConfigBody(): string {
-  const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
+function stageConfigBody(src: string = SCHEMAS_TS()): string {
   const start = src.indexOf("export const StageConfig = z\n  .strictObject({\n");
   if (start < 0) throw new Error("schemas.ts: StageConfig is no longer a z.strictObject");
   const end = src.indexOf("\n  })\n  .default({});", start);
@@ -186,20 +190,45 @@ function stageConfigBody(): string {
   return src.slice(start, end);
 }
 
+/** The keys a `...NAME,` spread in a StageConfig body brings in, each of them a refusal.
+ *  W2c Task 13b (R-13b-1) moved StageConfig's refusals out of the literal into a spread of `TOP_LEVEL_DECIDER_REFUSALS`,
+ *  built as `Object.fromEntries(TOP_LEVEL_STAGE_DECIDERS.map((key) => [key, z.never(...)...]))` — so the keys are not
+ *  in the shape's text any more. They are read from the spread's own declaration: its key source must be
+ *  TOP_LEVEL_STAGE_DECIDERS (whose VALUE is imported) and every entry must be a `z.never`. A spread this cannot read
+ *  that way THROWS: skipping it would drop refusals out of the scan, which is exactly the way it went blind before. */
+function spreadRefusalKeys(body: string, src: string): string[] {
+  const keys: string[] = [];
+  for (const spread of body.matchAll(/^ {4}\.\.\.(\w+),/gm)) {
+    const name = spread[1]!;
+    const decl = new RegExp(`\\nconst ${name} = Object\\.fromEntries\\(\\s*(\\w+)\\.map\\(\\(\\w+\\) => \\[\\w+, z\\.never\\(`).exec(src);
+    if (decl === null) throw new Error(`schemas.ts: StageConfig spreads ${name}, which is no longer an Object.fromEntries(<keys>.map((key) => [key, z.never(...)])) of refusals`);
+    if (decl[1] !== "TOP_LEVEL_STAGE_DECIDERS") throw new Error(`schemas.ts: ${name} refuses the keys of ${decl[1]}, which this scan cannot resolve (it reads TOP_LEVEL_STAGE_DECIDERS)`);
+    keys.push(...TOP_LEVEL_STAGE_DECIDERS);
+  }
+  return keys;
+}
+
 /** Config keys StageConfig declares only to REFUSE them (W2c Task 12: a top-level stage decider moved to `config.rules`
- *  and is refused loudly with `z.never`, saying so, rather than as an unrecognised key). */
-function refusedConfigKeys(): string[] {
-  const keys = [...stageConfigBody().matchAll(/^ {4}(\w+): z\.never\(/gm)].map((m) => m[1]!);
+ *  and is refused loudly with `z.never`, saying so, rather than as an unrecognised key) — written in the shape, or
+ *  brought in by the refusals spread (see spreadRefusalKeys). */
+function refusedConfigKeys(src: string = SCHEMAS_TS()): string[] {
+  const body = stageConfigBody(src);
+  const keys = [...[...body.matchAll(/^ {4}(\w+): z\.never\(/gm)].map((m) => m[1]!), ...spreadRefusalKeys(body, src)];
   if (keys.length === 0) throw new Error("schemas.ts: StageConfig refuses no key");
   return keys;
 }
 
 /** The top-level keys of StageConfig (a refused one included: see refusedConfigKeys). */
-function stageConfigKeys(): string[] {
-  const keys = [...stageConfigBody().matchAll(/^ {4}(\w+): z\./gm)].map((m) => m[1]!);
+function stageConfigKeys(src: string = SCHEMAS_TS()): string[] {
+  const body = stageConfigBody(src);
+  const keys = [...[...body.matchAll(/^ {4}(\w+): z\./gm)].map((m) => m[1]!), ...spreadRefusalKeys(body, src)];
   if (keys.length === 0) throw new Error("schemas.ts: StageConfig declares no keys");
   return keys;
 }
+
+/** Every whole decider any sport declares — read from the engine's own declarations here, NOT from the web lib's
+ *  TOP_LEVEL_STAGE_DECIDERS that the schema's spread consumes (an expected value taken from the code under test). */
+const ENGINE_DECIDER_KEYS = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))].sort();
 
 describe("API-only rows — bodies derived from product authorities", () => {
   it("empty case first: an unknown row is still refused, never a silent league", () => {
@@ -301,8 +330,15 @@ describe("API-only rows — bodies derived from product authorities", () => {
     const declared = stageConfigKeys();
     expect(declared).toContain("thirdPlace");
     const refused = refusedConfigKeys();
-    expect(refused).toEqual(["shootout", "extraTime"]);
+    // The refused set is exactly the decider set the ENGINE declares (R-13b-1), however the schema spells it.
+    expect(ENGINE_DECIDER_KEYS.length, "anti-vacuity: the engine declares deciders").toBeGreaterThan(2);
+    expect([...refused].sort()).toEqual(ENGINE_DECIDER_KEYS);
     for (const key of refused) expect(declared).toContain(key); // declared-but-refused: why the declared list alone is not enough
+    // And the live schema refuses each one saying where it went — the text scan above is not left to vouch for itself.
+    for (const key of refused) {
+      const said = StageConfig.safeParse({ [key]: false }).error?.issues.map((i) => i.message) ?? [];
+      expect(said, `StageConfig.${key}`).toContain(STAGE_DECIDER_MOVED);
+    }
     expect(declared).toContain("rules"); // W2c Task 12: a create takes config.rules (validated by the usecase)
     let checked = 0;
     for (const row of ROW_KEYS) for (const s of stagesForRow(row)) for (const key of Object.keys(s.config)) {
@@ -311,6 +347,18 @@ describe("API-only rows — bodies derived from product authorities", () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the StageConfig scan reads a refusals spread, and throws on one it cannot read or on none (a skipped spread would drop refusals unseen)", () => {
+    const shape = (spread: string, line = "    ...REF,\n") => `x\nexport const StageConfig = z\n  .strictObject({\n${line}    legs: z.number(),\n  })\n  .default({});\n${spread}`;
+    const good = "\nconst REF = Object.fromEntries(\n  TOP_LEVEL_STAGE_DECIDERS.map((key) => [key, z.never({ error: MSG }).optional()]),\n);\n";
+    expect(TOP_LEVEL_STAGE_DECIDERS.length, "anti-vacuity: the keys the spread contributes").toBeGreaterThan(2);
+    expect(refusedConfigKeys(shape(good))).toEqual([...TOP_LEVEL_STAGE_DECIDERS]);
+    expect(stageConfigKeys(shape(good))).toEqual(["legs", ...TOP_LEVEL_STAGE_DECIDERS]);
+    expect(() => refusedConfigKeys(shape(good.replace("z.never", "z.unknown")))).toThrow(/no longer an Object\.fromEntries/);
+    expect(() => refusedConfigKeys(shape(good.replace("TOP_LEVEL_STAGE_DECIDERS", "OTHER")))).toThrow(/cannot resolve/);
+    expect(() => refusedConfigKeys(shape(""))).toThrow(/no longer an Object\.fromEntries/); // a spread with no declaration
+    expect(() => refusedConfigKeys(shape(good, ""))).toThrow(/refuses no key/); // no spread, no z.never: nothing refused
   });
 
   it("page_playoff_only / stepladder_only = the builder's second stage with no feed", () => {
