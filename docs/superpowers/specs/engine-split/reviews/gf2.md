@@ -70,4 +70,17 @@ Do NOT reformat W2c's format-1 corpora (I-1). Path: take main's (GF-2) corpus fo
 
 ## Resolution
 
-(pending)
+All six findings fixed in new commits on top of ff84756d9 (2026-10-16, Sonnet implementer). Detail: `gf2-kernel-overlay-design.md`, the "Batch review round" bullet.
+
+| # | fix | where |
+|---|---|---|
+| I-1 | `reformatCorpus` tells a format-1 stream that replays clean under format 1 but differs from the effective answer from a stale field, and refuses with the route that works (start from main's format-3 corpus, re-append with `EXTEND_GOLDEN=1`); both messages can appear in one refusal. GOLDEN-POLICY paragraph "A format-1 corpus the reformat cannot take". Tests: synthetic streams for a settle, an expunge where the module answers and a withdrawal over a level result; the stale control; the mixed corpus; `reformatAll`; the cited policy paragraph exists. | `golden-reformat.ts`, `golden-format.test.ts`, `GOLDEN-POLICY.md` |
+| M-1 | (a) `parseCorpus` refuses a stream key outside the input and the three formats' fields, exit 2, CLI rows in formats 1, 2 and 3. (b) A counted sweep: every committed stream stores exactly its format's keys. (c) `recomputeStream` returns only stored fields; the floor's `kernelRecorder` and `statsRecorder` call `recomputeKernel` / `recomputeStats`, which keep `dense` for the probe. | `fold-epoch-guard.ts`, `fold-epoch-guard-cli.test.ts`, `golden.ts`, `golden-floor.ts`, `golden-format.test.ts` |
+| M-2 | `capture-s2-handoff.md` section 4 rewritten: format 3, stats a guarded MINOR with a manual MINOR outside the recorded rows (points to the policy list), an award unpinned only in the 8 sports with no declared key. | `capture-s2-handoff.md` |
+| n1 | The note/award bullet splits: a module-state change owes a MAJOR, a stats-fold change for an undeclared award key a MINOR. | `GOLDEN-POLICY.md` |
+| n2 | 17 flat budgets (9 + 7 + 1) now use `sweepBudget`; `golden-budget.test.ts` scans every `golden*.test.ts` for a flat 60/120 s closer (counted). | `golden-stats/format/overlay.test.ts`, `golden-budget.test.ts` |
+| n3 | "One witness per column" in the floor section. | `GOLDEN-POLICY.md` |
+
+Verification: scoped vitest 1570/1570 over 24 files (JSON reporter, paths under the gf2 worktree); 10 mutants, each run once, each killed by an assertion failure; tsc 0; eslint 0 on the touched files; `engine:boundary` PASS (330 files); `fold-epoch:check --against origin/main` exit 0 (381 streams, 0 violations); parity ledger `ledgers/gf2-batch-review.json` against ff84756d9, 3 rewritten + 10 added, 0 unaccounted.
+
+One finding of the fix itself: dropping `dense` from `recomputeStream` reddened 13 floor-overlay tests, because the ablation probe skips its kernel comparison when a recording has no `dense` and then reads every event as unpinned. The recorders were repointed; the fail-open is caught by tests, not by the probe.

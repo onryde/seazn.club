@@ -134,7 +134,10 @@ rewrite the same corpora and `golden.ts`); one PR or two, CI compares the net di
 **Risks.** Recorder fidelity is circular (the replay reruns the same recorder): the T3 teeth tests are the only proof. The freeze
 over-approximates (a comment fix in `core/` forces a major): the reformat ships alone. Digest summaries are unreadable in a diff (as
 digest states; `corpusStateDiff` names steps). Replay adds a `summaryOf` + SHA-256 per step: budget CI-way runs. Hot files: a concurrent
-EXTEND/REBASELINE on main means re-running REFORMAT after rebase. After 2b the path list is engine-repo-relative.
+EXTEND/REBASELINE on main means re-running REFORMAT after rebase, EXCEPT for a format-1 corpus that holds a stream whose effective answer
+differs from the module's (a settle, an expunge, a withdrawal over a level result): that corpus cannot be reformatted at all, and the refusal
+says to start from main's format-3 corpus and re-append with EXTEND_GOLDEN (found by the batch review, below). After 2b the path list is
+engine-repo-relative.
 
 ## 6. Open questions for the owner
 
@@ -355,3 +358,23 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
   repositories are built in a file-level `beforeAll`: `-t "GF-2 T4"` runs 14 tests and passes on its own (it was 14 red). (6) The policy bullet
   on player-stats folds outside the recorded rows now lists `sumPlayerStats` and the division re-derivation, the tombstone relabel, entrant
   kind, the lineup pair and the single football `motm` witness, each read from the code. Counts after the round: 17 scoped files, 981 of 981.
+- **Batch review round (reviews/gf2.md, Opus, whole batch: 1 Important, 2 Minor, 3 Nit, all fixed in new commits).** (I-1) The reformat
+  tool refused a format-1 corpus that holds a stream whose effective answer differs from the module's (a settle, an expunge where the
+  module still answers, a withdrawal over a level result) and told the reader to re-baseline first, which records the module's answer
+  again. `reformatCorpus` now tells that case from a stale field (the stream replays clean under format 1) and names the route that works:
+  start from main's format-3 corpus and re-append with `EXTEND_GOLDEN=1`; a corpus with both gets both messages. Tests: synthetic format-1
+  streams for each of the three classes, the stale control, the mixed corpus, `reformatAll`, and a test that the cited policy paragraph
+  exists. (M-1) `dense` can no longer be stored silently, three ways: `parseCorpus` refuses any stream key outside the input and the three
+  formats' fields (exit 2, CLI rows for formats 1, 2 and 3), `recomputeStream` returns only stored fields (`dense` lives on `recomputeKernel`
+  and `recomputeStats`; the floor's `kernelRecorder` and `statsRecorder` call those, because a probe handed a recording without `dense` skips
+  its kernel comparison and reads every event as unpinned: 13 floor-overlay tests caught it the first time), and a counted sweep holds that
+  every committed stream stores exactly its format's keys. (M-2) `capture-s2-handoff.md` says format 3, stats a guarded MINOR with a manual
+  MINOR outside the recorded rows, and an award unpinned only in the eight sports with no declared key. (n1) The policy splits a module-state
+  change (MAJOR) from a stats-fold change (MINOR). (n2) 17 flat `60_000`/`120_000` budgets in three golden test files now derive from
+  `sweepBudget`, and a counted scan keeps it so. (n3) The floor section records one witness per column. Mutants (10, each run once, each
+  killed by an assertion failure, none by a timeout): a flat budget put back; the key allow-list widened to `dense`; the key check limited
+  to format 2 and up; `dense` injected into a committed carrom stream; `recomputeStream(..., 2)` leaking the raw recomputation; the dead-end
+  test dropping its format-1 condition, flipping its replay-clean test, losing that test altogether, and not counting its streams; the policy
+  paragraph renamed under the message's pointer. Counts: scoped 1570 of 1570 over 24 files (the golden and guard files plus boundary-gate,
+  stryker-changed-lines, release-epoch-report-cli, fold-epoch, schema-snapshot, generator-fields, dossiers); parity ledger
+  `ledgers/gf2-batch-review.json` against ff84756d9: 3 rewritten + 10 added, 0 unaccounted (6470 -> 6480 collected).
