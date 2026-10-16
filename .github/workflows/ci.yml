@@ -790,6 +790,9 @@ jobs:
           --health-retries 10
 
     env:
+      # CI logs errors only: pino defaults to info and floods the Actions log
+      # (schedule_court_filtered etc.), burying the failure.
+      LOG_LEVEL: error
       # Superuser connection so the app can `set role app_user` (RLS). Local =>
       # no SSL. Port 5432 keeps prepared statements on (not the Supabase pooler).
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -1191,6 +1194,9 @@ jobs:
       # job-wide.
 
     env:
+      # CI logs errors only: pino defaults to info and floods the Actions log
+      # (schedule_court_filtered etc.), burying the failure.
+      LOG_LEVEL: error
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
@@ -1468,6 +1474,9 @@ jobs:
           --health-retries 10
 
     env:
+      # CI logs errors only: pino defaults to info and floods the Actions log
+      # (schedule_court_filtered etc.), burying the failure.
+      LOG_LEVEL: error
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
@@ -1480,6 +1489,11 @@ jobs:
       ANTHROPIC_API_KEY: sk-ant-ci-smoke-fixture
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
       STRIPE_WEBHOOK_SECRET: whsec_ci_smoke
+      # x-cron-secret for /api/cron/* (billing-quantity, p72). Job-level so the
+      # server and scripts/smoke.ts read ONE value; without it the route throws
+      # "CRON_SECRET is not configured" and the right-secret legs skip. CI-only
+      # dummy, same convention as e2e.yml.
+      CRON_SECRET: ci-only-smoke-cron-secret-0123456789
       # Real Stripe Connect test-mode account (`acct_…`), provisioned once via
       # `npm run stripe:connect-fixture` (scripts/stripe-connect-fixture.ts).
       # Registration/sponsor checkout mint a destination charge against
@@ -1674,9 +1688,9 @@ jobs:
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-smoke-secret
           # Default pino level is info — every accepted score event + route
-          # floods the Actions log and buries the failure. warn keeps refusals
-          # and faults; silent would hide the only signal when a red is real.
-          LOG_LEVEL: warn
+          # floods the Actions log and buries the failure. error keeps faults
+          # only; silent would hide the only signal when a red is real.
+          LOG_LEVEL: error
           # smoke signs in by reading `login_url` off the magic-link response,
           # and this server runs as NODE_ENV=production. Production stopped
           # exposing that link on a failed send — it used to, so a Resend
