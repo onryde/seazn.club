@@ -287,13 +287,18 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
       await tx`update fixture_stream_sessions set machine_seconds = machine_seconds + ${seconds} where id = ${next.id}`;
     }
   }
-  // Df: the cost estimate, at the TERMINAL transition — the first instant at which machine_seconds and
-  // the guest are final. Read the row back inside this transaction so the machine_seconds just written
-  // above is included. `is null` makes it idempotent: a repeat of the same terminal transition never
-  // moves a recorded estimate. The STORAGE term is refined later by the sweep, which is the one writer
-  // that learns `recording_seconds` (Task 12 step 5) — at this instant it is usually still 0, and the
-  // sweep recomputes rather than leaving a compute-only number standing as the whole estimate.
-  if (!isTerminal(before.state) && isTerminal(next.state)) {
+  // Df: the cost estimate of an ENDED session, recomputed from the row whenever its Machine time can have moved: at the
+  // TERMINAL transition, and again when its runner enters destroyed AFTER the end (PR #976 review I1). A session that
+  // fails before its Machine is confirmed gone — the crash cap, a refusal, a warming/provision timeout, a credit refusal,
+  // relay_disabled — is terminal while its runner is still lost/stopping/exited; the attempt's seconds land on the later
+  // destroyed (the C27 cleanup), and an estimate frozen at the terminal transition read 0 Machine time for good (the sweep
+  // re-estimates only a session with a recording). So it is an OVERWRITE — never `is null` — from the row read back inside
+  // this transaction (the machine_seconds just written above included), through the one formula the sweep also overwrites
+  // with: a repeat (a destroyed re-entry with no boot, a sweep before or after) lands on the same value. The STORAGE term
+  // is still the sweep's to learn (`recording_seconds`, Task 12 step 5); this reads whatever it has learnt so far.
+  const endedNow = !isTerminal(before.state) && isTerminal(next.state);
+  const destroyedAfterEnd = isTerminal(before.state) && before.runner.state !== "destroyed" && next.runner.state === "destroyed";
+  if (endedNow || destroyedAfterEnd) {
     const [f] = await tx<{ recording_seconds: number; machine_seconds: number; guest_cpus: number | null; guest_memory_mb: number | null; guest_cpu_class: string | null }[]>`
       select recording_seconds, machine_seconds, guest_cpus, guest_memory_mb, guest_cpu_class
         from fixture_stream_sessions where id = ${next.id}`;
@@ -305,7 +310,7 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
       if (minor !== null) {
         await tx`update fixture_stream_sessions
                     set est_cost_minor = ${minor}, est_cost_currency = ${EST_COST_CURRENCY}
-                  where id = ${next.id} and est_cost_minor is null`;
+                  where id = ${next.id}`;
       }
     }
   }

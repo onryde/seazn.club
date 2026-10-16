@@ -40,7 +40,7 @@ import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
-  RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS,
+  RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS,
   WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { CRASHES_NONE, failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
@@ -2181,6 +2181,8 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
     r.runner.setObserved(first, "failed", crashExit);
     await currentSession(r.auth, r.fixtureId, r.deps);
     expect(await machineSecondsOf(sessionId), "attempt 1: its boot entry → its destroyed").toBe(attempt1 / 1000);
+    const [mid] = await sql<{ est_cost_minor: number | null }[]>`select est_cost_minor from fixture_stream_sessions where id = ${sessionId}`;
+    expect(mid!.est_cost_minor, "an estimate belongs to an ENDED session — attempt 1's destroyed on a live one writes none").toBeNull();
     // ---- attempt 2
     expect(await r.row(sessionId)).toMatchObject({ state: "live", runner_state: "booting", runner_retries: 1 });
     expect(r.runner.created.map((c) => c.attempt)).toEqual([1, 2]);
@@ -2198,16 +2200,117 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
     expect(await machineSecondsOf(sessionId), "attempt 1 + attempt 2, each from its OWN boot entry; CREATE_MS unbilled").toBe((attempt1 + attempt2) / 1000);
   });
 
-  it("billing, the EMPTY case: a PASSTHROUGH session books no Machine — looked at N times and stopped, it has no runner_transition row to anchor on and bills 0 machine seconds", async () => {
-    const LOOKS = 3;
+  // PR #976 review m1: the empty case must REACH the billing branch — a passthrough session never enters it (no runner),
+  // so it stayed green under every mutant. A composed create that is refused takes the runner creating → destroyed: the
+  // branch runs, finds no booting row, and must add nothing — not even the create call's own wait.
+  it("billing, the EMPTY case: a COMPOSED session whose create is refused never boots — its runner enters destroyed (the billing branch runs) with no booting row, so it bills 0 machine seconds and never the create's own wait (mutants: `if (boot)` → `if (true)`; drop `to_state = 'booting'` → CREATE_MS billed)", async () => {
+    const CREATE_MS = 30_000;
     const r = await rig({ credits: 1 });
-    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    for (let i = 0; i < LOOKS; i++) { await step(r, STREAM_POLL_MS); await currentSession(r.auth, r.fixtureId, r.deps); }
-    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
-    expect(await r.row(sessionId)).toMatchObject({ state: "completed" });
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition'`;
-    expect(n).toBe(0);
+    const realCreate = r.runner.create.bind(r.runner);
+    r.runner.create = async (spec) => { r.tick(CREATE_MS); return realCreate(spec); };   // the refused call takes CREATE_MS
+    r.runner.failNextCreate({ status: 422, retryable: false });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    expect(await r.row(sessionId)).toMatchObject({ state: "failed", runner_state: "destroyed", machine_id: null });
+    const rt = await sql<{ from_state: string; to_state: string }[]>`
+      select from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq`;
+    // Premise, both halves: the runner DID enter destroyed (the branch ran), and nothing ever entered booting.
+    expect(rt.map((x) => `${x.from_state}->${x.to_state}`)).toEqual(["none->creating", "creating->destroyed"]);
     expect(await machineSecondsOf(sessionId)).toBe(0);
+    const [f] = await sql<{ est_cost_minor: number | null }[]>`select est_cost_minor from fixture_stream_sessions where id = ${sessionId}`;
+    expect(f!.est_cost_minor, "no recording, no Machine time: the estimate is the zero it measured, not null").toBe(computeMinorFor(0));
+  });
+
+  // PR #976 review m2: the window's lower bound is the LAST destroyed. With ONE prior destroyed row (M2's case) `min` and
+  // `max` agree, so `max` → `min` survived. After a retry there are two, and a late create_ok re-entry makes three: `min`
+  // re-opens attempt 2's window and bills it again.
+  it("billing, M2 after a RETRY: attempt 1 lost → the retry boots → stopped; then attempt 1's create reports back late (destroyed → lost → destroyed with no boot) and bills nothing more (mutant: max → min re-bills attempt 2's boot → now)", async () => {
+    const PLAY1_MS = 60_000, PLAY2_MS = 120_000, LATE_MS = 240_000;
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);   // attempt 1 boots at T0
+    await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    const first = (await r.row(sessionId)).machine_id!;
+    await step(r, PLAY1_MS);
+    r.runner.setObserved(first, "failed", { exitCode: 1, oomKilled: false, requestedStop: false });
+    await currentSession(r.auth, r.fixtureId, r.deps);                  // lost → destroyed → the ONE retry, booting at T0 + PLAY1
+    expect(await r.row(sessionId)).toMatchObject({ state: "live", runner_state: "booting", runner_retries: 1 });
+    await heartbeat(sessionId, r.runner.created[1]!.jobToken, { state: "playing" }, r.deps);
+    await step(r, PLAY2_MS);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect(await r.row(sessionId)).toMatchObject({ state: "completed", runner_state: "destroyed" });
+    const billed = (PLAY1_MS + PLAY2_MS) / 1000;                         // each attempt from its own boot entry to its own destroyed
+    expect(await machineSecondsOf(sessionId)).toBe(billed);
+    await step(r, LATE_MS);
+    await apply(sessionId, { type: "runner", trigger: { type: "create_ok", machineId: "fake-machine-late-retry" } }, r.deps);
+    const destroyedRows = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events
+                                                       where session_id = ${sessionId} and kind = 'runner_transition' and to_state = 'destroyed'`;
+    expect(destroyedRows[0]!.n, "premise: three entries into destroyed — the bound must be the LAST of them").toBe(3);
+    expect(await machineSecondsOf(sessionId)).toBe(billed);
+  });
+
+  // PR #976 review I1: a session that ENDS while its Machine is still up (the crash cap, a refusal, a warming/provision
+  // timeout, a credit refusal, relay_disabled) is terminal before its runner reaches destroyed. The attempt's seconds land
+  // on that later destroyed (C27 cleanup), so an estimate written only at the terminal transition read 0 Machine time —
+  // and the sweep re-estimates only a session with a recording.
+  it("billing I1: a WARMING TIMEOUT on a Machine that is booting and looked at — the session fails first, the runner reaches destroyed after, and the estimate is recomputed there (mutant: estimate only at the terminal transition → 0)", async () => {
+    const LOOKS = 4, LOOK_MS = 120_000, PAST_MS = 185_000;
+    expect(LOOKS * LOOK_MS, "premise: every look but the last is inside the warming window").toBeLessThan(WARMING_TIMEOUT_MINUTES * 60_000);
+    expect(LOOKS * LOOK_MS + PAST_MS, "premise: the last look is past it").toBeGreaterThan(WARMING_TIMEOUT_MINUTES * 60_000);
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);   // booting at T0
+    for (let i = 0; i < LOOKS; i++) { await step(r, LOOK_MS); await currentSession(r.auth, r.fixtureId, r.deps); }
+    expect(await r.row(sessionId)).toMatchObject({ state: "warming", runner_state: "booting" });
+    await step(r, PAST_MS);
+    await currentSession(r.auth, r.fixtureId, r.deps);                   // warming timeout: the session fails, the Machine is still up
+    const ended = await r.row(sessionId);
+    expect(ended.state).toBe("failed");
+    expect(ended.runner_state, "premise: the session ended BEFORE its runner reached destroyed — the I1 window").not.toBe("destroyed");
+    // C27: a terminal row is the relay sweep's to reconcile (`reconcileSession`, its backstop — the organiser's reads skip
+    // terminal rows), and it observes the Machine down. The clock does not move, so destroyed lands at the end's instant.
+    for (let i = 0; i < 5 && (await r.row(sessionId)).runner_state !== "destroyed"; i++) await reconcileSession(sessionId, r.deps);
+    expect(await r.row(sessionId)).toMatchObject({ state: "failed", runner_state: "destroyed" });
+    const expected = (LOOKS * LOOK_MS + PAST_MS) / 1000;
+    expect(await machineSecondsOf(sessionId)).toBe(expected);
+    expect(computeMinorFor(expected), "the differential: the estimate can tell this Machine time from none").toBeGreaterThan(computeMinorFor(0));
+    const cost = async () => (await sql<{ est_cost_minor: number | null }[]>`select est_cost_minor from fixture_stream_sessions where id = ${sessionId}`)[0]!.est_cost_minor;
+    expect(await cost()).toBe(computeMinorFor(expected));
+    // A second reconcile, the clock moved: the runner is already destroyed, so neither number moves.
+    await step(r, LOOK_MS);
+    await reconcileSession(sessionId, r.deps);
+    expect([await machineSecondsOf(sessionId), await cost()]).toEqual([expected, computeMinorFor(expected)]);
+  });
+
+  it("billing I1: the crash that reaches RUNNER_CRASH_CAP fails the session BEFORE its Machine is confirmed gone — the estimate is recomputed on that destroyed, and a later destroyed RE-ENTRY (a late create_ok) recomputes the same value (mutant: estimate only at the terminal transition → 0)", async () => {
+    const BOOT_LOOKS = 3, LOOK_MS = 120_000, BEAT_MS = 10_000, LATE_MS = 240_000;
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);   // booting at T0
+    for (let i = 0; i < BOOT_LOOKS; i++) { await step(r, LOOK_MS); await currentSession(r.auth, r.fixtureId, r.deps); }
+    const token = r.runner.created[0]!.jobToken;
+    await heartbeat(sessionId, token, { state: "playing" }, r.deps);
+    for (let i = 0; i < RUNNER_CRASH_CAP; i++) {
+      await step(r, BEAT_MS);
+      await heartbeat(sessionId, token, { state: "stopped", exitReason: "fatal" }, r.deps);   // R2003b: one counted crash each
+    }
+    const crashRows = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events
+                                                   where session_id = ${sessionId} and kind = 'runner_transition' and payload ? 'crashCount'`;
+    expect(crashRows[0]!.n, "premise: every crash up to the cap was counted").toBe(RUNNER_CRASH_CAP);
+    // The capping decision failed the session with the runner LOST; its force_destroy confirmed in the same request.
+    expect(await r.row(sessionId)).toMatchObject({ state: "failed", runner_state: "destroyed" });
+    const lostOnEnd = await sql<{ from_state: string; to_state: string }[]>`
+      select from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq desc limit 2`;
+    expect(lostOnEnd.map((x) => `${x.from_state}->${x.to_state}`), "premise: the end came first, destroyed after").toEqual(["lost->destroyed", "playing->lost"]);
+    const expected = (BOOT_LOOKS * LOOK_MS + RUNNER_CRASH_CAP * BEAT_MS) / 1000;
+    expect(await machineSecondsOf(sessionId)).toBe(expected);
+    expect(computeMinorFor(expected), "the differential: the estimate can tell this Machine time from none").toBeGreaterThan(computeMinorFor(0));
+    const cost = async () => (await sql<{ est_cost_minor: number | null }[]>`select est_cost_minor from fixture_stream_sessions where id = ${sessionId}`)[0]!.est_cost_minor;
+    expect(await cost()).toBe(computeMinorFor(expected));
+    // Idempotent: a destroyed RE-ENTRY with no boot runs the recompute again — and lands on the same value.
+    await step(r, LATE_MS);
+    await apply(sessionId, { type: "runner", trigger: { type: "create_ok", machineId: "fake-machine-late-cap" } }, r.deps);
+    const reentry = await sql<{ from_state: string; to_state: string }[]>`
+      select from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq desc limit 2`;
+    expect(reentry.map((x) => `${x.from_state}->${x.to_state}`), "premise: the recompute path ran a second time").toEqual(["lost->destroyed", "destroyed->lost"]);
+    expect([await machineSecondsOf(sessionId), await cost()]).toEqual([expected, computeMinorFor(expected)]);
   });
 });
 
