@@ -178,9 +178,6 @@ const phoneOutputsDiffer = (a: GoldenStream, b: GoldenStream): boolean =>
     (a.overlay !== b.overlay || a.summaries!.length !== b.summaries!.length || a.summaries!.some((digest, i) => digest !== b.summaries![i])));
 /** Whether the player stats differ: only when BOTH sides record them (gaining them is a separate question, losing them is `formatFell`). */
 const statsDiffer = (a: GoldenStream, b: GoldenStream): boolean => recordsStats(a) && recordsStats(b) && a.playerStats !== b.playerStats;
-/** How a matched pair differs: "major" when anything a phone computes does, "minor" when ONLY the standings deltas do, null when nothing does.
- *  (The caller reads only "major" from it: the server-only classes it counts itself, deltas and `statsDiffer`, beside it.) */
-const foldChange = (a: GoldenStream, b: GoldenStream): Owed | null => (phoneOutputsDiffer(a, b) ? "major" : a.deltas !== b.deltas ? "minor" : null);
 /** A side's minor for a sport: 0 when the side declares no FOLD_MINOR (or none for this sport), which is what a baseline from before it existed means. */
 const minorOf = (side: Side, sport: string): number => (side.minors === undefined ? 0 : (get(side.minors, sport) ?? 0));
 
@@ -258,7 +255,6 @@ function compareSport(sport: string, before: Side, after: Side, touched: () => r
       added++; //   ... and a new one is
     } else {
       matched++;
-      const change = foldChange(a.stream, b.stream);
       // Gaining the fields owes nothing when the source is frozen (the recorder ran the baseline's own code) and, when it is not, the
       // major for the kernel fields (a phone computes them) or the minor for the player stats (only the server does).
       const gained = recordsKernel(a.stream) && !recordsKernel(b.stream);
@@ -267,7 +263,8 @@ function compareSport(sport: string, before: Side, after: Side, touched: () => r
       if ((recordsKernel(b.stream) && !recordsKernel(a.stream)) || (recordsStats(b.stream) && !recordsStats(a.stream))) fell++;
       const unfrozen = gained && touched().length > 0;
       if (unfrozen) recordedUnfrozen++;
-      if (change === "major" || unfrozen) changed++;
+      // (a phone's own outputs decide the major; the server-only classes, deltas and `statsDiffer`, are counted below, beside it)
+      if (phoneOutputsDiffer(a.stream, b.stream) || unfrozen) changed++;
       else {
         if (a.stream.deltas !== b.stream.deltas) deltasOnly++;
         if (statsDiffer(a.stream, b.stream)) statsOnly++;
