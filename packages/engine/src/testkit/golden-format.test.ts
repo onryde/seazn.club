@@ -368,7 +368,7 @@ describe("reformatCorpus — it is NEVER a re-baseline: it refuses when anything
       const lines = defaultLineupPair(resolvePositions(m, m.configSchema.parse(row.raw)));
       const events = row.events(lines);
       const stream: GoldenStream = { config: "synthetic", seed, events, ...storedFields(recomputeStream(m, row.raw, events, undefined, 1)) };
-      return { m, corpus: { ...base, configs: { ...base.configs, synthetic: row.raw as Record<string, unknown> }, streams: [...base.streams, stream] }, stream };
+      return { m, corpus: { ...base, configs: { ...base.configs, synthetic: row.raw }, streams: [...base.streams, stream] }, stream };
     };
 
     it("each is a valid format-1 stream whose effective answer differs, and each reformat is refused with the route, never the re-baseline advice (counted, three classes)", () => {
