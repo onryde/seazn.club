@@ -8,7 +8,7 @@
 // `gallery-snapshots.test.ts` runs every snapshot back through the overlay's model and `slateStateOf` (the card
 // layer's own authority), so a snapshot that does not show the state its kind names fails there.
 import "server-only";
-import { mulberry32, type EventEnvelope, type Lineup, type LineupPair } from "@seazn/engine/core";
+import { kernelOwnsEvent, mulberry32, type EventEnvelope, type Lineup, type LineupPair } from "@seazn/engine/core";
 import { resolvePositions, type AnySportModule, type PositionCatalog } from "@seazn/engine/sport";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentPerson } from "@/lib/overlay-recent-types";
@@ -152,21 +152,43 @@ function sampleFor(sportKey: string): Sample {
   const cfg = sportModule.configSchema.parse(preset === undefined ? {} : (sportModule.variants[preset] ?? {}));
   const catalog = resolvePositions(sportModule, cfg);
   const lineups: LineupPair = { home: lineupFor(catalog, "home"), away: lineupFor(catalog, "away") };
+  return { sportKey, module: sportModule, cfg, lineups, played: walkToDecision(sportKey, sportModule, cfg, lineups) };
+}
+
+/**
+ * The seeded walk to a decision BY PLAY: the module's own generated events, applied one at a time until the module
+ * decides. Exported for its guard's test.
+ *
+ * It records play only. A drawn `core.*` other than the start (a forfeit, an abandon, a void) would end or rewrite the
+ * match by something other than play, and a kernel-owned type (suspend, resume, settle, the lineup family) is one the
+ * kernel folds itself and the module refuses (review I-1, `outcome-readers.test.ts`): either is redrawn, as the
+ * conformance walk does for a decided-by-play stream, and a generator that yields nothing else is refused by name.
+ * The stop test reads the module's outcome of its OWN state: the walk is not a fold (no settle or withdrawal can be in
+ * it, by the guard below); the snapshot it feeds is folded through `foldFrom` and read through `outcomeOf`.
+ */
+export function walkToDecision(
+  sportKey: string,
+  sportModule: AnySportModule,
+  cfg: unknown,
+  lineups: LineupPair,
+): EventEnvelope[] {
   const rng = mulberry32(SEED);
   let state = sportModule.init(cfg, lineups);
   const played: EventEnvelope[] = [];
+  const isPlay = (e: { type: string }) => !e.type.startsWith("core.") || e.type === "core.start";
   for (let n = 1; n <= MAX_EVENTS; n++) {
-    // A drawn `core.*` other than the start (a forfeit, an abandon, a void) would end or rewrite the match by
-    // something other than play; draw again, as the conformance walk does for a decided-by-play stream.
     let next = sportModule.arbitraryEvent?.(state, rng) ?? null;
-    for (let k = 0; k < 64 && next !== null && next.type.startsWith("core.") && next.type !== "core.start"; k++) {
+    for (let k = 0; k < 64 && next !== null && !isPlay(next); k++) {
       next = sportModule.arbitraryEvent?.(state, rng) ?? null;
     }
     if (next === null) break;
+    if (!isPlay(next) || kernelOwnsEvent(sportModule, next, { state, settled: false })) {
+      throw new Error(`overlay gallery: ${sportKey}'s generator kept yielding ${next.type}; the walk records only play`);
+    }
     const ev = envelope(n, next.type, next.payload);
     state = sportModule.apply(state, ev);
     played.push(ev);
-    if (sportModule.outcome(state) !== null) return { sportKey, module: sportModule, cfg, lineups, played };
+    if (sportModule.outcome(state) !== null) return played;
   }
   throw new Error(`overlay gallery: ${sportKey} did not decide by play within ${MAX_EVENTS} events (seed ${SEED})`);
 }

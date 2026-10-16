@@ -16,7 +16,8 @@ import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import { OVERLAY_SPORT_KEYS } from "@/components/overlay/overlay-tokens";
 import { slateStateOf } from "@/components/overlay/overlay-slate";
 import { GALLERY_RESULT_VARIANT_SPORTS, GALLERY_SNAPSHOT_KINDS } from "@/components/overlay/gallery-matrix";
-import { GALLERY_SIDES, galleryResultVariants, gallerySnapshots } from "../gallery-snapshots";
+import type { AnySportModule } from "@seazn/engine/sport";
+import { GALLERY_SIDES, galleryResultVariants, gallerySnapshots, walkToDecision } from "../gallery-snapshots";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DICT: Record<string, string> = JSON.parse(readFileSync(join(HERE, "../../../dictionaries/en/public.json"), "utf8"));
@@ -144,5 +145,47 @@ describe("galleryResultVariants — every status whose Result card is not 'decid
       expect(snapshot.outcome, variant.sportKey).not.toBeNull();
       expect(modelOf(variant.sportKey, snapshot).decided, variant.sportKey).toBe(true);
     }
+  });
+});
+
+// Review I-1's rule (outcome-readers.test.ts) as a guard, not a comment: the sample walk records PLAY, so it never hands
+// a module an event the kernel folds itself (suspend, resume, settle, the lineup family) or one that ends the match by
+// something other than play. It redraws such an event, and a generator that yields nothing else is refused by name.
+describe("walkToDecision — the sample walk only ever applies play", () => {
+  const stuckOn = (type: string): AnySportModule =>
+    ({
+      init: () => ({}),
+      apply: () => {
+        throw new Error(`the walk applied ${type}`);
+      },
+      outcome: () => null,
+      arbitraryEvent: () => ({ type, payload: {} }),
+    }) as unknown as AnySportModule;
+
+  it.each(["core.settle", "core.suspend", "core.resume", "core.forfeit", "core.abandon"])(
+    "a generator that only yields %s is refused by name, never applied",
+    (type) => {
+      expect(() => walkToDecision("probe", stuckOn(type), {}, {} as never)).toThrow(
+        new RegExp(`probe's generator kept yielding ${type.replace(".", "\\.")}`),
+      );
+    },
+  );
+
+  it("the positive pair: a kernel-owned draw is REDRAWN, and only the play event that follows is applied", () => {
+    let draws = 0;
+    const applied: string[] = [];
+    const redrawn = {
+      init: () => ({ decided: false }),
+      apply: (_s: unknown, ev: { type: string }) => {
+        applied.push(ev.type);
+        return { decided: true };
+      },
+      outcome: (st: { decided: boolean }) => (st.decided ? { kind: "draw" } : null),
+      arbitraryEvent: () => (++draws <= 3 ? { type: "core.settle", payload: {} } : { type: "probe.point", payload: {} }),
+    } as unknown as AnySportModule;
+    const played = walkToDecision("probe", redrawn, {}, {} as never);
+    expect(draws, "three settles drawn, then the point").toBe(4);
+    expect(applied).toEqual(["probe.point"]);
+    expect(played.map((e) => e.type)).toEqual(["probe.point"]);
   });
 });
