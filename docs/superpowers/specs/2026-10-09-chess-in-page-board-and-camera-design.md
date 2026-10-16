@@ -1770,8 +1770,8 @@ line makes it an order: **first come, first served, one place per player.**
 
 #### 5.7.2 The ledger
 
-A new delta, **V449 on this branch** (V448 is its last; "the next free number at the time",
-renumbered at merge, as V446 to V448 are). It does three things.
+A new delta, **V450 (next free; renumbered at merge)** (V449, `video_rooms_to_end`, is the branch's last;
+"the next free number at the time", renumbered at merge, as V446 to V449 are). It does three things.
 
 **1. `fixture_seat_line`: one row per `(fixture_id, person_id)`, a stay.**
 - `fixture_id`, `person_id`: both `on delete cascade`, so the row goes with its board and its
@@ -3066,8 +3066,9 @@ The sample is a mechanism reference, not a code source. Specifically rejected:
 - **The capacity build (§3.2.1, §5.7, §6.1, §8.1) comes AFTER the D16 review loop closes**, on its
   own branch off the merged tree. It touches `window.ts`, `preflight.ts`, `room.ts`, `sweep.ts`,
   `invite.ts`, `budget.ts`, `seat-ask-limit.ts`, the room client and one new migration. The
-  migration is "the next free number at the time, renumbered at merge": this spec says V449 because
-  V448 is the branch's last, and the build takes whatever is next on the tree it starts from. It
+  migration is "the next free number at the time, renumbered at merge": this spec says V450 because
+  V449 (D16 fix-2's `video_rooms_to_end`) is the branch's last, and the build takes whatever is next on
+  the tree it starts from. It
   also changes `DEADLINE_AFTER_MS` (C7) and every test that types the old 20 minutes (§3.2.1
   lists them). This document is the only thing this amendment changes; nothing in it is built.
 
