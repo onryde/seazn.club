@@ -335,7 +335,7 @@ describe("overlayModel — led and serving truth table", () => {
     // wrong key wired to the right word.
     const MARK = "overlay.cricket.strikerMark";
     expect(model.detail.map((d) => d.text)).toEqual([
-      `Sharma${MARK} 34 (21) · Kohli 12 (9)`,
+      `${MARK}Sharma 34 (21) · Kohli 12 (9)`,
       `Bumrah 2.3-0-14-1`,
     ]);
     expect(model.detail[1]?.glyphs).toEqual(["1", "4", "W"]);

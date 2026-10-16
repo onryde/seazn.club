@@ -44,7 +44,7 @@ import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { OverlayModel } from "@/lib/overlay-model";
 import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
 import { OverlayMatchCard } from "../overlay-slate";
-import { OVERLAY_THEMES, resolveTheme } from "../theme-registry";
+import { OVERLAY_TEMPLATES, resolveTemplate } from "../template-registry";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -174,7 +174,7 @@ const serverStatus = async (fixtureId: string) =>
 // The stage, mounted exactly as the OBS page mounts it: `initial` from `loadOverlayLiveData`, the sport's own default
 // theme, no realtime (the poll is the transport every overlay falls back to).
 // ---------------------------------------------------------------------------------------------------------------------
-const THEME_COMPONENTS = new Set<unknown>(Object.values(OVERLAY_THEMES).map((t) => t.component));
+const THEME_COMPONENTS = new Set<unknown>(Object.values(OVERLAY_TEMPLATES).map((t) => t.component));
 
 async function mountOverlay(r: Rig) {
   const props: OverlayStageProps = {
@@ -182,7 +182,7 @@ async function mountOverlay(r: Rig) {
     initial: JSON.parse(JSON.stringify(await loadOverlayLiveData(r.fixtureId))),
     realtime: false,
     sportKey: r.sportKey,
-    style: resolveTheme(undefined, r.sportKey).id,
+    style: resolveTemplate(undefined, r.sportKey).id,
     sides: [
       { id: r.home, name: "Home" },
       { id: r.away, name: "Away" },
@@ -280,7 +280,7 @@ describe.skipIf(!HAS_DB)("the overlay's end card follows an undo of the deciding
   it("the rig's two sports really are different decision shapes (anti-vacuity)", () => {
     expect(CASES.map((c) => c.sportKey)).toEqual(["badminton", "cricket"]);
     // Different default themes, so both of the overlay's scorebug registrations sit under the card at least once.
-    expect(new Set(CASES.map((c) => resolveTheme(undefined, c.sportKey).id)).size).toBe(2);
+    expect(new Set(CASES.map((c) => resolveTemplate(undefined, c.sportKey).id)).size).toBe(2);
   });
 
   for (const c of CASES) {

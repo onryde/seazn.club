@@ -6,17 +6,17 @@
 // `useOverlayClock`. The one missing piece was a caller — nothing ever set
 // `delayMs` above 0. This file is that caller's parser.
 //
-// Same stance as `resolveTheme` (`theme-registry.ts`): `?delay=` is typed
+// Same stance as `resolveTemplate` (`template-registry.ts`): `?delay=` is typed
 // into an OBS Browser Source URL by a human mid-broadcast, under time
 // pressure, so an unparseable or out-of-range value falls back to a safe
 // default and NEVER throws — "A 404 or an exception here would take a club
-// off air over a query string" (`resolveTheme`'s own doc comment; this
+// off air over a query string" (`resolveTemplate`'s own doc comment; this
 // route's `page.tsx` follows the identical precedent for `?style=`/`?lang=`
 // rather than inventing a second one for `?delay=`).
 //
 // Plain function, not zod: `?style=`/`?lang=` (this route's other two query
 // params) are both resolved by hand-written functions with no schema either
-// — `resolveTheme`, `toLocale` — and this is not part of any OpenAPI-
+// — `resolveTemplate`, `toLocale` — and this is not part of any OpenAPI-
 // generated contract (unlike `lib/stream-url.ts`'s `streamUrlSchema`, which
 // is embedded in `PutFixtureStream` and has to dodge the
 // `z.preprocess()`-not-`.transform()` `openapi:gen` crash for that reason).

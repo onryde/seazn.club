@@ -16,7 +16,7 @@ import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { overlayStartLabel } from "@/lib/overlay-model";
 import { loadOverlayLiveData } from "@/server/overlay/load";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
-import { resolveTheme } from "@/components/overlay/theme-registry";
+import { resolveTemplate, templateParam } from "@/components/overlay/template-registry";
 import { resolveDelayMs } from "@/lib/overlay-delay";
 import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE } from "@/lib/realtime-purpose";
 
@@ -51,7 +51,10 @@ export async function generateStaticParams() {
 type Params = { fixtureId: string };
 /** RT: the signed key rides under the token route's own parameter name, so the panel that writes it, this page that
  *  reads it and the route that verifies it spell it once (lib/realtime-purpose.ts). */
-type Query = { style?: string; lang?: string; delay?: string } & { [K in typeof OVERLAY_KEY_PARAM]?: string | string[] };
+/** R2007 decision 2: `template` is read first; `style` is the alias every pre-R2007 OBS URL carries, kept forever. */
+type Query = { template?: string | string[]; style?: string | string[]; lang?: string; delay?: string } & {
+  [K in typeof OVERLAY_KEY_PARAM]?: string | string[];
+};
 
 export default async function OverlayPage({
   params,
@@ -62,12 +65,12 @@ export default async function OverlayPage({
 }) {
   const { fixtureId } = await params;
   const query = await searchParams;
-  const { style, lang, delay } = query;
+  const { lang, delay } = query;
   const key = query[OVERLAY_KEY_PARAM];
 
   // Task 5d — closes the delay-compensation seam: an unparseable or
   // out-of-range `?delay=` falls back to 0 (undelayed) rather than
-  // throwing, the same stance `resolveTheme` below documents for `?style=`
+  // throwing, the same stance `resolveTemplate` below documents for `?template=`
   // ("A 404 or an exception here would take a club off air over a query
   // string"). Resolved HERE, server-side, beside `style`/`lang` — never on
   // the client — for the same reason those two are (this route's own
@@ -150,11 +153,13 @@ export default async function OverlayPage({
       realtime={realtime}
       sportKey={division.sport_key}
       // Owner answer 18 (Q7): resolved against the REGISTRY, and only the id
-      // crosses to the client — never the theme's `component`, which would be
-      // a React element type travelling as an RSC prop. An unknown, misspelt
-      // or sport-unsuitable `?style=` lands on this sport's default rather
-      // than erroring: an OBS browser source cannot fix a typo mid-match.
-      style={resolveTheme(style, division.sport_key).id}
+      // crosses to the client — never the template's `component`, which would
+      // be a React element type travelling as an RSC prop. R2007 decision 2:
+      // `?template=` wins when present, `?style=` is the alias; an unknown,
+      // misspelt or sport-unsuitable id lands on this sport's default and a
+      // retired one on its replacement, never an error: an OBS browser source
+      // cannot fix a typo mid-match.
+      style={resolveTemplate(templateParam(query), division.sport_key).id}
       sides={sides}
       startLabel={startLabel}
       slateMeta={{

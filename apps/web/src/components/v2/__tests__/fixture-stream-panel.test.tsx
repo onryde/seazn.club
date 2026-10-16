@@ -9,7 +9,7 @@
 // Two disciplines the wave's own rules impose and this file follows:
 //
 //   * every expectation about the style strip is DERIVED from
-//     `themesForSport` / `defaultThemeFor` — never a table typed here, so a
+//     `templatesForSport` / `defaultTemplateFor` — never a table typed here, so a
 //     fourth theme moves the test with the registry instead of leaving it
 //     asserting yesterday's list (AGENTS.md class 19);
 //   * the opaque-preview caption is derived from the DICTIONARY, not from the
@@ -39,7 +39,7 @@ import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/componen
 import { Modal } from "@/components/modal";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
-import { defaultThemeFor, themesForSport } from "@/components/overlay/theme-registry";
+import { defaultTemplateFor, templatesForSport } from "@/components/overlay/template-registry";
 import { ApiV1Error } from "@/lib/client-v1";
 import { CaptureQrV2, captureQrV2Text } from "@/lib/capture-qr";
 import { messages, type MessageKey } from "@/lib/messages";
@@ -301,14 +301,14 @@ describe("the style strip is built from the registry", () => {
   // A sport whose default differs from another's, so an ordering/selection
   // mistake cannot hide behind one lucky constant (AGENTS.md class 19).
   it("premise: two sports really do open on different themes", () => {
-    expect(defaultThemeFor("cricket")).not.toBe(defaultThemeFor("football"));
+    expect(defaultTemplateFor("cricket")).not.toBe(defaultTemplateFor("football"));
   });
 
   it.each(["football", "cricket", "badminton"])(
-    "%s renders exactly the themes themesForSport returns, in registry order",
+    "%s renders exactly the themes templatesForSport returns, in registry order",
     (sportKey) => {
       const tree = open({ sportKey }).tree();
-      const expected = themesForSport(sportKey).map((t) => t.id);
+      const expected = templatesForSport(sportKey).map((t) => t.id);
       expect(expected.length, "premise: the registry offers more than one theme").toBeGreaterThan(1);
       expect(styleIds(tree)).toEqual(expected);
     },
@@ -316,7 +316,7 @@ describe("the style strip is built from the registry", () => {
 
   it("labels every style tab from the registry's own labelKey, never English typed here", () => {
     const tree = open({ sportKey: "football" }).tree();
-    for (const theme of themesForSport("football")) {
+    for (const theme of templatesForSport("football")) {
       const tab = byTestId(tree, `stream-tab-${theme.id}`);
       expect(tab, `no tab for ${theme.id}`).toBeDefined();
       const label = (messages as Record<string, string>)[theme.labelKey];
@@ -367,23 +367,23 @@ describe("the style strip is built from the registry", () => {
 
 describe("the strip OPENS on the sport's own default, not merely on something", () => {
   it.each(["football", "cricket", "badminton", "tennis", "volleyball"])(
-    "%s opens on defaultThemeFor",
+    "%s opens on defaultTemplateFor",
     (sportKey) => {
       const tree = open({ sportKey }).tree();
       const selected = styleTabs(tree).find((t) => attr(t, "aria-selected") === true);
-      expect(String(attr(selected!, "data-stream-style"))).toBe(defaultThemeFor(sportKey));
+      expect(String(attr(selected!, "data-stream-style"))).toBe(defaultTemplateFor(sportKey));
     },
   );
 
   it.each(["football", "cricket"])("%s hands the preview the same default", (sportKey) => {
     const stage = stageOf(open({ sportKey }).tree());
-    expect(propsOf(stage).style).toBe(defaultThemeFor(sportKey));
+    expect(propsOf(stage).style).toBe(defaultTemplateFor(sportKey));
     expect(propsOf(stage).sportKey).toBe(sportKey);
   });
 
   it("selecting another style moves BOTH the preview and the OBS link", () => {
     const island = open({ sportKey: "football" });
-    const other = themesForSport("football").find((t) => t.id !== defaultThemeFor("football"))!;
+    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
     click(styleTabs(island.tree()).find((t) => attr(t, "data-stream-style") === other.id));
     expect(propsOf(stageOf(island.tree())).style).toBe(other.id);
     expect(String(propsOf(byTestId(island.tree(), "stream-link")!).value)).toContain(
@@ -401,7 +401,7 @@ describe("RT: the OBS URL the panel copies carries THIS fixture's signed overlay
       const link = String(propsOf(byTestId(island.tree(), "stream-link")!).value);
       const url = new URL(link, "http://origin.test");
       expect(url.pathname).toBe(`/overlay/fixtures/${FIXTURE.id}`);
-      expect(url.searchParams.get("style")).toBe(defaultThemeFor("football"));
+      expect(url.searchParams.get("style")).toBe(defaultTemplateFor("football"));
       expect(url.searchParams.get(OVERLAY_KEY_PARAM), "the key, under the route's own parameter name").toBe(ctx().overlayKeys[FIXTURE.id]);
       await (propsOf(byTestId(island.tree(), "stream-copy")!).onClick as () => Promise<void>)();
       expect(writes, "Copy puts the keyed URL on the clipboard").toEqual([link]);
@@ -414,7 +414,7 @@ describe("RT: the OBS URL the panel copies carries THIS fixture's signed overlay
     const island = open({ overlayKeys: { "f-other": "KEY_other" } });
     const url = new URL(String(propsOf(byTestId(island.tree(), "stream-link")!).value), "http://origin.test");
     expect(url.searchParams.has(OVERLAY_KEY_PARAM)).toBe(false);
-    expect(url.searchParams.get("style"), "the positive pair: the rest of the link is intact").toBe(defaultThemeFor("football"));
+    expect(url.searchParams.get("style"), "the positive pair: the rest of the link is intact").toBe(defaultTemplateFor("football"));
   });
 });
 
@@ -529,7 +529,7 @@ describe("the preview is the real stage, seeded from the row", () => {
 describe("the opaque-preview caption is dictionary-driven, not theme-named", () => {
   const captionKeyFor = (id: string) => `stream.preview.${id}`;
   const en = uiDict("en");
-  const withCaption = themesForSport("football")
+  const withCaption = templatesForSport("football")
     .map((t) => t.id)
     .filter((id) => typeof en[captionKeyFor(id)] === "string");
 
@@ -551,7 +551,7 @@ describe("the opaque-preview caption is dictionary-driven, not theme-named", () 
   });
 
   it("shows the caption for a theme that declares one and for no other", () => {
-    for (const theme of themesForSport("football")) {
+    for (const theme of templatesForSport("football")) {
       const island = open({ sportKey: "football" });
       click(styleTabs(island.tree()).find((t) => attr(t, "data-stream-style") === theme.id));
       const note = byTestId(island.tree(), "stream-preview-note");
@@ -851,7 +851,7 @@ describe("phone first — the 44px floor is the BASE, not an override", () => {
     }
     // The positive pair: without it an empty tree passes every check above. Two passes × (the registry's style tabs +
     // the six OBS-tab controls) — derived from the registry, so a fourth theme moves the floor with it.
-    expect(seen.length, "nothing was checked").toBe(2 * (themesForSport("football").length + 6));
+    expect(seen.length, "nothing was checked").toBe(2 * (templatesForSport("football").length + 6));
     expect(seen.length).toBeGreaterThanOrEqual(16);
   });
 

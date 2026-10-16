@@ -4,7 +4,7 @@
 // construction in `overlayModel`, so each row renders its own half of it —
 // that split lives here, in the renderer, rather than widening the model.
 import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
-import { OverlayBallGlyphs } from "./overlay-ball-glyphs";
+import { detailCopy, detailEntryClass } from "./overlay-detail-copy";
 
 const halfOf = (value: string, row: 0 | 1): string => {
   const parts = value.split("–");
@@ -20,6 +20,11 @@ export function OverlayBug({
   tick: [boolean, boolean];
   msg: OverlayMsg;
 }) {
+  // §4 rule 1 (at most the two most recent entries), over the lines a corner footer can carry: never the CREASE
+  // (review a, PR #974). At the 30 px floor the bug's 512 px footer cannot hold a pair's figures beside the chase, let
+  // alone the bowler's analysis and this over's glyphs — it showed "Haruto Fuj… · J…", every figure gone. The crease
+  // is the bar band's (W2 plan); the bug keeps the chase or result, which it can draw whole.
+  const footer = model.detail.filter((line) => !line.crease).slice(-2);
   return (
     <div className="ovl-bug">
       <div className="ovl-bug-header">
@@ -93,7 +98,7 @@ export function OverlayBug({
           </div>
         );
       })}
-      {model.result || model.chase || model.detail.length > 0 ? (
+      {model.result || model.chase || footer.length > 0 ? (
         <div data-testid="ovl-detail" className="ovl-bug-footer ovl-label">
           {model.result ? (
             <span data-testid="ovl-result" className="ovl-detail-emphasis">{model.result}</span>
@@ -117,8 +122,8 @@ export function OverlayBug({
               the `·` land on the clipped line as a stray dot detached from its
               label. The same shim was on `overlay-bar.tsx` and is gone there
               too — the bar is merely wide enough to hide it today. */}
-          {model.detail.slice(-2).map((line, i) => (
-            <span key={line.text + i} className="ovl-detail-entry">
+          {footer.map((line, i) => (
+            <span key={line.text + i} className={detailEntryClass(line)}>
               {i > 0 ? "·" : null}
               {line.tone ? (
                 <span data-testid="ovl-chip" className={`ovl-chip ovl-chip-${line.tone}`} />
@@ -130,12 +135,7 @@ export function OverlayBug({
                   overflows. An anonymous flex item is not one, so without this
                   span the rule has nothing to match and a long locale
                   overflows the tile again. */}
-              <span className="ovl-detail-copy">
-                {line.text ? <span className="ovl-detail-label">{line.text}</span> : null}
-                {line.glyphs && line.glyphs.length > 0 ? (
-                  <OverlayBallGlyphs glyphs={line.glyphs} />
-                ) : null}
-              </span>
+              {detailCopy(line)}
             </span>
           ))}
         </div>

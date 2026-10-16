@@ -17,6 +17,7 @@ const BARE = /\b[A-Za-z_$][\w$]*\.outcome\(/g;
 const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
   "packages/engine/src/core/events.ts": { calls: 3, reason: "the kernel itself: the decided flag, outcomeOf, and kernelOwnsEvent's settled-finalize test" },
   "apps/web/src/server/overlay/recent.ts": { calls: 2, reason: "a point-state PROBE over a stored module state, not a fold result; a settlement is never part of module state, so outcomeOf cannot apply (preflight C8)" },
+  "apps/web/src/server/overlay/gallery-snapshots.ts": { calls: 1, reason: "R2007: the staff gallery's sample walk stops when the module decides its OWN state — a generator walk, not a fold; `walkToDecision` redraws every core type but the start — every type kernelOwnsEvent can claim — and refuses a generator that yields nothing else (tested), so no settle or withdrawal can be in it, and the snapshot it feeds is folded through foldFrom (outcomeOf)" },
   "apps/web/src/server/public-site/public-player-matches.ts": { calls: 1, reason: "W2b PF-1 off STORED rows (no fold): whether the module's own stored state held the level result a stored withdrawal award was admitted over (storedLevelWithdrawal); a settled fixture's outcome is a win and returns before the read" },
   "packages/engine/src/testkit/stoppages.ts": { calls: 1, reason: "testkit: module-level conformance, no settle in its streams" },
   "packages/engine/src/testkit/conformance.ts": { calls: 5, reason: "testkit: module-level conformance, no settle in its streams" },
@@ -249,6 +250,7 @@ describe("review I-1: every module.apply replay loop skips what the kernel owns"
   const NOT_A_LEDGER_REPLAY: readonly { file: string; call?: string; reason: string }[] = [
     { file: "apps/web/src/server/overlay/recent.ts", call: "next = module.apply(", reason: "the point-state PROBE: one synthetic module event applied to a stored state, never a ledger event" },
     { file: "packages/engine/src/history/history.ts", call: "REVERSIBLE[e.type]?.apply(", reason: "the DIVISION history ledger (schedule_applied, fixtures_generated, …): `REVERSIBLE[type].apply` folds schedule ops, never a match event — no sport module, no core.* type" },
+    { file: "apps/web/src/server/overlay/gallery-snapshots.ts", call: "state = sportModule.apply(", reason: "the staff gallery's sample WALK (R2007): a module's own generated events, never a stored ledger — it records a sport event or the start and redraws every other core type, which is every type kernelOwnsEvent can claim (gallery-snapshots.test.ts sweeps CORE_EVENT_SCHEMAS)" },
     { file: "packages/engine/src/testkit/helpers.ts", reason: "testkit: buildStream drives apply with a module's own events" },
     { file: "packages/engine/src/testkit/conformance.ts", reason: "testkit: conformance drives apply with a module's own generated events" },
     { file: "packages/engine/src/testkit/conformance-pad.ts", reason: "testkit: the registry/dispatch drift probe (one call, one message naming it)" },

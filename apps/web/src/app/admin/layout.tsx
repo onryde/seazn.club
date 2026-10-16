@@ -29,6 +29,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Link href="/admin/ai-runs" className="hover:text-white">AI runs</Link>
           <Link href="/admin/fixtures" className="hover:text-white">Fixture config</Link>
           <Link href="/admin/capture-records" className="hover:text-white">{t(dict, "admin.captureRecords.nav")}</Link>
+          <Link href="/admin/overlay-gallery" className="hover:text-white">{t(dict, "admin.overlayGallery.nav")}</Link>
           <Link href="/admin/settings" className="hover:text-white">Settings</Link>
           <Link href="/admin/audit" className="hover:text-white">Audit</Link>
         </nav>

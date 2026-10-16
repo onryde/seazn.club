@@ -20073,6 +20073,24 @@ async function streamOverlaySuite(): Promise<void> {
       bug.body.includes('data-style="bug"') &&
       bar.body.includes('data-style="bar"'),
   );
+  // R2007 decision 2 (spec 2026-10-15 §4.4): `?template=` names the template, `?style=` stays its alias forever.
+  // Hockey opens on `bug`, so `?template=bar` is the discriminating row (a route ignoring `?template=` lands on bug),
+  // and `?template=bug&style=bar` proves template wins over the alias. Anchored on `="` (AGENTS.md: React serialises an
+  // omitted prop as "$undefined", so a bare attribute probe passes in both states).
+  const viaTemplate = await html(anon, `/overlay/fixtures/${entitled.fixtureId}?template=bar`);
+  const bothParams = await html(anon, `/overlay/fixtures/${entitled.fixtureId}?template=bug&style=bar`);
+  const viaStyle = await html(anon, `/overlay/fixtures/${entitled.fixtureId}?style=bar`);
+  check(
+    `overlay smoke: ?template= picks the template server-side, and wins over ?style= (got ${viaTemplate.status}/${bothParams.status})`,
+    viaTemplate.status === 200 &&
+      viaTemplate.body.includes('data-style="bar"') &&
+      bothParams.status === 200 &&
+      bothParams.body.includes('data-style="bug"'),
+  );
+  check(
+    `overlay smoke: ?style= is still honoured as the alias (got ${viaStyle.status})`,
+    viaStyle.status === 200 && viaStyle.body.includes('data-style="bar"'),
+  );
   const junk = await html(anon, `/overlay/fixtures/${entitled.fixtureId}?style=nonsense`);
   check(
     `overlay smoke: an unusable ?style= falls back rather than taking a club off air (got ${junk.status})`,
@@ -21793,6 +21811,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   captureRecord: () => captureRecordSuite(),
   bracketFinish: () => bracketFinishSuite(),
   walkoverCredit: () => walkoverCreditSuite(),
+  streamOverlay: () => streamOverlaySuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan

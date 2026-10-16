@@ -5527,6 +5527,7 @@
   "pad.cricket.action.playerLine.field.person": "Joueur",
   "stream.tab.bar": "Bandeau diffusion",
   "stream.tab.bug": "Incrustation d'angle",
+  "stream.scene.live": "En direct",
   "stream.title": "Diffuser ce match",
   "stream.button": "Diffuser",
   "stream.buttonLive": "En direct",
@@ -5810,5 +5811,18 @@
   "admin.captureRecords.unlinked": "Journaux qui ne nomment aucune session",
   "admin.captureRecords.noneForFixture": "Aucun journal de capture pour ce match.",
   "admin.captureRecords.breadcrumb": "Admin",
-  "admin.captureRecords.invalidLines": "Lignes invalides écartées (non conformes ou ressemblant à un secret)"
+  "admin.captureRecords.invalidLines": "Lignes invalides écartées (non conformes ou ressemblant à un secret)",
+  "admin.overlayGallery.nav": "Galerie d'incrustations",
+  "admin.overlayGallery.title": "Modèles d'incrustation",
+  "admin.overlayGallery.sport": "Sport",
+  "admin.overlayGallery.allSports": "Tous les sports",
+  "admin.overlayGallery.frame": "Cadre",
+  "admin.overlayGallery.frameFull": "Full HD",
+  "admin.overlayGallery.framePhoneLandscape": "Téléphone, paysage (844 × 475)",
+  "admin.overlayGallery.framePhonePortrait": "Téléphone, portrait (390 × 219)",
+  "admin.overlayGallery.snapshot.warming": "Avant le match",
+  "admin.overlayGallery.snapshot.live": "En direct",
+  "admin.overlayGallery.snapshot.ended": "Résultat",
+  "admin.overlayGallery.moments": "Temps forts",
+  "admin.overlayGallery.sceneCaption": "Scène : {scene}"
 }

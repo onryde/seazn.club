@@ -25,7 +25,7 @@ import {
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
-import { cricketDetail } from "@/lib/overlay-cricket";
+import { cricketDetail, type CricketDetailPerson } from "@/lib/overlay-cricket";
 import { creditsNobody, forfeitCopyLookup, forfeitTag, forfeitWords, NO_LEDGER, type ForfeitCopy } from "@/lib/forfeit-tag";
 import type { SportTone } from "@/components/v2/scorepad/v3/sport-theme";
 
@@ -124,6 +124,11 @@ export interface OverlayDetailLine {
   /** Cricket this-over ball chips (already notated). When set, bar/bug render
    *  circular LED pills after `text` instead of flattening glyphs into the string. */
   glyphs?: readonly string[];
+  /** A crease line (`cricketDetail`): the bar band's, never drawn by the bug (review a, PR #974). */
+  crease?: true;
+  /** The people on a crease line, each a name that may ellipse beside figures that may not. When set, the renderers
+   *  draw these instead of `text` (which stays their spoken join). */
+  people?: readonly CricketDetailPerson[];
 }
 
 export interface OverlayModel {
@@ -207,7 +212,7 @@ export interface OverlayModel {
  * inside the bar: an empty `chase` string rendered no band and must keep
  * rendering none.
  *
- * It lives HERE rather than in `theme-registry.ts` because that module imports
+ * It lives HERE rather than in `template-registry.ts` because that module imports
  * the three theme components, and the bar importing it back would close a
  * cycle. This is a fact about the MODEL and needs nothing else.
  */

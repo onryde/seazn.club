@@ -9,9 +9,9 @@
 // Class / i18n prefix remains `ovl-slate` / `overlay.slate.*` (rename later).
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { OverlayCricketToss } from "@/lib/overlay-cricket";
-import { warmingTossLine } from "@/lib/overlay-openers";
+import { warmingLine } from "@/lib/overlay-openers";
 import type { OverlayHighlight, OverlayModel, OverlaySide } from "@/lib/overlay-model";
-import type { OverlayThemeProps } from "./theme-registry";
+import type { OverlayThemeProps } from "./template-registry";
 
 export type SlateState = "warming" | "ended" | "live";
 
@@ -68,8 +68,11 @@ function HighlightBox(props: {
 export function OverlayMatchCard({
   model,
   msg,
+  sportKey,
   cricketToss,
 }: Pick<OverlayThemeProps, "model" | "msg"> & {
+  /** Whose warming line this is: only a sport that declares a toss shows one (review d, PR #974). */
+  sportKey: string;
   cricketToss?: OverlayCricketToss | null;
 }) {
   const state = slateStateOf(model);
@@ -89,6 +92,10 @@ export function OverlayMatchCard({
 
   const home = model.sides[0];
   const away = model.sides[1];
+  const warming =
+    state === "warming"
+      ? warmingLine({ sportKey, toss: cricketToss, sideNames: [home.name, away.name], startContext: model.header.context, msg })
+      : "";
 
   return (
     <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={state}>
@@ -169,14 +176,12 @@ export function OverlayMatchCard({
 
           {state === "warming" ? (
             <>
-              <span data-testid="ovl-slate-line" className="ovl-slate-line">
-                {warmingTossLine({
-                  toss: cricketToss,
-                  sideNames: [home.name, away.name],
-                  startContext: model.header.context,
-                  msg,
-                })}
-              </span>
+              {/* A sport with no toss and no start time has nothing to say here — never an empty line. */}
+              {warming ? (
+                <span data-testid="ovl-slate-line" className="ovl-slate-line">
+                  {warming}
+                </span>
+              ) : null}
               <span data-testid="ovl-slate-indicator-warming" className="ovl-slate-warming-dots">
                 <span />
                 <span />

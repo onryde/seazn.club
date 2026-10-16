@@ -5,7 +5,7 @@
 // transform the CSS transitions.
 import { useLayoutEffect, useRef, useState } from "react";
 import { hasDetailBand, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
-import { OverlayBallGlyphs } from "./overlay-ball-glyphs";
+import { detailCopy, detailEntryClass } from "./overlay-detail-copy";
 import { availableNameWidth, pickNameRung } from "./name-ladder";
 
 // Fix round 3, F5 — the bug's own pattern (`overlay-bug.tsx`'s `halfOf`),
@@ -223,24 +223,17 @@ export function OverlayBar({
               moves. The bar keeps the FULL list — the two-entry cap is §4's
               and belongs to the bug alone. */}
           {model.detail.map((line, i) => (
-            <span key={line.text + i} className="ovl-detail-entry">
+            <span key={line.text + i} className={detailEntryClass(line)}>
               {i > 0 || model.chase || model.result ? <span className="ovl-detail-sep" /> : null}
               {line.tone ? (
                 <span data-testid="ovl-chip" className={`ovl-chip ovl-chip-${line.tone}`} />
               ) : null}
-              {/* `.ovl-detail-label` carries §4's ellipsis (globals.css). The
-                  bar has 1776px and is nowhere near its own boundary, but the
-                  guard is the PAIR — §4's own lesson is that a composition
-                  guard added to one theme is owed to the other in the same
-                  change, and `.ovl-detail-entry`'s `nowrap` now applies here
-                  too, so an es/nl detail list would overflow this band rather
-                  than wrap. */}
-              <span className="ovl-detail-copy">
-                {line.text ? <span className="ovl-detail-label">{line.text}</span> : null}
-                {line.glyphs && line.glyphs.length > 0 ? (
-                  <OverlayBallGlyphs glyphs={line.glyphs} />
-                ) : null}
-              </span>
+              {/* `.ovl-detail-label` carries §4's ellipsis (globals.css), and a
+                  crease line's NAME carries it in place of its figures (review
+                  a, PR #974: at the 30 px floor this band DOES reach its
+                  boundary, and the one label cut "0.3-0-…"). The bug draws the
+                  same copy — the guard is the PAIR, §4's own lesson. */}
+              {detailCopy(line)}
             </span>
           ))}
         </div>

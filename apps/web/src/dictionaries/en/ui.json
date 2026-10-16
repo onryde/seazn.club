@@ -5527,6 +5527,7 @@
   "pad.cricket.action.playerLine.field.person": "Player",
   "stream.tab.bar": "Broadcast bar",
   "stream.tab.bug": "Corner bug",
+  "stream.scene.live": "Live",
   "stream.title": "Stream this match",
   "stream.button": "Stream",
   "stream.buttonLive": "Live",
@@ -5810,5 +5811,18 @@
   "admin.captureRecords.unlinked": "Records that name no session",
   "admin.captureRecords.noneForFixture": "No capture record for this fixture.",
   "admin.captureRecords.breadcrumb": "Admin",
-  "admin.captureRecords.invalidLines": "Bad lines dropped (invalid or secret-shaped)"
+  "admin.captureRecords.invalidLines": "Bad lines dropped (invalid or secret-shaped)",
+  "admin.overlayGallery.nav": "Overlay gallery",
+  "admin.overlayGallery.title": "Overlay templates",
+  "admin.overlayGallery.sport": "Sport",
+  "admin.overlayGallery.allSports": "All sports",
+  "admin.overlayGallery.frame": "Frame",
+  "admin.overlayGallery.frameFull": "Full HD",
+  "admin.overlayGallery.framePhoneLandscape": "Phone, landscape (844 × 475)",
+  "admin.overlayGallery.framePhonePortrait": "Phone, portrait (390 × 219)",
+  "admin.overlayGallery.snapshot.warming": "Before the match",
+  "admin.overlayGallery.snapshot.live": "Live",
+  "admin.overlayGallery.snapshot.ended": "Result",
+  "admin.overlayGallery.moments": "Moments",
+  "admin.overlayGallery.sceneCaption": "Scene: {scene}"
 }

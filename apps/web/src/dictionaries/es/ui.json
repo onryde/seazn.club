@@ -5527,6 +5527,7 @@
   "pad.cricket.action.playerLine.field.person": "Jugador",
   "stream.tab.bar": "Barra de transmisión",
   "stream.tab.bug": "Bug de esquina",
+  "stream.scene.live": "En directo",
   "stream.title": "Emitir este partido",
   "stream.button": "Emitir",
   "stream.buttonLive": "En directo",
@@ -5810,5 +5811,18 @@
   "admin.captureRecords.unlinked": "Registros que no nombran ninguna sesión",
   "admin.captureRecords.noneForFixture": "No hay registros de captura para este partido.",
   "admin.captureRecords.breadcrumb": "Admin",
-  "admin.captureRecords.invalidLines": "Líneas no válidas descartadas (no conformes o con forma de secreto)"
+  "admin.captureRecords.invalidLines": "Líneas no válidas descartadas (no conformes o con forma de secreto)",
+  "admin.overlayGallery.nav": "Galería de superposiciones",
+  "admin.overlayGallery.title": "Plantillas de superposición",
+  "admin.overlayGallery.sport": "Deporte",
+  "admin.overlayGallery.allSports": "Todos los deportes",
+  "admin.overlayGallery.frame": "Encuadre",
+  "admin.overlayGallery.frameFull": "Full HD",
+  "admin.overlayGallery.framePhoneLandscape": "Móvil, horizontal (844 × 475)",
+  "admin.overlayGallery.framePhonePortrait": "Móvil, vertical (390 × 219)",
+  "admin.overlayGallery.snapshot.warming": "Antes del partido",
+  "admin.overlayGallery.snapshot.live": "En directo",
+  "admin.overlayGallery.snapshot.ended": "Resultado",
+  "admin.overlayGallery.moments": "Momentos",
+  "admin.overlayGallery.sceneCaption": "Escena: {scene}"
 }

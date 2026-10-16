@@ -104,7 +104,9 @@ describe("I3 — the bug's clock is its OWN type token, not the brand's", () => 
 
   it("the brand's own rule is UNCHANGED — the fix is a new token, not a widening", () => {
     const body = ruleBody(".ovl-bug-brand");
-    expect(body, "_THEMES.md:360 — brand Barlow 24/600 .08em").toContain("font-size: 24px");
+    // R2007 (D9, `_THEMES.md` §4 amended 2026-10-15): the brand rose to the 30 px floor; it is still the brand's OWN
+    // rule, its weight and tracking unchanged — the clock is still a separate token.
+    expect(body, "_THEMES.md §4 — brand Barlow 30/600 .08em (D9; was 24)").toContain("font-size: 30px");
     expect(body).toContain("font-weight: 600");
     expect(body).toContain("letter-spacing: 0.08em");
   });

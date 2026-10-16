@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { tossMoment, warmingTossLine } from "../overlay-openers";
+import { builtinModules } from "@seazn/engine/sports";
+import { OVERLAY_SPORT_KEYS } from "@/components/overlay/overlay-tokens";
+import { declaresToss, tossMoment, warmingLine } from "../overlay-openers";
 import {
   closedOverBaselineOf,
   CLOSED_OVER_BASELINE_NONE,
@@ -52,10 +54,11 @@ describe("tossMoment", () => {
   });
 });
 
-describe("warmingTossLine", () => {
+describe("warmingLine", () => {
   it("pending copy when toss is absent", () => {
     expect(
-      warmingTossLine({
+      warmingLine({
+        sportKey: "cricket",
         toss: null,
         sideNames: ["Kings", "Royals"],
         startContext: "Sat 14:30",
@@ -69,13 +72,59 @@ describe("warmingTossLine", () => {
 
   it("won-and-elected once toss is on the wire", () => {
     expect(
-      warmingTossLine({
+      warmingLine({
+        sportKey: "cricket",
         toss: { wonBySide: 0, elected: "bat" },
         sideNames: ["Kings", "Royals"],
         startContext: "Sat 14:30",
         msg,
       }),
     ).toBe("Kings won the toss and elected to bat");
+  });
+});
+
+// Review d (PR #974, pre-existing from #782): the warming card said "Toss pending" for EVERY sport — a football or
+// badminton broadcast promising a toss it will never have. The toss line belongs to a sport whose ENGINE MODULE declares
+// a toss; every other sport's warming line is its start alone. The expectation is read off each module's own
+// `eventSchemas` (the engine's declaration of what it accepts), never off the app's table the code reads.
+describe("warmingLine — a toss line only for a sport whose module declares a toss (every overlay sport)", () => {
+  const pendingMsg = (key: string, vars?: Record<string, string | number>) =>
+    key === "overlay.slate.warmingLineTossPending" ? `Toss pending · ${vars?.start}` : msg(key, vars);
+  const declared = new Map(builtinModules.map((m) => [m.key, Object.keys(m.eventSchemas ?? {})]));
+
+  it("toss copy iff the engine module declares `<sport>.toss`; the start alone otherwise", () => {
+    let toss = 0;
+    let plain = 0;
+    for (const sportKey of OVERLAY_SPORT_KEYS) {
+      const types = declared.get(sportKey);
+      expect(types, `${sportKey}: no engine module`).toBeDefined();
+      const wants = types!.includes(`${sportKey}.toss`);
+      expect(declaresToss(sportKey), sportKey).toBe(wants);
+      const line = warmingLine({ sportKey, toss: null, sideNames: ["Kings", "Royals"], startContext: "Sat 14:30", msg: pendingMsg });
+      if (wants) {
+        expect(line, sportKey).toBe("Toss pending · Sat 14:30");
+        toss++;
+      } else {
+        expect(line, sportKey).toBe("Sat 14:30");
+        plain++;
+      }
+    }
+    console.log(`overlay sports checked: ${toss + plain} (toss: ${toss}, no toss: ${plain})`);
+    expect(toss + plain).toBe(OVERLAY_SPORT_KEYS.length);
+    // Both branches witnessed, or the sweep proves one of them by default.
+    expect(toss, "no overlay sport declares a toss").toBeGreaterThan(0);
+    expect(plain, "every overlay sport declares a toss").toBeGreaterThan(0);
+  });
+
+  it("a known toss on a sport with none declared is ignored, not announced", () => {
+    expect(
+      warmingLine({ sportKey: "football", toss: { wonBySide: 0, elected: "bat" }, sideNames: ["Kings", "Royals"], startContext: "Sat 14:30", msg }),
+    ).toBe("Sat 14:30");
+  });
+
+  it("an unknown sport key declares no toss", () => {
+    expect(declaresToss("quidditch")).toBe(false);
+    expect(declaresToss("")).toBe(false);
   });
 });
 

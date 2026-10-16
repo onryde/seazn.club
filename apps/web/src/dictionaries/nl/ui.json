@@ -5527,6 +5527,7 @@
   "pad.cricket.action.playerLine.field.person": "Speler",
   "stream.tab.bar": "Uitzendbalk",
   "stream.tab.bug": "Hoek-bug",
+  "stream.scene.live": "Live",
   "stream.title": "Deze wedstrijd uitzenden",
   "stream.button": "Uitzenden",
   "stream.buttonLive": "Live",
@@ -5810,5 +5811,18 @@
   "admin.captureRecords.unlinked": "Logboeken die geen sessie noemen",
   "admin.captureRecords.noneForFixture": "Geen capture-logboek voor deze wedstrijd.",
   "admin.captureRecords.breadcrumb": "Admin",
-  "admin.captureRecords.invalidLines": "Ongeldige regels weggelaten (niet conform of geheim-achtig)"
+  "admin.captureRecords.invalidLines": "Ongeldige regels weggelaten (niet conform of geheim-achtig)",
+  "admin.overlayGallery.nav": "Overlay-galerij",
+  "admin.overlayGallery.title": "Overlay-sjablonen",
+  "admin.overlayGallery.sport": "Sport",
+  "admin.overlayGallery.allSports": "Alle sporten",
+  "admin.overlayGallery.frame": "Beeld",
+  "admin.overlayGallery.frameFull": "Full HD",
+  "admin.overlayGallery.framePhoneLandscape": "Telefoon, liggend (844 × 475)",
+  "admin.overlayGallery.framePhonePortrait": "Telefoon, staand (390 × 219)",
+  "admin.overlayGallery.snapshot.warming": "Voor de wedstrijd",
+  "admin.overlayGallery.snapshot.live": "Live",
+  "admin.overlayGallery.snapshot.ended": "Uitslag",
+  "admin.overlayGallery.moments": "Momenten",
+  "admin.overlayGallery.sceneCaption": "Scène: {scene}"
 }

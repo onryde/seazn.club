@@ -11,9 +11,11 @@ import type { OverlayMoment } from "@/lib/overlay-moments";
 import type { OverlayMsg } from "@/lib/overlay-model";
 import type { Phase } from "./moment-queue";
 
+/** The striker's mark LEADS the name, as on the crease band (confirm pass, PR #974) — one striker vocabulary on one
+ *  frame, and never a mark beside the runs that reads as the not-out "40*". */
 function batterLine(b: OverlayCricketBatter, mark: string): string {
   const name = b.name ?? "";
-  return `${name}${b.onStrike ? mark : ""} ${b.runs} (${b.balls})`;
+  return `${b.onStrike ? mark : ""}${name} ${b.runs} (${b.balls})`;
 }
 
 function bowlerLine(b: OverlayCricketBowler): string {

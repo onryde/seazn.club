@@ -16,7 +16,7 @@ import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destina
 import { captureError } from "@/lib/sentry";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
-import { defaultThemeFor } from "@/components/overlay/theme-registry";
+import { defaultTemplateFor } from "@/components/overlay/template-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
   CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
@@ -173,7 +173,7 @@ export async function captureCommon(
   if (await hasFeature(c.orgId, "streaming.overlay", ctx.competition_id)) {
     const key = overlayKeyFor(c.fixtureId);
     keyed = key !== null;
-    const theme = s.themeId ?? defaultThemeFor(ctx.sport_key);
+    const theme = s.themeId ?? defaultTemplateFor(ctx.sport_key);
     overlayUrl = `${origin}/overlay/fixtures/${c.fixtureId}?style=${encodeURIComponent(theme)}${key !== null ? `&${OVERLAY_KEY_PARAM}=${encodeURIComponent(key)}` : ""}`;
   }
 

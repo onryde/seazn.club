@@ -286,6 +286,16 @@ describe("§4 as corrected — the footer's text ellipses rather than reaching t
     expect(rule).toMatch(/min-width:\s*0/);
   });
 
+  // §4: "where a chase or result line is present it takes priority" / "it leads the row". At the 30 px floor (R2007,
+  // D9) a shrinking chase was the FIRST thing to give: every flex item shrinks in proportion to its size, so cricket on
+  // the bug read "N…" beside two half-names. The entries yield first; the sentence ellipsises only when it alone is
+  // wider than its row.
+  it("the chase/result sentence never yields before the entries, and is capped at its row", () => {
+    const rule = ruleBody(".ovl-detail-emphasis");
+    expect(rule, "a shrinking chase gives way before the entries it leads").toMatch(/flex-shrink:\s*0/);
+    expect(rule, "an unshrinkable sentence wider than its row would clip").toMatch(/max-width:\s*100%/);
+  });
+
   it("nothing in the overlay stylesheet still routes the overhang to the TILE", () => {
     // The withdrawn ruling read "the horizontal overhang ... reaches `.ovl-bug`
     // instead, which is where §4 wants it clipped". One authority per fact: a

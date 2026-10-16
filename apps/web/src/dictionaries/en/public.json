@@ -661,7 +661,7 @@
   "overlay.moment.setWon": "SET {n}",
   "overlay.moment.gameWon": "GAME {n}",
   "overlay.moment.setWonLine": "{short} {home}–{away}",
-  "overlay.cricket.strikerMark": "*",
+  "overlay.cricket.strikerMark": "▸",
   "overlay.cricket.target": "Target {target}",
   "overlay.cricket.thisOver": "this over",
   "overlay.slate.pillUpcoming": "UPCOMING",
