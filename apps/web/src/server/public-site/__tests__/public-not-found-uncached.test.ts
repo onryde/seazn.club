@@ -81,15 +81,15 @@ import type * as TS from "typescript";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
-  competitionTag,
-  divisionTag,
   getPublicCompetition,
   getPublicDivision,
   getPublicFixture,
   getPublicOrg,
-  orgTag,
   readPublicCompetitionShell,
 } from "@/server/public-site/data";
+// The tag helpers live in the leaf `cache-tags` on this branch (data.ts imports them and no longer re-exports them),
+// so the import cycle through revalidate.ts stays cut (usecases/external-play/__tests__/no-import-cycle.test.ts).
+import { competitionTag, divisionTag, orgTag } from "@/server/public-site/cache-tags";
 import { getPublicCompetitionHub } from "@/server/public-site/competition-hub";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
