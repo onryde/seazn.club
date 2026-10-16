@@ -442,7 +442,7 @@ describe("GOLDEN-POLICY.md — what the guard cannot see names what the engine s
         const cfg = module.configSchema.parse(raw) as unknown;
         const lineups = stream.lineups ?? defaultLineupPair(resolvePositions(module, cfg));
         const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, stream.events.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 });
-        return folded.expunged && module.outcome(folded.state as never) !== null && stream.outcome === "null";
+        return folded.expunged && module.outcome(folded.state) !== null && stream.outcome === "null";
       });
       expect(closing.length, `${module.key}: an award stream whose standing expunge the recorded outcome shows`).toBeGreaterThan(0);
       for (const stream of closing) expect(text, `the policy names ${module.key}'s ${stream.config}#${stream.seed}`).toContain(`#${stream.seed}`);
