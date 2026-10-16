@@ -184,6 +184,15 @@ rules instead needs an epoch per division or fixture, which does not exist.
   division sum and re-derivation, the merged-person relabel, the entrant kind and the lineup pair the server hands the fold (the list is in
   GOLDEN-POLICY.md, "What the guard cannot see"). Raising `STATS_FOLD_VERSION` (an engine constant, `src/stats/stats.ts`) when the fold's
   output changes is a separate manual obligation the guard does not enforce.
+- **A phone must not offer a lineup change in a sport that does not declare lineup support** (owner ruling 2026-10-15). The engine takes
+  `core.lineup.*` only from a module that declares a `lineupPolicy` (`admitsLineupEvents(module)`, `@seazn/engine/core`; today football,
+  cricket, volleyball, badminton, table tennis, tennis, ice hockey and hockey, and NOT boardgame, carrom or generic). For the others the
+  write path refuses all five types with **`LINEUP_NOT_SUPPORTED`** and the server answers **422** (`POST /api/v1/fixtures/{id}/events`),
+  so a lineup event queued for such a sport is rejected, never parked and never retried. The refusal is the write path's only: a ledger
+  that already holds one still folds on replay, so read it as a fold input and keep it. Before this a substitution was accepted there and
+  moved the kernel's squads but nothing the sport shows (in generic the pad kept offering the player taken off, and a tap credited
+  them). This is a MAJOR for those three sports: **`foldEpochOf` of boardgame, carrom and generic is 2**, so a phone bundled at epoch 1
+  is `426 ENGINE_OUTDATED` for them. Drive the offer from the module's own declaration, never from a list of sport names.
 - A harness-only rewrite of a corpus (a state string that moves without changing its meaning) is a MAJOR bump and locks out every
   older phone of that sport; the guard cannot tell it from a real change. A deltas-only
   change is a MINOR bump (D34) and locks nobody out.
@@ -196,6 +205,10 @@ rules instead needs an epoch per division or fixture, which does not exist.
 - [ ] 426 is "parked until update": never dropped, never auto-retried, queue kept in order, resent after the update.
 - [ ] Reconcile the optimistic fold against the `201` body's `state_summary` / `outcome` / `status` on every ack.
 - [ ] Only the named `sport` blocked; other sports keep scoring.
+- [ ] No lineup control (substitution, replacement, position, retirement, entry) is offered for a sport whose module declares no
+      `lineupPolicy`; a `422 LINEUP_NOT_SUPPORTED` is shown as a rejection with the localised `engineError.LINEUP_NOT_SUPPORTED` copy and
+      the event is dropped from the queue (it can never succeed). The offer is derived from the declaration, and a test drives each of
+      the eleven sports through it (eight offer, three do not).
 - [ ] A test that drives the real queue through a faked epoch bump (the usecase tests' way), not a mocked transport.
 - [ ] The app never computes or renders `standingsDelta`, `supportsDraws`, non-headline credit or player stats (the phone contract in §3); if it must,
       put D34 back in front of your owner first.
