@@ -2,9 +2,8 @@
 // sport's catalog declares `benchMax: 0` (boardgame, carrom, generic).
 //
 // Before this, `putLineup` saved the row and `validateLineup` only warned
-// (`bench_size`). The engine never uses such a bench, and the boardgame and
-// carrom stats folds credited every bench row on the sheet with no event
-// touching it. Driven through the REAL `PUT` and `GET` handlers (only the auth
+// (`bench_size`). The sport declares no bench and the engine never uses the
+// row. Driven through the REAL `PUT` and `GET` handlers (only the auth
 // door is mocked, as in route.test.ts beside this file) against a real
 // Postgres, over every sport the engine ships — the limit is each sport's own
 // resolved catalog declaration, never a sport-name list.
@@ -117,6 +116,13 @@ async function seedScene(auth: AuthCtx, m: AnySportModule, people: number): Prom
   const persons = rows.map((r) => r.id);
   for (const id of persons) await sql`insert into entrant_members (entrant_id, person_id) values (${mine!.id}, ${id})`;
   return { auth, fixtureId, entrantId: mine!.id, divisionId: division.id, persons };
+}
+
+/** A person in the org who is a member of no entrant. */
+async function outsider(auth: AuthCtx, name: string): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name) values (${auth.orgId}, ${`${name} Outsider`}) returning id`;
+  return id;
 }
 
 const url = (s: Scene) => `http://localhost/api/v1/fixtures/${s.fixtureId}/lineups/${s.entrantId}`;
@@ -291,6 +297,71 @@ describe.skipIf(!HAS_DB)("PUT lineups — the bench a catalog does not have", ()
     }
     expect(checked).toBeGreaterThanOrEqual(3);
   }, 120_000);
+
+  // CHECK ORDER. Each check below refuses the sheet by ITSELF first (the control: the second row is a STARTING row);
+  // then the same sheet with that row on the bench must come back as the bench refusal. Without the control, a rig
+  // whose check never fires would pass the second half for no reason. One test per check, so a bench check moved past
+  // exactly one of them reds exactly the tests behind it.
+  const sweepNoBench = async (scene: (auth: AuthCtx, m: AnySportModule) => Promise<void>) => {
+    const { auth } = await seedOrg();
+    let checked = 0;
+    for (const { module } of NO_BENCH) {
+      await scene(auth, module);
+      checked++;
+    }
+    expect(checked).toBe(NO_BENCH.length);
+    expect(checked).toBeGreaterThanOrEqual(3);
+  };
+
+  it("check order: before the roster check (a non-member on the bench)", () =>
+    sweepNoBench(async (auth, module) => {
+      const s = await seedScene(auth, module, 1);
+      const [a] = s.persons as [string];
+      const stranger = await outsider(auth, module.key);
+      const control = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: stranger, slot: "starting", order_no: 2 }]);
+      expect(control.status, `${module.key}: roster control`).toBe(422);
+      expect(control.body.error?.message, `${module.key}: roster control is the roster check`).toMatch(/not a member/);
+      const benched = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: stranger, slot: "bench", order_no: 2 }]);
+      expect(benched.body.error?.code, `${module.key}: non-member on the bench`).toBe(CODE);
+    }), 120_000);
+
+  it("check order: before the duplicate-person check (the same person twice, once on the bench)", () =>
+    sweepNoBench(async (auth, module) => {
+      const s = await seedScene(auth, module, 1);
+      const [a] = s.persons as [string];
+      const control = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: a, slot: "starting", order_no: 2 }]);
+      expect(control.status, `${module.key}: duplicate control`).toBe(422);
+      expect(control.body.error?.message, `${module.key}: duplicate control is the duplicate check`).toMatch(/duplicate person/);
+      const benched = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: a, slot: "bench", order_no: 2 }]);
+      expect(benched.body.error?.code, `${module.key}: duplicate on the bench`).toBe(CODE);
+    }), 120_000);
+
+  it("check order: before the roster-eligibility gate (a person outside the division's age band)", () =>
+    sweepNoBench(async (auth, module) => {
+      const s = await seedScene(auth, module, 2);
+      const [a, b] = s.persons as [string, string];
+      await sql`update divisions set age_min = 10, age_max = 15 where id = ${s.divisionId}`;
+      await sql`update persons set dob = '2000-01-01' where id = ${a}`;
+      const control = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: b, slot: "starting", order_no: 2 }]);
+      expect(control.status, `${module.key}: eligibility control`).toBe(422);
+      expect(control.body.error?.code, `${module.key}: eligibility control is the eligibility gate`).toBe("ELIGIBILITY_VIOLATION");
+      const benched = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: b, slot: "bench", order_no: 2 }]);
+      expect(benched.body.error?.code, `${module.key}: ineligible sheet with a bench row`).toBe(CODE);
+    }), 120_000);
+
+  it("check order: before the suspension gate (a person with an active ban in the division)", () =>
+    sweepNoBench(async (auth, module) => {
+      const s = await seedScene(auth, module, 2);
+      const [a, b] = s.persons as [string, string];
+      await sql`
+        insert into suspensions (org_id, division_id, person_id, status, source, reason, matches_total)
+        values (${auth.orgId}, ${s.divisionId}, ${a}, 'active', 'manual', 'Violent conduct', 1)`;
+      const control = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: b, slot: "starting", order_no: 2 }]);
+      expect(control.status, `${module.key}: suspension control`).toBe(422);
+      expect(control.body.error?.code, `${module.key}: suspension control is the suspension gate`).toBe("SUSPENDED_PLAYER");
+      const benched = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }, { person_id: b, slot: "bench", order_no: 2 }]);
+      expect(benched.body.error?.code, `${module.key}: banned sheet with a bench row`).toBe(CODE);
+    }), 120_000);
 
   it("a division whose sport module cannot be resolved is not refused — the existing save-unchecked posture, not a 500", async () => {
     const { auth } = await seedOrg();
