@@ -33,8 +33,8 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { PHASE_CHANNELS, PROGRAMME_PHASES } from "@/lib/relay-phase";
 import {
-  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
-  RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
+  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_CRASH_CAP, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
+  RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { BEAT_EXIT_REASONS, failReasonFromExit, type BeatExitReason, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
@@ -150,8 +150,9 @@ async function row(sid: string) {
     state: string; fail_reason: string | null; end_reason: string | null; desired_state: string; heartbeat_at: string | null;
     runner_state: string; machine_id: string | null;
     runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
+    runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number;
   }[]>`select state, fail_reason, end_reason, desired_state, heartbeat_at, runner_state, machine_id,
-              runner_exit_code, runner_oom_killed, runner_requested_stop
+              runner_exit_code, runner_oom_killed, runner_requested_stop, runner_crash_count, runner_crash_beats, runner_crash_exits
          from fixture_stream_sessions where id = ${sid}`;
   return r!;
 }
@@ -974,6 +975,8 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
           expect(s.runner.created, label).toHaveLength(1);
           expect(s.runner.destroyed, label).toEqual([]);
           expect(after, label).toMatchObject({ state: before.state, runner_state: before.runner_state, machine_id: before.machine_id, fail_reason: null, desired_state: before.desired_state });
+          // R2003b: the runner is untouched either way, but a fatal run is ONE crash on the row; signalled / session_gone none
+          expect(after.runner_crash_count, `${label}: crashes counted`).toBe(reason === "fatal" ? 1 : 0);
         } else {
           expect(after, label).toMatchObject({ state: "failed", fail_reason: "machine_refused" });
           expect(s.runner.created, `${label}: never a retry`).toHaveLength(1);
@@ -1243,5 +1246,162 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     expect((await postBeat(stalled.sessionId, { state: "stalled", programmePhase: "waiting", input: "connecting" }, { token: stalled.jobToken })).status).toBe(200);
     expect(await row(stalled.sessionId)).toMatchObject({ state: "warming", runner_state: "booting" });
     expect(await consumes(stalled.sessionId)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R2003b through the REAL routes (owner approval 2026-10-16): a session whose runner has crashed RUNNER_CRASH_CAP times
+// fails machine_crash — torn down, no retry. Each crash's evidence arrives the way production's does: its final beat on
+// the heartbeat route, and its exit on the next read of the Machine (the facts route's reconcile → the fake provider's
+// observation). Every request loads the row and persists it, so the count surviving request to request IS the witness
+// that V450's columns round-trip (cols → toSession → persist). Expected counts are the crashes each test makes.
+// ---------------------------------------------------------------------------------------------------------------
+const CRASH_EXIT: ExitInfo = { exitCode: 70, oomKilled: false, requestedStop: false };   // C06: the compositor's Fatal exit
+/** The ledger's crash counts, in order: the `crashCount` each runner_transition carried (session.ts eventRowsOf). */
+async function crashCounts(sid: string): Promise<number[]> {
+  const rows = await sql<{ n: number }[]>`
+    select (payload->>'crashCount')::int as n from fixture_stream_events
+     where session_id = ${sid} and kind = 'runner_transition' and payload ? 'crashCount' order by seq`;
+  return rows.map((r) => r.n);
+}
+
+describe.skipIf(!HAS_DB)("R2003b: the crash-loop cap through the heartbeat and facts routes", () => {
+  it("the SEQUENCE: crash 1 → restarted → crash 2 → restarted → crash 3 FAILS machine_crash — each crash seen by its fatal beat AND its exit counts once; the Machine is torn down at the cap, no retry is spent, the next read is 410", async () => {
+    expect(RUNNER_CRASH_CAP, "owner approval 2026-10-16").toBe(3);
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    const read = async () => getFacts(s.sessionId, { token: s.jobToken });
+    const t0 = Date.now();
+    for (let k = 1; k < RUNNER_CRASH_CAP; k++) {
+      expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status, `crash ${k}: its beat`).toBe(200);
+      // F-007: Fly is restarting it in place — the exit carries its instant (distinct per crash, well inside
+      // RUNNER_RESTART_STUCK_SECONDS of now) and the window's restart count k
+      s.runner.setObserved(m1, "pending", CRASH_EXIT, { since: new Date(t0 + k * 10), count: k });
+      expect((await read()).status, `crash ${k}: its exit`).toBe(200);
+      expect((await read()).status, `crash ${k}: its exit, read again`).toBe(200);
+      s.runner.setObserved(m1, "running");
+      expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+      expect(await row(s.sessionId), `after crash ${k}`).toMatchObject({ state: "live", runner_state: "playing", machine_id: m1, fail_reason: null, runner_crash_count: k });
+      expect(s.runner.destroyed, `after crash ${k}`).toEqual([]);
+    }
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status, "crash RUNNER_CRASH_CAP: its beat").toBe(200);
+    // the teardown ran after commit and the fake confirmed the DELETE (destroy_ok): destroyed, and still failed — no retry
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_state: "destroyed", runner_crash_count: RUNNER_CRASH_CAP });
+    expect(s.runner.destroyed, "torn down at the cap").toEqual([m1]);
+    expect((await read()).status, "over").toBe(410);
+    expect(s.runner.created, "no retry, though attempt 1 had one").toHaveLength(1);
+    expect(RUNNER_MAX_ATTEMPTS, "premise").toBeGreaterThan(1);
+    expect(await crashCounts(s.sessionId), "the ledger: one row per counted crash, never the re-reads").toEqual([1, 2, RUNNER_CRASH_CAP]);
+  });
+
+  // R2003b review m2: this used to model attempt 1's crash as "Fly gave up and destroyed the Machine" with NO restart
+  // count, a shape Fly never sends (its final exit carries restart_count 2, F-007). That shape is the cap at once: see the
+  // final-exit test below. The retry here comes from the road that does spend it: a crash read mid-restart whose
+  // restarted process never beats.
+  it("per SESSION: a crash seen only by its exit (no beat; read while Fly restarts it, restart_count 1) whose restarted process never beats is lost at the composed window and spends the ONE retry with the count carried; two fatal crashes of the replacement then reach the cap — machine_crash, and no third Machine", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    s.runner.setObserved(m1, "pending", CRASH_EXIT, { since: new Date(), count: 1 });
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId), "counted; still the same Machine, mid-restart").toMatchObject({ state: "live", runner_state: "playing", machine_id: m1, runner_crash_count: 1 });
+    await advance(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.destroyed, "lost at the window: torn down").toEqual([m1]);
+    expect(s.runner.created, "the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(await row(s.sessionId), "the replacement carries the session's crash, not the attempt's evidence").toMatchObject({ state: "live", runner_state: "booting", runner_crash_count: 1, runner_crash_beats: 0, runner_crash_exits: 0 });
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    for (let k = 2; k <= RUNNER_CRASH_CAP; k++) {
+      expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status, `crash ${k}`).toBe(200);
+      if (k < RUNNER_CRASH_CAP) {
+        expect(await row(s.sessionId), `crash ${k}`).toMatchObject({ state: "live", runner_crash_count: k });
+        expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+      }
+    }
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_crash_count: RUNNER_CRASH_CAP });
+    expect(s.runner.created, "no third Machine").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(410);
+  });
+
+  it("a platform stop is never a crash: RUNNER_CRASH_CAP + 1 `signalled` final beats leave the session live with nothing counted, and the exit-0 Machine it leaves behind is lost → the ONE retry, still counting nothing", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    for (let i = 0; i <= RUNNER_CRASH_CAP; i++) {
+      expect((await postBeat(s.sessionId, stoppedBeat("signalled"), { token: s.jobToken })).status, `signalled ${i}`).toBe(200);
+    }
+    expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "playing", machine_id: m1, runner_crash_count: 0 });
+    // C06: SIGTERM drains and exits 0, which Fly does not restart; the Machine stops and auto-destroys
+    s.runner.setObserved(m1, "destroyed", { exitCode: 0, oomKilled: false, requestedStop: false }, undefined, new Date(Date.now() - 1_000));
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "booting", runner_crash_count: 0 });
+    expect(s.runner.created).toHaveLength(RUNNER_MAX_ATTEMPTS);
+  });
+
+  it("the refusal keeps its own path: one crash short of the cap, an observed exit 78 fails machine_refused — never machine_crash — and adds no crash", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    for (let k = 1; k < RUNNER_CRASH_CAP; k++) {
+      expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+      expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    }
+    expect((await row(s.sessionId)).runner_crash_count, "premise: one short").toBe(RUNNER_CRASH_CAP - 1);
+    s.runner.setObserved(m1, "pending", { exitCode: RELAY_EXIT_REFUSED, oomKilled: false, requestedStop: false }, { since: new Date(), count: RUNNER_INPLACE_RESTARTS });
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(410);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_refused", runner_crash_count: RUNNER_CRASH_CAP - 1 });
+    expect(s.runner.created).toHaveLength(1);
+  });
+
+  // R2003b review m1/m2. F-007 measured (M1, M3): crashes #1 and #2 restarted in place, #3 Fly's final exit with
+  // restart_count 2, then the Machine stays down (auto_destroy here). Expected values are the measurement's.
+  it("Fly gave up: its FINAL exit read on the destroyed Machine (restart_count 2, not restarted) is the 3 crashes F-007 measured — failed machine_crash on that read, torn down by Fly already, no retry spent", async () => {
+    const F007 = { finalRestartCount: 2, crashes: 3 };
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    s.runner.setObserved(m1, "destroyed", CRASH_EXIT, { final: F007.finalRestartCount }, new Date(Date.now() - 1_000));
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(410);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_crash_count: F007.crashes });
+    expect(s.runner.created, "no retry").toHaveLength(1);
+  });
+
+  // R2003b review I2 through the REAL routes. F-007's slow loop: past the ~330 s refill Fly restarts every crash in place
+  // with restart_count 1 (M2), and a runtime crash (panic, OOM kill) sends no final beat. The restarted process's own job
+  // GET (the facts route) is the read that follows each restart, and Fly then says `started`.
+  it("R2003b I2: a SLOW beat-less crash loop through the facts route — each crash read only by the restarted process's own job GET, after Fly finished the restart (running) — counts once per crash, re-reads nothing; the 3rd fails the session with the CAPPING crash's reason (an OOM kill: machine_oom), no retry", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    const PANIC: ExitInfo = { exitCode: 101, oomKilled: false, requestedStop: false };
+    const OOM: ExitInfo = { exitCode: 137, oomKilled: true, requestedStop: false };
+    const t0 = Date.now() - 60 * 60_000;
+    let checked = 0;
+    for (let k = 1; k <= RUNNER_CRASH_CAP; k++) {
+      s.runner.setObserved(m1, "running", k < RUNNER_CRASH_CAP ? PANIC : OOM, { restarted: 1 }, new Date(t0 + k * 331_000));
+      if (k < RUNNER_CRASH_CAP) {
+        expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `crash ${k}: the restarted process's job GET`).toBe(200);
+        expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `crash ${k}: read again`).toBe(200);
+        expect(await row(s.sessionId), `crash ${k}`).toMatchObject({ state: "live", runner_state: "playing", machine_id: m1, fail_reason: null, runner_crash_count: k });
+        expect(s.runner.destroyed, `crash ${k}`).toEqual([]);
+      } else {
+        expect((await getFacts(s.sessionId, { token: s.jobToken })).status, "the cap").toBe(410);
+      }
+      checked++;
+    }
+    expect(checked).toBe(RUNNER_CRASH_CAP);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_oom", runner_crash_count: RUNNER_CRASH_CAP });
+    expect(s.runner.destroyed, "torn down at the cap").toEqual([m1]);
+    expect(s.runner.created, "no retry").toHaveLength(1);
+    expect(await crashCounts(s.sessionId), "one ledger row per crash, never the re-reads").toEqual([1, 2, RUNNER_CRASH_CAP]);
+  });
+
+  // R2003b review I3: the heartbeat route hands `callback_crashed` to a still-running session only. In ONE request the
+  // beat runs the expiry first, and the expiry can end the session while the runner is still stopping (a warming
+  // timeout: failed machine_boot_timeout, the runner sent its stop). The domain refuses a crash beat on a terminal
+  // session (C27), so without the route's own guard the Machine's beat is a 500.
+  it("a fatal final beat that meets a session the SAME request's expiry just failed (warming past its deadline: failed machine_boot_timeout, the runner stopping) is recorded and answered 200 — never a 500 on the Machine's beat — and counts no crash", async () => {
+    const s = await session();
+    expect(await row(s.sessionId), "premise: warming, booting").toMatchObject({ state: "warming", runner_state: "booting" });
+    await sql`update fixture_stream_sessions set warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${s.sessionId}`;
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_boot_timeout", runner_crash_count: 0 });
+    expect(await lastHeartbeat(s.sessionId), "the beat is recorded").toMatchObject({ state: "stopped", exitReason: "fatal" });
+    expect(await crashCounts(s.sessionId)).toEqual([]);
   });
 });

@@ -633,6 +633,42 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(refused * accepted).toBeGreaterThan(0);
   });
 
+  // R2003b (V450): the crash tally's four columns. Every existing row reads "nothing counted" (0/0/0/null), and the table
+  // holds the domain's invariant — the session's count includes the current attempt's — so a write that breaks it is
+  // refused, beside its accepted twin. The CHECK's name is the migration's.
+  it("runner_crash_* (V450, R2003b): three smallint NOT NULL DEFAULT 0 counts and a nullable timestamptz; a new row reads 0/0/0/null; negatives and a count below either bound are REFUSED, the tally the domain writes is accepted", async () => {
+    const r = await rig();
+    const shapes = await sql<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select column_name, data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name like 'runner_crash_%'
+       order by column_name`;
+    expect(shapes).toEqual([
+      { column_name: "runner_crash_beats", data_type: "smallint", is_nullable: "NO", column_default: "0" },
+      { column_name: "runner_crash_count", data_type: "smallint", is_nullable: "NO", column_default: "0" },
+      { column_name: "runner_crash_exit_at", data_type: "timestamp with time zone", is_nullable: "YES", column_default: null },
+      { column_name: "runner_crash_exits", data_type: "smallint", is_nullable: "NO", column_default: "0" },
+    ]);
+    const sid = await insertSession(r, "live");
+    const [fresh] = await sql<{ c: number; b: number; e: number; at: Date | null }[]>`
+      select runner_crash_count as c, runner_crash_beats as b, runner_crash_exits as e, runner_crash_exit_at as at from fixture_stream_sessions where id = ${sid}`;
+    expect(fresh).toEqual({ c: 0, b: 0, e: 0, at: null });
+    const write = (c: number, b: number, e: number) =>
+      sql`update fixture_stream_sessions set runner_crash_count = ${c}, runner_crash_beats = ${b}, runner_crash_exits = ${e}, runner_crash_exit_at = now() where id = ${sid}`;
+    let refused = 0;
+    for (const [c, b, e] of [[-1, 0, 0], [1, -1, 0], [1, 0, -1], [1, 2, 0], [1, 0, 2]] as const) {
+      await expect(write(c, b, e), `${c}/${b}/${e}`).rejects.toMatchObject({ code: "23514" });
+      refused++;
+    }
+    // the named invariant, by name: a count below the larger bound
+    await expect(write(2, 3, 1)).rejects.toMatchObject({ code: "23514", constraint_name: "fixture_stream_sessions_crash_tally" });
+    let accepted = 0;
+    for (const [c, b, e] of [[3, 3, 1], [3, 1, 3], [2, 0, 0], [3, 2, 2]] as const) {   // a retry carried 2 and reset the attempt; max, never the sum
+      await write(c, b, e);
+      accepted++;
+    }
+    expect(refused * accepted).toBe(5 * 4);
+  });
+
   it("output_released_at (V423, C1): NULLABLE timestamptz with no default, so every existing row reads 'not released'; the mark is REFUSED on every ACTIVE state and on a row that never held an output, and accepted on every TERMINAL row that did — both state lists the domain's own", async () => {
     const r = await rig();
     const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`

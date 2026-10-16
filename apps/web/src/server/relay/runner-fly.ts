@@ -51,7 +51,7 @@
 // Machine or start a second one — the 409 adopt (T5-c), the unestablished
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
-import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, exitRecorded, flyDuration, isRetryable, restartFrom, type Machine, type MachineCreateInput } from "./fly-client";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, embeddedEventsOf, exitAtFrom, exitInfoFrom, exitRecorded, exitRestartedFrom, flyDuration, isRetryable, restartFrom, type Machine, type MachineCreateInput } from "./fly-client";
 import { RUNNER_INPLACE_RESTARTS, RUNNER_PLATFORM_STOP_SIGNAL, RUNNER_STOP_GRACE_SECONDS, liveRunnerIdentity } from "./config";
 import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
@@ -360,8 +360,8 @@ export class FlyRunner implements RunnerProvider {
     await this.client.stopMachine(runnerId, { signal: opts.signal, timeoutSeconds: opts.timeoutSeconds }); // 404 = already gone, inside the client
   }
 
-  /** GET the Machine and, when it is not still coming up or running, its events for
-   *  the exit payload.
+  /** GET the Machine and, when it is not running, its events for the exit payload. A running Machine's newest exit is
+   *  read off the GET's own body instead (R2003b review I2): no second call on the steady state.
    *
    *  C1, measured and against the brief's premise: a DESTROYED Machine answers GET
    *  200 with `state: "destroyed"` — 404 means the id never existed. Both land on
@@ -369,21 +369,33 @@ export class FlyRunner implements RunnerProvider {
    *  are fetched for every non-running state rather than only for a stopped one. */
   async observe(runnerId: string): Promise<RunnerObservation> {
     const m = await this.client.getMachine(runnerId);
-    const NOT_RESTARTING = { restarting: false, restartingSince: null, restartCount: null } as const;
+    const NOT_RESTARTING = { restarting: false, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null } as const;
     if (!m) return { state: "destroyed", exit: null, ...NOT_RESTARTING };
     const state = fromFlyState(m.state);
-    if (state === "running") return { state, exit: null, ...NOT_RESTARTING };
+    if (state === "running") {
+      // R2003b review I2: the newest exit is the PREVIOUS run's: a crash Fly already restarted in place. A runtime crash
+      // (panic, OOM kill, SIGSEGV) sends no final beat, and the read that reliably follows each restart (the restarted
+      // process's own job GET) finds the Machine `started`. Without this exit a slow crash loop (F-007: restart_count back
+      // to 1 every refilled window) is never counted. The GET's own `events` carry it (the F-007 probe read every exit off
+      // this GET), so the steady state costs no events call: that action is limited to 1 req/s per Machine. No body
+      // events, or none that parse: no claim, as before. Never `restarting` while running.
+      const embedded = embeddedEventsOf(m);
+      if (!embedded) return { state, exit: null, ...NOT_RESTARTING };
+      return { state, exit: exitInfoFrom(embedded), restarting: false, restartingSince: null, restartCount: restartFrom(embedded).count,
+        exitAt: exitAtFrom(embedded), exitRestarted: exitRestartedFrom(embedded) };
+    }
     // F-007: `starting` (pending) is read through the events too — it is the ~1.3 s middle of an in-place restart as
     // well as a cold boot, and only the latest exit event tells them apart. A cold boot has no exit: exit null, as before.
     const events = await this.client.machineEvents(runnerId).catch((e: unknown) => (e instanceof FlyApiError && e.status === 404 ? [] : Promise.reject(e)));
     // F-007 race: STOPPED before Fly recorded this stop's exit — UNRECORDED (restarting null), never the previous run's exit.
     // `stopped` only, the one state F-007 measured racing: a failed launch never ran and Fly writes it NO exit, so for
     // `failed` "unrecorded" would be forever (pass-3 review) — it falls through and is a plain, immediate loss.
-    if (state === "stopped" && !exitRecorded(events)) return { state, exit: null, restarting: null, restartingSince: null, restartCount: null };
+    if (state === "stopped" && !exitRecorded(events)) return { state, exit: null, restarting: null, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null };
     const restart = restartFrom(events);
     // ADR 0007: Fly's fields end here — the port carries the neutral `restarting`.
     if (state === "pending" && !restart.restarting) return { state, exit: null, ...NOT_RESTARTING };
-    return { state, exit: exitInfoFrom(events), restarting: restart.restarting, restartingSince: restart.since, restartCount: restart.count };
+    return { state, exit: exitInfoFrom(events), restarting: restart.restarting, restartingSince: restart.since, restartCount: restart.count, exitAt: exitAtFrom(events),
+      exitRestarted: exitRestartedFrom(events) };
   }
 
   async destroy(runnerId: string): Promise<void> {

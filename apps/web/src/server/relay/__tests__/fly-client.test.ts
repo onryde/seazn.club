@@ -6,7 +6,7 @@
 // exactly Retry-After"; drop the pre-retry lookup → "timeout then lookup";
 // drop the redaction → "redaction"; treat destroy 404 as an error → "destroy".
 import { describe, expect, it, vi } from "vitest";
-import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, exitInfoFrom, flyDuration, isRetryable, redact } from "../fly-client";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, exitAtFrom, exitInfoFrom, flyDuration, isRetryable, redact } from "../fly-client";
 import type { MachineCreateInput } from "../fly-client";
 import { ENDING_TIMEOUT_SECONDS, PROVISION_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { FakeRecorder } from "../fakes";
@@ -526,5 +526,30 @@ describe("FlyClient — the provider-call ledger (ruling 13)", () => {
     const r = rig([{ status: 200, body: MACHINE }], { recorder: undefined });
     await expect(r.client.getMachine("m_1")).resolves.toMatchObject({ id: "m_1" });
     await new Promise((res) => setImmediate(res));   // the record is fire-and-forget; let it run
+  });
+});
+
+// R2003b: the crash cap counts an observed crash exit ONCE however often it is read, by the exit's own instant. The
+// instant must be the SAME exit `exitInfoFrom` describes — the newest by `timestamp`, whatever order Fly sends — or a
+// re-read could look like a new crash (double count) or a new crash like a re-read (dropped).
+describe("exitAtFrom (R2003b) — the newest exit's instant, the identity the crash cap counts by", () => {
+  const exit = (id: string, timestamp: number | undefined, exitCode: number) =>
+    ({ id, type: "exit", status: "stopped", source: "flyd", ...(timestamp === undefined ? {} : { timestamp }), request: { exit_event: { exit_code: exitCode, oom_killed: false, requested_stop: false } } });
+  const start = (id: string, timestamp: number) => ({ id, type: "start", status: "started", source: "flyd", timestamp, request: null });
+  it("the newest exit's timestamp, in either array order — the same exit exitInfoFrom reports; an older exit, a start, or a launch never wins", () => {
+    let checked = 0;
+    for (const events of [[exit("a", 4_000, 70), start("s", 3_000), exit("b", 2_000, 139)], [exit("b", 2_000, 139), start("s", 3_000), exit("a", 4_000, 70)]]) {
+      expect(exitAtFrom(events as never)).toEqual(new Date(4_000));
+      expect(exitInfoFrom(events as never)?.exitCode, "the exit it names").toBe(70);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("the empty cases: no events, no exit among them, and an exit Fly gave no timestamp — each null (no identity, so the cap counts nothing for it)", () => {
+    expect(exitAtFrom([])).toBeNull();
+    expect(exitAtFrom([start("s", 1_000)] as never)).toBeNull();
+    expect(exitAtFrom([exit("a", undefined, 70)] as never)).toBeNull();
+    // its pair: the same exit WITH a timestamp has one
+    expect(exitAtFrom([exit("a", 1_000, 70)] as never)).toEqual(new Date(1_000));
   });
 });

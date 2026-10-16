@@ -291,12 +291,25 @@ export class FakeRecorder implements ProviderCallRecorder {
   }
 }
 
-type FakeRestart = { since: Date; count: number } | "unrecorded";
-type FakeObserved = Pick<RunnerObservation, "state" | "exit"> & { restart?: FakeRestart };
-const observation = (o: FakeObserved): RunnerObservation =>
-  o.restart === "unrecorded"
-    ? { state: o.state, exit: o.exit, restarting: null, restartingSince: null, restartCount: null }
-    : { state: o.state, exit: o.exit, restarting: o.restart !== undefined, restartingSince: o.restart?.since ?? null, restartCount: o.restart?.count ?? null };
+/** The newest exit's restart record, in F-007's shapes (what runner-fly.ts reads off Fly's exit event):
+ *  - `{ since, count }`: restarting in place NOW (the ~1.4 s window): `restarting`, and the exit's own record says so.
+ *  - `{ restarted: count }` (R2003b review I2): Fly restarted it in place and the restart COMPLETED, so the Machine reads
+ *    `running` again with this exit as its newest. Not `restarting`; the exit's own record still says restarted.
+ *  - `{ final: count }` (R2003b review m2): the window's FINAL exit. Fly will not restart it, and its count is
+ *    max_retries (F-007: 2 after 3 crashes). On a `stopped` or `destroyed` Machine alike.
+ *  - `"unrecorded"`: down before the provider recorded the exit (`restarting: null`). */
+type FakeRestart = { since: Date; count: number } | { restarted: number } | { final: number } | "unrecorded";
+type FakeObserved = Pick<RunnerObservation, "state" | "exit"> & { restart?: FakeRestart; exitAt?: Date };
+const countOf = (r: Exclude<FakeRestart, "unrecorded">): number => ("since" in r ? r.count : "restarted" in r ? r.restarted : r.final);
+/** R2003b `exitAt`: the exit's instant — given, or a restart's own `since` (runner-fly.ts: a restarting exit's instant IS
+ *  the restart's), else null (an exit with no instant counts nothing). Unrecorded: no exit, so none. */
+const observation = (o: FakeObserved): RunnerObservation => {
+  const r = o.restart;
+  if (r === "unrecorded") return { state: o.state, exit: o.exit, restarting: null, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null };
+  const inFlight = r !== undefined && "since" in r;
+  return { state: o.state, exit: o.exit, restarting: inFlight, restartingSince: inFlight ? r.since : null, restartCount: r === undefined ? null : countOf(r),
+    exitAt: o.exitAt ?? (inFlight ? r.since : null), exitRestarted: r === undefined ? null : !("final" in r) };
+};
 
 export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
@@ -364,7 +377,9 @@ export class FakeRunner implements RunnerProvider {
   async observe(runnerId: string): Promise<RunnerObservation> {
     this.record("getMachine", "GET", `/machines/${runnerId}`, runnerId);
     const o = this.observed.get(runnerId);
-    if (!o || !this.alive.has(runnerId)) return observation({ state: "destroyed", exit: o?.exit ?? null });
+    // R2003b review m2: a destroyed Machine keeps its newest exit's whole record (Fly's GET 200 still carries the events,
+    // C1), its restart count included.
+    if (!o || !this.alive.has(runnerId)) return observation({ state: "destroyed", exit: o?.exit ?? null, ...(o?.restart && o.restart !== "unrecorded" ? { restart: o.restart } : {}), ...(o?.exitAt ? { exitAt: o.exitAt } : {}) });
     if (o.state === "stopped" && o.exit?.requestedStop) {
       // auto_destroy: a cleanly stopped Machine is gone by the next look
       this.alive.delete(runnerId);
@@ -387,11 +402,11 @@ export class FakeRunner implements RunnerProvider {
   }
 
   /** Test controls. */
-  /** `restart` (F-007): the provider is restarting this runner in place since `since` — what runner-fly.ts reads off
-   *  Fly's latest exit event; `"unrecorded"` — down before the provider recorded the exit (`restarting: null`). Absent:
-   *  not restarting. */
-  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null, restart?: FakeRestart): void {
-    this.observed.set(runnerId, { state, exit, restart });
+  /** `restart` (F-007): the newest exit's restart record (FakeRestart: in flight, completed, final, or unrecorded) — what
+   *  runner-fly.ts reads off Fly's latest exit event. Absent: no restart record. `exitAt` (R2003b): the exit's instant
+   *  when it is not an in-flight restart's own `since`. */
+  setObserved(runnerId: string, state: RunnerObservation["state"], exit: RunnerObservation["exit"] = null, restart?: FakeRestart, exitAt?: Date): void {
+    this.observed.set(runnerId, { state, exit, restart, ...(exitAt ? { exitAt } : {}) });
     if (state === "destroyed") this.alive.delete(runnerId);
   }
   /** Fail the next `create`. The ARGUMENT is the proof the failure carries (lane C A3, owner-confirmed 2026-09-28; A23):

@@ -183,7 +183,9 @@ export function eventRowsOf(before: Session, d: Decision, command: Command): Eve
   for (const e of d.events) {
     if (e.type === "RunnerChanged") {
       rows.push({ source: "runner", kind: "runner_transition", type: e.trigger, from: e.from, to: e.to,
-        payload: { attempt: d.next.runner.attempt, machineId: d.next.runner.machineId, machineName: d.next.runner.name, ...(command.type === "runner" && command.trigger.type === "observed" ? { observed: command.trigger.state, exit: command.trigger.exit ?? null } : {}) } });
+        payload: { attempt: d.next.runner.attempt, machineId: d.next.runner.machineId, machineName: d.next.runner.name, ...(command.type === "runner" && command.trigger.type === "observed" ? { observed: command.trigger.state, exit: command.trigger.exit ?? null } : {}),
+          // R2003b: the session's crash count, on the row of the step that MOVED it — the ledger's witness of each counted crash
+          ...(d.next.runner.crashes.count !== before.runner.crashes.count ? { crashCount: d.next.runner.crashes.count } : {}) } });
     } else if (e.type === "RunnerRetried") {
       rows.push({ source: "runner", kind: "event", type: e.type, from: null, to: null, payload: { attempt: e.attempt } });
     } else if (e.type === "SessionEnding") {

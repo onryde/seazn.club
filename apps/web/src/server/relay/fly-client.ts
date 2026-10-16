@@ -587,6 +587,30 @@ export function restartFrom(events: readonly MachineEvent[]): { restarting: bool
   return { restarting: true, since: newest.timestamp === undefined ? null : new Date(newest.timestamp), count: restartCount };
 }
 
+/** R2003b: the instant of the newest exit the events carry — the exit `exitInfoFrom` describes — or null (no exit, or
+ *  an exit Fly gave no `timestamp`). The crash cap's identity for that exit: a second read of it returns the same instant. */
+export function exitAtFrom(events: readonly MachineEvent[]): Date | null {
+  const newest = newestExit(events);
+  return newest?.timestamp === undefined ? null : new Date(newest.timestamp);
+}
+
+/** R2003b review m1: the newest exit's OWN record of whether Fly restarts it in place, whether or not that restart has
+ *  since completed. `restartFrom` answers a different question: is one in flight NOW. F-007: `true` on every restarting
+ *  exit (exit k carries restart_count k); `false` on the window's final exit, which carries restart_count max_retries, one
+ *  FEWER than the crashes it closes. Read defensively: anything but a literal boolean is null. */
+export function exitRestartedFrom(events: readonly MachineEvent[]): boolean | null {
+  const restarting = (newestExit(events)?.request?.exit_event as Record<string, unknown> | undefined)?.restarting;
+  return typeof restarting === "boolean" ? restarting : null;
+}
+
+/** R2003b review I2: the events a Machine GET carries in its own body (`events[]`). The F-007 probe read every exit event
+ *  it reports off this GET, with no separate events call. Parsed with the events route's own schema. null when the body
+ *  carries none, or none that parse: that is no claim, never an empty history. */
+export function embeddedEventsOf(m: Machine): MachineEvent[] | null {
+  const parsed = z.array(MachineEventSchema).safeParse((m as { events?: unknown }).events);
+  return parsed.success ? parsed.data : null;
+}
+
 /** F-007 race (appendix, M2): Fly answers `stopped` up to 320 ms BEFORE the exit event of that stop is written. Until it
  *  is, the newest exit is the PREVIOUS run's, older than the `start` that followed it — so it says nothing about this stop.
  *  Recorded = some exit event is newer than the newest `start` (no start at all: any exit). */

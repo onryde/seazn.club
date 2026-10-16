@@ -7,6 +7,8 @@ import { resolve } from "node:path";
 import { RelayHeartbeat } from "@/server/api-v1/schemas";
 import { EVENT_PAYLOAD_MAX_STRING } from "../config";
 import { ALLOWED_KEYS, pathTemplate, sanitise, scrubBeatText } from "../sanitise";
+import { RUNNER_NONE } from "../domain/runner";
+import { decide, eventRowsOf, type Command, type Session } from "../domain/session";
 
 const SECRET = "sekrit-9f3a1c";
 /** The fields R2 adds to the beat, typed from compositor spec 2026-10-14 §5.3 / C06 `HealthReport` / C07 `heartbeat_wire`,
@@ -49,6 +51,16 @@ describe("sanitise — allowlist", () => {
     const written = { machineId: "m1", staleAttempt: 1, machineName: "relay-x-r1", reason: "sweep" };
     expect(sanitise(written)).toEqual(written);
     expect(Object.keys(written).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
+  });
+  it("R2003b: a counted crash's runner_transition payload survives WHOLE — `crashCount` included (the payload is the REAL eventRowsOf's, never a typed copy)", () => {
+    const live: Session = { id: "s1", fixtureId: "f1", orgId: "o1", mode: "composed", state: "live", desiredState: "live", failReason: null, endReason: null,
+      runner: { ...RUNNER_NONE, state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1" }, runnerRetries: 0, createdAt: new Date(0), startedAt: new Date(0),
+      endedAt: null, heartbeatAt: new Date(0), beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, startCause: "organiser", warmingAt: null };
+    const c: Command = { type: "runner", trigger: { type: "callback_crashed" } };
+    const [row] = eventRowsOf(live, decide(live, c, new Date(1)), c).filter((r) => r.kind === "runner_transition");
+    expect(row!.payload, "premise: the step counted a crash").toHaveProperty("crashCount", 1);
+    expect(sanitise(row!.payload)).toEqual(row!.payload);
+    expect(Object.keys(row!.payload).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
   });
   it("capture QR v2 T6: the create action's pairingId and startCause survive — the operator start is traceable to the pairing that made it", () => {
     const written = { pairingId: "6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", startCause: "operator", mode: "passthrough", targetId: "t1" };

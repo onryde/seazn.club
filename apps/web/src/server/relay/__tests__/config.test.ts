@@ -385,6 +385,14 @@ describe("R2003 — restart and beat constants", () => {
     expect(config.RUNNER_INPLACE_RESTARTS).toBe(2);
     expect(config.RELAY_EXIT_REFUSED).toBe(78);
   });
+  // R2003b (owner approval 2026-10-16): "fail the session as machine_crash after 3 fatal crashes per session". F-007 is
+  // why a cap is owed (Fly's window refills after ~330 s, so in-place restarts alone never end a slow crash loop), and it
+  // fixes the cap's relation to the in-place budget: Fly restarts RUNNER_INPLACE_RESTARTS crashes per window and declines
+  // the next, so a cap of exactly one more fails a fully-seen burst rather than spending the retry on the same image.
+  it("RUNNER_CRASH_CAP is the owner's 3, one more than Fly's in-place restarts per window (F-007)", () => {
+    expect(config.RUNNER_CRASH_CAP, "owner approval 2026-10-16").toBe(3);
+    expect(config.RUNNER_CRASH_CAP).toBe(config.RUNNER_INPLACE_RESTARTS + 1);
+  });
 });
 
 // R2004 PR 0 — the stop contract. Each figure is typed from its SOURCE, never read back off config.ts or the compositor's

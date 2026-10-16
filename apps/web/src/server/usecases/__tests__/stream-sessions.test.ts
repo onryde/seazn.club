@@ -43,7 +43,7 @@ import {
   RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS,
   WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
-import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
+import { CRASHES_NONE, failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
 import { composedUnavailable, disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { OutputState, ProviderCallRecorder, RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
@@ -1055,7 +1055,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
   // port's made-nothing failure (A23), so the session fails at once with the reason the DOMAIN declares for a create that
   // made nothing — derived from the table, never typed — which differs from the unknown path's reason (the differential).
   const madeNothingReason = () => {
-    const creating = { state: "creating" as const, attempt: 1, name: "n1", machineId: null, stopRequestedAt: null, lastExit: null };
+    const creating = { state: "creating" as const, attempt: 1, name: "n1", machineId: null, stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
     const out = stepRunner(creating, { type: "create_failed", retryable: false, outcomeUnknown: false }, new Date(0));
     expect(out.signal?.type).toBe("failed");
     return (out.signal as { reason: string }).reason;
