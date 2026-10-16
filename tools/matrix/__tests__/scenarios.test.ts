@@ -1181,6 +1181,35 @@ class WarnsToo extends FakeLeagueDriver {
 }
 const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
 
+/** http.ts's `if (err instanceof ZodError) { ... }` branch of v1Inner's catch, header to its closer at the same indent.
+ *  THROWS on a missing header or closer, so a pin cannot pass on text it never found. */
+function zodErrorBranch(src: string): string {
+  const header = "\n    if (err instanceof ZodError) {\n";
+  const at = src.indexOf(header);
+  if (at < 0) throw new Error("http.ts: no `if (err instanceof ZodError) {` branch");
+  const end = src.indexOf("\n    }\n", at + header.length);
+  if (end < 0) throw new Error("http.ts: the ZodError branch has no closer");
+  return src.slice(at, end);
+}
+
+/** What is wrong with a ZodError branch's answers; empty when it is sound. The pin (W2c Task 13 put a comment, a
+ *  `const moved` and a nested named-refusal return ahead of the generic one, so "the branch OPENS with the return" is
+ *  no longer the question): EVERY path of the branch answers 400 VALIDATION, and the branch ends in an UNCONDITIONAL
+ *  answer — which is where a malformed id (it names no moved decider) lands. Full-line comments are dropped first:
+ *  they may sit anywhere in the branch and say anything. */
+function zodBranchFlaws(branch: string): string[] {
+  const code = branch.replace(/^\s*\/\/.*$/gm, "");
+  const returns = [...code.matchAll(/^( *)return\b[^;]*;/gm)];
+  const flaws: string[] = [];
+  if (returns.length === 0) flaws.push("the branch answers nothing");
+  for (const r of returns) if (!/^ *return errorResponse\(requestId, 400, "VALIDATION", /.test(r[0])) flaws.push(`not a 400 VALIDATION: ${r[0].trim().slice(0, 70)}`);
+  if ((code.match(/\breturn\b/g) ?? []).length !== returns.length) flaws.push("a return that does not start its own line");
+  if (/\bthrow\b/.test(code)) flaws.push("the branch throws");
+  const last = returns.at(-1);
+  if (last !== undefined && last[1]!.length !== 6) flaws.push("no unconditional answer: the last return is nested in a condition");
+  return flaws;
+}
+
 describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49)", () => {
   // State transitions, the empty case first: an individual sport (no members,
   // no lineups, nothing thrown); the first team fixture; a second fixture with
@@ -1462,7 +1491,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(/\nexport async function gateLineupSuspensions\([\s\S]*?\n\}\n/.exec(read("apps/web/src/server/usecases/discipline.ts"))?.[0]).toMatch(/throw new HttpError\(\s*422,[^;]*"SUSPENDED_PLAYER"/);
     // A malformed person id never reaches the usecase: a Uuid in the schema, a ZodError answered 400 VALIDATION.
     expect(read("apps/web/src/server/api-v1/schemas.ts")).toMatch(/export const LineupSlotInput = z\.object\(\{\s*person_id: Uuid,/);
-    expect(read("apps/web/src/server/api-v1/http.ts")).toMatch(/if \(err instanceof ZodError\) \{\s*return errorResponse\(requestId, 400, "VALIDATION"/);
+    expect(zodBranchFlaws(zodErrorBranch(read("apps/web/src/server/api-v1/http.ts")))).toEqual([]);
     // A second PUT replaces the first: delete, then insert.
     const del = put.indexOf("delete from lineups where fixture_id = ${fixtureId} and entrant_id = ${entrantId}");
     expect(del).toBeGreaterThan(-1);
@@ -1481,6 +1510,27 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     const callers = sources.filter((p) => /\bassertLineup\(/.test(read(p)));
     expect(callers).toEqual(["packages/engine/src/sport/catalog.ts"]);
     expect(read("packages/engine/src/sport/catalog.ts").match(/\bassertLineup\(/g)).toHaveLength(1);
+  });
+
+  it("the ZodError-branch pin tolerates comments and the named refusal, and rejects every way the 400 VALIDATION answer can break", () => {
+    const named = '      if (moved !== null) {\n        return errorResponse(requestId, 400, "VALIDATION", moved.message, { field: moved.field });\n      }\n';
+    const generic = '      return errorResponse(requestId, 400, "VALIDATION", "Invalid input", {\n        issues: err.issues,\n      });';
+    const branch = (...body: string[]) => `\n    if (err instanceof ZodError) {\n${body.join("")}\n    }\n`;
+    // The sound shapes: the bare return the pin was first written against, and the shape http.ts has now (comment, const, nested return).
+    expect(zodBranchFlaws(zodErrorBranch(branch(generic)))).toEqual([]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      // a comment that says return errorResponse(requestId, 500, \"X\");\n      const moved = f(err.issues);\n", named, generic)))).toEqual([]);
+    // Each way it breaks.
+    expect(zodBranchFlaws(zodErrorBranch(branch(generic.replace("400", "500"))))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(generic.replace('"VALIDATION"', '"ERROR"'))))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(named, generic.replace("400", "422"))))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(named.replace("400", "200"), generic)))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(named)))).toEqual(["no unconditional answer: the last return is nested in a condition"]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      if (x) return errorResponse(requestId, 500, \"X\");\n", generic)))).toEqual(["a return that does not start its own line"]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      throw err;\n")))).toEqual(["the branch answers nothing", "the branch throws"]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      log(err);\n")))).toEqual(["the branch answers nothing"]);
+    // A branch the pin cannot bound is a named failure, never a pass.
+    expect(() => zodErrorBranch("\n    if (err instanceof Error) {\n")).toThrow(/no `if \(err instanceof ZodError\) \{` branch/);
+    expect(() => zodErrorBranch("\n    if (err instanceof ZodError) {\n      return 1;\n")).toThrow(/no closer/);
   });
 });
 
