@@ -380,8 +380,11 @@ hand in the same PR; no tool will tell you):
     boardgame, carrom, generic, volleyball, badminton, tabletennis, tennis): every
     module folds it as `return state` and the player-statistics fold ignores a key the
     sport does not declare.
-  A change to how either folds therefore owes a **manual MAJOR bump of every sport it
-  reaches**: raise each sport's `FOLD_EPOCH` by hand in the same PR. Nothing here is a
+  A change to how a MODULE folds either (the state it keeps, so what a phone computes)
+  therefore owes a **manual MAJOR bump of every sport it reaches**: raise each sport's
+  `FOLD_EPOCH` by hand in the same PR. A change to how the player-statistics fold treats
+  an award key a sport does not declare is server-only (a phone never computes it), so it
+  owes a manual **MINOR** (`FOLD_MINOR`), by owner ruling Q2. Nothing here is a
   closed gap; the floor only keeps the open one visible. `forfeit-credit.ts`: walkover
   credit is pinned only where a corpus has a forfeit that reaches it.
   **Retired by GF-2 T3** (the same probe, run on the format-2 recorder, now answers
@@ -528,6 +531,14 @@ eleven. The ablation probe takes the recorder as a parameter: the same probe ove
 same corpora answers "unpinned" for a pause and a lineup change under the module-only
 recorder and "pinned" under the real one, and `golden-floor-overlay.test.ts` holds
 that flip for each retired claim.
+
+**One witness per column.** The floor asks for ONE stream per token, and that is what it
+gets: at the GF-2 batch review (2026-10-16) the overlay columns `settlement`, `expunged`,
+`levelWithdrawal` (where the sport has it) and `squads` were each witnessed by exactly one
+stream per sport (one setting it, one clearing it; stoppage by one or two), so a rule with
+branches is pinned only for the inputs that one stream happens to use. That is not a gap
+against the floor and not a defect; when a column's rule grows a branch, adding a witness for
+the new input is that change's job, because the floor will not ask for it.
 
 **Anti-vacuity.** Every sweep reports how many sports, tokens and holes it
 checked; zero is a failure; the empty-corpus case is tested first (an emptied

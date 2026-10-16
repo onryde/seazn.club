@@ -160,24 +160,31 @@ rules instead needs an epoch per division or fixture, which does not exist.
 
 ## 4. Known limits of the epoch guard (do not rely on it for more than it does)
 
-- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Since GF-2 they are **format 2**: besides the
+- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Since GF-2 they are **format 3**: besides the
   module's states they record the **effective** outcome and summary (`outcomeOf` / `summaryOf`: a settlement, an expunge, a withdrawal
-  over a held level result laid over the module's answer), a summary digest after every event, and the kernel overlay beside module
-  state (stoppage, squads, settlement, expunged, levelWithdrawal, a pending decider). The golden floor (`src/testkit/golden-floor.test.ts`)
+  over a held level result laid over the module's answer), a summary digest after every event, the kernel overlay beside module
+  state (stoppage, squads, settlement, expunged, levelWithdrawal, a pending decider) and each fixture's final player-stat rows
+  (`playerStats`, a MINOR: only the server computes them). The golden floor (`src/testkit/golden-floor.test.ts`)
   makes every sport's corpus record every `core.*` event the kernel accepts, including `core.settle`, every outcome kind the module can
   produce, and each overlay fact leaving its kernel default and coming back. So a change to how the kernel computes any of those moves a
   golden and owes a bump the guard now announces; it is no longer a manual MAJOR. A pause, a lineup change a module does not read,
   mid-match summaries and the kernel's side of an undo were on this list and are off it.
-- **Still not pinned, and so still a MANUAL MAJOR of every sport it reaches:** a note and an award (the floor's `OVERLAY_CLAIMS` names
-  them and goes red the day one starts to move a golden), `forfeit-credit.ts` where no corpus has a forfeit that reaches it, a path no
-  stream exercises (for example the expunge of an `abandonPolicy: "award"` football, hockey or icehockey match: no recorded config sets
-  it), a widening of a kernel REFUSAL (X-AB-4 `ABANDONED_SETTLE_OR_VOID`, the settle admission `SETTLE_NOT_APPLICABLE`: a refused ledger
-  was never recorded, so accepting more moves no byte), and the player-statistics folds (`src/stats/stats.ts`). See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
+- **Still not pinned, and so still a MANUAL MAJOR of every sport it reaches:** a note (all eleven sports) and an award in the eight
+  sports that declare no award key (the floor's `OVERLAY_CLAIMS` names them and goes red the day one starts to move a golden; football's
+  `motm`, hockey's `potm` and icehockey's `mvp` are pinned since GF-2 T4, through the stat rows), `forfeit-credit.ts` where no corpus has
+  a forfeit that reaches it, a path no stream exercises (for example the expunge of an `abandonPolicy: "award"` football, hockey or
+  icehockey match: no recorded config sets it), and a widening of a kernel REFUSAL (X-AB-4 `ABANDONED_SETTLE_OR_VOID`, the settle
+  admission `SETTLE_NOT_APPLICABLE`: a refused ledger was never recorded, so accepting more moves no byte). See
+  `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
+- **Player statistics (`src/stats/stats.ts`) are a guarded MINOR, with a manual MINOR outside the recorded rows** (owner ruling Q2). Format 3
+  records each fixture's final rows, so a change to how a recorded stat folds moves a golden and owes a `FOLD_MINOR` the guard announces.
+  What the recorded rows do not show owes a MANUAL MINOR, raised by hand: a stat no stream earns, an award key no stream credits, the
+  division sum and re-derivation, the merged-person relabel, the entrant kind and the lineup pair the server hands the fold (the list is in
+  GOLDEN-POLICY.md, "What the guard cannot see"). Raising `STATS_FOLD_VERSION` (an engine constant, `src/stats/stats.ts`) when the fold's
+  output changes is a separate manual obligation the guard does not enforce.
 - A harness-only rewrite of a corpus (a state string that moves without changing its meaning) is a MAJOR bump and locks out every
   older phone of that sport; the guard cannot tell it from a real change. A deltas-only
   change is a MINOR bump (D34) and locks nobody out.
-- Also invisible to both halves, and so owed a MANUAL MAJOR: player-statistics folds (`src/stats/stats.ts`). See `GOLDEN-POLICY.md`,
-  "What the guard cannot see".
 
 ## 5. Checklist for S2
 
