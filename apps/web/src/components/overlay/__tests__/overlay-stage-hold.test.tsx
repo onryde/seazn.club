@@ -24,7 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentType, ReactElement } from "react";
 import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
-import { OVERLAY_THEMES } from "../theme-registry";
+import { OVERLAY_TEMPLATES } from "../template-registry";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { OverlayModel } from "@/lib/overlay-model";
@@ -37,8 +37,8 @@ const DELAY_MS = 5_000;
 
 /** Every registered theme's component, derived from the registry rather than
  *  named — a set written by hand freezes today's default (see
- *  `theme-registry.ts`'s own note about exactly this). */
-const THEME_COMPONENTS = new Set<unknown>(Object.values(OVERLAY_THEMES).map((t) => t.component));
+ *  `template-registry.ts`'s own note about exactly this). */
+const THEME_COMPONENTS = new Set<unknown>(Object.values(OVERLAY_TEMPLATES).map((t) => t.component));
 
 afterEach(() => {
   vi.useRealTimers();

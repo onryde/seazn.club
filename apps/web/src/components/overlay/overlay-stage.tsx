@@ -17,6 +17,7 @@ import { OverlayEndOfOverCard } from "./overlay-end-of-over";
 import { OverlayTossCard } from "./overlay-toss-card";
 import { OVERLAY_MOMENT_FOLD_MS } from "./moment-timing";
 import { fetchOverlayFixture, type OverlayLiveData, type RealtimePurpose } from "@/components/public-site/live-score-data";
+import type { OverlayMoment } from "@/lib/overlay-moments";
 import {
   hasDetailBand,
   overlayModel,
@@ -28,9 +29,9 @@ import { useOverlayClock } from "./use-overlay-clock";
 import { t } from "@/lib/i18n-runtime";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // Owner answer 18 (Q7): the stage knows the REGISTRY, not two components. It
-// imports neither `overlay-bar` nor `overlay-bug` — registering a third theme
+// imports neither `overlay-bar` nor `overlay-bug` — registering a third template
 // must not touch this file, and an import here would be exactly that edit.
-import { OVERLAY_THEMES, slabPlacementFor, type ThemeId } from "./theme-registry";
+import { OVERLAY_TEMPLATES, cardRegionFor, type CanvasBox, type TemplateId } from "./template-registry";
 import { OverlayMatchCard, slateStateOf } from "./overlay-slate";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
 
@@ -41,11 +42,12 @@ export interface OverlayStageProps {
   initial: OverlayLiveData;
   realtime: boolean;
   sportKey: string;
-  /** A registry id, already resolved server-side by `resolveTheme` (Step 6c).
-   *  The stage never validates: by the time a value reaches this prop it has
-   *  been through the resolver, and a `ThemeId` that is not a registry key is
-   *  a compile error. */
-  style: ThemeId;
+  /** A registry id, already resolved server-side by `resolveTemplate` (Step 6c;
+   *  R2007 kept the prop's NAME — `?style=` is the alias forever, and the DOM's
+   *  `data-style` is what e2e and OBS-facing tests read). The stage never
+   *  validates: by the time a value reaches this prop it has been through the
+   *  resolver, and a `TemplateId` that is not a registry key is a compile error. */
+  style: TemplateId;
   sides: [OverlaySideInput, OverlaySideInput];
   startLabel: string | null;
   /** Competition / stage for the slate card meta pill. */
@@ -72,6 +74,32 @@ export interface OverlayStageProps {
    *  to `useLiveFixture`; the stage declares nothing of its own. */
   realtimePurpose?: RealtimePurpose;
   overlayKey?: string;
+  /** R2007, preview-only (`OverlayPreview`): the transport's fetcher returns `initial`, so no request ever leaves the
+   *  page — a preview over sample data would otherwise poll a fixture id that does not exist, every `POLL_MS`. */
+  snapshotOnly?: boolean;
+  /** R2007, preview-only (the gallery's moment cells): a slab shown statically in the slot, in the queue's fully-shown
+   *  phase (`hold`). A static render never raises one from the queue — the baseline is the mount's tip. */
+  pinnedMoment?: OverlayMoment;
+}
+
+/** The card layout's inputs, as the inline custom properties `.ovl-slate-content` reads (R2007 step 9b, decision G2):
+ *  the template's declared box and the region `cardRegionFor` leaves beside it, in canvas px. */
+function cardLayoutVars(box: CanvasBox, region: CanvasBox | null): Record<string, string> {
+  const px = (n: number) => `${n}px`;
+  return {
+    "--ovl-safe-x": px(box.x),
+    "--ovl-safe-y": px(box.y),
+    "--ovl-safe-w": px(box.width),
+    "--ovl-safe-h": px(box.height),
+    ...(region === null
+      ? {}
+      : {
+          "--ovl-card-x": px(region.x),
+          "--ovl-card-y": px(region.y),
+          "--ovl-card-w": px(region.width),
+          "--ovl-card-h": px(region.height),
+        }),
+  };
 }
 
 /** Stable identity: a fresh `[]` every render would re-run the enqueue effect
@@ -115,7 +143,9 @@ export function OverlayStage(props: OverlayStageProps) {
   // community org's overlay asks for realtime on a signed key and a refusal
   // leaves it on the poll; the console preview passes neither and never asks.
   const { data, transport, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
-    fetcher: fetchOverlayFixture,
+    // R2007: a preview (`snapshotOnly`) never touches the network — its fetcher hands back the snapshot it was given.
+    // The hook holds its fetcher in a ref, so a fresh closure per render is harmless.
+    fetcher: props.snapshotOnly ? async () => props.initial : fetchOverlayFixture,
     delayMs: props.delayMs,
     realtimePurpose: props.realtimePurpose,
     overlayKey: props.overlayKey,
@@ -152,7 +182,12 @@ export function OverlayStage(props: OverlayStageProps) {
    */
   const [momentBaseline] = useState(() => maxSeq(props.initial.recent));
   const [closedOverBaseline] = useState(() => closedOverBaselineOf(props.initial.lastClosedOver));
-  const placement = slabPlacementFor(props.style);
+  // The registry entry: the ONE place the template's component, slab placement and card box are read (R2007).
+  const template = OVERLAY_TEMPLATES[props.style];
+  const placement = template.slabPlacement;
+  // Step 9b (G2): cards are laid out beside the template's DECLARED box. No region big enough ⇒ no card at all — a
+  // card squeezed over the scorebug is the defect this replaced.
+  const cardRegion = cardRegionFor(template.sceneCardSafeArea);
   const reducedMotion = usePrefersReducedMotion();
 
   const model: OverlayModel = overlayModel({
@@ -169,7 +204,7 @@ export function OverlayStage(props: OverlayStageProps) {
   });
 
   const cardState = slateStateOf(model);
-  const showMatchCard = cardState === "warming" || cardState === "ended";
+  const showMatchCard = (cardState === "warming" || cardState === "ended") && cardRegion !== null;
 
   // Moments first, then end-of-over (so OUT precedes the over card), then toss
   // (only when the match card is NOT up — card owns warming openers).
@@ -201,7 +236,10 @@ export function OverlayStage(props: OverlayStageProps) {
         return [...moments, ...(eoo ?? []), ...(toss ? [toss] : [])];
       })();
 
-  const { current: moment, phase } = useMomentQueue(incoming, { reducedMotion });
+  const queued = useMomentQueue(incoming, { reducedMotion });
+  // A pinned moment (the gallery's moment cells) replaces the queue's, held in the fully-shown phase.
+  const moment = props.pinnedMoment ?? queued.current;
+  const phase = props.pinnedMoment ? "hold" : queued.phase;
 
   // Score tick: the ONE `big` that changed, and only that one (R13). The
   // previous pair lives in a ref that is read AND written only inside this
@@ -237,10 +275,15 @@ export function OverlayStage(props: OverlayStageProps) {
     return () => window.removeEventListener("resize", measure);
   }, [props.fit]);
 
-  // The registry lookup, and the ONLY place a theme becomes a component. A
+  // The registry lookup, and the ONLY place a template becomes a component. A
   // `props.style === "bar" ? <OverlayBar/> : <OverlayBug/>` branch is what the
-  // owner's answer replaces: a third theme would have had to edit it.
-  const Theme = OVERLAY_THEMES[props.style].component;
+  // owner's answer replaces: a third template would have had to edit it.
+  const Theme = template.component;
+  const canvasStyle = {
+    ...sportThemeStyle(props.sportKey),
+    ...cardLayoutVars(template.sceneCardSafeArea, cardRegion),
+    transform: `scale(${scale})`,
+  } as React.CSSProperties;
 
   // I1 (2026-09-10). Under `?delay=`, the transport presents nothing until the
   // delay has elapsed — the snapshot in hand at t=0 was taken at t=0 and says
@@ -268,7 +311,7 @@ export function OverlayStage(props: OverlayStageProps) {
           data-awaiting-delay="1"
           data-led="none"
           className="ovl-canvas ovl-label ovl-static"
-          style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}
+          style={canvasStyle}
         />
       </div>
     );
@@ -283,14 +326,18 @@ export function OverlayStage(props: OverlayStageProps) {
         data-transport={transport}
         data-led={model.sides[0].led ? "home" : model.sides[1].led ? "away" : "none"}
         className={`ovl-canvas ovl-label${model.live ? "" : " ovl-static"}`}
-        style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}
+        style={canvasStyle}
       >
         {/* Scorebug theme (bar|bug). Match/end card is a LAYER above it when
             warming or ended — not a third ?style= (2026-09-12). */}
         {showMatchCard ? (
           <OverlayMatchCard model={model} msg={msg} cricketToss={data.cricketToss} />
         ) : null}
-        <Theme model={model} tick={tick} msg={msg} sportKey={props.sportKey} />
+        {/* `display: contents`: no box of its own, so the template lays out exactly as before. It exists so the gallery
+            e2e can find THE TEMPLATE'S elements (its children) and measure them against the declared box. */}
+        <div data-testid="ovl-template" data-template={props.style} style={{ display: "contents" }}>
+          <Theme model={model} tick={tick} msg={msg} sportKey={props.sportKey} />
+        </div>
         {/* W2's slab attaches here (R4). The slot CLIPS: the slab slides out
             from under the scorebug rather than appearing beside it, so the
             wrapper owns the `overflow: hidden` and the slab owns the

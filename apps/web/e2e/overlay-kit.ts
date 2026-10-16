@@ -138,6 +138,25 @@ export async function signInAs(page: Page, email: string): Promise<void> {
 }
 
 /**
+ * R2007 — a FRESH staff user with an org of their own (the capture-records-admin recipe), signed in on `page`. For the
+ * staff overlay gallery: parallel-safe, and the shared Pro owner's staff bit is never borrowed.
+ */
+export async function signInStaff(page: Page): Promise<void> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const email = `delivered+ovlgallery-${tag}@resend.dev`;
+  await withDb(async (sql) => {
+    const [{ id: uid }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, is_staff, staff_role)
+      values (${email}, ${"Overlay Gallery Staff " + tag}, true, true, 'support') returning id`;
+    const [{ id: orgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status, created_by)
+      values (${"Overlay Gallery " + tag}, ${`ovlgal-${tag}`}, 'active', ${uid}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${uid}, 'owner')`;
+  });
+  await signInAs(page, email);
+}
+
+/**
  * A LIVE hockey fixture in a public competition, in an org of its own, with one
  * card of every class on the ledger — the state the overlay's three chip tones
  * and its live dot need, and the first thing in this repo ever to render them.

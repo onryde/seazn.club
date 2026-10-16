@@ -25,6 +25,9 @@ import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
 import { hasDetailBand, overlayModel } from "@/lib/overlay-model";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+import type { OverlayMoment } from "@/lib/overlay-moments";
+import { OVERLAY_TEMPLATES, cardRegionFor, type TemplateId } from "../template-registry";
+import { declaredValue, parseCss, readGlobalsCss } from "@/components/v2/scorepad/v3/__tests__/_globals-css";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DICT: Record<string, string> = JSON.parse(
@@ -111,5 +114,124 @@ describe("hasDetailBand is the predicate the bar actually used", () => {
     expect(hasDetailBand(model({ result: "Home won by 12 runs" }))).toBe(true);
     expect(hasDetailBand(model({ detail: [{ text: "x" }] as never }))).toBe(true);
     expect(hasDetailBand(model({}))).toBe(false);
+  });
+});
+
+// R2007 (spec 2026-10-15 §4.7) — the slab attaches where the TEMPLATE says, read off its registry entry. The two shipped
+// values are typed from the spec's placement (bar → bar, bug → bug), so a registry edit that swaps them goes red too.
+const SPEC_PLACEMENT: Record<TemplateId, "bar" | "bug"> = { bar: "bar", bug: "bug" };
+const PINNED: OverlayMoment = { kind: "goal", headline: "GOAL", line: "Milton Keynes Rovers", tone: "led", seq: 9 };
+
+const slotClassOf = (html: string): string | undefined =>
+  /data-testid="ovl-moment-slot" class="([^"]*)"/.exec(html)?.[1];
+
+describe("the slot's placement is the template's own `slabPlacement`", () => {
+  it("for every registry entry, the slot class is ovl-moment-slot--<def.slabPlacement>, and it holds the slab", () => {
+    let checked = 0;
+    for (const def of Object.values(OVERLAY_TEMPLATES)) {
+      expect(def.slabPlacement, def.id).toBe(SPEC_PLACEMENT[def.id]);
+      const html = renderToStaticMarkup(
+        <OverlayStage {...props(live([]))} style={def.id} snapshotOnly pinnedMoment={PINNED} />,
+      );
+      expect(slotClassOf(html)?.split(" "), def.id).toContain(`ovl-moment-slot--${def.slabPlacement}`);
+      expect(html, `${def.id}: the pinned slab renders in the slot`).toMatch(
+        /data-testid="ovl-moment-slot"[^>]*>(?:(?!<\/div>).)*data-testid="overlay-moment"/s,
+      );
+      checked++;
+    }
+    console.log(`templates checked: ${checked}`);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+    expect(checked).toBe(2);
+  });
+
+  it("no pinned moment and nothing new on the ledger: the slot is empty", () => {
+    const html = renderToStaticMarkup(<OverlayStage {...props(live([]))} style="bug" snapshotOnly />);
+    expect(html).not.toContain('data-testid="overlay-moment"');
+  });
+});
+
+// R2007 step 4.2b (coordinator decision G2) — the stage hands the card layout its box and its region as inline custom
+// properties on `.ovl-canvas`. The expected values are the def's own declared box and `cardRegionFor` of it (whose rule is
+// pinned with typed numbers in template-registry.test.ts).
+describe("the stage writes --ovl-safe-* and --ovl-card-* from the registry entry", () => {
+  const canvasStyleOf = (html: string): string =>
+    /data-testid="ovl-root"[^>]*style="([^"]*)"/.exec(html)?.[1] ?? "";
+
+  it("for every registry entry", () => {
+    let checked = 0;
+    for (const def of Object.values(OVERLAY_TEMPLATES)) {
+      const style = canvasStyleOf(renderToStaticMarkup(<OverlayStage {...props(live([]))} style={def.id} />));
+      const box = def.sceneCardSafeArea;
+      const region = cardRegionFor(box)!;
+      const want: Record<string, number> = {
+        "--ovl-safe-x": box.x,
+        "--ovl-safe-y": box.y,
+        "--ovl-safe-w": box.width,
+        "--ovl-safe-h": box.height,
+        "--ovl-card-x": region.x,
+        "--ovl-card-y": region.y,
+        "--ovl-card-w": region.width,
+        "--ovl-card-h": region.height,
+      };
+      for (const [prop, px] of Object.entries(want)) expect(style, `${def.id} ${prop}`).toContain(`${prop}:${px}px`);
+      checked++;
+    }
+    console.log(`templates checked: ${checked}`);
+    expect(checked).toBe(2);
+  });
+});
+
+// R2007 steps 7 and 9 (review m1) — each `sceneCardSafeArea` is DECLARED from its template's CSS layout rule, never
+// copied from a measurement. This holds the declaration to the stylesheet it was derived from: move a bar band or the
+// bug's width and the box must move with it. The expected numbers are the CSS custom properties, never a render.
+describe("each template's declared box is the box its CSS lays out", () => {
+  const RULES = parseCss(readGlobalsCss());
+  const px = (selector: string, prop: string): number => {
+    let found: string | undefined;
+    for (const r of RULES) if (r.selector === selector && r.conditions.length === 0) found = declaredValue(r, prop) ?? found;
+    const m = /^(\d+(?:\.\d+)?)px$/.exec(found ?? "");
+    if (!m) throw new Error(`${selector} { ${prop} } is not a px length: ${found}`);
+    return Number(m[1]);
+  };
+
+  it("the bar: x = .ovl-bar left, width = canvas − left − right, y = 1080 − bottom − main − band", () => {
+    const bottom = px(".ovl-canvas", "--ovl-bar-bottom");
+    const main = px(".ovl-canvas", "--ovl-bar-main-h");
+    const band = px(".ovl-canvas", "--ovl-bar-band-h");
+    const left = px(".ovl-bar", "left");
+    const right = px(".ovl-bar", "right");
+    expect(OVERLAY_TEMPLATES.bar.sceneCardSafeArea).toEqual({
+      x: left,
+      y: 1080 - bottom - main - band,
+      width: 1920 - left - right,
+      height: main + band,
+    });
+  });
+
+  it("the bug: its left, top and width; height = header + two rows + footer (the most any sport shows)", () => {
+    const left = px(".ovl-canvas", "--ovl-bug-left");
+    const top = px(".ovl-canvas", "--ovl-bug-top");
+    const width = px(".ovl-canvas", "--ovl-bug-w");
+    const header = px(".ovl-canvas", "--ovl-bug-header-h");
+    const row = px(".ovl-canvas", "--ovl-bug-row-h");
+    const footer = px(".ovl-canvas", "--ovl-bug-footer-h");
+    expect(OVERLAY_TEMPLATES.bug.sceneCardSafeArea).toEqual({ x: left, y: top, width, height: header + 2 * row + footer });
+  });
+
+  it("…and the bug's rules READ those properties, so the box and the paint cannot drift apart", () => {
+    const decl = (selector: string, prop: string): string | undefined => {
+      let found: string | undefined;
+      for (const r of RULES) if (r.selector === selector && r.conditions.length === 0) found = declaredValue(r, prop) ?? found;
+      return found;
+    };
+    expect(decl(".ovl-bug", "left")).toBe("var(--ovl-bug-left)");
+    expect(decl(".ovl-bug", "top")).toBe("var(--ovl-bug-top)");
+    expect(decl(".ovl-bug", "width")).toBe("var(--ovl-bug-w)");
+    expect(decl(".ovl-bug-header", "height")).toBe("var(--ovl-bug-header-h)");
+    expect(decl(".ovl-bug-row", "height")).toBe("var(--ovl-bug-row-h)");
+    expect(decl(".ovl-bug-footer", "height")).toBe("var(--ovl-bug-footer-h)");
+    expect(decl(".ovl-bar", "bottom")).toBe("var(--ovl-bar-bottom)");
+    expect(decl(".ovl-bar-main", "height")).toBe("var(--ovl-bar-main-h)");
+    expect(decl(".ovl-detail-band", "height")).toBe("var(--ovl-bar-band-h)");
   });
 });

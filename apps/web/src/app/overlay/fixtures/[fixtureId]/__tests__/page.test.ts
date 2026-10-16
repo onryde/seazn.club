@@ -17,6 +17,7 @@
 // `getDictionary`, `overlayStartLabel`) stays real.
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE } from "@/lib/realtime-purpose";
 
@@ -36,6 +37,23 @@ const loadOverlayLiveData = vi.fn();
 vi.mock("@/server/overlay/load", () => ({
   loadOverlayLiveData: (...a: unknown[]) => loadOverlayLiveData(...a),
 }));
+
+// R2007 (review m5b) — the registry gains a RETIRED entry, so `?template=gone` can prove an OBS URL carrying a retired
+// id keeps working. `resolveTemplate` is the REAL `resolveTemplateFrom` over that registry; bar and bug are untouched,
+// so every other test in this file reads the shipped entries.
+vi.mock("@/components/overlay/template-registry", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("@/components/overlay/template-registry")>();
+  const OVERLAY_TEMPLATES = {
+    ...orig.OVERLAY_TEMPLATES,
+    gone: { ...orig.OVERLAY_TEMPLATES.bug, id: "gone", retired: { replacedBy: "bug" } },
+  } as typeof orig.OVERLAY_TEMPLATES;
+  return {
+    ...orig,
+    OVERLAY_TEMPLATES,
+    resolveTemplate: (requested: string | null | undefined, sportKey: string) =>
+      orig.resolveTemplateFrom(OVERLAY_TEMPLATES, requested, sportKey, orig.defaultTemplateFor(sportKey)),
+  };
+});
 
 const side = (id: string, name: string, short: string) => ({
   entrantId: id,
@@ -185,4 +203,38 @@ describe("OverlayPage — the OBS URL's signed key reaches <OverlayStage> with t
     }
     expect(checked).toBe(cases.length);
   });
+});
+
+// R2007 decision 2 (spec 2026-10-15 §4.4): `?template=` is read first, `?style=` is the alias forever, and an unknown
+// `template` resolves to the sport default — never to `style`'s value. The page's element is RENDERED, so the
+// assertion reads the `data-style` the OBS page actually carries, anchored on `="` (an omitted prop serialises as
+// "$undefined", AGENTS.md).
+describe("OverlayPage — ?template= wins, ?style= is the alias (R2007)", () => {
+  async function styleOf(sportKey: string, query: Record<string, string>): Promise<string | undefined> {
+    publicFixtureSlugs.mockResolvedValue({ orgSlug: "test-org", compSlug: "test-comp", divSlug: "open" });
+    const data = baseFixtureData();
+    getPublicFixture.mockResolvedValue({ ...data, division: { ...data.division, sport_key: sportKey } });
+    hasFeature.mockResolvedValue(true);
+    loadOverlayLiveData.mockResolvedValue(baseInitial);
+    const { default: OverlayPage } = await import("../page");
+    const el = (await OverlayPage({
+      params: Promise.resolve({ fixtureId: "f1" }),
+      searchParams: Promise.resolve(query),
+    })) as unknown as ReactElement;
+    const html = renderToStaticMarkup(el);
+    return /data-testid="ovl-root" data-style="([^"]*)"/.exec(html)?.[1];
+  }
+
+  const ROWS: [sport: string, query: Record<string, string>, want: string, why: string][] = [
+    ["football", { template: "bug", style: "bar" }, "bug", "template wins when present"],
+    ["football", { style: "bar" }, "bar", "style is the alias"],
+    ["football", { template: "nope", style: "bar" }, "bug", "an unknown template → the sport default, not style"],
+    ["cricket", {}, "bar", "no params → cricket's default"],
+    ["football", { template: "gone" }, "bug", "a retired id → its replacement (review m5b)"],
+  ];
+  for (const [sport, query, want, why] of ROWS) {
+    it(`${sport} ${JSON.stringify(query)} → data-style="${want}" (${why})`, async () => {
+      expect(await styleOf(sport, query)).toBe(want);
+    });
+  }
 });

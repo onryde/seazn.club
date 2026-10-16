@@ -11,7 +11,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { OverlayCricketToss } from "@/lib/overlay-cricket";
 import { warmingTossLine } from "@/lib/overlay-openers";
 import type { OverlayHighlight, OverlayModel, OverlaySide } from "@/lib/overlay-model";
-import type { OverlayThemeProps } from "./theme-registry";
+import type { OverlayThemeProps } from "./template-registry";
 
 export type SlateState = "warming" | "ended" | "live";
 

@@ -1365,7 +1365,15 @@ body {
    RE-PIN (2026-09-09): appended at the END of the file rather than
    immediately after the `:root { --sport-* }` block the brief named — that
    block now sits at :1134 (moved by intervening commits since the brief's
-   line pin), and the plan's own intent was "append", not "insert mid-file". */
+   line pin), and the plan's own intent was "append", not "insert mid-file".
+
+   R2007 (spec 2026-10-15 §4.5, D9 — `_THEMES.md` amended the same day): two
+   floors now bind every rule below. NO overlay text under 30 px at 1920×1080
+   (a 1080p stream watched on a phone shows the canvas at ~0.2–0.44×, and a
+   21 px caption lands under 5 px), and the bar's bottom edge at least 150 px
+   off the canvas floor, clear of YouTube's player controls (~14 %).
+   `overlay-readability-css.test.ts` scans every `.ovl-` font-size, and the
+   gallery e2e reads the computed sizes in every template × sport × state. */
 .ovl-canvas {
   position: absolute;
   top: 0;
@@ -1390,7 +1398,17 @@ body {
    derived from them (see `.ovl-moment-slot--bar`). Typed as literals in both
    places they drifted: the slot froze their SUM at 231 while the detail band
    is conditional, so a bar without one left the slab floating 51 px clear. */
-.ovl-canvas { --ovl-bar-main-h: 126px; --ovl-bar-band-h: 51px; --ovl-bar-bottom: 54px; }
+/* R2007 (D9): the bottom inset is 15 % of the canvas (≥ 150 px, clear of a
+   player's controls) and the band grows to hold 30 px text. The registry's
+   `bar.sceneCardSafeArea` is DERIVED from these three and `.ovl-bar`'s left /
+   right (`overlay-slab-placement.test.tsx` holds the two together). */
+.ovl-canvas { --ovl-bar-main-h: 126px; --ovl-bar-band-h: 60px; --ovl-bar-bottom: 162px; }
+/* R2007 — the corner bug's geometry, as custom properties for the same reason
+   as the bar's: the registry's `bug.sceneCardSafeArea` and the moment slot are
+   derived from them. 560 wide (was 480) so the 30 px header and footer keep
+   their words; the tallest bug is header + two side rows + footer. */
+.ovl-canvas { --ovl-bug-left: 60px; --ovl-bug-top: 54px; --ovl-bug-w: 560px;
+              --ovl-bug-header-h: 60px; --ovl-bug-row-h: 90px; --ovl-bug-footer-h: 56px; }
 .ovl-bar-main { display: flex; align-items: stretch; height: var(--ovl-bar-main-h);
                 background: var(--sport-board); }
 /* MAX-WIDTH 480 (product ruling 2026-09-10, `_THEMES.md` §3). The cell has a
@@ -1405,7 +1423,7 @@ body {
                  gap: 3px; min-width: 225px; max-width: 480px; padding: 0 33px;
                  background: var(--sport-board-2); }
 .ovl-live-row { display: flex; align-items: center; gap: 12px;
-                font-size: 24px; font-weight: 600; letter-spacing: 0.02em; }
+                font-size: 30px; font-weight: 600; letter-spacing: 0.02em; }
 /* Review round 1, CRITICAL: `--sport-ink` 1-px hairline, not `--sport-board`
    — `_THEMES.md` §2/§3, "the hairline… not the fill — is what satisfies WCAG
    1.4.11 here". Without it hockey's live dot measures 2.75:1 on `board-2`,
@@ -1425,7 +1443,7 @@ body {
    trades one composition defect for another; `overflow: hidden` sits on the
    line rather than on `.ovl-live-cell` so the live dot's 15 px glow
    (`box-shadow`, which paints outside its box) is not clipped with it. */
-.ovl-context { font-size: 21px; font-weight: 500; white-space: nowrap; overflow: hidden;
+.ovl-context { font-size: 30px; font-weight: 500; white-space: nowrap; overflow: hidden;
                color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-team-cell { position: relative; display: flex; align-items: center; gap: 24px;
                  flex: 1 1 auto; min-width: 0; padding: 0 42px; }
@@ -1433,12 +1451,12 @@ body {
 .ovl-team-cell--hero { flex: 1 1 0; }
 /* Closed innings + absolute target between the live cell and the hero. */
 .ovl-innings-strip { display: flex; align-items: center; padding: 0 24px;
-                     font-size: 21px; font-weight: 600; letter-spacing: 0.02em;
+                     font-size: 30px; font-weight: 600; letter-spacing: 0.02em;
                      color: color-mix(in srgb, var(--sport-ink) 70%, transparent);
                      white-space: nowrap; background: var(--sport-board-2);
                      border-right: 1px solid color-mix(in srgb, var(--sport-ink) 12%, transparent); }
-.ovl-bug-innings-strip { display: flex; align-items: center; min-height: 36px;
-                         padding: 0 18px 0 26px; font-size: 18px; font-weight: 600;
+.ovl-bug-innings-strip { display: flex; align-items: center; min-height: 48px;
+                         padding: 0 18px 0 26px; font-size: 30px; font-weight: 600;
                          letter-spacing: 0.02em;
                          color: color-mix(in srgb, var(--sport-ink) 70%, transparent);
                          background: var(--sport-board-2); white-space: nowrap;
@@ -1489,17 +1507,21 @@ body {
              letter-spacing: 0.08em;
              color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
 .ovl-detail-band { display: flex; align-items: center; gap: 33px; height: var(--ovl-bar-band-h);
-                   padding: 0 33px; font-size: 24px; font-weight: 500;
+                   padding: 0 33px; font-size: 30px; font-weight: 500;
                    background: color-mix(in srgb, var(--sport-board) 90%, transparent);
                    color: color-mix(in srgb, var(--sport-ink) 92%, transparent); }
 /* `flex: none` because a 1.5px rule that shrinks is a rule that disappears:
    once the entries below can shrink (see `.ovl-detail-label`), every flexible
    item in the row is a candidate, and the separator has the least to give. */
-.ovl-detail-sep { flex: none; width: 1.5px; height: 24px; background: rgba(255, 255, 255, 0.2); }
+.ovl-detail-sep { flex: none; width: 1.5px; height: 30px; background: rgba(255, 255, 255, 0.2); }
 /* The chase/result sentence leads the row and is the longest single string
    either theme carries ("NOR won by 8 wickets with 12 balls remaining"), so it
-   takes §4's ellipsis on the same terms as an entry's label. */
-.ovl-detail-emphasis { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+   takes §4's ellipsis on the same terms as an entry's label. And §4 gives it
+   PRIORITY: `flex-shrink: 0` makes the entries beside it yield first (a flex row
+   shrinks every item in proportion, which at the 30 px floor cut cricket's chase
+   on the bug to "N…" beside two names), and `max-width: 100%` is where it stops —
+   a sentence wider than its whole row still ellipsises rather than clipping. */
+.ovl-detail-emphasis { flex-shrink: 0; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis;
                        font-weight: 600; color: var(--sport-ink); }
 /* `_THEMES.md` §4 rule 2 (product ruling 2026-09-10) — "an entry is one unit".
    Both renderers wrapped each detail entry in `className="contents"`, and
@@ -1545,12 +1567,14 @@ body {
    a defeated `nowrap` still reaches the tile. */
 .ovl-detail-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ovl-detail-copy { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
-/* Live this-over chips — larger circles than the end-of-over pill strip. */
+/* Live this-over chips. R2007 (D9): the run inside is held to the 30 px floor,
+   so the circle grows round it (44 in a 60 px band). */
 .ovl-ball-glyphs { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* The glyph's width is a floor: a one-character ball stays a 44 px circle, a two-letter extra ("wd") becomes a pill. */
 .ovl-ball-glyph {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; border-radius: 999px;
-  font-size: 15px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
+  min-width: 44px; height: 44px; padding: 0 8px; box-sizing: border-box; border-radius: 999px;
+  font-size: 30px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--sport-led) 22%, transparent);
   color: var(--sport-led);
   border: 1px solid color-mix(in srgb, var(--sport-ink) 35%, transparent);
@@ -1568,22 +1592,22 @@ body {
 
 
 /* Theme B — corner bug (_THEMES.md §4) */
-.ovl-bug { position: absolute; left: 60px; top: 54px; width: 480px;
+.ovl-bug { position: absolute; left: var(--ovl-bug-left); top: var(--ovl-bug-top); width: var(--ovl-bug-w);
            border-radius: 12px; overflow: hidden;
            background: var(--sport-board);
            box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5);
            /* Above `.ovl-slate` (sibling match card) — not a child of it. */
            z-index: 3; }
-.ovl-bug-header { display: flex; align-items: center; gap: 12px; height: 48px;
+.ovl-bug-header { display: flex; align-items: center; gap: 12px; height: var(--ovl-bug-header-h);
                   padding: 0 21px; background: var(--sport-board-2);
-                  font-size: 21px; font-weight: 600; }
+                  font-size: 30px; font-weight: 600; }
 .ovl-bug-header .ovl-live-dot { width: 13.5px; height: 13.5px; }
 /* Fix round 3, F4 — the status/live word, split out of `.ovl-bug-context`
    (§4: "'Live' Geist 21/600, context Geist 19.5/500") so the two can sit
    side by side in the header's own flex row. Inherits `.ovl-bug-header`'s
    21px/600 by default; declared explicitly so it does not drift if that
    rule's own font properties ever change. */
-.ovl-bug-status { font-size: 21px; font-weight: 600; }
+.ovl-bug-status { font-size: 30px; font-weight: 600; }
 /* `_THEMES.md` §4 (product ruling 2026-09-10) — "its context slot is guarded
    like the bar's", the twin of `.ovl-context` above. About 291px ≈ 32
    characters are free in this 48px header after the status word, the gaps and
@@ -1593,10 +1617,10 @@ body {
    together mean this line clips rather than growing the header. The renderer
    ALSO drops the field once decided (`overlay-bug.tsx`) — one guard for the
    sentence §4 sends to the footer, one for every other long label. */
-.ovl-bug-context { font-size: 19.5px; font-weight: 500; min-width: 0;
+.ovl-bug-context { font-size: 30px; font-weight: 500; min-width: 0;
                    white-space: nowrap; overflow: hidden;
                    color: color-mix(in srgb, var(--sport-ink) 65%, transparent); }
-.ovl-bug-brand { margin-left: auto; font-size: 24px; font-weight: 600;
+.ovl-bug-brand { margin-left: auto; font-size: 30px; font-weight: 600;
                  letter-spacing: 0.08em;
                  color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 /* Fix round 5, I3 — §4's header, right-hand slot: "brand Barlow 24/600 .08em
@@ -1611,7 +1635,7 @@ body {
 .ovl-bug-clock { margin-left: auto; font-size: 33px; font-weight: 700;
                  color: var(--sport-led); }
 .ovl-bug-row { position: relative; display: flex; align-items: center; gap: 18px;
-               height: 90px; padding: 0 24px; }
+               height: var(--ovl-bug-row-h); padding: 0 24px; }
 .ovl-bug-code { width: 96px; font-size: 48px; font-weight: 600; }
 .ovl-bug-cells { display: flex; gap: 18px; font-size: 39px; font-weight: 600;
                  color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
@@ -1643,7 +1667,7 @@ body {
    produce is not clipped anywhere now: `.ovl-detail-label` ellipses it before
    the tile can see it, per §4's 2026-09-10 correction. */
 .ovl-bug-footer { display: flex; align-items: center; justify-content: flex-start; gap: 18px;
-                  height: 45px; padding: 0 24px; font-size: 21px; font-weight: 500;
+                  height: var(--ovl-bug-footer-h); padding: 0 24px; font-size: 30px; font-weight: 500;
                   white-space: nowrap;
                   color: color-mix(in srgb, var(--sport-ink) 85%, transparent); }
 
@@ -1695,21 +1719,26 @@ body {
                     font-size: 30px; font-weight: 600; letter-spacing: 0.08em;
                     color: color-mix(in srgb, var(--sport-ink) 75%, transparent); z-index: 2;
                     text-shadow: 0 1px 8px color-mix(in srgb, var(--sport-board) 70%, transparent); }
-/* Centre the card in the safe frame ABOVE the composited scorebug. Bottom
-   pad = bar inset + main + detail band (always reserved) + 24px gap — the
-   same stack `.ovl-moment-slot--bar` uses. z-index below the scorebug so a
-   tall card never paints over team names / LED. */
-.ovl-slate-content { position: absolute; inset: 0; display: flex; flex-direction: column;
+/* R2007 step 9b (coordinator decision G2): the card is laid out in the REGION
+   the template leaves free — `cardRegionFor(def.sceneCardSafeArea)`, written
+   by the stage as `--ovl-card-x/y/w/h` on `.ovl-canvas` — and centred in it.
+   It used to be centred on the whole canvas with a bottom pad that cleared
+   only the BAR, so on the bug it sat under the scorebug. Beside the bug it is
+   a 1180 × 936 column; above the bar a 1728 × 636 strip, which is what the
+   compact sizes below are measured against. No region, no card: the stage
+   does not mount one. z-index below the scorebug either way. */
+.ovl-slate-content { position: absolute;
+                      left: var(--ovl-card-x); top: var(--ovl-card-y);
+                      width: var(--ovl-card-w); height: var(--ovl-card-h);
+                      display: flex; flex-direction: column;
                       align-items: center; justify-content: center; text-align: center;
-                      padding: 72px 96px
-                               calc(var(--ovl-bar-bottom) + var(--ovl-bar-main-h) + var(--ovl-bar-band-h) + 24px);
                       z-index: 1; }
 .ovl-slate-card {
-  display: flex; flex-direction: column; align-items: center; gap: 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
   max-width: 1100px; width: 100%;
   max-height: 100%;
   overflow: hidden;
-  padding: 44px 56px 40px;
+  padding: 32px 48px;
   border-radius: 28px;
   /* Plate ~30 points more open than the first cut (92% → 62%) so the camera
      reads through; ink / LED border stay full strength (not `opacity` on the
@@ -1723,77 +1752,87 @@ body {
     0 24px 64px color-mix(in srgb, #000 35%, transparent),
     0 0 0 1px color-mix(in srgb, var(--sport-led) 28%, transparent);
 }
+/* The pill is a BLOCK, not a flex container: flex centres an overflowing text run past both edges, so a long context
+   lost its first word ("RESULT"). As a block it starts at its left and ellipsises at its end; its column-flex parent
+   (align-items: center) still shrink-wraps and centres it. */
 .ovl-slate-pill {
-  display: inline-flex; align-items: center; justify-content: center;
-  max-width: 90%; padding: 10px 28px; border-radius: 9999px;
+  display: block;
+  max-width: 90%; padding: 8px 30px; border-radius: 9999px;
   background: color-mix(in srgb, var(--sport-board-2) 62%, #000);
   border: 1px solid color-mix(in srgb, var(--sport-led) 40%, transparent);
-  font-size: 18px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+  font-size: 30px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: color-mix(in srgb, var(--sport-ink) 82%, transparent);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ovl-slate-headline { font-size: 64px; font-weight: 800; letter-spacing: 0.02em;
                        color: var(--sport-ink); text-transform: uppercase;
-                       line-height: 1.08; max-width: 1400px;
+                       line-height: 1.04; max-width: 1400px;
                        text-shadow: 0 2px 14px color-mix(in srgb, var(--sport-board) 75%, transparent); }
-.ovl-slate-line { margin-top: 4px; font-size: 24px; font-weight: 500;
+.ovl-slate-line { font-size: 30px; font-weight: 500;
                    color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-slate-matchup {
   display: flex; align-items: center; justify-content: center; gap: 36px;
-  margin-top: 8px;
 }
-.ovl-slate-team { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.ovl-slate-team { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+/* The tile's width is a floor, not a fixed size: at the 32 px score a cricket line ("94/8 (10.2)") is wider than the
+   square. */
 .ovl-slate-tile {
-  width: 220px; height: 220px; border-radius: 28px;
+  min-width: 164px; height: 164px; padding: 0 24px; border-radius: 24px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; box-shadow: 0 18px 40px rgba(0,0,0,0.35);
 }
 .ovl-slate-tile-code {
-  font-size: 72px; font-weight: 800; letter-spacing: 0.04em; line-height: 1;
+  font-size: 64px; font-weight: 800; letter-spacing: 0.04em; line-height: 1;
   color: #fff; text-transform: uppercase;
 }
 .ovl-slate-tile-score {
-  font-size: 28px; font-weight: 600; color: color-mix(in srgb, #fff 88%, transparent);
+  font-size: 32px; font-weight: 600; color: color-mix(in srgb, #fff 88%, transparent); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .ovl-slate-vs {
   font-size: 42px; font-weight: 600; letter-spacing: 0.04em;
   color: color-mix(in srgb, var(--sport-ink) 45%, transparent);
-  text-transform: lowercase; padding-bottom: 48px;
+  /* Name pill (30 px + 2 × 8 padding) + the team's 14 px gap: "vs" centres on the tiles. */
+  text-transform: lowercase; padding-bottom: 66px;
 }
+/* A block for the same reason as .ovl-slate-pill: only a block draws the ellipsis on a club name that overflows. */
 .ovl-slate-name-pill {
-  display: inline-flex; max-width: 280px; padding: 10px 22px; border-radius: 9999px;
+  display: block; max-width: 420px; padding: 8px 24px; border-radius: 9999px;
   background: var(--sport-ink); color: var(--sport-board);
-  font-size: 20px; font-weight: 700;
+  font-size: 30px; font-weight: 700; line-height: 1.2;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ovl-slate-highlights {
-  display: flex; gap: 24px; margin-top: 4px; width: min(920px, 100%);
+  display: flex; gap: 24px; width: min(960px, 100%);
 }
+/* R2007 (D9): role, name and figures all clear the 30 px floor, so the box
+   reads as two lines — the role and the name on one, the figures under — to
+   stay inside the 636 px region above the bar. */
 .ovl-slate-highlight {
   flex: 1; min-width: 0;
   background: color-mix(in srgb, var(--sport-board-2) 48%, transparent);
   border: 1px solid color-mix(in srgb, var(--sport-led) 32%, transparent);
-  border-radius: 16px; padding: 18px 22px; text-align: left;
-  display: flex; flex-direction: column; gap: 6px;
+  border-radius: 16px; padding: 12px 22px; text-align: left;
+  display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 14px; row-gap: 2px;
 }
 .ovl-slate-highlight--empty { visibility: hidden; }
 .ovl-slate-highlight-role {
-  font-size: 14px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
-  color: color-mix(in srgb, var(--sport-ink) 55%, transparent);
+  font-size: 30px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--sport-ink) 60%, transparent);
 }
-.ovl-slate-highlight-name { font-size: 26px; font-weight: 700; color: var(--sport-ink); }
-.ovl-slate-highlight-stats { display: flex; align-items: baseline; gap: 12px; }
+.ovl-slate-highlight-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                             font-size: 32px; font-weight: 700; color: var(--sport-ink); }
+.ovl-slate-highlight-stats { display: flex; align-items: baseline; gap: 12px; flex-basis: 100%; }
 .ovl-slate-highlight-line {
-  font-size: 28px; font-weight: 700; color: var(--sport-ink);
+  font-size: 38px; font-weight: 700; color: var(--sport-ink); line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
 .ovl-slate-highlight-detail {
-  font-size: 18px; font-weight: 500;
+  font-size: 30px; font-weight: 500;
   color: color-mix(in srgb, var(--sport-ink) 55%, transparent);
 }
 .ovl-slate-warming-dots { display: flex; align-items: center; justify-content: center;
-                           gap: 12px; margin-top: 4px; }
+                           gap: 12px; }
 .ovl-slate-warming-dots span { width: 15px; height: 15px; border-radius: 9999px;
                                 background: var(--sport-led);
                                 animation: ovl-breathe 2s ease-in-out infinite; }
@@ -1846,13 +1885,13 @@ body {
   overflow: hidden;
   pointer-events: none;
 }
-/* §4 — the bug is inset left 60, width 480, so its right edge is 540; the rows
-   start below its 48 px header. The slab is the height of the bug's body and
-   emerges rightward from behind it. */
+/* §4 — the slab emerges rightward from behind the bug's right edge, its top
+   flush with the first side row (below the header). R2007: derived from the
+   bug's own custom properties, so a wider bug moves the slab with it. */
 .ovl-moment-slot--bug {
-  left: 540px;
+  left: calc(var(--ovl-bug-left) + var(--ovl-bug-w));
   right: 0;
-  top: 102px;
+  top: calc(var(--ovl-bug-top) + var(--ovl-bug-header-h));
   height: 216px;
 }
 /* §3 — the bar is inset left/right 72, bottom 54, and stands 177 tall (126 main
@@ -1966,7 +2005,7 @@ body {
   max-width: 690px;
 }
 .ovl-slab__line {
-  font-size: 21px;
+  font-size: 30px;
   font-weight: 600;
 }
 
@@ -2014,9 +2053,9 @@ body {
   background: color-mix(in srgb, var(--sport-board) 92%, transparent);
   color: var(--sport-ink);
   border-left: 4px solid var(--sport-led);
-  padding: 20px 28px;
+  padding: 16px 28px;
   gap: 24px;
-  max-width: 860px;
+  max-width: 1000px;
   font-variant-numeric: tabular-nums;
 }
 .ovl-end-of-over--full {
@@ -2030,7 +2069,7 @@ body {
 .ovl-end-of-over-main {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   flex: 1.2;
 }
@@ -2045,7 +2084,7 @@ body {
 }
 .ovl-end-of-over-title {
   color: var(--sport-led);
-  font-size: 23px;
+  font-size: 30px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2053,7 +2092,8 @@ body {
 .ovl-end-of-over-batter,
 .ovl-end-of-over-bowler,
 .ovl-end-of-over-line {
-  font-size: 20px;
+  font-size: 30px;
+  line-height: 1.2;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -2061,10 +2101,9 @@ body {
 }
 .ovl-end-of-over-bowler {
   color: color-mix(in srgb, var(--sport-ink) 75%, transparent);
-  font-size: 17px;
 }
 .ovl-end-of-over-side-label {
-  font-size: 14px;
+  font-size: 30px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2078,13 +2117,13 @@ body {
 .ovl-end-of-over-glyph {
   background: color-mix(in srgb, var(--sport-led) 18%, transparent);
   color: var(--sport-led);
-  padding: 5px 13px;
+  padding: 3px 12px;
   border-radius: 5px;
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 700;
 }
 .ovl-end-of-over-runs {
-  font-size: 28px;
+  font-size: 36px;
   font-weight: 800;
   color: var(--sport-ink);
 }

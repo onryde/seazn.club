@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { OverlayMatchCard, OverlaySlate, slateStateOf } from "../overlay-slate";
-import type { OverlayThemeProps } from "../theme-registry";
+import type { OverlayThemeProps } from "../template-registry";
 import { t } from "@/lib/i18n-runtime";
 import { nameLadder, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 

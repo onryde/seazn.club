@@ -207,7 +207,7 @@ export interface OverlayModel {
  * inside the bar: an empty `chase` string rendered no band and must keep
  * rendering none.
  *
- * It lives HERE rather than in `theme-registry.ts` because that module imports
+ * It lives HERE rather than in `template-registry.ts` because that module imports
  * the three theme components, and the bar importing it back would close a
  * cycle. This is a fact about the MODEL and needs nothing else.
  */
