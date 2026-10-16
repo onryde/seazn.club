@@ -1,6 +1,6 @@
 {
  "batch": "lineup-fix",
- "note": "Test-id ledger for the engine lineup fix (owner ruling 2026-10-15, option 1: the engine refuses core.lineup.* for a sport that declares no lineupPolicy - boardgame, carrom, generic - raising their fold major to 2; the golden floor owes them no lineup or squads tokens and their withdrawal stream is re-recorded without lineup events), built against base c781d9c60 (origin/main). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. SCOPE: collected over the seven engine test files this branch changes (src/core/errors.test.ts, lineup-support.test.ts, lineup.events.test.ts, src/testkit/golden-floor.test.ts, golden-floor-streams.test.ts, golden-floor-overlay.test.ts, golden-overlay.test.ts), each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` from the engine directory, DATABASE_URL empty: 212 ids before, 226 after (6 retitled, 14 added, none retired). Every other engine test file is untouched, so its ids cannot move. The apps/web and tools/matrix tests this branch adds or edits (http.test.ts, append-event.test.ts, engine-http.ts) are outside the engine collection root and are not collected.",
+ "note": "Test-id ledger for the engine lineup fix (owner ruling 2026-10-15, option 1: the engine refuses core.lineup.* for a sport that declares no lineupPolicy - boardgame, carrom, generic - raising their fold major to 2; the golden floor owes them no lineup or squads tokens and their withdrawal stream is re-recorded without lineup events), built against base c781d9c60 (origin/main). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. SCOPE: collected over the seven engine test files this branch changes (src/core/errors.test.ts, lineup-support.test.ts, lineup.events.test.ts, src/testkit/golden-floor.test.ts, golden-floor-streams.test.ts, golden-floor-overlay.test.ts, golden-overlay.test.ts), each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` from the engine directory, DATABASE_URL empty: 212 ids before, 228 after (6 retitled, 16 added, none retired). Every other engine test file is untouched, so its ids cannot move. The apps/web and tools/matrix tests this branch adds or edits (http.test.ts, append-event.test.ts, engine-http.ts) are outside the engine collection root and are not collected.",
  "entries": [
   {
    "id": "src/core/lineup.events.test.ts › policy refusals across the strict/replay seam › defaults to the kernel policy when a module declares none",
@@ -82,6 +82,16 @@
    "id": "src/core/lineup-support.test.ts › the premise: which modules declare lineup support › each declining sport's own catalog admits no bench: a bench sheet is not part of what the sport's team sheet may hold",
    "fate": "added",
    "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the refusal is the sport's answer, not the moment's › a sport that DECLARES a lineupPolicy is never refused for lacking one in those moments: it answers the moment, whatever it answers",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy, and, from the review follow-up, the moment ledgers: the refusal is the sport's answer after a withdrawal, a decided result, a finalize, an abandon and an open stoppage)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the refusal is the sport's answer, not the moment's › every lineup type, after a withdrawal, a decided result, a finalize, an abandon and an open stoppage, in all three sports: LINEUP_NOT_SUPPORTED",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy, and, from the review follow-up, the moment ledgers: the refusal is the sport's answer after a withdrawal, a decided result, a finalize, an abandon and an open stoppage)"
   },
   {
    "id": "src/core/lineup.events.test.ts › policy refusals across the strict/replay seam › applies the kernel default policy to a module that declares exactly it: a return is refused by the reducer",

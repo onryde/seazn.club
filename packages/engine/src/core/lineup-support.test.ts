@@ -14,14 +14,14 @@
 // verdict (`planLineupEvents` asks `reduceLineupEvent`), never from the predicate under test.
 import { describe, expect, it } from "vitest";
 import { EngineError, EngineErrorCode } from "./errors.ts";
-import { admitsLineupEvents, foldMatch, foldMatchWithStoppage, type EventEnvelope } from "./events.ts";
+import { admitsLineupEvents, foldMatch, foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "./events.ts";
 import { DEFAULT_LINEUP_POLICY, LINEUP_EVENT_SCHEMAS, type LineupEventType } from "./lineup.ts";
 import type { LineupPair } from "./types.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { benchPair, planLineupEvents } from "../testkit/golden-floor.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
-import { makeEnvelope } from "../testkit/helpers.ts";
+import { buildStream, makeEnvelope } from "../testkit/helpers.ts";
 import { onePlayEvent } from "../testkit/play-event.ts";
 
 const TYPES = Object.keys(LINEUP_EVENT_SCHEMAS) as LineupEventType[];
@@ -229,6 +229,140 @@ describe("a module that declares no lineupPolicy refuses core.lineup.* on the wr
       expect(retired.squads.home.members.find((member) => member.personId === starter)?.onField, `${m.key}: the recorded retirement still folds`).toBe(false);
     });
     expect(replayed).toBe(3 * TYPES.length);
+  });
+});
+
+/** The moments a match can be in when a lineup change arrives, beyond the three `ledgers` covers: after a withdrawal, after a
+ *  decided result, after it was locked by a finalize, after an abandon, and while play is suspended. Each is built from the
+ *  module's own play (the generator, a real `played` event), never from a hand-typed stream. */
+interface Moment {
+  readonly name: string;
+  readonly prefix: EventEnvelope[];
+  /** Why this ledger really is in that moment: read off the fold's own facts, so a moment that quietly collapsed into "mid-match"
+   *  (a withdrawal that did not take, a stream that never decided) fails here and not as a vacuous green. */
+  readonly holds: (m: AnySportModule, s: Scene, prefix: readonly EventEnvelope[]) => void;
+}
+
+/** The module's generator walked to a decided result, renumbered from seq 0 (a void inside the walk would be re-pointed, so a
+ *  walk that holds one is skipped). Null when no seed in range decides: chess's plain cfg decides in one event, so it always can. */
+function decidedWalk(m: AnySportModule, s: Scene): EventEnvelope[] | null {
+  for (let seed = 1; seed <= 40; seed++) {
+    const walk = buildStream(m as never, s.cfg as never, s.lineups, seed, 400);
+    if (walk.some((e) => e.voids !== undefined)) continue;
+    const renumbered = walk.map((e, i) => ev(i, e.type, e.payload));
+    const folded = foldMatchWithStoppage(m as never, s.cfg as never, s.lineups, renumbered);
+    if (outcomeOf(m as never, folded as never) !== null) return renumbered;
+  }
+  return null;
+}
+
+function moments(m: AnySportModule, s: Scene): Moment[] {
+  if (s.played === null) return [];
+  const played = ev(1, s.played.type, s.played.payload);
+  const live = [START(), played];
+  const out: Moment[] = [];
+  const nextPlay = (prefix: readonly EventEnvelope[]) => ev(prefix.length, played.type, played.payload);
+  out.push({
+    name: "after a withdrawal",
+    prefix: [...live, ev(2, "core.forfeit", { by: s.lineups.home.entrantId, reason: "withdrew" })],
+    holds: (mod, sc, prefix) => {
+      const folded = foldMatchWithStoppage(mod as never, sc.cfg as never, sc.lineups, prefix);
+      expect(outcomeOf(mod as never, folded as never), `${mod.key}: a withdrawal decides the match`).not.toBeNull();
+      expect(codeOf(() => write(mod, sc, prefix, nextPlay(prefix))), `${mod.key}: play is refused after a withdrawal`).not.toBeNull();
+    },
+  });
+  const decided = decidedWalk(m, s);
+  if (decided !== null) {
+    out.push({
+      name: "after a decided result",
+      prefix: decided,
+      holds: (mod, sc, prefix) => {
+        const folded = foldMatchWithStoppage(mod as never, sc.cfg as never, sc.lineups, prefix);
+        expect(outcomeOf(mod as never, folded as never), `${mod.key}: the walk decided`).not.toBeNull();
+        // the KERNEL's own answer to a further sport event, so the lineup refusal below is shown to differ from the moment's
+        expect(codeOf(() => write(mod, sc, prefix, nextPlay(prefix))), `${mod.key}: a further sport event is ALREADY_DECIDED`).toBe("ALREADY_DECIDED");
+      },
+    });
+    out.push({
+      name: "after a finalize",
+      prefix: [...decided, ev(decided.length, "core.finalize", {})],
+      holds: (mod, sc, prefix) => {
+        expect(prefix.at(-1)?.type).toBe("core.finalize");
+        expect(codeOf(() => write(mod, sc, prefix, nextPlay(prefix))), `${mod.key}: a further sport event after a finalize`).not.toBeNull();
+      },
+    });
+  }
+  out.push({
+    name: "after an abandon",
+    prefix: [...live, ev(2, "core.abandon", { reason: "weather" })],
+    holds: (mod, sc, prefix) => {
+      expect(codeOf(() => write(mod, sc, prefix, nextPlay(prefix))), `${mod.key}: play is refused after an abandon`).not.toBeNull();
+    },
+  });
+  out.push({
+    name: "during a stoppage",
+    prefix: [...live, ev(2, "core.suspend", { reason: "floodlights" })],
+    holds: (mod, sc, prefix) => {
+      const folded = foldMatchWithStoppage(mod as never, sc.cfg as never, sc.lineups, prefix);
+      expect(folded.stoppage, `${mod.key}: play is suspended`).not.toBeNull();
+      expect(codeOf(() => write(mod, sc, prefix, nextPlay(prefix))), `${mod.key}: a sport event is WRONG_PHASE while play is suspended`).toBe("WRONG_PHASE");
+    },
+  });
+  return out;
+}
+
+describe("the refusal is the sport's answer, not the moment's", () => {
+  // Without this, a gate placed AFTER the kernel's state guards (or switched off by a decided result, an open stoppage, an
+  // abandon) still passes the three ledgers above, and the same lineup change would read ALREADY_DECIDED or WRONG_PHASE: the
+  // answer would depend on when it was sent, and a phone could not tell "this sport has no lineup changes" from "not now".
+  it("every lineup type, after a withdrawal, a decided result, a finalize, an abandon and an open stoppage, in all three sports: LINEUP_NOT_SUPPORTED", () => {
+    let refused = 0;
+    let moment = 0;
+    const kinds = new Set<string>();
+    const sports: string[] = [];
+    forEachSport(({ module: m }) => {
+      if (declares(m)) return;
+      sports.push(m.key);
+      for (const s of scenes(m)) {
+        for (const { name, prefix, holds } of moments(m, s)) {
+          holds(m, s, prefix);
+          kinds.add(name);
+          moment++;
+          for (const type of TYPES) {
+            const where = `${m.key} cfg#${s.cfgIndex} ${name} ${type}`;
+            const candidate = ev(prefix.length, type, payloadOf(type, s.lineups));
+            expect(codeOf(() => write(m, s, prefix, candidate)), where).toBe("LINEUP_NOT_SUPPORTED");
+            refused++;
+          }
+        }
+      }
+    });
+    expect(sports).toEqual(["boardgame", "carrom", "generic"]);
+    // anti-vacuity: all five moments were reached, in every sport, and every cell was counted
+    expect([...kinds].sort()).toEqual(["after a decided result", "after a finalize", "after a withdrawal", "after an abandon", "during a stoppage"]);
+    expect(moment, "moments built").toBeGreaterThanOrEqual(3 * 5);
+    expect(refused, "refusals asserted").toBe(moment * TYPES.length);
+  });
+
+  it("a sport that DECLARES a lineupPolicy is never refused for lacking one in those moments: it answers the moment, whatever it answers", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      if (!declares(m)) return;
+      let own = 0;
+      for (const s of scenes(m)) {
+        for (const { name, prefix, holds } of moments(m, s)) {
+          holds(m, s, prefix);
+          for (const type of TYPES) {
+            const code = codeOf(() => write(m, s, prefix, ev(prefix.length, type, payloadOf(type, s.lineups))));
+            expect(code, `${m.key} cfg#${s.cfgIndex} ${name} ${type}`).not.toBe("LINEUP_NOT_SUPPORTED");
+            checked++;
+            own++;
+          }
+        }
+      }
+      expect(own, `${m.key}: moments reached`).toBeGreaterThan(0);
+    });
+    expect(checked).toBeGreaterThan(8 * 4 * TYPES.length);
   });
 });
 
