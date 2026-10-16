@@ -214,7 +214,9 @@ describe.skipIf(!HAS_DB)("PUT lineups — the bench a catalog does not have", ()
       const [a, b, c] = s.persons as [string, string, string];
       const first = await put(s, [{ person_id: a, slot: "starting", order_no: 1 }]);
       expect(first.status, `${module.key}: first`).toBe(200);
-      // Replacing it with a sheet that has a bench row is refused BEFORE the old rows are deleted.
+      // Replacing it with a sheet that has a bench row is refused, and the lineup on file is still there afterwards.
+      // (Not a placement witness: the whole PUT is one transaction, so a refusal thrown after the writes would roll
+      // them back too. What it pins is that a refused PUT never costs an organiser the sheet they already had.)
       const refused = await put(s, [
         { person_id: b, slot: "starting", order_no: 1 },
         { person_id: c, slot: "bench", order_no: 2 },

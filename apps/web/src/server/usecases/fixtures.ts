@@ -549,8 +549,9 @@ export async function putLineup(
       throw new HttpError(422, `lineup is locked once a fixture is ${fixture.status}`);
     }
     // A catalog that declares no bench takes no bench row. The limit is the catalog's own `benchMax` (lineup-catalog.ts
-    // `benchRefusal`), checked before the eligibility gates and before the delete below, so a refusal writes nothing
-    // and leaves the lineup already on file as it was.
+    // `benchRefusal`), checked before the eligibility gates and before the delete below, so a refusal does no writes
+    // at all and leaves the lineup already on file as it was (the transaction would roll a later throw back as well;
+    // checking first just spends nothing on it).
     const catalog = catalogForFixture(fixture);
     const benchRefused = catalog === null ? null : benchRefusal(catalog, input.slots);
     if (benchRefused !== null) {
