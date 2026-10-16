@@ -14,7 +14,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { fmtTime } from "@/lib/format";
 import { messages } from "@/lib/messages";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
-import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { CHECKIN_BATCH_GAP_MS, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { OpenRoundConfirmBody, OpenRoundControl } from "../open-round-control";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -50,6 +50,9 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   openedAt: null,
   deadlineAt: null,
   windowMinutes: DEADLINE_AFTER_MS / 60_000,
+  staggered: false,
+  batches: [],
+  staggerSpanMinutes: 0,
   scheduledAt: "2026-10-16T19:00:00.000Z",
   press: "open",
   earlierInPlay: [],
@@ -194,6 +197,61 @@ describe("OpenRoundConfirmBody — what will happen, stated before it happens", 
     expect(h).toMatch(new RegExp(`data-testid="open-round-already-note"[^>]*>${esc(pl("runsheet.round.reopenNotice", 3))}<`));
     expect(h).toContain(esc(t("runsheet.round.confirmWindowReinvite", { time: fmtTime(TZ, deadline) })));
     expect(h, "the window does not restart on a reinvite").not.toContain(esc(t("runsheet.round.confirmWindow", { minutes: DEADLINE_AFTER_MS / 60_000 })));
+  });
+
+  // Capacity test 12, the organiser's half (spec §3.2.1, §8.1): a round that staggers must not say "straight away".
+  describe("a staggered round (capacity test 12)", () => {
+    const BATCHES = [0, 1, 2].map((i) => ({
+      fromBoard: 10 * i + 1,
+      toBoard: 10 * i + 10,
+      offsetMs: i * CHECKIN_BATCH_GAP_MS,
+      opensAt: null,
+      closesAt: null,
+    }));
+    /** Minutes from the Open press to the last batch, from the constants: two gaps. */
+    const SPAN = (2 * CHECKIN_BATCH_GAP_MS) / 60_000;
+    const STAGGERED = () => ROUND({ staggered: true, batches: BATCHES, staggerSpanMinutes: SPAN });
+    const dicts: [Locale, Dict][] = [["en", messages as unknown as Dict], ["es", esUi], ["fr", frUi], ["nl", nlUi]];
+    const at = (d: Dict, key: string) => (d as unknown as Record<string, string>)[key]!;
+    const render = (round: OpenRoundView, locale: Locale, dict: Dict) =>
+      renderToStaticMarkup(
+        <DictProvider dict={dict} locale={locale}>
+          <OpenRoundConfirmBody round={round} tz={TZ} />
+        </DictProvider>,
+      );
+
+    it("states the stagger - the last group opens SPAN minutes after the press, each board has the window from ITS group - and never 'straight away', in all four locales", () => {
+      let checked = 0;
+      for (const [locale, dict] of dicts) {
+        const h = render(STAGGERED(), locale, dict);
+        const want = at(dict, "runsheet.round.confirmWindowStaggered").replace("{span}", String(SPAN)).replace("{minutes}", String(DEADLINE_AFTER_MS / 60_000));
+        expect(h, `${locale}: the staggered sentence with the constants' own minutes`).toContain(esc(want));
+        expect(h, `${locale}: never the unstaggered 'straight away' sentence`).not.toContain(esc(at(dict, "runsheet.round.confirmWindow").split("{minutes}")[0]!));
+        expect(want, `${locale}: no unfilled placeholder`).not.toMatch(/\{[a-z]+\}/);
+        checked += 1;
+      }
+      expect(checked, "locales checked").toBe(4);
+      expect(SPAN, "premise: the span is not the window (the two numbers are told apart)").not.toBe(DEADLINE_AFTER_MS / 60_000);
+    });
+
+    it("the pair: a round of one batch (or off) keeps the unstaggered sentence, and a staggered flag with a single batch does too", () => {
+      for (const round of [ROUND(), ROUND({ staggered: true, batches: [BATCHES[0]!], staggerSpanMinutes: 0 })]) {
+        const h = render(round, "en", messages as unknown as Dict);
+        expect(h).toContain(esc(t("runsheet.round.confirmWindow", { minutes: DEADLINE_AFTER_MS / 60_000 })));
+        expect(h).not.toContain(esc(en["runsheet.round.confirmWindowStaggered"]!.split("{span}")[0]!));
+      }
+    });
+
+    it("a reinvite press keeps ITS sentence (the earliest deadline), staggered or not", () => {
+      const deadline = new Date(Date.parse(OPENED) + DEADLINE_AFTER_MS).toISOString();
+      const h = render(
+        ROUND({ ...STAGGERED(), state: "open", openedAt: OPENED, deadlineAt: deadline, press: "reinvite", pairings: [P(1, { owedSeats: 1, invitedAt: OPENED })] }),
+        "en",
+        messages as unknown as Dict,
+      );
+      expect(h).toContain(esc(t("runsheet.round.confirmWindowReinvite", { time: fmtTime(TZ, deadline) })));
+      expect(h).not.toContain(esc(en["runsheet.round.confirmWindowStaggered"]!.split("{span}")[0]!));
+    });
   });
 
   it("an untimed round states no scheduled time", () => {

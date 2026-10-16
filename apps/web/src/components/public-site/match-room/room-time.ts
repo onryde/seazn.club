@@ -12,8 +12,17 @@ export function formatCountdown(ms: number): string {
 
 /** "19:20" — a 24-hour clock in the viewer's own timezone (the canvas's
  *  face; `2-digit` alone renders a 12-hour clock in en). */
-export function formatTimeOfDay(iso: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+export function formatTimeOfDay(iso: string, locale: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23", ...(timeZone ? { timeZone } : {}) }).format(new Date(iso));
+}
+
+/** The face of a time the page PROMISES (spec §6.1 (1): the batch wait's "opens at"): the instant rounded UP to the next
+ *  whole minute, then as `formatTimeOfDay` - so the page never names a minute before the server opens the door, whatever
+ *  the gap constant is set to. An instant already on a minute is not moved. `timeZone` is for tests (a named zone); the page
+ *  never passes one, so it is the viewer's. */
+export function formatPromisedTime(iso: string, locale: string, timeZone?: string): string {
+  const up = Math.ceil(Date.parse(iso) / 60_000) * 60_000;
+  return formatTimeOfDay(new Date(up).toISOString(), locale, timeZone);
 }
 
 /** T17B fix 2, D13: whether the server's clock has reached `flagAt` (clock-math

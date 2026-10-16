@@ -116,6 +116,21 @@ export function NotOpenedCard({ t }: { t: RoomT }) {
   );
 }
 
+/** Spec §6.1 (1): the round is open and this board's check-in group has not opened yet. `time` is the board's own opening,
+ *  in the viewer's zone and rounded up to the minute, or null before mount (a time-of-day never renders on the server). */
+export function BatchWaitCard({ time, t }: { time: string | null; t: RoomT }) {
+  return (
+    <StateCard testId="room-state-batch-wait" icon="clock" title={t("externalPlay.room.state.batchWait.title")}>
+      {time !== null ? (
+        <p data-testid="room-batch-wait-time" className="m-0 text-[22px] font-semibold leading-tight tabular-nums text-[#7c3aed]">
+          {t("externalPlay.room.state.batchWait.time", { time })}
+        </p>
+      ) : null}
+      <Body>{t("externalPlay.room.state.batchWait.body", { time: time ?? "" })}</Body>
+    </StateCard>
+  );
+}
+
 /** 2 · Camera required, and 3 · Camera dropped at check-in: Try again. */
 export function CameraCard({
   dropped,

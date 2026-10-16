@@ -40,6 +40,18 @@ export function cameraRetryDelayMs(attempt: number): number {
   return Math.min(CAMERA_RETRY_BASE_MS * 2 ** Math.min(Math.max(attempt, 0), 16), CAMERA_RETRY_MAX_MS);
 }
 
+/** Spec §6.1 (1): a board whose check-in batch has not opened re-reads AT its `opensAt`, plus a jitter of up to this much,
+ *  so ten boards' players do not reach the door in the same instant. */
+export const BATCH_REREAD_JITTER_MS = 2_000;
+
+/** How long until the batch-wait re-read: the time to `opensAt` on the SERVER's clock (the client's wall clock plus the
+ *  snapshot's skew, so a phone with a wrong clock still waits the right time), never negative, plus the jitter. Not
+ *  before `opensAt`: a re-read earlier would find the door shut. */
+export function batchRereadDelayMs(opensAtIso: string, serverNowMs: number, jitterMs: number): number {
+  const jitter = Math.min(Math.max(jitterMs, 0), BATCH_REREAD_JITTER_MS);
+  return Math.max(0, Date.parse(opensAtIso) - serverNowMs) + jitter;
+}
+
 /** What the room does with one answer from the camera door (D21-fix-3):
  *  - `done`: a token came, or the server said stop (`retry: false`) - nothing more to ask;
  *  - `final`: the request itself is refused in a way that will answer the same again (not a player, not found, not
@@ -111,6 +123,17 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
     const id = setInterval(() => void refresh(), every);
     return () => clearInterval(id);
   }, [state.polling, every, refresh]);
+  // Spec §6.1 (1): the batch wait re-reads once, AT the board's opening - not on a poll, and it starts no poll of its own.
+  // Keyed on the snapshot's own clock too, so a read that found the door still shut (a skew that was off by a hair)
+  // schedules the next one rather than leaving the card up for ever.
+  const waitingFor = state.snap.phase === "before" ? state.snap.opensAt : null;
+  const waitSnapAt = state.snap.serverNow;
+  useEffect(() => {
+    if (waitingFor === null || !state.polling) return;
+    const delay = batchRereadDelayMs(waitingFor, Date.now() + stateRef.current.skewMs, Math.random() * BATCH_REREAD_JITTER_MS);
+    const id = setTimeout(() => void refresh(), delay);
+    return () => clearTimeout(id);
+  }, [waitingFor, waitSnapAt, state.polling, refresh]);
   // D10b: a tab coming back into view reads at once (a phone woken after the organiser's void or re-arm).
   useEffect(() => {
     if (!state.polling || typeof document === "undefined" || typeof document.addEventListener !== "function") return;

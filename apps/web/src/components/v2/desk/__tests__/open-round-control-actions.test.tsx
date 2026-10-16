@@ -64,6 +64,9 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   openedAt: null,
   deadlineAt: null,
   windowMinutes: DEADLINE_AFTER_MS / 60_000,
+  staggered: false,
+  batches: [],
+  staggerSpanMinutes: 0,
   scheduledAt: null,
   press: "open",
   earlierInPlay: [],
@@ -74,7 +77,7 @@ const OPENED_AT = "2026-10-16T18:04:00.000Z";
 const INVITED = ROUND({
   state: "open",
   openedAt: OPENED_AT,
-  deadlineAt: "2026-10-16T18:24:00.000Z",
+  deadlineAt: new Date(Date.parse(OPENED_AT) + DEADLINE_AFTER_MS).toISOString(),
   press: "none",
   pairings: [P(1, { owedSeats: 0, invitedAt: OPENED_AT, canResend: true }), P(2, { owedSeats: 0, invitedAt: OPENED_AT, canResend: true })],
 });

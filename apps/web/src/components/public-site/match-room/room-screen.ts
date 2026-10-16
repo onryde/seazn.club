@@ -22,6 +22,7 @@ export type RoomScreen =
   | { kind: "held" } // seam: a game on file nobody may act on
   | { kind: "live" }
   | { kind: "notOpened" } // card 1
+  | { kind: "batchWait" } // spec §6.1 (1): the round is open, this board's check-in batch is not yet
   | { kind: "cameraRequired" } // card 2
   | { kind: "cameraLost" } // card 3
   | { kind: "cameraBlocked" } // T17B fix 2 (D2): the browser refused the camera — reload after allowing it
@@ -46,6 +47,8 @@ const REFUSAL_SCREEN: Record<SeatRefusal, CardKind> = {
   lichess_reconsent_required: "relink",
   window_closed: "closed",
   round_not_open: "notOpened",
+  // Spec §3.2.1: the round is open but THIS board's batch has not opened - the card says when.
+  checkin_not_open: "batchWait",
   not_a_player: "unavailable",
   fixture_not_playable: "unavailable",
 };
@@ -108,7 +111,10 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   // no game will ever be created, so neither the window's cards nor "setting up" may show. A re-pair (above) and a
   // result (over) still outrank it; a re-paired board's fresh bridge reads open again.
   if (snap.boardClosed) return { kind: "boardClosed" };
-  if (snap.phase === "not_opened" || snap.phase === "before") return { kind: "notOpened" };
+  // Spec §6.1 (1): `before` splits on whether the round is stamped. No stamp: the organiser has not opened it (card 1,
+  // unchanged). Stamped, board's batch not yet open: the batch-wait card, whose copy would be false on card 1.
+  if (snap.phase === "not_opened") return { kind: "notOpened" };
+  if (snap.phase === "before") return { kind: "batchWait" };
   if (snap.phase === "closed" || snap.held) return { kind: "closed" };
   // The window is open and there is no game yet.
   if (s.seat !== null && !s.seat.seated) {

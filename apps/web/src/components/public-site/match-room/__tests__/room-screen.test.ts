@@ -69,9 +69,11 @@ describe("roomScreen", () => {
     });
   });
 
-  it("the window: not opened and before ⇒ card 1; closed with no game ⇒ card 6; held with no game ⇒ card 6", () => {
+  it("the window: not opened ⇒ card 1; before (stamped, this board's batch not yet open) ⇒ the batch-wait card; closed with no game ⇒ card 6; held with no game ⇒ card 6", () => {
     expect(roomScreen(st({ phase: "not_opened" })).kind).toBe("notOpened");
-    expect(roomScreen(st({ phase: "before" })).kind).toBe("notOpened");
+    // Spec §6.1 (1): `before` is a stamped round whose board opens later. Card 1's words ("your organiser will open it")
+    // would be false there, so it is its own screen - and the unstamped round keeps card 1 (the pair).
+    expect(roomScreen(st({ phase: "before" })).kind).toBe("batchWait");
     expect(roomScreen(st({ phase: "closed" })).kind).toBe("closed");
     expect(roomScreen(st({ held: true })).kind).toBe("closed");
   });
@@ -109,7 +111,7 @@ describe("roomScreen", () => {
     });
   });
 
-  it("every seat refusal has its screen (preflight's eleven reasons; canvas cards 1, 2, 3, 4, 6, 7, 8, T17B's blocked card, and the check-in for a camera still starting)", () => {
+  it("every seat refusal has its screen (preflight's twelve reasons; canvas cards 1, 2, 3, 4, 6, 7, 8, T17B's blocked card, and the check-in for a camera still starting)", () => {
     const want: Record<SeatRefusal, string> = {
       camera_required: "cameraRequired",
       camera_lost: "cameraLost",
@@ -122,6 +124,8 @@ describe("roomScreen", () => {
       lichess_reconsent_required: "relink",
       window_closed: "closed",
       round_not_open: "notOpened",
+      // Spec §3.2.1 / §6.1: the round is open but THIS board's batch is not - its own card, never the "not opened" one.
+      checkin_not_open: "batchWait",
       not_a_player: "unavailable",
       fixture_not_playable: "unavailable",
     };
@@ -131,7 +135,7 @@ describe("roomScreen", () => {
       expect(roomScreen(st({}, { seat: refused(reason) })).kind, reason).toBe(kind);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: refusal reasons").toBe(11);
+    expect(checked, "anti-vacuity: refusal reasons").toBe(12);
   });
 
   it("a game on file is the live room — whatever stale seat refusal or window the state still holds", () => {

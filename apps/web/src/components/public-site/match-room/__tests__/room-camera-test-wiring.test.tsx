@@ -407,6 +407,7 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
     held: "ends",
     live: "keeps",
     notOpened: "ends",
+    batchWait: "ends",
     cameraRequired: "ends",
     cameraLost: "ends",
     cameraBlocked: "ends",

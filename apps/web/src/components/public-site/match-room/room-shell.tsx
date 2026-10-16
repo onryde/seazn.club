@@ -42,6 +42,7 @@ import {
   CreatingCard,
   FlagNotice,
   MoveNoticeView,
+  BatchWaitCard,
   NotOpenedCard,
   OffForClubCard,
   RelinkCard,
@@ -54,7 +55,7 @@ import {
 import { HeldSeam } from "./room-seams";
 import { cameraEnds, roomScreen } from "./room-screen";
 import { canMove, cameraRetryDue, moveNotice, ownMeetingRetired, plyOf, type RoomState } from "./room-state";
-import { formatCountdown, formatTimeOfDay, useFlagFallen, useServerNow } from "./room-time";
+import { formatCountdown, formatPromisedTime, formatTimeOfDay, useFlagFallen, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
 import { deliverCameraFault, deliverCameraReport } from "./room-api";
@@ -553,6 +554,8 @@ export function Screen({
       return <RelinkCard relinkHref={relinkHref} t={t} />;
     case "notOpened":
       return <NotOpenedCard t={t} />;
+    case "batchWait":
+      return <BatchWaitCard time={snap.opensAt !== null && now !== null ? formatPromisedTime(snap.opensAt, locale) : null} t={t} />;
     case "cameraRequired":
     case "cameraLost":
       return <CameraCard dropped={screen.kind === "cameraLost"} busy={busy} onRetry={tryAgain} t={t} />;

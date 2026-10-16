@@ -134,7 +134,9 @@ export function OpenRoundConfirmBody({ round, tz }: { round: OpenRoundView; tz: 
       <p>
         {round.press === "reinvite" && round.deadlineAt !== null
           ? msg("runsheet.round.confirmWindowReinvite", { time: fmtTime(tz, round.deadlineAt) })
-          : msg("runsheet.round.confirmWindow", { minutes: round.windowMinutes })}
+          : round.staggered && round.batches.length > 1
+            ? msg("runsheet.round.confirmWindowStaggered", { minutes: round.windowMinutes, span: round.staggerSpanMinutes })
+            : msg("runsheet.round.confirmWindow", { minutes: round.windowMinutes })}
       </p>
       {round.press !== "reinvite" && round.scheduledAt !== null && (
         <p>{msg("runsheet.round.confirmScheduled", { time: fmtTime(tz, round.scheduledAt) })}</p>
