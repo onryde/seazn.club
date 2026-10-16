@@ -25,6 +25,7 @@ broke it by construction.
 | `REBASELINE_GOLDEN=1` | the same recorded **events**, with states / outcome / summary / deltas recomputed | an **intended** fold change. The commit diff is then the behaviour change itself. |
 | `EXTEND_GOLDEN=1` | **appends** streams covering uncovered fidelity-tier types and optional fields, then the streams the **golden floor** owes (next section but one), each written in the canonical **slim** form (see "Per-step digests") | a coverage gap. Never touches an existing stream. |
 | `REFORMAT_GOLDEN=1` | takes a corpus to the current format, one step at a time: adds the **format-2** fields (`summaries`, `overlay`) and `format: 2`, then the **format-3** field (`playerStats`) and `format: 3` (see "Corpus format 2" and "Corpus format 3"); every field, event and config the corpus already holds stays byte for byte | a corpus that does not yet record the kernel overlay (GF-2). **Never a re-baseline:** it replays every stream against the bytes it already holds and refuses to run if one field would change. |
+| *(no env: a one-off script)* | one **floor-batch stream**, re-derived from its batch under today's engine and put back at the **same index**; every other stream byte for byte | an intended rule change that refuses or rewrites an **event** a floor stream records, which `REBASELINE_GOLDEN` cannot do (see "Re-recording a floor-batch stream in place"). Owes a **major**. |
 
 Only the appended stream is slimmed, never the corpus as a whole: the existing
 streams have to survive byte for byte, and re-slimming an already-slim stream is
@@ -649,6 +650,60 @@ streams have `seed >= FLOOR_SEED_STRIDE` (100000); the epoch guard keys a stream
 by `config#seed`, so a floor stream is a plain **added** stream, never a changed
 one, and a floor append owes no version bump (neither `FOLD_EPOCH` nor `FOLD_MINOR`). The existing streams are not
 touched; `golden.test.ts` asserts the prefix.
+
+## Re-recording a floor-batch stream in place
+
+A floor stream (seed `>= FLOOR_SEED_STRIDE`) is DERIVED, not hand-written ("a floor is reproduced one batch at a time"
+above), so when an intended rule change makes one of its **recorded events** wrong, the repair is the floor's own derivation
+run again under the new engine, written back where the stream already sits. Two have been needed:
+
+- **Main's #977** (`6586a6243`, merged as `cf3e64977`): the kernel now refuses `core.lineup.*` for a sport that declares no
+  `lineupPolicy`, so the withdrawal stream of boardgame, carrom and generic (`default#800008`; generic's is `win_loss#800008`) lost its four lineup events.
+- **W2c BG-KO-2**: an Armageddon tie-break must name who had Black, so boardgame's `knockoutTiebreak#100008` lost its
+  `{rung, winner, score}` event for `{rung, black, result}` (the old shape is refused with `TIEBREAK_COLOUR_REQUIRED`).
+
+**When it applies:** only to a floor stream, and only when an event it records (not just a state, outcome or summary the
+fold recomputes) must change. Not `REBASELINE_GOLDEN=1`: that keeps every recorded event byte for byte, so it cannot change
+one, and a ledger the engine now refuses does not fold to be recomputed. Not `EXTEND_GOLDEN=1`: it never touches an existing
+stream, and a stream with the same `config#seed` is already there. Not `UPDATE_GOLDEN=1`: it rewrites everything. A stream below
+the stride (a generator walk) is never re-derived this way.
+
+**What it owes: a MAJOR for that sport**, in the same PR. The epoch guard keys a stream by `config#seed`, and a stream whose
+events, lineups or raw config differ is counted **removed and added** (`scripts/fold-epoch-guard.ts`), so an in-place
+re-record owes what a deletion owes ("A re-baseline that changes a fold must raise that sport's version": a stream removed,
+or re-recorded). The bump may follow in the next commit; the guard compares the PR as a whole. #977 raised boardgame, carrom and
+generic to 2; W2c raised boardgame to 3.
+
+**How it is done.** There is no env mode; it is a scratch script, which is why every rule of the policy lands on you rather
+than on `corpusWriteVerdict` (that dirty-tree refusal guards the env modes only):
+
+1. Start from a tree whose only change is the engine change, and put the corpus write in a commit of its own, so the diff is
+   reviewed as a state diff.
+2. `floorBatches(corpus)` gives the batch that holds the stream; `reproduceFloorBatch(module, corpus, batch)` is what
+   `extendFloor` appends to `corpusBefore(corpus, batch.start)` today.
+3. Compare the batch with its reproduction index by index. The identity (`config#seed`) of every stream must match, and
+   **the script refuses to write unless exactly the stream you meant to re-record differs**. A second stream that differs is a
+   finding (the engine change moved more than intended, or the floor itself grew), not something to write over.
+4. Print what moved: the event indices that differ, and whether `outcome`, `deltas`, `summary`, `playerStats` and `overlay`
+   differ. Read it as a state diff; for #100008 only event 9 and the summary moved.
+5. Put the reproduced stream back at the same index (`corpus.streams[index] = reproduced`) and `writeCorpus(corpus)`. Nothing
+   else in the corpus shifts: identity and position are unchanged, the stream stays in its slim form.
+6. Check: the plain golden replay and the floor suites green (`golden.test.ts`, `golden-floor-streams.test.ts`, which
+   reproduces every batch), a second run of the script reporting nothing to change, and `fold-epoch:check --against origin/main`
+   naming the major owed (then raise `FOLD_EPOCH`).
+
+```ts
+const id = (s: GoldenStream) => `${s.config}#${s.seed}`;
+const batch = floorBatches(corpus).find((b) => b.streams.some((s) => id(s) === target))!;
+const reproduced = reproduceFloorBatch(module, corpus, batch);
+const moved = batch.streams.flatMap((s, i) => {
+  if (id(reproduced[i]!) !== id(s)) throw new Error(`identity drift at ${id(s)}`);
+  return JSON.stringify(reproduced[i]) === JSON.stringify(s) ? [] : [i];
+});
+if (moved.length !== 1 || id(batch.streams[moved[0]!]!) !== target) throw new Error(`refusing: expected exactly ${target} to change`);
+corpus.streams[batch.start + moved[0]!] = reproduced[moved[0]!]!;
+writeCorpus(corpus);
+```
 
 ## Branch streams (W2c Task 16c)
 

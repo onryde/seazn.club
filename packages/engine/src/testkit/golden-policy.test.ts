@@ -25,6 +25,8 @@ import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { football } from "../sports/football/index.ts";
 import { sweepBudget } from "./golden-budget.ts";
+import * as floorStreams from "./golden-floor-streams.ts";
+import * as golden from "./golden.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 import {
   MAX_EVENTS,
@@ -483,5 +485,57 @@ describe("GOLDEN-POLICY.md — what the guard cannot see names what the engine s
     expect(text).toContain("manual MAJOR bump");
     expect(text).toContain("abandonActive");
     expect(events, "the flag the policy names exists").toContain("let abandonActive");
+  });
+});
+
+// ------------------------------------------------- the in-place re-record of a floor stream is documented against real machinery
+
+describe("GOLDEN-POLICY.md — \"Re-recording a floor-batch stream in place\" names real machinery and real examples", () => {
+  const policy = readFileSync(join(import.meta.dirname, "GOLDEN-POLICY.md"), "utf8");
+  const HEADING = "## Re-recording a floor-batch stream in place";
+  const at = policy.indexOf(HEADING);
+  const section = at < 0 ? "" : policy.slice(at, policy.indexOf("\n## ", at + 1));
+
+  it("the section exists, and the write-modes table points at it by its title", () => {
+    expect(at, "the heading exists").toBeGreaterThan(-1);
+    expect(section.length, "the section has a body").toBeGreaterThan(500);
+    expect(policy.slice(0, at), "the table row cites the section").toContain('see "Re-recording a floor-batch stream in place"');
+  });
+
+  it("every helper it tells you to call is a real export, and it names the obligations: the major, the guard, the refusal to write more than the one stream", () => {
+    const exported: Record<string, unknown> = { ...floorStreams, ...golden };
+    const named = ["floorBatches", "reproduceFloorBatch", "corpusBefore", "extendFloor", "FLOOR_SEED_STRIDE", "writeCorpus", "corpusWriteVerdict"];
+    let found = 0;
+    for (const name of named) {
+      expect(section, `the section names ${name}`).toContain(name);
+      expect(exported[name], `${name} is exported`).toBeDefined();
+      found++;
+    }
+    expect(found).toBe(named.length);
+    for (const phrase of ["MAJOR", "FOLD_EPOCH", "fold-epoch:check", "removed and added", "refuses to write unless exactly", "config#seed"]) expect(section, phrase).toContain(phrase);
+    const scripts = (JSON.parse(readFileSync(join(import.meta.dirname, "../../package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
+    expect(scripts["fold-epoch:check"], "the script the section runs exists").toBeDefined();
+    for (const file of ["golden.test.ts", "golden-floor-streams.test.ts"]) expect(existsSync(join(import.meta.dirname, file)), `${file} exists`).toBe(true);
+  });
+
+  it("its two worked examples are what the corpora hold: #100008 records the colour-naming Armageddon in a floor batch; the 800008 withdrawal streams carry no lineup event", () => {
+    const boardgame = readCorpus("boardgame");
+    const index = boardgame.streams.findIndex((s) => s.config === "knockoutTiebreak" && s.seed === 100008);
+    expect(index, "boardgame knockoutTiebreak#100008 exists").toBeGreaterThan(-1);
+    const stream = boardgame.streams[index]!;
+    expect(floorStreams.isFloorStream(stream), "it is a floor stream").toBe(true);
+    expect(floorStreams.floorBatches(boardgame).some((b) => b.start <= index && index < b.start + b.streams.length), "it sits in a floor batch").toBe(true);
+    const armageddon = stream.events.filter((e) => e.type === "boardgame.tiebreak").map((e) => e.payload as Record<string, unknown>);
+    expect(armageddon.some((p) => p.rung === "armageddon" && p.black !== undefined && p.winner === undefined), "its Armageddon names who had Black and derives the winner").toBe(true);
+    let checked = 0;
+    for (const key of ["boardgame", "carrom", "generic"]) {
+      const withdrawal = readCorpus(key).streams.filter((s) => s.seed === 800008);
+      expect(withdrawal.length, `${key} records an 800008 withdrawal stream`).toBeGreaterThan(0);
+      for (const s of withdrawal) {
+        expect(s.events.filter((e) => e.type.startsWith("core.lineup.")), `${key} ${s.config}#${s.seed}: no lineup event`).toEqual([]);
+        checked++;
+      }
+    }
+    expect(checked, "one 800008 stream per sport the section names").toBe(3);
   });
 });
