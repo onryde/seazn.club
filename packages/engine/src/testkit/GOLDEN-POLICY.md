@@ -427,14 +427,21 @@ hand in the same PR; no tool will tell you):
   requires each fact to move. What it cannot require is a path no stream reaches: a
   config knob no recorded config sets. Football, hockey and icehockey (the last two
   through the shared period kernel's `applyAbandon`) carry `abandonPolicy: "replay" |
-  "award"`, and every recorded config says `replay`; under `award` the module itself
-  answers an outcome after an abandon (the leader wins, a level score is a draw where a
-  draw stands), so `outcomeOf`'s expunge guard (an expunged match has no outcome) would
-  be visible there, and no stream shows it. The expunge of an `award`-policy match is
-  owed a recorded config in each of the three. (Under the recorded configs only
-  cricket's module answers an outcome after an abandon, so a mutant that makes
-  `outcomeOf` ignore the expunge reaches cricket alone; the `expunged` column is what
-  pins it in all eleven.)
+  "award"`, `replay` by default; under `award` the module itself answers an outcome
+  after an abandon (the leader wins, a level score is a draw where a draw stands), so
+  `outcomeOf`'s expunge guard (an expunged match has no outcome) is visible only in a
+  stream that sets it. **Closed for those three by W2c Task 16c:** each records an
+  `abandonAward` config and a branch stream whose withdrawal expunge stands over the
+  award (`golden-branches.ts`: football `abandonAward#90005`, hockey
+  `abandonAward#90006`, icehockey `abandonAward#90007`), recorded with no outcome. A
+  mutant that makes `outcomeOf` ignore the expunge now reds the replay of those three
+  as well as cricket's (measured 2026-10-16: four of the eleven replays; before these
+  streams it reached cricket alone). Under the recorded configs a module answers an
+  outcome after an abandon in cricket (its own rule) and wherever a recorded config sets
+  a policy other than `replay`: `award` in football, hockey and icehockey, `share` in
+  carrom and generic (and hockey's `q4_stands`). The `expunged` column pins the expunge
+  itself in all eleven. A NEW knob is still owed a recorded config: the floor will not
+  ask for one.
 - **Kernel refusals, and widening what the kernel accepts.** A rule that only REFUSES an
   event moves no recorded byte when it is widened: a ledger it refused was never
   recorded, and every ledger it accepted folds as before. There are two, both fed by the
@@ -489,7 +496,7 @@ hand in the same PR; no tool will tell you):
   moves no golden (the P-3 mutant left the corpus green). A change to how an
   offered input folds owes a manual **MAJOR**, because the summary code that
   reads `state.forfeitAward` ships to phones. Task 16b's own award owes none
-  yet: commit `3abddb9c4` bumped football, hockey, carrom and generic for W2c's
+  yet: W2c's manual bump ("raise FOLD_EPOCH one MAJOR") raised football, hockey, carrom and generic for W2c's
   opt-in cfg keys only, and ice hockey, which carries none, stayed at epoch 1. A
   per-stream `foldOptions` corpus field is the real fix: the engine owner ruled
   it a follow-up, GF-3 ("per-stream foldOptions"), after W2c merges. It is not
@@ -656,6 +663,11 @@ verdict is owed a counterfactual that only it rejects, and the test asserts the
 REASON each one gives. `branchHoles` is the skip rule (any recorded stream that reaches a
 branch makes it a skip, whatever its config name or seed) and `extendBranches`
 appends one slim stream per hole; `EXTEND_GOLDEN=1` runs it after the floor.
+A branch stream is recorded in its corpus's format (`recomputeStream(…,
+corpusFormat(corpus))`, as the other append paths do): on a format-3 corpus it
+carries `summaries`, `overlay` and `playerStats` like every other stream, and
+the award+expunge streams record the overlay `{"expunged":[[<last step>,true]]}`
+and no outcome.
 
 Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
 and up): above every generator seed, below the floor's stride, so the floor's
