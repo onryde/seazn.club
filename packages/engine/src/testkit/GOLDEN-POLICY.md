@@ -152,6 +152,25 @@ is a no-op, and a format-2 corpus whose recorded fields no longer replay is refu
 never "repaired". `rebaselineCorpus`, `extendCorpus` and `extendFloor` keep the
 corpus's format.
 
+**A format-1 corpus the reformat cannot take.** Format 1 stores the *module's* outcome,
+summary and deltas; format 2 stores the *effective* ones. On a stream with a
+settlement, an expunge where the module still answers, or a withdrawal laid over a held
+level result the two differ, so the reformat's own check (the current engine must
+reproduce every field the corpus holds, as format 2 records it) finds a disagreement.
+The ordinary advice, "re-baseline it first", does not work here: a format-1 re-baseline
+records the module's answer, the bytes the stream already has, and the reformat refuses
+again. The tool tells the two apart (the stream replays clean under format 1, but not
+under format 2) and its refusal names the route that does work: **start from the
+format-3 corpus on main** (take that file as main has it, where every stream already
+holds its effective answer) **and re-append the branch's streams with
+`EXTEND_GOLDEN=1`**, which records in the corpus's own format. Appended streams are
+plain *added* streams to the epoch guard and owe nothing by themselves; a config the
+branch added may grow a floor hole `EXTEND_GOLDEN` then fills. Measured on W2c's
+format-1 corpora (football, hockey and icehockey, whose `abandonAward` streams record
+a draw where the effective replay gives none): every one of them refuses a reformat. A
+corpus with a stale field *and* such a stream gets both messages, each under its own
+advice; the stale one is re-baselined first, as above.
+
 **What the guard does with the new fields (GF-2 T2).** When both sides of a
 comparison record them, a difference in either `summaries` (its length, or any
 digest) or `overlay` is a **major** owed, like a moved state: a phone computes

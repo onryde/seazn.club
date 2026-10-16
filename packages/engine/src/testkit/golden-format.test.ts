@@ -3,6 +3,8 @@
 // REFORMAT is the one write mode that is NOT a re-baseline: it adds the two format-2 fields to every stream and proves, as it
 // goes, that nothing the corpus already holds would move. Everything below states a rule of that and then tries to break it.
 // No committed corpus is written by any test here; reformatted corpora are built in memory.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
@@ -327,13 +329,114 @@ describe("reformatCorpus — it is NEVER a re-baseline: it refuses when anything
   const withStream = (stream: GoldenStream): GoldenCorpus => ({ ...corpus1, streams: [...corpus1.streams, stream] });
   const tamperFirst = (patch: Partial<GoldenStream>): GoldenCorpus => ({ ...corpus1, streams: [{ ...corpus1.streams[0]!, ...patch }, ...corpus1.streams.slice(1)] });
 
-  it("a stream recorded under format 1 whose EFFECTIVE outcome differs from the module's (a settle): the stored outcome would move", () => {
+  /** The message of a refusal, or a failure of the test if there was none. */
+  const refusalOf = (run: () => unknown): string => {
+    try {
+      run();
+    } catch (error) {
+      return (error as Error).message;
+    }
+    throw new Error("expected a refusal, and the reformat went through");
+  };
+
+  it("a stream recorded under format 1 whose EFFECTIVE outcome differs from the module's (a settle): refused, naming the route that works, not a re-baseline that would record the module's answer again", () => {
     const { home } = defaultLineupPair(resolvePositions(module, module.configSchema.parse(raw)));
     const events = [ev("core.start"), ev("core.abandon", { reason: "rain" }), ev("core.settle", { winner: home.entrantId, method: "organiser" })];
     const legacy: GoldenStream = { config: cfgName, seed: 99_999, events, ...storedFields(recomputeStream(module, raw, events, undefined, 1)) };
     expect(legacy.outcome, "precondition: format 1 recorded the module's bare outcome").toBe("null");
-    expect(() => reformatCorpus(module, withStream(legacy), 2)).toThrow(/generic config=\w+ seed=99999 outcome: recorded null, replayed .*settled_organiser/s);
-    expect(() => reformatCorpus(module, withStream(legacy), 2)).toThrow(/re-baseline/);
+    // the stream is a good FORMAT-1 stream: every byte of it replays under format 1, so a format-1 re-baseline would write the same bytes
+    expect(verifyStream(module, withStream(legacy), legacy), "precondition: a format-1 re-baseline leaves this stream as it is").toEqual([]);
+    const refusal = refusalOf(() => reformatCorpus(module, withStream(legacy), 2));
+    expect(refusal).toMatch(/generic config=\w+ seed=99999 outcome: recorded null, replayed .*settled_organiser/s);
+    expect(refusal).toMatch(/cannot be reformatted/);
+    expect(refusal).toMatch(/A re-baseline cannot help/);
+    expect(refusal).toMatch(/format-3 corpus on main/);
+    expect(refusal).toContain("EXTEND_GOLDEN=1");
+    expect(refusal, "the advice that cannot work is not given").not.toMatch(/that is a re-baseline, not a reformat/);
+  });
+
+  describe("the reformat dead end (GF-2 batch review I-1): every class of stream the kernel lays an answer over", () => {
+    interface Row { name: string; sport: string; raw: unknown; events: (lines: { home: { entrantId: string }; away: { entrantId: string } }) => GoldenEvent[] }
+    const ROWS: readonly Row[] = [
+      { name: "a settle", sport: "generic", raw: { resultMode: "score", allowDraws: true }, events: ({ home }) => [ev("core.start"), ev("core.abandon", { reason: "rain" }), ev("core.settle", { winner: home.entrantId, method: "organiser" })] },
+      { name: "an expunge where the module still answers", sport: "football", raw: { abandonPolicy: "award" }, events: () => [ev("core.start"), ev("core.abandon", { reason: "x", expunge: true })] },
+      { name: "a withdrawal over a held level result", sport: "generic", raw: { resultMode: "score", allowDraws: true }, events: ({ away }) => [ev("core.start"), ev("generic.result", { p1Score: 1, p2Score: 1 }), ev("core.forfeit", { by: away.entrantId, reason: "withdrew" })] },
+    ];
+    const synthetic = (row: Row, seed: number): { m: AnySportModule; corpus: GoldenCorpus; stream: GoldenStream } => {
+      const m = sport(row.sport);
+      const base = formatOneOf(row.sport);
+      const lines = defaultLineupPair(resolvePositions(m, m.configSchema.parse(row.raw)));
+      const events = row.events(lines);
+      const stream: GoldenStream = { config: "synthetic", seed, events, ...storedFields(recomputeStream(m, row.raw, events, undefined, 1)) };
+      return { m, corpus: { ...base, configs: { ...base.configs, synthetic: row.raw as Record<string, unknown> }, streams: [...base.streams, stream] }, stream };
+    };
+
+    it("each is a valid format-1 stream whose effective answer differs, and each reformat is refused with the route, never the re-baseline advice (counted, three classes)", () => {
+      let checked = 0;
+      ROWS.forEach((row, i) => {
+        const { m, corpus, stream } = synthetic(row, 99_900 + i);
+        // the class: format 1 stores the module's answer, the kernel's effective answer differs, and format 1 replays clean
+        expect(verifyStream(m, corpus, stream), `${row.name}: a valid format-1 stream`).toEqual([]);
+        const effective = recomputeStream(m, corpus.configs.synthetic, stream.events, undefined, 2);
+        expect(effective.outcome !== stream.outcome || effective.summary !== stream.summary || effective.deltas !== stream.deltas, `${row.name}: the effective answer differs from the module's`).toBe(true);
+        const refusal = refusalOf(() => reformatCorpus(m, corpus, 2));
+        expect(refusal, row.name).toContain(`${row.sport} config=synthetic seed=${99_900 + i}`);
+        expect(refusal, row.name).toMatch(/cannot be reformatted/);
+        expect(refusal, row.name).toMatch(/: 1 stream\(s\) record the module's own outcome/);
+        expect(refusal, row.name).toContain("EXTEND_GOLDEN=1");
+        expect(refusal, row.name).not.toMatch(/that is a re-baseline, not a reformat/);
+        // and target 3 reads the same format-1 corpus the same way
+        expect(refusalOf(() => reformatCorpus(m, corpus, 3)), `${row.name} -> 3`).toContain("EXTEND_GOLDEN=1");
+        checked++;
+      });
+      expect(checked).toBe(3);
+    });
+
+    it("the refusal's pointer lands: GOLDEN-POLICY.md holds the paragraph the message cites, and it names the route", () => {
+      const row = ROWS[0]!;
+      const { m, corpus } = synthetic(row, 99_900);
+      const cited = /GOLDEN-POLICY\.md, "([^"]+)"/.exec(refusalOf(() => reformatCorpus(m, corpus, 2)))?.[1];
+      expect(cited, "the refusal cites a policy section").toBeDefined();
+      const policy = readFileSync(join(import.meta.dirname, "GOLDEN-POLICY.md"), "utf8");
+      const at = policy.indexOf(`**${cited}.**`);
+      expect(at, `the policy has a paragraph called "${cited}"`).toBeGreaterThanOrEqual(0);
+      const paragraph = policy.slice(at, policy.indexOf("\n\n", at));
+      expect(paragraph).toContain("format-3 corpus on main");
+      expect(paragraph).toContain("EXTEND_GOLDEN=1");
+    });
+
+    it("reformatAll carries the route through: the run writes nothing and the message still names it", () => {
+      const row = ROWS[0]!;
+      const { corpus } = synthetic(row, 99_900);
+      const thrown = refusalOf(() => reformatAll([sport(row.sport)], () => corpus, 2));
+      expect(thrown).toMatch(/wrote nothing: 1 of 1 sport\(s\) refused/);
+      expect(thrown).toContain("EXTEND_GOLDEN=1");
+    });
+
+    it("a STALE format-1 field (the module's answer moved) is still a re-baseline, with no route advice: the two refusals are told apart", () => {
+      const stale = refusalOf(() => reformatCorpus(module, tamperFirst({ outcome: `{"kind":"draw"}` }), 2));
+      expect(stale).toMatch(/that is a re-baseline, not a reformat/);
+      expect(stale).toMatch(/outcome: recorded/);
+      expect(stale).not.toMatch(/cannot be reformatted/);
+      expect(stale).not.toContain("EXTEND_GOLDEN");
+    });
+
+    it("both in one corpus: the stale stream is told to re-baseline, the effective-answer stream to start from main, each under its own advice", () => {
+      const row = ROWS[0]!;
+      const { m, corpus, stream } = synthetic(row, 99_900);
+      const first = corpus.streams[0]!;
+      const both: GoldenCorpus = { ...corpus, streams: [{ ...first, outcome: `{"kind":"draw"}` }, ...corpus.streams.slice(1)] };
+      const refusal = refusalOf(() => reformatCorpus(m, both, 2));
+      const rebaseline = refusal.indexOf("that is a re-baseline, not a reformat");
+      const route = refusal.indexOf("cannot be reformatted");
+      expect(rebaseline, "the re-baseline advice is given").toBeGreaterThanOrEqual(0);
+      expect(route, "the route is given").toBeGreaterThanOrEqual(0);
+      const staleLabel = refusal.indexOf(`generic config=${first.config} seed=${first.seed} outcome: recorded`);
+      const deadLabel = refusal.indexOf(`generic config=synthetic seed=${stream.seed}`);
+      expect(staleLabel, "the stale stream is named, under the re-baseline advice").toBeGreaterThan(rebaseline);
+      expect(staleLabel, "... and not under the route").toBeLessThan(route);
+      expect(deadLabel, "the effective-answer stream is named, under the route").toBeGreaterThan(route);
+    });
   });
 
   it("a stored state, outcome, summary or deltas that no longer replays: refused, naming the field", () => {
