@@ -1168,21 +1168,23 @@ const recordedOf = (out: string, sport: string): number => Number(/ recorded (\d
 const recordedTotal = (out: string): number => KEYS.reduce((n, k) => n + recordedOf(out, k), 0);
 const bumpAll = (repo: Repo, keys: readonly string[] = KEYS): void => { for (const k of keys) setEpoch(repo, k, realEntry("FOLD_EPOCH", k) + 1); };
 
-describe("fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes)", () => {
-  beforeAll(() => {
-    for (const f of CORPORA) {
-      const c = JSON.parse(readFileSync(join(ENGINE, SPORTS_DIR, f), "utf8")) as Corpus;
-      STREAMS.set(c.key, c.streams.length);
-    }
-    for (const [name, prefix] of [["fmt-mono", "packages/engine"], ["fmt-rooted", ""]] as const) {
-      const before = gitSpawns;
-      const repo = makeFormatRepo(name, prefix);
-      formatRepoSpawns.push(gitSpawns - before);
-      if (prefix === "") fmtRooted = repo;
-      else fmtMono = repo;
-    }
-  }, FORMAT_BUILD_MS);
+// The format repositories are built at FILE level, not inside one describe: both the GF-2 (format 2) and the GF-2 T4 (format 3) blocks
+// read fmtMono/fmtRooted, and a `-t "GF-2 T4"` run skips the earlier block's hooks along with its tests, leaving them undefined.
+beforeAll(() => {
+  for (const f of CORPORA) {
+    const c = JSON.parse(readFileSync(join(ENGINE, SPORTS_DIR, f), "utf8")) as Corpus;
+    STREAMS.set(c.key, c.streams.length);
+  }
+  for (const [name, prefix] of [["fmt-mono", "packages/engine"], ["fmt-rooted", ""]] as const) {
+    const before = gitSpawns;
+    const repo = makeFormatRepo(name, prefix);
+    formatRepoSpawns.push(gitSpawns - before);
+    if (prefix === "") fmtRooted = repo;
+    else fmtMono = repo;
+  }
+}, FORMAT_BUILD_MS);
 
+describe("fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes)", () => {
   // one `git show` per corpus per tag per layout: it spawns, so it states its budget like every spawning test here (a flat 5 s default
   // measured 4.3 s on an idle machine and 5.1 s on a loaded one: a latent red, found by raising a real epoch under load)
   spawnIt(KEYS.length * 6)("the rig: the base is format 1, its reformat is format 2 and the next is format 3, in every sport and layout (counted)", () => {
@@ -1803,6 +1805,8 @@ describe("fold-epoch-guard CLI: GF-2 T4 - corpus format 3 (player stats are a mi
       ["a row without a personId", (c) => { c.streams[0]!.playerStats = '[{"stats":{}}]'; }, /stream #0 is malformed/],
       ["a row whose stats is an array", (c) => { c.streams[0]!.playerStats = '[{"personId":"p","stats":[]}]'; }, /stream #0 is malformed/],
       ["a row whose stat is not a number", (c) => { c.streams[0]!.playerStats = '[{"personId":"p","stats":{"goals":"3"}}]'; }, /stream #0 is malformed/],
+      // `1e999` is a valid JSON number that parses to Infinity: `typeof` accepts it, only `Number.isFinite` refuses it
+      ["a row whose stat is not a finite number", (c) => { c.streams[0]!.playerStats = '[{"personId":"p","stats":{"goals":1e999}}]'; }, /stream #0 is malformed/],
       ["a row that is not an object", (c) => { c.streams[0]!.playerStats = "[1]"; }, /stream #0 is malformed/],
       ["a format-3 stream without its summaries", (c) => { delete c.streams[0]!.summaries; }, /stream #0 is malformed \(a format-3 stream needs summaries/],
       ["a format-3 stream without its overlay", (c) => { delete c.streams[0]!.overlay; }, /stream #0 is malformed \(a format-3 stream needs summaries/],
