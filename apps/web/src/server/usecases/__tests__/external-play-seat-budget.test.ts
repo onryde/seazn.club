@@ -6,7 +6,7 @@
 // REAL seat and the REAL adapter against the e2e RealtimeKit fixture server (e2e/realtimekit-fixture-server.ts), counting
 // the calls the FIXTURE saw — never the seat's own idea of what it asked:
 //
-//   1. the per-participant evidence cache (V446): a read of a starting camera is allowed only on the back-off schedule
+//   1. the per-participant evidence cache (V457): a read of a starting camera is allowed only on the back-off schedule
 //      (1, 2, 4, 8 s — the ruling's table, typed below from the ruling, never read back from the code under test); a claim
 //      between reads is answered from what the last read found, re-judged against the claim's own clock, with no vendor
 //      call; anything DEFINITE (on, off, blocked, absent) is never cached;

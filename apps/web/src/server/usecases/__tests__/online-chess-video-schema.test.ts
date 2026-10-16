@@ -1,4 +1,4 @@
-// V439 video + flags + audit. Four claims that are not derivable from the DDL:
+// V451 video + flags + audit. Four claims that are not derivable from the DDL:
 //  - D6: N participants per fixture is the MODEL, so (fixture_id, person_id)
 //    is deliberately NOT unique — a second angle is config later, not a
 //    migration. The test proves two rows for one person are accepted.
@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "@/lib/db";
 import { seedOnlineChessFixture } from "./_external-play-seed";
-import { OLD_SHAPE, oldShapeStubs } from "./_v448-old-shape";
+import { OLD_SHAPE, oldShapeStubs } from "./_v459-old-shape";
 import { SUPERUSER_ONLY } from "../../../../../../scripts/rls-exempt.ts";
 
 const CHECK_VIOLATION = "23514";
@@ -30,7 +30,7 @@ const attempt = (p: Promise<unknown>): Promise<Outcome> =>
     }),
   );
 
-describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
+describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
   let orgId = "";
   let fixtureId = "";
   /** A second fixture in the same stage, with NO meeting row — the only way to
@@ -97,7 +97,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     expect(checked).toBe(2);
   });
 
-  // V442 (T13, controller ruling C1): camera evidence is read after the
+  // V454 (T13, controller ruling C1): camera evidence is read after the
   // meeting ends — never before — and a settled stamp is what stops a re-run
   // writing a second flag. Every write here is rolled back (a sentinel), so
   // the shared meeting row stays as beforeAll made it.
@@ -135,7 +135,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     )).toEqual({ accepted: true });
   });
 
-  // V442 (T14 re-review 3, I-1): a guard fault is OUR safeguard taking the
+  // V454 (T14 re-review 3, I-1): a guard fault is OUR safeguard taking the
   // player's camera out of the meeting. Every write is rolled back.
   describe("guard faults (I-1): our safeguard's gap, never the player's", () => {
     const fault = (tx: typeof sql, o: { startedAt?: string; endedAt?: string | null; fixture?: string; side?: string } = {}) => tx`
@@ -196,7 +196,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     expect(Number(count)).toBe(2);
   });
 
-  // V446 (D21): the seat gate's per-participant evidence cache. A participant starts with no read on file; the columns
+  // V457 (D21): the seat gate's per-participant evidence cache. A participant starts with no read on file; the columns
   // move together (no outstanding read ⇒ nothing cached), and only the two not-yet verdicts are ever cached.
   describe("D21: the seat-read cache columns", () => {
     const insertWith = (cols: { reads?: number; at?: Date | null; state?: string | null; since?: Date | null }) =>
@@ -264,7 +264,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     })).toMatchObject({ accepted: false, code: "23505" });
   });
 
-  it("V447: a seat's ask count is one row per (fixture, person, door); an ask count below 1 and a third door are refused; the pair is accepted", async () => {
+  it("V458: a seat's ask count is one row per (fixture, person, door); an ask count below 1 and a third door are refused; the pair is accepted", async () => {
     const insert = (route: string, asks: number, at = personId) => (tx: typeof sql) => tx`
       insert into fixture_seat_asks (fixture_id, person_id, route, window_started_at, asks)
       values (${fixtureId}, ${at}, ${route}, now(), ${asks})`;
@@ -307,7 +307,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
 
   // camera_connection_problems (T14 fix round 5, ruling 1): the NEUTRAL flag
   // job 5 raises when our safeguard's stamps pile up in one match.
-  // multiple_devices (T17B fix 2, D9; V444): job 5's flag for a player
+  // multiple_devices (T17B fix 2, D9; V455): job 5's flag for a player
   // connected from more than one place at the same time in the match.
   it.each(["camera_lost", "out_of_band_play", "camera_connection_problems", "multiple_devices"])("accepts an open %s flag", async (kind) => {
     expect(await attempt(sql`
@@ -373,7 +373,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
 
   // T6 fix round 1 (review M-3): with policy_downgrade gone, the columns only
   // it used (stage_id, from_policy, to_policy) were dropped from the unmerged
-  // V439. Expected set typed from that ruling, not read from the table.
+  // V451. Expected set typed from that ruling, not read from the table.
   it("the audit table carries only what a video override needs", async () => {
     const cols = await sql<{ column_name: string }[]>`
       select column_name from information_schema.columns
@@ -405,8 +405,8 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     });
   });
 
-  // ─── V448 (D16): one meeting per PLAYER ──────────────────────────────────────────────────────────────────────────────
-  describe("V448: a meeting per player (fixture, side)", () => {
+  // ─── V459 (D16): one meeting per PLAYER ──────────────────────────────────────────────────────────────────────────────
+  describe("V459: a meeting per player (fixture, side)", () => {
     const meeting = (tx: typeof sql, side: string | null, o: { fixture?: string; meetingId?: string } = {}) => tx`
       insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
       values (${o.fixture ?? fixtureId}, ${side}, ${orgId}, ${o.meetingId ?? `mtg-${randomUUID().slice(0, 8)}`},
@@ -414,7 +414,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
               (select away_entrant_id from fixtures where id = ${o.fixture ?? fixtureId}))`;
     const participant = (tx: typeof sql, side: string, o: { preset?: string; reported?: string | null; reportedAt?: Date | null } = {}) => tx`
       insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, camera_reported, camera_reported_at)
-      values (${fixtureId}, ${side}, ${o.preset === "arbiter" ? null : personId}, ${o.preset ?? "player"}, ${`p-v448-${randomUUID().slice(0, 8)}`},
+      values (${fixtureId}, ${side}, ${o.preset === "arbiter" ? null : personId}, ${o.preset ?? "player"}, ${`p-v459-${randomUUID().slice(0, 8)}`},
               ${o.reported ?? null}, ${o.reportedAt ?? null})`;
 
     it("a meeting names the side it is for: home and away are accepted, anything else is refused, and so is none (each counted)", async () => {
@@ -526,14 +526,14 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
 
     // ── The delta's own guard (§5.6.7, M6) ───────────────────────────────────────────────────────────────────────────
     // No harness here runs a Flyway migration from a test (v380-age-band-backfill.test.ts says so), so the real delta
-    // file is read off disk and executed against a disposable SCRATCH SCHEMA holding the V439/V442/V446 shape of the
+    // file is read off disk and executed against a disposable SCRATCH SCHEMA holding the V451/V454/V457 shape of the
     // three tables. The replica is checked, not trusted: after the delta the scratch tables must have exactly the shape
     // the live (migrated) database has, so a replica that drifted from history, or a delta that does not land where
     // Flyway's run does, fails the comparison.
     describe("the delta's guard", () => {
-      const DELTA = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..", "db", "migration", "deltas", "V448__video_meeting_per_player.sql");
+      const DELTA = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..", "db", "migration", "deltas", "V459__video_meeting_per_player.sql");
       const delta = (): string => readFileSync(DELTA, "utf8");
-      /** V439 + V442 + V446, the three tables as they were before V448 (_v448-old-shape.ts). */
+      /** V451 + V454 + V457, the three tables as they were before V459 (_v459-old-shape.ts). */
       const TABLES = ["fixture_video_meetings", "fixture_video_participants", "fixture_video_guard_faults"] as const;
       const STUBS = (live: string) => oldShapeStubs(live, { fixtureIds: [fixtureId], orgId, personId });
 
@@ -575,7 +575,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
           await sql.begin(async (tx0) => {
             const tx = tx0 as unknown as typeof sql;
             const [{ live }] = await tx<{ live: string }[]>`select current_schema() as live`;
-            const scratch = `v448_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+            const scratch = `v459_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
             await tx.unsafe(`create schema "${scratch}"`);
             await tx.unsafe(`set local search_path to "${scratch}", "${live}"`);
             await tx.unsafe(STUBS(live));
@@ -658,15 +658,15 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
              where l.pid = pg_backend_pid() and l.locktype = 'relation' and n.nspname in (${live}, ${scratch})`;
         });
         const STRONG = new Set(["ShareRowExclusiveLock", "ShareLock", "ExclusiveLock", "AccessExclusiveLock"]);
-        const scratchStrong = got.filter((l) => l.schema.startsWith("v448_") && STRONG.has(l.mode));
+        const scratchStrong = got.filter((l) => l.schema.startsWith("v459_") && STRONG.has(l.mode));
         expect(scratchStrong.length, "control: the probe sees the strong locks the delta takes - in the scratch schema").toBeGreaterThan(0);
-        const liveStrong = got.filter((l) => !l.schema.startsWith("v448_") && STRONG.has(l.mode));
+        const liveStrong = got.filter((l) => !l.schema.startsWith("v459_") && STRONG.has(l.mode));
         expect(liveStrong, "and none on a live table").toEqual([]);
       });
 
       it("a seat claim still in flight when the delta starts is SEEN: the delta waits for it on the table lock, then the guard raises (and had it rolled back, the delta applies)", async () => {
         // Committed scratch schema (a second connection has to SEE the table), dropped in the finally.
-        const scratch = `v448_lock_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+        const scratch = `v459_lock_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
         const [{ live }] = await sql<{ live: string }[]>`select current_schema() as live`;
         const [f] = await sql<{ home: string; away: string }[]>`select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`;
         const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
@@ -732,9 +732,9 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
   // scripts/rls-exempt.ts. That name is a claim that no app_user connection can reach the table. These cases make the
   // claim the DATABASE's: a sealed table has no policy AND no grant, so an app_user query on it is refused (42501),
   // never silently empty.
-  describe("sealed tables (V439, V442, V446, V447, V449): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
-    /** Typed from the migrations' own words (V439: "Sealed like V410's tables … no app_user policy"; stage_round_opens
-     *  and V442's guard faults enable + force with no policy), never read from the catalogue. */
+  describe("sealed tables (V451, V454, V457, V458, V460): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
+    /** Typed from the migrations' own words (V451: "Sealed like V410's tables … no app_user policy"; stage_round_opens
+     *  and V454's guard faults enable + force with no policy), never read from the catalogue. */
     const SEALED = [
       "fixture_play_flags", "fixture_seat_asks", "fixture_video_guard_faults", "fixture_video_meetings",
       "fixture_video_participants", "online_chess_audit", "realtimekit_call_budget", "stage_round_opens", "video_rooms_to_end",
@@ -762,7 +762,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
       expect(rows.filter((r) => r.hasOrgId).map((r) => r.name)).toEqual(WITH_ORG_ID);
     });
 
-    it("the pair: the same probe reads app_user's grant on fixture_external_play, V439's one TENANT table", async () => {
+    it("the pair: the same probe reads app_user's grant on fixture_external_play, V451's one TENANT table", async () => {
       const [t] = await sql<{ granted: boolean; policies: number }[]>`
         select has_table_privilege('app_user', c.oid, ${ANY_PRIVILEGE}) as granted,
                (select count(*)::int from pg_policies p where p.tablename = c.relname and p.schemaname = n.nspname) as policies

@@ -309,7 +309,7 @@ export type BridgeRowView = {
   last_error: string | null;
   needs_reason: string | null;
   move_count: number;
-  /** Each side's time AS AT `last_move_at` (V442, T10's append), in ms. */
+  /** Each side's time AS AT `last_move_at` (V454, T10's append), in ms. */
   white_ms: number | null;
   black_ms: number | null;
 };

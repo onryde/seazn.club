@@ -4,7 +4,7 @@ import "server-only";
 // theirs can move it from Seazn. Each such board goes to the organiser as `account_changed`. Called by the re-link
 // (external-accounts.ts upsertLichessLink) after its own write commits; never throws, and never silent.
 //
-// Final re-review P11 (1): a seat hold, like token_revoked — the hold freezes THIS player's seat (V442
+// Final re-review P11 (1): a seat hold, like token_revoked — the hold freezes THIS player's seat (V454
 // `revoked_seat`), the opponent plays on, and reconcile keeps reading the game so its real end is recorded.
 //
 // Final re-review P11 (4): an UNLINK (`to: null`) leaves the same boards — recorded for an account no longer linked,

@@ -1,4 +1,4 @@
-// Review T2-I1: since V439 the Lichess row holds a SEALED board:play token — a
+// Review T2-I1: since V451 the Lichess row holds a SEALED board:play token — a
 // credential that can move pieces in any of the player's Lichess games. The
 // consent copy promises that grant ends when the player unlinks; deleting the
 // account is the stronger withdrawal, so DELETE /api/users/me must revoke it at

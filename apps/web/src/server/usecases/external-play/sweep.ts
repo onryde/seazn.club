@@ -140,7 +140,7 @@ export type SweepDeps = {
   /** TEST SEAM — the clock the pass budget (I-1) and reconcile's slice (D20)
    *  are measured on. Production passes none and reads Date.now. */
   wallClock?: () => number;
-  /** TEST SEAM — job 3b's read of the parked rooms (V449). Production reads `video_rooms_to_end`; a test passes a reader that
+  /** TEST SEAM — job 3b's read of the parked rooms (V460). Production reads `video_rooms_to_end`; a test passes a reader that
    *  throws to prove a broken or missing table cannot starve the jobs that run before it. */
   parkedRooms?: () => Promise<readonly ParkedRoom[]>;
 };
@@ -701,10 +701,10 @@ async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<Sweep
   pass.report.meetingsEnded++;
 }
 
-// Job 3b: a room whose meeting row went with its fixture (D16 fix-2, review residual 2; V449).
+// Job 3b: a room whose meeting row went with its fixture (D16 fix-2, review residual 2; V460).
 //
 // A meeting row is the only thing that tracks an ACTIVE vendor room, and it cascades away with its fixture (a stage deleted,
-// Rebuild fixtures, a Swiss round reshaped to a smaller field, the undo of a generation, or anything wider). V449's trigger
+// Rebuild fixtures, a Swiss round reshaped to a smaller field, the undo of a generation, or anything wider). V460's trigger
 // parks each un-ended room in `video_rooms_to_end` in the deleting transaction; this ends it at the vendor and clears the
 // parking only AFTER the end succeeded, so a refused end (a failure, or the call budget) keeps its row and the next pass asks
 // again - the same "the row outlives the room" rule retireStaleMeeting keeps. Why the sweep and not the deleting call: a
@@ -1007,12 +1007,12 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
 // player who plays from a camera-less tab while a second tab of theirs has
 // its camera on shows no camera off. So the same reports are read once more
 // for overlap: a player with MORE THAN ONE connection at the same time inside
-// the match is a `multiple_devices` flag (V444) naming when and how many —
+// the match is a `multiple_devices` flag (V455) naming when and how many —
 // flagged, never blocked. A reload is sequential, never "at once".
 //
 // One settle per room: `camera_evidence_at` is stamped, conditionally on
 // null, in the SAME transaction as the flags — a re-run, or a pass racing
-// this one, writes no second flag (V442). A room whose reports never become
+// this one, writes no second flag (V454). A room whose reports never become
 // readable is settled after a day with no flag and REPORTED, never re-read
 // forever.
 

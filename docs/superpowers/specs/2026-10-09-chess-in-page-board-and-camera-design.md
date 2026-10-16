@@ -667,10 +667,10 @@ colour; the colour only LABELS (`arbiter.ts:283-286` and `:539-542` map white/bl
   `const [row]` / `[m]` / `gone[0]` destructuring on a meeting query.
 - One kind of REFERENCE names the side without saying it: a reference to
   `fixture_video_participants` keyed by `participant_id`. Those are the seat gate's evidence
-  stamp and its V446 read cache (`judgeSeat`'s `last_publisher_seen_at` update, and
+  stamp and its V457 read cache (`judgeSeat`'s `last_publisher_seen_at` update, and
   `claimEvidenceRead`, `recordEvidence` and `cachedEvidence`, all in `preflight.ts`; the
   `seat_read_*` columns). The vendor issues a participant id inside exactly one meeting, and
-  `unique (fixture_id, participant_id)` (V439) already says so, so the id identifies the
+  `unique (fixture_id, participant_id)` (V451) already says so, so the id identifies the
   participant row. Those columns stay per participant and do not change.
 - **That exemption stops at the participant row.** A statement keyed by `participant_id` that
   also joins `fixture_video_meetings` or `fixture_video_guard_faults` is not exempt for that
@@ -704,7 +704,7 @@ colour; the colour only LABELS (`arbiter.ts:283-286` and `:539-542` map white/bl
   mention of a video table that is not one of those five reference shapes (`lock table`, `using`, a
   plain string), so a shape it cannot read is never skipped.
 
-**A room whose meeting row cascades away with its fixture (D16 fix-2, V449).** A meeting row is the only
+**A room whose meeting row cascades away with its fixture (D16 fix-2, V460).** A meeting row is the only
 thing that tracks an ACTIVE vendor room, and it goes with its fixture: a stage delete, Rebuild fixtures, a
 Swiss round reshaped to a smaller field, the undo of a generation, and every wider delete (division,
 competition, organisation) leave up to two rooms per board active with live player tokens. The delete cannot
@@ -716,7 +716,7 @@ statement or cascade deleted it. The sweep (job 3b) ends each parked room and de
 the end succeeded, so a refused end is asked again; the vendor's documented not-found counts as gone. Latency
 is one sweep tick; cost is the two teardown calls per room through the D21 budget.
 
-**Schema** (a new delta after V446, D21's call-budget delta; numbered at the time):
+**Schema** (a new delta after V457, D21's call-budget delta; numbered at the time):
 - `fixture_video_meetings` gains `side text not null check (side in ('home','away'))`. Its
   key becomes `(fixture_id, side)`; `meeting_id` stays unique.
 - `fixture_video_participants` and `fixture_video_guard_faults` gain `side` and reference
@@ -729,7 +729,7 @@ is one sweep tick; cost is the two teardown calls per room through the D21 budge
   retires the board's stale rows first, so a newcomer who lands on the side with nothing on
   file ends the stayer's old room too (walkthrough R3-1 found the gap; `realtimekit.test.ts`
   pins it).
-- `camera_evidence_at` stays per row, and V442's check (evidence requires `ended_at`)
+- `camera_evidence_at` stays per row, and V454's check (evidence requires `ended_at`)
   stays per row.
 - New on the player participant row: `camera_reported text null check (camera_reported in
   ('live','off'))` and `camera_reported_at timestamptz null`, for the pill (§5.6.3).
@@ -760,7 +760,7 @@ it.
 | `realtimekit.ts:721-743` `endMeeting` | stamps `removed_at` on every arbiter row of the FIXTURE | stamps only the arbiter rows of ITS `(fixture_id, side)` |
 | `preflight.ts` `seatPlayer`'s optional branch (`:223`) and `verifyRequiredSeat` (`:334`) → `ensureMeeting` | the board's meeting | the CALLER's side (`player.side`, from `loadSides` at `:173-174`) |
 | `preflight.ts` `playerParticipant`'s R2-2 locked mint check (`:535-548`, the `in (…)` at `:544`). D21-fix-3 moved it here from `issuePlayerToken`, which now only wraps it (`:560-563`) | `em.entrant_id in (home, away)`, any side | pinned to the row's OWN side (§5.6.5, the review's I3) |
-| `preflight.ts` `judgeSeat`'s evidence stamp `last_publisher_seen_at` (`:420-423`); `claimEvidenceRead`, `recordEvidence` and `cachedEvidence`, the V446 seat-read cache (`:448-502`) | by participant id | unchanged (a participant id is one meeting's; §5.6.1) |
+| `preflight.ts` `judgeSeat`'s evidence stamp `last_publisher_seen_at` (`:420-423`); `claimEvidenceRead`, `recordEvidence` and `cachedEvidence`, the V457 seat-read cache (`:448-502`) | by participant id | unchanged (a participant id is one meeting's; §5.6.1) |
 | `preflight.ts` `storedPlayerParticipant` (`:575-585`), and `room.ts` `ownParticipantId` in `compose` (`:432`) | by fixture + person | by `(fixture_id, side)` + person |
 | `preflight.ts` `cameraTokenForSeat` (`:277-285`), called by `room.ts` `requestRoomCamera` (`:584-587`) behind `POST …/room/camera` (D21-fix-3, §5.2) | the optional camera's token door; it reaches the meeting only through `seatPlayer` | unchanged in shape. It takes the caller's side from `seatPlayer` and has no statement of its own to key; a test drives it once per side |
 | `create-game.ts` the two `seatPlayer(… recheck: true)` calls (`:220-223`) | re-verify each player against the board's meeting | each player against their OWN side's meeting, through `seatPlayer`. A player with no participant on file answers `camera_required` and nothing is minted |
@@ -816,7 +816,7 @@ to D16, built together with its one consumer, this pill; no seam ships without a
   the row stamped is the caller's `storedPlayerParticipant` on their own side, in a meeting
   still open (`storedPlayerParticipant` in `preflight.ts`, `:575-585`). That function is the
   one rule for which participant is a person's, and it matters here: `(fixture_id,
-  person_id)` is deliberately not unique (V439), so the stamp and the snapshot's read of the
+  person_id)` is deliberately not unique (V451), so the stamp and the snapshot's read of the
   same row must go through it. Anything else is the room's one 404. The server stamps `camera_reported` and `camera_reported_at` on
   that row, on the server's clock.
 - **A change writes; a heartbeat mostly refreshes.** A report with `heartbeat: false` always
@@ -1138,7 +1138,7 @@ accepted:
 - The sweep's candidate is a row. It reads only that row's side's player, so the other
   player's participants are not "absent" and the read is not stuck at `not_ready`.
 - It stamps `camera_evidence_at` on `(fixture_id, side)`. Stamping both rows at once would
-  break V442's check while the other meeting is still live, and abort the settle on every
+  break V454's check while the other meeting is still live, and abort the settle on every
   pass.
 - Each meeting's peer reports belong to one player, so `camera_lost` is that player's, and
   the arbiter panel shows a flag over that player's own row (§5.6.4).
@@ -1154,7 +1154,7 @@ accepted:
 meeting row with `ended_at is null` is ACTIVE at the vendor, and its tokens stay valid
 until they expire. Dropping the rows would orphan them, and nothing would ever end them.
 How many there are is whatever is unended on the day of the deploy. This paragraph first
-quoted a stg version (V442) and a row count (four, three of them unended); stg moves, so
+quoted a stg version (V454) and a row count (four, three of them unended); stg moves, so
 those figures are stale by construction and none is written now.
 - **A runnable, with an owner.** `scripts/chess-end-shared-meetings.ts`, written with D16
   beside the other one-off operations in `scripts/` (`reconcile-stranded-wallets.ts` is the
@@ -1232,7 +1232,7 @@ budget, and each new call site keeps the deferral rule:
   token. A `camera_starting` answer to a browser that holds its token carries none, so the
   polling claims on the way cost the 3.
 - A later claim inside the back-off (1, 2, 4, 8 s, `CAMERA_EVIDENCE_BACKOFF_MS`): 0 for a browser
-  that holds its token, answered from the cache (the V446 `seat_read_*` columns). A browser that
+  that holds its token, answered from the cache (the V457 `seat_read_*` columns). A browser that
   holds none (a reload, a second tab) is handed a refreshed token on every answer, so its claim in
   the back-off costs 1.
 - T9's re-verify before creating the game: 0 when the player's pass was read within
@@ -1666,7 +1666,7 @@ counted:
   - each test shows it reached the guard: the fake `addParticipant` was called once, and the
     refusal is the lock's. Three mutants are run one at a time, and the count killed is
     reported (3 of 3).
-- Evidence settles per meeting, while the other meeting is still live (no V442 abort).
+- Evidence settles per meeting, while the other meeting is still live (no V454 abort).
 - A half-ended board: one of the two teardowns fails at the vendor and the other ends; the
   sweep retries only the failed row; an arbiter in the still-live meeting is not stamped
   removed and one in the ended meeting is; the player of the failed row keeps their camera.
@@ -1770,8 +1770,8 @@ line makes it an order: **first come, first served, one place per player.**
 
 #### 5.7.2 The ledger
 
-A new delta, **V450 (next free; renumbered at merge)** (V449, `video_rooms_to_end`, is the branch's last;
-"the next free number at the time", renumbered at merge, as V446 to V449 are). It does three things.
+A new delta, **V461 (next free; renumbered at merge)** (V460, `video_rooms_to_end`, is the branch's last;
+"the next free number at the time", renumbered at merge, as V457 to V460 are). It does three things.
 
 **1. `fixture_seat_line`: one row per `(fixture_id, person_id)`, a stay.**
 - `fixture_id`, `person_id`: both `on delete cascade`, so the row goes with its board and its
@@ -1877,7 +1877,7 @@ A new delta, **V450 (next free; renumbered at merge)** (V449, `video_rooms_to_en
   its arrival to now, and a player first held on their second claim queued behind everyone who had
   arrived after their first, an inversion by construction that load test B's zero bar could never have
   met. Test 20 pins it.
-- **Sealed like V439, V446 and V447:** RLS enabled AND forced, no policy, no grant for `app_user`;
+- **Sealed like V451, V457 and V458:** RLS enabled AND forced, no policy, no grant for `app_user`;
   only the privileged client reaches it, and `online-chess-video-schema.test.ts` reads the
   catalogue (its sealed-table count rises by one). No `org_id`: it is not a tenant table. Two small
   rows per Required board per round.
@@ -1885,9 +1885,9 @@ A new delta, **V450 (next free; renumbered at merge)** (V449, `video_rooms_to_en
 **2. `stage_round_opens.staggered boolean not null default false`** (§3.2.1): written by `openRound` at
 every open and re-stamp; rows that exist when the delta lands read `false` and behave as before.
 
-**3. V447's check, AMENDED (Q6, ruled).** `fixture_seat_asks.route` gains `'line'`: `check (route in
-('seat', 'camera', 'line'))`, a closed set on purpose so a third door cannot ship unlimited. V447
-is amended in place, not corrected forward: no environment has applied it (stg is at V445) and an
+**3. V458's check, AMENDED (Q6, ruled).** `fixture_seat_asks.route` gains `'line'`: `check (route in
+('seat', 'camera', 'line'))`, a closed set on purpose so a third door cannot ship unlimited. V458
+is amended in place, not corrected forward: no environment has applied it (stg is at V456) and an
 unmerged migration is amended, not corrected forward. The build re-checks that at the time and
 falls back to a new delta in the same file if it has landed anywhere.
 
@@ -2089,7 +2089,7 @@ counted, and the answers it gets are the claim's own (`camera_required`, `camera
 including when the budget defers it mid-claim, which is `camera_starting` and never `queued` (step 4):
 a `queued` answer carries a position, and 1 would stand beside the front waiting stay's own 1.
 
-**Which door counts, and why the seat limit keeps its number.** V447's 20 asks a minute on the seat
+**Which door counts, and why the seat limit keeps its number.** V458's 20 asks a minute on the seat
 door is the owner's ruling (D21-fix-4: KEEP 20) and is derived from the room's own worst case for one
 check-in attempt on each of two devices. A queued player polls every few seconds, and counted there
 those polls would eat the asks a check-in attempt needs and leave the button dead for a minute (the
@@ -2435,7 +2435,7 @@ player in line well before the deadline has all the time before it as well.
 | `ADMIT_HOLD_MS` | 54,500 (derived) | `MINT_TO_READ_MS + CAMERA_EVIDENCE_DEADLINE_MS + max(CAMERA_EVIDENCE_BACKOFF_MS)` = 31.5 s + 15 s + 8 s: the dead-camera bound on an admitted stay, with the margin for the verdict read one back-off step after the deadline (§5.7.5); a test asserts it is at least `LINE_RELEASE_GRACE_MS` |
 | `LINE_SERVE_TAIL_S` | 23 (derived) | `(CAMERA_EVIDENCE_DEADLINE_MS + max(CAMERA_EVIDENCE_BACKOFF_MS)) / 1000`: the longest from a stay's first read to its verdict; added to `etaS` in `mayTimeOut` (§5.7.3) |
 | `LINE_LOCK_TIMEOUT_MS` | 1,000 | the gate lock's `lock_timeout` (§5.7.3): 1,000 times the few milliseconds the lock is held, and under `LINE_POLL_MIN_MS`, so a busy claim answers before the client's next poll; a test asserts it is below `LINE_POLL_MIN_MS` |
-| `LINE_ASK_LIMIT` | 64 | derived from the poll floor, as V447's two are |
+| `LINE_ASK_LIMIT` | 64 | derived from the poll floor, as V458's two are |
 | `CREATE_PROMPT_S` | 30 | the load metrics (§5.6.8) |
 | `ARRIVAL_JITTER_MS` | 50 | the harness's inversion excuse (c) |
 
@@ -2531,7 +2531,7 @@ because it travels only on a `queued` answer. The screen is `REFUSAL_SCREEN.queu
 in it), so a new `SeatRefusal` that is missed fails compilation.
 
 **3. The seat 429 wait: a countdown, then the button comes back (C5).** The seat door allows 20 asks
-a minute per seat (one person on one board; V447, `fixture_seat_asks`), which is the room's own
+a minute per seat (one person on one board; V458, `fixture_seat_asks`), which is the room's own
 worst case for one check-in attempt on each of two devices (§5.7.3). A SECOND attempt on one device inside the minute (the player
 presses Check in, the camera is slow, they press Try again after 23 s) can meet the limit: today
 the client treats the 429 as "later", burns a poll step and shows nothing, so the button does
@@ -3062,12 +3062,15 @@ The sample is a mechanism reference, not a code source. Specifically rejected:
   `outOfOrder`, so they are refused on any DB past V431. **Amend them to V439/V440 as
   part of this design's schema work** — do not enable `outOfOrder`. (Renumbered at the
   2026-10-13 rebase onto W2b: main took V437 capture records and V438 W2b, so the branch's
-  four deltas V433–V436 became V439–V442 with their DDL unchanged.)
+  four deltas V433–V436 became V439–V442 with their DDL unchanged. Renumbered again at the
+  2026-10-16 rebase onto main's V450 (`stream_runner_crash_count`): the branch's ten deltas, V439–V442 and
+  V444–V449, became V451–V460 in the same order with their DDL unchanged; V443 is W2c's and is not on this
+  branch. Every other V45x/V46x in this document is the post-2026-10-16 number.)
 - **The capacity build (§3.2.1, §5.7, §6.1, §8.1) comes AFTER the D16 review loop closes**, on its
   own branch off the merged tree. It touches `window.ts`, `preflight.ts`, `room.ts`, `sweep.ts`,
   `invite.ts`, `budget.ts`, `seat-ask-limit.ts`, the room client and one new migration. The
-  migration is "the next free number at the time, renumbered at merge": this spec says V450 because
-  V449 (D16 fix-2's `video_rooms_to_end`) is the branch's last, and the build takes whatever is next on
+  migration is "the next free number at the time, renumbered at merge": this spec says V461 because
+  V460 (D16 fix-2's `video_rooms_to_end`) is the branch's last, and the build takes whatever is next on
   the tree it starts from. It
   also changes `DEADLINE_AFTER_MS` (C7) and every test that types the old 20 minutes (§3.2.1
   lists them). This document is the only thing this amendment changes; nothing in it is built.
@@ -3140,7 +3143,7 @@ Out of scope for the capacity amendment (2026-10-15), each with the reason it is
   into the text above and no longer open: Q1, an `off` round is one batch, decided and stored at the
   open (§3.2.1); Q2, one global FIFO per vendor bucket (§5.7.6); Q3, Optional yields to the line
   (§5.7.1); Q5, the gap STARTS at 120 s and the load re-run may tighten it to 60 s (§5.6.8); Q6,
-  V447 is AMENDED in place, because no environment has applied it (stg is at V445; §5.7.2).
+  V458 is AMENDED in place, because no environment has applied it (stg is at V456; §5.7.2).
   Two more were ruled in the capacity re-review by the controller's fix-3 dispatch of 2026-10-15
   (`progress.md`; not an owner decision, and to be put to the owner with the rest): Q7, windowed
   admission replaces the single head (§5.7.3); Q8, an admitted stay's hold is capped at

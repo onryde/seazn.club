@@ -37,7 +37,7 @@ import { effectiveBridge, loadOnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 import { readNeedsReason } from "./queue";
 
-/** The reasons a CALLER may hold a fixture for. Each is a V439/V441
+/** The reasons a CALLER may hold a fixture for. Each is a V451/V453
  *  `needs_reason` (the `satisfies` keeps them inside NEEDS_REASONS); no
  *  no-show is among them — spec §3.6: a revoked token is not a no-show.
  *  `tiebreak_owed` is not a caller's to assert (R2): only a written draw
@@ -209,7 +209,7 @@ function dispositionOf(s: GameSnapshot): Disposition {
 
 type Held = { held: false } | { held: true; reason: NeedsReason };
 
-/** The seat a seat hold (SEAT_HOLD_REASONS) froze — V442 `revoked_seat`;
+/** The seat a seat hold (SEAT_HOLD_REASONS) froze — V454 `revoked_seat`;
  *  controller ruling M7: the other player keeps playing. */
 export type RevokedSeat = "white" | "black" | "both";
 
@@ -291,7 +291,7 @@ async function hold(
         return { held: true, reason: stored };
       }
     }
-    // The seat belongs to a seat hold only (V442's CHECK): any other reason
+    // The seat belongs to a seat hold only (V454's CHECK): any other reason
     // that lands here clears it.
     await tx`
       update fixture_external_play

@@ -1,6 +1,6 @@
--- V446 — RealtimeKit inside its vendor budget (T17B fix 2, D21; review I2).
+-- V457 — RealtimeKit inside its vendor budget (T17B fix 2, D21; review I2).
 --
--- Renumber at merge if main has moved past (V443 is W2c's, controller ruling 2026-10-14; V444 and V445 are this
+-- Renumber at merge if main has moved past (V443 is W2c's, controller ruling 2026-10-14; V455 and V456 are this
 -- branch's).
 --
 -- WHY. RealtimeKit's REST API allows 1,200 calls per five minutes for the WHOLE account, and past it EVERY call is
@@ -26,7 +26,7 @@
 --    (`starting`: no evidence yet; `unreadable`: the report could not be read); anything definite — on, off, blocked,
 --    absent — clears the cache, so a seat is never answered from a stale pass.
 --
--- Sealed like V439's tables: RLS enabled AND forced, no policy, no grant for app_user — only the privileged client
+-- Sealed like V451's tables: RLS enabled AND forced, no policy, no grant for app_user — only the privileged client
 -- reaches it (online-chess-video-schema.test.ts reads the catalogue). The participants table is already sealed; the new
 -- columns inherit that.
 create table realtimekit_call_budget (

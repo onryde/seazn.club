@@ -1,7 +1,7 @@
 // T16 — what the organiser's queue says about a HELD online board (canvas
 // HoldQueueDesktop/Phone): a short title for the chip, and a sentence naming
 // what happened. One entry per member of the needs_reason vocabulary
-// (`NEEDS_REASONS`, which V439/V441's CHECK pins): a `Record<NeedsReason, …>`
+// (`NEEDS_REASONS`, which V451/V453's CHECK pins): a `Record<NeedsReason, …>`
 // so a new reason cannot ship without its copy (tsc), and the copy sweep in
 // external-play-reason-map.test.ts reads every member in every locale.
 //
@@ -31,7 +31,7 @@ export const HELD_TITLE_KEYS: Readonly<Record<NeedsReason, DictionaryKey>> = {
 
 export type HeldCopyInput = {
   reason: NeedsReason;
-  /** V442: the seat a seat hold (token_revoked, account_changed) froze. */
+  /** V454: the seat a seat hold (token_revoked, account_changed) froze. */
   revokedSeat: "white" | "black" | "both" | null;
   whiteName: string;
   blackName: string;
@@ -39,7 +39,7 @@ export type HeldCopyInput = {
 
 /** The sentence's key and the name it carries, if any. A no-show names the
  *  colour that stayed away; a revoked token or a changed account names the
- *  seat V442 recorded — never a no-show (design §3.6) — and both seats or an
+ *  seat V454 recorded — never a no-show (design §3.6) — and both seats or an
  *  unknown seat names nobody. */
 export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { name: string } } {
   switch (row.reason) {
@@ -68,7 +68,7 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
         case null:
           return { key: "externalPlay.reason.tokenRevoked" };
       }
-    // falls through only if V442's seat vocabulary grows — tsc refuses that
+    // falls through only if V454's seat vocabulary grows — tsc refuses that
     case "double_walkover_blocked":
       return { key: "externalPlay.reason.doubleWalkoverBlocked" };
     case "create_outcome_unknown":
@@ -91,9 +91,9 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
         case null:
           return { key: "externalPlay.reason.accountChanged" };
       }
-    // falls through only if V442's seat vocabulary grows — tsc refuses that
+    // falls through only if V454's seat vocabulary grows — tsc refuses that
     case "clock_flag_unsettled":
-      // T17B fix 2, D11: no seat is recorded for it (V442's revoked_seat is a seat hold's), so it names nobody; the
+      // T17B fix 2, D11: no seat is recorded for it (V454's revoked_seat is a seat hold's), so it names nobody; the
       // side and the times are the hold's detail.
       return { key: "externalPlay.reason.clockFlagUnsettled" };
   }

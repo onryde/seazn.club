@@ -1,4 +1,4 @@
-// T17B fix 2, D21 — the platform-wide RealtimeKit call budget (video/budget.ts, V446 `realtimekit_call_budget`).
+// T17B fix 2, D21 — the platform-wide RealtimeKit call budget (video/budget.ts, V457 `realtimekit_call_budget`).
 //
 // The vendor allows 1,200 REST calls per five minutes for the WHOLE account; past it every call, for every club, is
 // refused for five minutes. The bucket is how we stay under it — so what these tests pin is the property the vendor

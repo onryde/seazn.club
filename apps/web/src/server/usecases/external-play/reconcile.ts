@@ -151,7 +151,7 @@ const IS_TERMINAL: Record<LichessStatus | "unrecognised", boolean> = {
 export const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error", "account_changed", "clock_flag_unsettled"] as const satisfies readonly HoldReason[];
 
 /** lila registers no draw offer before ply 2 (Game.scala `playerCanOfferDraw`,
- *  lila 3747530a1 — source, as T10 cites it); V442's CHECKs refuse one. */
+ *  lila 3747530a1 — source, as T10 cites it); V454's CHECKs refuse one. */
 const DRAW_MIN_PLY = 2;
 
 /** A T12 answer after which the game is closed on our side: a result written
@@ -485,7 +485,7 @@ async function holdRevoked(g: Game, revoked: readonly Colour[]): Promise<ResultW
  *  append absorbs). One recorded after THIS read was sent to Lichess after
  *  Lichess was read, so the line in hand cannot hold its move: nothing it
  *  could excuse is missed. No lock is owed for that ordering, and the write
- *  spends it anyway once the ledger passes its ply (V442: next ply only). */
+ *  spends it anyway once the ledger passes its ply (V454: next ply only). */
 async function submissionOnFile(fixtureId: string): Promise<SubmittedMove | null> {
   const [row] = await sql<{ ply: number | null; uci: string | null }[]>`
     select pending_move_ply as ply, pending_move_uci as uci
@@ -543,7 +543,7 @@ function offerAfter(b: BridgeRow, g: BoardGameFull, ply: number) {
   return by === "white" ? { ...keep, by, whitePly: ply } : { ...keep, by, blackPly: ply };
 }
 
-/** The row's clocks after this read, in the row's own terms (V442, T10's
+/** The row's clocks after this read, in the row's own terms (V454, T10's
  *  append): `white_ms`/`black_ms` are each side's time AS AT `last_move_at`,
  *  and every renderer counts the side to move down from `last_move_at`
  *  (once both sides have moved — scalachess Clock.step). Lichess reports
@@ -570,7 +570,7 @@ function clocksAt(b: BridgeRow, g: BoardGameFull, ply: number, adopted: number, 
     : { whiteMs: g.whiteMs, blackMs: asOfMove(g.blackMs, b.black_ms), lastMoveAt: last };
 }
 
-/** The instant the side to move's clock ran out, from the ROW's own clocks (V442: each clock as at `last_move_at`) — or
+/** The instant the side to move's clock ran out, from the ROW's own clocks (V454: each clock as at `last_move_at`) — or
  *  null when this read is not a flag candidate or a read that adopted plies (the row's clocks are an earlier move's, so
  *  it waits for the next read). */
 function flagInstant(g: Game, lichess: BoardGameFull, adopted: number): { mover: Colour; flagAt: number } | null {
@@ -580,7 +580,7 @@ function flagInstant(g: Game, lichess: BoardGameFull, adopted: number): { mover:
   const mover: Colour = lichess.movesUci.length % 2 === 0 ? "white" : "black";
   const asOfMove = mover === "white" ? b.white_ms : b.black_ms;
   if (asOfMove === null) {
-    // V442 writes both clocks with every move from ply 2; the flag's instant is then the move itself (the earliest).
+    // V454 writes both clocks with every move from ply 2; the flag's instant is then the move itself (the earliest).
     log.warn({ fixtureId: g.fixture.fixtureId, gameId: g.gameId, mover }, "lichess reconcile: a running clock with no stored time");
   }
   return { mover, flagAt: b.last_move_at.getTime() + Math.max(0, asOfMove ?? 0) };
@@ -778,7 +778,7 @@ async function applyExport(
              started_at = coalesce(started_at, ${t.at}::timestamptz),
              last_move_at = ${t.at},
              -- I4: this write adopts at least one ply, so it passes the only
-             -- submission the row can hold (V442: the next ply's) — spent.
+             -- submission the row can hold (V454: the next ply's) — spent.
              pending_move_ply = null, pending_move_uci = null, pending_move_at = null,
              updated_at = now()
        where fixture_id = ${fixtureId} and challenge_id = ${g.gameId}
@@ -805,7 +805,7 @@ async function applyExport(
   // The board's last state for the room: the line we now hold, and the clocks
   // as our row last knew them (the export's are never used) — T17B fix 2, D11
   // (c): the running side's counted down to this read, as every renderer
-  // counts it (V442: each clock is as at `last_move_at`), never sent as at the
+  // counts it (V454: each clock is as at `last_move_at`), never sent as at the
   // move. A read that adopted plies has no row clock for them: as stored.
   if (t.snapshot.status !== "unrecognised") {
     const limitMs = g.fixture.clock.limit * 1000;

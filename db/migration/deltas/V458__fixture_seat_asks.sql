@@ -1,8 +1,8 @@
--- V447 — a per-seat limit on the match room's seat and camera doors (T17B fix 2, D21-fix-4; review I2).
+-- V458 — a per-seat limit on the match room's seat and camera doors (T17B fix 2, D21-fix-4; review I2).
 --
--- Renumber at merge if main has moved past (V443 is W2c's; V444-V446 are this branch's).
+-- Renumber at merge if main has moved past (V443 is W2c's; V455-V457 are this branch's).
 --
--- WHY. Every seat claim and every camera-token ask can cost the platform's RealtimeKit budget (V446: ONE bucket for the
+-- WHY. Every seat claim and every camera-token ask can cost the platform's RealtimeKit budget (V457: ONE bucket for the
 -- whole account), and both routes answer to any signed-in player of a board. A player with a hand-rolled client could ask at
 -- twenty requests a second, keep the bucket empty, and turn every club's check-in into `camera_starting` while the sweep's
 -- retries found no token to spend. The limit is PER SEAT - one (fixture, person) pair, per door - so one player's loop can
@@ -18,7 +18,7 @@
 -- THE LIFECYCLE IS THE FIXTURE'S. The row goes with its fixture and with its person, so nothing accumulates past the
 -- boards that earned it, and no cleanup job exists to forget.
 --
--- Sealed like V446's `realtimekit_call_budget`: RLS enabled AND forced, no policy, no grant for app_user - only the
+-- Sealed like V457's `realtimekit_call_budget`: RLS enabled AND forced, no policy, no grant for app_user - only the
 -- privileged client reaches it (online-chess-video-schema.test.ts reads the catalogue). No org_id: it is not a tenant table
 -- (the person and fixture it names are, and are checked by the room's identity before this table is touched).
 create table fixture_seat_asks (

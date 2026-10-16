@@ -2,7 +2,7 @@ import "server-only";
 // T16 — "Let the game go on" (chess design D10, §7): the organiser has
 // reviewed a board's fair-play flags and the game carries on. Flags are
 // evidence, never sanctions: closing one changes no result and no seat, and
-// the row stays on file with WHO closed it and WHEN — V439's resolution pair
+// the row stays on file with WHO closed it and WHEN — V451's resolution pair
 // (closed_at, resolved_by) is the audit record (controller ruling
 // 2026-10-12: one authority per fact).
 //

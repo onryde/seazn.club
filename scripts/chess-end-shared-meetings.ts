@@ -1,9 +1,9 @@
-// One-off deploy step for V448 (db/migration/deltas/V448__video_meeting_per_player.sql; chess in-page board and camera
+// One-off deploy step for V459 (db/migration/deltas/V459__video_meeting_per_player.sql; chess in-page board and camera
 // design, docs/superpowers/specs/2026-10-09-chess-in-page-board-and-camera-design.md §5.6.7).
 //
-// Before D16 a board had ONE RealtimeKit meeting shared by both players. V448 gives every player a meeting of their own
+// Before D16 a board had ONE RealtimeKit meeting shared by both players. V459 gives every player a meeting of their own
 // and DROPS the shared rows. A shared meeting whose row has `ended_at is null` is still ACTIVE at the vendor and its
-// tokens stay valid until they expire: dropping the row would orphan it and nothing would ever end it. So V448's first
+// tokens stay valid until they expire: dropping the row would orphan it and nothing would ever end it. So V459's first
 // two statements are a table lock and a guard that RAISES while any such row exists, and this script is what clears
 // them: it ends every row with `ended_at is null` at the vendor (kick everyone, then INACTIVE - the two calls
 // `endMeeting` makes, realtimekit.ts), one row at a time, each in its own try, and stamps the row ended.
@@ -20,12 +20,12 @@
 // exits 1 if any failed (so a deploy script stops), 2 if it could not start. It is safe to run twice: a row it has
 // stamped is not found again, and a row that failed stays unended and is retried.
 //
-// Why this is not `endMeeting`: the script runs against the schema BEFORE V448, and `endMeeting` stamps its rows through
+// Why this is not `endMeeting`: the script runs against the schema BEFORE V459, and `endMeeting` stamps its rows through
 // the per-player columns (`side`) that do not exist yet - it would end the room at the vendor and then fail to record
 // it, leaving the guard to raise for ever. The two vendor calls are the same (scripts and the adapter are held to it by
 // the script's test, which drives both against the RealtimeKit fixture and compares); the stamp is schema-neutral.
 //
-// It REFUSES to run once V448 is applied. After the delta a row is one player's live room, and ending "every unended
+// It REFUSES to run once V459 is applied. After the delta a row is one player's live room, and ending "every unended
 // row" would end rooms people are playing in. A vendor meeting that no longer exists (RealtimeKit's documented 404 on
 // the INACTIVE call) is already ended: the row is stamped and counted as gone, because the guard would otherwise
 // refuse the deploy for ever over a room nobody can join.
@@ -34,7 +34,7 @@
 // bucket belongs to the app serving traffic, not to a one-off). A vendor 429 is a failure like any other: the row stays
 // unended and the next run takes it. With hundreds of rows, run it in more than one go.
 //
-// NEVER against a production database from a branch that has not shipped V448's code, and never without the owner's
+// NEVER against a production database from a branch that has not shipped V459's code, and never without the owner's
 // word: it is a one-off for the environment the controller names (stg). No secret is printed: failures carry the
 // vendor's status and path, never a token or a response body.
 import type postgres from "postgres";
@@ -55,7 +55,7 @@ export type Report = {
   gone: number;
   failed: number;
   failures: Failure[];
-  /** V448 is already applied: nothing was touched. */
+  /** V459 is already applied: nothing was touched. */
   refused: boolean;
   dryRun: boolean;
 };
@@ -119,7 +119,7 @@ export function vendorFromEnv(
   };
 }
 
-/** Whether the schema is already per player (V448 applied): a meeting row then has a `side`. */
+/** Whether the schema is already per player (V459 applied): a meeting row then has a `side`. */
 async function isPerPlayer(sql: Sql): Promise<boolean> {
   const [row] = await sql<{ n: number }[]>`
     select count(*)::int as n from information_schema.columns
@@ -136,7 +136,7 @@ export async function endSharedMeetings(
   const log = opts.log ?? (() => undefined);
   const dryRun = opts.dryRun === true;
   if (await isPerPlayer(sql)) {
-    log("REFUSED: this database already has V448's per-player meetings. A row here is one player's live room; this script ends the SHARED rooms the delta refuses, and would end rooms people are playing in.");
+    log("REFUSED: this database already has V459's per-player meetings. A row here is one player's live room; this script ends the SHARED rooms the delta refuses, and would end rooms people are playing in.");
     return { ...EMPTY, refused: true, dryRun };
   }
   const rows = await sql<{ fixtureId: string; meetingId: string }[]>`
@@ -206,7 +206,7 @@ async function main(): Promise<number> {
     console.log("\n--- summary ---");
     console.log(`Unended shared meetings found: ${r.found}`);
     if (!r.refused && !dryRun) console.log(`Ended: ${r.ended} (already gone at the vendor: ${r.gone})\nFailed: ${r.failed}`);
-    if (r.failed > 0) console.error("\nSome meetings were not ended. V448 will refuse to apply while they exist; fix the cause and run again.");
+    if (r.failed > 0) console.error("\nSome meetings were not ended. V459 will refuse to apply while they exist; fix the cause and run again.");
     return exitCodeOf(r);
   } finally {
     await sql.end();

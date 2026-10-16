@@ -744,7 +744,7 @@ describe.runIf(HAS_DB)("act — turn, absorb and races (Review Focus 2)", () => 
       const { sent, deps } = boardStub(async () => {
         // T11-shaped: the game ended on this very move and reconcile adopted
         // the stream's moves before our append ran (spending T10's
-        // submission, as reconcile's ledger write does — V442, T13 I4).
+        // submission, as reconcile's ledger write does — V454, T13 I4).
         await sql`
           update fixture_external_play
              set status = 'finished', finished_at = now(), moves_uci = '["e2e4"]'::jsonb, move_count = 1,
@@ -1734,7 +1734,7 @@ describe("publishRoomBroadcast", () => {
         expect(calls.length).toBe(1);
         expect(calls[0]!.url).toBe("https://stub.supabase.test/realtime/v1/api/broadcast");
         expect(calls[0]!.init.headers).toMatchObject({ Authorization: "Bearer svc", apikey: "svc" });
-        // V440's policy matches `external-play:{lobby_fixture_id}`, so riding
+        // V452's policy matches `external-play:{lobby_fixture_id}`, so riding
         // this topic needs NO new realtime policy for players.
         const { messages } = JSON.parse(String(calls[0]!.init.body)) as { messages: { topic: string; event: string; private: boolean }[] };
         expect(messages[0]).toEqual({ topic: externalPlayLobbyTopic("fix-1"), event: "room_state", payload: BODY, private: true });

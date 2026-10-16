@@ -121,7 +121,7 @@ export interface DivisionRow {
    *  `stages.required_court_tags` (the sibling V367 column, wired the same
    *  pass — CRUD for the stage side still does not exist). */
   required_court_tags: string[];
-  /** V439 online-chess camera requirement for this division; null = inherit
+  /** V451 online-chess camera requirement for this division; null = inherit
    *  the competition's (NOT NULL floor). Resolved per fixture, with the stage
    *  level, by camera-policy.ts's fixtureCameraPolicy. */
   camera_policy: CameraPolicy | null;

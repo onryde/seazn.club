@@ -1,8 +1,8 @@
 import "server-only";
 // The organiser queue for online-play fixtures stuck in `needs_organiser`,
-// read by the division page's fixtures tab. Rebuilt against V439: the
+// read by the division page's fixtures tab. Rebuilt against V451: the
 // pre-redesign reader was deleted in 340dce7ed together with the schema it
-// read. Same shape the page already consumes, plus `reason` — V439 moved the
+// read. Same shape the page already consumes, plus `reason` — V451 moved the
 // why out of free-text `last_error` into the `needs_reason` vocabulary.
 import type { NoResultOffer } from "@/lib/arbiter-view";
 import { withTenant } from "@/lib/db";
@@ -25,7 +25,7 @@ export type NeedsOrganiserExternalPlayRow = {
   /** T16 — the queue names the players by colour (canvas HoldQueue), and the
    *  settle sends a SIDE: which side plays White. */
   whiteSide: Side;
-  /** V442: the seat a seat hold (token_revoked, account_changed) froze; null otherwise. */
+  /** V454: the seat a seat hold (token_revoked, account_changed) froze; null otherwise. */
   revokedSeat: "white" | "black" | "both" | null;
   roundNo: number | null;
   /** The board number in its round (`seq_in_round`, the room's boardNo). */
@@ -43,12 +43,12 @@ const REVOKED_SEATS = ["white", "black", "both"] as const;
 function readRevokedSeat(raw: unknown): NeedsOrganiserExternalPlayRow["revokedSeat"] {
   if (raw === null) return null;
   const seat = REVOKED_SEATS.find((x) => x === raw);
-  // V442's CHECK keeps the column to these three; a drift is refused loudly.
+  // V454's CHECK keeps the column to these three; a drift is refused loudly.
   if (!seat) throw new HttpError(500, `revoked_seat outside its vocabulary: ${JSON.stringify(raw)}`, "REVOKED_SEAT_UNKNOWN");
   return seat;
 }
 
-/** V439's CHECK pairs `needs_organiser` with a non-null reason from the
+/** V451's CHECK pairs `needs_organiser` with a non-null reason from the
  *  vocabulary, so a row outside it cannot exist. A guard, not a comment: if
  *  the CHECK and NEEDS_REASONS ever drift, refuse loudly instead of handing
  *  the queue a reason nothing can label. */

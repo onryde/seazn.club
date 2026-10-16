@@ -3,7 +3,7 @@ import "server-only";
 // ONLY MOVER: a player posts an intended move here, we validate it, confirm
 // the caller is that colour's player and that it is their turn, and submit it
 // with THAT player's own Lichess token. Only a move Lichess accepted is
-// recorded in the ledger (V442), and only a recorded move is broadcast.
+// recorded in the ledger (V454), and only a recorded move is broadcast.
 //
 // Lichess decides legality and ends games. This file never adjudicates a
 // result and never writes 'finished' (controller ruling Q2): a resign, an
@@ -430,7 +430,7 @@ async function playMove(
   // as ours, never as out-of-band play. Cleared by the append; a refusal or a
   // 5xx leaves it (a 5xx may have played it). It excuses only this ply with
   // this move, so it can never whitewash a different one. Recorded only while
-  // the ledger is still at this ply (V442's CHECK: a submission is for the
+  // the ledger is still at this ply (V454's CHECK: a submission is for the
   // NEXT ply only) — a stale tab records nothing, and never erases the next
   // mover's; Lichess judges its move as before.
   await sql`
@@ -477,7 +477,7 @@ async function playMove(
            end,
            ${sql(waitingCol)} = coalesce(${sql(waitingCol)}, ${limitMs}),
            draw_offer_by = case when draw_offer_by = ${otherColour(colour)} then null else draw_offer_by end,
-           -- I4: the only submission the row can hold is this ply's (V442),
+           -- I4: the only submission the row can hold is this ply's (V454),
            -- and the ledger now holds this ply.
            pending_move_ply = null, pending_move_uci = null, pending_move_at = null,
            updated_at = now()
@@ -608,7 +608,7 @@ function drawBroadcast(f: OnlinePlayFixture, row: DrawRow, now: Date): RoomBroad
   const turn = turnAt(row.move_count);
   // Every draw broadcast is at ply >= 2, where scalachess's clock runs: a yes
   // is recorded only from ply 2 (its WHERE), and a no needs a standing
-  // offer, which V442's draw_offer_by CHECK refuses below ply 2.
+  // offer, which V454's draw_offer_by CHECK refuses below ply 2.
   if (row.last_move_at !== null) {
     const elapsed = Math.max(0, now.getTime() - row.last_move_at.getTime());
     if (turn === "white") whiteMs = Math.max(0, whiteMs - elapsed);

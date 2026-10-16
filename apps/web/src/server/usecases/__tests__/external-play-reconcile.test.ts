@@ -354,7 +354,7 @@ async function rowOf(fixtureId: string): Promise<Row> {
       from fixture_external_play where fixture_id = ${fixtureId}`;
   return r!;
 }
-/** V439's fair-play flags for a fixture, oldest first. */
+/** V451's fair-play flags for a fixture, oldest first. */
 async function flagsOf(fixtureId: string) {
   return sql<{ kind: string; org_id: string; person_id: string | null; note: string | null; closed_at: Date | null; resolved_by: string | null }[]>`
     select kind, org_id, person_id, note, closed_at, resolved_by from fixture_play_flags
@@ -640,7 +640,7 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     expect(sent.map((b) => b.drawOfferBy)).toEqual([null]);
   });
 
-  it("an offer read before ply 2 is not adopted (lila registers none; V442 refuses one)", async () => {
+  it("an offer read before ply 2 is not adopted (lila registers none; V454 refuses one)", async () => {
     const g = await readyGame();
     serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), wdraw: true }));
     await reconcile(g.fixtureId, "sweep", observed().deps);
@@ -1956,7 +1956,7 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
       const { deps, sent } = observed(new Date(before.last_move_at!.getTime() + c.after));
       const out = await reconcile(g.fixtureId, "sweep", deps);
       expect(out, c.why).toMatchObject({ source: "export", adopted: 0, finished: true });
-      // V442: each clock is as at `last_move_at`; White's has been running since. Black's waits, as stored.
+      // V454: each clock is as at `last_move_at`; White's has been running since. Black's waits, as stored.
       expect(sent.map((b) => [b.whiteMs, b.blackMs]), c.why).toEqual([[Math.max(0, before.white_ms! - c.after), before.black_ms]]);
       checked++;
     }
@@ -2096,7 +2096,7 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
 // ---------------------------------------------------------------------------
 // T11 fix round 1 — I5: plies reconcile ADOPTS were played at Lichess without
 // us (our server is the only mover). Controller ruling: a fair-play flag in
-// V439's table, never a sanction; evidence = the plies + whether the camera
+// V451's table, never a sanction; evidence = the plies + whether the camera
 // was Required; one flag per adoption, never a duplicate on a re-read.
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_play flag", () => {
@@ -2108,7 +2108,7 @@ describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_pl
     expect(flags.length, "one adoption, one flag").toBe(1);
     expect(flags[0]).toMatchObject({ kind: "out_of_band_play", org_id: g.orgId, person_id: null, closed_at: null, resolved_by: null });
     // The evidence: the plies by number, the moves themselves (the recording's,
-    // not ours), and the camera policy (V439 default: off).
+    // not ours), and the camera policy (V451 default: off).
     expect(flags[0]!.note).toContain(`plies 2-${LINE.length}`);
     expect(flags[0]!.note).toContain(LINE.slice(1).join(" "));
     expect(flags[0]!.note).toContain("camera not required (policy off)");

@@ -1,4 +1,4 @@
-// The organiser queue's reader, rebuilt against V439 (the pre-redesign one was
+// The organiser queue's reader, rebuilt against V451 (the pre-redesign one was
 // deleted in 340dce7ed with its schema). It is what the division page's
 // fixtures tab calls, so it is imported here through the SAME path the page
 // uses: the `@/server/usecases/external-play` index.
@@ -84,7 +84,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
     await sql`update fixture_external_play set white_side = 'away', challenge_id = ${`gm-${s.fixtureId.slice(0, 12)}`}, revoked_seat = 'black' where fixture_id = ${s.fixtureId}`;
     const [row] = await listNeedsOrganiserExternalPlay(s.auth, s.divisionId);
     expect([row!.whiteSide, row!.canResync, row!.revokedSeat]).toEqual(["away", true, "black"]);
-    // Every seat V442 admits reads as itself — counted.
+    // Every seat V454 admits reads as itself — counted.
     let checked = 0;
     for (const seat of ["white", "black", "both"] as const) {
       await sql`update fixture_external_play set revoked_seat = ${seat} where fixture_id = ${s.fixtureId}`;
@@ -108,7 +108,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
     const s = await seeded();
     await bridge(s.fixtureId, s.orgId, "needs_organiser", "aborted", null);
     expect((await listNeedsOrganiserExternalPlay(s.auth, s.divisionId)).map((r) => r.reason)).toEqual(["aborted"]);
-    // V439's status CHECK, minus needs_organiser — typed from the migration.
+    // V451's status CHECK, minus needs_organiser — typed from the migration.
     const others = ["pending", "ready", "live", "finished"];
     let checked = 0;
     for (const status of others) {
@@ -125,7 +125,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
     ]);
   });
 
-  it("every reason V439 admits is listed as itself, and the TS vocabulary IS the CHECK", async () => {
+  it("every reason V451 admits is listed as itself, and the TS vocabulary IS the CHECK", async () => {
     // The authority is the database: read the needs_reason CHECK's literals.
     const [def] = await sql<{ d: string }[]>`
       select pg_get_constraintdef(c.oid) as d from pg_constraint c

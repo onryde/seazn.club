@@ -1,6 +1,6 @@
 import "server-only";
 // Linked external board accounts (Lichess first). The row carries the
-// player's OAuth TOKEN AT REST (chess design §3.1, V439) — this reverses the
+// player's OAuth TOKEN AT REST (chess design §3.1, V451) — this reverses the
 // identity-only decision V405 shipped under, because our server submits both
 // players' moves with their own tokens. The token is sealed by
 // external-play/secrets.ts; `access_token_enc` is named HERE and nowhere else
@@ -14,7 +14,7 @@ import { openPlayerToken, sealPlayerToken } from "@/server/external-play/secrets
 import { log } from "@/server/logger";
 import { hasValidKek } from "@/server/relay/crypto";
 
-/** V439's second unique constraint — a Lichess account can only ever be
+/** V451's second unique constraint — a Lichess account can only ever be
  *  linked to ONE Seazn user. */
 const ALREADY_LINKED_CONSTRAINT = "user_external_accounts_provider_external_user_id_key";
 
@@ -137,11 +137,11 @@ async function revokeAtLichess(
   }
 }
 
-/** Upsert on `(user_id, provider)`. V439's second unique constraint,
+/** Upsert on `(user_id, provider)`. V451's second unique constraint,
  *  `(provider, external_user_id)`, means a given Lichess account links to ONE
  *  Seazn user; a different user claiming an already-linked account trips it,
  *  and it is surfaced as a typed 409 rather than a raw 23505. Writing the
- *  token also writes `consented_at = now()`: V439's
+ *  token also writes `consented_at = now()`: V451's
  *  `user_external_accounts_consent_token_check` refuses one without the
  *  other, so the two cannot drift apart. */
 export async function upsertLichessLink(

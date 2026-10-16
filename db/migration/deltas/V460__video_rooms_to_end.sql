@@ -1,6 +1,6 @@
--- V449 — rooms nothing tracks any more (D16 fix-2, review residual 2).
+-- V460 — rooms nothing tracks any more (D16 fix-2, review residual 2).
 --
--- Renumber at merge if main has moved past (V443 is W2c's; V444-V448 are this branch's).
+-- Renumber at merge if main has moved past (V443 is W2c's; V455-V459 are this branch's).
 --
 -- WHY. A `fixture_video_meetings` row is the ONLY thing that tracks an ACTIVE vendor room, and it cascades away with its
 -- fixture. Four writes delete fixtures (a stage deleted; Rebuild fixtures; a Swiss round reshaped to a smaller field; the
@@ -19,11 +19,11 @@
 -- delete cascades to the very meeting rows that fire the trigger, and a foreign key on `org_id` would make that delete
 -- fail. `fixture_id` and `side` are for the log line only; `org_id` scopes the sweep's test seam.
 --
--- Sealed like V446's `realtimekit_call_budget`: RLS enabled AND forced, no policy, no grant for app_user - only the
+-- Sealed like V457's `realtimekit_call_budget`: RLS enabled AND forced, no policy, no grant for app_user - only the
 -- privileged client reaches it (online-chess-video-schema.test.ts reads the catalogue). It carries an org_id, so it is
 -- exempt by name in scripts/rls-exempt.ts, as `fixture_video_meetings` is.
 --
--- The trigger function is security definer with a pinned search_path (the V306 / V439 shape): the delete that fires it
+-- The trigger function is security definer with a pinned search_path (the V306 / V451 shape): the delete that fires it
 -- may run as app_user (a stage delete under withTenant), which holds no privilege on this sealed table. It only INSERTs
 -- the row being deleted, and never fails the delete (`on conflict do nothing`).
 create table video_rooms_to_end (

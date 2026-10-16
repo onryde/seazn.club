@@ -10,7 +10,7 @@ import "server-only";
 // The reschedule detector in guard.ts (`scheduled_at_basis`) is a DIFFERENT
 // question and stays schedule-based; do not re-anchor it.
 //
-// `stage_round_opens` is SEALED (V439: FORCE RLS, no app_user policy, no
+// `stage_round_opens` is SEALED (V451: FORCE RLS, no app_user policy, no
 // grant), so these readers must be handed the privileged `sql` client. Inside
 // a `withTenant` transaction (role app_user) the read is refused outright —
 // `permission denied for table stage_round_opens` (42501), verified against
@@ -28,7 +28,7 @@ export type RoundOpenRow = RoundOpen & { id: string };
 
 /** THE read of `stage_round_opens` (T19 folded the by-key read in here rather
  *  than add a second reader — controller addendum 3). `null` ⇒ this
- *  (stage, round) has never been opened. (`openedBy` is NOT NULL in V439; the
+ *  (stage, round) has never been opened. (`openedBy` is NOT NULL in V451; the
  *  type keeps the plan's declared `string | null`.) */
 export async function roundOpenAt(db: AnySql, stageId: string, roundNo: number): Promise<RoundOpenRow | null> {
   const rows = await db<RoundOpenRow[]>`

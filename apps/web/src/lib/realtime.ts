@@ -316,7 +316,7 @@ export type RoomBroadcast = {
 };
 
 /** Push the room state to both players, and the board to spectators. Same endpoint, headers and topic as
- *  `publishExternalPlayLobby` — the topic's realtime policy (V440) already
+ *  `publishExternalPlayLobby` — the topic's realtime policy (V452) already
  *  admits a seated player, so no new policy — plus the timeout that
  *  `publishFixtureUpdate` carries. Fire-and-forget: never throws. */
 export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcast): Promise<void> {

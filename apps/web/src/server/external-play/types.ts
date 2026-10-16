@@ -19,7 +19,7 @@ export type ExternalPlayStatus =
   | "needs_organiser";
 
 /** Spec §9 / row `needs_reason` — why a fixture landed in `needs_organiser`.
- *  The SAME SET as the `needs_reason` CHECK (V439, as V441 re-declares it).
+ *  The SAME SET as the `needs_reason` CHECK (V451, as V453 re-declares it).
  *  `token_revoked` / `double_walkover_blocked` are §3.6: a revoked token is
  *  not a no-show; a blocked double walkover is its own state.
  *  external-play-needs-organiser.test.ts reads the CHECK back from
@@ -35,21 +35,21 @@ export const NEEDS_REASONS = [
   "provider_error",
   "token_revoked",
   "double_walkover_blocked",
-  // V441 (T9 fix round 1, I2): a stale create whose outcome a lookup could
+  // V453 (T9 fix round 1, I2): a stale create whose outcome a lookup could
   // not prove — held for an organiser, never re-created blind.
   "create_outcome_unknown",
-  // V441 (T12, spec §3.6; fix round 1, R2): a drawn game in a bracket stage,
+  // V453 (T12, spec §3.6; fix round 1, R2): a drawn game in a bracket stage,
   // written through the engine, whose fold now awaits its tie-break — ship 1
   // cannot create the tie-break game, so the organiser is told. Never decided.
   "tiebreak_owed",
-  // V441 (T12 fix round 1, I2): Lichess ended the game for a fair-play
+  // V453 (T12 fix round 1, I2): Lichess ended the game for a fair-play
   // violation (status `cheat`) — the organiser's fair-play queue.
   "fair_play",
-  // V441 (final review P11): a player re-linked a DIFFERENT Lichess account
+  // V453 (final review P11): a player re-linked a DIFFERENT Lichess account
   // while their game was live or mid-create — the recorded account is no
   // longer theirs, and its grant was revoked by the re-link (M-2).
   "account_changed",
-  // V445 (T17B fix 2, D11): the side to move's clock ran out and Lichess still
+  // V456 (T17B fix 2, D11): the side to move's clock ran out and Lichess still
   // reports the game `started` a minute later — never a flag of ours; the
   // organiser decides, with the evidence (reconcile.ts).
   "clock_flag_unsettled",
@@ -58,9 +58,9 @@ export type NeedsReason = (typeof NEEDS_REASONS)[number];
 
 /** The holds that freeze ONE SEAT, not the game (controller ruling M7; final
  *  re-review P11 (1)): the seat whose link broke — a token Lichess refused,
- *  or an account the player re-linked away from — is V442's `revoked_seat`,
+ *  or an account the player re-linked away from — is V454's `revoked_seat`,
  *  and the other player keeps playing and can still win on the clock.
- *  Freezing the innocent side would hand them the flag. V442's
+ *  Freezing the innocent side would hand them the flag. V454's
  *  `revoked_seat` CHECK admits a seat on exactly these reasons. */
 export const SEAT_HOLD_REASONS = ["token_revoked", "account_changed"] as const satisfies readonly NeedsReason[];
 export type SeatHoldReason = (typeof SEAT_HOLD_REASONS)[number];

@@ -333,7 +333,7 @@ async function meetingOnFile(fixtureId: string, side: MeetingSide, now: Date): P
  *  fresh window's old meetings (D16 review G1) in place of deleting them: the row must outlive the vendor call that ends its
  *  room, because the row is the only thing that tracks an ACTIVE room, and a row whose stamp matches no pairing is exactly
  *  what the retire path already ends and deletes (a claim's `retireStaleMeeting`, and the sweep's teardown). The stamp is "a
- *  stamp to compare, never joined" (V439), so this needs no schema. */
+ *  stamp to compare, never joined" (V451), so this needs no schema. */
 export const RETIRED_PAIR = "00000000-0000-0000-0000-000000000000";
 
 /** R2-2: retire the board's meetings if they are (still) another pairing's with no game behind them: each room is ENDED at

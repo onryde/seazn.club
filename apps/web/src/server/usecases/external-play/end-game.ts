@@ -34,7 +34,7 @@ export type GameToEnd = {
   whiteSide: Side;
   lichessIds: Record<Colour, string>;
   ply: number;
-  /** The standing draw offer on file, and each side's last offer's ply (V442) — lila's draw rules read both. */
+  /** The standing draw offer on file, and each side's last offer's ply (V454) — lila's draw rules read both. */
   drawOfferBy: Colour | null;
   offerPly: Record<Colour, number | null>;
 };

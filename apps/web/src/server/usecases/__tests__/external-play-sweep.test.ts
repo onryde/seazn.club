@@ -4024,7 +4024,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   // closes what the organiser saw. A flag closed DURING the match must not
   // swallow the camera judgment that only comes after it — and a camera flag
   // the organiser has closed is already-judged evidence: a later pass over the
-  // same room raises nothing (V442's one settle per room).
+  // same room raises nothing (V454's one settle per room).
   it("T16: a flag closed mid-match does not stop the camera judgment; the judged camera flag, once closed, is never raised again", async () => {
     const m = await playedMatch();
     const x = session(m, m.startedAt - 120_000, m.endedAt);
@@ -4966,7 +4966,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const K = 3;
     const claims = Object.fromEntries(PATH_NAMES.map((p) => [p, 0])) as Record<PathName, number>;
     const counters = { passes: 0, early: 0, not_ready: 0, flagged: 0, outage_failed: 0, unread: 0, settled_skip: 0, readies: 0, half_settled: 0 };
-    // D16: each player's room settles on its OWN (V442, per row): the model is the two rooms, side by side - a room is read
+    // D16: each player's room settles on its OWN (V454, per row): the model is the two rooms, side by side - a room is read
     // while it is unsettled, settles when its report is final (or on the day's give-up), and nothing the other room does
     // moves it.
     type Facts = { reads: boolean; settledNow: number; flags: number; failures: string[] };
@@ -5089,7 +5089,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
-  it("D16: a room settles while the OTHER is still live - no V442 abort (evidence requires an ended room, per row), and the live one is untouched", async () => {
+  it("D16: a room settles while the OTHER is still live - no V454 abort (evidence requires an ended room, per row), and the live one is untouched", async () => {
     const m = await playedMatch();
     bothOnThroughout(m);
     // Stands for a half-ended board: away's teardown failed at the vendor and its row is unended.

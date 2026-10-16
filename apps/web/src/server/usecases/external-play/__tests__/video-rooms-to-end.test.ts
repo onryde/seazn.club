@@ -1,7 +1,7 @@
 // D16 fix-2, review residual 2: a meeting row is the only thing that tracks an ACTIVE vendor room, and it cascades away with its
 // fixture. Four writes delete fixtures (a stage delete, Rebuild fixtures, a Swiss round reshaped to a smaller field, an undo of a
 // generation) and each used to leave up to two rooms per board ACTIVE, with live player tokens, that nothing could find.
-// V449's trigger parks an un-ended room in `video_rooms_to_end` in the deleting transaction; the sweep ends each parked room and
+// V460's trigger parks an un-ended room in `video_rooms_to_end` in the deleting transaction; the sweep ends each parked room and
 // deletes its row only after the end succeeded. Every test below drives the REAL usecase, then the REAL sweep.
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
@@ -61,7 +61,7 @@ async function sweepOrg(orgId: string, over: Partial<SweepDeps> = {}) {
 }
 
 describe.skipIf(!HAS_DB)("a room whose meeting row cascades away with its fixture is parked, then ended by the sweep", () => {
-  describe("the trigger itself (V449)", () => {
+  describe("the trigger itself (V460)", () => {
     it("parks an un-ended room when its row is deleted - both players' rooms, with the board and the side - and an ENDED room parks nothing", async () => {
       const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
       const [a, b] = r.boards;

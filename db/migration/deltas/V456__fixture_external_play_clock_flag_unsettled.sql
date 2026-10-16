@@ -1,7 +1,7 @@
--- V445 — fixture_external_play learns `clock_flag_unsettled` (T17B fix 2, D11).
+-- V456 — fixture_external_play learns `clock_flag_unsettled` (T17B fix 2, D11).
 --
 -- Renumber at merge if main has moved past (V443 is W2c's, controller ruling
--- 2026-10-14; V444 is this branch's D9).
+-- 2026-10-14; V455 is this branch's D9).
 --
 -- Measured live on staging (game x0JKlePc, 5+0, 2026-10-14): White's clock
 -- reached zero and Lichess still reported the game `started` with White at 0

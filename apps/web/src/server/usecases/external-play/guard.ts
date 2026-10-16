@@ -47,7 +47,7 @@ export type BridgeRow = {
   needs_reason: NeedsReason | null;
   started_at: Date | null;
   finished_at: Date | null;
-  /** V442 — T10's move ledger: every move Lichess ACCEPTED, as UCI. */
+  /** V454 — T10's move ledger: every move Lichess ACCEPTED, as UCI. */
   moves_uci: string[];
   move_count: number;
   last_move_at: Date | null;
@@ -57,11 +57,11 @@ export type BridgeRow = {
   draw_offer_by: "white" | "black" | null;
   white_draw_offer_ply: number | null;
   black_draw_offer_ply: number | null;
-  /** V442 (T11 fix round 1, ruling M7): the seat a seat hold
+  /** V454 (T11 fix round 1, ruling M7): the seat a seat hold
    *  (SEAT_HOLD_REASONS: token_revoked, account_changed) froze; null on any
    *  other row, and on a seat hold whose seat nobody recorded (both frozen). */
   revoked_seat: "white" | "black" | "both" | null;
-  /** V442 (T13 fix round 1, ruling I4): the move T10 is submitting — the
+  /** V454 (T13 fix round 1, ruling I4): the move T10 is submitting — the
    *  ply it was sent at, the canonical UCI, and when — recorded BEFORE the
    *  Board API call, cleared once the ledger holds that ply. All or none. */
   pending_move_ply: number | null;

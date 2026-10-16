@@ -1,4 +1,4 @@
--- V444 — fixture_play_flags learns `multiple_devices` (T17B fix 2, D9).
+-- V455 — fixture_play_flags learns `multiple_devices` (T17B fix 2, D9).
 --
 -- Renumber at merge if main has moved past. V443 is skipped on purpose: the
 -- W2c wave claimed it (controller ruling 2026-10-14), and flyway accepts the

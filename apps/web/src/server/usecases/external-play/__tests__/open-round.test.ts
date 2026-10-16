@@ -2652,7 +2652,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     const report = await sweepExternalPlay({
       orgIds: [r.orgId],
       serialise: false,
-      // The real endMeeting stamps the row after the vendor calls (a row stamped ended parks nothing when its delete follows - V449).
+      // The real endMeeting stamps the row after the vendor calls (a row stamped ended parks nothing when its delete follows - V460).
       endMeeting: async (id) => {
         ended.push(id);
         await sql`update fixture_video_meetings set ended_at = now() where meeting_id = ${id} and ended_at is null`;

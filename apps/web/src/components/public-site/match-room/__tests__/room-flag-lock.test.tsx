@@ -5,7 +5,7 @@
 // organiser confirming it. The result, when it lands, replaces all of it.
 //
 // Driven through the REAL Screen and its real hook (renderIsland runs useState/useEffect; fake timers move the
-// clock). Expected instants come from the snapshot's own clock (V442: each clock is as at `clockAsOf`), never from
+// clock). Expected instants come from the snapshot's own clock (V454: each clock is as at `clockAsOf`), never from
 // the code under test.
 //
 // Single sport, deliberately: online play exists only for boardgame chess (supportsOnlinePlay).
@@ -218,7 +218,7 @@ describe("D13: at the mover's flag the room locks — the board, every game acti
   });
 });
 
-describe("D13: moverFlagAt — the instant the side to MOVE reaches zero, from the snapshot's own clock (V442), or none", () => {
+describe("D13: moverFlagAt — the instant the side to MOVE reaches zero, from the snapshot's own clock (V454), or none", () => {
   it("every case — counted; the two instants differ from each other's wrong answer", () => {
     const asOf = Date.parse(LIVE.clockAsOf!);
     const cases: [string, RoomGame, number | null][] = [

@@ -1,6 +1,6 @@
--- V448 — one RealtimeKit meeting per PLAYER (T17B fix 2, D16; design §5.6, owner ruling "1 per-player").
+-- V459 — one RealtimeKit meeting per PLAYER (T17B fix 2, D16; design §5.6, owner ruling "1 per-player").
 --
--- Renumber at merge if main has moved past (V443 is W2c's; V444-V447 are this branch's).
+-- Renumber at merge if main has moved past (V443 is W2c's; V455-V458 are this branch's).
 --
 -- WHY. D7 ("a player sees their own tile only") was enforced by the player's browser alone, and a browser can be tampered
 -- with: in a meeting shared by both players, one who calls `subscribe` from the console very likely receives the
@@ -18,7 +18,7 @@
 --     own client's last word on its camera, relayed by our server. The two move together (a state has a stamp and a stamp a
 --     state) and an arbiter's row never has one. Nothing reads these but the room snapshot (a source-guard test pins it):
 --     not the seat gate, not camera_lost, not the evidence read, not the teardown.
---   - camera_evidence_at stays per row, and so does V442's check (evidence requires ended_at): each meeting settles on its
+--   - camera_evidence_at stays per row, and so does V454's check (evidence requires ended_at): each meeting settles on its
 --     own, while the other may still be live.
 --
 -- GREENFIELD (RULES.md). The shared-meeting rows are DROPPED, not split, and nothing is backfilled; their participants and
@@ -39,7 +39,7 @@
 -- against the NEW schema (its meeting insert has no `side`, and the `on conflict (fixture_id)` it names no longer exists), so
 -- a check-in fails with a database error until the deploy lands. Migrate and deploy back to back with no round open.
 --
--- Sealed like V439's tables: RLS is already enabled AND forced on all three, with no policy; the new columns inherit it.
+-- Sealed like V451's tables: RLS is already enabled AND forced on all three, with no policy; the new columns inherit it.
 
 lock table fixture_video_meetings in access exclusive mode;
 
@@ -50,7 +50,7 @@ begin
   select count(*) into unended from fixture_video_meetings where ended_at is null;
   if unended > 0 then
     raise exception
-      'V448: % shared video meeting(s) with ended_at null are still ACTIVE at the vendor; dropping them would orphan live rooms. Run scripts/chess-end-shared-meetings.ts against this environment first (chess-end-shared-meetings), then migrate again.',
+      'V459: % shared video meeting(s) with ended_at null are still ACTIVE at the vendor; dropping them would orphan live rooms. Run scripts/chess-end-shared-meetings.ts against this environment first (chess-end-shared-meetings), then migrate again.',
       unended
       using hint = 'The script ends each unended row at the vendor (kick-all, then INACTIVE) and is safe to run twice.';
   end if;

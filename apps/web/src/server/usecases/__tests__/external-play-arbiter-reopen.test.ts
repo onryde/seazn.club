@@ -126,7 +126,7 @@ describe.skipIf(!DB)("the player path, the same class (T17B fix 2, D3)", () => {
   // Reasoned, not fixed: the reuse path (storedPlayerParticipant → refreshParticipantToken) cannot meet a removed
   // participant. No writer removes a player's participant (the sweep and leaveAsArbiter remove arbiters only;
   // endMeeting kicks and deactivates, deleting nobody), a retired meeting's rows cascade away with it (R2-2), and
-  // V442 refuses a removed player row outright. That refusal is the guard this assumption rests on — pinned here, so a
+  // V454 refuses a removed player row outright. That refusal is the guard this assumption rests on — pinned here, so a
   // future removal writer for players reds and must revisit the reuse path.
   it("a player participant can never be on file as removed: the CHECK refuses it, by name — and an arbiter's may be (the positive pair)", async () => {
     const opened = new Date(Date.now() - 5 * 60_000);

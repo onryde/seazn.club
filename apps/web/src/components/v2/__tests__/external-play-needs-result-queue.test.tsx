@@ -115,7 +115,7 @@ describe("a held card", () => {
   });
 
   it("final re-review P11 (2): an account change names the re-linked seat's player by colour, in every locale — counted", () => {
-    // Home plays Black here, so the name must follow the colour V442 recorded, not the side.
+    // Home plays Black here, so the name must follow the colour V454 recorded, not the side.
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as Locale[]) {
       const h = card(

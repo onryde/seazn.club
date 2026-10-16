@@ -73,7 +73,7 @@ const revoked = (): (string | null)[] =>
 const relink = (side: SeedSide, externalUserId: string, token = `lio_relink_${randomUUID().slice(0, 6)}`) =>
   upsertLichessLink(side.userId, { externalUserId, username: externalUserId, scopes: [...PLAY_SCOPES], token });
 
-/** A Lichess id nobody else holds (V439: `(provider, external_user_id)` is unique). */
+/** A Lichess id nobody else holds (V451: `(provider, external_user_id)` is unique). */
 const freshAccount = () => `p11-${randomUUID().slice(0, 10)}`;
 
 async function round(fixtures: number): Promise<SeedOnlineChessRoundResult> {

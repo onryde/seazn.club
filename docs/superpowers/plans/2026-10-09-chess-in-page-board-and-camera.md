@@ -110,11 +110,13 @@ Copied from the spec. Every task's requirements implicitly include this section.
 - **W2a's organiser-only gate** (`isOrganiserOnlyEvent`, `apps/web/src/lib/organiser-only-events.ts`)
   must be checked **as merged**, not as described here.
 - **Migrations V405/V407 are below main's high-water mark (V431)** and `flyway.toml` sets
-  no `outOfOrder`. Task 1 amends them to V439/V440. Do not enable `outOfOrder`.
+  no `outOfOrder`. Task 1 amends them to V439/V440 (V451/V452 after the 2026-10-16 renumber below). Do not enable `outOfOrder`.
 - **Migration numbers in this plan are the post-W2b ones.** The tasks were written and run as
   V433–V436; the 2026-10-13 rebase onto W2b (main: V437 capture records, V438 W2b) renumbered them
   V433→V439, V434→V440, V435→V441, V436→V442, DDL unchanged. Task reports in `.superpowers/sdd/`
-  keep the old numbers.
+  keep the old numbers. **Renumbered again 2026-10-16** (rebase onto main's V450
+  `stream_runner_crash_count`): V439–V442 and V444–V449 became V451–V454 and V455–V460, same order, DDL
+  unchanged (V443 is W2c's, not on this branch). Every other V45x/V46x in this plan is the 2026-10-16 number.
 
 ## Review Focus
 
@@ -171,8 +173,8 @@ schedule:
 
 | File | Responsibility | Task |
 |---|---|---|
-| `db/migration/deltas/V439__online_chess_board_and_camera.sql` | amended schema: tokens at rest, camera policy, meetings, flags, audit | T1 |
-| `db/migration/deltas/V440__online_chess_realtime_policy.sql` | realtime policy for the room channel | T1 |
+| `db/migration/deltas/V451__online_chess_board_and_camera.sql` | amended schema: tokens at rest, camera policy, meetings, flags, audit | T1 |
+| `db/migration/deltas/V452__online_chess_realtime_policy.sql` | realtime policy for the room channel | T1 |
 | `apps/web/src/server/external-play/secrets.ts` | seal/unseal a player token (device-link pattern) | T2 |
 | `apps/web/src/server/usecases/external-accounts.ts` | store token + scopes + consent, revoke on unlink | T2 |
 | `apps/web/src/server/external-play/lichess/board-api.ts` | challenge-to-user, accept, move, resign, draw, abort, export | T3 |
@@ -379,7 +381,7 @@ executes on `main` and returns a false green.
 
 ---
 
-### Task 1: Amend V405/V407 to V439/V440 and add the board + camera schema
+### Task 1: Amend V405/V407 to V451/V452 and add the board + camera schema
 
 V405 and V407 exist on this branch and are **unmerged**; main's high-water mark
 is V431 and `db/flyway.toml` sets no `outOfOrder` (confirmed:
@@ -389,12 +391,12 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 
 **Files:**
 - Rename + rewrite: `db/migration/deltas/V405__lichess_external_play.sql` →
-  `db/migration/deltas/V439__online_chess_board_and_camera.sql` (current file is
+  `db/migration/deltas/V451__online_chess_board_and_camera.sql` (current file is
   75 lines: `user_external_accounts` at 12-24, its index at 26, RLS at 28-29,
   `fixture_external_play` at 31-62, indexes 64-70, RLS + tenant policy +
   grant 72-75)
 - Rename + rewrite: `db/migration/deltas/V407__lichess_lobby_ready.sql` →
-  `db/migration/deltas/V440__online_chess_realtime_policy.sql` (current file is
+  `db/migration/deltas/V452__online_chess_realtime_policy.sql` (current file is
   44 lines; the `realtime.messages` policy body is at 35-45 of the `do $migrate$`
   block, reading `auth.jwt() ->> 'lobby_fixture_id'`)
 - Modify: `apps/web/src/server/usecases/__tests__/external-play-schema.test.ts`
@@ -431,7 +433,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
     `opened_by`, one row per `(stage_id, round_no)`) — T9, T13
   - `fixture_external_play.round_open_id` + `.invited_at` (D12: the per-fixture
     invite record, gated on an opened round) — T13
-  - V440's `realtime.messages` policy `external play lobby read by claim` — T10
+  - V452's `realtime.messages` policy `external play lobby read by claim` — T10
 
 **Deviations decided here, with reasons (do not silently re-litigate):**
 
@@ -444,8 +446,8 @@ in place** — renamed and rewritten — not superseded by forward migrations.
    its own forward migration once the last reader is gone**. Verified reference
    counts: `grep -arn "url_white\|url_black\|urlWhite\|urlBlack" apps/web/src`.
 2. **No move ledger here.** §3.4 records accepted moves, but the brief's schema
-   list does not include a ledger and this task must not invent one. V439/V440
-   are the branch's new high-water mark, so **T10 adds `V441__…` as a normal
+   list does not include a ledger and this task must not invent one. V451/V452
+   are the branch's new high-water mark, so **T10 adds `V453__…` as a normal
    forward migration** — nothing is blocked by leaving it out.
 3. **Camera policy lands on `competitions` and `stages`, not `divisions`.** The
    brief says "division/stage", but the authoritative interface is
@@ -489,7 +491,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 
 - [ ] **Step 1: Rebuild the test DB from scratch, because the rename invalidates its Flyway history.**
   `seazn_chess-lep` already recorded V405/V407 as applied; after the rename
-  Flyway would try V439 against a database that already has
+  Flyway would try V451 against a database that already has
   `user_external_accounts`, and `create table` would fail. Drop and recreate,
   and **run `sync:sports`** — `db:apply` alone is not a fresh schema and
   `funnel.test.ts` then fails `expected 'generic' to be 'badminton'`:
@@ -512,9 +514,9 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 
   ```
   cd $WT && git mv db/migration/deltas/V405__lichess_external_play.sql \
-    db/migration/deltas/V439__online_chess_board_and_camera.sql
+    db/migration/deltas/V451__online_chess_board_and_camera.sql
   cd $WT && git mv db/migration/deltas/V407__lichess_lobby_ready.sql \
-    db/migration/deltas/V440__online_chess_realtime_policy.sql
+    db/migration/deltas/V452__online_chess_realtime_policy.sql
   cd $WT && grep -arn "V405\|V407" db/ apps/web/src docs/superpowers/plans/2026-10-09-chess-in-page-board-and-camera.md
   ```
 
@@ -531,7 +533,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   deleted, not weakened.
 
   ```ts
-  it("user_external_accounts carries the sealed token, scopes and consent (V439)", async () => {
+  it("user_external_accounts carries the sealed token, scopes and consent (V451)", async () => {
     expect(await columns("user_external_accounts")).toEqual([
       "access_token_enc", "consented_at", "created_at", "external_user_id",
       "id", "provider", "scopes", "updated_at", "user_id", "username",
@@ -565,7 +567,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
       await sql.begin(async (tx) => {
         const [u] = await tx<{ id: string }[]>`
           insert into users (email, display_name, email_verified)
-          values (${`v433-${randomUUID()}@test.local`}, 'V439', true) returning id`;
+          values (${`v433-${randomUUID()}@test.local`}, 'V451', true) returning id`;
         await tx`
           insert into user_external_accounts
             (user_id, provider, external_user_id, username, access_token_enc, scopes, consented_at)
@@ -601,7 +603,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   });
 
   // The EMPTY case, stated first in spirit: a legacy identity-only row — the
-  // state every already-linked player is in — must stay legal, or V439 cannot
+  // state every already-linked player is in — must stay legal, or V451 cannot
   // be applied to a database that has one.
   it("accepts a legacy identity-only row: no token, no scopes, no consent", async () => {
     expect(await tryAccount({ token: null, scopes: [], consentedAt: null }))
@@ -625,12 +627,12 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   — i.e. `{ accepted: false, code: "42703", constraint: undefined }`, not the
   expected `23514`.
 
-- [ ] **Step 7: Write V439's `user_external_accounts` half.**
-  Replace lines 1-29 of `V439__online_chess_board_and_camera.sql`:
+- [ ] **Step 7: Write V451's `user_external_accounts` half.**
+  Replace lines 1-29 of `V451__online_chess_board_and_camera.sql`:
 
   ```sql
   -- =============================================================================
-  -- V439 — Online chess: board in page + camera (design 2026-10-09).
+  -- V451 — Online chess: board in page + camera (design 2026-10-09).
   -- Amends the unmerged V405 in place (renamed: V405 sat below main's V431 and
   -- flyway.toml sets no outOfOrder, so it could never be applied again).
   --
@@ -680,7 +682,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   ```
 
 - [ ] **Step 8: Re-apply and run green.**
-  Flyway will not re-run an already-applied V439, so rebuild again (Step 1's
+  Flyway will not re-run an already-applied V451, so rebuild again (Step 1's
   three commands), then re-run the suite with outputFile `/tmp/b1-t1-green1.json`.
   Expected: `numFailedTests: 0`, and `numTotalTests` = the file's case count
   (6 pre-existing `fixture_external_play` cases minus the deleted identity-only
@@ -736,11 +738,11 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 
 - [ ] **Step 11: Commit the account half.**
   ```
-  cd $WT && git add db/migration/deltas/V439__online_chess_board_and_camera.sql \
-    db/migration/deltas/V440__online_chess_realtime_policy.sql \
+  cd $WT && git add db/migration/deltas/V451__online_chess_board_and_camera.sql \
+    db/migration/deltas/V452__online_chess_realtime_policy.sql \
     apps/web/src/server/usecases/__tests__/external-play-schema.test.ts \
     apps/web/src/server/relay/__tests__/enc-boundary.test.ts
-  cd $WT && git commit -m "feat(chess): amend V405/V407 to V439/V440 and keep the player token at rest"
+  cd $WT && git commit -m "feat(chess): amend V405/V407 to V451/V452 and keep the player token at rest"
   ```
 
 - [ ] **Step 12: Failing test — the bridge row's new column and reason vocabulary.**
@@ -748,7 +750,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   `url_white`/`url_black` stay (deviation 1):
 
   ```ts
-  it("fixture_external_play has exactly the design §3 columns (V439)", async () => {
+  it("fixture_external_play has exactly the design §3 columns (V451)", async () => {
     expect(await columns("fixture_external_play")).toEqual([
       "black_emailed_at", "black_lichess_id", "challenge_id", "created_at", "expires_at",
       "finished_at", "fixture_id", "last_error", "last_polled_at", "mint_claimed_at",
@@ -776,8 +778,8 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   off by `video_override_at`, and the two reasons rejected with
   `{ accepted: false, code: "23514", constraint: "fixture_external_play_needs_reason_check" }`.
 
-- [ ] **Step 14: Write V439's bridge amendments.**
-  In `V439__online_chess_board_and_camera.sql`, inside the
+- [ ] **Step 14: Write V451's bridge amendments.**
+  In `V451__online_chess_board_and_camera.sql`, inside the
   `create table fixture_external_play (...)`: extend the `needs_reason` CHECK and
   add the override stamp, immediately after `last_error`:
 
@@ -802,7 +804,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   ```sql
     -- Dead under the 2026-10-09 design (§3.3 removes the urlWhite/urlBlack
     -- hand-off: White's token challenges Black's username). Kept nullable
-    -- because guard.ts/room.ts still select them; T9 drops them in V441 once
+    -- because guard.ts/room.ts still select them; T9 drops them in V453 once
     -- the last reader is gone.
     url_white           text,
     url_black           text,
@@ -822,7 +824,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 
 - [ ] **Step 16: Commit.**
   ```
-  cd $WT && git add db/migration/deltas/V439__online_chess_board_and_camera.sql \
+  cd $WT && git add db/migration/deltas/V451__online_chess_board_and_camera.sql \
     apps/web/src/server/usecases/__tests__/external-play-schema.test.ts
   cd $WT && git commit -m "feat(chess): bridge carries the video override and the two new organiser reasons"
   ```
@@ -832,7 +834,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   `apps/web/src/server/usecases/__tests__/online-chess-camera-schema.test.ts`:
 
   ```ts
-  // V439 camera policy: a column on competitions and stages, never a config key
+  // V451 camera policy: a column on competitions and stages, never a config key
   // (divisions.config / stages.config are sport-module-validated snapshots that
   // strip foreign keys — V209's own note). Competition is NOT NULL with 'off' for
   // all existing data (design §5.1); stage is nullable = inherit.
@@ -844,7 +846,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   const CHECK_VIOLATION = "23514";
   const HAS_DB = !!process.env.DATABASE_URL;
 
-  describe.skipIf(!HAS_DB)("camera policy columns (V439)", () => {
+  describe.skipIf(!HAS_DB)("camera policy columns (V451)", () => {
     let orgId = "";
     let divisionId = "";
     let stageId = "";
@@ -925,7 +927,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   `column "camera_policy" does not exist` (`42703`). If instead `numTotalTests:
   0`, the DB env did not reach the process.
 
-- [ ] **Step 19: Write the camera policy columns.** Append to V439:
+- [ ] **Step 19: Write the camera policy columns.** Append to V451:
 
   ```sql
   -- =============================================================================
@@ -951,7 +953,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 
 - [ ] **Step 21: Commit.**
   ```
-  cd $WT && git add db/migration/deltas/V439__online_chess_board_and_camera.sql \
+  cd $WT && git add db/migration/deltas/V451__online_chess_board_and_camera.sql \
     apps/web/src/server/usecases/__tests__/online-chess-camera-schema.test.ts
   cd $WT && git commit -m "feat(chess): camera policy columns on competitions and stages"
   ```
@@ -961,7 +963,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   `apps/web/src/server/usecases/__tests__/online-chess-video-schema.test.ts`:
 
   ```ts
-  // V439 video + flags + audit. Four claims that are not derivable from the DDL:
+  // V451 video + flags + audit. Four claims that are not derivable from the DDL:
   //  - D6: N participants per fixture is the MODEL, so (fixture_id, person_id)
   //    is deliberately NOT unique — a second angle is config later, not a
   //    migration. The test proves two rows for one person are accepted.
@@ -988,7 +990,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
       }),
     );
 
-  describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
+  describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     let orgId = "";
     let fixtureId = "";
     let stageId = "";
@@ -1128,7 +1130,7 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   assertion diffs. That is the right red; do not "fix" it by softening
   `beforeAll`.
 
-- [ ] **Step 24: Write the video, flag and audit tables.** Append to V439:
+- [ ] **Step 24: Write the video, flag and audit tables.** Append to V451:
 
   ```sql
   -- =============================================================================
@@ -1256,15 +1258,15 @@ in place** — renamed and rewritten — not superseded by forward migrations.
   the both-directions case still reds; confirm it does, then rebuild. A guard
   nothing kills is not tested.
 
-- [ ] **Step 27: Rename V440 and update its header for the room channel.**
+- [ ] **Step 27: Rename V452 and update its header for the room channel.**
   The policy body is unchanged — the room channel IS `external-play:{fixtureId}`
   and the claim it reads is still `lobby_fixture_id`, never `fixture_id` (V403's
   paid `fixture:{id}` policy reads that, and sharing the claim name would let a
   paid-realtime JWT authorize this free channel, or the reverse). Replace line 1
-  of `V440__online_chess_realtime_policy.sql`:
+  of `V452__online_chess_realtime_policy.sql`:
 
   ```sql
-  -- V440 — private match-room channel external-play:{fixtureId} (amends the
+  -- V452 — private match-room channel external-play:{fixtureId} (amends the
   -- unmerged V407; renamed because V407 sat below main's V431 and flyway.toml
   -- sets no outOfOrder). Under the 2026-10-09 design this topic carries the
   -- LIVE game, not just lobby readiness: our server is the only mover, so every
@@ -1278,14 +1280,14 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 
   Also fix the three stale references found in Step 2:
   `external-play-schema.test.ts:17` describe title → `"external play schema
-  (V439/V440)"`, and `external-accounts.ts:3`'s `V405` → `V439` (its "no OAuth
+  (V451/V452)"`, and `external-accounts.ts:3`'s `V405` → `V451` (its "no OAuth
   token is kept" sentence is T2's to rewrite — leave the sentence, fix only the
   version, so T2's diff shows the reversal clearly).
 
 - [ ] **Step 28: Verify the whole migration applies from empty, twice.**
   Rebuild (Step 1), then
   `cd $WT && DATABASE_URL=… DATABASE_SSL=disable npm run db:info` and confirm
-  V439 and V440 both show `Success` and that **no** version above V440 is
+  V451 and V452 both show `Success` and that **no** version above V452 is
   pending. Then run `db:apply` again ⇒ "No migration necessary" (idempotent, and
   proof the rename did not leave a duplicate version).
 
@@ -1308,8 +1310,8 @@ in place** — renamed and rewritten — not superseded by forward migrations.
 - [ ] **Step 30: Typecheck and commit.**
   ```
   cd $WT && rtk proxy npx tsc --noEmit -p apps/web
-  cd $WT && git add db/migration/deltas/V439__online_chess_board_and_camera.sql \
-    db/migration/deltas/V440__online_chess_realtime_policy.sql \
+  cd $WT && git add db/migration/deltas/V451__online_chess_board_and_camera.sql \
+    db/migration/deltas/V452__online_chess_realtime_policy.sql \
     apps/web/src/server/usecases/external-accounts.ts \
     apps/web/src/server/usecases/__tests__/external-play-schema.test.ts \
     apps/web/src/server/usecases/__tests__/online-chess-video-schema.test.ts
@@ -1330,7 +1332,7 @@ grain, the enforcement shape and the window-anchor consequence.
   `apps/web/src/server/usecases/__tests__/online-chess-round-open-schema.test.ts`:
 
   ```ts
-  // V439 / D12: rounds are organiser-driven. The open stamp is its own table
+  // V451 / D12: rounds are organiser-driven. The open stamp is its own table
   // keyed (stage_id, round_no) because v2 has no rounds table — a round is a
   // column on fixtures (V214__fixtures.sql:10). Claims:
   //   - a round opens ONCE: a second press collides on the unique key, so
@@ -1359,7 +1361,7 @@ grain, the enforcement shape and the window-anchor consequence.
       }),
     );
 
-  describe.skipIf(!HAS_DB)("stage_round_opens (V439, D12)", () => {
+  describe.skipIf(!HAS_DB)("stage_round_opens (V451, D12)", () => {
     let orgId = "";
     let stageId = "";
     let userId = "";
@@ -1442,7 +1444,7 @@ grain, the enforcement shape and the window-anchor consequence.
   process and the `skipIf` swallowed the file.
 
 - [ ] **Step 33: Write `stage_round_opens`.** Append to
-  `db/migration/deltas/V439__online_chess_board_and_camera.sql`:
+  `db/migration/deltas/V451__online_chess_board_and_camera.sql`:
 
   ```sql
   -- =============================================================================
@@ -1481,7 +1483,7 @@ grain, the enforcement shape and the window-anchor consequence.
 
 - [ ] **Step 34: Rebuild, run green, mutate.**
   Rebuild the test DB (Step 1's three commands — Flyway will not re-run an
-  applied V439), then re-run Step 32's command ⇒ `numFailedTests: 0`,
+  applied V451), then re-run Step 32's command ⇒ `numFailedTests: 0`,
   `numTotalTests: 6`. Mutant: drop the unique key by hand
 
   ```
@@ -1495,7 +1497,7 @@ grain, the enforcement shape and the window-anchor consequence.
 
 - [ ] **Step 35: Commit.**
   ```
-  cd $WT && git add db/migration/deltas/V439__online_chess_board_and_camera.sql \
+  cd $WT && git add db/migration/deltas/V451__online_chess_board_and_camera.sql \
     apps/web/src/server/usecases/__tests__/online-chess-round-open-schema.test.ts
   cd $WT && git commit -m "feat(chess): organiser-driven round opens stamp when and who (D12)"
   ```
@@ -1513,7 +1515,7 @@ grain, the enforcement shape and the window-anchor consequence.
   ```
 
   ```ts
-  it("fixture_external_play has exactly the design §3 + D12 columns (V439)", async () => {
+  it("fixture_external_play has exactly the design §3 + D12 columns (V451)", async () => {
     expect(await columns("fixture_external_play")).toEqual([
       "black_emailed_at", "black_lichess_id", "challenge_id", "created_at", "expires_at",
       "finished_at", "fixture_id", "invited_at", "last_error", "last_polled_at",
@@ -1612,7 +1614,7 @@ grain, the enforcement shape and the window-anchor consequence.
   `column "round_open_id" of relation "fixture_external_play" does not exist`
   (`42703`), i.e. `{ accepted: false, code: "42703", constraint: undefined }`.
 
-- [ ] **Step 38: Write the bridge's invite half.** In V439's
+- [ ] **Step 38: Write the bridge's invite half.** In V451's
   `create table fixture_external_play (...)`, immediately after `last_error` and
   the `video_override_at` block added in Step 14:
 
@@ -1683,7 +1685,7 @@ grain, the enforcement shape and the window-anchor consequence.
   cd $WT && rtk proxy npx tsc --noEmit -p apps/web
   cd $WT && rtk proxy npx eslint db/../apps/web/src/server/usecases/__tests__/external-play-schema.test.ts \
     apps/web/src/server/usecases/__tests__/online-chess-round-open-schema.test.ts
-  cd $WT && git add db/migration/deltas/V439__online_chess_board_and_camera.sql \
+  cd $WT && git add db/migration/deltas/V451__online_chess_board_and_camera.sql \
     apps/web/src/server/usecases/__tests__/external-play-schema.test.ts
   cd $WT && git commit -m "feat(chess): a fixture cannot be marked invited before its round is opened (D12)"
   ```
@@ -2184,7 +2186,7 @@ by a named step below; none may be left for later.
   ```ts
   import "server-only";
   // Linked external board accounts (Lichess first). The row carries the
-  // player's OAuth TOKEN AT REST (chess design §3.1, V439) — this reverses the
+  // player's OAuth TOKEN AT REST (chess design §3.1, V451) — this reverses the
   // identity-only decision V405 shipped under, because our server submits both
   // players' moves with their own tokens. The token is sealed by
   // external-play/secrets.ts; `access_token_enc` is named HERE and nowhere else
@@ -2196,7 +2198,7 @@ by a named step below; none may be left for later.
   import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
   import { openPlayerToken, sealPlayerToken } from "@/server/external-play/secrets";
 
-  /** V439's second unique constraint — a Lichess account can only ever be
+  /** V451's second unique constraint — a Lichess account can only ever be
    *  linked to ONE Seazn user. */
   const ALREADY_LINKED_CONSTRAINT = "user_external_accounts_provider_external_user_id_key";
 
@@ -2242,11 +2244,11 @@ by a named step below; none may be left for later.
     return openPlayerToken(Buffer.from(enc).toString("base64"));
   }
 
-  /** Upsert on `(user_id, provider)`. V439's second unique constraint,
+  /** Upsert on `(user_id, provider)`. V451's second unique constraint,
    *  `(provider, external_user_id)`, means a given Lichess account links to ONE
    *  Seazn user; a different user claiming an already-linked account trips it,
    *  and it is surfaced as a typed 409 rather than a raw 23505. Writing the
-   *  token also writes `consented_at = now()`: V439's
+   *  token also writes `consented_at = now()`: V451's
    *  `user_external_accounts_consent_token_check` refuses one without the
    *  other, so the two cannot drift apart. */
   export async function upsertLichessLink(
@@ -4547,8 +4549,8 @@ Judge on: `failed: 0`, `files: 21` (a lower file count means a path was filtered
 out by a literal-filename mismatch, which reports as green), every
 `.testResults[].name` resolving under `$WT`, and a `total` at or above the
 numbers each task recorded. Then `cd $WT && DATABASE_URL=… DATABASE_SSL=disable
-npm run db:apply` ⇒ "No migration necessary", and `npm run db:info` ⇒ V439 and
-V440 both `Success` with nothing pending above them.
+npm run db:apply` ⇒ "No migration necessary", and `npm run db:info` ⇒ V451 and
+V452 both `Success` with nothing pending above them.
 
 **Not run here, deliberately:** e2e and smoke. B1 ships no user-facing surface —
 `time-controls.ts` and `board-api.ts` have no production caller until T9, which
@@ -4700,7 +4702,7 @@ hypothesis.
 
 **Every task in B2 now needs schema** (T6 included, since D12 re-anchored its
 gate), and the plan's file-structure table describes
-`V439__online_chess_board_and_camera.sql` only as "camera policy, meetings,
+`V451__online_chess_board_and_camera.sql` only as "camera policy, meetings,
 flags, audit" — no columns are written down anywhere. Two agents must not both
 add migrations. The exact DDL B2 consumes, which T1 owns:
 
@@ -8930,7 +8932,7 @@ against the tree at `8afdd8b42` / `origin/main` `e201fab8f`, read 2026-10-09):
   `mintExternalPlayLobbyToken` already mint a private token carrying
   `lobby_fixture_id`, matched by V407's policy
   (`V407__lichess_lobby_ready.sql:38`). T10 rides that same topic with a new
-  event name, so **no new realtime policy is needed for players**; V440 is a
+  event name, so **no new realtime policy is needed for players**; V452 is a
   spectator-only concern (T1/B4).
 - `fixtures.is_final` and `fixtures.third_place` exist
   (`V368__fixture_round_role.sql:38-39`). `StageKind` is
@@ -8989,7 +8991,7 @@ is that function's new home.
 - Test: `apps/web/src/server/usecases/external-play/__tests__/open-round.test.ts`
 
 **Interfaces:**
-- Consumes: T1's `stage_round_opens` (`unique (stage_id, round_no)`); V439's
+- Consumes: T1's `stage_round_opens` (`unique (stage_id, round_no)`); V451's
   `white_emailed_at` / `black_emailed_at`, which **already exist** (V405:45) — do NOT add
   a second invite stamp; `audit(db, competitionId, orgId, type, payload, actorId)` from
   `usecases/audit.ts:26`; `sendX...Email` from `@/lib/email` with args typed in
@@ -9296,7 +9298,7 @@ export type RoomBroadcast = {
 export function publishRoomBroadcast(fixtureId: string, body: RoomBroadcast): Promise<void>;
 ```
 
-**Columns owed by T1's `V439__online_chess_board_and_camera.sql`** — T10 reads
+**Columns owed by T1's `V451__online_chess_board_and_camera.sql`** — T10 reads
 and writes these and cannot be built without them:
 
 ```sql
@@ -9312,9 +9314,9 @@ alter table fixture_external_play
 
 ---
 
-- [ ] **Step 1: Re-check V439's move columns before writing a line.** Read
-  `db/migration/deltas/V439__online_chess_board_and_camera.sql` and run
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/chess-lichess-external-play && grep -an "moves_uci\|move_count\|last_move_at\|white_ms\|black_ms\|clock_increment_s\|draw_offer_by" db/migration/deltas/V439__online_chess_board_and_camera.sql`.
+- [ ] **Step 1: Re-check V451's move columns before writing a line.** Read
+  `db/migration/deltas/V451__online_chess_board_and_camera.sql` and run
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/chess-lichess-external-play && grep -an "moves_uci\|move_count\|last_move_at\|white_ms\|black_ms\|clock_increment_s\|draw_offer_by" db/migration/deltas/V451__online_chess_board_and_camera.sql`.
   All seven must be present. If any is missing, STOP and report it to the
   controller as a T1 gap — do not add a migration from this task (T1 owns the
   file, and two tasks editing one delta is the shape that produced the
@@ -10434,7 +10436,7 @@ export function holdForOrganiser(a: {
 export function resultIdempotencyKey(fixtureId: string, snapshot: GameSnapshot): string;
 ```
 
-**Also owed by T1's V439:** the `needs_reason` CHECK at
+**Also owed by T1's V451:** the `needs_reason` CHECK at
 `V405__lichess_external_play.sql:48-51` must grow `'token_revoked'`,
 `'double_walkover_blocked'` and `'tiebreak_owed'`. The table-level coupling
 check at `:57` (`(status = 'needs_organiser') = (needs_reason is not null)`)
@@ -10453,7 +10455,7 @@ stays as it is.
   writes as `mintOrgOwnerAuth`, which is correct under both the present and the
   promised gate. No commit.
 
-- [ ] **Step 2: re-check V439's `needs_reason` CHECK.** Write a schema test in
+- [ ] **Step 2: re-check V451's `needs_reason` CHECK.** Write a schema test in
   `external-play-result.test.ts` — INSERT, never a `check_clause` read (a
   clause-text test was sent back as decoration in this programme's Task 1
   review, and a by-column catalog lookup returns every CHECK that mentions the
@@ -10488,7 +10490,7 @@ stays as it is.
   });
   ```
 
-  Run it first — the three new reasons must fail with `23514` until T1's V439
+  Run it first — the three new reasons must fail with `23514` until T1's V451
   lands and the test DB is migrated. If they fail, report the T1 gap and STOP.
 
 - [ ] **Step 3 (RED): enumerate EVERY terminal status, from the spec's table.**
@@ -10972,7 +10974,7 @@ export function expectedEndAt(startedAt: Date, tc: TimeControl): Date;
   `playableWindow` and its test together and say so in the commit. No commit.
 
 - [ ] **Step 3 — GATE C: confirm `meeting_id` on the bridge row.** Run
-  `grep -an "meeting_id" db/migration/deltas/V439__online_chess_board_and_camera.sql`.
+  `grep -an "meeting_id" db/migration/deltas/V451__online_chess_board_and_camera.sql`.
   Job 3 cannot be written without it. If absent, report the T1/T7 gap. No commit.
 
 - [ ] **Step 4 (RED): `playableWindow`, and the unopened round that must never
@@ -14067,7 +14069,7 @@ ships it differently, change the ONE place named here, not the assertions.
 | `LICHESS_BASE_URL` overrides the Lichess host | already built — `apps/web/src/server/external-play/lichess/client.ts:11` (`process.env.LICHESS_BASE_URL ?? "https://lichess.org"`); T3's `board-api.ts` must read the same var | `LICHESS_FIXTURE_PORT` in `lichess-fixture-server.ts` |
 | `REALTIMEKIT_BASE_URL` overrides the video host | T7 (`video/realtimekit.ts`) | `REALTIMEKIT_FIXTURE_PORT` in `realtimekit-fixture-server.ts` |
 | Match room served at `/play/<matchRoomToken>` | T14 | `matchRoomPathBySql` in `helpers.ts` |
-| `user_external_accounts` token columns: `access_token_sealed`, `scopes` (jsonb), `consented_at` | T1 (V439) | `linkLichessBySql` in `helpers.ts` |
+| `user_external_accounts` token columns: `access_token_sealed`, `scopes` (jsonb), `consented_at` | T1 (V451) | `linkLichessBySql` in `helpers.ts` |
 | Organiser "Open round" control: stamps `round_opened_at` on the stage's round, sends invites, starts the T−10/T+20 window from that stamp | T13 | `openRoundAsOrganiser` in the spec |
 
 ---
@@ -14094,7 +14096,7 @@ ships it differently, change the ONE place named here, not the assertions.
 **Interfaces:**
 
 *Consumes* — `LICHESS_BASE_URL` (client.ts:11), `REALTIMEKIT_BASE_URL` (T7),
-`/play/<token>` (T14), V439's token columns (T1), the Open-round control (T13),
+`/play/<token>` (T14), V451's token columns (T1), the Open-round control (T13),
 `seatPlayer`/`act`/`reconcile`/`writeResultFrom` (T8/T10/T11/T12),
 `SHIP1_TIME_CONTROLS` (T5), `WINDOW_OPEN_LEAD_MS`/`DEADLINE_AFTER_MS`/
 `LICHESS_TIMEOUT_MS` (`server/external-play/window.ts:5,6,9`).
@@ -14166,8 +14168,8 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/chess-lichess-external-p
   grep -rna "REALTIMEKIT_BASE_URL" apps/web/src --include='*.ts' | grep -av '\.next'
   echo "--- /play route (T14) ---"
   ls apps/web/src/app/play/\[token\]/page.tsx 2>&1
-  echo "--- V439 token columns (T1) ---"
-  grep -na "access_token_sealed\|scopes\|consented_at" db/migration/deltas/V439__*.sql 2>&1
+  echo "--- V451 token columns (T1) ---"
+  grep -na "access_token_sealed\|scopes\|consented_at" db/migration/deltas/V451__*.sql 2>&1
   echo "--- round_opened_at + open-round route (T13) ---"
   grep -rna "round_opened_at" apps/web/src db --include='*.ts' --include='*.sql' | grep -av '\.next'
   ls apps/web/src/app/api/v1/stages/\[id\]/open-round/route.ts 2>&1
@@ -14490,7 +14492,7 @@ Routes: `POST /v2/meetings` → `{"data":{"id":"mtg-<n>"}}`; `POST /v2/meetings/
 /** Link a Seazn user to a Lichess identity WITH a play-scoped token, the state
  *  the venue needs and the identity-only V405 link could not express.
  *
- *  Column names come from V439 (T1), not from this file's imagination — if that
+ *  Column names come from V451 (T1), not from this file's imagination — if that
  *  migration named them differently, THIS is the one place to change. The token
  *  is written sealed-shaped but inert: nothing in the walkthrough decrypts it,
  *  because the Lichess fixture server accepts any bearer string. That is
@@ -14816,7 +14818,7 @@ Commit: `test(chess): online-chess walkthrough on the local fixture servers, org
 
 *Consumes* — `startLichessFixtureServer` / `LICHESS_FIXTURE_PORT` (T17),
 `writeResultFrom` (T12), `createGameIfReady` (T9), `SHIP1_TIME_CONTROLS` (T5),
-the V439/V440 migrations (T1), W2b's merged `core.forfeit` contract.
+the V451/V452 migrations (T1), W2b's merged `core.forfeit` contract.
 
 *Produces* — `onlineChessVenueSmoke()` in `scripts/smoke.ts`; a committed scoped-gate transcript in the task report.
 
@@ -14894,7 +14896,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/chess-lichess-external-p
 
 A killed background command reports exit 0, so read the `SMOKE_EXIT=` the command prints rather than the harness's own status. Confirm `scripts/__tests__/smoke-select.test.ts` still passes with the new name in its `KNOWN` list.
 
-- [ ] **Step 7: Confirm no branch migration sits below main's high-water mark.** Flyway refuses an out-of-order migration on any database already past `V432` (main's W2a `V432__fixture_status_needs_decision.sql`, which took V432 while this branch was in flight; the branch's migrations were renumbered V439–V442 at the 2026-10-11 rebase), and `db/flyway.toml` sets no `outOfOrder` (P4 — the file is under `db/`, not the repo root). Task 1 amended V405/V407 to V439/V440; this step proves nothing was missed:
+- [ ] **Step 7: Confirm no branch migration sits below main's high-water mark.** Flyway refuses an out-of-order migration on any database already past `V432` (main's W2a `V432__fixture_status_needs_decision.sql`, which took V432 while this branch was in flight; the branch's migrations were renumbered V451–V454 at the 2026-10-11 rebase), and `db/flyway.toml` sets no `outOfOrder` (P4 — the file is under `db/`, not the repo root). Task 1 amended V405/V407 to V451/V452; this step proves nothing was missed:
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/chess-lichess-external-play && \
@@ -14910,7 +14912,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/chess-lichess-external-p
   else echo "ok: every branch migration is above V$MAIN_MAX"; fi
 ```
 
-Expect `main high-water: V432` and `this branch adds: 433 434 435 436`. If `405` or `407` still appears, Task 1's amendment did not land — fix it there, and do **not** enable `outOfOrder`. Then prove it against a real database: `npm run db:apply && npm run db:info` on a fresh schema, and `npm run check:rls` because V439 adds tables.
+Expect `main high-water: V432` and `this branch adds: 433 434 435 436`. If `405` or `407` still appears, Task 1's amendment did not land — fix it there, and do **not** enable `outOfOrder`. Then prove it against a real database: `npm run db:apply && npm run db:info` on a fresh schema, and `npm run check:rls` because V451 adds tables.
 
 - [ ] **Step 8: Clear `apps/web/.next` before the typecheck.** A stale Next route-types validator produces false `tsc` reds after a rebase, and this branch has been rebased onto `8afdd8b42`. Clear it first, in its own step, so a red here is a real red:
 

@@ -461,7 +461,7 @@ async function flagView(
       // read is null, and the card says so in general words).
       return { id: f.id, kind: "multiple_devices", at, personName: ctx.nameOf(f.personId), report: parseMultipleDevicesNote(f.note) };
     default:
-      // V439's CHECK (widened by V444) names exactly four kinds. A guard, not
+      // V451's CHECK (widened by V455) names exactly four kinds. A guard, not
       // a comment: a fifth is refused loudly rather than drawn as one of them.
       throw new HttpError(500, `fixture_play_flags row with unknown kind ${JSON.stringify(f.kind)}`, "FLAG_KIND_UNKNOWN");
   }
@@ -649,7 +649,7 @@ async function mintArbiter(
     // naming it - nothing retries it. It is receive-only (the arbiter preset) and holds no token we gave out.
     await video.removeParticipant({ meetingId: a.meetingId, participantId: minted.participantId }).catch(() => undefined);
     // The vendor's participant is gone (or going): a record already holding it
-    // must not stay a live watch. Arbiter rows only (V442: a player's is never
+    // must not stay a live watch. Arbiter rows only (V454: a player's is never
     // removed).
     await sql`
       update fixture_video_participants set removed_at = now()

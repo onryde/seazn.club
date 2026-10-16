@@ -2,7 +2,7 @@ import "server-only";
 // Camera policy for online chess (spec 2026-10-09 §5.1, owner decisions D5/D9).
 // TWO sections: pure predicates (this half) and the database reader below.
 //
-// THREE levels, each a column (V439; controller ruling Q1=D, 2026-10-09):
+// THREE levels, each a column (V451; controller ruling Q1=D, 2026-10-09):
 // stages.camera_policy → divisions.camera_policy → competitions.camera_policy.
 // Stage and division are nullable (null = inherit); the competition's is NOT
 // NULL with default 'off', so the chain always has a floor and every row of

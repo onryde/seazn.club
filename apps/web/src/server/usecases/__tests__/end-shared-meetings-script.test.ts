@@ -1,9 +1,9 @@
-// D16, design §5.6.7 - the deploy step that must run BEFORE V448: scripts/chess-end-shared-meetings.ts ends every shared
+// D16, design §5.6.7 - the deploy step that must run BEFORE V459: scripts/chess-end-shared-meetings.ts ends every shared
 // RealtimeKit meeting whose row is still `ended_at is null`, so the delta that drops those rows orphans nothing.
 //
 // What is under test is the script as it is RUN: the pure sweep (`endSharedMeetings`), the vendor adapter it builds from the
 // environment (`vendorFromEnv`), and the CLI (`node --experimental-strip-types`, real exit codes) against
-//   - a database holding the PRE-V448 shape of the three video tables (the delta test's replica, _v448-old-shape.ts, in a
+//   - a database holding the PRE-V459 shape of the three video tables (the delta test's replica, _v459-old-shape.ts, in a
 //     SCRATCH schema per test - no live table is touched and no live lock is taken), and
 //   - the RealtimeKit fixture server (e2e/realtimekit-fixture-server.ts), the vendor the walkthroughs use.
 // NEVER against stg or prod; there is no flag here that could point it there.
@@ -34,12 +34,12 @@ import {
   type Report,
   type Vendor,
 } from "../../../../../../scripts/chess-end-shared-meetings.ts";
-import { OLD_SHAPE, oldShapeStubs } from "./_v448-old-shape";
+import { OLD_SHAPE, oldShapeStubs } from "./_v459-old-shape";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const REPO = join(import.meta.dirname, "..", "..", "..", "..", "..", "..");
 const SCRIPT = join(REPO, "scripts", "chess-end-shared-meetings.ts");
-const DELTA = join(REPO, "db", "migration", "deltas", "V448__video_meeting_per_player.sql");
+const DELTA = join(REPO, "db", "migration", "deltas", "V459__video_meeting_per_player.sql");
 const SECRET = REALTIMEKIT_FIXTURE_ENV.REALTIMEKIT_API_TOKEN;
 // A spawn of node plus the postgres import is a second or two on a loaded machine; the CLI tests say so (AGENTS.md class 20:
 // a flat timeout beside a derived cost is a latent red - this one is per CLI call, and the heaviest test makes three).
@@ -69,12 +69,12 @@ afterEach(() => {
 type Scratch = { db: Db; name: string; orgId: string; personId: string };
 const scratches: Scratch[] = [];
 
-/** A fresh schema holding the PRE-V448 shape (and stubs for what its keys point at), with its own one-connection client whose
+/** A fresh schema holding the PRE-V459 shape (and stubs for what its keys point at), with its own one-connection client whose
  *  search path is that schema alone - which is also what `DB_SCHEMA=<name>` gives the CLI. */
 async function scratch(): Promise<Scratch> {
   const url = process.env.DATABASE_URL!;
   const [{ live }] = await sql<{ live: string }[]>`select current_schema() as live`;
-  const name = `v448s_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const name = `v459s_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
   await sql.unsafe(`create schema "${name}"`);
   const db = postgres(url, { max: 1, ssl: connectionOptions(url).ssl, connection: { search_path: name } });
   const s: Scratch = { db, name, orgId: randomUUID(), personId: randomUUID() };
@@ -106,7 +106,7 @@ async function vendorMeeting(): Promise<string> {
 
 type Seeded = { fixtureId: string; meetingId: string; playerParticipant: string; arbiterRowId: string; playerRowId: string };
 
-/** One SHARED pre-V448 board: a meeting row (unended unless `ended`), a player and an arbiter in it at the vendor and in the
+/** One SHARED pre-V459 board: a meeting row (unended unless `ended`), a player and an arbiter in it at the vendor and in the
  *  database, the player live in the room when `live`. */
 async function shared(s: Scratch, o: { ended?: boolean; live?: boolean } = {}): Promise<Seeded> {
   const { db } = s;
@@ -174,7 +174,7 @@ const count = (out: string, label: string): number => {
   return Number(m[1]);
 };
 
-describe.skipIf(!HAS_DB)("scripts/chess-end-shared-meetings.ts (V448's deploy step, §5.6.7)", () => {
+describe.skipIf(!HAS_DB)("scripts/chess-end-shared-meetings.ts (V459's deploy step, §5.6.7)", () => {
   it("the script file is where the delta's guard message says it is", () => {
     expect(existsSync(SCRIPT)).toBe(true);
     expect(readFileSync(DELTA, "utf8"), "the delta names the script by its repo path").toContain("scripts/chess-end-shared-meetings.ts");
@@ -325,7 +325,7 @@ describe.skipIf(!HAS_DB)("scripts/chess-end-shared-meetings.ts (V448's deploy st
       expect(await endedAt(s, b.fixtureId)).toBeNull();
     });
 
-    it("REFUSES once V448 is applied: a row is then one player's live room, and ending 'every unended row' would end games", async () => {
+    it("REFUSES once V459 is applied: a row is then one player's live room, and ending 'every unended row' would end games", async () => {
       const s = await scratch();
       await s.db.unsafe(readFileSync(DELTA, "utf8")); // empty table: the guard passes and the delta lands
       const fixtureId = randomUUID();
@@ -514,7 +514,7 @@ describe.skipIf(!HAS_DB)("scripts/chess-end-shared-meetings.ts (V448's deploy st
       expect(count(down.out, "Failed")).toBe(2);
       expect(count(down.out, "Ended")).toBe(0);
       expect(down.out).not.toContain(SECRET);
-      for (const r of rooms) expect(await endedAt(s, r.fixtureId), "unended: V448 will keep refusing, as it should").toBeNull();
+      for (const r of rooms) expect(await endedAt(s, r.fixtureId), "unended: V459 will keep refusing, as it should").toBeNull();
       fx.setUnavailable(false);
       const up = await cli(s);
       expect(up.code, up.out).toBe(0);
@@ -551,7 +551,7 @@ describe.skipIf(!HAS_DB)("scripts/chess-end-shared-meetings.ts (V448's deploy st
   });
 
   describe("the seam with the delta: the guard refuses, the script clears it, the delta lands", () => {
-    it("V448 raises while an unended shared row exists (naming this script), loses nothing; after the script it applies and the rows go", async () => {
+    it("V459 raises while an unended shared row exists (naming this script), loses nothing; after the script it applies and the rows go", async () => {
       const s = await scratch();
       const rooms = [await shared(s, { live: true }), await shared(s), await shared(s, { ended: true })];
       const delta = readFileSync(DELTA, "utf8");

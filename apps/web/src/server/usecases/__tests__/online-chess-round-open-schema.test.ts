@@ -1,4 +1,4 @@
-// V439 / D12: rounds are organiser-driven. The open stamp is its own table
+// V451 / D12: rounds are organiser-driven. The open stamp is its own table
 // keyed (stage_id, round_no) because v2 has no rounds table — a round is a
 // column on fixtures (V214__fixtures.sql:10). Claims:
 //   - a round opens ONCE: a second press collides on the unique key, so
@@ -31,7 +31,7 @@ const attempt = (p: Promise<unknown>): Promise<Outcome> =>
     }),
   );
 
-describe.skipIf(!HAS_DB)("stage_round_opens (V439, D12)", () => {
+describe.skipIf(!HAS_DB)("stage_round_opens (V451, D12)", () => {
   let orgId = "";
   let stageId = "";
   let userId = "";

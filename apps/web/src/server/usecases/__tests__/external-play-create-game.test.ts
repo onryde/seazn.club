@@ -213,7 +213,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Review Focus 5 — there is no perso
  *  helpers break one requirement at a time so each guard is individually
  *  killable. */
 async function clearConsent(userId: string) {
-  // V439's consent/token CHECK forbids a stored token without a consent stamp,
+  // V451's consent/token CHECK forbids a stored token without a consent stamp,
   // so an identity-only (legacy) row is modelled the way one really looks: no
   // stamp AND no token.
   await sql`
@@ -2315,7 +2315,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Minor b — a stray game is cancelle
 });
 
 // T16 (controller addendum, T10 carry): "On a game re-create, reset all nine
-// V441 columns" (the move ledger, V442 after renumbering). A new game starts
+// V453 columns" (the move ledger, V454 after renumbering). A new game starts
 // from the start position: a ledger left by an earlier game would put that
 // game's moves, clocks and draw offer on the new board — the spectators' board
 // (watchFromLedger) and the players' room both read it. No path returns a row

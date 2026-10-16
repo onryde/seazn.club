@@ -36,7 +36,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 
-/** The two doors. Mirrors V447's CHECK: a third is a migration as well as a line here. */
+/** The two doors. Mirrors V458's CHECK: a third is a migration as well as a line here. */
 export const SEAT_ASK_ROUTES = ["seat", "camera"] as const;
 export type SeatAskRoute = (typeof SEAT_ASK_ROUTES)[number];
 

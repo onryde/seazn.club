@@ -1,4 +1,4 @@
-// The three video tables as they were BEFORE V448 (V439 + V442 + V446): one shared meeting per fixture. Used by the delta's
+// The three video tables as they were BEFORE V459 (V451 + V454 + V457): one shared meeting per fixture. Used by the delta's
 // own test (online-chess-video-schema.test.ts) and by the deploy script's (end-shared-meetings-script.test.ts), which must
 // run against exactly this shape. Both put it in a SCRATCH schema ahead of the live one on the search path, with the
 // referenced tables as STUBS in the scratch schema: a replica whose foreign keys named the live tables would take locks on

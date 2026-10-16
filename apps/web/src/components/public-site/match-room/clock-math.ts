@@ -21,7 +21,7 @@ export function remainingMs(a: { baseMs: number; asOfMs: number; nowMs: number; 
 /**
  * T17B fix 2, D13: the instant, on the SERVER's clock, at which the side to
  * move's clock reaches zero — the same reading the clock face counts down
- * (each clock is as at `clockAsOf`, V442) — or null when no clock runs toward
+ * (each clock is as at `clockAsOf`, V454) — or null when no clock runs toward
  * one: the clocks not started (ply < 2), the game over, no stamp yet. Never a
  * flag on its own: Lichess decides that (reconcile.ts, D11).
  */

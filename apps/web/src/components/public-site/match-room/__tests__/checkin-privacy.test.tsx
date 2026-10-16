@@ -4,7 +4,7 @@
 // client could falsify. D16 (design §5.6.7, "Copy") changed the ground under that ruling: each player is in a
 // meeting of their OWN, so there is no opponent stream to subscribe to and the guarantee now holds on the vendor's
 // side whatever the client does - once no shared meeting exists anywhere, which the deploy step
-// (scripts/chess-end-shared-meetings.ts) and the V448 guard make true. The first sentence may therefore state it, and
+// (scripts/chess-end-shared-meetings.ts) and the V459 guard make true. The first sentence may therefore state it, and
 // it is the ONE sentence the absolutes check below excepts. It also says who CAN watch — the organiser:
 // `mayWatchBoards` admits the club's owner or admin — and that the video is not recorded (the RealtimeKit adapter
 // starts no recording; the privacy policy says "We do not record").
