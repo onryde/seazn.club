@@ -190,9 +190,8 @@ fall back from, is live — no B-prompt needs its fallback path.
   bench over a positive `benchMax` is still saved with the `bench_size` warning.
   GET is unchanged, so a bench row stored earlier still reads. It was API-only:
   the fixture-console editor is hidden for these sports (`lineupEditorApplies`
-  false). Before the engine fix the boardgame and carrom stats folds credited
-  every bench row on the sheet with no event touching it; the re-recorded golden
-  stream dropped the bench, so nothing pins that now. The bench harness is
+  false). The reason: the sport declares no bench, `validateLineup` only ever
+  warned about the row, and the engine never uses it. The bench harness is
   untouched by the refusal: `putFixtureLineup` (`oracle.ts`) sends starting rows
   only, and no pack carries a bench row.
 

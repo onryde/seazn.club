@@ -2,9 +2,9 @@
 //
 // A catalog that declares `benchMax: 0` (boardgame, carrom, generic) says the
 // sport has no bench. `validateLineup` only ever WARNED about a bench row for
-// it (`bench_size`), and `putLineup` saved the row anyway, so the stats folds
-// credited a player no event touched. `benchRefusal` is the decision `putLineup`
-// now makes before it writes anything. Swept over every module the engine ships
+// it (`bench_size`), and `putLineup` saved the row anyway, though the engine
+// never uses it. `benchRefusal` is the decision `putLineup` now makes before it
+// writes anything. Swept over every module the engine ships
 // (`builtinModules`), with the limit read off each module's OWN resolved catalog
 // — never off a sport-name list.
 //

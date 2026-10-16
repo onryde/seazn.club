@@ -504,8 +504,8 @@ function catalogForFixture(sport: { sport_key: string; module_version: string; c
  *
  *  Everything `validateLineup` finds is a WARNING on the response, with one exception: a bench row for a sport whose
  *  catalog declares `benchMax: 0` (boardgame, carrom, generic) is REFUSED, 422 `LINEUP_BENCH_NOT_SUPPORTED`, before
- *  anything is written. Such a sport has no bench, and the stats folds used to credit every bench row on the sheet
- *  with a match no event touched. Reads (`getLineup`) are unchanged: a bench row saved before this rule still reads. */
+ *  anything is written. Such a sport declares no bench, `validateLineup` only ever warned about the row, and the
+ *  engine never uses it. Reads (`getLineup`) are unchanged: a bench row saved before this rule still reads. */
 export async function putLineup(
   auth: AuthCtx,
   fixtureId: string,

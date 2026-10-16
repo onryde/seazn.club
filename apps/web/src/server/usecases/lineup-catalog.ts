@@ -44,9 +44,9 @@ export interface BenchRefusal {
 /**
  * Does this catalog refuse the bench rows a lineup carries? Only a catalog that
  * DECLARES `benchMax: 0` does (boardgame, carrom, generic): it is saying the sport
- * has no bench at all, so a bench row is never a substitute the engine will use,
- * only a row the stats folds used to credit with a match nobody played. The limit
- * is read off the resolved catalog (`lineupCatalogFor`), never off a sport name.
+ * has no bench at all: `validateLineup` only ever warned about such a row, and the
+ * engine never uses it. The limit is read off the resolved catalog
+ * (`lineupCatalogFor`), never off a sport name.
  *
  * Owner scope, 2026-10-16: ZERO only. A bench over a POSITIVE `benchMax` stays the
  * soft `bench_size` warning `validateLineup` raises (an organiser may knowingly name
