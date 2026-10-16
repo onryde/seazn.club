@@ -3924,6 +3924,7 @@
   "engineError.WRONG_PHASE": "That action doesn't apply at this point in the match.",
   "engineError.ALREADY_DECIDED": "This match already has a result. Reopen it before scoring again.",
   "engineError.LINEUP_INVALID": "The line-up isn't valid. Check the players and try again.",
+  "engineError.LINEUP_NOT_SUPPORTED": "This sport doesn't record line-up changes. Nothing was saved.",
   "engineError.CONFIG_INVALID": "This match's settings aren't valid. Ask an organiser to check them.",
   "engineError.SEQ_CONFLICT": "Someone else scored first. Catching up now.",
   "engineError.STAGE_NOT_READY": "This stage isn't ready yet.",

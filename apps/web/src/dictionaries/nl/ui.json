@@ -3924,6 +3924,7 @@
   "engineError.WRONG_PHASE": "Die actie past niet op dit moment in de wedstrijd.",
   "engineError.ALREADY_DECIDED": "Deze wedstrijd heeft al een uitslag. Heropen hem voordat je opnieuw scoort.",
   "engineError.LINEUP_INVALID": "De opstelling is niet geldig. Controleer de spelers en probeer het opnieuw.",
+  "engineError.LINEUP_NOT_SUPPORTED": "Deze sport registreert geen opstellingswijzigingen. Er is niets opgeslagen.",
   "engineError.CONFIG_INVALID": "De instellingen van deze wedstrijd zijn niet geldig. Vraag een organisator ze te controleren.",
   "engineError.SEQ_CONFLICT": "Iemand anders scoorde eerder. Bijwerken.",
   "engineError.STAGE_NOT_READY": "Deze fase is nog niet klaar.",

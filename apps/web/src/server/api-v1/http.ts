@@ -27,6 +27,9 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   WRONG_PHASE: 422,
   ALREADY_DECIDED: 422,
   LINEUP_INVALID: 422,
+  // A sport that declares no lineupPolicy takes no lineup event (core/events.ts). A client that offered one is out of step
+  // with the sport, not with the ledger, so it is a 422 and not a 409: re-sending the same event will never succeed.
+  LINEUP_NOT_SUPPORTED: 422,
   CONFIG_INVALID: 422,
   STAGE_NOT_READY: 422,
   DRAW_NOT_ALLOWED: 422,

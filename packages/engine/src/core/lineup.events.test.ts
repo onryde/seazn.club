@@ -343,12 +343,36 @@ describe("policy refusals across the strict/replay seam", () => {
     expect(personsAtPosition(squads.home, "GK")).toEqual(["h-gk"]);
   });
 
-  it("defaults to the kernel policy when a module declares none", () => {
-    // No `lineupPolicy` hook at all — the eight modules that do not care. The
-    // default forbids a return, so the write path refuses one.
-    expect(() => foldMatch(toy(), cfg, lineups, returning, { strictFromSeq: 0 })).toThrow(
-      EngineError,
+  it("takes no lineup change on the write path from a module that declares no lineupPolicy, whatever the kernel default would say", () => {
+    // Owner ruling 2026-10-15. This test used to read "defaults to the kernel policy when a module declares none" and
+    // asserted only `toThrow(EngineError)` - which the new refusal also satisfies, for a different reason. So it names the
+    // reason: no `lineupPolicy` hook, no lineup events (the three sports that declare none read no squad).
+    let thrown: unknown;
+    try {
+      foldMatch(toy(), cfg, lineups, returning, { strictFromSeq: 0 });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(EngineError.is(thrown, "LINEUP_NOT_SUPPORTED")).toBe(true);
+    // ...even for a module that adopts squads (`onLineup`): the declaration is the policy, not the adoption.
+    const adopting = toy({ onLineup: (state) => state });
+    expect(() => foldMatch(adopting, cfg, lineups, returning, { strictFromSeq: 0 })).toThrow(
+      expect.objectContaining({ code: "LINEUP_NOT_SUPPORTED" }),
     );
+    // ...and it is the write path's: the same ledger as history still folds, the squads as recorded.
+    const { squads } = foldMatchWithStoppage(toy(), cfg, lineups, returning);
+    expect(personsAtPosition(squads.home, "GK")).toEqual(["h-gk"]);
+  });
+
+  it("applies the kernel default policy to a module that declares exactly it: a return is refused by the reducer", () => {
+    const module = toy({ lineupPolicy: () => DEFAULT_LINEUP_POLICY });
+    try {
+      foldMatch(module, cfg, lineups, returning, { strictFromSeq: 0 });
+      expect.unreachable("the default forbids a return");
+    } catch (err) {
+      expect(EngineError.is(err, "LINEUP_INVALID")).toBe(true);
+      expect((err as EngineError).data).toMatchObject({ reason: "reentry-forbidden" });
+    }
   });
 
   it("carries provenance 'added' through a whole fold, not just a bare reduce", () => {

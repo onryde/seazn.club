@@ -750,8 +750,12 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   //    accepted change; never after a refusal.
   //
   // The kernel folds `core.lineup.*` itself and never forwards those events to
-  // `apply`, exactly as with `core.suspend`. A module that only needs to READ
-  // the squads mid-fold declares neither hook and reads `ctx.squads`.
+  // `apply`, exactly as with `core.suspend`. DECLARING `lineupPolicy` is what
+  // opts a module in (owner ruling 2026-10-15): a module that declares none
+  // takes no lineup event on the write path (`LINEUP_NOT_SUPPORTED`), so the
+  // squads it reads from `ctx.squads` never move from the team sheet. A module
+  // that wants the kernel's most restrictive answer declares
+  // `lineupPolicy: () => DEFAULT_LINEUP_POLICY` rather than omitting it.
   lineupPolicy?(cfg: Cfg): LineupPolicy;
   onLineup?(state: State, squads: SquadState): State;
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…

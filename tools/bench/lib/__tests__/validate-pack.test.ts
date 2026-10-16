@@ -252,6 +252,69 @@ function genericPack(opts: BuildOpts = {}): Record<string, unknown> {
   };
 }
 
+/** A goalless football fixture (a decided draw) whose home side makes one substitution after the kick-off: the cheapest
+ *  stream in which `core.lineup.substitution` is legal, because football DECLARES a `lineupPolicy`. Generic, boardgame and
+ *  carrom declare none and the kernel refuses every lineup event there (owner ruling 2026-10-15), so a pack that needs the
+ *  kernel's squad bookkeeping to move must be a sport that takes lineup events. */
+function footballSquadPack(opts: { readonly events?: { type: string; payload?: Record<string, unknown> }[]; readonly specials?: Record<string, unknown>[] } = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    suite: "_unit",
+    org: { name: "Unit Org", slug: "unit-org", timezone: "UTC" },
+    competition: { name: "Unit Cup", slug: "unit-cup", endsOn: "2099-01-02" },
+    divisions: [
+      {
+        ref: "d1",
+        name: "D1",
+        sportKey: "football",
+        variantKey: "11-a-side",
+        moduleVersion: "1.0.0",
+        cfgOverrides: { shootout: false },
+        stages: [{ ref: "s1", seq: 1, kind: "league", name: "League" }],
+      },
+    ],
+    persons: [
+      { ref: "p1", fullName: "Person One", lane: "player" },
+      { ref: "p2", fullName: "Person Two", lane: "player" },
+      { ref: "p3", fullName: "Person Three", lane: "player" },
+    ],
+    entrants: [
+      { ref: "e1", divisionRef: "d1", kind: "team", displayName: "One", roster: [{ person: "p1" }, { person: "p3" }] },
+      { ref: "e2", divisionRef: "d1", kind: "team", displayName: "Two", roster: [{ person: "p2" }] },
+    ],
+    streams: [
+      {
+        divisionRef: "d1",
+        fixtureExtKey: "f1",
+        home: "e1",
+        away: "e2",
+        provenance: "real",
+        lineups: {
+          home: [
+            { person: "p1", slot: "starting" },
+            { person: "p3", slot: "bench" },
+          ],
+          away: [{ person: "p2", slot: "starting" }],
+        },
+        events: opts.events ?? [
+          { type: "core.start" },
+          {
+            type: "core.lineup.substitution",
+            payload: { side: "@e1", off: "@p1", on: { personId: "@p3", slot: "starting", orderNo: 1 } },
+          },
+          { type: "football.period", payload: { phase: "HT" } },
+          { type: "football.period", payload: { phase: "FT" } },
+        ],
+      },
+    ],
+    expected: {
+      matches: [{ divisionRef: "d1", fixtureExtKey: "f1", outcome: { kind: "draw" } }],
+      ...(opts.specials === undefined ? {} : { specials: opts.specials }),
+    },
+    meta: { synthetic: true, sources: [] },
+  };
+}
+
 /** A boardgame pack whose division plays WITHOUT colours — the one cheap place
  *  in the engine where a strict fold and a tolerant fold disagree
  *  (`applyPairing`, sports/boardgame/boardgame.ts:297: "STRICT ONLY (§3.3
@@ -1120,41 +1183,17 @@ describe("validatePack — specials", () => {
 
   it("reaches the kernel's squad bookkeeping, which no state path can", () => {
     // `subsUsed` moves only because a real `core.lineup.substitution` was
-    // folded — 0 vs 0 would prove nothing, so the pack does one.
+    // folded - 0 vs 0 would prove nothing, so the pack does one. The sport is
+    // football because it DECLARES a `lineupPolicy`: generic takes no lineup
+    // event at all (below), so it cannot carry this claim.
     const withSub = (equals: number): Record<string, unknown> =>
-      genericPack({
-        persons: [
-          { ref: "p1", fullName: "Person One", lane: "player" },
-          { ref: "p2", fullName: "Person Two", lane: "player" },
-          { ref: "p3", fullName: "Person Three", lane: "player" },
-        ],
-        lineups: {
-          home: [
-            { person: "p1", slot: "starting" },
-            { person: "p3", slot: "bench" },
-          ],
-          away: [{ person: "p2", slot: "starting" }],
-        },
-        events: [
-          { type: "core.start" },
-          {
-            type: "core.lineup.substitution",
-            payload: {
-              side: "@e1",
-              off: "@p1",
-              on: { personId: "@p3", slot: "starting", orderNo: 1 },
-            },
-          },
-          { type: "generic.result", payload: { p1Score: 2, p2Score: 1 } },
-        ],
+      footballSquadPack({
         specials: [
           {
             kind: "concussion_sub",
             divisionRef: "d1",
             fixtureExtKey: "f1",
-            claims: [
-              { on: "squads", entrant: "e1", field: "subsUsed", equals },
-            ],
+            claims: [{ on: "squads", entrant: "e1", field: "subsUsed", equals }],
           },
         ],
       });
@@ -1165,6 +1204,40 @@ describe("validatePack — specials", () => {
     expect(finding.message).toBe(
       'squads subsUsed for "e1": claim expects 0, the fold produced 1',
     );
+  });
+
+  it("a sport that declares no lineupPolicy takes no lineup event: the same substitution in a generic pack is fold.rejected, naming LINEUP_NOT_SUPPORTED", () => {
+    // The product folds an import under the write path (event-import.ts), so the pack validator, which mirrors it
+    // (PACK_FOLD_OPTIONS), refuses a stream that carries a lineup change for generic, boardgame or carrom. Without this
+    // the squads claim above could be "moved" to generic again and nobody would notice the sport had stopped taking it.
+    const genericWithSub = genericPack({
+      persons: [
+        { ref: "p1", fullName: "Person One", lane: "player" },
+        { ref: "p2", fullName: "Person Two", lane: "player" },
+        { ref: "p3", fullName: "Person Three", lane: "player" },
+      ],
+      lineups: {
+        home: [
+          { person: "p1", slot: "starting" },
+          { person: "p3", slot: "bench" },
+        ],
+        away: [{ person: "p2", slot: "starting" }],
+      },
+      events: [
+        { type: "core.start" },
+        {
+          type: "core.lineup.substitution",
+          payload: { side: "@e1", off: "@p1", on: { personId: "@p3", slot: "starting", orderNo: 1 } },
+        },
+        { type: "generic.result", payload: { p1Score: 2, p2Score: 1 } },
+      ],
+    });
+    const finding = onlyError(validatePack(genericWithSub, UNIT).findings);
+    expect(finding.code).toBe("fold.rejected");
+    expect(finding.message).toContain('event #1 ("core.lineup.substitution")');
+    expect(finding.message).toContain("LINEUP_NOT_SUPPORTED");
+    // and the football twin of the SAME events is clean: the refusal is the sport's declaration, not the pack's shape
+    expectClean(validatePack(footballSquadPack(), UNIT), UNIT_NO_TABLE);
   });
 
   it("reads an exemption never charged as 0, so `equals: 0` is assertable", () => {

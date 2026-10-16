@@ -1,0 +1,122 @@
+{
+ "batch": "lineup-fix",
+ "note": "Test-id ledger for the engine lineup fix (owner ruling 2026-10-15, option 1: the engine refuses core.lineup.* for a sport that declares no lineupPolicy - boardgame, carrom, generic - raising their fold major to 2; the golden floor owes them no lineup or squads tokens and their withdrawal stream is re-recorded without lineup events), built against base c781d9c60 (origin/main). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. SCOPE: collected over the seven engine test files this branch changes (src/core/errors.test.ts, lineup-support.test.ts, lineup.events.test.ts, src/testkit/golden-floor.test.ts, golden-floor-streams.test.ts, golden-floor-overlay.test.ts, golden-overlay.test.ts), each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` from the engine directory, DATABASE_URL empty: 212 ids before, 228 after (6 retitled, 16 added, none retired). Every other engine test file is untouched, so its ids cannot move. The apps/web and tools/matrix tests this branch adds or edits (http.test.ts, append-event.test.ts, engine-http.ts) are outside the engine collection root and are not collected.",
+ "entries": [
+  {
+   "id": "src/core/lineup.events.test.ts › policy refusals across the strict/replay seam › defaults to the kernel policy when a module declares none",
+   "fate": "rewritten",
+   "to": "src/core/lineup.events.test.ts › policy refusals across the strict/replay seam › takes no lineup change on the write path from a module that declares no lineupPolicy, whatever the kernel default would say",
+   "reason": "owner ruling 2026-10-15: the test now names the new refusal (it asserted only toThrow(EngineError), which the refusal also satisfies for another reason); the old premise moves to the added sibling that declares exactly the kernel default"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › RETIRED lineup: exactly boardgame, carrom and generic (every recorded type) and football's position change flip from unpinned to pinned; the other sports were pinned already",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › RETIRED lineup: football's position change flips from unpinned to pinned; boardgame, carrom and generic record no lineup event any more (the kernel refuses them); the other sports were pinned already",
+   "reason": "boardgame, carrom and generic record no lineup event any more, so the flip is measured on football's position change; the three sports are asserted to record none"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the probe answers 'pinned' for a lineup event once a module reacts to it (a boardgame given an onLineup that writes state)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the probe answers 'pinned' for a lineup event once a module reacts to it (a boardgame given a lineupPolicy and an onLineup that writes state)",
+   "reason": "the vehicle is a boardgame given a lineupPolicy, because the three committed corpora hold no lineup event to probe"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the withdrawal story carries lineup changes whenever the squads still owe a move (GF-2 T3) › with overlay:squads:set the only hole, the story is built WITH lineup changes; with no hole it is not",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-streams.test.ts › the withdrawal story carries lineup changes whenever the squads still owe a move (GF-2 T3) › with overlay:squads:set the only hole, the story is built WITH lineup changes (where the sport admits them); with no hole it is not",
+   "reason": "the story is built with lineup changes only where the sport admits them"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › owner ruling (GF-2 design §4): stoppage, settlement and expunged owe set AND cleared, squads set; levelWithdrawal set AND cleared only where a level result is reachable",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › owner ruling (GF-2 design §4): stoppage, settlement and expunged owe set AND cleared, squads set only where the sport admits lineup events; levelWithdrawal set AND cleared only where a level result is reachable",
+   "reason": "squads set is owed only where the sport admits lineup events"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure › every impossible-by-policy reason is a reducer refusal code per config — never '?' and never the planner's own 'no-candidate'",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — the lineup vocabulary is derived from the kernel; an unplanned type is a named failure › every impossible-by-policy reason is a reducer refusal code per config (or, for a sport that declares no lineupPolicy, the kernel's named refusal) — never '?' and never the planner's own 'no-candidate'",
+   "reason": "a sport that declares no lineupPolicy has the kernel's named refusal (lineup-not-supported) as its reason"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › a module that declares a lineupPolicy still admits what its policy allows › admits every lineup type the reducer accepts under the module's own policy - first, mid-match and after a void - and never answers LINEUP_NOT_SUPPORTED",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › a module that declares no lineupPolicy refuses core.lineup.* on the write path › a refusal leaves the ledger as it was: a second refusal answers the same, and the next legal event is still taken",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › a module that declares no lineupPolicy refuses core.lineup.* on the write path › refuses a lineup change whose payload is otherwise valid, but a malformed one is the payload's INVALID_EVENT, first",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › a module that declares no lineupPolicy refuses core.lineup.* on the write path › refuses every lineup type, as the first event, mid-match and after a void, with a named code",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › a module that declares no lineupPolicy refuses core.lineup.* on the write path › still FOLDS a ledger that already holds a lineup event (replay): the refusal is the write path's",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the error code › LINEUP_NOT_SUPPORTED is in the taxonomy",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the premise: which modules declare lineup support › admitsLineupEvents is the module's declaration, sport by sport",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the premise: which modules declare lineup support › declares lineupPolicy and onLineup together, and exactly boardgame, carrom and generic decline (owner ruling 2026-10-15)",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the premise: which modules declare lineup support › each declining sport's own catalog admits no bench: a bench sheet is not part of what the sport's team sheet may hold",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the refusal is the sport's answer, not the moment's › a sport that DECLARES a lineupPolicy is never refused for lacking one in those moments: it answers the moment, whatever it answers",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy, and, from the review follow-up, the moment ledgers: the refusal is the sport's answer after a withdrawal, a decided result, a finalize, an abandon and an open stoppage)"
+  },
+  {
+   "id": "src/core/lineup-support.test.ts › the refusal is the sport's answer, not the moment's › every lineup type, after a withdrawal, a decided result, a finalize, an abandon and an open stoppage, in all three sports: LINEUP_NOT_SUPPORTED",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the engine refuses core.lineup.* for a sport that declares no lineupPolicy (premise, predicate, refusal sweep, sequence, replay, admission of the declaring sports, taxonomy, and, from the review follow-up, the moment ledgers: the refusal is the sport's answer after a withdrawal, a decided result, a finalize, an abandon and an open stoppage)"
+  },
+  {
+   "id": "src/core/lineup.events.test.ts › policy refusals across the strict/replay seam › applies the kernel default policy to a module that declares exactly it: a return is refused by the reducer",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the kernel default policy still applies to a module that declares exactly it"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › RETIRED lineup, on a synthetic vehicle: a module that declares a lineupPolicy and NO onLineup leaves every lineup type unpinned under the module-only recorder and pinned under the real one (what boardgame, carrom and generic did before they refused them)",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: the retired lineup claim is demonstrated on a synthetic vehicle because the three committed corpora hold no lineup event"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — a sport that refuses lineup events owes none (owner ruling 2026-10-15) › every lineup type is impossible there, the reason names the refusal, and no squads token is required",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: a sport that refuses lineup events owes no lineup token and no squads token"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — a sport that refuses lineup events owes none (owner ruling 2026-10-15) › the offers a refusing sport gets plan no event (the kernel would refuse each) and carry no bench: its own catalog admits none",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: a sport that refuses lineup events owes no lineup token and no squads token"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › owner ruling 2026-10-15: a sport that refuses lineup events owes no squads token (a squads change there is impossible), and nothing else is dropped",
+   "fate": "added",
+   "reason": "owner ruling 2026-10-15: a sport that refuses lineup events owes no lineup token and no squads token"
+  }
+ ]
+}

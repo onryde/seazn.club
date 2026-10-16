@@ -13,6 +13,7 @@ import { asFormatTwo } from "./golden-reformat.ts";
 import {
   CORE_TYPES,
   FLOOR_EXEMPTIONS,
+  LINEUP_NOT_SUPPORTED_REASON,
   LINEUP_TYPES,
   NATURAL_OUTCOMES,
   benchPair,
@@ -205,14 +206,14 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
   });
 
   it("overlayRequirement: a fact the kernel returns and the floor has no rule for is a named failure, and so is a rule for a fact it no longer returns", () => {
-    expect(() => overlayRequirement([...FOLD_OVERLAY_KEYS, "possession"], true)).toThrow(/possession.*no overlay rule/);
-    expect(() => overlayRequirement(FOLD_OVERLAY_KEYS.filter((k) => k !== "expunged"), true)).toThrow(/expunged.*no longer returns/);
-    expect(() => overlayRequirement([], true)).toThrow(/no longer returns/);
+    expect(() => overlayRequirement([...FOLD_OVERLAY_KEYS, "possession"], true, true)).toThrow(/possession.*no overlay rule/);
+    expect(() => overlayRequirement(FOLD_OVERLAY_KEYS.filter((k) => k !== "expunged"), true, true)).toThrow(/expunged.*no longer returns/);
+    expect(() => overlayRequirement([], true, true)).toThrow(/no longer returns/);
   });
 
-  it("owner ruling (GF-2 design §4): stoppage, settlement and expunged owe set AND cleared, squads set; levelWithdrawal set AND cleared only where a level result is reachable", () => {
-    const withLevel = [...overlayRequirement(FOLD_OVERLAY_KEYS, true).keys()].sort();
-    const without = [...overlayRequirement(FOLD_OVERLAY_KEYS, false).keys()].sort();
+  it("owner ruling (GF-2 design §4): stoppage, settlement and expunged owe set AND cleared, squads set only where the sport admits lineup events; levelWithdrawal set AND cleared only where a level result is reachable", () => {
+    const withLevel = [...overlayRequirement(FOLD_OVERLAY_KEYS, true, true).keys()].sort();
+    const without = [...overlayRequirement(FOLD_OVERLAY_KEYS, false, true).keys()].sort();
     // typed from the ruling, not read off the table under test
     expect(without).toEqual([
       "overlay:expunged:cleared",
@@ -224,18 +225,34 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
       "overlay:stoppage:set",
     ]);
     expect(withLevel).toEqual([...without, "overlay:levelWithdrawal:cleared", "overlay:levelWithdrawal:set"].sort());
-    for (const why of overlayRequirement(FOLD_OVERLAY_KEYS, true).values()) expect(why.length).toBeGreaterThan(20);
+    for (const why of overlayRequirement(FOLD_OVERLAY_KEYS, true, true).values()) expect(why.length).toBeGreaterThan(20);
+  });
+
+  it("owner ruling 2026-10-15: a sport that refuses lineup events owes no squads token (a squads change there is impossible), and nothing else is dropped", () => {
+    for (const levelReachable of [true, false]) {
+      const admits = [...overlayRequirement(FOLD_OVERLAY_KEYS, levelReachable, true).keys()].sort();
+      const refuses = [...overlayRequirement(FOLD_OVERLAY_KEYS, levelReachable, false).keys()].sort();
+      expect(refuses, `level ${String(levelReachable)}`).toEqual(admits.filter((t) => t !== "overlay:squads:set"));
+      expect(admits).toContain("overlay:squads:set");
+    }
   });
 
   it("every sport requires the unconditional overlay tokens, and the level-withdrawal pair exactly where its floor requires a level outcome", () => {
     let sports = 0;
     let withLevel = 0;
     let withoutLevel = 0;
+    let squads = 0;
+    let noSquads = 0;
     forEachSport(({ module, key }) => {
       const req = floorRequirement(module, corpusOf(key));
-      for (const t of ["overlay:stoppage:set", "overlay:stoppage:cleared", "overlay:squads:set", "overlay:settlement:set", "overlay:settlement:cleared", "overlay:expunged:set", "overlay:expunged:cleared"] as const) {
+      for (const t of ["overlay:stoppage:set", "overlay:stoppage:cleared", "overlay:settlement:set", "overlay:settlement:cleared", "overlay:expunged:set", "overlay:expunged:cleared"] as const) {
         expect(req.required.has(t), `${key} ${t}`).toBe(true);
       }
+      // squads: owed exactly where the sport DECLARES lineup support (its lineupPolicy), read off the module and not the predicate
+      const declares = module.lineupPolicy !== undefined;
+      expect(req.required.has("overlay:squads:set"), `${key}: overlay:squads:set iff the sport declares a lineupPolicy`).toBe(declares);
+      if (declares) squads++;
+      else noSquads++;
       expect(req.required.has("overlay:squads:cleared"), `${key}: a squads clear cannot be read off a stream`).toBe(false);
       const level = LEVEL_OUTCOME_TOKENS.some((k) => req.required.has(outcomeToken(k)));
       for (const t of ["overlay:levelWithdrawal:set", "overlay:levelWithdrawal:cleared"] as const) expect(req.required.has(t), `${key} ${t} iff a level outcome is required`).toBe(level);
@@ -246,6 +263,9 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
     expect(sports).toBe(builtinModules.length);
     expect(withLevel, "football, cricket, hockey ... can end level").toBeGreaterThan(0);
     expect(withoutLevel, "badminton, tennis ... cannot").toBeGreaterThan(0);
+    expect(squads, "sports that owe a squads token").toBeGreaterThan(0);
+    expect(noSquads, "sports that refuse lineup events owe none").toBeGreaterThan(0);
+    expect(squads + noSquads).toBe(builtinModules.length);
   });
 
   it("empty case: an EMPTY corpus names every overlay token the sport requires as a hole (the floor cannot shrink by losing its streams)", () => {
@@ -253,12 +273,14 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
     forEachSport(({ module, key }) => {
       const empty: GoldenCorpus = { ...corpusOf(key), streams: [] };
       const required = [...floorRequirement(module, empty).required.keys()].filter((t) => t.startsWith("overlay:"));
-      expect(required.length, key).toBeGreaterThanOrEqual(7);
+      // stoppage, settlement and expunged owe two each; squads one where the sport declares a lineupPolicy
+      const floor = 6 + (module.lineupPolicy !== undefined ? 1 : 0);
+      expect(required.length, key).toBeGreaterThanOrEqual(floor);
       const holes = new Set(floorHoles(module, empty));
       for (const t of required) expect(holes.has(t), `${key} ${t}`).toBe(true);
       tokens += required.length;
     });
-    expect(tokens).toBeGreaterThanOrEqual(builtinModules.length * 7);
+    expect(tokens).toBeGreaterThanOrEqual(builtinModules.length * 6 + 8);
   });
 
   it("dropping the streams that hold an overlay token makes exactly that token a hole, naming the sport (teeth: the token is read off the recorded overlay)", () => {
@@ -266,6 +288,8 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
     forEachSport(({ module, key }) => {
       const corpus = corpusOf(key);
       for (const token of ["overlay:stoppage:set", "overlay:stoppage:cleared", "overlay:squads:set"] as const) {
+        // squads is owed only where the sport declares a lineupPolicy; elsewhere the corpus holds none and the floor asks for none
+        if (token === "overlay:squads:set" && module.lineupPolicy === undefined) continue;
         expect(floorRequirement(module, corpus).required.has(token), `${key} ${token}`).toBe(true);
         const kept = corpus.streams.filter((s) => !recordedTokens({ ...corpus, streams: [s] }).has(token));
         expect(kept.length, `${key} ${token}: some stream held it`).toBeLessThan(corpus.streams.length);
@@ -273,7 +297,8 @@ describe("golden floor — the kernel overlay is a token family of its own (GF-2
         dropped++;
       }
     });
-    expect(dropped).toBe(builtinModules.length * 3);
+    // stoppage set and cleared in every sport, squads in the eight that declare a lineupPolicy
+    expect(dropped).toBe(builtinModules.length * 2 + builtinModules.filter((m) => m.lineupPolicy !== undefined).length);
   });
 });
 
@@ -397,10 +422,61 @@ describe("golden floor — lineup planning asks the real reducer", () => {
         const cfg = module.configSchema.parse(corpusOf(key).configs[offer.cfgName]);
         const starters = offer.lineups.home.slots.filter((s) => s.slot === "starting");
         expect(starters).toEqual(defaultLineupPair(resolvePositions(module, cfg)).home.slots);
-        expect(offer.lineups.home.slots.filter((s) => s.slot === "bench")).toHaveLength(3);
+        // a bench of FLOOR_BENCH where the sport admits lineup events (someone to bring on); none where it refuses them (its catalog's benchMax)
+        expect(offer.lineups.home.slots.filter((s) => s.slot === "bench")).toHaveLength(module.lineupPolicy === undefined ? (module.positions.lineup.benchMax ?? 0) : 3);
       }
     });
     expect(offers).toBeGreaterThanOrEqual(builtinModules.length);
+  });
+});
+
+describe("golden floor — a sport that refuses lineup events owes none (owner ruling 2026-10-15)", () => {
+  it("every lineup type is impossible there, the reason names the refusal, and no squads token is required", () => {
+    let refusing = 0;
+    let admitting = 0;
+    let typesChecked = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      // the DECLARATION, read here, not through the predicate the floor uses
+      if (module.lineupPolicy !== undefined) {
+        admitting++;
+        expect(req.required.has("overlay:squads:set"), `${key} owes a squads token`).toBe(true);
+        return;
+      }
+      refusing++;
+      for (const type of LINEUP_TYPES) {
+        const token = eventToken(type);
+        expect(req.required.has(token), `${key} ${type} is required`).toBe(false);
+        expect(req.exempt.has(token), `${key} ${type} is exempt`).toBe(false);
+        // the reason is the kernel's refusal, per recorded config (the same shape the reducer's own refusals take)
+        expect(req.impossible.get(token), `${key} ${type}`).toMatch(/lineup-not-supported/);
+        for (const cfgName of Object.keys(corpusOf(key).configs)) expect(req.impossible.get(token), `${key} ${type}`).toContain(`${cfgName}: lineup-not-supported`);
+        typesChecked++;
+      }
+      expect(req.required.has("overlay:squads:set"), `${key} owes a squads token`).toBe(false);
+      // and nothing in the corpus can have recorded one: a stream that set the squads there is impossible
+      expect(recordedTokens(corpusOf(key)).has("overlay:squads:set"), `${key} records a squads change`).toBe(false);
+      for (const type of LINEUP_TYPES) expect(recordedTokens(corpusOf(key)).has(eventToken(type)), `${key} records ${type}`).toBe(false);
+    });
+    expect(refusing, "sports that refuse lineup events").toBe(3);
+    expect(admitting, "sports that admit them").toBe(builtinModules.length - 3);
+    expect(typesChecked).toBe(3 * LINEUP_TYPES.length);
+  });
+
+  it("the offers a refusing sport gets plan no event (the kernel would refuse each) and carry no bench: its own catalog admits none", () => {
+    let offers = 0;
+    forEachSport(({ module, key }) => {
+      if (module.lineupPolicy !== undefined) return;
+      for (const offer of lineupOffers(module, corpusOf(key))) {
+        offers++;
+        expect(offer.plan.events, `${key}/${offer.cfgName}`).toEqual([]);
+        expect(offer.plan.accepted, `${key}/${offer.cfgName}`).toEqual([]);
+        expect(Object.keys(offer.plan.refused).sort(), `${key}/${offer.cfgName}`).toEqual([...LINEUP_TYPES].sort());
+        expect(new Set(Object.values(offer.plan.refused)), `${key}/${offer.cfgName}`).toEqual(new Set(["lineup-not-supported"]));
+        expect(offer.lineups.home.slots.filter((slot) => slot.slot === "bench"), `${key}/${offer.cfgName} bench rows (benchMax ${module.positions.lineup.benchMax})`).toHaveLength(module.positions.lineup.benchMax ?? 0);
+      }
+    });
+    expect(offers, "offers examined").toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -785,20 +861,28 @@ describe("golden floor — the lineup vocabulary is derived from the kernel; an 
     expect(() => lineupTypesOf(narrowed)).toThrow(/core\.lineup\.entry.*no longer declares/);
   });
 
-  it("every impossible-by-policy reason is a reducer refusal code per config — never '?' and never the planner's own 'no-candidate'", () => {
+  it("every impossible-by-policy reason is a reducer refusal code per config (or, for a sport that declares no lineupPolicy, the kernel's named refusal) — never '?' and never the planner's own 'no-candidate'", () => {
     let reasons = 0;
+    let refusals = 0;
     forEachSport(({ module, key }) => {
       const req = floorRequirement(module, corpusOf(key));
       for (const [token, why] of req.impossible) {
         for (const part of why.split("; ")) {
           const code = part.split(": ")[1];
           expect(code, `${key} ${token}: ${part}`).toBeDefined();
-          expect(Object.hasOwn(REDUCER_CODES, code!), `${key} ${token}: "${code}" is not a reducer refusal code`).toBe(true);
+          if (module.lineupPolicy === undefined) {
+            // owner ruling 2026-10-15: the reducer is never asked; the sport's own declaration is the answer
+            expect(code, `${key} ${token}`).toBe(LINEUP_NOT_SUPPORTED_REASON);
+            refusals++;
+          } else {
+            expect(Object.hasOwn(REDUCER_CODES, code!), `${key} ${token}: "${code}" is not a reducer refusal code`).toBe(true);
+          }
           reasons++;
         }
       }
     });
     expect(reasons).toBeGreaterThan(0);
+    expect(refusals, "refusing sports contribute 5 types x their configs each").toBeGreaterThanOrEqual(3 * LINEUP_TYPES.length);
   });
 
   it("a plan that never got to ask the reducer ('no-candidate') cannot become a floor reason: the requirement refuses to derive from it", () => {

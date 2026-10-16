@@ -24,7 +24,7 @@
 //
 // A scenario is attempted only for a sport whose floor still has a hole it serves, and only appends a stream that
 // actually reduces the holes. Existing streams are never touched.
-import { foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, type EventEnvelope } from "../core/events.ts";
+import { admitsLineupEvents, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, type EventEnvelope } from "../core/events.ts";
 import { EngineError } from "../core/errors.ts";
 import { mulberry32, type Rng } from "../core/rng.ts";
 import type { LineupPair } from "../core/types.ts";
@@ -426,7 +426,8 @@ const FORFEIT_STORIES: Readonly<Record<string, ForfeitStory>> = {
 function buildForfeit(ctx: Ctx, story: ForfeitStory): Built | null {
   // The withdrawal story carries lineup changes when the floor still wants them, in the config whose policy accepts the
   // most types (cricket's `mutable`, football's `concussed`, volleyball's libero default).
-  const wantsLineup = story.lineup === true && [...ctx.holes].some((t) => t.startsWith("event:core.lineup.") || t === overlayToken("squads", "set"));
+  // (not for a sport that refuses lineup events: the kernel would refuse the changes, and its floor never owes the tokens)
+  const wantsLineup = story.lineup === true && admitsLineupEvents(ctx.module) && [...ctx.holes].some((t) => t.startsWith("event:core.lineup.") || t === overlayToken("squads", "set"));
   const offers = wantsLineup ? lineupOffers(ctx.module, ctx.corpus) : [];
   const best = offers.reduce<(typeof offers)[number] | null>((a, o) => (a === null || o.plan.accepted.length > a.plan.accepted.length ? o : a), null);
   const cfgNames = best === null ? ctx.cfgNames : [best.cfgName];

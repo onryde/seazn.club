@@ -917,8 +917,9 @@ describe("every overlay, undo and settle token the floor can require is SERVED b
 });
 
 describe("the withdrawal story carries lineup changes whenever the squads still owe a move (GF-2 T3)", () => {
-  it("with overlay:squads:set the only hole, the story is built WITH lineup changes; with no hole it is not", () => {
+  it("with overlay:squads:set the only hole, the story is built WITH lineup changes (where the sport admits them); with no hole it is not", () => {
     let withLineup = 0;
+    let refusing = 0;
     forEachSport(({ module, key }) => {
       const corpus = readCorpus(key);
       const withdrew = SCENARIOS.find((x) => x.id === "withdrew")!;
@@ -929,10 +930,19 @@ describe("the withdrawal story carries lineup changes whenever the squads still 
       expect(owed, `${key}: and with a squads hole`).not.toBeNull();
       const lineupEvents = (b: Built | null): number => (b?.events ?? []).filter((e) => e.type.startsWith("core.lineup.")).length;
       expect(lineupEvents(none), `${key}: nothing owes a lineup change, so none is spliced`).toBe(0);
-      expect(lineupEvents(owed), `${key}: squads owed, so the story carries them`).toBeGreaterThan(0);
-      withLineup++;
+      if (module.lineupPolicy === undefined) {
+        // owner ruling 2026-10-15: a sport with no lineupPolicy refuses every lineup event, so even a (synthetic) squads hole is
+        // answered without one, and with no bench sheet to bring anyone on from
+        expect(lineupEvents(owed), `${key}: the kernel refuses a lineup change here, so none is spliced`).toBe(0);
+        expect(owed?.lineups, `${key}: and no bench sheet is invented`).toBeUndefined();
+        refusing++;
+      } else {
+        expect(lineupEvents(owed), `${key}: squads owed, so the story carries them`).toBeGreaterThan(0);
+        withLineup++;
+      }
     });
-    expect(withLineup).toBe(builtinModules.length);
+    expect(withLineup).toBe(builtinModules.length - 3);
+    expect(refusing).toBe(3);
   }, sweepBudget("build", 1));
 
   it("the withdrawal story serves overlay:squads:set and the stoppage story serves both stoppage tokens", () => {

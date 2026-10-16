@@ -78,6 +78,8 @@ describe("EngineError", () => {
       "ABANDONED_SETTLE_OR_VOID",
       "DOUBLE_WALKOVER_NO_NEXT_MATCH",
       "STAGE_SEAT_DEPARTED",
+      // Owner ruling 2026-10-15 — a lineup event for a sport that declares no lineupPolicy. Appended last, existing order frozen.
+      "LINEUP_NOT_SUPPORTED",
     ]);
   });
 });

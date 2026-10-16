@@ -212,7 +212,7 @@
       "reason": "The `.some(appearance)` gate only decides whether `unplayed` is computed; the metric loop re-tests `metric.appearance === true` before skipping, so a model with no appearance metric credits exactly the same rows whether `unplayed` is computed or not. Computing it cannot throw or write: `playedInStats` re-resolves voids over `active`, which holds no `core.void` (resolveVoids throws only on one), and what it reaches (the model's own `unplayed` — boardgameUnplayed → statsUnplayed — forfeitStatsRole, playRecorded) is pure and reads forfeits through safeParse. Re-judged after ruling 120 moved the reading into playedInStats."
     },
     {
-      "mutant": "src/core/events.ts:359:57 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:373:57 ConditionalExpression → true",
       "original": "typeof e.voids === \"string\"",
       "line": "for (const e of ledger) if (e.type === \"core.void\" && typeof e.voids === \"string\") voided.add(e.voids);",
       "reason": "Without the typeof check a core.void with no string `voids` adds undefined or null to `voided`; the only read is `voided.has(e.id)`, and every ledger entry's `id` is a string, so no entry is ever skipped that the original would fold."
@@ -296,7 +296,7 @@
       "reason": "carromForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/core/events.ts:402:20 StringLiteral → \"\"",
+      "mutant": "src/core/events.ts:416:20 StringLiteral → \"\"",
       "original": "\"over\"",
       "line": "return decided ? \"over\" : started ? \"play\" : \"pre\";",
       "reason": "Only a hook-less fake reaches this fallback, and only a DECIDED fold reads the decided arm: there guarantee 4 (ALREADY_DECIDED) answers every forfeit before the phase guard except a withdrawal over a held level result, and \"withdrew\" is admitted in every phase (R5), so the phase name is never read into a refusal."
@@ -404,61 +404,61 @@
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2292:58 StringLiteral → \"\"",
+      "mutant": "src/sports/nested/kernel.ts:2294:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = nestedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2722:58 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2726:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = periodForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "periodForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2723:135 BooleanLiteral → true",
+      "mutant": "src/sports/period/kernel.ts:2727:135 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2574:60 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2576:60 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = setBasedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "setBasedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2317:9 ConditionalExpression → true",
+      "mutant": "src/sports/setbased/kernel.ts:2319:9 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2317:20 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2319:20 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/core/events.ts:954:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
+      "mutant": "src/core/events.ts:989:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
       "original": "decided &&",
       "line": "decided &&",
       "reason": "Undecided, a withdrawal is over a level result only if outcomeOf reads level, and an undecided fold's outcomeOf is null or a settle's win (CoreSettle requires a winner), never level — so `decided ||` admits nothing that `decided &&` does not."
     },
     {
-      "mutant": "src/core/events.ts:955:7 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:990:7 ConditionalExpression → true",
       "original": "event.type === \"core.forfeit\"",
       "line": "event.type === \"core.forfeit\" &&",
       "reason": "forfeitReasonOf parses the payload as CoreForfeit, a strict {by, reason} object; no other kernel or sport event declares exactly that shape (set sanctions need `level`, period suspensions `class`, carrom adjustments `entrantId` and `delta`, nested game awards `winner`), so only a core.forfeit reads \"withdrew\"."
     },
     {
-      "mutant": "src/core/events.ts:980:11 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:1015:11 ConditionalExpression → true",
       "original": "phase !== \"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
     },
     {
-      "mutant": "src/core/events.ts:980:21 StringLiteral → \"\"",
+      "mutant": "src/core/events.ts:1015:21 StringLiteral → \"\"",
       "original": "\"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
@@ -512,19 +512,19 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2319:38 ConditionalExpression → true",
+      "mutant": "src/sports/period/kernel.ts:2322:38 ConditionalExpression → true",
       "original": "awardReasonOf(outcome) !== \"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2319:65 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2322:65 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2331:27 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2333:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."

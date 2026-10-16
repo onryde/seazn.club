@@ -20,6 +20,7 @@
 // guard cannot see") — never a table read off the code under test.
 import { describe, expect, it } from "vitest";
 import { CORE_EVENT_SCHEMAS } from "../core/events.ts";
+import { DEFAULT_LINEUP_POLICY } from "../core/lineup.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
@@ -30,6 +31,7 @@ import {
   CORE_TYPES,
   DenseOverlayMissing,
   LINEUP_TYPES,
+  benchPair,
   OVERLAY_CLAIMS,
   OVERLAY_CONTROLS,
   eventToken,
@@ -38,6 +40,7 @@ import {
   moduleRecorder,
   recordedTokens,
   overlayVerdicts,
+  planLineupEvents,
   staleOverlayClaims,
   statsRecorder,
   uncoveredUnpinned,
@@ -89,6 +92,27 @@ const RETIRED_AWARD: OverlayClaim = {
   reason: "an award reaches module.apply but every module folds it as `return state`, and the player statistics were not recorded, so nothing recorded depends on it",
 };
 const RETIRED = [RETIRED_STOPPAGE, RETIRED_LINEUP];
+
+/** A module that admits lineup events, and a corpus that records some, for the probe tests that are about HOW a lineup event is
+ *  credited. The committed corpora record none in boardgame, carrom or generic any more: the kernel refuses a lineup event there
+ *  (owner ruling 2026-10-15), and those sports were the only vehicle for the probe's lineup branches that did not already declare
+ *  an `onLineup`. So the vehicle is rebuilt: boardgame GIVEN a `lineupPolicy` (so the kernel admits the events), and its committed
+ *  withdrawal stream with the five planned lineup events spliced in before the forfeit over the bench pair, which is exactly how the
+ *  floor built that stream before the ruling. `onLineup` is the variable: absent, or a hook a test supplies. */
+function lineupVehicle(onLineup?: (state: object, squads: never) => object): { module: (typeof builtinModules)[number]; corpus: GoldenCorpus; spliced: number } {
+  const boardgame = builtinModules.find((m) => m.key === "boardgame")!;
+  const corpus = corpusOf("boardgame");
+  const withdrew = corpus.streams.find((st) => {
+    const last = st.events.at(-1);
+    return last?.type === "core.forfeit" && (last.payload as { reason?: string }).reason === "withdrew";
+  })!;
+  const cfg = boardgame.configSchema.parse(corpus.configs[withdrew.config]);
+  const lineups = benchPair(boardgame, cfg);
+  const plan = planLineupEvents(lineups, DEFAULT_LINEUP_POLICY);
+  const stream = { ...withdrew, lineups, events: [...withdrew.events.slice(0, -1), ...plan.events, withdrew.events.at(-1)!] };
+  const module = { ...boardgame, lineupPolicy: () => DEFAULT_LINEUP_POLICY, ...(onLineup === undefined ? {} : { onLineup }) } as unknown as (typeof builtinModules)[number];
+  return { module, corpus: { ...corpus, streams: [stream] }, spliced: plan.events.length };
+}
 
 /** The award keys the module's OWN declaration lists (the expected sets below are the engine's, never typed here). */
 const declaredAwards = (module: (typeof builtinModules)[number]): string[] => (module.playerStats?.awards ?? []).map((a) => a.key);
@@ -170,21 +194,26 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
     expect(checked).toBe(builtinModules.length * RETIRED_STOPPAGE.tokens.length);
   }, sweepBudget("probe"));
 
-  it("RETIRED lineup: exactly boardgame, carrom and generic (every recorded type) and football's position change flip from unpinned to pinned; the other sports were pinned already", () => {
-    // The set that was unpinned is the policy of record before this task: "inert in boardgame, carrom and generic (no onLineup,
-    // every type), and core.lineup.position is inert in football too". It is typed here from that text, and the probe must agree.
-    const wasUnpinned = (key: string, type: string): boolean => key === "boardgame" || key === "carrom" || key === "generic" || (key === "football" && type === "core.lineup.position");
+  it("RETIRED lineup: football's position change flips from unpinned to pinned; boardgame, carrom and generic record no lineup event any more (the kernel refuses them); the other sports were pinned already", () => {
+    // Before the 2026-10-15 ruling the set that flipped was boardgame, carrom and generic (no onLineup, every type) plus football's
+    // position change. The three now refuse every lineup event, their floor owes none and their corpora hold none, so the flip is
+    // not measurable on their committed bytes: their verdicts are "unrecorded" under both recorders (asserted, derived from the
+    // module's own declaration). The synthetic tests below recreate the flip for a module that declares no onLineup.
+    const wasUnpinned = (key: string, type: string): boolean => key === "football" && type === "core.lineup.position";
     const flips: string[] = [];
+    const unrecordedEverywhere: string[] = [];
     let probed = 0;
-    forEachSport(({ key }) => {
+    forEachSport(({ module, key }) => {
       const before = verdictsOf(key, moduleRecorder, [RETIRED_LINEUP]);
       const after = verdictsOf(key, kernelRecorder, [RETIRED_LINEUP]);
+      let unrecorded = 0;
       for (const type of LINEUP_TYPES) {
         const token = eventToken(type);
         const was = before.get(token)!;
         const now = after.get(token)!;
         if (was.verdict === "unrecorded") {
           expect(now.verdict, `${key} ${type}: recorded under neither`).toBe("unrecorded");
+          unrecorded++;
           continue; // a type the sport's policy never lets a stream record
         }
         probed++;
@@ -192,12 +221,33 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
         expect(now.verdict, `${key} ${type} under the real recorder`).toBe("pinned");
         if (was.verdict === "unpinned") flips.push(`${key} ${type}`);
       }
+      // a sport that declares no lineupPolicy records none of the five (read off the declaration, not the verdicts)
+      if (module.lineupPolicy === undefined) {
+        expect(unrecorded, `${key}: every lineup type is unrecorded where the kernel refuses them`).toBe(LINEUP_TYPES.length);
+        unrecordedEverywhere.push(key);
+      }
     });
-    expect(probed, "every recorded lineup type of every sport was probed").toBeGreaterThan(builtinModules.length * 3);
-    expect(new Set(flips.map((f) => f.split(" ")[0])), "the sports that flip").toEqual(new Set(["boardgame", "carrom", "generic", "football"]));
-    expect(flips.filter((f) => f.startsWith("football ")), "football flips on its position change only").toEqual(["football core.lineup.position"]);
-    expect(flips.length).toBeGreaterThanOrEqual(7);
+    expect(probed, "every recorded lineup type of every sport was probed").toBeGreaterThan(builtinModules.length * 2);
+    expect(unrecordedEverywhere, "the sports whose corpora can hold no lineup event").toEqual(["boardgame", "carrom", "generic"]);
+    expect(flips, "football flips on its position change only").toEqual(["football core.lineup.position"]);
   }, sweepBudget("probe"));
+
+  it("RETIRED lineup, on a synthetic vehicle: a module that declares a lineupPolicy and NO onLineup leaves every lineup type unpinned under the module-only recorder and pinned under the real one (what boardgame, carrom and generic did before they refused them)", () => {
+    const { module, corpus, spliced } = lineupVehicle();
+    expect(module.onLineup).toBeUndefined();
+    expect(spliced, "the vehicle really holds lineup events").toBeGreaterThanOrEqual(3);
+    const before = overlayVerdicts(module, corpus, moduleRecorder, [RETIRED_LINEUP]);
+    const after = overlayVerdicts(module, corpus, kernelRecorder, [RETIRED_LINEUP]);
+    let flipped = 0;
+    for (const type of LINEUP_TYPES) {
+      const token = eventToken(type);
+      if (before.get(token)?.verdict === "unrecorded") continue;
+      expect(before.get(token)?.verdict, `${type} under the module-only recorder`).toBe("unpinned");
+      expect(after.get(token)?.verdict, `${type} under the real recorder`).toBe("pinned");
+      flipped++;
+    }
+    expect(flipped, "recorded lineup types that flipped").toBe(spliced);
+  }, sweepBudget("probe", 1));
 
   it("the retirement is DETECTED by the staleness check itself: under the real recorder every retired claim is stale in every sport it applied to, under the module-only recorder none is", () => {
     let stale = 0;
@@ -219,7 +269,9 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
       held += claimedTokens(module, corpus, RETIRED);
     });
     expect(stale).toBe(held);
-    expect(stale).toBeGreaterThan(builtinModules.length * 2);
+    // the stoppage claim goes stale in all eleven sports (two tokens each); the lineup claim was asserted for the sports that declare no
+    // onLineup, whose five types are all impossible now (owner ruling 2026-10-15), so it contributes nothing and no sport is vacuous
+    expect(stale).toBe(builtinModules.length * RETIRED_STOPPAGE.tokens.length);
   }, sweepBudget("probe"));
 
   it("EVERY recorded core event whose ablation says 'unpinned' is covered by a claim: a note everywhere, an award exactly where the sport declares no key for it (swept per sport x token, counted)", () => {
@@ -344,30 +396,27 @@ describe("golden floor — the overlay-unpinned class is declared, reasoned and 
 
   // The probe answers both ways whatever the claim table holds: these use the retired lineup row only as a CHAIN definition, under
   // the module-only recorder, because they are about how `overlayVerdicts` credits each type with what it adds.
-  it("the probe answers 'pinned' for a lineup event once a module reacts to it (a boardgame given an onLineup that writes state)", () => {
-    const boardgame = builtinModules.find((m) => m.key === "boardgame")!;
-    expect(boardgame.onLineup).toBeUndefined();
+  it("the probe answers 'pinned' for a lineup event once a module reacts to it (a boardgame given a lineupPolicy and an onLineup that writes state)", () => {
     // (the kernel also offers the hook the INITIAL squads, so a hook that merely stamps the state is equal at every step;
     // one that writes the squads it was handed differs exactly when a lineup event changed them)
-    const reacting = { ...boardgame, onLineup: (state: object, squads: unknown) => ({ ...state, squadDigest: JSON.stringify(squads) }) } as unknown as typeof boardgame;
-    const verdicts = overlayVerdicts(reacting, corpusOf("boardgame"), moduleRecorder, [RETIRED_LINEUP]);
+    const { module, corpus, spliced } = lineupVehicle((state: object, squads: unknown) => ({ ...state, squadDigest: JSON.stringify(squads) }));
+    expect(module.onLineup).toBeDefined();
+    const verdicts = overlayVerdicts(module, corpus, moduleRecorder, [RETIRED_LINEUP]);
     const recorded = LINEUP_TYPES.map(eventToken).filter((t) => (verdicts.get(t)?.streams ?? 0) > 0);
-    expect(recorded.length).toBeGreaterThan(0);
+    expect(recorded.length, "recorded lineup types").toBe(spliced);
     for (const t of recorded) expect(verdicts.get(t)?.verdict, t).toBe("pinned");
   });
 
   it("the lineup chain credits each type with only what it ADDS: a hook that reacts to who is on the field sees substitution, retirement and entry, not a position change", () => {
-    const boardgame = builtinModules.find((m) => m.key === "boardgame")!;
     // the kernel hands the hook the squads after every lineup change; this one writes only WHO is on the field, which a
     // substitution, a retirement and an entry change and a position change does not
-    const onFieldOnly = {
-      ...boardgame,
-      onLineup: (state: object, squads: { home: { members: { onField: boolean; personId: string }[] }; away: { members: { onField: boolean; personId: string }[] } }) => ({
+    const { module, corpus } = lineupVehicle(
+      (state: object, squads: { home: { members: { onField: boolean; personId: string }[] }; away: { members: { onField: boolean; personId: string }[] } }) => ({
         ...state,
         onField: [...squads.home.members, ...squads.away.members].filter((m) => m.onField).map((m) => m.personId).join(","),
       }),
-    } as unknown as typeof boardgame;
-    const verdicts = overlayVerdicts(onFieldOnly, corpusOf("boardgame"), moduleRecorder, [RETIRED_LINEUP]);
+    );
+    const verdicts = overlayVerdicts(module, corpus, moduleRecorder, [RETIRED_LINEUP]);
     const verdictOf = (type: string) => verdicts.get(eventToken(type))?.verdict;
     expect(verdictOf("core.lineup.position"), "a position change moves nobody on or off the field").toBe("unpinned");
     expect(verdictOf("core.lineup.substitution")).toBe("pinned");

@@ -1810,8 +1810,11 @@ export interface PeriodPreset {
    * dispensations that ARE rolling, so the same preset shape has to answer
    * differently for two configs of one module.
    *
-   * Omitted ⇒ `DEFAULT_LINEUP_POLICY`: no growth, no return, no exemption, no
-   * cap — nothing a module could do before this wave becomes impossible.
+   * Omitted ⇒ the sport takes no lineup event at all (`LINEUP_NOT_SUPPORTED`,
+   * owner ruling 2026-10-15), NOT the kernel default: state
+   * `() => DEFAULT_LINEUP_POLICY` (no growth, no return, no exemption, no cap)
+   * to get that. Note `onLineup` below is declared unconditionally, so a preset
+   * that omits the policy would adopt squads that can never change.
    */
   lineupPolicy?: (cfg: PeriodCfg) => LineupPolicy;
   metrics: MetricSpec[];
@@ -2539,9 +2542,10 @@ export function makePeriodModule(
     },
     variants: preset.variants,
 
-    // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`. Declared
-    // only when the preset states a policy, so a period sport that says nothing
-    // gets `DEFAULT_LINEUP_POLICY` from the fold and is byte-for-byte unmoved.
+    // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`. `lineupPolicy` is
+    // declared only when the preset states one, and since the 2026-10-15 ruling a
+    // period sport that states none takes NO lineup event (`LINEUP_NOT_SUPPORTED`):
+    // the declaration is the opt-in. Both shipped presets (hockey, ice hockey) state one.
     ...(preset.lineupPolicy === undefined ? {} : { lineupPolicy: preset.lineupPolicy }),
     onLineup: (state, squads) => squadAdopter.adopt(state, squads),
 

@@ -155,10 +155,12 @@ export interface LineupPolicy {
   readonly anyExemption?: boolean;
 }
 
-/** What a module that declares no `lineupPolicy` gets: nothing is permitted
- *  that was not already true before this wave — no growth, no return, no
- *  exemption — and no cap, because a cap nobody declared is not the kernel's to
- *  invent. */
+/** The kernel's most restrictive answer: no growth, no return, no exemption, and no
+ *  cap, because a cap nobody declared is not the kernel's to invent. A module opts
+ *  in to it by DECLARING `lineupPolicy: () => DEFAULT_LINEUP_POLICY`; one that
+ *  declares nothing takes no lineup event at all on the write path
+ *  (`LINEUP_NOT_SUPPORTED`, owner ruling 2026-10-15), and reaches this value only
+ *  when a ledger that already holds such an event is REPLAYED. */
 export const DEFAULT_LINEUP_POLICY: LineupPolicy = {
   reentry: "none",
   reentryPositionLock: false,

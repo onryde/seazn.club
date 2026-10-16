@@ -410,7 +410,10 @@ hand in the same PR; no tool will tell you):
   "pinned" where it answered "unpinned" on the module-only one): `core.suspend` /
   `core.resume` in all eleven sports (the stoppage is a recorded column), and every
   `core.lineup.*` type in boardgame, carrom and generic plus football's position
-  change (the squads are a recorded column). `uncoveredUnpinned` still ablates every
+  change (the squads are a recorded column). Since the 2026-10-15 lineup ruling the
+  first three no longer take a lineup event at all (see "The golden floor", item 1), so
+  their corpora hold none and the flip stands on football's position change alone.
+  `uncoveredUnpinned` still ablates every
   recorded `core.*` event and reds on any that moves nothing yet is named by no claim.
   **Retired by GF-2 T4** (format 3 records the final player-stats rows): `core.award` in
   football (`motm`), hockey (`potm`) and icehockey (`mvp`), where an award credits a
@@ -490,7 +493,17 @@ least one stream for each of:
    instead of being "impossible". `core.void` is in every corpus because an undo
    is the commonest thing a phone writes. A void's target id is `voids` on the
    recorded event (`GoldenEvent.voids`, the envelope field; the payload is
-   strictly empty). Two more tokens say WHAT is undone or left standing:
+   strictly empty). **The five `core.lineup.*` types are required only of a sport
+   that ADMITS them** (owner ruling 2026-10-15): the kernel takes a lineup event on the
+   write path only for a module that declares a `lineupPolicy`, so boardgame, carrom and
+   generic (which declare none, and read no squad) refuse every one with
+   `LINEUP_NOT_SUPPORTED`. For them all five are *impossible*, with the reason
+   `lineup-not-supported` per recorded config, they owe no `overlay:squads:set` (item 3),
+   and their corpora record no lineup event and no bench sheet (their own catalogs'
+   `benchMax` is 0, and a bench existed in a floor stream only to give a lineup event
+   someone to bring on). The test is the module's declaration (`admitsLineupEvents`), not a
+   list of sport names: a sport that declares a policy tomorrow owes the tokens tomorrow.
+   Two more tokens say WHAT is undone or left standing:
    `undo:core.forfeit`, `undo:core.abandon` and `undo:core.settle` (a mis-tapped
    retirement or abandon, struck, with play resuming to the walk's own result; a
    settle struck, which takes the organiser's win away), and
@@ -514,7 +527,8 @@ least one stream for each of:
    rule, or loses one), and each carries one owner-ruled rule (design §4, 2026-10-15):
    `stoppage` set and cleared; `squads` set (a lineup change moves them off the team
    sheets; the default is a digest only a fold can compute, so "cleared" is not
-   required); `settlement` set and cleared; `expunged` set and cleared;
+   required; owed only where the sport admits lineup events, so not in boardgame,
+   carrom or generic); `settlement` set and cleared; `expunged` set and cleared;
    `levelWithdrawal` set and cleared, only where the sport's floor requires a draw, a
    tie or a no_result (a withdrawal can be laid over a held level result there
    alone: football, cricket, boardgame, generic, ice hockey, hockey). The tokens are
@@ -535,7 +549,9 @@ the next reasoned exemption. Impossible-by-policy rows
 are not exemptions but derived: `core.lineup.replacement` is required only where
 a recorded config's policy lets the reducer accept it (football's `concussed`,
 cricket's `mutable`, volleyball's libero); everywhere else the floor records the
-reducer's own refusal code instead of a stream.
+reducer's own refusal code instead of a stream. A sport that declares no
+`lineupPolicy` is refused by the kernel before the reducer is asked, so its reason is the
+kernel's own (`lineup-not-supported`) for all five types.
 
 **Recorded, overlay unpinned.** The floor is a presence check, and a stream that
 records `core.note` satisfies it without pinning anything. That class is explicit:
@@ -575,7 +591,8 @@ the fold confirms are live — an undo, a struck retirement and a struck abandon
 later play, searched across every config and seed: a toss or a pairing card where
 a board game's or a carrom match's other events are chained), a stoppage with a
 note and an award and the finalize, an abandon that stands, each forfeit reason, a
-withdrawal carrying the lineup changes — and keeps a stream only if it closes a
+withdrawal carrying the lineup changes (where the sport admits them; in boardgame, carrom
+and generic it is the same story without them) — and keeps a stream only if it closes a
 hole. Two stories were added by GF-2 T3: a **settle** story (where the sport can end
 level: a level result, a `withdrew` forfeit laid over it, the forfeit struck, a settle
 by the organiser, the settle struck, a settle by lot; where it cannot: an abandon in
