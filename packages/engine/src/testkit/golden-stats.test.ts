@@ -423,7 +423,7 @@ describe("reformatCorpus to format 3 — adds playerStats and moves nothing the 
       expect(after.streams.length).toBeGreaterThan(0);
       expect(bytesOf(reformatCorpus(module, after, 3))).toBe(bytesOf(after));
       expect(bytesOf(after).length).toBeGreaterThan(bytesOf(before).length);
-    }, 120_000);
+    }, sweepBudget("probe", 1));
   }
 
   it("the sweep covered every sport, every stream, and some real rows", () => {
@@ -438,7 +438,7 @@ describe("reformatCorpus to format 3 — adds playerStats and moves nothing the 
     expect(bytesOf(direct)).toBe(bytesOf(formatThreeOf("generic")));
     expect(bytesOf(reformatCorpus(module, reformatCorpus(module, one, 2), 3))).toBe(bytesOf(direct));
     expect(Object.keys(direct.streams[0]!).slice(-3)).toEqual(["summaries", "overlay", "playerStats"]);
-  }, 120_000);
+  }, sweepBudget("probe", 3));
 
   it("a corpus is never reformatted DOWN, and target 1 is not a reformat at all", () => {
     const module = sport("generic");
@@ -463,7 +463,7 @@ describe("reformatCorpus to format 3 — adds playerStats and moves nothing the 
     const { playerStats: _dropped, ...without } = good.streams[0]!;
     expect(() => reformatCorpus(module, { ...good, streams: [without as GoldenStream, ...good.streams.slice(1)] }, 3)).toThrow(/must record playerStats/);
     expect(() => reformatCorpus(module, { ...two, streams: [] }, 3)).toThrow(/no streams/);
-  }, 120_000);
+  }, sweepBudget("probe", 3));
 });
 
 describe("reformatAll to format 3 — all sports or none", () => {
@@ -472,13 +472,13 @@ describe("reformatAll to format 3 — all sports or none", () => {
     expect(plan).toHaveLength(1);
     expect(bytesOf(plan[0]!.after)).toBe(bytesOf(formatThreeOf("generic")));
     expect(corpusFormat(plan[0]!.before)).toBe(2);
-  }, 120_000);
+  }, sweepBudget("probe", 2));
 
   it("one sport refusing throws for the whole run and names it", () => {
     const tampered = (c: GoldenCorpus): GoldenCorpus => ({ ...c, streams: [{ ...c.streams[0]!, outcome: '{"kind":"draw"}' }, ...c.streams.slice(1)] });
     const read = (key: string): GoldenCorpus => (key === "carrom" ? tampered(formatTwoOf(key)) : formatTwoOf(key));
     expect(() => reformatAll([sport("generic"), sport("carrom")], read, 3)).toThrow(/wrote nothing: 1 of 2 sport\(s\) refused[\s\S]*carrom config=/);
-  }, 120_000);
+  }, sweepBudget("probe", 2));
 });
 
 // ------------------------------------------------------------------------------------------------ the reviewed state diff
@@ -545,7 +545,7 @@ describe("the other writers record playerStats when the corpus is format 3", () 
       expect(Object.keys(s)).not.toContain("dense");
       expect(verifyStream(module, corpus, s), `${s.config}#${s.seed}`).toEqual([]);
     }
-  }, 60_000);
+  }, sweepBudget("build", 1));
 
   it("rebaselineCorpus keeps format 3, re-records a stale playerStats, and the diff names the stat key", () => {
     const module = sport("generic");
@@ -562,7 +562,7 @@ describe("the other writers record playerStats when the corpus is format 3", () 
     expect(fixed.streams[index]!.playerStats).toBe(good.streams[index]!.playerStats);
     expect(corpusFormat(fixed)).toBe(3);
     expect(corpusStateDiff(stale, fixed, module).streams[0]!.statsKeysMoved).toEqual([key]);
-  }, 60_000);
+  }, sweepBudget("probe", 3));
 
   const key = "badminton"; // the sport golden-slim's extend test already uses: small, with a generator walk to drop
   const walks = (c: GoldenCorpus): GoldenStream[] => c.streams.filter((s) => s.seed < FLOOR_SEED_STRIDE);
@@ -584,7 +584,8 @@ describe("the other writers record playerStats when the corpus is format 3", () 
       appendedTotal += fresh.length;
     }
     expect(appendedTotal).toBeGreaterThanOrEqual(2);
-  }, 60_000);
+  // two bases, each a generator walk (~6 s each measured at load ~25): 3 units of build work, not 2, so the budget holds above 2x
+  }, sweepBudget("build", 3));
 
   it("extendFloor, from a format-3 corpus without its floor streams, reproduces the committed floor streams WITH playerStats", () => {
     const module = sport(key);
@@ -598,7 +599,7 @@ describe("the other writers record playerStats when the corpus is format 3", () 
     expect(result.appended.length).toBeGreaterThan(0);
     expect(result.corpus.streams.slice(first)).toEqual(expected);
     for (const stream of result.corpus.streams.slice(first)) expect(typeof stream.playerStats, `${stream.config}#${stream.seed}`).toBe("string");
-  }, 60_000);
+  }, sweepBudget("build", 1));
 });
 
 // ------------------------------------------------------------------------------------------------- the award credit

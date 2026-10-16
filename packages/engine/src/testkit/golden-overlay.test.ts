@@ -683,7 +683,7 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
       totals.interesting += interesting;
       totals.customLineups += customLineups;
       totals.recorded += recorded;
-    }, 120_000);
+    }, sweepBudget("probe", 1));
   }
 
   it("the sweep covered every sport, every stream, and every overlay column that any corpus moves", () => {

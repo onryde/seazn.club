@@ -262,7 +262,7 @@ describe("reformatCorpus — adds the format-2 fields and moves nothing the corp
       expect(bytesOf(again)).toBe(bytesOf(after));
       // the written file is the committed one plus the new fields: strictly longer, and every old byte is still there
       expect(bytesOf(after).length).toBeGreaterThan(bytesOf(before).length);
-    }, 120_000);
+    }, sweepBudget("probe", 1));
   }
 
   it("the sweep covered every sport and a non-trivial number of streams and steps", () => {
@@ -289,7 +289,7 @@ describe("reformatAll — all sports or none: one refusal writes nothing", () =>
     expect(plan[0]!.module.key).toBe("generic");
     expect(bytesOf(plan[0]!.after)).toBe(bytesOf(reformattedOf("generic")));
     expect(corpusFormat(plan[0]!.before)).toBe(1);
-  }, 120_000);
+  }, sweepBudget("probe", 2));
 
   it("one sport refusing throws for the whole run and names it: the sports that DID reformat are never handed out to be written", () => {
     const tampered = (c: GoldenCorpus): GoldenCorpus => ({ ...c, streams: [{ ...c.streams[0]!, outcome: `{"kind":"draw"}` }, ...c.streams.slice(1)] });
@@ -304,12 +304,12 @@ describe("reformatAll — all sports or none: one refusal writes nothing", () =>
     expect(thrown!.message).toMatch(/wrote nothing: 1 of 2 sport\(s\) refused/);
     expect(thrown!.message).toContain("carrom config=");
     expect(thrown!.message).not.toContain("generic config=");
-  }, 120_000);
+  }, sweepBudget("probe", 2));
 
   it("every refusing sport is named, not only the first", () => {
     const tampered = (c: GoldenCorpus): GoldenCorpus => ({ ...c, streams: [{ ...c.streams[0]!, outcome: `{"kind":"draw"}` }, ...c.streams.slice(1)] });
     expect(() => reformatAll([sport("carrom"), sport("volleyball")], (key) => tampered(formatOneOf(key)), 2)).toThrow(/2 of 2 sport\(s\) refused[\s\S]*carrom config=[\s\S]*volleyball config=/);
-  }, 120_000);
+  }, sweepBudget("probe", 2));
 
   it("an empty module list is refused (a reformat of nothing proves nothing)", () => {
     expect(() => reformatAll([], formatOneOf, 2)).toThrow(/no sport to reformat/);
@@ -442,7 +442,7 @@ describe("buildCorpus (UPDATE_GOLDEN, a corpus from nothing) writes the current 
       expect(Object.keys(stream)).not.toContain("dense");
       expect(verifyStream(module, corpus, stream), `${stream.config}#${stream.seed}`).toEqual([]);
     }
-  }, 60_000);
+  }, sweepBudget("build", 1));
 });
 
 // ----------------------------------------------------- the other writers keep the corpus's format (rebaseline, extend)
@@ -503,7 +503,8 @@ describe("extendCorpus and extendFloor append in the corpus's format", () => {
       appendedTotal += fresh.length;
     }
     expect(appendedTotal).toBeGreaterThanOrEqual(2);
-  }, 60_000);
+  // two bases, each a generator walk (~6 s each measured at load ~25): 3 units of build work, not 2, so the budget holds above 2x
+  }, sweepBudget("build", 3));
 
   it("extendFloor: from a format-2 corpus without its floor streams, it reproduces the committed floor streams WITH the new fields", () => {
     const committed2 = reformattedOf(key);
@@ -516,7 +517,7 @@ describe("extendCorpus and extendFloor append in the corpus's format", () => {
     expect(result.appended.length).toBeGreaterThan(0);
     expect(result.corpus.streams.slice(first)).toEqual(expected);
     for (const stream of result.corpus.streams.slice(first)) expect(typeof stream.overlay, `${stream.config}#${stream.seed}`).toBe("string");
-  }, 60_000);
+  }, sweepBudget("build", 1));
 });
 
 // ------------------------------------------------------------------------------------------- the reviewed state diff
