@@ -15,7 +15,7 @@ import { signInStaff } from "./overlay-kit";
 //   6. no transport         the previews never fetch or subscribe (`snapshotOnly`)
 //   7. frames               `?frame=844` / `?frame=390` render each preview at that width
 //   8. figures              no crease figure or ball glyph is ellipsised, clipped or out of its entry, at every frame,
-//                           and the striker's mark rides with its name (review a and confirm pass, PR #974)
+//                           and the striker's mark leads its name (review a and confirm pass, PR #974)
 //   8b. squeeze             with one batter's name made hostile, every figure still sits whole inside its own entry
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
@@ -219,7 +219,8 @@ const HOSTILE_NAME = "Wolfeschlegelsteinhausenbergerdorff ".repeat(12).slice(0, 
  * Check 8's in-page read (run through `page.evaluate`, so it is self-contained). With `hostile`, the first name in
  * every crease band is replaced first (check 8b). Each crease figure, ball glyph and striker mark must be whole
  * (never ellipsised), inside its own `.ovl-detail-entry`, and inside every ancestor that clips; each mark must sit in
- * its name's box, on the name's edge, nearer the name than the figures; no ellipsised box in an entry may hold a digit.
+ * its name's box, BEFORE the name and at its start edge, with the name between it and the figures; no ellipsised box
+ * in an entry may hold a digit.
  */
 function probeFigures(hostile: string | null) {
   const cut: string[] = [];
@@ -279,8 +280,12 @@ function probeFigures(hostile: string | null) {
         } else {
           const n = name.getBoundingClientRect();
           const f = figs.getBoundingClientRect();
-          if (Math.abs(r.left - n.right) > 1) cut.push(`${key}: mark "${text}" sits ${(r.left - n.right).toFixed(1)}px off its name's edge`);
-          if (f.left - r.right <= r.left - n.right) cut.push(`${key}: mark "${text}" sits nearer the figures than the name`);
+          // The name's START edge: the mark's own right margin (≤ 0.2 em of the mark's font, scaled with the preview)
+          // is all that may stand between them.
+          const em = parseFloat(getComputedStyle(fig).fontSize) * (root.getBoundingClientRect().width / root.offsetWidth);
+          const gap = n.left - r.right;
+          if (gap < -1 || gap > 0.2 * em + 1) cut.push(`${key}: mark "${text}" sits ${gap.toFixed(1)}px off its name's start edge`);
+          if (n.right > f.left + 1) cut.push(`${key}: mark "${text}" — the name does not stand between it and the figures`);
         }
       }
     }
@@ -396,8 +401,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // nothing — which is exactly the claim this check holds). Three halves: every crease figure, ball glyph and striker
   // mark is whole, inside its own entry and inside every box that clips it; no ellipsised box in a detail entry holds a
   // numeral (the old one-label shape, or any future one, fails here even with no figure box to read); and the striker's
-  // mark rides with its NAME — in the name's box, on the name's edge — never with the figures, where "Fuji… * 31" reads
-  // as the not-out "31*" (confirm pass).
+  // mark LEADS its NAME — in the name's box, at its start edge, the name between it and the figures. After the name it
+  // drifted toward the figures ("Fuji… * 31" reads as the not-out "31*") and could never hug an ellipsis (confirm pass).
   test("check 8: a figure is never cut — every crease figure and ball glyph whole, at Full HD, 844 and 390", async ({ page }) => {
     test.setTimeout(300_000);
     await signInStaff(page);

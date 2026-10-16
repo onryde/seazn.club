@@ -13,7 +13,7 @@
 // W2 plan: "The cricket bar's second band carries the batters at the crease and the bowler's figures"), so the bug
 // draws the chase or result and no crease line — never a crease it can only show by cutting its numbers.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cricket, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
@@ -22,6 +22,7 @@ import { cricketDetail, liveFromScorecard } from "@/lib/overlay-cricket";
 import { nameLadder, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
+import { OverlayEndOfOverCard } from "../overlay-end-of-over";
 import type { ReactElement } from "react";
 
 const msg: OverlayMsg = (key) => (key === "overlay.cricket.strikerMark" ? "*" : key);
@@ -130,11 +131,14 @@ describe("the bar draws each person as a NAME that may ellipse beside FIGURES th
     expect(ofClass(tree, "ovl-detail-name").some((n) => textOf(n).includes("*"))).toBe(false);
   });
 
-  // Confirm pass, PR #974: the mark is the STRIKER's (overlay.cricket.strikerMark), and every batter at the crease is
-  // not out — so a mark that drifts off the name toward the figures ("Fuji… * 31") reads as the not-out "31*". The
-  // name and its mark share one box (`.ovl-detail-who`) that holds no figures, so the mark follows the name's edge
-  // wherever the name ellipses; the browser half is the gallery's check 8.
-  it("the mark rides WITH its name: one who-box holds the name and the mark, and never the figures", () => {
+  // Confirm pass, PR #974 (coordinator ruling, owner may override at sign-off): the mark is the STRIKER's
+  // (overlay.cricket.strikerMark), and every batter at the crease is not out — so a mark AFTER the name drifts toward
+  // the figures ("Fuji… * 31") and reads as the not-out "31*". And it can never hug an ellipsis: `text-overflow`
+  // truncates whole glyphs, so the glyph that did not fit leaves empty slack inside the name's box. The mark LEADS the
+  // name instead, the pad's own on-strike treatment (`▸${strikerName}`, skins/cricket.tsx): it shares one box with the
+  // name (`.ovl-detail-who`), sits at the name's START edge, and the name stands between it and the figures. The browser
+  // half is the gallery's check 8.
+  it("the mark LEADS its name: one who-box holds the mark then the name, and never the figures", () => {
     const whos = ofClass(tree, "ovl-detail-who");
     console.log(`who boxes checked: ${whos.length}, people: ${people.length}`);
     expect(whos.length, "one who-box per person").toBe(people.length);
@@ -145,12 +149,38 @@ describe("the bar draws each person as a NAME that may ellipse beside FIGURES th
       expect(inside.some((c) => c.includes("ovl-detail-figures")), `who-box ${i} holds no figures`).toBe(false);
       if (people[i]!.mark !== undefined) {
         marked++;
-        expect(inside, `who-box ${i} holds the striker's mark`).toContain("ovl-detail-mark");
+        expect(inside, `who-box ${i}: the striker's mark first, then the name`).toEqual(["ovl-detail-mark", "ovl-detail-name"]);
       } else {
-        expect(inside, `who-box ${i}: no mark for a non-striker`).not.toContain("ovl-detail-mark");
+        expect(inside, `who-box ${i}: no mark for a non-striker`).toEqual(["ovl-detail-name"]);
       }
     });
     expect(marked, "anti-vacuity: the striker was checked").toBe(1);
+  });
+
+  it("the end-of-over card leads its striker with the same mark (one striker vocabulary on one frame)", () => {
+    const closed = {
+      inningsIndex: 0,
+      over: 12,
+      runs: 8,
+      wickets: 1,
+      score: "142/6",
+      glyphs: [{ kind: "runs", runs: 1 }],
+      bowler: { name: "Bumrah", overs: "4.0", maidens: 0, runs: 28, wickets: 2 },
+      batters: [
+        { name: "Iyer", runs: 40, balls: 24, onStrike: true },
+        { name: "Pant", runs: 12, balls: 8, onStrike: false },
+      ],
+    };
+    const card = walk(
+      OverlayEndOfOverCard({
+        moment: { seq: 1, kind: "endOfOver", graphic: "endOfOver", holdMs: 1, tone: "led", headline: "End of over 12", endOfOver: closed } as never,
+        phase: "in" as never,
+        msg,
+      }),
+    );
+    const batters = ofClass(card, "ovl-end-of-over-batter").map(rawText);
+    expect(batters, "both batters read").toHaveLength(2);
+    expect(batters).toEqual([`${msg("overlay.cricket.strikerMark")}Iyer 40 (24)`, "Pant 12 (8)"]);
   });
 
   it("no crease text rides in an ellipsis LABEL any more, and each entry reads exactly its line's text", () => {
@@ -208,6 +238,20 @@ describe("the stylesheet: a name yields, figures never do", () => {
     expect(who).toMatch(/display:\s*inline-flex/);
     expect(who).toMatch(/min-width:\s*0/);
     expect(ruleBody(".ovl-detail-mark")).toMatch(/flex:\s*none/);
+    // The overlay's indicator colour — the serve dot's and the LED bar's (`--sport-led`), never a hard-coded hex.
+    expect(ruleBody(".ovl-detail-mark")).toMatch(/color:\s*var\(--sport-led\)/);
+  });
+
+  it("the striker mark is one glyph, the same in every locale, and never the not-out star", () => {
+    const root = join(__dirname, "..", "..", "..", "dictionaries");
+    const marks = readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => (JSON.parse(readFileSync(join(root, d.name, "public.json"), "utf8")) as Record<string, string>)["overlay.cricket.strikerMark"]);
+    console.log(`locales checked: ${marks.length}, marks: ${JSON.stringify(marks)}`);
+    expect(marks.length, "anti-vacuity: every locale").toBeGreaterThanOrEqual(4);
+    expect(new Set(marks).size, "one glyph in every locale").toBe(1);
+    expect([...marks[0]!], "a single glyph").toHaveLength(1);
+    expect(marks[0], "never the not-out star").not.toBe("*");
   });
 
   it("an entry holding figures keeps its content minimum (min-width: auto), where a label entry's is zero", () => {

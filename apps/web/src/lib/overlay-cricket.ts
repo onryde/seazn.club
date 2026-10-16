@@ -326,7 +326,8 @@ export type CricketDetailLine = {
 };
 
 /** One person on a crease line. `mark` is the striker's (`overlay.cricket.strikerMark`), kept out of `name` so a name
- *  that ellipses never takes it with it. */
+ *  that ellipses never takes it with it. It LEADS the name (confirm pass, PR #974): after the name it drifted toward
+ *  the figures and read as the not-out "31*", and it could never hug an ellipsis. */
 export type CricketDetailPerson = {
   name: string;
   mark?: string;
@@ -334,7 +335,7 @@ export type CricketDetailPerson = {
 };
 
 const spoken = (people: readonly CricketDetailPerson[]): string =>
-  people.map((p) => `${p.name}${p.mark ?? ""} ${p.figures}`).join(" · ");
+  people.map((p) => `${p.mark ?? ""}${p.name} ${p.figures}`).join(" · ");
 
 export function cricketDetail(
   live: OverlayCricketLive | null | undefined,

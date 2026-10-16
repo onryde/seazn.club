@@ -88,7 +88,7 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     expect(sc.live!.striker).toBe("H-p3");
     expect(sc.live!.nonStriker).toBe("H-p1");
     const line = sc.innings.at(-1)!.batting.find((b) => b.person === "H-p1")!;
-    expect(cricketDetail(live, msg)[0]?.text).toBe(`Iyer* 0 (0) · Sharma ${line.runs} (${line.balls})`);
+    expect(cricketDetail(live, msg)[0]?.text).toBe(`*Iyer 0 (0) · Sharma ${line.runs} (${line.balls})`);
   });
 
   it("the bowler's line is O-M-R-W from the engine; this over's glyphs are structured chips", () => {
@@ -106,7 +106,7 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     const line = sc.innings.at(-1)!.batting.find((b) => b.person === "H-p1")!;
     const [batters, bowler] = cricketDetail(live, msg);
     expect(batters).toEqual({
-      text: `Iyer* 0 (0) · Sharma ${line.runs} (${line.balls})`,
+      text: `*Iyer 0 (0) · Sharma ${line.runs} (${line.balls})`,
       crease: true,
       people: [
         { name: "Iyer", mark: "*", figures: "0 (0)" },
@@ -117,7 +117,7 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     // footer's labels, a test's textContent) reads what it always did.
     let checked = 0;
     for (const l of [batters!, bowler!]) {
-      expect(l.text).toBe(l.people!.map((p) => `${p.name}${p.mark ?? ""} ${p.figures}`).join(" · "));
+      expect(l.text).toBe(l.people!.map((p) => `${p.mark ?? ""}${p.name} ${p.figures}`).join(" · "));
       checked++;
     }
     expect(checked).toBe(2);
@@ -173,7 +173,7 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
   it("a batter the line-up never named is dropped from the LINE but stays a fact on the wire", () => {
     const anon = liveFromScorecard(sc, (id) => (id === "H-p1" ? undefined : NAMES[id]));
     expect(anon!.batters.map((b) => b.name)).toEqual(["Iyer", undefined]);
-    expect(cricketDetail(anon, msg)[0]?.text).toBe("Iyer* 0 (0)");
+    expect(cricketDetail(anon, msg)[0]?.text).toBe("*Iyer 0 (0)");
   });
 
   it("the marker follows the STRIKER, not the first name that survives", () => {

@@ -34,11 +34,12 @@ export function detailCopy(line: OverlayDetailLine): ReactElement {
                 </>
               ) : null}
               <span className="ovl-detail-person">
-                {/* The striker's mark rides WITH the name (confirm pass, PR #974): beside the figures, "Fuji… * 31"
-                    reads as cricket's not-out "31*". One box for both, so the mark sits on the name's edge. */}
+                {/* The striker's mark LEADS the name (confirm pass, PR #974), the pad's own on-strike treatment:
+                    after it, the mark drifted toward the figures ("Fuji… * 31", the not-out "31*") and could never
+                    hug an ellipsis. One box for both, so the mark sits at the name's start edge. */}
                 <span className="ovl-detail-who">
-                  <span className="ovl-detail-name">{p.name}</span>
                   {p.mark ? <span className="ovl-detail-mark">{p.mark}</span> : null}
+                  <span className="ovl-detail-name">{p.name}</span>
                 </span>{" "}
                 <span className="ovl-detail-figures">{p.figures}</span>
               </span>

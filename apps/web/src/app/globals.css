@@ -1583,11 +1583,14 @@ body {
                      grid-template-columns: minmax(0, max-content); grid-auto-columns: max-content;
                      align-items: baseline; }
 .ovl-detail-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* The NAME column's box: the name and the striker's mark (confirm pass, PR #974). The name shrinks inside it and the
-   mark (`flex: none`) never does, so the mark sits on the name's right edge — right after its ellipsis — and never
-   drifts toward the figures, where "* 31" reads as the not-out "31*". `min-width: 0` keeps the column's zero minimum. */
+/* The NAME column's box: the striker's mark, then the name (confirm pass, PR #974). The mark LEADS — the pad's own
+   on-strike treatment (`▸` before the striker's name) — because after the name it drifted toward the figures, where
+   "* 31" reads as the not-out "31*", and it could never hug the ellipsis: `text-overflow` truncates whole glyphs, so
+   the glyph that did not fit leaves empty slack inside the name's box. The name shrinks; the mark (`flex: none`) never
+   does, and wears the overlay's indicator colour (the serve dot's, the LED bar's). `min-width: 0` keeps the column's
+   zero minimum. */
 .ovl-detail-who { display: inline-flex; align-items: baseline; min-width: 0; }
-.ovl-detail-mark { flex: none; }
+.ovl-detail-mark { flex: none; margin-right: 0.1em; color: var(--sport-led); }
 .ovl-detail-figures { margin-left: 0.3em; }
 /* Live this-over chips. R2007 (D9): the run inside is held to the 30 px floor,
    so the circle grows round it (44 in a 60 px band). */
