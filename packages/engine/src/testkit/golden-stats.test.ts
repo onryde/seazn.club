@@ -24,6 +24,7 @@ import {
   formatCorpusStateDiff,
   readCorpus,
   rebaselineCorpus,
+  recomputeStats,
   recomputeStream,
   storedFields,
   verifyStream,
@@ -216,13 +217,14 @@ describe("recordPlayerStats — a hand-built ledger with rows written out by han
 // ------------------------------------------------------------------------------------------------ recomputeStream formats
 
 describe("recomputeStream — the three formats", () => {
-  it("format 1 is the legacy four fields, format 2 adds summaries, overlay and the dense form, format 3 adds playerStats", () => {
+  it("format 1 is the legacy four fields, format 2 adds summaries and overlay, format 3 adds playerStats; only recomputeStats also carries the dense form", () => {
     const module = sport("generic");
     const raw = rawOf(module);
     const events = [ev("core.start")];
     expect(Object.keys(recomputeStream(module, raw, events, undefined, 1))).toEqual(["states", "outcome", "summary", "deltas"]);
-    expect(Object.keys(recomputeStream(module, raw, events, undefined, 2))).toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay", "dense"]);
-    expect(Object.keys(recomputeStream(module, raw, events, undefined, 3))).toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay", "dense", "playerStats"]);
+    expect(Object.keys(recomputeStream(module, raw, events, undefined, 2))).toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay"]);
+    expect(Object.keys(recomputeStream(module, raw, events, undefined, 3))).toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay", "playerStats"]);
+    expect(Object.keys(recomputeStats(module, raw, events)), "the probe's recording keeps the dense form").toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay", "dense", "playerStats"]);
   });
 
   it("storedFields writes playerStats last and never the dense overlay; a format-2 recomputation stores none", () => {

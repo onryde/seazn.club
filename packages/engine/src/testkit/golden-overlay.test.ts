@@ -534,12 +534,13 @@ describe("recomputeKernel — the decider column is `deciderPending`, not the mo
 });
 
 describe("recomputeStream — the two formats", () => {
-  it("format 1 is the legacy four fields and nothing else; format 2 adds summaries, overlay and the dense form", () => {
+  it("format 1 is the legacy four fields and nothing else; format 2 adds summaries and overlay; the dense form is only on recomputeKernel", () => {
     const module = builtinModules[0]!;
     const raw = rawOf(module);
     const ledger = [ev("core.start")];
     expect(Object.keys(recomputeStream(module, raw, ledger, undefined, 1))).toEqual(["states", "outcome", "summary", "deltas"]);
-    expect(Object.keys(recomputeStream(module, raw, ledger, undefined, 2))).toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay", "dense"]);
+    expect(Object.keys(recomputeStream(module, raw, ledger, undefined, 2))).toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay"]);
+    expect(Object.keys(recomputeKernel(module, raw, ledger)), "the probe's recording keeps the dense form").toEqual(["states", "outcome", "summary", "deltas", "summaries", "overlay", "dense"]);
   });
 
   it("format 1 still records the module's BARE outcome for a settle (the golden floor's settle exemption reads exactly this)", () => {

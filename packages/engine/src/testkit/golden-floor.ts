@@ -47,7 +47,7 @@ import {
 import { DRAW_KINDS, FORFEIT_REASONS, OUTCOME_KINDS, isLevelOutcome, type LineupPair, type LineupSlot, type MatchOutcome } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
-import { corpusFormat, recomputeStream, textDigest, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
+import { corpusFormat, recomputeKernel, recomputeStats, recomputeStream, textDigest, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
 import { FOLD_OVERLAY_KEYS, OVERLAY_COLUMNS, overlayTransitions } from "./golden-overlay.ts";
 import { awardStatKey, creditedAwardKeys } from "./golden-stats.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
@@ -403,13 +403,15 @@ export type Recorder = (module: AnySportModule, rawConfig: unknown, events: read
  *  event, the kernel overlay as change points, and the dense per-step overlay a probe compares). Every probe below defaults to it,
  *  because the corpora are format 2 and a probe that asked a narrower question than the corpus records would answer "unpinned"
  *  for what the guard now compares. */
-export const kernelRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStream(module, rawConfig, events, lineups, 2);
+// (these two call the recorders that carry the dense overlay, NOT `recomputeStream`: that returns only what a stream stores, and a probe
+// handed a recording without `dense` skips its kernel comparison and reads every event as unpinned)
+export const kernelRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeKernel(module, rawConfig, events, lineups);
 
 /** The floor's recorder since GF-2 T4: the REAL format-3 recording, the format-2 one plus the final player-stats rows. A probe
  *  defaults to it because the corpora are format 3, and a probe that asked a narrower question than the corpus records would
  *  answer "unpinned" for what the guard now compares (an award, until this recorder, moved no recorded field). `kernelRecorder`
  *  stays, explicit, as the CONTROL of that retirement: the same probe is unpinned under it. */
-export const statsRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStream(module, rawConfig, events, lineups, 3);
+export const statsRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStats(module, rawConfig, events, lineups);
 
 /** The MODULE-ONLY recorder (corpus format 1): what the harness recorded before GF-2. Kept, explicit, as the CONTROL of every
  *  retirement: the same probe that answers "pinned" under `kernelRecorder` answers "unpinned" under this one, which is what shows
