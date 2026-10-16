@@ -21,8 +21,8 @@ import { subjectToScorerCapabilityGates } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
 import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./discipline";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
-import { lineupCatalogFor } from "./lineup-catalog";
-import { validateLineup, type LineupIssue } from "@seazn/engine/sport";
+import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
+import { validateLineup, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
 import type { Lineup } from "@seazn/engine/core";
 import { log } from "@/server/logger";
 
@@ -488,7 +488,24 @@ function checkStoredLineup(
   }
 }
 
-/** Replace an entrant's lineup for a fixture (idempotent PUT, doc 08 §3). */
+/** The catalog that governs this fixture's division, or `null` when its sport module cannot be resolved.
+ *  `null` means "no benchMax to refuse against", so the save goes ahead UNCHECKED; `checkStoredLineup` resolves the
+ *  same module after the write, fails the same way, logs it and reports `checked: false`, which is what keeps
+ *  this from being a silent skip. */
+function catalogForFixture(sport: { sport_key: string; module_version: string; config: unknown }): PositionCatalog | null {
+  try {
+    return lineupCatalogFor(resolveModule(sport.sport_key, sport.module_version), sport.config);
+  } catch {
+    return null;
+  }
+}
+
+/** Replace an entrant's lineup for a fixture (idempotent PUT, doc 08 §3).
+ *
+ *  Everything `validateLineup` finds is a WARNING on the response, with one exception: a bench row for a sport whose
+ *  catalog declares `benchMax: 0` (boardgame, carrom, generic) is REFUSED, 422 `LINEUP_BENCH_NOT_SUPPORTED`, before
+ *  anything is written. Such a sport has no bench, and the stats folds used to credit every bench row on the sheet
+ *  with a match no event touched. Reads (`getLineup`) are unchanged: a bench row saved before this rule still reads. */
 export async function putLineup(
   auth: AuthCtx,
   fixtureId: string,
@@ -530,6 +547,19 @@ export async function putLineup(
     }
     if (fixture.status !== "scheduled") {
       throw new HttpError(422, `lineup is locked once a fixture is ${fixture.status}`);
+    }
+    // A catalog that declares no bench takes no bench row. The limit is the catalog's own `benchMax` (lineup-catalog.ts
+    // `benchRefusal`), checked before the eligibility gates and before the delete below, so a refusal writes nothing
+    // and leaves the lineup already on file as it was.
+    const catalog = catalogForFixture(fixture);
+    const benchRefused = catalog === null ? null : benchRefusal(catalog, input.slots);
+    if (benchRefused !== null) {
+      throw new HttpError(
+        422,
+        `This sport has no bench, so a lineup cannot include bench rows (${benchRefused.benchRows} sent)`,
+        "LINEUP_BENCH_NOT_SUPPORTED",
+        { bench_max: 0, bench_rows: benchRefused.benchRows },
+      );
     }
     const ids = [...new Set(input.slots.map((s) => s.person_id))];
     if (ids.length !== input.slots.length) {

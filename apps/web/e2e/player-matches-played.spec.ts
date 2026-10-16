@@ -250,7 +250,8 @@ test("R115-1: /me, the public player card and the console count only matches pla
 // aggregates), each Mine v Theirs, one played match each, recorded through the organiser's own doors:
 //   A — no lineup; after the match Lou joins Mine's roster.
 //   B — Mine records a sheet: Pia and Leo as starting players, Cole as coach, Ben on the bench; after the match Leo
-//       leaves B's Mine.
+//       leaves B's Mine. (Generic has no bench, so PUT lineups refuses Ben's row; it is written under the door, as a
+//       sheet saved before that rule would be, and the refusal is asserted first.)
 // Expected, from the rules: Pia 2 (A by the roster, B by the sheet); Cole, registered as coach, none; Lou 1 (A); Ben 1
 // (A; B's bench row is no match in generic — no figures show he came on); Leo 2 (A by the roster, B by the sheet).
 test("ruling 122: the coach is listed with no team match; a bench row follows the bench rule; a late joiner keeps the lineup-less match; a sheet player who left keeps the sheet's", async ({ page, browser }, testInfo) => {
@@ -297,8 +298,25 @@ test("ruling 122: the coach is listed with no team match; a bench row follows th
     expect(fixtures.length, `${name}: one match`).toBe(1);
     const f = fixtures[0]!;
     if (sheet !== null) {
-      const put = await apiJson(page.request, `/api/v1/fixtures/${f.id}/lineups/${mineId}`, "PUT", { slots: sheet });
+      // Generic declares no bench (`benchMax: 0`), so PUT lineups REFUSES a sheet with a bench row and writes nothing.
+      // Ben's row is therefore a sheet saved BEFORE that rule, which every reader still has to count by the bench
+      // rule: the door is shown shut first, then his row goes in straight under it.
+      const benched = sheet.filter((row) => row.slot === "bench");
+      const starters = sheet.filter((row) => row.slot !== "bench");
+      expect(benched.length, `${name}: premise — the sheet names a bench player`).toBeGreaterThan(0);
+      const refused = await apiJson(page.request, `/api/v1/fixtures/${f.id}/lineups/${mineId}`, "PUT", { slots: sheet });
+      expect(refused.status, `${name} sheet with a bench row: ${JSON.stringify(refused.error)}`).toBe(422);
+      expect(refused.error?.code, `${name}: the refusal is the named one`).toBe("LINEUP_BENCH_NOT_SUPPORTED");
+      const put = await apiJson(page.request, `/api/v1/fixtures/${f.id}/lineups/${mineId}`, "PUT", { slots: starters });
       expect(put.status, `${name} sheet: ${JSON.stringify(put.error)}`).toBeLessThan(300);
+      await withDb(async (sql) => {
+        for (const [i, row] of benched.entries()) {
+          await sql`
+            insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, order_no, role)
+            select ${f.id}, ${mineId}, ${row.person_id}, org_id, 'bench', ${starters.length + i + 1}, ${row.role}
+            from fixtures where id = ${f.id}`;
+        }
+      });
     }
     const seq = { n: 0 };
     await post(page.request, f.id, seq, "core.start", {});
