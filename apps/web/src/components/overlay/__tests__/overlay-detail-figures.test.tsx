@@ -130,6 +130,29 @@ describe("the bar draws each person as a NAME that may ellipse beside FIGURES th
     expect(ofClass(tree, "ovl-detail-name").some((n) => textOf(n).includes("*"))).toBe(false);
   });
 
+  // Confirm pass, PR #974: the mark is the STRIKER's (overlay.cricket.strikerMark), and every batter at the crease is
+  // not out — so a mark that drifts off the name toward the figures ("Fuji… * 31") reads as the not-out "31*". The
+  // name and its mark share one box (`.ovl-detail-who`) that holds no figures, so the mark follows the name's edge
+  // wherever the name ellipses; the browser half is the gallery's check 8.
+  it("the mark rides WITH its name: one who-box holds the name and the mark, and never the figures", () => {
+    const whos = ofClass(tree, "ovl-detail-who");
+    console.log(`who boxes checked: ${whos.length}, people: ${people.length}`);
+    expect(whos.length, "one who-box per person").toBe(people.length);
+    let marked = 0;
+    whos.forEach((who, i) => {
+      const inside = walk(propsOf(who).children as never).map(cls);
+      expect(inside, `who-box ${i} holds its name`).toContain("ovl-detail-name");
+      expect(inside.some((c) => c.includes("ovl-detail-figures")), `who-box ${i} holds no figures`).toBe(false);
+      if (people[i]!.mark !== undefined) {
+        marked++;
+        expect(inside, `who-box ${i} holds the striker's mark`).toContain("ovl-detail-mark");
+      } else {
+        expect(inside, `who-box ${i}: no mark for a non-striker`).not.toContain("ovl-detail-mark");
+      }
+    });
+    expect(marked, "anti-vacuity: the striker was checked").toBe(1);
+  });
+
   it("no crease text rides in an ellipsis LABEL any more, and each entry reads exactly its line's text", () => {
     const entries = ofClass(tree, "ovl-detail-entry");
     expect(entries.length).toBe(lines.length);
@@ -178,6 +201,13 @@ describe("the stylesheet: a name yields, figures never do", () => {
     const rule = ruleBody(".ovl-detail-person");
     expect(rule).toMatch(/display:\s*inline-grid/);
     expect(rule).toMatch(/grid-template-columns:\s*minmax\(0,\s*max-content\)/);
+  });
+
+  it("the who-box shrinks with its name and the mark never does, so the mark sits on the name's edge", () => {
+    const who = ruleBody(".ovl-detail-who");
+    expect(who).toMatch(/display:\s*inline-flex/);
+    expect(who).toMatch(/min-width:\s*0/);
+    expect(ruleBody(".ovl-detail-mark")).toMatch(/flex:\s*none/);
   });
 
   it("an entry holding figures keeps its content minimum (min-width: auto), where a label entry's is zero", () => {

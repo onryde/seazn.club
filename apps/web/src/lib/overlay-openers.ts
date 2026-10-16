@@ -43,6 +43,11 @@ export function tossMoment(args: {
  * engine registry); `overlay-openers-end-of-over.test.ts` sweeps this answer against every overlay sport's own
  * `eventSchemas`. Review d (PR #974, from #782):
  * the warming card promised "Toss pending" on every sport — football, badminton, tennis — that will never have one.
+ *
+ * KNOWN GAP (follow-up owed, recorded on PR #974): CARROM declares `carrom.toss`, so it answers yes here, but the
+ * overlay reads only cricket's toss (`load.ts` → `cricketToss`; `warmingLine` takes no other). So after a recorded
+ * carrom toss the warming card still says "Toss pending" until play starts. The fix is plumbing carrom's toss through
+ * the loader to `warmingLine`, not narrowing this answer: carrom does have a toss.
  */
 export function declaresToss(sportKey: string): boolean {
   return sportKey !== "" && Object.hasOwn(EVENT_KEY, `${sportKey}.toss`);

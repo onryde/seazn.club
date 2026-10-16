@@ -14,7 +14,9 @@ import { signInStaff } from "./overlay-kit";
 //   5. slab placement       each moment cell's slab sits in the slot its template's registry entry names
 //   6. no transport         the previews never fetch or subscribe (`snapshotOnly`)
 //   7. frames               `?frame=844` / `?frame=390` render each preview at that width
-//   8. figures              no crease figure or ball glyph is ellipsised or clipped, at every frame (review a, PR #974)
+//   8. figures              no crease figure or ball glyph is ellipsised, clipped or out of its entry, at every frame,
+//                           and the striker's mark rides with its name (review a and confirm pass, PR #974)
+//   8b. squeeze             with one batter's name made hostile, every figure still sits whole inside its own entry
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -210,6 +212,88 @@ const intersects = (a: Box, b: Box) =>
   a.x + TOL < b.x + b.width && b.x + TOL < a.x + a.width && a.y + TOL < b.y + b.height && b.y + TOL < a.y + a.height;
 const fmt = (b: Box | null) => (b === null ? "none" : `{x:${b.x.toFixed(1)}, y:${b.y.toFixed(1)}, w:${b.width.toFixed(1)}, h:${b.height.toFixed(1)}}`);
 
+/** 400 characters with no digit, so check 8's "an ellipsised box holds a numeral" half never reads the name itself. */
+const HOSTILE_NAME = "Wolfeschlegelsteinhausenbergerdorff ".repeat(12).slice(0, 400);
+
+/**
+ * Check 8's in-page read (run through `page.evaluate`, so it is self-contained). With `hostile`, the first name in
+ * every crease band is replaced first (check 8b). Each crease figure, ball glyph and striker mark must be whole
+ * (never ellipsised), inside its own `.ovl-detail-entry`, and inside every ancestor that clips; each mark must sit in
+ * its name's box, on the name's edge, nearer the name than the figures; no ellipsised box in an entry may hold a digit.
+ */
+function probeFigures(hostile: string | null) {
+  const cut: string[] = [];
+  let figures = 0;
+  let marks = 0;
+  let ellipsised = 0;
+  let squeezed = 0;
+  let floored = 0;
+  const visible = (el: HTMLElement) =>
+    el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true } as CheckVisibilityOptions);
+  const roots = [...document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"]')];
+  if (hostile !== null) {
+    for (const band of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"] .ovl-detail-band')) {
+      const name = band.querySelector<HTMLElement>(".ovl-detail-name");
+      if (name === null || !visible(name)) continue;
+      name.textContent = hostile;
+      squeezed++;
+    }
+    for (const band of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"] .ovl-detail-band')) {
+      const names = [...band.querySelectorAll<HTMLElement>(".ovl-detail-name")];
+      if (names.some((n) => n.textContent === hostile) && names.some((n) => n.getBoundingClientRect().width <= 1)) floored++;
+    }
+  }
+  for (const root of roots) {
+    const key = root.closest<HTMLElement>("[data-gallery-cell]")?.dataset.galleryCell ?? "?";
+    for (const fig of root.querySelectorAll<HTMLElement>(".ovl-detail-figures, .ovl-ball-glyph, .ovl-detail-mark")) {
+      if (!visible(fig)) continue;
+      const isMark = fig.classList.contains("ovl-detail-mark");
+      if (isMark) marks++;
+      else figures++;
+      const text = (fig.textContent ?? "").trim();
+      if (fig.scrollWidth > fig.clientWidth + 1) cut.push(`${key}: "${text}" is ellipsised`);
+      const r = fig.getBoundingClientRect();
+      const entry = fig.closest<HTMLElement>(".ovl-detail-entry");
+      if (entry !== null) {
+        const e = entry.getBoundingClientRect();
+        if (r.left < e.left - 1 || r.right > e.right + 1) cut.push(`${key}: "${text}" spills out of its entry`);
+      }
+      // Every ancestor that clips (overflow-x other than visible), up to and including the canvas root.
+      for (let a = fig.parentElement; a !== null && a !== root.parentElement; a = a.parentElement) {
+        if (a !== root && getComputedStyle(a).overflowX === "visible") continue;
+        const b = a.getBoundingClientRect();
+        if (r.left < b.left - 1 || r.right > b.right + 1) {
+          cut.push(`${key}: "${text}" runs out of .${String(a.className || a.tagName).split(" ")[0]}`);
+          break;
+        }
+      }
+      if (isMark) {
+        const who = fig.parentElement;
+        const name = who?.querySelector<HTMLElement>(".ovl-detail-name") ?? null;
+        const person = fig.closest<HTMLElement>(".ovl-detail-person");
+        const figs = person?.querySelector<HTMLElement>(".ovl-detail-figures") ?? null;
+        if (who === null || !who.classList.contains("ovl-detail-who") || name === null) {
+          cut.push(`${key}: mark "${text}" is not in its name's box`);
+        } else if (figs === null || who.contains(figs)) {
+          cut.push(`${key}: mark "${text}" shares a box with the figures`);
+        } else {
+          const n = name.getBoundingClientRect();
+          const f = figs.getBoundingClientRect();
+          if (Math.abs(r.left - n.right) > 1) cut.push(`${key}: mark "${text}" sits ${(r.left - n.right).toFixed(1)}px off its name's edge`);
+          if (f.left - r.right <= r.left - n.right) cut.push(`${key}: mark "${text}" sits nearer the figures than the name`);
+        }
+      }
+    }
+    for (const el of root.querySelectorAll<HTMLElement>(".ovl-detail-entry *")) {
+      const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
+      if (!own || el.scrollWidth <= el.clientWidth + 1) continue;
+      ellipsised++;
+      if (/\d/.test(el.textContent ?? "")) cut.push(`${key}: "${(el.textContent ?? "").slice(0, 40)}" is cut and holds a numeral`);
+    }
+  }
+  return { figures, marks, ellipsised, squeezed, floored, cut };
+}
+
 test.describe("the staff overlay gallery (R2007)", () => {
   test("checks 1–5 over every cell: fidelity, the 30 px floor, the bar lift, the safe area and the slab placement", async ({ page }) => {
     test.setTimeout(240_000);
@@ -309,51 +393,44 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // 8 — review a (PR #974): at the 30 px floor a crease line ran out of band and its ellipsis landed on the BOWLER'S
   // FIGURES ("0.3-0-…") while the name stayed whole. A number is the fact a broadcast graphic exists to carry: a name may
   // yield, a figure never does. Read at all three frames (the canvas is laid out at 1920 and scaled, so a frame changes
-  // nothing — which is exactly the claim this check holds). Two halves: every crease figure and ball glyph is whole and
-  // inside every box that clips it; and no ellipsised box in a detail entry holds a numeral (the old one-label shape,
-  // or any future one, fails here even with no figure box to read).
+  // nothing — which is exactly the claim this check holds). Three halves: every crease figure, ball glyph and striker
+  // mark is whole, inside its own entry and inside every box that clips it; no ellipsised box in a detail entry holds a
+  // numeral (the old one-label shape, or any future one, fails here even with no figure box to read); and the striker's
+  // mark rides with its NAME — in the name's box, on the name's edge — never with the figures, where "Fuji… * 31" reads
+  // as the not-out "31*" (confirm pass).
   test("check 8: a figure is never cut — every crease figure and ball glyph whole, at Full HD, 844 and 390", async ({ page }) => {
     test.setTimeout(300_000);
     await signInStaff(page);
     for (const query of ["", "?frame=844", "?frame=390"]) {
       const declared = await openGallery(page, query);
-      const read = await page.evaluate(() => {
-        const cut: string[] = [];
-        let figures = 0;
-        let ellipsised = 0;
-        for (const root of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"]')) {
-          const key = root.closest<HTMLElement>("[data-gallery-cell]")?.dataset.galleryCell ?? "?";
-          for (const fig of root.querySelectorAll<HTMLElement>(".ovl-detail-figures, .ovl-ball-glyph")) {
-            if (!fig.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true } as CheckVisibilityOptions)) continue;
-            figures++;
-            const text = (fig.textContent ?? "").trim();
-            if (fig.scrollWidth > fig.clientWidth + 1) cut.push(`${key}: "${text}" is ellipsised`);
-            // Every ancestor that clips (overflow-x other than visible), up to and including the canvas root.
-            const r = fig.getBoundingClientRect();
-            for (let a = fig.parentElement; a !== null && a !== root.parentElement; a = a.parentElement) {
-              if (a !== root && getComputedStyle(a).overflowX === "visible") continue;
-              const b = a.getBoundingClientRect();
-              if (r.left < b.left - 1 || r.right > b.right + 1) {
-                cut.push(`${key}: "${text}" runs out of .${String(a.className || a.tagName).split(" ")[0]}`);
-                break;
-              }
-            }
-          }
-          for (const el of root.querySelectorAll<HTMLElement>(".ovl-detail-entry *")) {
-            const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
-            if (!own || el.scrollWidth <= el.clientWidth + 1) continue;
-            ellipsised++;
-            if (/\d/.test(el.textContent ?? "")) cut.push(`${key}: "${(el.textContent ?? "").slice(0, 40)}" is cut and holds a numeral`);
-          }
-        }
-        return { figures, ellipsised, cut };
-      });
+      const read = await page.evaluate(probeFigures, null);
       console.log(
-        `[8] frame ${query || "full"}: cells ${declared}, figures + glyphs checked: ${read.figures}, cut boxes read: ${read.ellipsised}, figures cut: ${read.cut.length}`,
+        `[8] frame ${query || "full"}: cells ${declared}, figures + glyphs checked: ${read.figures}, marks checked: ${read.marks}, cut boxes read: ${read.ellipsised}, figures cut: ${read.cut.length}`,
       );
       expect(read.figures, `anti-vacuity: no crease figure or ball glyph was read at ${query || "full"}`).toBeGreaterThan(0);
+      expect(read.marks, `anti-vacuity: no striker mark was read at ${query || "full"}`).toBeGreaterThan(0);
       expect.soft(read.cut, `figures cut at ${query || "full"}`).toEqual([]);
     }
+  });
+
+  // 8b — confirm pass, PR #974: check 8 reads the gallery's own names, and those never squeeze an entry down to its
+  // figures — so the floor that holds them (`.ovl-detail-entry--figures { min-width: auto }`) went unread, and that rule
+  // set to 0 passed check 8. Here the first name in every crease band is made hostile (400 characters, no digits): the
+  // band must give nearly all of it back, a flex row shrinks every entry in proportion to its width, and an entry with
+  // no floor is pushed under its own figures, which then spill out of it. The witness that the squeeze reached a floor:
+  // some name in a squeezed band gave every pixel it had. Full HD only — a frame scales the one 1920 layout (check 8
+  // reads all three). Cricket only, with no sweep: the crease is the only detail line that carries figures.
+  test("check 8b: a hostile name squeezes the crease band, and every figure still sits whole inside its own entry", async ({ page }) => {
+    await signInStaff(page);
+    const declared = await openGallery(page, "");
+    const read = await page.evaluate(probeFigures, HOSTILE_NAME);
+    console.log(
+      `[8b] cells ${declared}, crease bands squeezed: ${read.squeezed}, reaching a floor: ${read.floored}, figures + glyphs + marks checked: ${read.figures + read.marks}, figures cut: ${read.cut.length}`,
+    );
+    expect(read.squeezed, "anti-vacuity: no crease band was squeezed").toBeGreaterThan(0);
+    expect(read.floored, "anti-vacuity: the squeeze never reached a figures floor").toBeGreaterThan(0);
+    expect(read.figures, "anti-vacuity: no figure was read").toBeGreaterThan(0);
+    expect.soft(read.cut, "figures cut under the squeeze").toEqual([]);
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {

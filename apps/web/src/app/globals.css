@@ -1570,9 +1570,9 @@ body {
 /* Review a (PR #974) — a NAME yields, FIGURES never do. At the 30 px floor the
    cricket band reached its edge and the one `${name} ${figures}` label put its
    ellipsis on the bowler's analysis ("0.3-0-…") while the name stayed whole.
-   Each person is now a grid of name | striker mark | figures whose NAME column
-   is `minmax(0, max-content)`: the person's min-content — its flex minimum — is
-   its mark and figures alone, so the row can take every pixel of a name and
+   Each person is now a grid of name-with-its-striker-mark | figures whose NAME
+   column is `minmax(0, max-content)`: the person's min-content — its flex minimum —
+   is its mark and figures alone, so the row can take every pixel of a name and
    none of a number. That floor has to reach the band: an entry holding figures
    keeps `min-width: auto` (its content minimum) where a label entry's is 0, or
    the band shrinks the entry under its own figures and they spill. (Its copy
@@ -1583,6 +1583,11 @@ body {
                      grid-template-columns: minmax(0, max-content); grid-auto-columns: max-content;
                      align-items: baseline; }
 .ovl-detail-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The NAME column's box: the name and the striker's mark (confirm pass, PR #974). The name shrinks inside it and the
+   mark (`flex: none`) never does, so the mark sits on the name's right edge — right after its ellipsis — and never
+   drifts toward the figures, where "* 31" reads as the not-out "31*". `min-width: 0` keeps the column's zero minimum. */
+.ovl-detail-who { display: inline-flex; align-items: baseline; min-width: 0; }
+.ovl-detail-mark { flex: none; }
 .ovl-detail-figures { margin-left: 0.3em; }
 /* Live this-over chips. R2007 (D9): the run inside is held to the 30 px floor,
    so the circle grows round it (44 in a 60 px band). */
