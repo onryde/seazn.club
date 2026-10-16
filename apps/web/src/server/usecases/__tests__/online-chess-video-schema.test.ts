@@ -264,14 +264,15 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     })).toMatchObject({ accepted: false, code: "23505" });
   });
 
-  it("V458: a seat's ask count is one row per (fixture, person, door); an ask count below 1 and a third door are refused; the pair is accepted", async () => {
+  it("V458 (amended for the line's door): a seat's ask count is one row per (fixture, person, door); an ask count below 1 and a fourth door are refused; the three are accepted", async () => {
     const insert = (route: string, asks: number, at = personId) => (tx: typeof sql) => tx`
       insert into fixture_seat_asks (fixture_id, person_id, route, window_started_at, asks)
       values (${fixtureId}, ${at}, ${route}, now(), ${asks})`;
     expect(await rolledBack(insert("seat", 1)), "the positive pair: a first ask on each door").toEqual({ accepted: true });
     expect(await rolledBack(insert("camera", 1))).toEqual({ accepted: true });
+    expect(await rolledBack(insert("line", 1)), "the check-in line's own door (capacity work, Q6)").toEqual({ accepted: true });
     expect(await rolledBack(insert("seat", 0)), "an ask count below 1 is no row").toMatchObject({ accepted: false, code: CHECK_VIOLATION });
-    expect(await rolledBack(insert("arbiter", 1)), "the doors are a closed set: a third is a migration too").toMatchObject({
+    expect(await rolledBack(insert("arbiter", 1)), "the doors are a closed set: a fourth is a migration too").toMatchObject({
       accepted: false,
       code: CHECK_VIOLATION,
     });
@@ -285,6 +286,83 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     expect(await rolledBack(insert("seat", 1, randomUUID())), "and the person is a person on file").toMatchObject({
       accepted: false,
       code: FK_VIOLATION,
+    });
+  });
+
+  // V461 (the capacity work): the line's ledger and the round's stagger flag.
+  describe("V461: fixture_seat_line (a stay) and stage_round_opens.staggered", () => {
+    const STAY = { first: "2026-10-16T10:00:00Z", before: "2026-10-16T09:59:59Z", after: "2026-10-16T10:00:05Z" } as const;
+    /** One stay for (fixtureId, personId); `extra` overrides or adds columns. Every write here is rolled back. */
+    const stay = (extra: Record<string, string | boolean | null> = {}, who = personId) => (tx: typeof sql) => {
+      const row: Record<string, string | boolean | null> = {
+        fixture_id: fixtureId, person_id: who, budget_key: "bk-test", first_claim_at: STAY.first,
+        last_seen_at: STAY.first, last_gate: "passed", ...extra,
+      };
+      const cols = Object.keys(row);
+      return tx.unsafe(
+        `insert into fixture_seat_line (${cols.join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")})`,
+        cols.map((c) => row[c]!),
+      );
+    };
+
+    it("a stay with no other columns set is accepted: the positive pair every refusal below is measured against", async () => {
+      expect(await rolledBack(stay())).toEqual({ accepted: true });
+      const [d] = await sql<{ completing: string | null }[]>`
+        select column_default as completing from information_schema.columns
+         where table_schema = current_schema() and table_name = 'fixture_seat_line' and column_name = 'completing'`;
+      expect(d!.completing, "completing starts false").toBe("false");
+    });
+
+    it("one stay per (fixture, person); a person who is not on file and a gate outside held/passed are refused", async () => {
+      expect(await rolledBack(async (tx) => { await stay()(tx); await stay()(tx); }), "one stay per player per board")
+        .toMatchObject({ accepted: false, code: "23505" });
+      expect(await rolledBack(stay({}, randomUUID())), "the person is a person on file").toMatchObject({ accepted: false, code: FK_VIOLATION });
+      expect(await rolledBack(stay({ last_gate: "queued" })), "last_gate is a closed set").toMatchObject({ accepted: false, code: CHECK_VIOLATION });
+      expect(await rolledBack(stay({ last_gate: "held" })), "held is one of the two").toEqual({ accepted: true });
+    });
+
+    it("every later instant is on or after the arrival, and a stay ends in at most one way (counted)", async () => {
+      let checked = 0;
+      for (const col of ["queued_at", "admitted_at", "served_at", "ended_at"] as const) {
+        expect(await rolledBack(stay({ [col]: STAY.before })), `${col} before the arrival`).toMatchObject({ accepted: false, code: CHECK_VIOLATION });
+        expect(await rolledBack(stay({ [col]: STAY.first })), `${col} at the arrival`).toEqual({ accepted: true });
+        expect(await rolledBack(stay({ [col]: STAY.after })), `${col} after the arrival`).toEqual({ accepted: true });
+        checked += 3;
+      }
+      expect(await rolledBack(stay({ served_at: STAY.after, ended_at: STAY.after })), "served AND ended").toMatchObject({ accepted: false, code: CHECK_VIOLATION });
+      expect(await rolledBack(stay({ served_at: STAY.after })), "served alone").toEqual({ accepted: true });
+      expect(await rolledBack(stay({ ended_at: STAY.after })), "ended alone").toEqual({ accepted: true });
+      checked += 3;
+      expect(checked, "anti-vacuity: cases checked").toBe(15);
+    });
+
+    it("a stay goes with its board and with its person (cascade), so no cleanup job exists to forget", async () => {
+      const gone = await seedOnlineChessFixture({ onlinePlay: "lichess", divisionStarted: false, linked: true, scheduledAt: new Date(Date.now() + 86_400_000) });
+      const rowsOf = async (fid: string) => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_seat_line where fixture_id = ${fid}`)[0]!.n;
+      await sql`insert into fixture_seat_line (fixture_id, person_id, budget_key, first_claim_at, last_seen_at, last_gate)
+                values (${gone.fixtureId}, ${gone.home.personId}, 'bk-cascade', now(), now(), 'passed')`;
+      expect(await rowsOf(gone.fixtureId), "premise: the stay is on file").toBe(1);
+      await sql`delete from fixtures where id = ${gone.fixtureId}`;
+      expect(await rowsOf(gone.fixtureId), "deleting the board deletes its stay").toBe(0);
+    });
+
+    it("the line's two indexes are the partial ones the order and the reservation sum read, on the right columns", async () => {
+      const idx = await sql<{ name: string; def: string }[]>`
+        select indexname as name, indexdef as def from pg_indexes
+         where schemaname = current_schema() and tablename = 'fixture_seat_line' and indexname <> 'fixture_seat_line_pkey' order by indexname`;
+      expect(idx.map((i) => i.name)).toEqual(["fixture_seat_line_order_idx", "fixture_seat_line_reserved_idx"]);
+      const [order, reserved] = idx;
+      expect(order!.def).toContain("(budget_key, first_claim_at, fixture_id, person_id)");
+      expect(order!.def).toMatch(/WHERE .*queued_at IS NOT NULL.*served_at IS NULL.*ended_at IS NULL/);
+      expect(reserved!.def).toContain("(budget_key)");
+      expect(reserved!.def).toMatch(/WHERE .*admitted_at IS NOT NULL.*served_at IS NULL.*ended_at IS NULL/);
+    });
+
+    it("stage_round_opens.staggered is a boolean that cannot be null and reads false for a row that predates it", async () => {
+      const [col] = await sql<{ type: string; nullable: string; def: string | null }[]>`
+        select data_type as type, is_nullable as nullable, column_default as def from information_schema.columns
+         where table_schema = current_schema() and table_name = 'stage_round_opens' and column_name = 'staggered'`;
+      expect(col).toEqual({ type: "boolean", nullable: "NO", def: "false" });
     });
   });
 
@@ -732,14 +810,15 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
   // scripts/rls-exempt.ts. That name is a claim that no app_user connection can reach the table. These cases make the
   // claim the DATABASE's: a sealed table has no policy AND no grant, so an app_user query on it is refused (42501),
   // never silently empty.
-  describe("sealed tables (V451, V454, V457, V458, V460): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
+  describe("sealed tables (V451, V454, V457, V458, V460, V461): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
     /** Typed from the migrations' own words (V451: "Sealed like V410's tables … no app_user policy"; stage_round_opens
      *  and V454's guard faults enable + force with no policy), never read from the catalogue. */
     const SEALED = [
-      "fixture_play_flags", "fixture_seat_asks", "fixture_video_guard_faults", "fixture_video_meetings",
+      "fixture_play_flags", "fixture_seat_asks", "fixture_seat_line", "fixture_video_guard_faults", "fixture_video_meetings",
       "fixture_video_participants", "online_chess_audit", "realtimekit_call_budget", "stage_round_opens", "video_rooms_to_end",
     ];
-    /** The five with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). */
+    /** The five with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). fixture_seat_line has none, like
+     *  fixture_seat_asks: it is keyed by a fixture and a person the room has already proved. */
     const WITH_ORG_ID = ["fixture_play_flags", "fixture_video_meetings", "online_chess_audit", "stage_round_opens", "video_rooms_to_end"];
     const ANY_PRIVILEGE = "select, insert, update, delete, truncate, references, trigger";
 

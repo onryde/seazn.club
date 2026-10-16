@@ -24,9 +24,10 @@
 create table fixture_seat_asks (
   fixture_id        uuid not null references fixtures(id) on delete cascade,
   person_id         uuid not null references persons(id)  on delete cascade,
-  -- The two doors. A closed set on purpose: a third is a code change AND a migration, so a new door cannot ship unlimited
-  -- by forgetting to ask for a limit.
-  route             text not null check (route in ('seat', 'camera')),
+  -- The three doors. A closed set on purpose: a fourth is a code change AND a migration, so a new door cannot ship unlimited
+  -- by forgetting to ask for a limit. 'line' is the check-in line's door (capacity work, spec §5.7.3 and Q6): amended
+  -- into this delta in place because no environment has applied it - an unmerged migration is amended, not corrected forward.
+  route             text not null check (route in ('seat', 'camera', 'line')),
   -- When the current window opened (a fixed window, anchored on the first ask after the last one closed), and how many asks
   -- it has taken. A refused ask is counted too and never moves the window, so hammering cannot keep a seat shut past it.
   window_started_at timestamptz not null,
