@@ -21,7 +21,7 @@ export interface DeciderSource extends DeciderOffSource {
  * keys are required so the compiler sends every caller back to its SELECT for `rules_override`; tsc cannot read
  * the SQL text itself, which is why `bracket-overlay-callers.test.ts` drives each one with an override seeded.
  *
- * `rules_override` is `fixtures.rules_override` (V443): match-scoped keys only, written by the one validated writer
+ * `rules_override` is `fixtures.rules_override` (V462): match-scoped keys only, written by the one validated writer
  * (Task 14). Null = the fixture plays its stage's rules. `undefined` reads the same way, exactly as an unselected
  * `config_snapshot` does — a column that was not selected is not an override.
  */

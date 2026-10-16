@@ -1,3 +1,10 @@
+-- VERSION, re-pinned 2026-10-16 at the W2c rebase onto origin/main cf3e64977: written as V443 (main's
+-- tail was V438; V439-V442 are chess's, on staging). Main has since merged V450__stream_runner_crash_count.sql,
+-- and Flyway runs no out-of-order migrations here, so a V443 reaching a database that has applied V450 is
+-- refused. Renumbered (not corrected forward: this delta has never run in production) to V462, past main's
+-- V450 and the V451-V461 the chess session has reserved for its own deltas. Chess must still merge first,
+-- or this moves again.
+--
 -- W2c (spec §4.3): a fixture's own match-format override — engine ruleKeys of
 -- scope "match" only, written by writeFixtureRulesOverride alone. Null = the
 -- fixture plays its stage's rules. Greenfield (spec §11): nullable, no default,
