@@ -8,7 +8,7 @@
 // `gallery-snapshots.test.ts` runs every snapshot back through the overlay's model and `slateStateOf` (the card
 // layer's own authority), so a snapshot that does not show the state its kind names fails there.
 import "server-only";
-import { kernelOwnsEvent, mulberry32, type EventEnvelope, type Lineup, type LineupPair } from "@seazn/engine/core";
+import { mulberry32, type EventEnvelope, type Lineup, type LineupPair } from "@seazn/engine/core";
 import { resolvePositions, type AnySportModule, type PositionCatalog } from "@seazn/engine/sport";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentPerson } from "@/lib/overlay-recent-types";
@@ -52,7 +52,8 @@ const STEP_MS = 40_000;
 const FIXTURE_ID = "gallery";
 
 /** Fictional people, one per line-up slot, so a cricket crease, a scorer or a carded player is NAMED on the card
- *  the way a real fixture's consented line-up names them. */
+ *  the way a real fixture's consented line-up names them. Some are LONG on purpose (review a, PR #974): a name is the
+ *  thing that yields on a full band, and the gallery's figures check can only see a figure cut when a name pushes it. */
 const PEOPLE: Readonly<Record<"home" | "away", readonly string[]>> = {
   home: [
     "Rashida Okonkwo",
@@ -69,7 +70,7 @@ const PEOPLE: Readonly<Record<"home" | "away", readonly string[]>> = {
   ],
   away: [
     "Callum MacLeod-Brennan",
-    "Jean-Sébastien Tremblay",
+    "Jean-Sébastien Tremblay-Desrosiers",
     "Amara Diallo",
     "Ravi Chandrasekhar",
     "Freya Lindqvist",
@@ -159,12 +160,15 @@ function sampleFor(sportKey: string): Sample {
  * The seeded walk to a decision BY PLAY: the module's own generated events, applied one at a time until the module
  * decides. Exported for its guard's test.
  *
- * It records play only. A drawn `core.*` other than the start (a forfeit, an abandon, a void) would end or rewrite the
- * match by something other than play, and a kernel-owned type (suspend, resume, settle, the lineup family) is one the
- * kernel folds itself and the module refuses (review I-1, `outcome-readers.test.ts`): either is redrawn, as the
- * conformance walk does for a decided-by-play stream, and a generator that yields nothing else is refused by name.
- * The stop test reads the module's outcome of its OWN state: the walk is not a fold (no settle or withdrawal can be in
- * it, by the guard below); the snapshot it feeds is folded through `foldFrom` and read through `outcomeOf`.
+ * It records play only: a sport event, or the start. Any other `core.*` draw is redrawn — a forfeit, an abandon or a
+ * void would end or rewrite the match by something other than play, and a kernel-owned type (suspend, resume, settle,
+ * the lineup family) is one the kernel folds itself and the module refuses (review I-1, `outcome-readers.test.ts`) —
+ * as the conformance walk does for a decided-by-play stream; a generator that yields nothing else for 64 draws throws,
+ * naming the type. ONE predicate covers both: every type `kernelOwnsEvent` can claim is a `core.*` type other than the
+ * start, so asking it as well would be a second check that can never fire (review, PR #974) — the test file holds that
+ * from the kernel's own `CORE_EVENT_SCHEMAS`. The stop test reads the module's outcome of its OWN state: the walk is not
+ * a fold (no settle or withdrawal can be in it); the snapshot it feeds is folded through `foldFrom` and read through
+ * `outcomeOf`.
  */
 export function walkToDecision(
   sportKey: string,
@@ -182,7 +186,7 @@ export function walkToDecision(
       next = sportModule.arbitraryEvent?.(state, rng) ?? null;
     }
     if (next === null) break;
-    if (!isPlay(next) || kernelOwnsEvent(sportModule, next, { state, settled: false })) {
+    if (!isPlay(next)) {
       throw new Error(`overlay gallery: ${sportKey}'s generator kept yielding ${next.type}; the walk records only play`);
     }
     const ev = envelope(n, next.type, next.payload);

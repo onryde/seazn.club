@@ -84,6 +84,7 @@ export type DictionaryKey =
   | "admin.overlayGallery.framePhonePortrait"
   | "admin.overlayGallery.moments"
   | "admin.overlayGallery.nav"
+  | "admin.overlayGallery.sceneCaption"
   | "admin.overlayGallery.snapshot.ended"
   | "admin.overlayGallery.snapshot.live"
   | "admin.overlayGallery.snapshot.warming"

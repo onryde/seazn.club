@@ -100,7 +100,10 @@ describe("OverlayPreview", () => {
       checked++;
     }
     console.log(`templates checked: ${checked}`);
-    expect(checked).toBe(2);
+    // The registry's own size (review, PR #974): a third template is swept here with no edit; ≥ 2 is the floor the
+    // spec's bar and bug set, so an emptied registry still fails.
+    expect(checked).toBe(Object.keys(OVERLAY_TEMPLATES).length);
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 
   it("the frame's height is width × 1080 / 1920", () => {

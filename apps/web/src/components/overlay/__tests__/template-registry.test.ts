@@ -243,13 +243,19 @@ describe("cardRegionFor — step 9b: the largest inset strip beside the box, kep
     }
     console.log(`templates checked: ${checked}`);
     expect(checked, "anti-vacuity").toBeGreaterThan(0);
-    expect(checked).toBe(2);
+    // The registry's own size (review, PR #974): a third template is swept here with no edit; ≥ 2 is the floor the
+    // spec's bar and bug set, so an emptied registry still fails.
+    expect(checked).toBe(Object.keys(OVERLAY_TEMPLATES).length);
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 });
 
 describe("the shipped registry", () => {
   it("bar and bug, each with a ui label key, a component, and the spec's slab placement", () => {
-    expect(Object.keys(OVERLAY_TEMPLATES)).toEqual(["bar", "bug"]);
+    // The spec's two are present; the registry may grow (§4.7), so the set is not pinned — each key names its own def.
+    expect(Object.keys(OVERLAY_TEMPLATES)).toEqual(expect.arrayContaining(["bar", "bug"]));
+    expect(Object.keys(OVERLAY_TEMPLATES).length).toBeGreaterThanOrEqual(2);
+    for (const [id, def] of Object.entries(OVERLAY_TEMPLATES)) expect(def.id, id).toBe(id);
     // Spec §4.7: the slab attaches to the scorebug it belongs to — typed, so a registry edit that swaps them goes red.
     expect(OVERLAY_TEMPLATES.bar.slabPlacement).toBe("bar");
     expect(OVERLAY_TEMPLATES.bug.slabPlacement).toBe("bug");

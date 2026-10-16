@@ -331,7 +331,7 @@ export function OverlayStage(props: OverlayStageProps) {
         {/* Scorebug theme (bar|bug). Match/end card is a LAYER above it when
             warming or ended — not a third ?style= (2026-09-12). */}
         {showMatchCard ? (
-          <OverlayMatchCard model={model} msg={msg} cricketToss={data.cricketToss} />
+          <OverlayMatchCard model={model} msg={msg} sportKey={props.sportKey} cricketToss={data.cricketToss} />
         ) : null}
         {/* `display: contents`: no box of its own, so the template lays out exactly as before. It exists so the gallery
             e2e can find THE TEMPLATE'S elements (its children) and measure them against the declared box. */}

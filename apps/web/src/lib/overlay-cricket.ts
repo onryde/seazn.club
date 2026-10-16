@@ -312,9 +312,29 @@ export function ballGlyphText(g: BallGlyph): string {
  * never flattened into `text` (a string cannot carry pill geometry).
  */
 export type CricketDetailLine = {
+  /** The line as a reader hears it — `people` joined. Every reader of `text` (React keys, a test's textContent) reads
+   *  what it always did; the renderers draw `people`. */
   text: string;
+  /** Review a (PR #974): this is the CREASE, the bar band's content (W2 plan: "the cricket bar's second band carries
+   *  the batters at the crease and the bowler's figures"). The bug's 512 px footer cannot hold it beside the chase at
+   *  the 30 px floor without cutting its numbers, so the bug draws no crease line. */
+  crease: true;
+  /** Each person as THREE facts, so a band can let the name yield and never the figures: at the 30 px floor the one
+   *  `${name} ${figures}` label ellipsised the bowler's analysis to "0.3-0-…" while the name stayed whole. */
+  people?: readonly CricketDetailPerson[];
   glyphs?: readonly string[];
 };
+
+/** One person on a crease line. `mark` is the striker's (`overlay.cricket.strikerMark`), kept out of `name` so a name
+ *  that ellipses never takes it with it. */
+export type CricketDetailPerson = {
+  name: string;
+  mark?: string;
+  figures: string;
+};
+
+const spoken = (people: readonly CricketDetailPerson[]): string =>
+  people.map((p) => `${p.name}${p.mark ?? ""} ${p.figures}`).join(" · ");
 
 export function cricketDetail(
   live: OverlayCricketLive | null | undefined,
@@ -325,25 +345,27 @@ export function cricketDetail(
   // can be named". The third — `batters.length === 0` — was the redundant one,
   // since the filter of an empty list is empty, and it is gone.
   if (!live) return [];
-  const named = live.batters.filter((b) => b.name !== undefined);
-  if (named.length === 0) return [];
-
   const mark = msg("overlay.cricket.strikerMark");
-  const batters = named
-    .map((b) => `${b.name}${b.onStrike ? mark : ""} ${b.runs} (${b.balls})`)
-    .join(" · ");
+  const batters: CricketDetailPerson[] = live.batters.flatMap((b) =>
+    b.name === undefined ? [] : [{ name: b.name, ...(b.onStrike ? { mark } : {}), figures: `${b.runs} (${b.balls})` }],
+  );
+  if (batters.length === 0) return [];
 
   const glyphLabels =
     live.thisOver.length === 0 ? undefined : live.thisOver.map(ballGlyphText);
-  const bowler =
-    live.bowler === undefined
+  // An unnamed bowler is no PERSON on the line (a name is what the line is for) — the over's glyphs still ride.
+  const bowler: CricketDetailPerson | undefined =
+    live.bowler?.name === undefined
       ? undefined
-      : `${live.bowler.name} ${[
-          live.bowler.overs,
-          ...(live.bowler.maidens === null ? [] : [String(live.bowler.maidens)]),
-          String(live.bowler.runs),
-          String(live.bowler.wickets),
-        ].join("-")}`;
+      : {
+          name: live.bowler.name,
+          figures: [
+            live.bowler.overs,
+            ...(live.bowler.maidens === null ? [] : [String(live.bowler.maidens)]),
+            String(live.bowler.runs),
+            String(live.bowler.wickets),
+          ].join("-"),
+        };
 
   // No "this over" label on the live band — the circular glyphs carry that
   // meaning. The end-of-over card keeps `overlay.cricket.thisOver` as its
@@ -352,9 +374,12 @@ export function cricketDetail(
     bowler === undefined && glyphLabels === undefined
       ? undefined
       : {
-          text: bowler ?? "",
+          text: bowler === undefined ? "" : spoken([bowler]),
+          crease: true,
+          ...(bowler === undefined ? {} : { people: [bowler] }),
           ...(glyphLabels === undefined ? {} : { glyphs: glyphLabels }),
         };
 
-  return second === undefined ? [{ text: batters }] : [{ text: batters }, second];
+  const first: CricketDetailLine = { text: spoken(batters), crease: true, people: batters };
+  return second === undefined ? [first] : [first, second];
 }

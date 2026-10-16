@@ -5823,5 +5823,6 @@
   "admin.overlayGallery.snapshot.warming": "Before the match",
   "admin.overlayGallery.snapshot.live": "Live",
   "admin.overlayGallery.snapshot.ended": "Result",
-  "admin.overlayGallery.moments": "Moments"
+  "admin.overlayGallery.moments": "Moments",
+  "admin.overlayGallery.sceneCaption": "Scene: {scene}"
 }

@@ -1567,6 +1567,23 @@ body {
    a defeated `nowrap` still reaches the tile. */
 .ovl-detail-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ovl-detail-copy { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+/* Review a (PR #974) — a NAME yields, FIGURES never do. At the 30 px floor the
+   cricket band reached its edge and the one `${name} ${figures}` label put its
+   ellipsis on the bowler's analysis ("0.3-0-…") while the name stayed whole.
+   Each person is now a grid of name | striker mark | figures whose NAME column
+   is `minmax(0, max-content)`: the person's min-content — its flex minimum — is
+   its mark and figures alone, so the row can take every pixel of a name and
+   none of a number. That floor has to reach the band: an entry holding figures
+   keeps `min-width: auto` (its content minimum) where a label entry's is 0, or
+   the band shrinks the entry under its own figures and they spill. (Its copy
+   needs no floor of its own: the entry it fills is never narrower than it.) */
+.ovl-detail-entry--figures { min-width: auto; }
+.ovl-detail-people { display: inline-flex; align-items: baseline; gap: 0.3em; }
+.ovl-detail-person { display: inline-grid; grid-auto-flow: column;
+                     grid-template-columns: minmax(0, max-content); grid-auto-columns: max-content;
+                     align-items: baseline; }
+.ovl-detail-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ovl-detail-figures { margin-left: 0.3em; }
 /* Live this-over chips. R2007 (D9): the run inside is held to the 30 px floor,
    so the circle grows round it (44 in a 60 px band). */
 .ovl-ball-glyphs { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
@@ -1715,7 +1732,16 @@ body {
    (`--sport-board`) with a `--sport-led` limelight border. The composited
    scorebug keeps its own inset unchanged. */
 .ovl-slate { position: absolute; inset: 0; overflow: hidden; background: transparent; z-index: 1; }
-.ovl-slate-brand { position: absolute; left: 72px; top: 54px;
+/* The brand sits at the top-RIGHT corner of the card REGION (review, PR #974),
+   not at a fixed 72/54: that point is inside the bug's declared box, under the
+   bug's own board. The region is disjoint from the template's box by
+   construction (`cardRegionFor`), and the gallery's check 4 holds the brand
+   off the card it labels. Right, not left: the region's top-left corner beside
+   the bug put this "seazn" a few px from the bug's own, reading as a stutter;
+   top-right is the broadcast watermark's corner, far from every template's
+   brand (the bar's is at its foot). `right` is measured from the 1920 canvas. */
+.ovl-slate-brand { position: absolute; top: var(--ovl-card-y, 72px);
+                    right: calc(1920px - var(--ovl-card-x, 96px) - var(--ovl-card-w, 1728px));
                     font-size: 30px; font-weight: 600; letter-spacing: 0.08em;
                     color: color-mix(in srgb, var(--sport-ink) 75%, transparent); z-index: 2;
                     text-shadow: 0 1px 8px color-mix(in srgb, var(--sport-board) 70%, transparent); }

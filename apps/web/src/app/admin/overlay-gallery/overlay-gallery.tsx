@@ -150,13 +150,21 @@ export function OverlayGallery(props: OverlayGalleryProps) {
                     <figcaption className="flex flex-wrap items-baseline gap-x-3 text-sm">
                       <span className="font-semibold text-white">{t(ui, def.labelKey)}</span>
                       <span className="text-slate-300">{cellState(cell, ui, moment)}</span>
-                      {scene && <span className="text-xs text-slate-500">{t(ui, scene.labelKey)}</span>}
+                      {/* "Scene: Live", never a bare "Live" beside the snapshot's own "Live" (review, PR #974): the
+                          snapshot's state and the scene are two axes, and the caption must say which is which. */}
+                      {scene && (
+                        <span className="text-xs text-slate-500">
+                          {t(ui, "admin.overlayGallery.sceneCaption", { scene: t(ui, scene.labelKey) })}
+                        </span>
+                      )}
                     </figcaption>
                     <div
                       className="w-fit rounded-sm ring-1 ring-slate-700"
                       style={{
                         // Transparency must read as transparency: the overlay paints only its own boxes.
-                        background: "repeating-conic-gradient(#334155 0% 25%, #1e293b 0% 50%) 0 0 / 24px 24px",
+                        // The house palette's own slate-700/800 (Tailwind theme tokens), not hex copies of them.
+                        background:
+                          "repeating-conic-gradient(var(--color-slate-700) 0% 25%, var(--color-slate-800) 0% 50%) 0 0 / 24px 24px",
                       }}
                     >
                       <OverlayPreview

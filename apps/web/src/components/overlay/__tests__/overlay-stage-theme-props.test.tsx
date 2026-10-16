@@ -122,7 +122,8 @@ describe("OverlayStage threads its dictionary to the theme (`msg`)", () => {
       "overlay.slate.warmingLineTossPending": "TOSS|{start}",
       "overlay.brand": "seazn",
     };
-    const html = renderToStaticMarkup(<OverlayStage {...props({ dict: partial })} />);
+    // Cricket: the toss line is a sport WITH a toss's (review d, PR #974) — the only line here a dictionary writes.
+    const html = renderToStaticMarkup(<OverlayStage {...props({ dict: partial, sportKey: "cricket", style: "bar" })} />);
     expect(headlineOf(html), "the theme reads props.dict").toBe("ZZTOP Milton Keynes Rovers Northbridge Athletic");
     expect(lineOf(html)).toBe("TOSS|Sat 14:30 BST");
     expect(headlineOf(html), "not some other en dictionary").not.toBe(

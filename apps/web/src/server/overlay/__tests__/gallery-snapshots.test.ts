@@ -17,6 +17,7 @@ import { OVERLAY_SPORT_KEYS } from "@/components/overlay/overlay-tokens";
 import { slateStateOf } from "@/components/overlay/overlay-slate";
 import { GALLERY_RESULT_VARIANT_SPORTS, GALLERY_SNAPSHOT_KINDS } from "@/components/overlay/gallery-matrix";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { CORE_EVENT_SCHEMAS, isKernelOwnedEventType, kernelOwnsEvent } from "@seazn/engine/core";
 import { GALLERY_SIDES, galleryResultVariants, gallerySnapshots, walkToDecision } from "../gallery-snapshots";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -151,6 +152,9 @@ describe("galleryResultVariants — every status whose Result card is not 'decid
 // Review I-1's rule (outcome-readers.test.ts) as a guard, not a comment: the sample walk records PLAY, so it never hands
 // a module an event the kernel folds itself (suspend, resume, settle, the lineup family) or one that ends the match by
 // something other than play. It redraws such an event, and a generator that yields nothing else is refused by name.
+// ONE predicate does it (review, PR #974): "a sport event or the start". Every type `kernelOwnsEvent` can claim is a
+// `core.*` type other than the start, so the walk asked it nothing `isPlay` had not already answered — the sweep below
+// holds that from the kernel's own declarations, which is why the walk carries no second, dead check.
 describe("walkToDecision — the sample walk only ever applies play", () => {
   const stuckOn = (type: string): AnySportModule =>
     ({
@@ -170,6 +174,25 @@ describe("walkToDecision — the sample walk only ever applies play", () => {
       );
     },
   );
+
+  it("every core type the kernel declares, bar the start, is redrawn — which is every type kernelOwnsEvent can claim", () => {
+    const declared = Object.keys(CORE_EVENT_SCHEMAS);
+    // The ones the kernel can claim: always-owned, plus forfeit and finalize (its two conditional members).
+    const claimable = declared.filter((t) => isKernelOwnedEventType(t) || t === "core.forfeit" || t === "core.finalize");
+    let refused = 0;
+    for (const type of declared.filter((t) => t !== "core.start")) {
+      expect(() => walkToDecision("probe", stuckOn(type), {}, {} as never), type).toThrow(/generator kept yielding/);
+      refused++;
+    }
+    console.log(`core types declared: ${declared.length}, kernel-claimable: ${claimable.length}, refused by the walk: ${refused}`);
+    expect(refused).toBe(declared.length - 1);
+    expect(claimable.length, "anti-vacuity: the kernel claims nothing").toBeGreaterThan(0);
+    // The structural premise: nothing the kernel claims is the start, and nothing outside `core.*` is claimed.
+    expect(claimable.filter((t) => t === "core.start" || !t.startsWith("core."))).toEqual([]);
+    const probe = { outcome: () => null };
+    expect(kernelOwnsEvent(probe, { type: "probe.point", payload: {} }, { state: {}, settled: true }), "a sport event").toBe(false);
+    expect(kernelOwnsEvent(probe, { type: "core.start", payload: {} }, { state: {}, settled: true }), "the start").toBe(false);
+  });
 
   it("the positive pair: a kernel-owned draw is REDRAWN, and only the play event that follows is applied", () => {
     let draws = 0;

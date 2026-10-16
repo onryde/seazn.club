@@ -63,15 +63,16 @@ function render(
   {
     locale = "en",
     cricketToss,
-  }: { locale?: string; cricketToss?: { wonBySide: 0 | 1; elected: "bat" | "bowl" } | null } = {},
+    sportKey = "cricket",
+  }: { locale?: string; cricketToss?: { wonBySide: 0 | 1; elected: "bat" | "bowl" } | null; sportKey?: string } = {},
 ) {
   // Omit `cricketToss` when unset — `exactOptionalPropertyTypes` treats an
   // explicit `undefined` key as a different props shape than an absent key,
   // and `rerender(themeProps(...))` only passes model+msg.
   const props =
     cricketToss === undefined
-      ? { model, msg: msgOf(locale) }
-      : { model, msg: msgOf(locale), cricketToss };
+      ? { model, msg: msgOf(locale), sportKey }
+      : { model, msg: msgOf(locale), sportKey, cricketToss };
   return renderIsland(OverlayMatchCard, props, expand);
 }
 
@@ -139,7 +140,7 @@ describe("OverlayMatchCard — card-only layer (no nested scorebug)", () => {
     const keyMsg: OverlayMsg = (key) => key;
     const tree = renderIsland(
       OverlayMatchCard,
-      { model: { ...BASE_MODEL, live: false }, msg: keyMsg },
+      { model: { ...BASE_MODEL, live: false }, msg: keyMsg, sportKey: "cricket" },
       expand,
     ).tree();
     const brand = tree.find((el) => classesOf(el).includes("ovl-slate-brand"));
@@ -200,6 +201,27 @@ describe("OverlayMatchCard — headline/line per state, resolved through `msg`",
       }),
     );
     expect(textOf(byTestId(tree, "ovl-slate-line")!)).not.toMatch(/pending/i);
+  });
+
+  // Review d (PR #974, from #782): "Toss pending" was the warming line of EVERY sport. A sport whose module declares no
+  // toss shows its start alone — and nothing at all when it has no start to show, never an empty line.
+  it("warming on a sport with no toss: the start alone, no toss copy", () => {
+    const en = dictOf("en");
+    const tree = render(WARMING, { sportKey: "football" }).tree();
+    expect(textOf(byTestId(tree, "ovl-slate-line")!)).toBe("Sat 14:30 BST");
+    expect(textOf(byTestId(tree, "ovl-slate-line")!)).not.toContain(
+      t(en, "overlay.slate.warmingLineTossPending", { start: "" }).replace(/[\s·]+$/, ""),
+    );
+    const known = render(WARMING, { sportKey: "football", cricketToss: { wonBySide: 0, elected: "bat" } }).tree();
+    expect(textOf(byTestId(known, "ovl-slate-line")!), "a toss on the wire of a sport without one is not announced").toBe(
+      "Sat 14:30 BST",
+    );
+  });
+
+  it("warming with no toss and no start: no line at all", () => {
+    const tree = render({ ...WARMING, header: { context: "" } }, { sportKey: "football" }).tree();
+    expect(byTestId(tree, "ovl-slate-line")).toBeUndefined();
+    expect(byTestId(render({ ...WARMING, header: { context: "" } }).tree(), "ovl-slate-line"), "cricket still says pending").toBeDefined();
   });
 
   it("warming: every {var} in the templates is supplied — no literal placeholder survives to screen", () => {
@@ -300,9 +322,10 @@ describe("public.overlay.slate.* actually reaches the screen, in every locale", 
 });
 
 describe("OverlayMatchCard — the state-swap cross-fade", () => {
-  const themeProps = (model: OverlayModel): Pick<OverlayThemeProps, "model" | "msg"> => ({
+  const themeProps = (model: OverlayModel): Pick<OverlayThemeProps, "model" | "msg"> & { sportKey: string } => ({
     model,
     msg: msgOf("en"),
+    sportKey: "cricket",
   });
 
   it("never fades on mount", () => {

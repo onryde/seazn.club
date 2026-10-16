@@ -141,7 +141,10 @@ describe("the slot's placement is the template's own `slabPlacement`", () => {
     }
     console.log(`templates checked: ${checked}`);
     expect(checked, "anti-vacuity").toBeGreaterThan(0);
-    expect(checked).toBe(2);
+    // The registry's own size (review, PR #974): a third template is swept here with no edit; ≥ 2 is the floor the
+    // spec's bar and bug set, so an emptied registry still fails.
+    expect(checked).toBe(Object.keys(OVERLAY_TEMPLATES).length);
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 
   it("no pinned moment and nothing new on the ledger: the slot is empty", () => {
@@ -177,7 +180,10 @@ describe("the stage writes --ovl-safe-* and --ovl-card-* from the registry entry
       checked++;
     }
     console.log(`templates checked: ${checked}`);
-    expect(checked).toBe(2);
+    // The registry's own size (review, PR #974): a third template is swept here with no edit; ≥ 2 is the floor the
+    // spec's bar and bug set, so an emptied registry still fails.
+    expect(checked).toBe(Object.keys(OVERLAY_TEMPLATES).length);
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 });
 

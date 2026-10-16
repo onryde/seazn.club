@@ -93,10 +93,34 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
 
   it("the bowler's line is O-M-R-W from the engine; this over's glyphs are structured chips", () => {
     const bowl = sc.innings.at(-1)!.bowling.find((b) => b.person === "A-p11")!;
+    const figures = `${bowl.overs}-${bowl.maidens}-${bowl.runs}-${bowl.wickets}`;
     expect(cricketDetail(live, msg)[1]).toEqual({
-      text: `Bumrah ${bowl.overs}-${bowl.maidens}-${bowl.runs}-${bowl.wickets}`,
+      text: `Bumrah ${figures}`,
+      crease: true,
+      people: [{ name: "Bumrah", figures }],
       glyphs: ["1", "4", "wd", "W"],
     });
+  });
+
+  it("each person is a NAME, the striker's MARK and FIGURES — three facts, so a band lets the name yield and never the figures (review a, PR #974)", () => {
+    const line = sc.innings.at(-1)!.batting.find((b) => b.person === "H-p1")!;
+    const [batters, bowler] = cricketDetail(live, msg);
+    expect(batters).toEqual({
+      text: `Iyer* 0 (0) · Sharma ${line.runs} (${line.balls})`,
+      crease: true,
+      people: [
+        { name: "Iyer", mark: "*", figures: "0 (0)" },
+        { name: "Sharma", figures: `${line.runs} (${line.balls})` },
+      ],
+    });
+    // `text` stays the line as a reader hears it — the people joined — so every reader of it (React keys, the
+    // footer's labels, a test's textContent) reads what it always did.
+    let checked = 0;
+    for (const l of [batters!, bowler!]) {
+      expect(l.text).toBe(l.people!.map((p) => `${p.name}${p.mark ?? ""} ${p.figures}`).join(" · "));
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a maiden count the ledger cannot state is DROPPED, not printed as null", () => {
@@ -106,12 +130,18 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     };
     expect(cricketDetail(coarse, msg)[1]).toEqual({
       text: "Bumrah 2.3-14-1",
+      crease: true,
+      people: [{ name: "Bumrah", figures: "2.3-14-1" }],
       glyphs: ["1", "4", "wd", "W"],
     });
   });
 
   it("an empty over drops the this-over segment entirely rather than trailing a label", () => {
-    expect(cricketDetail({ ...live, thisOver: [] }, msg)[1]).toEqual({ text: "Bumrah 0.3-0-6-1" });
+    expect(cricketDetail({ ...live, thisOver: [] }, msg)[1]).toEqual({
+      text: "Bumrah 0.3-0-6-1",
+      crease: true,
+      people: [{ name: "Bumrah", figures: "0.3-0-6-1" }],
+    });
   });
 
   it("every glyph the engine can emit renders as notation, and a dot ball is a dot", () => {
@@ -129,6 +159,8 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     ] as never;
     expect(cricketDetail({ ...live, thisOver: glyphs }, msg)[1]).toEqual({
       text: "Bumrah 0.3-0-6-1",
+      crease: true,
+      people: [{ name: "Bumrah", figures: "0.3-0-6-1" }],
       glyphs: ["·", "3", "wd", "wd+2", "nb", "nb+2", "2b", "1lb", "5p", "W"],
     });
   });
@@ -160,6 +192,7 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     expect(anon!.bowler).toBeUndefined();
     expect(cricketDetail(anon, msg)[1]).toEqual({
       text: "",
+      crease: true,
       glyphs: ["1", "4", "wd", "W"],
     });
   });

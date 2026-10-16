@@ -9,10 +9,12 @@ import { signInStaff } from "./overlay-kit";
 //   2b. priority            a chase/result line ellipsises only when it alone fills its row (§4)
 //   3. bar lift             every bar sits ≥ 150 canvas px off the canvas floor (D9)
 //   4. safe area            each template stays inside its declared box; every card stays out of it (G2), and fits
-//                           its region without clipping, a wrapped tile score or a pill cut at its first letter
+//                           its region without clipping, a wrapped tile score or a pill cut at its first letter; the
+//                           slate's brand stays out of the template's box and off its own card
 //   5. slab placement       each moment cell's slab sits in the slot its template's registry entry names
 //   6. no transport         the previews never fetch or subscribe (`snapshotOnly`)
 //   7. frames               `?frame=844` / `?frame=390` render each preview at that width
+//   8. figures              no crease figure or ball glyph is ellipsised or clipped, at every frame (review a, PR #974)
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -42,6 +44,8 @@ interface CellProbe {
   slabPlacement: string;
   safeArea: Box;
   roots: number;
+  /** 1 — the caption's parts (template, state, scene), as a staff member reads them. */
+  captionParts: string[];
   textChecked: number;
   violators: string[];
   /** 2b — chase/result sentences read, and the ones cut while something beside them kept its width. */
@@ -50,6 +54,8 @@ interface CellProbe {
   barLift: number | null;
   templateBox: Box | null;
   cardBox: Box | null;
+  /** 4 — the slate's brand mark: painted by the warming/ended layer, so it owes the template's box what the card does. */
+  brandBox: Box | null;
   /** 4b — the card's own fit: content it clips, a score that wraps in its tile, a pill whose first letter is cut. */
   cardFit: string[];
   pillsChecked: number;
@@ -94,10 +100,11 @@ async function probeCells(page: Page): Promise<CellProbe[]> {
           slabPlacement: cell.dataset.slabPlacement ?? "",
           safeArea: JSON.parse(cell.dataset.safeArea ?? "null"),
           roots: roots.length,
+          captionParts: [...cell.querySelectorAll("figcaption > span")].map((s) => (s.textContent ?? "").trim()),
           previewWidth: cell.querySelector('[data-testid="ovl-preview"]')?.getBoundingClientRect().width ?? 0,
         };
         if (!root) {
-          return { ...base, textChecked: 0, violators: [], emphasisChecked: 0, emphasisCut: [], barLift: null, templateBox: null, cardBox: null, cardFit: [], pillsChecked: 0, slotClass: null, slotHasSlab: false };
+          return { ...base, textChecked: 0, violators: [], emphasisChecked: 0, emphasisCut: [], barLift: null, templateBox: null, cardBox: null, brandBox: null, cardFit: [], pillsChecked: 0, slotClass: null, slotHasSlab: false };
         }
         const canvas = root.getBoundingClientRect();
         const scale = canvas.width / canvasW;
@@ -145,6 +152,8 @@ async function probeCells(page: Page): Promise<CellProbe[]> {
         const templateBox = toCanvas(union(tpl ? [...tpl.children].map((c) => c.getBoundingClientRect()) : []));
         const card = root.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
         const cardBox = card ? toCanvas(card.getBoundingClientRect()) : null;
+        const brand = root.querySelector<HTMLElement>(".ovl-slate-brand");
+        const brandBox = brand ? toCanvas(brand.getBoundingClientRect()) : null;
         // 4b — a card that fits its region by clipping is not a fit (`.ovl-slate-card` is overflow: hidden, max-height
         // 100%); a tile score on two lines, or a pill centred past its own left edge, is the D9 floor bought badly.
         const cardFit: string[] = [];
@@ -180,6 +189,7 @@ async function probeCells(page: Page): Promise<CellProbe[]> {
           barLift,
           templateBox,
           cardBox,
+          brandBox,
           cardFit,
           pillsChecked,
           slotClass: slot?.className ?? null,
@@ -212,6 +222,15 @@ test.describe("the staff overlay gallery (R2007)", () => {
     const rootless = cells.filter((c) => c.roots !== 1).map((c) => `${c.key} (${c.roots} roots)`);
     console.log(`[1] cells: ${cells.length}, declared: ${declared}`);
     expect(rootless, "each cell holds exactly one overlay root").toEqual([]);
+    // Review (PR #974): the caption read "Broadcast bar Live Live" — the snapshot's state and the scene's name are two
+    // different axes, so no caption may say the same word twice and leave the reader to guess which is which.
+    const captionsRead = cells.filter((c) => c.captionParts.length > 0).length;
+    const echoing = cells
+      .filter((c) => new Set(c.captionParts.map((p) => p.toLowerCase())).size !== c.captionParts.length)
+      .map((c) => `${c.key}: "${c.captionParts.join(" | ")}"`);
+    console.log(`[1] captions read: ${captionsRead}, repeating a part: ${echoing.length}`);
+    expect(captionsRead, "every cell has a caption").toBe(cells.length);
+    expect.soft(echoing, "captions that say the same thing twice").toEqual([]);
 
     // 2 — the text floor, computed.
     const textChecked = cells.reduce((n, c) => n + c.textChecked, 0);
@@ -261,6 +280,16 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect.soft(cardless, "a warming, ended or variant cell with no card").toEqual([]);
     expect.soft(outside, "templates outside their declared sceneCardSafeArea").toEqual([]);
     expect.soft(overlapping, "cards over the template's declared box").toEqual([]);
+    // The brand mark the slate paints beside its card (review, PR #974): it sat at a fixed 72/54 — inside the bug's
+    // declared box, under the bug's own board. It owes the template's box what the card does, and it must not sit on
+    // the card it labels.
+    const withBrand = cells.filter((c) => c.brandBox !== null);
+    const brandOver = withBrand
+      .filter((c) => intersects(c.brandBox!, c.safeArea) || (c.cardBox !== null && intersects(c.brandBox!, c.cardBox)))
+      .map((c) => `${c.key}: brand ${fmt(c.brandBox)} meets declared ${fmt(c.safeArea)} or card ${fmt(c.cardBox)}`);
+    console.log(`[4] slate brands checked: ${withBrand.length}, over the template or the card: ${brandOver.length}`);
+    expect(withBrand.length, "anti-vacuity: no slate brand was read").toBeGreaterThan(0);
+    expect.soft(brandOver, "the slate's brand over the template's declared box or its own card").toEqual([]);
     const misfit = withCard.flatMap((c) => c.cardFit.map((f) => `${c.key}: ${f}`));
     const pills = cells.reduce((n, c) => n + c.pillsChecked, 0);
     console.log(`[4b] cards checked for fit: ${withCard.length}, pills checked: ${pills}, misfits: ${misfit.length}`);
@@ -275,6 +304,56 @@ test.describe("the staff overlay gallery (R2007)", () => {
     console.log(`[5] moment cells checked: ${momentCells.length}`);
     expect(momentCells.length, "anti-vacuity: no moment cell").toBeGreaterThan(0);
     expect.soft(misplaced, "slabs not where the template's registry entry puts them").toEqual([]);
+  });
+
+  // 8 — review a (PR #974): at the 30 px floor a crease line ran out of band and its ellipsis landed on the BOWLER'S
+  // FIGURES ("0.3-0-…") while the name stayed whole. A number is the fact a broadcast graphic exists to carry: a name may
+  // yield, a figure never does. Read at all three frames (the canvas is laid out at 1920 and scaled, so a frame changes
+  // nothing — which is exactly the claim this check holds). Two halves: every crease figure and ball glyph is whole and
+  // inside every box that clips it; and no ellipsised box in a detail entry holds a numeral (the old one-label shape,
+  // or any future one, fails here even with no figure box to read).
+  test("check 8: a figure is never cut — every crease figure and ball glyph whole, at Full HD, 844 and 390", async ({ page }) => {
+    test.setTimeout(300_000);
+    await signInStaff(page);
+    for (const query of ["", "?frame=844", "?frame=390"]) {
+      const declared = await openGallery(page, query);
+      const read = await page.evaluate(() => {
+        const cut: string[] = [];
+        let figures = 0;
+        let ellipsised = 0;
+        for (const root of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"]')) {
+          const key = root.closest<HTMLElement>("[data-gallery-cell]")?.dataset.galleryCell ?? "?";
+          for (const fig of root.querySelectorAll<HTMLElement>(".ovl-detail-figures, .ovl-ball-glyph")) {
+            if (!fig.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true } as CheckVisibilityOptions)) continue;
+            figures++;
+            const text = (fig.textContent ?? "").trim();
+            if (fig.scrollWidth > fig.clientWidth + 1) cut.push(`${key}: "${text}" is ellipsised`);
+            // Every ancestor that clips (overflow-x other than visible), up to and including the canvas root.
+            const r = fig.getBoundingClientRect();
+            for (let a = fig.parentElement; a !== null && a !== root.parentElement; a = a.parentElement) {
+              if (a !== root && getComputedStyle(a).overflowX === "visible") continue;
+              const b = a.getBoundingClientRect();
+              if (r.left < b.left - 1 || r.right > b.right + 1) {
+                cut.push(`${key}: "${text}" runs out of .${String(a.className || a.tagName).split(" ")[0]}`);
+                break;
+              }
+            }
+          }
+          for (const el of root.querySelectorAll<HTMLElement>(".ovl-detail-entry *")) {
+            const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
+            if (!own || el.scrollWidth <= el.clientWidth + 1) continue;
+            ellipsised++;
+            if (/\d/.test(el.textContent ?? "")) cut.push(`${key}: "${(el.textContent ?? "").slice(0, 40)}" is cut and holds a numeral`);
+          }
+        }
+        return { figures, ellipsised, cut };
+      });
+      console.log(
+        `[8] frame ${query || "full"}: cells ${declared}, figures + glyphs checked: ${read.figures}, cut boxes read: ${read.ellipsised}, figures cut: ${read.cut.length}`,
+      );
+      expect(read.figures, `anti-vacuity: no crease figure or ball glyph was read at ${query || "full"}`).toBeGreaterThan(0);
+      expect.soft(read.cut, `figures cut at ${query || "full"}`).toEqual([]);
+    }
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {

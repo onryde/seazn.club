@@ -5823,5 +5823,6 @@
   "admin.overlayGallery.snapshot.warming": "Voor de wedstrijd",
   "admin.overlayGallery.snapshot.live": "Live",
   "admin.overlayGallery.snapshot.ended": "Uitslag",
-  "admin.overlayGallery.moments": "Momenten"
+  "admin.overlayGallery.moments": "Momenten",
+  "admin.overlayGallery.sceneCaption": "Scène: {scene}"
 }
