@@ -3924,6 +3924,7 @@
   "engineError.WRONG_PHASE": "Esa acción no corresponde en este momento del partido.",
   "engineError.ALREADY_DECIDED": "Este partido ya tiene resultado. Reábrelo antes de volver a puntuar.",
   "engineError.LINEUP_INVALID": "La alineación no es válida. Revisa los jugadores e inténtalo de nuevo.",
+  "engineError.LINEUP_NOT_SUPPORTED": "Este deporte no registra cambios de alineación. No se guardó nada.",
   "engineError.CONFIG_INVALID": "La configuración de este partido no es válida. Pide a un organizador que la revise.",
   "engineError.SEQ_CONFLICT": "Alguien ha puntuado antes. Actualizando.",
   "engineError.STAGE_NOT_READY": "Esta fase aún no está lista.",

@@ -3924,6 +3924,7 @@
   "engineError.WRONG_PHASE": "Cette action ne s'applique pas à ce moment du match.",
   "engineError.ALREADY_DECIDED": "Ce match a déjà un résultat. Rouvrez-le avant de marquer à nouveau.",
   "engineError.LINEUP_INVALID": "La composition n'est pas valide. Vérifiez les joueurs et réessayez.",
+  "engineError.LINEUP_NOT_SUPPORTED": "Ce sport n'enregistre pas les changements de composition. Rien n'a été enregistré.",
   "engineError.CONFIG_INVALID": "Les réglages de ce match ne sont pas valides. Demandez à un organisateur de les vérifier.",
   "engineError.SEQ_CONFLICT": "Quelqu'un a marqué avant vous. Mise à jour en cours.",
   "engineError.STAGE_NOT_READY": "Cette phase n'est pas encore prête.",

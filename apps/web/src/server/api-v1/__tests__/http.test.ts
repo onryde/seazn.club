@@ -1,7 +1,7 @@
 // v1 kernel: envelope, EngineError→HTTP map, cursor pagination (doc 08 §1/§4).
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { EngineError, EngineErrorCode, FORFEIT_REASONS, foldMatch } from "@seazn/engine/core";
+import { EngineError, EngineErrorCode, FORFEIT_REASONS, foldMatch, foldMatchWithStoppage, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope, onePlayEvent, sportCases } from "@seazn/engine/testkit";
 import uiEn from "@/dictionaries/en/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
@@ -67,6 +67,7 @@ describe("v1 envelope", () => {
     ["SEQ_CONFLICT", 409],
     ["INVALID_EVENT", 422],
     ["LINEUP_INVALID", 422],
+    ["LINEUP_NOT_SUPPORTED", 422],
     ["ELIGIBILITY", 422],
     ["ALREADY_DECIDED", 422],
     ["STAGE_NOT_READY", 422],
@@ -429,6 +430,122 @@ describe("cursor pagination", () => {
 // a walkover while nothing is played after the start —, a disqualification only once play started (R4), a retirement
 // only once something is played (ruling 113), a withdrawal in any phase (R5) — in FORFEIT_REASONS order. Ruling 118: a
 // module that declares `startIsPlay` (chess) has played from its Start, so its bare start is "played".
+// Engine lineup fix (owner ruling 2026-10-15, option 1): a sport that declares no `lineupPolicy` takes no `core.lineup.*` event.
+// This is the WRITE path exactly as `appendEventInTx` runs it - the candidate folded on top of the ledger with
+// `strictFromSeq: candidate.seq` - carried through `v1` to the wire, for every sport. The append path itself (a real ledger, a
+// real transaction) is in `engine-db/__tests__/append-event.test.ts`.
+describe("LINEUP_NOT_SUPPORTED: a sport that declares no lineupPolicy answers a lineup event with a 422 and a copy of its own", () => {
+  const LINEUP_TYPES = ["core.lineup.substitution", "core.lineup.replacement", "core.lineup.position", "core.lineup.retirement", "core.lineup.entry"] as const;
+  const enM = (k: string, v?: Record<string, string | number>) => interpolate((uiEn as Record<string, string>)[k]!, v);
+
+  /** The write path of `appendEventInTx`: the candidate on top of the ledger, strict from the candidate's seq. */
+  const append = (mod: unknown, cfg: unknown, lineups: ReturnType<typeof defaultLineupPair>, prior: EventEnvelope[], candidate: EventEnvelope) =>
+    foldMatchWithStoppage(mod as never, cfg as never, lineups, [...prior, candidate], { strictFromSeq: candidate.seq });
+  const refusal = (fn: () => unknown): EngineError | null => {
+    try {
+      fn();
+      return null;
+    } catch (e) {
+      if (e instanceof EngineError) return e;
+      throw e;
+    }
+  };
+
+  it("every sport, first event / after a start / mid-match / after a void, every lineup type: the declaring sports are not refused for it, the others are, as a 422 with the code's own copy", async () => {
+    let refused = 0;
+    let admitted = 0;
+    let declaring = 0;
+    let declining = 0;
+    for (const { key, module: mod } of sportCases()) {
+      const first = mod.configSchema.parse(mod.variants[Object.keys(mod.variants)[0]!] ?? {});
+      const lineups = defaultLineupPair(mod.positions);
+      const starter = lineups.home.slots.find((sl) => sl.slot === "starting")!;
+      const start = makeEnvelope(1, { type: "core.start", payload: {} });
+      // ruling 112's scene: the first cfg under which the module's own generator draws a sport event after the start (boardgame's
+      // one event decides a plain game, so under its bracket deciders a draw is held instead)
+      const scene = [first, mod.configSchema.parse({ ...(first as object), ...mod.bracketDeciders(first as never) })]
+        .map((c) => ({ cfg: c, played: onePlayEvent(mod, c, lineups, [start]) }))
+        .find((x) => x.played !== null);
+      if (scene === undefined) throw new Error(`${key}: its generator draws no sport event after the start`);
+      const { cfg } = scene;
+      const played = scene.played!;
+      // the module's own declaration decides which side of the sweep a sport is on (never a list of sport names)
+      const declares = mod.lineupPolicy !== undefined;
+      if (declares) declaring++;
+      else declining++;
+      const ledgers: Array<[string, EventEnvelope[]]> = [
+        ["first event", []],
+        ["after a start", [start]],
+        ["mid-match", [start, played]],
+        ["after a void", [start, played, makeEnvelope(3, { type: "core.void", payload: {} }, played.id)]],
+      ];
+      for (const [at, prior] of ledgers) {
+        for (const type of LINEUP_TYPES) {
+          // a retirement is the one type that needs only a starter, so it is the one the declaring sports can be shown to ADMIT
+          const payload = type === "core.lineup.retirement" ? { side: lineups.home.entrantId, personId: starter.personId } : { side: lineups.home.entrantId };
+          const candidate = makeEnvelope(prior.length + 1, { type, payload });
+          const label = `${key} ${at} ${type}`;
+          const err = refusal(() => append(mod, cfg, lineups, prior, candidate));
+          if (!declares) {
+            // The gate sits right after the payload check: a payload that does not parse is INVALID_EVENT, so the retirement is the
+            // one whose refusal proves the gate. The other types, carrying a bare side, parse-fail first, which is asserted too.
+            if (type === "core.lineup.retirement") {
+              expect(err, label).toBeInstanceOf(EngineError);
+              expect(err!.code, label).toBe("LINEUP_NOT_SUPPORTED");
+              const res = await v1(async () => {
+                throw err;
+              });
+              expect(res.status, label).toBe(422);
+              const error = (await body(res)).error as Record<string, unknown>;
+              expect(error, label).toEqual({ code: "LINEUP_NOT_SUPPORTED", message: err!.message });
+              expect(scoringErrorText(error.code as string, error.message as string, enM as never, "score.failed", error), label).toBe(enM("engineError.LINEUP_NOT_SUPPORTED"));
+              refused++;
+            } else {
+              expect(err?.code, `${label}: a malformed payload is INVALID_EVENT, whatever the sport`).toBe("INVALID_EVENT");
+            }
+          } else if (type === "core.lineup.retirement") {
+            expect(err?.code ?? null, `${label}: a sport that declares a policy is never refused for lacking one`).not.toBe("LINEUP_NOT_SUPPORTED");
+            // and where the match is live the reducer takes it: the same event the declining sports refuse is a ledger row here
+            if (at === "after a start" || at === "mid-match") expect(err, `${label}: a live match takes the retirement of a starter`).toBeNull();
+            admitted++;
+          }
+        }
+      }
+      // the next legal event folds after a refusal (the ledger was never touched), and a second refusal is the same refusal
+      if (!declares) {
+        const retire = (n: number) => makeEnvelope(n, { type: "core.lineup.retirement", payload: { side: lineups.home.entrantId, personId: starter.personId } });
+        expect(refusal(() => append(mod, cfg, lineups, [start, played], retire(3)))?.code, `${key}: first refusal`).toBe("LINEUP_NOT_SUPPORTED");
+        expect(refusal(() => append(mod, cfg, lineups, [start, played], retire(3)))?.code, `${key}: second refusal`).toBe("LINEUP_NOT_SUPPORTED");
+        expect(() => append(mod, cfg, lineups, [start], played), `${key}: the play that followed the refusal folds`).not.toThrow();
+      }
+    }
+    // anti-vacuity: both sides of the declaration were reached, and every cell was counted
+    expect(declining, "sports that decline").toBeGreaterThan(0);
+    expect(declaring, "sports that declare").toBeGreaterThan(0);
+    expect(declaring + declining).toBe(sportCases().length);
+    expect(refused, "refusals through the wire").toBe(declining * 4);
+    expect(admitted, "declaring sports shown not refused for lacking a policy").toBe(declaring * 4);
+  });
+
+  it("the replay path stays lenient: a ledger that already holds a lineup event folds without `strictFromSeq`, in a sport that now refuses it", () => {
+    let replayed = 0;
+    for (const { key, module: mod } of sportCases()) {
+      if (mod.lineupPolicy !== undefined) continue;
+      const cfg = mod.configSchema.parse(mod.variants[Object.keys(mod.variants)[0]!] ?? {});
+      const lineups = defaultLineupPair(mod.positions);
+      const starter = lineups.home.slots.find((sl) => sl.slot === "starting")!;
+      const ledger = [
+        makeEnvelope(1, { type: "core.start", payload: {} }),
+        makeEnvelope(2, { type: "core.lineup.retirement", payload: { side: lineups.home.entrantId, personId: starter.personId } }),
+      ];
+      expect(() => foldMatchWithStoppage(mod as never, cfg as never, lineups, ledger), `${key}: replay`).not.toThrow();
+      expect(refusal(() => foldMatchWithStoppage(mod as never, cfg as never, lineups, ledger, { strictFromSeq: 2 }))?.code, `${key}: the write path`).toBe("LINEUP_NOT_SUPPORTED");
+      replayed++;
+    }
+    expect(replayed, "refusing sports replayed").toBeGreaterThan(0);
+  });
+});
+
 describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons to the wire and the copy", () => {
   const rulebookAllowed = (phase: string, walkoverPhases: readonly string[], played: boolean) =>
     FORFEIT_REASONS.filter((r) =>

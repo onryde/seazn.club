@@ -1981,6 +1981,7 @@ export type DictionaryKey =
   | "engineError.LEVEL_RESULT_IN_BRACKET"
   | "engineError.LEVEL_RESULT_SEATED"
   | "engineError.LINEUP_INVALID"
+  | "engineError.LINEUP_NOT_SUPPORTED"
   | "engineError.MODULE_DUPLICATE"
   | "engineError.MODULE_NOT_FOUND"
   | "engineError.NON_MONOTONIC_TIME"

@@ -600,6 +600,7 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   WRONG_PHASE: "engineError.WRONG_PHASE",
   ALREADY_DECIDED: "engineError.ALREADY_DECIDED",
   LINEUP_INVALID: "engineError.LINEUP_INVALID",
+  LINEUP_NOT_SUPPORTED: "engineError.LINEUP_NOT_SUPPORTED",
   CONFIG_INVALID: "engineError.CONFIG_INVALID",
   SEQ_CONFLICT: "engineError.SEQ_CONFLICT",
   STAGE_NOT_READY: "engineError.STAGE_NOT_READY",

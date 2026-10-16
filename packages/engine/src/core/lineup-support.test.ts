@@ -241,7 +241,7 @@ describe("a module that declares a lineupPolicy still admits what its policy all
       sports++;
       let accepted = 0;
       for (const s of scenes(m)) {
-        const policy = m.lineupPolicy!(s.cfg as never);
+        const policy = m.lineupPolicy!(s.cfg);
         // the reducer's own verdicts, chained over the bench pair: expected values from the policy, not from the kernel gate
         const plan = planLineupEvents(s.lineups, policy);
         for (const { name, prefix } of ledgers(s)) {

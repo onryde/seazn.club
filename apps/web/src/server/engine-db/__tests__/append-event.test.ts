@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { football } from "@seazn/engine/sports/football";
 import { foldMatchWithStoppage } from "@seazn/engine/core";
+import { sportCases } from "@seazn/engine/testkit";
 import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "../index";
 import { appendEventInTx } from "../append-event";
@@ -423,6 +424,104 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
     expect(raw.includes(emailMarker)).toBe(false);
     expect(raw.includes(s.home)).toBe(false);
   });
+});
+
+/** A home side of a starter and a bench player and an away side of a starter, as the organiser's team sheet saves them
+ *  (`PUT /fixtures/{id}/lineups/{entrantId}` writes exactly these rows). Raw SQL, like `seed`. */
+async function seedSheets(s: Seed): Promise<{ homeStarter: string; homeBench: string; awayStarter: string }> {
+  const person = async (name: string): Promise<string> => {
+    const [{ id }] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${s.orgId}, ${name}) returning id`;
+    return id;
+  };
+  const homeStarter = await person("Gina Starter");
+  const homeBench = await person("Bea Bench");
+  const awayStarter = await person("Al Away");
+  for (const [entrantId, personId, slot, orderNo] of [
+    [s.home, homeStarter, "starting", 1],
+    [s.home, homeBench, "bench", 2],
+    [s.away, awayStarter, "starting", 1],
+  ] as const) {
+    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantId}, ${personId}, ${s.orgId})`;
+    await sql`insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, order_no) values (${s.fixtureId}, ${entrantId}, ${personId}, ${s.orgId}, ${slot}, ${orderNo})`;
+  }
+  return { homeStarter, homeBench, awayStarter };
+}
+const ledgerSize = async (fixtureId: string): Promise<number> => {
+  const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+  return n;
+};
+
+// Engine lineup fix (owner ruling 2026-10-15, option 1). `POST /api/v1/fixtures/{id}/events` ends in `appendEvent`, so this is the
+// route's refusal: a sport that declares no `lineupPolicy` takes no `core.lineup.*` event, and the engine's own EngineError
+// (`LINEUP_NOT_SUPPORTED`, a 422 by `ENGINE_HTTP`) is what the caller gets. Verified live on 2026-10-15 before the fix: a `dl_`
+// bearer got a 201 for a substitution in generic, and a later tap credited the player taken off.
+describe.skipIf(!HAS_DB)("a lineup event is refused by the append path of a sport that declares no lineupPolicy (engine lineup fix)", () => {
+  const lineupEvents = (s: Seed, sheets: { homeStarter: string; homeBench: string }) => ({
+    substitution: { type: "core.lineup.substitution", payload: { side: s.home, off: sheets.homeStarter, on: { personId: sheets.homeBench, slot: "starting", orderNo: 2 } } },
+    retirement: { type: "core.lineup.retirement", payload: { side: s.home, personId: sheets.homeStarter } },
+  });
+
+  it("generic, the sport where a tap went on crediting the player taken off: refused first, mid-match and after a void, and every refusal leaves the ledger and its seq untouched", async () => {
+    const s = await seed();
+    const sheets = await seedSheets(s);
+    const ev = lineupEvents(s, sheets);
+    let refusals = 0;
+    const refuse = async (seq: number, event: { type: string; payload: unknown }) => {
+      await expect(appendEvent(s.orgId, s.fixtureId, seq, event)).rejects.toMatchObject({ code: "LINEUP_NOT_SUPPORTED" });
+      refusals++;
+    };
+
+    // the first event of a fixture nobody started: the refusal is the sport's, not WRONG_PHASE
+    await refuse(0, ev.substitution);
+    expect(await ledgerSize(s.fixtureId), "nothing written").toBe(0);
+    expect(linesNamed("scoring event refused").at(-1)).toMatchObject({ fixtureId: s.fixtureId, eventType: "core.lineup.substitution", code: "LINEUP_NOT_SUPPORTED" });
+
+    await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+    // mid-match, then the same refusal a second time: the answer does not drift with a repeat
+    await refuse(1, ev.substitution);
+    await refuse(1, ev.substitution);
+    await refuse(1, ev.retirement);
+    expect(await ledgerSize(s.fixtureId), "only the start is on the ledger").toBe(1);
+
+    // the refusals consumed no seq: the next legal event goes in at the SAME expected seq, and a credit to the starter is the starter's
+    await appendEvent(s.orgId, s.fixtureId, 1, { type: "generic.score", payload: { by: s.home, points: 1, person: sheets.homeStarter } });
+    // after a void: strike that score, then offer the substitution again
+    const [scored] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${s.fixtureId} and type = 'generic.score'`;
+    await appendEvent(s.orgId, s.fixtureId, 2, { type: "core.void", payload: {}, voids: scored!.id });
+    await refuse(3, ev.substitution);
+    expect(await ledgerSize(s.fixtureId), "start, score, void").toBe(3);
+    // and play carries on after the last refusal
+    await appendEvent(s.orgId, s.fixtureId, 3, { type: "generic.score", payload: { by: s.away, points: 1, person: sheets.awayStarter } });
+    expect(await ledgerSize(s.fixtureId)).toBe(4);
+    // every refusal was logged by the funnel with its code, and none was swallowed
+    expect(refusals).toBe(5);
+    expect(linesNamed("scoring event refused").filter((l) => l.code === "LINEUP_NOT_SUPPORTED")).toHaveLength(refusals);
+  });
+
+  it("every sport, by its own declaration: a retirement of a starter after the start is refused where no lineupPolicy is declared (ledger unchanged) and recorded where one is", async () => {
+    let refused = 0;
+    let recorded = 0;
+    for (const { key, module: mod } of sportCases()) {
+      const cfg = mod.configSchema.parse(mod.variants[Object.keys(mod.variants)[0]!] ?? {});
+      const s = await seed({ sportKey: key, config: cfg, moduleVersion: mod.version, positionCatalog: mod.positions });
+      const sheets = await seedSheets(s);
+      await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+      const { retirement } = lineupEvents(s, sheets);
+      if (mod.lineupPolicy === undefined) {
+        await expect(appendEvent(s.orgId, s.fixtureId, 1, retirement), key).rejects.toMatchObject({ code: "LINEUP_NOT_SUPPORTED" });
+        expect(await ledgerSize(s.fixtureId), `${key}: refused, so only the start`).toBe(1);
+        refused++;
+      } else {
+        await appendEvent(s.orgId, s.fixtureId, 1, retirement);
+        expect(await ledgerSize(s.fixtureId), `${key}: recorded, so the start and the retirement`).toBe(2);
+        recorded++;
+      }
+    }
+    // anti-vacuity: both sides of the declaration were driven through the real funnel
+    expect(refused, "sports that refuse").toBeGreaterThan(0);
+    expect(recorded, "sports that record").toBeGreaterThan(0);
+    expect(refused + recorded).toBe(sportCases().length);
+  }, 120_000);
 });
 
 // Static, DB-independent checks — always run, regardless of DATABASE_URL.
