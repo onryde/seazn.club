@@ -174,6 +174,27 @@ fall back from, is live — no B-prompt needs its fallback path.
 
 (append as sessions run)
 
+- 2026-10-16 — **Engine lineup fix (PR #977) touched the bench; its one
+  product gap was FIXED in #978.** Not a session row. The engine now refuses
+  `core.lineup.*` with `LINEUP_NOT_SUPPORTED` for sports that declare no
+  `lineupPolicy` (boardgame, carrom, generic; FOLD_EPOCH 1 → 2). Bench edit in
+  that PR: `tools/bench/lib/__tests__/validate-pack.test.ts`'s squad
+  bookkeeping claim moved from a generic pack to a football pack, and a generic
+  pack carrying a lineup event is now asserted `fold.rejected` naming
+  `LINEUP_NOT_SUPPORTED`. A pack must not author lineup events for those three
+  sports. **Product gap, fixed in #978:** organiser `PUT …/lineups` used to
+  SAVE a bench row for a catalog with `benchMax: 0` (only a `bench_size`
+  warning), so an organiser could store a bench the engine will never use. It
+  now answers 422 `LINEUP_BENCH_NOT_SUPPORTED` (`bench_max`, `bench_rows`) and
+  writes nothing, whenever the resolved catalog's `benchMax` is 0. Zero only: a
+  bench over a positive `benchMax` is still saved with the `bench_size` warning.
+  GET is unchanged, so a bench row stored earlier still reads. It was API-only:
+  the fixture-console editor is hidden for these sports (`lineupEditorApplies`
+  false). The reason: the sport declares no bench, `validateLineup` only ever
+  warned about the row, and the engine never uses it. The bench harness is
+  untouched by the refusal: `putFixtureLineup` (`oracle.ts`) sends starting rows
+  only, and no pack carries a bench row.
+
 - 2026-10-10 — **Format-matrix W2b moved the bench onto its outcome shape**
   (owner-approved bench edit, format-matrix `_INDEX.md` ruling 107). Not a
   session row. W2b adds a sixth outcome kind, `double_walkover`, and

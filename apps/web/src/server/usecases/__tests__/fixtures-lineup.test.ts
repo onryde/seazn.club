@@ -205,7 +205,9 @@ describe.skipIf(!HAS_DB)("putLineup/getLineup — role and pair_order round-trip
     await putLineup(auth, fx.id, entrantA.id, {
       slots: [
         { person_id: numbered.id, slot: "starting", position_key: null, order_no: 1, roles: [] },
-        { person_id: unnumbered.id, slot: "bench", position_key: null, order_no: 2, roles: [] },
+        // Not "bench": the generic catalog declares `benchMax: 0` and PUT lineups refuses a bench row for it. The slot
+        // is incidental to the join under test (a starter beyond `size` is only a validateLineup warning).
+        { person_id: unnumbered.id, slot: "starting", position_key: null, order_no: 2, roles: [] },
       ],
     });
 

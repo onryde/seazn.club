@@ -47,6 +47,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { putLineup } from "../fixtures";
+import { lineupCatalogFor } from "../lineup-catalog";
 import { createPerson } from "../persons";
 import { listMyCareerStats } from "../me";
 import { careerMatchesByDivision, personCareerStats } from "../player-stats";
@@ -148,10 +149,21 @@ async function settle(fixtureId: string): Promise<void> {
 }
 
 type Sheet = { personId: string; slot: "starting" | "bench"; role: Lane };
-async function sheet(auth: AuthCtx, fixtureId: string, entrantId: string, rows: Sheet[]): Promise<void> {
+async function sheet(auth: AuthCtx, fixtureId: string, entrantId: string, rows: Sheet[], m: AnySportModule): Promise<void> {
+  // PUT lineups refuses a bench row where the sport's catalog declares `benchMax: 0` (boardgame, carrom, generic), so the
+  // door no longer writes one. A sheet saved BEFORE that rule is still data every reader must count by the same bench
+  // rule, so for those sports the bench rows go in the way the old door wrote them: straight into `lineups`.
+  const noBench = lineupCatalogFor(m, {}).lineup.benchMax === 0;
+  const viaDoor = rows.flatMap((r, i) => (noBench && r.slot === "bench" ? [] : [{ r, i }]));
+  const legacy = rows.flatMap((r, i) => (noBench && r.slot === "bench" ? [{ r, i }] : []));
   await putLineup(auth, fixtureId, entrantId, {
-    slots: rows.map((r, i) => ({ person_id: r.personId, slot: r.slot, position_key: null, order_no: i + 1, roles: [], role: r.role })),
+    slots: viaDoor.map(({ r, i }) => ({ person_id: r.personId, slot: r.slot, position_key: null, order_no: i + 1, roles: [], role: r.role })),
   } as never);
+  for (const { r, i } of legacy) {
+    await sql`
+      insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, order_no, role)
+      values (${fixtureId}, ${entrantId}, ${r.personId}, ${auth.orgId}, 'bench', ${i + 1}, ${r.role})`;
+  }
 }
 
 async function claim(personId: string): Promise<string> {
@@ -233,7 +245,7 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
         { personId: p.coach, slot: "bench", role: "coach" },
         { personId: p.staff, slot: "bench", role: "staff" },
         { personId: p.leaver, slot: "starting", role: "player" },
-      ]);
+      ], m);
       await settle(f1);
       await settle(f2);
       await patchEntrant(auth, mine, { members: [...squad.filter((id) => id !== p.leaver), p.late].map(member) } as never);
@@ -242,7 +254,7 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
         { personId: p.starter, slot: "starting", role: "player" },
         { personId: p.late, slot: "bench", role: "player" },
         { personId: p.dual, slot: "bench", role: "player" },
-      ]);
+      ], m);
       await settle(f3);
       const [{ count: sheetRows }] = await sql<{ count: number }[]>`
         select count(*)::int as count from lineups where fixture_id in (${f1}, ${f2}, ${f3})`;
@@ -302,7 +314,7 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
         const soloE = await entrant(auth, d.divisionId, "individual", "Solo", [solo]);
         const rivalE = await entrant(auth, d.divisionId, "individual", "Rival", [rival]);
         const f = await scheduledFixture(d.stageId, d.divisionId, soloE, rivalE);
-        await sheet(auth, f, soloE, [{ personId: solo, slot: "bench", role: "coach" }]);
+        await sheet(auth, f, soloE, [{ personId: solo, slot: "bench", role: "coach" }], m);
         await settle(f);
         for (const personId of [solo, rival]) {
           expect(await ask(auth, personId, await claim(personId), d, orgSlug), `${m.key}: individual`).toEqual(every(1));
@@ -319,7 +331,7 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
         const ce = await entrant(auth, d.divisionId, "pair", "CE", [c, e]);
         const f = await scheduledFixture(d.stageId, d.divisionId, ab, ce);
         // A pair sheet naming only A: B is still credited by the pair's roster.
-        await sheet(auth, f, ab, [{ personId: a, slot: "starting", role: "player" }]);
+        await sheet(auth, f, ab, [{ personId: a, slot: "starting", role: "player" }], m);
         await settle(f);
         for (const personId of [a, b]) {
           expect(await ask(auth, personId, await claim(personId), d, orgSlug), `${m.key}: pair`).toEqual(every(1));
