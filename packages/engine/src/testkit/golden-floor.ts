@@ -13,7 +13,9 @@
 //  1. `event:<type>` — every `core.*` type the kernel accepts (`CORE_EVENT_SCHEMAS`: the keys, not a table typed
 //     here). Minus the explicit, reasoned, staleness-checked `FLOOR_EXEMPTIONS`, and minus the lineup types the sport's
 //     own policy refuses in EVERY declared config (`planLineupEvents` asks the real reducer; a refusal is a named
-//     reason, not an exemption row).
+//     reason, not an exemption row). A sport that declares no `lineupPolicy` (boardgame, carrom, generic: owner ruling
+//     2026-10-15) takes no lineup event at all - the kernel refuses each on the write path - so all five are impossible
+//     there, for the same named reason, and it owes no `overlay:squads:set` either.
 //  2. `outcome:<token>` — every outcome the sport's module can produce:
 //       - `win`, always: a sport that cannot decide a match is not one;
 //       - `draw` iff `module.supportsDraws` says so for a draw-kind stage in some recorded config (`DRAW_KINDS`);
@@ -36,7 +38,7 @@
 // the "recorded, overlay unpinned" class below, probed by ablation against the real format-3 recorder.
 //
 // Purity: this file reads corpora through `golden.ts` (node:fs), so it stays out of the published testkit barrel.
-import { CORE_EVENT_SCHEMAS, forfeitAdmission, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, summaryOf, type EventEnvelope } from "../core/events.ts";
+import { CORE_EVENT_SCHEMAS, admitsLineupEvents, forfeitAdmission, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, summaryOf, type EventEnvelope } from "../core/events.ts";
 import {
   DEFAULT_LINEUP_POLICY,
   initSquads,
@@ -315,10 +317,22 @@ export interface LineupOffer {
   readonly plan: LineupPlan;
 }
 
-/** For each config the corpus records: the bench pair, and what the sport's own policy lets that config do. */
+/** The reason a refusing sport's lineup types are impossible: the kernel's own refusal (`LINEUP_NOT_SUPPORTED`), in the
+ *  kebab style of the reducer's `LineupRejectionReason`s so a sport's reasons read alike. */
+export const LINEUP_NOT_SUPPORTED_REASON = "lineup-not-supported";
+
+/** For each config the corpus records: the bench pair, and what the sport's own policy lets that config do. A sport that
+ *  does not admit lineup events at all (no `lineupPolicy`) is offered NOTHING: no event is planned, every type is refused
+ *  by name, and no bench is invented for it (its own catalog's `benchMax` is 0, and a bench exists here only to give a
+ *  lineup event someone to bring on). */
 export function lineupOffers(module: AnySportModule, corpus: GoldenCorpus, coreTypes: readonly string[] = CORE_TYPES): LineupOffer[] {
+  const admits = admitsLineupEvents(module);
   return Object.entries(corpus.configs).map(([cfgName, raw]) => {
     const cfg = module.configSchema.parse(raw) as unknown;
+    if (!admits) {
+      const refused = Object.fromEntries(lineupTypesOf(coreTypes).map((type) => [type, LINEUP_NOT_SUPPORTED_REASON]));
+      return { cfgName, lineups: defaultLineupPair(resolvePositions(module, cfg)), plan: { events: [], accepted: [], refused } };
+    }
     const lineups = benchPair(module, cfg);
     const policy = module.lineupPolicy?.(cfg) ?? DEFAULT_LINEUP_POLICY;
     return { cfgName, lineups, plan: planLineupEvents(lineups, policy, coreTypes) };
@@ -828,6 +842,9 @@ interface OverlayRule {
   readonly cleared?: string;
   /** The fact exists only over a level result: required only where the sport's floor requires a level outcome. */
   readonly whenLevel?: true;
+  /** The fact moves only by a lineup event: required only where the sport admits them (a sport that declares no `lineupPolicy`
+   *  refuses each on the write path, so a stream that set the squads there is impossible). */
+  readonly whenLineup?: true;
 }
 
 /** Owner ruling (GF-2 design §4, 2026-10-15), one row per key the kernel's fold returns besides `state`. */
@@ -836,7 +853,7 @@ const OVERLAY_RULES: Readonly<Record<(typeof FOLD_OVERLAY_KEYS)[number], Overlay
     set: "a core.suspend opens a stoppage, which the kernel keeps beside module state",
     cleared: "a core.resume (or a decision, or a void of the suspend) closes it again",
   },
-  squads: { set: "a lineup change moves the squads off the team sheets, which the kernel keeps beside module state" },
+  squads: { set: "a lineup change moves the squads off the team sheets, which the kernel keeps beside module state", whenLineup: true },
   settlement: {
     set: "a core.settle lays an organiser's win over a level or abandoned match (outcomeOf)",
     cleared: "a void of the settle takes the win away and the match is level or abandoned again",
@@ -865,8 +882,10 @@ export function foldKeysOf(module: AnySportModule, corpus: GoldenCorpus): string
 
 /** The overlay tokens a sport's floor requires: one rule per fold key. A key with no rule (the kernel gained a fact) and a rule
  *  with no key (it lost one) are both named failures, never a silently smaller floor. `levelReachable`: the sport's floor
- *  requires a draw, a tie or a no_result, i.e. a withdrawal can be laid over a held level result there. */
-export function overlayRequirement(foldKeys: readonly string[], levelReachable: boolean): Map<FloorToken, string> {
+ *  requires a draw, a tie or a no_result, i.e. a withdrawal can be laid over a held level result there. `lineupAdmitted`: the
+ *  sport admits lineup events (`admitsLineupEvents`), i.e. the squads can leave the team sheets there. REQUIRED, not defaulted:
+ *  a caller that forgot it would silently owe (or silently excuse) a squads token. */
+export function overlayRequirement(foldKeys: readonly string[], levelReachable: boolean, lineupAdmitted: boolean): Map<FloorToken, string> {
   for (const key of foldKeys) {
     if (!Object.hasOwn(OVERLAY_RULES, key)) {
       throw new Error(`golden floor: the kernel's fold returns "${key}" and the floor has no overlay rule for it: add one to OVERLAY_RULES, or argue it away`);
@@ -879,6 +898,7 @@ export function overlayRequirement(foldKeys: readonly string[], levelReachable: 
   for (const key of foldKeys) {
     const rule = OVERLAY_RULES[key as keyof typeof OVERLAY_RULES];
     if (rule.whenLevel === true && !levelReachable) continue;
+    if (rule.whenLineup === true && !lineupAdmitted) continue;
     out.set(overlayToken(key, "set"), rule.set);
     if (rule.cleared !== undefined) out.set(overlayToken(key, "cleared"), rule.cleared);
   }
@@ -957,7 +977,7 @@ export function floorRequirement(
 
   // 3. the kernel overlay — each fact the fold keeps beside module state, seen moving (and coming back where an undo reopens it).
   const levelReachable = LEVEL_OUTCOME_TOKENS.some((kind) => required.has(outcomeToken(kind)));
-  for (const [token, why] of overlayRequirement(foldKeysOf(module, corpus), levelReachable)) required.set(token, why);
+  for (const [token, why] of overlayRequirement(foldKeysOf(module, corpus), levelReachable, admitsLineupEvents(module))) required.set(token, why);
 
   // 4. the player stats (GF-2 T4) — an award the sport DECLARES, seen credited. Only where the corpus can record it (format 3): the
   //    floor asks for what the corpus's own format holds, as it asked for the overlay tokens only from format 2.
