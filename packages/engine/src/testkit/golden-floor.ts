@@ -24,11 +24,19 @@
 //         two are a reasoned per-sport list. `unrequiredObservedOutcomes` is its staleness check in the direction that
 //         matters: a bounded sweep of the module's own generator must not reach a token the floor does not require.
 //
-// WHAT IT IS NOT. It does not record `outcomeOf` / `summaryOf` / stoppage (the kernel overlays): the corpus record
-// shape is untouched by this task. That is why `core.settle` is exempt (see its row) until that later task lands.
+//  3. `overlay:<fact>:set|cleared` (GF-2 T3) — the kernel facts the format-2 corpus records beside module state (stoppage,
+//     squads, settlement, expunged, levelWithdrawal: the keys of the fold result, read off a real fold), each seen LEAVING its
+//     kernel default and, where an undo reopens it, coming back. `core.settle` is required like any other kernel event: the
+//     exemption it held until GF-2 is retired (the harness now records the effective outcome).
+//  4. `stats:award:<key>` (GF-2 T4) — for each award key the sport DECLARES in `playerStats.awards` (football `motm`, hockey `potm`,
+//     icehockey `mvp`; the other eight declare none), a `core.award` naming it, credited as `<key>_awards` in the format-3 corpus's
+//     recorded final player-stats rows. A sport that declares no award key has nothing to credit and no such token.
+//
+// WHAT IT IS NOT. It is a presence check: it says a corpus RECORDS a path, not that the guard would SEE a change to it. That is
+// the "recorded, overlay unpinned" class below, probed by ablation against the real format-3 recorder.
 //
 // Purity: this file reads corpora through `golden.ts` (node:fs), so it stays out of the published testkit barrel.
-import { CORE_EVENT_SCHEMAS, forfeitAdmission, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, type EventEnvelope } from "../core/events.ts";
+import { CORE_EVENT_SCHEMAS, forfeitAdmission, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, summaryOf, type EventEnvelope } from "../core/events.ts";
 import {
   DEFAULT_LINEUP_POLICY,
   initSquads,
@@ -36,16 +44,19 @@ import {
   type LineupPolicy,
   type SquadState,
 } from "../core/lineup.ts";
-import { DRAW_KINDS, FORFEIT_REASONS, type LineupPair, type LineupSlot } from "../core/types.ts";
+import { DRAW_KINDS, FORFEIT_REASONS, OUTCOME_KINDS, isLevelOutcome, type LineupPair, type LineupSlot, type MatchOutcome } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
-import { recomputeStream, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import { corpusFormat, recomputeKernel, recomputeStats, recomputeStream, textDigest, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
+import { FOLD_OVERLAY_KEYS, OVERLAY_COLUMNS, overlayTransitions } from "./golden-overlay.ts";
+import { awardStatKey, creditedAwardKeys } from "./golden-stats.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 // ------------------------------------------------------------------------------------------------------------ tokens
 
-/** `event:core.void`, `outcome:award:retired`, `outcome:double_walkover`, `undo:core.forfeit`, `standing:core.abandon`. */
-export type FloorToken = `event:${string}` | `outcome:${string}` | `undo:${string}` | `standing:${string}`;
+/** `event:core.void`, `outcome:award:retired`, `outcome:double_walkover`, `undo:core.forfeit`, `standing:core.abandon`,
+ *  `overlay:settlement:set`, `stats:award:motm`. */
+export type FloorToken = `event:${string}` | `outcome:${string}` | `undo:${string}` | `standing:${string}` | `overlay:${string}` | `stats:${string}`;
 
 /** Every `core.*` type the kernel accepts — the keys of its own schema map. */
 export const CORE_TYPES: readonly string[] = Object.keys(CORE_EVENT_SCHEMAS);
@@ -55,16 +66,31 @@ export const outcomeToken = (token: string): FloorToken => `outcome:${token}`;
 /** A `core.void` keyed by the TYPE of the event it strikes: an undo of a goal and an undo of a forfeit are different folds. */
 export const undoToken = (type: string): FloorToken => `undo:${type}`;
 
-/** The kernel events that DECIDE or END a match — a mis-tapped forfeit or abandon is the undo a phone needs most, and
- *  voiding one must REOPEN the match (the decided flag, the walkover credit and the stoppage it set all clear). Both are
- *  required of every sport: the kernel owns them, and `forfeitAdmission` / the abandon path admit them everywhere. */
-export const UNDOABLE_KERNEL: readonly string[] = ["core.forfeit", "core.abandon"];
+/** The kernel events that DECIDE or END a match — a mis-tapped forfeit, abandon or settle is the undo a phone needs most, and
+ *  voiding one must REOPEN the match (the decided flag, the walkover credit, the stoppage and the settlement it set all clear).
+ *  All three are required of every sport: the kernel owns them, and `forfeitAdmission` / the abandon path / `settleApplies`
+ *  admit them everywhere (GF-2 T3 added the settle: its undo is the only thing that clears the settlement beside module state). */
+export const UNDOABLE_KERNEL: readonly string[] = ["core.forfeit", "core.abandon", "core.settle"];
 
 /** An event a stream records and NOTHING strikes. An abandon that stands leaves a match ended with no outcome (the fixture
  *  awaits a settle or a replay), which is a different fold from an abandon that was voided and played on; a corpus that
  *  only ever struck its abandons would never record the first. */
 export const standingToken = (type: string): FloorToken => `standing:${type}`;
 export const STANDING_KERNEL: readonly string[] = ["core.abandon"];
+
+/** A kernel fact the recorded overlay moved: `overlay:settlement:set` (it left its kernel default) or `overlay:settlement:cleared`
+ *  (it came back, i.e. an undo reopened what the fact had closed). Read off a stream's `overlay` alone (`overlayTransitions`). */
+export type OverlayTransition = "set" | "cleared";
+export const overlayToken = (fact: string, transition: OverlayTransition): FloorToken => `overlay:${fact}:${transition}`;
+
+/** A `core.award` the player-stats rows CREDITED: `stats:award:motm` is held when some stream's recorded `playerStats` has a person
+ *  with `motm_awards` of 1 or more (GF-2 T4). Required only for the keys the sport's own `playerStats.awards` DECLARES: an award
+ *  the sport does not declare credits nobody (the fold ignores it), so there is nothing for the corpus to pin. */
+export const statsAwardToken = (key: string): FloorToken => `stats:award:${key}`;
+
+/** The outcome kinds that are LEVEL (`draw`, `tie`, `no_result`): the kernel's own `isLevelOutcome` asked of each kind it
+ *  declares (`OUTCOME_KINDS`), never a list typed here. A withdrawal can be laid over a held level result only. */
+export const LEVEL_OUTCOME_TOKENS: readonly string[] = OUTCOME_KINDS.filter((kind) => isLevelOutcome({ kind } as MatchOutcome));
 
 /** The outcome token a recorded `outcome` field names, or null while the stream recorded no outcome. An award is
  *  keyed by its REASON (`award:walkover`): the reason is what the sport's `forfeitCredit` and the table react to. */
@@ -97,6 +123,15 @@ export function recordedTokens(corpus: GoldenCorpus): Set<FloorToken> {
     });
     const token = outcomeTokenOf(stream.outcome);
     if (token !== null) out.add(outcomeToken(token));
+    // A format-2 stream records the kernel overlay; a format-1 stream (no `overlay`) records none, and so holds no overlay token.
+    if (stream.overlay !== undefined) {
+      for (const [fact, moved] of overlayTransitions(stream.overlay)) {
+        if (moved.set) out.add(overlayToken(fact, "set"));
+        if (moved.cleared) out.add(overlayToken(fact, "cleared"));
+      }
+    }
+    // A format-3 stream records the final player-stats rows; an earlier format records none, and so holds no stats token.
+    if (stream.playerStats !== undefined) for (const key of creditedAwardKeys(stream.playerStats)) out.add(statsAwardToken(key));
   }
   return out;
 }
@@ -360,9 +395,28 @@ export const NATURAL_OUTCOMES: Readonly<Record<string, Readonly<Record<string, s
 
 // ---------------------------------------------------------------------------------------------------- exemptions
 
-/** The harness function that turns a recorded ledger into a stream's recorded half. Injectable so the settle exemption's
- *  staleness is testable against a harness that records the kernel's overlays — the future the exemption waits for. */
-export type Recorder = typeof recomputeStream;
+/** The harness function that turns a recorded ledger into a stream's recorded half. Injectable so a probe can be shown to answer
+ *  both ways: under `kernelRecorder` (the real format-2 recording) and under `moduleRecorder` (what the harness recorded before). */
+export type Recorder = (module: AnySportModule, rawConfig: unknown, events: readonly GoldenEvent[], lineups?: LineupPair) => Recomputed;
+
+/** The floor's recorder since GF-2 T3: the REAL format-2 recording (the effective outcome, a digest of the summary after every
+ *  event, the kernel overlay as change points, and the dense per-step overlay a probe compares). Every probe below defaults to it,
+ *  because the corpora are format 2 and a probe that asked a narrower question than the corpus records would answer "unpinned"
+ *  for what the guard now compares. */
+// (these two call the recorders that carry the dense overlay, NOT `recomputeStream`: that returns only what a stream stores, and a probe
+// handed a recording without `dense` skips its kernel comparison and reads every event as unpinned)
+export const kernelRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeKernel(module, rawConfig, events, lineups);
+
+/** The floor's recorder since GF-2 T4: the REAL format-3 recording, the format-2 one plus the final player-stats rows. A probe
+ *  defaults to it because the corpora are format 3, and a probe that asked a narrower question than the corpus records would
+ *  answer "unpinned" for what the guard now compares (an award, until this recorder, moved no recorded field). `kernelRecorder`
+ *  stays, explicit, as the CONTROL of that retirement: the same probe is unpinned under it. */
+export const statsRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStats(module, rawConfig, events, lineups);
+
+/** The MODULE-ONLY recorder (corpus format 1): what the harness recorded before GF-2. Kept, explicit, as the CONTROL of every
+ *  retirement: the same probe that answers "pinned" under `kernelRecorder` answers "unpinned" under this one, which is what shows
+ *  the claim it retired was true before and is false now (a probe that could only ever answer one way would prove nothing). */
+export const moduleRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStream(module, rawConfig, events, lineups, 1);
 
 export interface FloorExemption {
   readonly token: FloorToken;
@@ -373,31 +427,17 @@ export interface FloorExemption {
   stale(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder): string | null;
 }
 
-/** The one thing the harness cannot yet record faithfully: a settlement. `recomputeStream` stores `module.outcome(state)`,
- *  and a settle lives BESIDE module state (`outcomeOf` lays it over), so a stream carrying one would record the module's
- *  bare answer while the effective outcome is a win — a recorded value that is wrong the moment it is written, and one
- *  `apps/web/src/server/engine-db/__tests__/outcome-readers.test.ts` forbids by name ("no golden corpus stream carries
- *  core.settle"). Recording `outcomeOf` / `summaryOf` is the SEPARATE later task; the settle streams land with it. */
-export const FLOOR_EXEMPTIONS: readonly FloorExemption[] = [
-  {
-    token: eventToken("core.settle"),
-    sports: "all",
-    reason:
-      "the corpus records the module's bare outcome (recomputeStream), and a settlement is laid over it by outcomeOf — a settle stream would record " +
-      "a draw/null where the effective outcome is a win; recording outcomeOf/summaryOf is the later kernel-overlay task",
-    stale(module, corpus, record) {
-      if (recordedTokens(corpus).has(eventToken("core.settle"))) return "the corpus records core.settle: delete the exemption";
-      const probe = settleProbe(module, corpus, record);
-      if (typeof probe === "string") return `the probe that proves the harness cannot record a settle could not run: ${probe}`;
-      return probe.recorded === probe.effective
-        ? `the harness now records the effective outcome (${probe.recorded}): record core.settle and delete the exemption`
-        : null;
-    },
-  },
-];
+/** The exemption table, EMPTY since GF-2 T3. It held one row, `core.settle` (all sports): the harness recorded `module.outcome(state)`,
+ *  a settlement lives BESIDE module state (`outcomeOf` lays it over), so a settle stream would have recorded the module's bare
+ *  answer while the effective outcome is a win, a value wrong the moment it is written. Format 2 records the effective outcome, so
+ *  `settleProbe` now reads recorded === effective in every sport: the row went stale, which is what its `stale()` was written to
+ *  announce, and it is deleted (golden-floor.test.ts holds the flip: the same probe under `moduleRecorder` still differs).
+ *  The mechanism stays for the next reasoned exemption; a row owes a reason and a `stale()` that turns it into a failure. */
+export const FLOOR_EXEMPTIONS: readonly FloorExemption[] = [];
 
-/** The recorded outcome of [start, abandon, settle] against the outcome the kernel reads from the same ledger. */
-export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = recomputeStream): { recorded: string; effective: string } | string {
+/** The recorded outcome of [start, abandon, settle] against the outcome the kernel reads from the same ledger. Under the module-only
+ *  recorder they differ (the old exemption's reason); under the format-2 recorder they are the same settled win. */
+export function settleProbe(module: AnySportModule, corpus: GoldenCorpus, record: Recorder = kernelRecorder): { recorded: string; effective: string } | string {
   const [name, raw] = Object.entries(corpus.configs)[0] ?? [];
   if (name === undefined) return "the corpus records no config";
   const cfg = module.configSchema.parse(raw) as unknown;
@@ -421,13 +461,19 @@ const exemptionApplies = (e: FloorExemption, sport: string): boolean => e.sports
 
 // -------------------------------------------------------------------------------------- recorded, overlay unpinned
 //
-// The floor is a PRESENCE check: a corpus that records `core.suspend` satisfies it. It does not follow that the epoch guard
-// can see a change to how a pause folds, because the harness records the MODULE's state, outcome, summary and deltas — not
-// the kernel overlay (stoppage clock, squads, settlement). An event the kernel owns, or one a module folds as `return
-// state`, can sit in a stream and move nothing the guard compares. That is a class, not a gap to hide: each CLAIM below
-// says which events are inert in which sports and why, the inertness is DERIVED by ablation (remove the event, compare
-// every recorded field), and a claim whose ablation starts finding movement is stale — the day the harness records the
-// overlay, every claim goes red and is deleted, and the manual-bump caveat in GOLDEN-POLICY.md goes with it.
+// The floor is a PRESENCE check: a corpus that records `core.note` satisfies it. It does not follow that the epoch guard can see
+// a change to how a note folds, because an event a module folds as `return state` can sit in a stream and move nothing the guard
+// compares. That is a class, not a gap to hide: each CLAIM below says which events are inert and why, the inertness is DERIVED by
+// ablation (remove the event, compare every recorded field), and a claim whose ablation starts finding movement is stale.
+//
+// Before GF-2 the class held every kernel-owned event as well (a pause: the stoppage clock lives in the overlay; a lineup change
+// a module does not read: the squads live in the overlay), because the harness recorded the module's answers only. Format 2
+// records the overlay and the summary after every event, so `ablationProbe` compares those too, and both classes flipped under
+// the real recorder: `stoppage` (all eleven sports) and `lineup` (boardgame, carrom, generic, and football's position change) are
+// retired. GF-2 T4 recorded the final player-stats rows (format 3) and the award class split along the sport's own declaration:
+// a sport that declares an award key credits it in those rows, so there the event is pinned (football `motm`, hockey `potm`,
+// icehockey `mvp`); the eight sports that declare none ignore it, and an award stays unpinned there. What is left is what no
+// recorded fact depends on: a note everywhere, and an award where the sport declares no key for it.
 
 export type OverlayVerdict = "unpinned" | "pinned" | "unrecorded";
 
@@ -464,46 +510,29 @@ const coversWhenUnpinned: OverlayClaim["covers"] = (_module, _token, verdict) =>
 
 export const OVERLAY_CLAIMS: readonly OverlayClaim[] = [
   {
-    id: "stoppage",
-    tokens: [eventToken("core.suspend"), eventToken("core.resume")],
-    mode: "together",
-    assertedFor: () => true,
-    covers: coversWhenUnpinned,
-    reason:
-      "kernel-owned: core.suspend / core.resume never reach module.apply, and the stoppage clock (core/time.ts) and the " +
-      "open-stoppage refusals live in the kernel overlay, which the harness does not record — a change to how a pause folds moves no golden",
-  },
-  {
     id: "note",
     tokens: [eventToken("core.note")],
     mode: "together",
     assertedFor: () => true,
     covers: coversWhenUnpinned,
     reason:
-      "a free-text annotation: it reaches module.apply but every module folds it as `return state`, so the recorded states, " +
-      "outcome, summary and deltas are identical with or without it",
+      "a free-text annotation: it reaches module.apply but every module folds it as `return state`, so every recorded field (the " +
+      "states, the effective outcome, the summary and its digest after each event, the deltas, the kernel overlay) is identical with " +
+      "or without it: nothing computes from a note",
   },
   {
     id: "award",
     tokens: [eventToken("core.award")],
     mode: "together",
-    assertedFor: () => true,
+    // from the module's OWN declaration (`playerStats.awards`), like the lineup claim read `onLineup`: a sport that declares an award key
+    // credits it in the player-stats rows, which format 3 records, so there the event is pinned (a claim that cannot hold is stale)
+    assertedFor: (module) => (module.playerStats?.awards ?? []).length === 0,
     covers: coversWhenUnpinned,
     reason:
-      "a player award (motm and the like): it reaches module.apply but every module folds it as `return state`, so the recorded " +
-      "fields are identical with or without it",
-  },
-  {
-    id: "lineup",
-    tokens: LINEUP_TYPES.map(eventToken),
-    mode: "chain",
-    assertedFor: (module) => module.onLineup === undefined,
-    covers: coversWhenUnpinned,
-    reason:
-      "kernel-owned squads: a module reacts to a lineup change only through onLineup, so one that declares none never sees it and " +
-      "its recorded fields are identical with or without them (asserted there); one that declares it can still ignore a type " +
-      "(football's position change), which the probe finds and the class then covers — a change to the lineup reducer " +
-      "(core/lineup.ts) moves no golden for the covered sport x type",
+      "an award this sport declares no key for: it reaches module.apply but every module folds it as `return state`, so every recorded " +
+      "field is identical with or without it, and the player-statistics fold ignores a key the sport's playerStats.awards does not " +
+      "declare, so no stat row moves either. A sport that DECLARES an award key is not in this class: format 3 records the rows, " +
+      "an award there adds `<key>_awards` to a person, and the golden floor requires one (`stats:award:<key>`)",
   },
 ];
 
@@ -514,28 +543,37 @@ export const OVERLAY_CONTROLS: readonly FloorToken[] = ["core.finalize", "core.a
 
 export interface Ablation {
   readonly kept: GoldenEvent[];
+  /** Where each kept event stood in the ledger that was ablated (`origin[i]` is the original index of `kept[i]`). */
+  readonly origin: number[];
 }
 
-/** The ledger without every event whose type is in `remove`, the `voids` ids renumbered to the survivors' new places; null
- *  when a void targets a removed event (its target is gone, so there is nothing sound to compare). */
-export function ablateEvents(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ablation | null {
+/** The ledger without every event whose type is in `remove`, AND without every void that struck one of them (a void of an event
+ *  that is not there strikes nothing, and what it struck is exactly what is being asked about), the surviving `voids` ids renumbered
+ *  to where their targets now sit. GF-1 refused such a ledger; the settle story (GF-2 T3) strikes the only settle a sport's
+ *  corpus records before saying it again, so refusing would leave `core.settle` unprobeable, and a verdict of "unrecorded" over a
+ *  recorded event is the blind spot this probe exists to close. */
+export function ablateEvents(events: readonly GoldenEvent[], remove: ReadonlySet<string>): Ablation {
+  const gone = new Set<number>();
+  events.forEach((event, i) => {
+    if (remove.has(event.type)) gone.add(i);
+  });
+  // a void sits after its target, so one forward pass settles a void of a void as well
+  events.forEach((event, i) => {
+    if (event.voids !== undefined && gone.has(Number(event.voids.slice(2)))) gone.add(i);
+  });
   const place = new Map<number, number>();
   let next = 0;
-  events.forEach((event, i) => {
-    if (!remove.has(event.type)) place.set(i, next++);
+  events.forEach((_, i) => {
+    if (!gone.has(i)) place.set(i, next++);
   });
   const kept: GoldenEvent[] = [];
-  for (const event of events) {
-    if (remove.has(event.type)) continue;
-    if (event.voids === undefined) {
-      kept.push(event);
-      continue;
-    }
-    const target = place.get(Number(event.voids.slice(2)));
-    if (target === undefined) return null;
-    kept.push({ ...event, voids: `e-${target}` });
-  }
-  return { kept };
+  const origin: number[] = [];
+  events.forEach((event, i) => {
+    if (gone.has(i)) return;
+    origin.push(i);
+    kept.push(event.voids === undefined ? event : { ...event, voids: `e-${place.get(Number(event.voids.slice(2)))}` });
+  });
+  return { kept, origin };
 }
 
 /** The recorded form of the state before any event: what the first event folds from. */
@@ -545,9 +583,46 @@ function initialState(module: AnySportModule, rawConfig: unknown, recordedLineup
   return JSON.stringify(foldMatch(module as never, cfg as never, lineups, [], { strictFromSeq: 0 }));
 }
 
+/** The digest of the summary the pad shows BEFORE any event (step -1 of `summaries`). */
+function initialSummary(module: AnySportModule, rawConfig: unknown, recordedLineups: LineupPair | undefined): string {
+  const cfg = module.configSchema.parse(rawConfig) as unknown;
+  const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
+  return textDigest(JSON.stringify(summaryOf(module as never, foldMatchWithStoppage(module as never, cfg as never, lineups, [], { strictFromSeq: 0 }) as never) ?? null));
+}
+
+/** A recorded overlay value names the event that opened it (`stoppage.eventId`, `settlement.eventId`, `levelWithdrawal.eventId`:
+ *  `e-<index in THIS ledger>`). Two ledgers that differ by an ablated event number the same event differently, so a comparison
+ *  maps each id to where the event sits in the other ledger first; an id whose event is gone is left, and so reads as the
+ *  difference it is. */
+function renumberEventIds(value: string, place: ReadonlyMap<number, number>): string {
+  return value.replace(/"eventId":"e-(\d+)"/g, (whole, index: string) => {
+    const moved = place.get(Number(index));
+    return moved === undefined ? whole : `"eventId":"e-${moved}"`;
+  });
+}
+
+/** A recording that holds the kernel overlay (`overlay`) but not the dense per-step form (`dense`) the ablation probe compares. The probe
+ *  would skip its kernel comparison and read every event as "nothing moved", i.e. unpinned: a recorder built on `recomputeStream`
+ *  (which hands out stored fields only) fails this way, so it is refused by name instead. A module-only recording (format 1) has
+ *  neither field and is fine. */
+export class DenseOverlayMissing extends Error {
+  constructor(where: string) {
+    super(
+      `golden floor: the recording of ${where} has an overlay but no dense overlay, so the ablation probe would skip its kernel comparison ` +
+        `and read every event as unpinned: record with recomputeKernel / recomputeStats (a recorder built on recomputeStream hands out stored fields only)`,
+    );
+    this.name = "DenseOverlayMissing";
+  }
+}
+
 /** Whether removing `big \ small` from the ledger changes any recorded field, across every recorded stream that carries one
- *  of those events. Moved = a retained step's state differs, the outcome / summary / deltas differ, or an ablated event's
- *  OWN step already changed the state (a module that folds the event into state). */
+ *  of those events. Moved = a retained step's state differs, the outcome / summary / deltas differ, or an ablated event's OWN
+ *  step already changed the state (a module that folds the event into state).
+ *
+ *  Under a format-2 recorder (the dense overlay and the summary digests are present) "every recorded field" is wider, and so is
+ *  what the guard compares: the kernel overlay (outcome, stoppage, settlement, expunged, levelWithdrawal, decider, squads) and
+ *  the summary digest, at every retained step, and the same two at an ablated event's own step against the step before it. A
+ *  module-only recorder (format 1) has neither, and the comparison is the narrower one it always was. */
 function ablationProbe(
   module: AnySportModule,
   corpus: GoldenCorpus,
@@ -563,7 +638,6 @@ function ablationProbe(
     if (!stream.events.some((e) => extra.has(e.type))) continue;
     const near = ablateEvents(stream.events, small);
     const far = ablateEvents(stream.events, big);
-    if (near === null || far === null) continue;
     const raw = corpus.configs[stream.config];
     streams++;
     // The recorded ledger itself must fold: a recorder that cannot is the probe's failure, not evidence.
@@ -575,15 +649,48 @@ function ablationProbe(
       refused++;
       continue;
     }
-    const gone = near.kept.map((e, i) => (extra.has(e.type) ? i : -1)).filter((i) => i >= 0);
-    const retained = near.kept.map((_, i) => i).filter((i) => !gone.includes(i));
-    const sameSteps = JSON.stringify(retained.map((i) => a.states[i])) === JSON.stringify(b.states);
+    for (const [label, recording] of [["the near ledger", a], ["the far ledger", b]] as const) {
+      if (recording.overlay !== undefined && recording.dense === undefined) throw new DenseOverlayMissing(`${label} of ${module.key} ${stream.config}#${stream.seed}`);
+    }
+    // Where each event sits in each ledger: the pairs both keep, and the near steps that exist only because of what is ablated
+    // (the events themselves, and the voids that struck them, which go with them).
+    const farAt = new Map(far.origin.map((original, position) => [original, position] as const));
+    const pairs = near.origin.flatMap((original, nearIndex) => (farAt.has(original) ? [[nearIndex, farAt.get(original)!] as const] : []));
+    const gone = near.origin.map((original, nearIndex) => (farAt.has(original) ? -1 : nearIndex)).filter((i) => i >= 0);
+    const ablated = gone.filter((i) => extra.has(near.kept[i]!.type));
+    const sameSteps = JSON.stringify(pairs.map(([n]) => a.states[n])) === JSON.stringify(pairs.map(([, f]) => b.states[f]));
     // An ablated event's OWN step must leave the recorded state as it found it (the state before the first event is the
     // module's init). Without this a module that folds the event into state would read as inert whenever a later event
-    // happened to overwrite what it wrote, or whenever nothing follows it.
-    const initial = gone.includes(0) ? initialState(module, raw, stream.lineups) : null;
-    const ownStepsNeutral = gone.every((i) => a.states[i] === (i === 0 ? initial : a.states[i - 1]));
-    if (!(sameSteps && ownStepsNeutral && a.outcome === b.outcome && a.summary === b.summary && a.deltas === b.deltas)) moved++;
+    // happened to overwrite what it wrote, or whenever nothing follows it. (A void that went with its target is not an
+    // ablated event: its step re-folds the ledger without the target, which is the change under test.)
+    const initial = ablated.includes(0) ? initialState(module, raw, stream.lineups) : null;
+    const ownStepsNeutral = ablated.every((i) => a.states[i] === (i === 0 ? initial : a.states[i - 1]));
+    let kernelSame = true;
+    if (a.dense !== undefined && b.dense !== undefined) {
+      const place = new Map(pairs);
+      const denseA = a.dense;
+      const denseB = b.dense;
+      kernelSame = OVERLAY_COLUMNS.every((column) => {
+        // (the far ledger's ids are its own, so the near ledger's are mapped onto them; at an own step nothing is renumbered)
+        const atRetained = pairs.every(([n, f]) => renumberEventIds(denseA.steps[column][n]!, place) === denseB.steps[column][f]);
+        const atOwn = ablated.every((i) => denseA.steps[column][i] === (i === 0 ? denseA.initial[column] : denseA.steps[column][i - 1]));
+        return atRetained && atOwn;
+      });
+      if (a.summaries !== undefined && b.summaries !== undefined) {
+        const summariesA = a.summaries;
+        const summariesB = b.summaries;
+        const initialSummaryDigest = ablated.includes(0) ? initialSummary(module, raw, stream.lineups) : null;
+        kernelSame =
+          kernelSame &&
+          pairs.every(([n, f]) => summariesA[n] === summariesB[f]) &&
+          ablated.every((i) => summariesA[i] === (i === 0 ? initialSummaryDigest : summariesA[i - 1]));
+      }
+    }
+    // Format 3 also records the final player-stats rows: an event the stats fold reads (an award the sport declares) moves them.
+    // Both sides come from ONE recorder, so a recorder that does not produce them (format 1 and 2) has `undefined` on both and the
+    // comparison is the narrower one it was.
+    const statsSame = a.playerStats === b.playerStats;
+    if (!(sameSteps && ownStepsNeutral && kernelSame && statsSame && a.outcome === b.outcome && a.summary === b.summary && a.deltas === b.deltas)) moved++;
   }
   const verdict: OverlayVerdict = streams === 0 ? "unrecorded" : moved > 0 || refused > 0 ? "pinned" : "unpinned";
   return { verdict, streams, moved, refused };
@@ -595,7 +702,7 @@ function ablationProbe(
 export function overlayVerdicts(
   module: AnySportModule,
   corpus: GoldenCorpus,
-  record: Recorder = recomputeStream,
+  record: Recorder = statsRecorder,
   claims: readonly OverlayClaim[] = OVERLAY_CLAIMS,
   scope: "claims" | "all" = "claims",
 ): Map<FloorToken, OverlayResult> {
@@ -633,7 +740,7 @@ export interface UncoveredReport {
 export function uncoveredUnpinned(
   module: AnySportModule,
   corpus: GoldenCorpus,
-  record: Recorder = recomputeStream,
+  record: Recorder = statsRecorder,
   claims: readonly OverlayClaim[] = OVERLAY_CLAIMS,
 ): UncoveredReport {
   const verdicts = overlayVerdicts(module, corpus, record, claims, "all");
@@ -673,21 +780,21 @@ export function impossibleReason(moduleKey: string, offers: readonly LineupOffer
 
 /** Claims that no longer hold for this sport, named: the event moves a recorded golden, is not recorded, or could not be
  *  probed. A token the sport's own policy makes impossible is not claimed (nothing to record). */
-export function staleOverlayClaims(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder): string[] {
+export function staleOverlayClaims(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder, claims: readonly OverlayClaim[] = OVERLAY_CLAIMS): string[] {
   const out: string[] = [];
   const impossible = floorRequirement(module, corpus).impossible;
   let verdicts: Map<FloorToken, OverlayResult>;
   try {
-    verdicts = overlayVerdicts(module, corpus, record);
+    verdicts = overlayVerdicts(module, corpus, record, claims);
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
-    for (const claim of OVERLAY_CLAIMS) {
+    for (const claim of claims) {
       if (!claim.assertedFor(module)) continue;
       for (const token of claim.tokens) if (!impossible.has(token)) out.push(`${module.key} ${token}: the probe that proves the "${claim.id}" claim could not run: ${why}`);
     }
     return out;
   }
-  for (const claim of OVERLAY_CLAIMS) {
+  for (const claim of claims) {
     if (!claim.assertedFor(module)) continue;
     for (const token of claim.tokens) {
       if (impossible.has(token)) continue;
@@ -701,6 +808,79 @@ export function staleOverlayClaims(module: AnySportModule, corpus: GoldenCorpus,
         );
       }
     }
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------------------------------- the kernel overlay tokens
+//
+// GF-2 recorded what a phone computes from the KERNEL beside what it computes from the module (golden-overlay.ts). Recording a
+// column is not exercising it: a corpus whose overlay never leaves the kernel defaults records `{}` for every stream and pins
+// nothing (measured over the 381 streams GF-2 T2 reformatted: no stream reached a settlement, an expunge or a level
+// withdrawal). So the floor requires each fact to be seen MOVING, and to be seen coming BACK where an undo can reopen it.
+
+/** What the floor requires of one kernel fact (a key of the fold result besides `state`). */
+interface OverlayRule {
+  /** Why the corpus must show the fact LEAVING its kernel default. */
+  readonly set: string;
+  /** Why it must show the fact coming BACK to the default. Absent = not required: a stream's overlay cannot say it for `squads`
+   *  (its default is the digest of the team sheets, which only a fold can compute). */
+  readonly cleared?: string;
+  /** The fact exists only over a level result: required only where the sport's floor requires a level outcome. */
+  readonly whenLevel?: true;
+}
+
+/** Owner ruling (GF-2 design §4, 2026-10-15), one row per key the kernel's fold returns besides `state`. */
+const OVERLAY_RULES: Readonly<Record<(typeof FOLD_OVERLAY_KEYS)[number], OverlayRule>> = {
+  stoppage: {
+    set: "a core.suspend opens a stoppage, which the kernel keeps beside module state",
+    cleared: "a core.resume (or a decision, or a void of the suspend) closes it again",
+  },
+  squads: { set: "a lineup change moves the squads off the team sheets, which the kernel keeps beside module state" },
+  settlement: {
+    set: "a core.settle lays an organiser's win over a level or abandoned match (outcomeOf)",
+    cleared: "a void of the settle takes the win away and the match is level or abandoned again",
+  },
+  expunged: {
+    set: "a core.abandon{expunge} takes the match off the table (outcomeOf reads null)",
+    cleared: "a void of the expunging abandon puts the match back",
+  },
+  levelWithdrawal: {
+    set: "a core.forfeit{withdrew} over a held level result is an award (outcomeOf, summaryOf)",
+    cleared: "a void of the withdrawal restores the level result",
+    whenLevel: true,
+  },
+};
+
+/** The keys the kernel's fold returns beside the module state, READ OFF a real fold of an empty ledger (never a list typed
+ *  here): the facts the floor owes a rule. */
+export function foldKeysOf(module: AnySportModule, corpus: GoldenCorpus): string[] {
+  const raw = Object.values(corpus.configs)[0];
+  if (raw === undefined) throw new Error(`golden floor: ${module.key} has no recorded config, so the keys of the kernel's fold cannot be read`);
+  const cfg = module.configSchema.parse(raw) as unknown;
+  const lineups = defaultLineupPair(resolvePositions(module, cfg));
+  const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, [], { strictFromSeq: 0 });
+  return Object.keys(folded).filter((key) => key !== "state");
+}
+
+/** The overlay tokens a sport's floor requires: one rule per fold key. A key with no rule (the kernel gained a fact) and a rule
+ *  with no key (it lost one) are both named failures, never a silently smaller floor. `levelReachable`: the sport's floor
+ *  requires a draw, a tie or a no_result, i.e. a withdrawal can be laid over a held level result there. */
+export function overlayRequirement(foldKeys: readonly string[], levelReachable: boolean): Map<FloorToken, string> {
+  for (const key of foldKeys) {
+    if (!Object.hasOwn(OVERLAY_RULES, key)) {
+      throw new Error(`golden floor: the kernel's fold returns "${key}" and the floor has no overlay rule for it: add one to OVERLAY_RULES, or argue it away`);
+    }
+  }
+  for (const key of Object.keys(OVERLAY_RULES)) {
+    if (!foldKeys.includes(key)) throw new Error(`golden floor: OVERLAY_RULES names "${key}", which the kernel's fold no longer returns: remove its rule`);
+  }
+  const out = new Map<FloorToken, string>();
+  for (const key of foldKeys) {
+    const rule = OVERLAY_RULES[key as keyof typeof OVERLAY_RULES];
+    if (rule.whenLevel === true && !levelReachable) continue;
+    out.set(overlayToken(key, "set"), rule.set);
+    if (rule.cleared !== undefined) out.set(overlayToken(key, "cleared"), rule.cleared);
   }
   return out;
 }
@@ -719,7 +899,12 @@ export interface FloorRequirement {
   readonly examined: { coreTypes: number; configs: number; admissionStates: number };
 }
 
-export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus, coreTypes: readonly string[] = CORE_TYPES): FloorRequirement {
+export function floorRequirement(
+  module: AnySportModule,
+  corpus: GoldenCorpus,
+  coreTypes: readonly string[] = CORE_TYPES,
+  exemptions: readonly FloorExemption[] = FLOOR_EXEMPTIONS,
+): FloorRequirement {
   const required = new Map<FloorToken, string>();
   const exempt = new Map<FloorToken, string>();
   const impossible = new Map<FloorToken, string>();
@@ -728,7 +913,7 @@ export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus, c
   const offers = lineupOffers(module, corpus, coreTypes);
   for (const type of coreTypes) {
     const token = eventToken(type);
-    const exemption = FLOOR_EXEMPTIONS.find((e) => e.token === token && exemptionApplies(e, module.key));
+    const exemption = exemptions.find((e) => e.token === token && exemptionApplies(e, module.key));
     if (exemption !== undefined) {
       exempt.set(token, exemption.reason);
       continue;
@@ -770,6 +955,18 @@ export function floorRequirement(module: AnySportModule, corpus: GoldenCorpus, c
   if (admission.both !== null) required.set(outcomeToken("double_walkover"), `forfeitAdmission admits a double walkover (${admission.both})`);
   for (const [token, why] of Object.entries(NATURAL_OUTCOMES[module.key] ?? {})) required.set(outcomeToken(token), `NATURAL_OUTCOMES: ${why}`);
 
+  // 3. the kernel overlay — each fact the fold keeps beside module state, seen moving (and coming back where an undo reopens it).
+  const levelReachable = LEVEL_OUTCOME_TOKENS.some((kind) => required.has(outcomeToken(kind)));
+  for (const [token, why] of overlayRequirement(foldKeysOf(module, corpus), levelReachable)) required.set(token, why);
+
+  // 4. the player stats (GF-2 T4) — an award the sport DECLARES, seen credited. Only where the corpus can record it (format 3): the
+  //    floor asks for what the corpus's own format holds, as it asked for the overlay tokens only from format 2.
+  if (corpusFormat(corpus) >= 3) {
+    for (const award of module.playerStats?.awards ?? []) {
+      required.set(statsAwardToken(award.key), `playerStats.awards declares "${award.key}": a core.award naming it must reach a person's ${awardStatKey(award.key)}`);
+    }
+  }
+
   return {
     sport: module.key,
     required,
@@ -786,9 +983,9 @@ export function floorHoles(module: AnySportModule, corpus: GoldenCorpus): FloorT
 }
 
 /** Exemptions that no longer hold for this sport (each entry's own `stale`), named. */
-export function staleFloorExemptions(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder): string[] {
+export function staleFloorExemptions(module: AnySportModule, corpus: GoldenCorpus, record?: Recorder, exemptions: readonly FloorExemption[] = FLOOR_EXEMPTIONS): string[] {
   const out: string[] = [];
-  for (const e of FLOOR_EXEMPTIONS) {
+  for (const e of exemptions) {
     if (!exemptionApplies(e, module.key)) continue;
     const why = e.stale(module, corpus, record);
     if (why !== null) out.push(`${module.key} ${e.token}: ${why}`);

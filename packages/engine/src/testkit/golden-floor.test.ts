@@ -1,27 +1,38 @@
 // The golden floor (GF-1) — see golden-floor.ts. Every expected set here is read off the engine's own declarations
 // (CORE_EVENT_SCHEMAS, FORFEIT_REASONS, forfeitAdmission, supportsDraws, the lineup reducer), never typed in.
 import { describe, expect, it } from "vitest";
-import { CORE_EVENT_SCHEMAS, foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
+import { CORE_EVENT_SCHEMAS } from "../core/events.ts";
+import { OUTCOME_KINDS, isLevelOutcome } from "../core/types.ts";
 import { DEFAULT_LINEUP_POLICY, type LineupRejectionReason } from "../core/lineup.ts";
 import { FORFEIT_REASONS } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
-import { readCorpus, recomputeStream, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import { readCorpus, type GoldenCorpus, type GoldenEvent } from "./golden.ts";
+import { FOLD_OVERLAY_KEYS } from "./golden-overlay.ts";
+import { asFormatTwo } from "./golden-reformat.ts";
 import {
   CORE_TYPES,
   FLOOR_EXEMPTIONS,
   LINEUP_TYPES,
   NATURAL_OUTCOMES,
   benchPair,
+  LEVEL_OUTCOME_TOKENS,
   eventToken,
   floorHoles,
   floorRequirement,
+  foldKeysOf,
   forfeitAdmissions,
   impossibleReason,
   lineupOffers,
   lineupTypesOf,
+  kernelRecorder,
+  moduleRecorder,
+  statsAwardToken,
+  statsRecorder,
   outcomeToken,
   outcomeTokenOf,
+  overlayRequirement,
+  overlayToken,
   planLineupEvents,
   recordedTokens,
   settleProbe,
@@ -32,8 +43,10 @@ import {
   staleFloorExemptions,
   staleNaturalOutcomes,
   unrequiredObservedOutcomes,
+  type FloorExemption,
+  type Recorder,
 } from "./golden-floor.ts";
-import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
+import { defaultLineupPair } from "./helpers.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 
 const corpora = new Map(builtinModules.map((m) => [m.key, readCorpus(m.key)] as const));
@@ -127,10 +140,11 @@ describe("golden floor — an undo of a KERNEL event is a token of its own (revi
     expect(sports).toBe(builtinModules.length);
   });
 
-  it("the decisive kernel events are exactly the two that decide or end a match: a forfeit and an abandon (review finding 2)", () => {
-    // Typed from the rulebook (a forfeit decides the match, an abandon ends play), NOT read off UNDOABLE_KERNEL: dropping
-    // one from the list would otherwise shrink every loop that iterates it and stay green.
-    expect([...UNDOABLE_KERNEL].sort()).toEqual(["core.abandon", "core.forfeit"]);
+  it("the kernel events a phone can mis-tap and strike are exactly the three that decide or end a match: a forfeit, an abandon and a settle (review finding 2, GF-2 T3)", () => {
+    // Typed from the rulebook (a forfeit decides the match, an abandon ends play, a settle decides a level or abandoned match
+    // by the organiser's word: X-ST-1), NOT read off UNDOABLE_KERNEL: dropping one from the list would otherwise shrink every
+    // loop that iterates it and stay green.
+    expect([...UNDOABLE_KERNEL].sort()).toEqual(["core.abandon", "core.forfeit", "core.settle"]);
     expect([...STANDING_KERNEL]).toEqual(["core.abandon"]);
   });
 
@@ -145,6 +159,203 @@ describe("golden floor — an undo of a KERNEL event is a token of its own (revi
     });
     expect(sports).toBe(builtinModules.length);
     expect(football).toBeDefined();
+  });
+});
+
+describe("golden floor — the kernel overlay is a token family of its own (GF-2 T3)", () => {
+  // single-sport: the rows below build synthetic corpora to prove the token reader's arithmetic, which does not depend on the sport;
+  // football only lends a real format-2 corpus as the base (the per-sport requirement sweeps are further down)
+  const football = builtinModules.find((m) => m.key === "football")!;
+  const base = corpusOf("football");
+  const OVERLAY = `{"stoppage":[[1,{"eventId":"e-1"}],[2,null]],"squads":[[3,"#bbbbbbbbbbbbbbbb"]],"expunged":[[4,true]]}`;
+  const stream = (overlay: string | undefined) => ({ ...base.streams[0]!, ...(overlay === undefined ? { overlay: undefined } : { overlay }) });
+
+  it("overlayToken spells `overlay:<fact>:set|cleared`, and a stream's overlay contributes exactly the transitions it records", () => {
+    expect(overlayToken("stoppage", "set")).toBe("overlay:stoppage:set");
+    expect(overlayToken("levelWithdrawal", "cleared")).toBe("overlay:levelWithdrawal:cleared");
+    const have = [...recordedTokens({ ...base, streams: [stream(OVERLAY)] })].filter((t) => t.startsWith("overlay:")).sort();
+    expect(have).toEqual(["overlay:expunged:set", "overlay:squads:set", "overlay:stoppage:cleared", "overlay:stoppage:set"]);
+  });
+
+  it("empty case first: a stream with no overlay (format 1), an empty overlay and an empty corpus record no overlay token", () => {
+    const tokens = (c: GoldenCorpus) => [...recordedTokens(c)].filter((t) => t.startsWith("overlay:"));
+    expect(tokens({ ...base, streams: [] })).toEqual([]);
+    expect(tokens({ ...base, streams: [stream("{}")] })).toEqual([]);
+    const { overlay: _dropped, ...format1 } = base.streams[0]!;
+    expect(tokens({ ...base, streams: [format1 as never] })).toEqual([]);
+  });
+
+  it("LEVEL_OUTCOME_TOKENS are the outcome kinds the kernel's own isLevelOutcome says are level", () => {
+    const level = OUTCOME_KINDS.filter((kind) => isLevelOutcome({ kind } as never));
+    expect([...LEVEL_OUTCOME_TOKENS].sort()).toEqual([...level].sort());
+    expect(level.length).toBeGreaterThan(0);
+    expect(level.length).toBeLessThan(OUTCOME_KINDS.length);
+  });
+
+  it("the facts are read off the fold's own keys (state excluded) in every sport, and are the facts the recorder records", () => {
+    let sports = 0;
+    forEachSport(({ module, key }) => {
+      const keys = foldKeysOf(module, corpusOf(key));
+      expect([...keys].sort(), key).toEqual([...FOLD_OVERLAY_KEYS].sort());
+      expect(keys, key).not.toContain("state");
+      sports++;
+    });
+    expect(sports).toBe(builtinModules.length);
+    expect(() => foldKeysOf(football, { ...base, configs: {} })).toThrow(/no recorded config/);
+  });
+
+  it("overlayRequirement: a fact the kernel returns and the floor has no rule for is a named failure, and so is a rule for a fact it no longer returns", () => {
+    expect(() => overlayRequirement([...FOLD_OVERLAY_KEYS, "possession"], true)).toThrow(/possession.*no overlay rule/);
+    expect(() => overlayRequirement(FOLD_OVERLAY_KEYS.filter((k) => k !== "expunged"), true)).toThrow(/expunged.*no longer returns/);
+    expect(() => overlayRequirement([], true)).toThrow(/no longer returns/);
+  });
+
+  it("owner ruling (GF-2 design §4): stoppage, settlement and expunged owe set AND cleared, squads set; levelWithdrawal set AND cleared only where a level result is reachable", () => {
+    const withLevel = [...overlayRequirement(FOLD_OVERLAY_KEYS, true).keys()].sort();
+    const without = [...overlayRequirement(FOLD_OVERLAY_KEYS, false).keys()].sort();
+    // typed from the ruling, not read off the table under test
+    expect(without).toEqual([
+      "overlay:expunged:cleared",
+      "overlay:expunged:set",
+      "overlay:settlement:cleared",
+      "overlay:settlement:set",
+      "overlay:squads:set",
+      "overlay:stoppage:cleared",
+      "overlay:stoppage:set",
+    ]);
+    expect(withLevel).toEqual([...without, "overlay:levelWithdrawal:cleared", "overlay:levelWithdrawal:set"].sort());
+    for (const why of overlayRequirement(FOLD_OVERLAY_KEYS, true).values()) expect(why.length).toBeGreaterThan(20);
+  });
+
+  it("every sport requires the unconditional overlay tokens, and the level-withdrawal pair exactly where its floor requires a level outcome", () => {
+    let sports = 0;
+    let withLevel = 0;
+    let withoutLevel = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      for (const t of ["overlay:stoppage:set", "overlay:stoppage:cleared", "overlay:squads:set", "overlay:settlement:set", "overlay:settlement:cleared", "overlay:expunged:set", "overlay:expunged:cleared"] as const) {
+        expect(req.required.has(t), `${key} ${t}`).toBe(true);
+      }
+      expect(req.required.has("overlay:squads:cleared"), `${key}: a squads clear cannot be read off a stream`).toBe(false);
+      const level = LEVEL_OUTCOME_TOKENS.some((k) => req.required.has(outcomeToken(k)));
+      for (const t of ["overlay:levelWithdrawal:set", "overlay:levelWithdrawal:cleared"] as const) expect(req.required.has(t), `${key} ${t} iff a level outcome is required`).toBe(level);
+      if (level) withLevel++;
+      else withoutLevel++;
+      sports++;
+    });
+    expect(sports).toBe(builtinModules.length);
+    expect(withLevel, "football, cricket, hockey ... can end level").toBeGreaterThan(0);
+    expect(withoutLevel, "badminton, tennis ... cannot").toBeGreaterThan(0);
+  });
+
+  it("empty case: an EMPTY corpus names every overlay token the sport requires as a hole (the floor cannot shrink by losing its streams)", () => {
+    let tokens = 0;
+    forEachSport(({ module, key }) => {
+      const empty: GoldenCorpus = { ...corpusOf(key), streams: [] };
+      const required = [...floorRequirement(module, empty).required.keys()].filter((t) => t.startsWith("overlay:"));
+      expect(required.length, key).toBeGreaterThanOrEqual(7);
+      const holes = new Set(floorHoles(module, empty));
+      for (const t of required) expect(holes.has(t), `${key} ${t}`).toBe(true);
+      tokens += required.length;
+    });
+    expect(tokens).toBeGreaterThanOrEqual(builtinModules.length * 7);
+  });
+
+  it("dropping the streams that hold an overlay token makes exactly that token a hole, naming the sport (teeth: the token is read off the recorded overlay)", () => {
+    let dropped = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      for (const token of ["overlay:stoppage:set", "overlay:stoppage:cleared", "overlay:squads:set"] as const) {
+        expect(floorRequirement(module, corpus).required.has(token), `${key} ${token}`).toBe(true);
+        const kept = corpus.streams.filter((s) => !recordedTokens({ ...corpus, streams: [s] }).has(token));
+        expect(kept.length, `${key} ${token}: some stream held it`).toBeLessThan(corpus.streams.length);
+        expect(floorHoles(module, { ...corpus, streams: kept }), `${key} without ${token}`).toContain(token);
+        dropped++;
+      }
+    });
+    expect(dropped).toBe(builtinModules.length * 3);
+  });
+});
+
+describe("golden floor — an award the sport declares must be seen credited in the recorded player stats (GF-2 T4)", () => {
+  /** The award keys the module's OWN declaration lists: the expected set is the engine's, never typed here. */
+  const declaredKeys = (module: (typeof builtinModules)[number]): string[] => (module.playerStats?.awards ?? []).map((a) => a.key);
+  const statsTokens = (tokens: Iterable<string>): string[] => [...tokens].filter((t) => t.startsWith("stats:")).sort();
+
+  it("statsAwardToken spells `stats:award:<key>`", () => {
+    expect(statsAwardToken("motm")).toBe("stats:award:motm");
+    expect(statsAwardToken("potm")).not.toBe(statsAwardToken("motm"));
+  });
+
+  it("the token reader credits exactly the keys a recorded person holds at least once (single-sport: synthetic rows prove the arithmetic, which does not depend on the sport)", () => {
+    const base = corpusOf("football");
+    const withStats = (playerStats: string | undefined): GoldenCorpus => ({ ...base, streams: [{ ...base.streams[0]!, playerStats }] });
+    const have = (playerStats: string | undefined) => statsTokens(recordedTokens(withStats(playerStats)));
+    expect(have('[{"personId":"p","stats":{"motm_awards":1,"goals":3}}]')).toEqual(["stats:award:motm"]);
+    expect(have('[{"personId":"p","stats":{"motm_awards":2}},{"personId":"q","stats":{"mvp_awards":1}}]')).toEqual(["stats:award:motm", "stats:award:mvp"]);
+    // empty case first: no field (an earlier format), no rows, a zero credit, a stat that merely ends the same way, an unreadable text
+    expect(have(undefined)).toEqual([]);
+    expect(have("[]")).toEqual([]);
+    expect(have('[{"personId":"p","stats":{"motm_awards":0}}]')).toEqual([]);
+    expect(have('[{"personId":"p","stats":{"_awards":4,"goals":1}}]')).toEqual([]);
+    expect(have("not json")).toEqual([]);
+    expect(statsTokens(recordedTokens({ ...base, streams: [] }))).toEqual([]);
+  });
+
+  it("the floor requires exactly the award keys the sport's own playerStats declares, each with a reason that names the key (every sport, counted both ways)", () => {
+    let declaring = 0;
+    let silent = 0;
+    forEachSport(({ module, key }) => {
+      const req = floorRequirement(module, corpusOf(key));
+      expect(statsTokens(req.required.keys()), key).toEqual(declaredKeys(module).map(statsAwardToken).sort());
+      for (const award of declaredKeys(module)) expect(req.required.get(statsAwardToken(award)), `${key} ${award}`).toContain(award);
+      if (declaredKeys(module).length > 0) declaring++;
+      else silent++;
+    });
+    expect(declaring, "some sport declares an award").toBeGreaterThan(0);
+    expect(silent, "and some declares none: its floor owes no stats token").toBeGreaterThan(0);
+    expect(declaring + silent).toBe(builtinModules.length);
+  });
+
+  it("the shipped corpora credit every declared key; blanking the rows of the streams that credit one makes exactly that token a hole (teeth, every declaring sport)", () => {
+    let dropped = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      for (const award of declaredKeys(module)) {
+        const token = statsAwardToken(award);
+        expect(recordedTokens(corpus).has(token), `${key} ${award}: credited`).toBe(true);
+        // blank the recorded rows of the streams that credit it (a stream also closes other holes, so dropping it would name those too):
+        // the ledger is untouched, only the recorded stats are gone, and the token is read off exactly that field
+        const crediting = corpus.streams.filter((s) => recordedTokens({ ...corpus, streams: [s] }).has(token));
+        expect(crediting.length, `${key} ${award}: some stream credits it`).toBeGreaterThan(0);
+        const blanked = corpus.streams.map((s) => (crediting.includes(s) ? { ...s, playerStats: "[]" } : s));
+        expect(floorHoles(module, { ...corpus, streams: blanked }), `${key} without the ${award} credit`).toEqual([token]);
+        dropped++;
+      }
+    });
+    expect(dropped, "one drop per declared key").toBe(builtinModules.reduce((n, m) => n + declaredKeys(m).length, 0));
+    expect(dropped).toBeGreaterThan(0);
+  });
+
+  it("the requirement follows the corpus's FORMAT: a format-2 corpus records no player stats, so it owes none and is not a hole (and an empty format-3 corpus owes every declared key)", () => {
+    let two = 0;
+    let empty = 0;
+    forEachSport(({ module, key }) => {
+      const corpus = corpusOf(key);
+      const keys = declaredKeys(module);
+      const older = asFormatTwo(corpus);
+      expect(statsTokens(floorRequirement(module, older).required.keys()), `${key}: a format-2 corpus`).toEqual([]);
+      expect(floorHoles(module, older), `${key}: and is not short of anything`).toEqual([]);
+      two++;
+      const none: GoldenCorpus = { ...corpus, streams: [] };
+      const holes = new Set(floorHoles(module, none));
+      for (const award of keys) {
+        expect(holes.has(statsAwardToken(award)), `${key} ${award}: an empty corpus owes it`).toBe(true);
+        empty++;
+      }
+    });
+    expect(two).toBe(builtinModules.length);
+    expect(empty).toBeGreaterThan(0);
   });
 });
 
@@ -348,88 +559,117 @@ describe("golden floor — the empty case and the teeth, first", () => {
 });
 
 describe("golden floor — exemptions and the reasoned list cannot go stale", () => {
-  it("every exemption row carries a reason, a real token, and covers at least one sport", () => {
-    expect(FLOOR_EXEMPTIONS.length).toBeGreaterThan(0);
-    for (const e of FLOOR_EXEMPTIONS) {
-      expect(e.reason.length, e.token).toBeGreaterThan(40);
-      expect(CORE_TYPES.map(eventToken), e.token).toContain(e.token);
-      expect(e.sports === "all" || e.sports.length > 0, e.token).toBe(true);
-    }
-  });
+  /** The `core.settle` row exactly as GF-1 shipped it, kept here as a FIXTURE: GF-2 T3 deleted it from the table once the
+   *  probe below flipped, and this is the evidence that the production staleness check would have announced that. */
+  const RETIRED_SETTLE_ROW: FloorExemption = {
+    token: eventToken("core.settle"),
+    sports: "all",
+    reason: "the corpus records the module's bare outcome (recomputeStream), and a settlement is laid over it by outcomeOf — a settle stream would record a draw/null where the effective outcome is a win",
+    stale(module, corpus, record) {
+      if (recordedTokens(corpus).has(eventToken("core.settle"))) return "the corpus records core.settle: delete the exemption";
+      const probe = settleProbe(module, corpus, record);
+      if (typeof probe === "string") return `the probe that proves the harness cannot record a settle could not run: ${probe}`;
+      return probe.recorded === probe.effective ? `the harness now records the effective outcome (${probe.recorded}): record core.settle and delete the exemption` : null;
+    },
+  };
 
-  it("no exemption is stale against the shipped corpora (swept over every sport, counted)", () => {
-    let checked = 0;
-    const stale: string[] = [];
+  it("the exemption table is EMPTY after GF-2 T3: core.settle is required of every sport, nothing is exempt, and every core type is still accounted for exactly once", () => {
+    expect(FLOOR_EXEMPTIONS).toEqual([]);
+    let sports = 0;
     forEachSport(({ module, key }) => {
-      checked++;
-      stale.push(...staleFloorExemptions(module, corpusOf(key)));
+      const req = floorRequirement(module, corpusOf(key));
+      expect(req.required.has(eventToken("core.settle")), `${key}: core.settle is required`).toBe(true);
+      expect(req.exempt.size, `${key}: nothing is exempt`).toBe(0);
+      expect(staleFloorExemptions(module, corpusOf(key)), key).toEqual([]);
+      sports++;
     });
-    expect(checked).toBe(builtinModules.length);
-    expect(stale).toEqual([]);
+    expect(sports).toBe(builtinModules.length);
   });
 
-  it("the settle exemption holds for a reason a probe proves: the harness records the bare outcome, the kernel reads another", () => {
-    let probed = 0;
+  it("the settle probe is what retired the row: under the module-only recorder the recorded outcome is NOT the effective one (the reason it existed), under the real format-2 recorder it IS (the reason it is gone), in every sport", () => {
+    let before = 0;
+    let after = 0;
     forEachSport(({ module, key }) => {
-      const probe = settleProbe(module, corpusOf(key));
-      expect(typeof probe, `${key}: ${typeof probe === "string" ? probe : ""}`).toBe("object");
-      if (typeof probe === "string") return;
-      expect(probe.recorded, key).not.toBe(probe.effective);
-      expect(probe.effective, key).toContain("settled_organiser");
-      probed++;
+      const old = settleProbe(module, corpusOf(key), moduleRecorder);
+      const now = settleProbe(module, corpusOf(key), kernelRecorder);
+      expect(typeof old, `${key}: ${typeof old === "string" ? old : ""}`).toBe("object");
+      expect(typeof now, `${key}: ${typeof now === "string" ? now : ""}`).toBe("object");
+      if (typeof old === "string" || typeof now === "string") return;
+      // the effective outcome is the kernel's reading of [start, abandon, settle]: a win by the organiser's settle (X-ST-1)
+      expect(now.effective, key).toContain("settled_organiser");
+      expect(now.effective, key).toContain('"kind":"win"');
+      expect(old.effective, `${key}: the same ledger, the same kernel`).toBe(now.effective);
+      expect(old.recorded, `${key}: the module alone does not see the settlement`).not.toBe(old.effective);
+      expect(now.recorded, `${key}: the real recorder records what the kernel reads`).toBe(now.effective);
+      before++;
+      after++;
     });
-    expect(probed).toBe(builtinModules.length);
+    expect(before).toBe(builtinModules.length);
+    expect(after).toBe(builtinModules.length);
+    // the default recorder of the probe is the real one (single-sport: it is one parameter default, not a per-sport fact)
+    const first = builtinModules[0]!;
+    expect(settleProbe(first, corpusOf(first.key))).toEqual(settleProbe(first, corpusOf(first.key), statsRecorder));
+    expect(settleProbe(first, corpusOf(first.key)), "the player stats do not move what the settle probe reads").toEqual(settleProbe(first, corpusOf(first.key), kernelRecorder));
   });
 
-  it("an exemption goes STALE the moment its token is recorded", () => {
+  /** The corpus as it stood when the row was written: no stream recorded `core.settle` (the row's first clause), so only the probe's
+   *  clause is in question. */
+  const beforeSettle = (key: string): GoldenCorpus => ({ ...corpusOf(key), streams: corpusOf(key).streams.filter((s) => !s.events.some((e) => e.type === "core.settle")) });
+
+  it("had the row stayed, the production staleness check would have gone red under the real recorder in every sport and stayed quiet under the module-only one", () => {
     let stale = 0;
     forEachSport(({ module, key }) => {
-      const corpus = corpusOf(key);
-      const cfgName = Object.keys(corpus.configs)[0]!;
-      const lineups = defaultLineupPair(resolvePositions(module, module.configSchema.parse(corpus.configs[cfgName])));
-      const events: GoldenEvent[] = [
-        { type: "core.start", payload: {} },
-        { type: "core.abandon", payload: { reason: "floodlight failure" } },
-        { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } },
-      ];
-      const made = { config: cfgName, seed: 99_999, events, ...recomputeStream(module, corpus.configs[cfgName], events, lineups) };
-      const withSettle: GoldenCorpus = { ...corpus, streams: [...corpus.streams, made] };
-      const messages = staleFloorExemptions(module, withSettle);
-      expect(messages.join("\n"), key).toMatch(/records core\.settle/);
+      const before = beforeSettle(key);
+      expect(before.streams.length, `${key}: the corpus before the settle stream is still a corpus`).toBeGreaterThan(0);
+      expect(before.streams.length, `${key}: and the settle stream was removed`).toBeLessThan(corpusOf(key).streams.length);
+      expect(staleFloorExemptions(module, before, moduleRecorder, [RETIRED_SETTLE_ROW]), `${key}: held before GF-2`).toEqual([]);
+      const messages = staleFloorExemptions(module, before, kernelRecorder, [RETIRED_SETTLE_ROW]);
+      expect(messages, key).toHaveLength(1);
+      expect(messages[0], key).toMatch(new RegExp(`^${key} event:core\\.settle: the harness now records the effective outcome`));
       stale++;
     });
     expect(stale).toBe(builtinModules.length);
   });
 
-  it("the settle exemption goes STALE the day the harness records the effective outcome (a harness that does, injected)", () => {
-    // The harness today stores `module.outcome(state)`. A harness that recorded what the kernel READS (`outcomeOf` over the
-    // folded ledger, a settlement laid over it) is the future the exemption waits for; inject one, and the row must go
-    // stale for every sport, naming that the settle streams can now land. The expected effective outcome is the kernel's own.
-    let stale = 0;
+  it("and the row's first clause fires on today's corpora in every sport, whichever recorder: the corpus records core.settle, so the exemption would be deleted", () => {
+    let fired = 0;
     forEachSport(({ module, key }) => {
-      const corpus = corpusOf(key);
-      const overlayRecorder: typeof recomputeStream = (m, raw, events, lineups) => {
-        const cfg = m.configSchema.parse(raw) as unknown;
-        const folded = foldMatchWithStoppage(m as never, cfg as never, lineups!, events.map((e, i) => makeEnvelope(i, e)), { strictFromSeq: 0 });
-        return { ...recomputeStream(m, raw, events, lineups), outcome: JSON.stringify(outcomeOf(m as never, folded as never) ?? null) };
-      };
-      // the real harness: the exemption holds
-      expect(staleFloorExemptions(module, corpus), key).toEqual([]);
-      // an overlay-recording harness: it is stale, and says why
-      const messages = staleFloorExemptions(module, corpus, overlayRecorder);
-      expect(messages.length, key).toBe(1);
-      expect(messages[0], key).toMatch(/the harness now records the effective outcome/);
-      stale++;
+      for (const record of [moduleRecorder, kernelRecorder]) {
+        expect(staleFloorExemptions(module, corpusOf(key), record, [RETIRED_SETTLE_ROW]), key).toEqual([`${key} event:core.settle: the corpus records core.settle: delete the exemption`]);
+        fired++;
+      }
     });
-    expect(stale).toBe(builtinModules.length);
+    expect(fired).toBe(builtinModules.length * 2);
   });
 
-  it("the settle exemption goes STALE when its probe cannot run (a recorder that throws), never silently holds", () => {
+  it("the mechanism still works for the next exemption: an injected row is exempt (not required), applies only to its sports, and says why it went stale", () => {
+    // two sports: football carries the injected row and cricket is the control that must not (any two sports would do)
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const cricket = builtinModules.find((m) => m.key === "cricket")!;
+    const row: FloorExemption = {
+      token: eventToken("core.note"),
+      sports: ["football"],
+      reason: "a reasoned exemption used to prove the mechanism, nothing more than that",
+      stale: (_m, _c, record) => (record === undefined ? null : "the injected recorder reached the row"),
+    };
+    const req = floorRequirement(football, corpusOf("football"), undefined, [row]);
+    expect(req.exempt.has(eventToken("core.note"))).toBe(true);
+    expect(req.required.has(eventToken("core.note")), "an exempt token is never also required").toBe(false);
+    expect(floorRequirement(cricket, corpusOf("cricket"), undefined, [row]).exempt.size, "another sport is not exempt").toBe(0);
+    expect(floorRequirement(cricket, corpusOf("cricket"), undefined, [row]).required.has(eventToken("core.note"))).toBe(true);
+    expect(staleFloorExemptions(football, corpusOf("football"), undefined, [row])).toEqual([]);
+    expect(staleFloorExemptions(football, corpusOf("football"), moduleRecorder, [row])).toEqual(["football event:core.note: the injected recorder reached the row"]);
+    expect(staleFloorExemptions(cricket, corpusOf("cricket"), moduleRecorder, [row]), "a row for football is not judged for cricket").toEqual([]);
+  });
+
+  it("the settle probe says it could not run (a recorder that throws), never silently holds", () => {
     const module = builtinModules[0]!;
-    const broken: typeof recomputeStream = () => {
+    const broken: Recorder = () => {
       throw new Error("recorder exploded");
     };
-    const messages = staleFloorExemptions(module, corpusOf(module.key), broken);
+    expect(settleProbe(module, corpusOf(module.key), broken)).toBe("recorder exploded");
+    expect(settleProbe(module, { ...corpusOf(module.key), configs: {} })).toBe("the corpus records no config");
+    const messages = staleFloorExemptions(module, beforeSettle(module.key), broken, [RETIRED_SETTLE_ROW]);
     expect(messages.join("\n")).toMatch(/probe that proves the harness cannot record a settle could not run: recorder exploded/);
   });
 

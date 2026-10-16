@@ -1,0 +1,323 @@
+{
+ "batch": "gf2-t2",
+ "note": "Test-id ledger for GF-2 T2 (the fold-epoch guard compares the kernel overlay, the Q1 freeze rule, the reformat of the 11 corpora to format 2, the T1 review fixes and the guard CLI fixtures reading the live epoch table; owner rulings 2026-10-15), built against base b55925506 (the rebased GF-2 T1 head). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T2 adds 61 tests and rewrites 2 titles (6229 -> 6290 collected): 26 in test/fold-epoch-guard.test.ts, 20 in test/fold-epoch-guard-cli.test.ts, and 15 from the T1 review and the T2 review fixes in src/testkit/golden-format.test.ts and golden-overlay.test.ts (the two rewritten titles are the 'format 1 today' test and the '(the default)' test, both made format-agnostic). The reformat commit changes no test id: the corpora are data. Scope: the matrix and scripts roots are not collected because T2 changes no file under tools/matrix or scripts; apps/web is untouched except by reading the reformatted corpora (outcome-readers, timeline, public-player-matches, player-matches, forfeit-vocabulary-scan re-run green, 134 passed 41 skipped for want of Postgres).",
+ "entries": [
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusFormat › every committed corpus is format 1 today (T1 writes no corpus byte)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-format.test.ts › corpusFormat › every committed corpus declares a valid format and carries exactly the fields that format owns (counted)",
+   "reason": "GF-2 T1 review: the corpora become format 2 in T2, so the test no longer asserts 'format 1 today'; it asserts a valid declared format with exactly the fields that format owns, counted, one format per tree"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream — the two formats › format 1 (the default) is the legacy four fields and nothing else; format 2 adds summaries, overlay and the dense form",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-overlay.test.ts › recomputeStream — the two formats › format 1 is the legacy four fields and nothing else; format 2 adds summaries, overlay and the dense form",
+   "reason": "GF-2 T1 review: recomputeStream's format is a required parameter, so '(the default)' is gone from the title and the 3-argument call from the body"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusFormat › formatOneOf is a format-1 corpus whichever format is committed, and drops nothing else",
+   "fate": "added",
+   "reason": "GF-2 T1 review: asFormatOne gives a format-1 view whichever format is committed, dropping nothing else"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusFormat › recomputeStream has no default format: five required parameters (a silent default 1 once let a caller record the wrong format)",
+   "fate": "added",
+   "reason": "GF-2 T1 review: recomputeStream's format parameter is required (Function.length 5, no default)"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatAll — all sports or none: one refusal writes nothing › an empty module list is refused (a reformat of nothing proves nothing)",
+   "fate": "added",
+   "reason": "GF-2 T1 review: a reformat is all sports or none (reformatAll), every refusing sport named"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatAll — all sports or none: one refusal writes nothing › every refusing sport is named, not only the first",
+   "fate": "added",
+   "reason": "GF-2 T1 review: a reformat is all sports or none (reformatAll), every refusing sport named"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatAll — all sports or none: one refusal writes nothing › every sport reformats: one plan entry per module, each the same corpus reformatCorpus gives on its own",
+   "fate": "added",
+   "reason": "GF-2 T1 review: a reformat is all sports or none (reformatAll), every refusing sport named"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatAll — all sports or none: one refusal writes nothing › one sport refusing throws for the whole run and names it: the sports that DID reformat are never handed out to be written",
+   "fate": "added",
+   "reason": "GF-2 T1 review: a reformat is all sports or none (reformatAll), every refusing sport named"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › writeRefusal — the gate golden.test.ts runs before any guarded write mode (pure: env, porcelain, writable paths) › a guarded mode runs from a tree holding only corpus changes or nothing, and fails closed outside a git checkout",
+   "fate": "added",
+   "reason": "GF-2 T1 review: the pure write gate over GUARDED_WRITE_MODES (REFORMAT is guarded like UPDATE and REBASELINE), tested for every mode"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › writeRefusal — the gate golden.test.ts runs before any guarded write mode (pure: env, porcelain, writable paths) › the real-environment wrapper asks git only when a guarded mode is on (a plain run never shells out to git)",
+   "fate": "added",
+   "reason": "GF-2 T1 review: the pure write gate over GUARDED_WRITE_MODES (REFORMAT is guarded like UPDATE and REBASELINE), tested for every mode"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › writeRefusal — the gate golden.test.ts runs before any guarded write mode (pure: env, porcelain, writable paths) › the same dirty tree is refused by EVERY guarded mode, and by no run that asks for none (counted)",
+   "fate": "added",
+   "reason": "GF-2 T1 review: the pure write gate over GUARDED_WRITE_MODES (REFORMAT is guarded like UPDATE and REBASELINE), tested for every mode"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeKernel — the decider column is `deciderPending`, not the module's `awaitingDecider` (D-C5) › a drawn knockout game owes the decider (true at the draw), a settle pays it although the module's phase stays 'tiebreak' (false), and voiding the settle owes it again (true)",
+   "fate": "added",
+   "reason": "GF-2 T1 review: the decider column pinned against the module's awaitingDecider (boardgame knockout draw, settle, void of the settle)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeKernel — the decider column is `deciderPending`, not the module's `awaitingDecider` (D-C5) › the empty case: a league board that draws owes nothing, and an undecided knockout board owes nothing before the draw",
+   "fate": "added",
+   "reason": "GF-2 T1 review: the decider column pinned against the module's awaitingDecider (boardgame knockout draw, settle, void of the settle)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 — a withdrawal over a held level result (X-WD-1) › a void of the withdrawal returns the held LEVEL result: the column, the outcome and the deltas go back, and both moves are change points",
+   "fate": "added",
+   "reason": "GF-2 T1 review: withdrawal rows for hockey, icehockey, carrom and cricket (7 level sports) and a void of a withdrawal returning the held level result"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 — a withdrawal over a held level result (X-WD-1) › every sport that can end level has a row: the committed corpora reach a draw or tie in hockey, icehockey and cricket",
+   "fate": "added",
+   "reason": "GF-2 T1 review: withdrawal rows for hockey, icehockey, carrom and cricket (7 level sports) and a void of a withdrawal returning the held level result"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 — an expunge (D5), where the module still answers › a void of the expunging abandon returns the flag, the outcome and the deltas to the live match, and both moves are change points",
+   "fate": "added",
+   "reason": "GF-2 T1 review: a void of the expunging abandon returns the flag, outcome and deltas to the live match"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (a) a reformat-only change › a change that gains the fields in TWO commits is judged on its net diff against the base, not commit by commit",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (a) a reformat-only change › engine at a repository root: is green, records every stream of every sport, and moves nothing - even beside edits to testkit, a doc and a test file",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (a) a reformat-only change › monorepo (packages/engine): is green, records every stream of every sport, and moves nothing - even beside edits to testkit, a doc and a test file",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (b) a reformat plus a kernel rule change in one diff › an UNTRACKED fold-source file in the working tree counts too (it is part of what the tree would ship), and so does a file moved OUT of src/",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (b) a reformat plus a kernel rule change in one diff › is red in EVERY sport, names the file and the way out, and is settled by each sport's own bump (the 'settled_' rename of the design note)",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (c) a reformat plus a change to the engine's package.json, or to the root lockfile › the engine's package.json (zod and the toolchain fold too) owes the major in every sport; so does the root lockfile; the ROOT package.json does not",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (c) a reformat plus a change to the engine's package.json, or to the root lockfile › with the engine at a repository root, package.json and the lockfile beside it are both the engine's",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (d) on a format-2 base, a recorded kernel field that moves is a MAJOR owed › a kernel SOURCE change with no corpus change owes nothing: the freeze only decides what a newly recorded stream owes",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (d) on a format-2 base, a recorded kernel field that moves is a MAJOR owed › one per-step summary digest, in two sports: exactly those two are red (nothing else in the corpus moved), and each is settled by its own bump",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (d) on a format-2 base, a recorded kernel field that moves is a MAJOR owed › overlay (how a suspension folds: its stoppage changed), in two sports: exactly those two are red (nothing else in the corpus moved), and each is settled by its own bump",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (e) a pre-existing field changed during the reformat › a mid-match state: the frozen source does not hide it - that sport alone is red with a major owed (Q6), the others record cleanly",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (e) a pre-existing field changed during the reformat › outcome: the frozen source does not hide it - that sport alone is red with a major owed (Q6), the others record cleanly",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › (e) a pre-existing field changed during the reformat › summary: the frozen source does not hide it - that sport alone is red with a major owed (Q6), the others record cleanly",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › a git that cannot list the change › is a refusal (exit 2, nothing judged), never a pass: here an unreadable index, with streams that need the change list",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › the change list is read in the repository's own spelling › a repository configured with diff.relative=true still reports repository-relative paths, so a kernel edit is not lost to the prefix",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › the format never falls, and a malformed format is a refusal › a format-1 corpus that already holds a format-2 field is refused: a half-converted corpus is not 'unrecorded'",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › the format never falls, and a malformed format is a refusal › a format-2 corpus rewritten as format 1 is red in every sport, and no bump settles it",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › the format never falls, and a malformed format is a refusal › each malformed format-2 corpus is refused (exit 2, nothing judged), whichever side holds it",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › the rig: the base is format 1 and its reformat is format 2, in every sport and layout (counted)",
+   "fate": "added",
+   "reason": "GF-2 T2: the guard on real git history with corpus format 2 (Q1 freeze rule, both layouts: monorepo and engine-at-root) - scenarios (a) reformat-only, (b) reformat plus a kernel change, (c) the non-source/lockfile clauses, (d) recorded fields on both sides, (e) pre-existing fields, fell, malformed"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - over every registered sport's real golden corpus › a reformat that touches no fold source owes nothing in any sport, and records every stream it compared (counted)",
+   "fate": "added",
+   "reason": "GF-2 T2: registry sweep over every sport's real corpus for the new fields, with counts (zero checked fails)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - over every registered sport's real golden corpus › on a format-2 base, a move in either new field names exactly that sport and owes a MAJOR, whichever sport it is (the sweep that teeth tests rely on)",
+   "fate": "added",
+   "reason": "GF-2 T2: registry sweep over every sport's real corpus for the new fields, with counts (zero checked fails)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - over every registered sport's real golden corpus › the format falling is a violation in every sport, bumped or not",
+   "fate": "added",
+   "reason": "GF-2 T2: registry sweep over every sport's real corpus for the new fields, with counts (zero checked fails)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - over every registered sport's real golden corpus › the same reformat with ANY fold-source path owes a major in every sport, and that sport's bump alone settles it",
+   "fate": "added",
+   "reason": "GF-2 T2: registry sweep over every sport's real corpus for the new fields, with counts (zero checked fails)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a moved overlay is a MAJOR owed, whether one change point or the whole column moved",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a moved per-step summary digest, with every state, outcome and summary the same, is a MAJOR owed (and a minor does not stand in for it)",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › FAILS CLOSED when it is not told what changed: no change list is a touched fold source, never a frozen one",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › a HALF-recorded stream (one of the two fields) is not recorded: the parser refuses it, and this function must not read it as gaining the fields",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › a minor bump does not settle it either: a phone computes this",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › a pre-existing field that ALSO moved is a change whatever the source did (Q6: a harness rewrite of an existing field is a major)",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › a sport with no baseline is new: nothing to compare, nothing recorded",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › a stream ADDED already in format 2 owes nothing and is not counted as recorded (EXTEND_GOLDEN)",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › a stream re-recorded in the same change (events differ) is removed and added, never 'recorded'",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › lists at most a few of the touched paths, and says how many more",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › owes NOTHING when the change touches no fold source, and the row counts it as recorded (not changed, not added)",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a stream that gains the fields for the first time (baseline format 1 -> format 2) › owes a MAJOR when the same change touches fold source, naming the paths and the way out",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › a summary list with another LENGTH is a move too, though every entry the two share is equal",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › equal summaries and an equal overlay are not a move (the control: the cases above are not red for another reason)",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › the format never falls: a corpus that stops recording the kernel fields is a violation › a format-2 corpus kept as it is, or format 1 kept as it is, is not a fall",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › the format never falls: a corpus that stops recording the kernel fields is a violation › is red whatever else is bumped, because a bump does not restore a pin that was dropped",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs › the format never falls: a corpus that stops recording the kernel fields is a violation › names it even when nothing else moved, and counts the streams",
+   "fate": "added",
+   "reason": "GF-2 T2: pure guard clauses for the kernel-overlay fields (summaries, overlay, newly recorded, format fell, half-recorded)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - which changed paths touch fold source (the owner's Q1 list) › a change list is filtered, keeping the order and every offender, and an empty list touches nothing",
+   "fate": "added",
+   "reason": "GF-2 T2: pure path table for the owner's Q1 fold-source list (what counts as fold source)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - which changed paths touch fold source (the owner's Q1 list) › in the monorepo (engine at packages/engine/): every path is judged by the ruling's list",
+   "fate": "added",
+   "reason": "GF-2 T2: pure path table for the owner's Q1 fold-source list (what counts as fold source)"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - which changed paths touch fold source (the owner's Q1 list) › with the engine at a repository root (engine-split 2b): the same list, with no prefix, and the lockfile beside package.json",
+   "fate": "added",
+   "reason": "GF-2 T2: pure path table for the owner's Q1 fold-source list (what counts as fold source)"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › writeRefusal — the gate golden.test.ts runs before any guarded write mode (pure: env, porcelain, writable paths) › the guarded branch of the wrapper: a dirty tree refuses every guarded mode, a clean or corpus-only tree lets it run, no checkout fails closed",
+   "fate": "added",
+   "reason": "GF-2 T2 review M-3: the guarded branch of corpusWriteRefusal, reached through injected git probes (dirty tree, clean, corpus-only, no checkout)"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes) › the format never falls, and a malformed format is a refusal › the fall is judged on the CORPUS, not on the streams that happen to match: format 1 with every stream re-recorded, and the bump paid, is still red",
+   "fate": "added",
+   "reason": "GF-2 T2 review I-1: the format fall is judged on the corpus - format 1 with every stream re-recorded and the bump paid is still exit 1"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - over every registered sport's real golden corpus › a sport that has no corpus on the current side is not also called a format fall (its own reason says it)",
+   "fate": "added",
+   "reason": "GF-2 T2 review I-1: the corpus-level fall clause must not also blame a sport with no current corpus"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-2 - over every registered sport's real golden corpus › the fall is a fact about the CORPUS: format 1 with EVERY stream re-recorded (nothing matches) is a violation in every sport, whatever the bump",
+   "fate": "added",
+   "reason": "GF-2 T2 review I-1: the corpus-level fall in every registered sport (counted), with a format-2 re-record control"
+  }
+ ]
+}

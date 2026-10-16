@@ -1,0 +1,79 @@
+{
+ "batch": "gf2-batch-review",
+ "note": "Test-id ledger for the GF-2 batch-review fix round (Opus review of the whole batch, reviews/gf2.md: I-1 the reformat dead end, M-1 probe-only dense stored silently, n2 flat sweep budgets), built against base ff84756d9 (the GF-2 tip the review read, after the rebase onto main). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. The round retitles 3 tests and adds 11 (6470 -> 6481 collected), none retired, all under packages/engine/src/testkit and packages/engine/test. Scope: no file under tools/matrix, scripts or apps/web changes in this round.",
+ "entries": [
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › a stream recorded under format 1 whose EFFECTIVE outcome differs from the module's (a settle): the stored outcome would move",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › a stream recorded under format 1 whose EFFECTIVE outcome differs from the module's (a settle): refused, naming the route that works, not a re-baseline that would record the module's answer again",
+   "reason": "GF-2 batch review I-1: the settle-class stream is still refused, but the refusal now names the route that works (main's format-3 corpus + EXTEND_GOLDEN) instead of advising a re-baseline that cannot repair it; the test also asserts the stream is a valid format-1 stream"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream — the two formats › format 1 is the legacy four fields and nothing else; format 2 adds summaries, overlay and the dense form",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-overlay.test.ts › recomputeStream — the two formats › format 1 is the legacy four fields and nothing else; format 2 adds summaries and overlay; the dense form is only on recomputeKernel",
+   "reason": "GF-2 batch review M-1: recomputeStream returns only stored fields, so format 2 no longer carries the probe-only dense form (it stays on recomputeKernel, asserted beside)"
+  },
+  {
+   "id": "src/testkit/golden-stats.test.ts › recomputeStream — the three formats › format 1 is the legacy four fields, format 2 adds summaries, overlay and the dense form, format 3 adds playerStats",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-stats.test.ts › recomputeStream — the three formats › format 1 is the legacy four fields, format 2 adds summaries and overlay, format 3 adds playerStats; only recomputeStats also carries the dense form",
+   "reason": "GF-2 batch review M-1: recomputeStream returns only stored fields, so formats 2 and 3 no longer carry the probe-only dense form (it stays on recomputeStats, asserted beside)"
+  },
+  {
+   "id": "src/testkit/golden-budget.test.ts › no golden test states a flat 60 s / 120 s timeout (AGENTS.md class 20: a flat timeout beside a derived cost is a latent red) › the golden test files that sweep a corpus close their slow tests with sweepBudget, and none of them states 60_000 or 120_000",
+   "fate": "added",
+   "reason": "GF-2 batch review n2: the golden test files state no flat 60_000/120_000 timeout (a counted scan)"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › a recomputation hands out only the fields a stream stores; the probe-only dense overlay stays on the recorder that needs it › every stream in every committed corpus stores exactly its corpus format's fields and no other key (swept, counted)",
+   "fate": "added",
+   "reason": "GF-2 batch review M-1: a recomputation hands out only the fields a stream stores (swept per sport and format, counted); the committed corpora hold exactly their format's keys"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › a recomputation hands out only the fields a stream stores; the probe-only dense overlay stays on the recorder that needs it › recomputeStream returns exactly the format's stored fields, for every sport and every format, so a spread of it cannot carry dense",
+   "fate": "added",
+   "reason": "GF-2 batch review M-1: a recomputation hands out only the fields a stream stores (swept per sport and format, counted); the committed corpora hold exactly their format's keys"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › a recomputation hands out only the fields a stream stores; the probe-only dense overlay stays on the recorder that needs it › the recorders the ablation probe uses still carry the dense overlay: dropping it from recomputeStream did not drop it from them",
+   "fate": "added",
+   "reason": "GF-2 batch review M-1: a recomputation hands out only the fields a stream stores (swept per sport and format, counted); the committed corpora hold exactly their format's keys"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › the reformat dead end (GF-2 batch review I-1): every class of stream the kernel lays an answer over › a STALE format-1 field (the module's answer moved) is still a re-baseline, with no route advice: the two refusals are told apart",
+   "fate": "added",
+   "reason": "GF-2 batch review I-1: the reformat dead end - a format-1 corpus holding a stream whose effective answer differs from the module's is refused with the route that works, and a stale field still gets the re-baseline advice"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › the reformat dead end (GF-2 batch review I-1): every class of stream the kernel lays an answer over › both in one corpus: the stale stream is told to re-baseline, the effective-answer stream to start from main, each under its own advice",
+   "fate": "added",
+   "reason": "GF-2 batch review I-1: the reformat dead end - a format-1 corpus holding a stream whose effective answer differs from the module's is refused with the route that works, and a stale field still gets the re-baseline advice"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › the reformat dead end (GF-2 batch review I-1): every class of stream the kernel lays an answer over › each is a valid format-1 stream whose effective answer differs, and each reformat is refused with the route, never the re-baseline advice (counted, three classes)",
+   "fate": "added",
+   "reason": "GF-2 batch review I-1: the reformat dead end - a format-1 corpus holding a stream whose effective answer differs from the module's is refused with the route that works, and a stale field still gets the re-baseline advice"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › the reformat dead end (GF-2 batch review I-1): every class of stream the kernel lays an answer over › reformatAll carries the route through: the run writes nothing and the message still names it",
+   "fate": "added",
+   "reason": "GF-2 batch review I-1: the reformat dead end - a format-1 corpus holding a stream whose effective answer differs from the module's is refused with the route that works, and a stale field still gets the re-baseline advice"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › the reformat dead end (GF-2 batch review I-1): every class of stream the kernel lays an answer over › the refusal's pointer lands: GOLDEN-POLICY.md holds the paragraph the message cites, and it names the route",
+   "fate": "added",
+   "reason": "GF-2 batch review I-1: the reformat dead end - a format-1 corpus holding a stream whose effective answer differs from the module's is refused with the route that works, and a stale field still gets the re-baseline advice"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a stream that stores a key no format records is refused in a format-1 corpus too (the check is not a format-2 or 3 rule), and the key is named",
+   "fate": "added",
+   "reason": "GF-2 batch review M-1: the guard refuses a stream key no format records, in a format-1 corpus too"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a recording with an overlay but no dense overlay, on either side of the ablation, is a named failure: it is never read as 'nothing moved' (which would turn every event unpinned)",
+   "fate": "added",
+   "reason": "GF-2 batch review verify pass N2: the probe throws DenseOverlayMissing for a recording that has an overlay but no dense overlay, on either side of the ablation, instead of skipping its kernel comparison"
+  }
+ ]
+}

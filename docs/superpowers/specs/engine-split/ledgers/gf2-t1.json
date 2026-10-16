@@ -1,0 +1,331 @@
+{
+ "batch": "gf2-t1",
+ "note": "Test-id ledger for GF-2 T1 (corpus format 2, the kernel-overlay recorder and REFORMAT_GOLDEN; owner rulings 2026-10-15), built against base d601f9da5 (the merge base; main after the engine-split 1e-minor merge, #963). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package. T1 adds 65 tests and changes no existing test id: 29 in the new src/testkit/golden-overlay.test.ts and 36 in the new src/testkit/golden-format.test.ts. src/testkit/golden.test.ts gains a REFORMAT_GOLDEN branch whose tests are collected only when that variable is set, so its ids are unchanged. Scope: the matrix and scripts roots are not collected because T1 changes no file under tools/matrix or scripts and no engine export they load; apps/web/src/server/engine-db/__tests__/outcome-readers.test.ts gains one readers-list entry (golden-overlay.ts) and changes no id (outside this ledger's roots). Whole-engine parity: before-only 0, after-only 65, both 6098 (engine 6098 before; 6163 after), unaccounted 0.",
+ "entries": [
+  {
+   "id": "src/testkit/golden-format.test.ts › buildCorpus (UPDATE_GOLDEN, a corpus from nothing) writes the current format › generic: a format-2 corpus, format before streams, every stream verified, no dense overlay stored",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusFormat › absent is 1, 1 and 2 are themselves, anything else is refused (a typo cannot read as format 1)",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusFormat › every committed corpus is format 1 today (T1 writes no corpus byte)",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusStateDiff — the new fields are part of the reviewed diff › a moved summary digest and a moved overlay column are listed per stream, by step and by column",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusStateDiff — the new fields are part of the reviewed diff › a reformat moves nothing and says how many streams were newly recorded",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusStateDiff — the new fields are part of the reviewed diff › an overlay whose text moved but no column did (a key-order change inside a value) is still a move, named as such",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › corpusStateDiff — the new fields are part of the reviewed diff › fields that VANISH (format 2 -> 1) are flagged, never reported as nothing moved",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › extendCorpus and extendFloor append in the corpus's format › extendCorpus: a format-2 corpus gets format-2 streams, a format-1 corpus gets format-1 streams, and each verifies",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › extendCorpus and extendFloor append in the corpus's format › extendFloor: from a format-2 corpus without its floor streams, it reproduces the committed floor streams WITH the new fields",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › guarded write modes — REFORMAT_GOLDEN shares REBASELINE's dirty-tree refusal › REFORMAT_GOLDEN is off in a normal run (this suite would otherwise be rewriting corpora)",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › guarded write modes — REFORMAT_GOLDEN shares REBASELINE's dirty-tree refusal › UPDATE, REBASELINE and REFORMAT are guarded; EXTEND (append only), an unset or non-'1' value are not",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › rebaselineCorpus keeps the corpus's format › format 1 stays format 1 (no field appears), format 2 stays format 2 and re-records both fields",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › a reformatted stream replays green under the format-2 verifier (summaries, overlay and the four old fields)",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › badminton: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › boardgame: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › carrom: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › cricket: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › football: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › generic: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › hockey: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › icehockey: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › tabletennis: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › tennis: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › the sweep covered every sport and a non-trivial number of streams and steps",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — adds the format-2 fields and moves nothing the corpus already holds › volleyball: every pre-existing field byte-identical, the new fields last, format before streams, a second run a no-op",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › a format-1 corpus that already carries a format-2 field is a hybrid: refused (absence can only mean format 1)",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › a format-2 corpus whose recorded summaries or overlay are stale is NOT a no-op: refused, never repaired",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › a stored state, outcome, summary or deltas that no longer replays: refused, naming the field",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › a stream recorded under format 1 whose EFFECTIVE outcome differs from the module's (a settle): the stored outcome would move",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › an emptied corpus (no streams) is refused: a reformat of nothing proves nothing",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › verifyStream under format 2 — each recorded field is compared, and a missing one is a failure › a format-1 corpus stream that holds a format-2 field is refused",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › verifyStream under format 2 — each recorded field is compared, and a missing one is a failure › a moved overlay names the column and the first differing change point",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › verifyStream under format 2 — each recorded field is compared, and a missing one is a failure › a moved summary digest names the step and the event type",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › verifyStream under format 2 — each recorded field is compared, and a missing one is a failure › missing fields, a wrong summary count, and a replay that produced none are failures, not 'nothing moved'",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › verifyStream under format 2 — each recorded field is compared, and a missing one is a failure › overlayMismatch tells a key-order change from a moved column, and survives text that is not JSON",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › verifyStream under format 2 — each recorded field is compared, and a missing one is a failure › passes untouched (the control: the tamper cases below are not redded by something else)",
+   "fate": "added",
+   "reason": "GF-2 T1: corpus format 2 and the REFORMAT_GOLDEN write mode - format detection, the guarded write modes, reformatCorpus (adds the fields, moves nothing, refuses a re-baseline), verifyStream's format-2 comparisons, corpusStateDiff's new fields, and the writers keeping the corpus's format."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › REFUSES a ragged dense overlay (columns of different lengths)",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › REFUSES a value whose text would not survive a JSON round trip (an integer-like key is reordered by JSON.parse)",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › an empty ledger is the empty overlay, and expands to empty columns",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › expand REFUSES a malformed overlay: an unknown column, a step out of range, steps not ascending, a non-array column",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › holds ONLY the steps where a value differs from the step before; a column that never leaves its default is omitted",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › records a value RETURNING to the default (a void reopening a decided match) as a change point of its own",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › round-trips: expanding the compact form carries every value forward to the dense per-step form",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › compactOverlay / expandOverlay — change points, losslessly (pure) › step 0 differing from the kernel default (step -1) is a change point at step 0",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › badminton: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › boardgame: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › carrom: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › cricket: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › football: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › generic: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › hockey: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › icehockey: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › tabletennis: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › tennis: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › the sweep covered every sport, every stream, and every overlay column that any corpus moves",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 over every committed stream (swept, counted) › volleyball: effective outcome/summary/deltas replay byte-identical to the committed bytes, and the overlay is the lossless change-point form of an independent fold",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 — a settle (X-ST-1), in every sport › records the settled WIN as the outcome (the module's own answer is not it), the settlement beside it, and settle-aware deltas",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 — a void REOPENS what it struck › every sport: settle then void-the-settle returns the outcome to what it was before the settle, and both moves are change points",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 — a withdrawal over a held level result (X-WD-1) › records the award (reason withdrew) as the outcome and the withdrawal beside it; the summary is the module's own, laid over the award",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream format 2 — an expunge (D5), where the module still answers › records NO outcome while the module's own outcome is non-null, and the expunge flag set at the abandon",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream — the two formats › an empty ledger records no steps, an empty overlay, and the kernel defaults at step -1 (the squads default is the team sheets)",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream — the two formats › format 1 (the default) is the legacy four fields and nothing else; format 2 adds summaries, overlay and the dense form",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › recomputeStream — the two formats › format 1 still records the module's BARE outcome for a settle (the golden floor's settle exemption reads exactly this)",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › textDigest — the one digest shape every corpus field uses › is '#' + the first 16 hex of SHA-256 (FIPS 180-2 test vector for 'abc')",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › the fold result's keys are all recorded (an inert-seam guard: a new kernel fact must be recorded or named) › every key foldMatchWithStoppage returns besides `state` is a recorded fold fact, and the other way round",
+   "fate": "added",
+   "reason": "GF-2 T1: the pure overlay module (golden-overlay.ts) and the format-2 recorder - change-point compaction and its refusals, the fold-key guard, hand-built settle/expunge/withdrawal/void ledgers in every sport, and the sweep of every committed stream under the effective recorder."
+  }
+ ]
+}

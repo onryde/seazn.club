@@ -10,7 +10,10 @@
 // write path would not accept). A void that fails the first strikes the wrong thing; one that fails the second is decoration.
 //
 // "Observable" is the kernel's own reading: module state, the effective outcome, the open stoppage, the squads, the
-// settlement, and whether an abandon is in force (probed by the refusal the kernel gives a forfeit while one is).
+// settlement, the expunge flag, a level withdrawal, and whether an abandon is in force (probed by the refusal the kernel gives
+// a forfeit while one is), and (GF-2 T4, corpus format 3) the final player-stats rows: an award folds as no change in module state, so
+// a void of one is decoration unless the stats are read. The facts that name the event that opened them are read in the numbering of
+// the ledger as recorded.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
@@ -20,20 +23,23 @@ import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import { readCorpus, type GoldenEvent } from "./golden.ts";
+import { recordPlayerStats } from "./golden-stats.ts";
 import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 /** The ledger without `drop` (indices), the surviving voids renumbered to where their targets now sit; null when a
- *  surviving void points at a dropped event. */
-function without(events: readonly GoldenEvent[], drop: ReadonlySet<number>): GoldenEvent[] | null {
+ *  surviving void points at a dropped event. `original[i]` is where event `i` of the result stood in `events`. */
+function without(events: readonly GoldenEvent[], drop: ReadonlySet<number>): { events: GoldenEvent[]; original: number[] } | null {
   const place = new Map<number, number>();
   let next = 0;
   events.forEach((_, i) => {
     if (!drop.has(i)) place.set(i, next++);
   });
   const out: GoldenEvent[] = [];
+  const original: number[] = [];
   for (let i = 0; i < events.length; i++) {
     if (drop.has(i)) continue;
     const event = events[i]!;
+    original.push(i);
     if (event.voids === undefined) {
       out.push(event);
       continue;
@@ -42,7 +48,7 @@ function without(events: readonly GoldenEvent[], drop: ReadonlySet<number>): Gol
     if (to === undefined) return null;
     out.push({ ...event, voids: `e-${to}` });
   }
-  return out;
+  return { events: out, original };
 }
 
 interface Reading {
@@ -50,18 +56,32 @@ interface Reading {
   readonly abandonInForce: boolean;
 }
 
-/** Everything the kernel reads of a ledger, or null when the strict write path refuses it. */
-function read(module: AnySportModule, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[]): Reading | null {
+/** Everything the kernel reads of a ledger, or null when the strict write path refuses it. The kernel facts that NAME the event that
+ *  opened them (a stoppage, a settlement, a level withdrawal: `eventId: "e-<index>"`) are read in the numbering of `original`, the
+ *  ledger the comparison started from: a ledger that never recorded an earlier event numbers the same event differently, and that
+ *  is not a difference in what the match says. */
+function read(module: AnySportModule, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], original?: readonly number[]): Reading | null {
   const envelopes = (list: readonly GoldenEvent[]) => list.map((e, i) => makeEnvelope(i, e, e.voids));
+  const inOriginal = (key: string, value: unknown): unknown => {
+    if (key !== "eventId" || typeof value !== "string" || original === undefined) return value;
+    const at = original[Number(value.slice(2))];
+    return at === undefined ? value : `e-${at}`;
+  };
   try {
     const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, envelopes(events), { strictFromSeq: 0 });
-    const fold = JSON.stringify({
-      state: folded.state,
-      stoppage: folded.stoppage,
-      squads: folded.squads,
-      settlement: folded.settlement,
-      effective: outcomeOf(module as never, folded as never),
-    });
+    const fold = JSON.stringify(
+      {
+        state: folded.state,
+        stoppage: folded.stoppage,
+        squads: folded.squads,
+        settlement: folded.settlement,
+        expunged: folded.expunged,
+        levelWithdrawal: folded.levelWithdrawal,
+        effective: outcomeOf(module as never, folded as never),
+        stats: recordPlayerStats(module, cfg, lineups, envelopes(events)),
+      },
+      inOriginal,
+    );
     let abandonInForce = false;
     try {
       const probe: GoldenEvent = { type: "core.forfeit", payload: { by: lineups.home.entrantId, reason: "retired" } };
@@ -88,10 +108,10 @@ function voidFailures(module: AnySportModule, cfg: unknown, lineups: LineupPair,
   const whole = reader(module, cfg, lineups, events);
   if (whole === null) return ["the recorded ledger is refused by the strict write path"];
   const out: string[] = [];
-  const b = reader(module, cfg, lineups, struck);
+  const b = reader(module, cfg, lineups, struck.events, struck.original);
   if (b === null) out.push("the ledger minus target and void is refused");
   else if (!same(whole, b)) out.push("striking the target is not the same as never recording it");
-  if (same(whole, reader(module, cfg, lineups, standing))) out.push(`the target ${events[t]!.type} left standing changes nothing: the void is decoration`);
+  if (same(whole, reader(module, cfg, lineups, standing.events, standing.original))) out.push(`the target ${events[t]!.type} left standing changes nothing: the void is decoration`);
   return out;
 }
 
@@ -143,6 +163,31 @@ describe("golden floor — every recorded void means what it says (swept, counte
     expect(real, "a recorded goal to borrow").toBeDefined();
     const honest: GoldenEvent[] = [{ type: "core.start", payload: {} }, { ...goal, payload: real!.payload }, { type: "core.void", payload: {}, voids: "e-1" }];
     expect(voidFailures(module, cfg, lineups, honest, 2)).toEqual([]);
+    // an open stoppage names the event that opened it (`e-<index>`), and striking an earlier goal moves that event: the same
+    // stoppage in a ledger that never recorded the goal sits two places earlier. The ids are compared where the events ARE.
+    const suspend: GoldenEvent = { type: "core.suspend", payload: { reason: "floodlight failure" } };
+    const renumbered: GoldenEvent[] = [{ type: "core.start", payload: {} }, { ...goal, payload: real!.payload }, { type: "core.void", payload: {}, voids: "e-1" }, suspend];
+    expect(voidFailures(module, cfg, lineups, renumbered, 2), "the stoppage opened by e-3 is the one e-1 opens once the goal and its void are gone").toEqual([]);
+    // and a settlement likewise (the story the settle stream tells, shifted by an earlier struck event)
+    const settled: GoldenEvent[] = [
+      { type: "core.start", payload: {} },
+      { ...goal, payload: real!.payload },
+      { type: "core.void", payload: {}, voids: "e-1" },
+      { type: "core.abandon", payload: { reason: "rain" } },
+      { type: "core.settle", payload: { winner: lineups.home.entrantId, method: "organiser" } },
+      { type: "core.void", payload: {}, voids: "e-4" },
+    ];
+    expect(voidFailures(module, cfg, lineups, settled, 5), "a struck settle leaves the abandoned match it found").toEqual([]);
+    // a void of an AWARD: the module folds it as no change, so only the player stats show it. Read with the stats it is honest
+    // (the struck award credits nobody, the standing one credits its person); read without them (the reading before format 3) it is decoration.
+    const person = lineups.home.slots[0]!.personId;
+    const awarded: GoldenEvent[] = [{ type: "core.start", payload: {} }, { type: "core.award", payload: { person, key: "motm" } }, { type: "core.void", payload: {}, voids: "e-1" }];
+    expect(voidFailures(module, cfg, lineups, awarded, 2), "a struck motm credits nobody; standing it credits the person").toEqual([]);
+    const kernelOnly: Reader = (m, c, l, events, original) => {
+      const r = read(m, c, l, events, original);
+      return r === null ? null : { ...r, fold: JSON.stringify((({ stats: _stats, ...rest }) => rest)(JSON.parse(r.fold) as { stats: string })) };
+    };
+    expect(voidFailures(module, cfg, lineups, awarded, 2, kernelOnly), "without the stats the award's void reads as decoration").toEqual([expect.stringMatching(/core\.award left standing changes nothing: the void is decoration/)]);
     // an engine whose void strikes nothing: a reader that folds without resolving voids
     const blind: Reader = (m, c, l, events) => read(m, c, l, events.filter((e) => e.type !== "core.void"));
     // (it also finds the void decoration: with voids ignored, "target standing" and "whole ledger" are one fold)

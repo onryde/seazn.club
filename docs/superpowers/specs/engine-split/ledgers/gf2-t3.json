@@ -1,0 +1,422 @@
+{
+ "batch": "gf2-t3",
+ "note": "Test-id ledger for GF-2 T3 (the golden floor requires the kernel overlay: overlay tokens, the settle and expunge stories, floor batches, the retired exemption and claims, the format-2 probe, the apps/web readers; owner rulings 2026-10-15), built against base 05fd17c32 (the GF-2 T2 head). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T3 adds 63 new test ids (55 from the build plus 9 from the review fixes, less 1 the review replaced: 71 after-only ids at the build included the 16 retitled tests), retitles 16 and retires 1 (6290 -> 6352 collected), all under packages/engine/src/testkit. Scope: the matrix and scripts roots are not collected because T3 changes no file under tools/matrix or scripts; apps/web changes two test files (outcome-readers.test.ts, timeline.test.ts) and no existing title (no id moves; outcome-readers.test.ts gains one test, outside the engine collection root), re-run green: 48 passed in the two files.",
+ "entries": [
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › every claim row names real core types, a reason, and applies to at least one sport",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › every claim row names real core types, a reason, and applies to at least one sport; the note claim says nothing computes from a note (Q4)",
+   "reason": "GF-2 T3: the claim table keeps note and award; the title says the note claim is Q4's 'nothing computes from a note'"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › pause is unpinned in EVERY sport: suspend and resume move no recorded golden anywhere (the review's finding 1)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › RETIRED stoppage: suspend and resume are unpinned under the module-only recorder and PINNED under the real format-2 recorder, in EVERY sport",
+   "reason": "GF-2 T3: the stoppage claim is retired; the test now proves the flip (unpinned under the module-only recorder, pinned under the format-2 one) in every sport"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › a lineup event is unpinned in EVERY recorded type where the module declares no onLineup; where it declares one, the probe sees movement in at least one type",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › RETIRED lineup: exactly boardgame, carrom and generic (every recorded type) and football's position change flip from unpinned to pinned; the other sports were pinned already",
+   "reason": "GF-2 T3: the lineup claim is retired; the test now proves which sports flip (boardgame, carrom, generic every type; football's position change)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › EVERY recorded core event whose ablation says 'unpinned' is covered by a claim: swept per sport x token, counted (review N1)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › EVERY recorded core event whose ablation says 'unpinned' is covered by a claim, and the unpinned ones are exactly a note and an award (swept per sport x token, counted)",
+   "reason": "GF-2 T3: the sweep now expects the unpinned ones to be exactly a note and an award"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › football declares onLineup yet its position change moves no golden: the claim COVERS it by the verdict, though it is not asserted for football",
+   "fate": "retired",
+   "reason": "GF-2 T3: the lineup claim row is retired, so football's 'covered by the verdict though not asserted' case no longer exists; football's position change is pinned and its flip is a clause of the RETIRED lineup test"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the sweep has teeth: the old declaration-only rule (lineups claimed where onLineup is undefined) leaves football's position change uncovered, by name",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the sweep has teeth: a claim table that forgets a class names it in every sport",
+   "reason": "GF-2 T3: the teeth of the uncovered-unpinned sweep are now a claim table that forgets a class, in every sport"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the day the harness records the kernel overlay, the KERNEL-OWNED claims go stale and the module-folded ones do not (an overlay-recording harness, injected)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the retirement is DETECTED by the staleness check itself: under the real recorder every retired claim is stale in every sport it applied to, under the module-only recorder none is",
+   "reason": "GF-2 T3: the kernel-owned claims went stale the day the harness recorded the overlay; the test now detects the retirement through the staleness check itself, on the real recorder"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit › a void whose target is removed leaves nothing sound to compare: null, not a guess",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-overlay.test.ts › ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit › a void whose target is removed goes with it (it struck nothing that is left), and the survivors' ids and origins follow",
+   "reason": "GF-2 T3: a void whose target is removed goes with it (ablateEvents returns origin) instead of returning null"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › reproduces the committed floor streams byte for byte from a corpus that lacks them, in order, touching nothing else",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-streams.test.ts › extendFloor — the golden floor's append path › reproduces each committed floor BATCH byte for byte from the streams preceding it, in order, touching nothing else (batches counted, none is a pass)",
+   "reason": "GF-2 T3: the append path is reproduced one floor BATCH at a time"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the undo stream strikes the KERNEL events that decide or end a match, and play carries on (review 2) › in every sport, a recorded void strikes each of core.forfeit and core.abandon: it took effect, the void clears it, and play resumes to a result",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor-streams.test.ts › the undo stream strikes the KERNEL events that decide or end a match, and play carries on (review 2) › in every sport, the undo stream's void strikes each of core.forfeit and core.abandon: it took effect, the void clears it, and play resumes to a result",
+   "reason": "GF-2 T3: the undo stream title names the undo stream; the settle's undo moved to the settle story"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › the decisive kernel events are exactly the two that decide or end a match: a forfeit and an abandon (review finding 2)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — an undo of a KERNEL event is a token of its own (review 2) › the kernel events a phone can mis-tap and strike are exactly the three that decide or end a match: a forfeit, an abandon and a settle (review finding 2, GF-2 T3)",
+   "reason": "GF-2 T3: a settle joins the kernel events a phone can mis-tap and strike (UNDOABLE_KERNEL is now three)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › every exemption row carries a reason, a real token, and covers at least one sport",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the exemption table is EMPTY after GF-2 T3: core.settle is required of every sport, nothing is exempt, and every core type is still accounted for exactly once",
+   "reason": "GF-2 T3: the exemption table is empty; the test asserts that and that every core type is still accounted for exactly once"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › no exemption is stale against the shipped corpora (swept over every sport, counted)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › had the row stayed, the production staleness check would have gone red under the real recorder in every sport and stayed quiet under the module-only one",
+   "reason": "GF-2 T3: the production staleness check against the shipped corpora, now proved on the retired settle row under both recorders"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle exemption holds for a reason a probe proves: the harness records the bare outcome, the kernel reads another",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle probe is what retired the row: under the module-only recorder the recorded outcome is NOT the effective one (the reason it existed), under the real format-2 recorder it IS (the reason it is gone), in every sport",
+   "reason": "GF-2 T3: the settle probe that justified the exemption now proves the flip: not the effective outcome under the module-only recorder, the effective one under the real format-2 recorder"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › an exemption goes STALE the moment its token is recorded",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › and the row's first clause fires on today's corpora in every sport, whichever recorder: the corpus records core.settle, so the exemption would be deleted",
+   "reason": "GF-2 T3: the row's first clause (the token is recorded) fires on today's corpora in every sport, whichever recorder"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle exemption goes STALE the day the harness records the effective outcome (a harness that does, injected)",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the mechanism still works for the next exemption: an injected row is exempt (not required), applies only to its sports, and says why it went stale",
+   "reason": "GF-2 T3: the stale-the-day-the-harness-records test became the injected-row test: the mechanism still works for the next exemption"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle exemption goes STALE when its probe cannot run (a recorder that throws), never silently holds",
+   "fate": "rewritten",
+   "to": "src/testkit/golden-floor.test.ts › golden floor — exemptions and the reasoned list cannot go stale › the settle probe says it could not run (a recorder that throws), never silently holds",
+   "reason": "GF-2 T3: the probe-cannot-run test now runs on the retired settle row, with a recorder that throws"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the table holds exactly the two classes no recorded fact depends on, and the two GF-2 retired are gone",
+   "fate": "added",
+   "reason": "GF-2 T3: the claim table after the retirements; core.settle is recorded and pinned once the probe drops the void that struck it"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › the probe's DEFAULT recorder is the real format-2 one: with no recorder named, a retired class reads as pinned in every sport (overlayVerdicts and staleOverlayClaims)",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: the probe's default recorder is the real format-2 one"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › golden floor — the overlay-unpinned class is declared, reasoned and derived › core.settle is recorded and PINNED in every sport: it is the one event whose every recorded instance is struck once, so the probe must ablate the void with it",
+   "fate": "added",
+   "reason": "GF-2 T3: the claim table after the retirements; core.settle is recorded and pinned once the probe drops the void that struck it"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › precondition: the note stream has steps before the note (retained) and the unperturbed probe says 'unpinned' over it",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a summary digest that differs at a RETAINED step moves the verdict",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a summary digest that differs at the ablated event's OWN step moves the verdict (the event is not neutral)",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › an overlay column that differs at a RETAINED step moves the verdict, whichever column",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › an overlay column that differs at the ablated event's OWN step moves the verdict (a note that opened a stoppage would not be inert)",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a stoppage that the removal RENUMBERS is not a difference: the suspend sits at e-4 with a note in front of it and at e-3 without, and the probe maps the id",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a note BEFORE the start sits at step 0, where the neutral reference is the pre-match headline: unperturbed it is inert, and a digest that is not the pre-match one at step 0 is a difference",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › but an id whose event is GONE is a difference: ablating the suspend itself is pinned",
+   "fate": "added",
+   "reason": "GF-2 T3: every clause of the format-2 probe comparison is reached (summary digest, overlay column, own step, renumbered ids, step 0, a gone id)"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a MODULE state that differs at a retained step moves the verdict by itself — the overlay, the summary and the outcome all agree (the narrower, format-1 clause still stands under format 2)",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: a module state that differs alone, and a void that went with its ablated target"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a void that WENT WITH its ablated target is not an ablated event: its own step re-folds the ledger without the target, which is the change under test",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: a module state that differs alone, and a void that went with its ablated target"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablateEvents — the ledger without a set of types, voids renumbered to where their targets now sit › a void of a void whose target is removed goes too (the chain is followed), and a void of something that stays is kept",
+   "fate": "added",
+   "reason": "GF-2 T3: ablateEvents follows a void of a void"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the undo stream strikes the KERNEL events that decide or end a match, and play carries on (review 2) › every undoable kernel event has a scenario that strikes it: the undo scenario the spliced ones, the settle scenario the rest (derived from UNDOABLE_KERNEL)",
+   "fate": "added",
+   "reason": "GF-2 T3: every undoable kernel event has a scenario that strikes it"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › floor batches — a floor is reproduced one maximal run at a time (GF-2 T3) › empty case first: a corpus with no stream, or no floor stream, has no batch",
+   "fate": "added",
+   "reason": "GF-2 T3: floor batches (maximal runs, corpusBefore, a config added after the floor, a floor that grew)"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › floor batches — a floor is reproduced one maximal run at a time (GF-2 T3) › a batch is a MAXIMAL run of consecutive floor streams: a generator walk between two runs splits them, two extends with nothing between are one",
+   "fate": "added",
+   "reason": "GF-2 T3: floor batches (maximal runs, corpusBefore, a config added after the floor, a floor that grew)"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › floor batches — a floor is reproduced one maximal run at a time (GF-2 T3) › corpusBefore keeps the streams before the index and ONLY the configs they reference, in the corpus's own order, without touching the corpus it was given",
+   "fate": "added",
+   "reason": "GF-2 T3: floor batches (maximal runs, corpusBefore, a config added after the floor, a floor that grew)"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › floor batches — a floor is reproduced one maximal run at a time (GF-2 T3) › a config added AFTER the floor changes what the floor derives under the old rule (every config the corpus holds) and not under the new one — carrom, where a draw-house config widens the requirement",
+   "fate": "added",
+   "reason": "GF-2 T3: floor batches (maximal runs, corpusBefore, a config added after the floor, a floor that grew)"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › floor batches — a floor is reproduced one maximal run at a time (GF-2 T3) › a floor that GREW after its first batch is two batches, and each reproduces from the streams preceding it (the older one as the first of what today's rules append)",
+   "fate": "added",
+   "reason": "GF-2 T3: floor batches (maximal runs, corpusBefore, a config added after the floor, a floor that grew)"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the settle and expunge stories (GF-2 T3) — each step is the kernel's own reading › the scenario order is the order a floor is reproduced in: settle and expunge are APPENDED after the GF-1 stories",
+   "fate": "added",
+   "reason": "GF-2 T3: the settle and expunge stories, each step the kernel's own reading"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the settle and expunge stories (GF-2 T3) — each step is the kernel's own reading › every sport has one settle stream; where the floor wants a withdrawal over a level result it is the level route, elsewhere the abandon route, and the kernel reads each step as the story says",
+   "fate": "added",
+   "reason": "GF-2 T3: the settle and expunge stories, each step the kernel's own reading"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the settle and expunge stories (GF-2 T3) — each step is the kernel's own reading › every sport has one expunge stream: the abandon takes the match off the table, its void puts it back, and play carries on to the result it had",
+   "fate": "added",
+   "reason": "GF-2 T3: the settle and expunge stories, each step the kernel's own reading"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the settle and expunge stories (GF-2 T3) — each step is the kernel's own reading › expungeStrike is the abandon the withdrawal cascade writes (expunge flagged) and is in force exactly while the kernel says expunged",
+   "fate": "added",
+   "reason": "GF-2 T3: the settle and expunge stories, each step the kernel's own reading"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › precondition: the stream is the level route (a withdrawal at n, its void, a settle, its void, a settle)",
+   "fate": "added",
+   "reason": "GF-2 T3: readsAs, the kernel's reading of a story step"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › settled: true only while a settle stands, false before it and after its void",
+   "fate": "added",
+   "reason": "GF-2 T3: readsAs, the kernel's reading of a story step"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › withdrawn: true only while the withdrawal laid over the level result stands",
+   "fate": "added",
+   "reason": "GF-2 T3: readsAs, the kernel's reading of a story step"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › expunged: true only while an expunging abandon stands, and a PLAIN abandon is not one",
+   "fate": "added",
+   "reason": "GF-2 T3: readsAs, the kernel's reading of a story step"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › every fact asked must hold (one wrong fact among right ones fails), and a fact not asked is not judged",
+   "fate": "added",
+   "reason": "GF-2 T3: readsAs, the kernel's reading of a story step"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › a ledger the fold REFUSES reads as nothing at all, whatever was asked (a settle over a match still live)",
+   "fate": "added",
+   "reason": "GF-2 T3: readsAs, the kernel's reading of a story step"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › settleStoryHolds — a story is kept only when EVERY step took effect (each step is defeated alone) › level route (football): the committed story holds, and defeating any ONE of its five kernel steps refuses it",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: settleStoryHolds, every kernel step defeated alone on both routes, and why a void needs no read of its own"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › settleStoryHolds — a story is kept only when EVERY step took effect (each step is defeated alone) › abandon route (badminton): the committed story holds, and defeating any ONE of its four kernel steps refuses it",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: settleStoryHolds, every kernel step defeated alone on both routes, and why a void needs no read of its own"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › settleStoryHolds — a story is kept only when EVERY step took effect (each step is defeated alone) › why a void needs no read of its own: a void that did not happen leaves its target standing, and the NEXT kernel event is refused by the strict fold",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: settleStoryHolds, every kernel step defeated alone on both routes, and why a void needs no read of its own"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › settleStoryHolds — a story is kept only when EVERY step took effect (each step is defeated alone) › a route is not interchangeable: the level story read as the abandon story (or the reverse) is refused",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: settleStoryHolds, every kernel step defeated alone on both routes, and why a void needs no read of its own"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › every overlay, undo and settle token the floor can require is SERVED by some scenario (a token no scenario serves can never be extended) › swept per sport: the required overlay:*, undo:* and event:core.settle tokens",
+   "fate": "added",
+   "reason": "GF-2 T3: every overlay, undo and settle token the floor can require is served by some scenario; the withdrawal story carries lineup changes while the squads owe a move"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the withdrawal story carries lineup changes whenever the squads still owe a move (GF-2 T3) › with overlay:squads:set the only hole, the story is built WITH lineup changes; with no hole it is not",
+   "fate": "added",
+   "reason": "GF-2 T3: every overlay, undo and settle token the floor can require is served by some scenario; the withdrawal story carries lineup changes while the squads owe a move"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › the withdrawal story carries lineup changes whenever the squads still owe a move (GF-2 T3) › the withdrawal story serves overlay:squads:set and the stoppage story serves both stoppage tokens",
+   "fate": "added",
+   "reason": "GF-2 T3: every overlay, undo and settle token the floor can require is served by some scenario; the withdrawal story carries lineup changes while the squads owe a move"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › overlayToken spells `overlay:<fact>:set|cleared`, and a stream's overlay contributes exactly the transitions it records",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › empty case first: a stream with no overlay (format 1), an empty overlay and an empty corpus record no overlay token",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › LEVEL_OUTCOME_TOKENS are the outcome kinds the kernel's own isLevelOutcome says are level",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › the facts are read off the fold's own keys (state excluded) in every sport, and are the facts the recorder records",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › overlayRequirement: a fact the kernel returns and the floor has no rule for is a named failure, and so is a rule for a fact it no longer returns",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › owner ruling (GF-2 design §4): stoppage, settlement and expunged owe set AND cleared, squads set; levelWithdrawal set AND cleared only where a level result is reachable",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › every sport requires the unconditional overlay tokens, and the level-withdrawal pair exactly where its floor requires a level outcome",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › empty case: an EMPTY corpus names every overlay token the sport requires as a hole (the floor cannot shrink by losing its streams)",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-floor.test.ts › golden floor — the kernel overlay is a token family of its own (GF-2 T3) › dropping the streams that hold an overlay token makes exactly that token a hole, naming the sport (teeth: the token is read off the recorded overlay)",
+   "fate": "added",
+   "reason": "GF-2 T3: the kernel overlay is a token family of its own (overlayToken, the facts off the fold's keys, the requirement and its empty case, teeth)"
+  },
+  {
+   "id": "src/testkit/golden-format.test.ts › rebaselineCorpus keeps the corpus's format › the streams a format-1 recording cannot reproduce are exactly the settle stories, in every sport (the kernel lays the settlement over the module's outcome)",
+   "fate": "added",
+   "reason": "GF-2 T3: a format-1 recording cannot reproduce the settle stories, in every sport"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › empty case first: the empty overlay sets and clears nothing",
+   "fate": "added",
+   "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › a column left at its default says nothing; one that leaves it SETS; one that returns CLEARS; one that leaves twice and returns once does both",
+   "fate": "added",
+   "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › a point at the default BEFORE the column ever left it is not a clear (the recorder never writes one; a hand-edited overlay must not read as one)",
+   "fate": "added",
+   "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › squads: any change point is a SET; a clear cannot be read from the stream alone (its default is the digest of the team sheets), so it is never claimed",
+   "fate": "added",
+   "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › refuses a malformed overlay by name rather than reading it as 'nothing happened'",
+   "fate": "added",
+   "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › both readers refuse the same malformed shapes by name — one shape check (overlayPairs) stands behind expandOverlay and overlayTransitions",
+   "fate": "added",
+   "reason": "GF-2 T3 mutation pass: both overlay readers refuse the same malformed shapes (one shape check)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › over the committed corpora: every column a stream records is read (swept, counted), and the transitions agree with expandOverlay's dense form",
+   "fate": "added",
+   "reason": "GF-2 T3: overlayTransitions, what a recorded overlay sets and clears (the floor reads it)"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › the static defaults are what a REAL fold of an empty ledger holds in every column but the squads — read off the fold, not off overlayDefaults, which spreads them",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: replaces the old static-defaults test (retired, below) which compared a table with its own spread; this one reads the defaults off a real fold of an empty ledger in all 11 sports"
+  },
+  {
+   "id": "src/testkit/golden-overlay.test.ts › overlayTransitions — which kernel facts a recorded overlay SETS and CLEARS (the floor reads these) › overlayDefaults is the static defaults plus the squads digest of the team sheets, and nothing else",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: the half of the old static-defaults test that was true: overlayDefaults is the table plus the squads digest"
+  },
+  {
+   "id": "src/testkit/golden-floor-streams.test.ts › readsAs — a story step is kept only when the kernel's own fold says it took effect › only the fold's own refusal reads as 'did not take effect': any other throw (a defect in a module) surfaces, it is not swallowed into a story that did not fit",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: readsAs now catches only EngineError; a non-EngineError throw must surface"
+  },
+  {
+   "id": "src/testkit/golden-policy.test.ts › GOLDEN-POLICY.md — what the guard cannot see names what the engine says it cannot › the sports with an abandonPolicy knob are the ones the policy names, every recorded config says 'replay', and 'award' makes the module answer an outcome after an abandon",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: the owed award-policy coverage names football, hockey and icehockey, derived from the parsed configs"
+  },
+  {
+   "id": "src/testkit/golden-policy.test.ts › GOLDEN-POLICY.md — what the guard cannot see names what the engine says it cannot › under the recorded configs only cricket's module answers an outcome after an abandon (the sentence the policy rests on), swept over every sport",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: the sentence the policy rests on, swept over every sport and every recorded config"
+  },
+  {
+   "id": "src/testkit/golden-policy.test.ts › GOLDEN-POLICY.md — what the guard cannot see names what the engine says it cannot › the widening-a-refusal bullet names both refusals by the code the kernel throws, and the kernel still throws them",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: widening a kernel refusal moves no golden; the policy names X-AB-4 and the settle admission by code"
+  },
+  {
+   "id": "src/testkit/golden-budget.test.ts › sweepBudget — a sweep's time budget is stated from the work, so it moves with the registry › one more sport costs exactly one sport's work more, for every kind, and the default is the whole registry",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: sweep budgets are sports x per-sport cost, not flat literals"
+  },
+  {
+   "id": "src/testkit/golden-budget.test.ts › sweepBudget — a sweep's time budget is stated from the work, so it moves with the registry › the kinds are ordered by cost (reading a corpus < probing it < rebuilding its floor) and every budget leaves room above a bare vitest default",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: ordering of the three kinds of sweep work"
+  },
+  {
+   "id": "src/testkit/golden-budget.test.ts › sweepBudget — a sweep's time budget is stated from the work, so it moves with the registry › refuses a count that is not a sport count, never reads it as free",
+   "fate": "added",
+   "reason": "GF-2 T3 review fix: a zero, negative, fractional or NaN sport count is refused"
+  }
+ ]
+}

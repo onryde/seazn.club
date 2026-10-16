@@ -13,6 +13,10 @@
 //               kernel-only, so the module walk underneath is the generator's own and keeps its natural outcome (which
 //               is how a drawn football match, a tied cricket match are found: by the walk's seed, then dressed).
 //  abandon    — play, a suspension that is never lifted, then the abandon.
+//  settle     — (GF-2 T3) the organiser's word over a match the module cannot decide: where the sport can end level, a level
+//               result, a withdrawal laid over it (X-WD-1), that withdrawal struck, a settle (X-ST-1), the settle struck, a
+//               second settle by another method; where it cannot, an abandon in its place. Every step is folded and checked.
+//  expunge    — (GF-2 T3) a withdrawal cascade's abandon{expunge} (D5) mid-match, struck at once, and play on to the result.
 //  walkover / double walkover / retired / disqualified / withdrew — a `core.forfeit` of each reason the kernel's phase
 //               guard admits, after the play that reason needs. The withdrawal also carries the lineup changes (a
 //               retirement, an entry, a substitution, a position change, an exempt replacement where the policy has
@@ -26,8 +30,21 @@ import { mulberry32, type Rng } from "../core/rng.ts";
 import type { LineupPair } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
-import { recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
-import { eventToken, floorHoles, lineupOffers, outcomeToken, outcomeTokenOf, standingToken, STANDING_KERNEL, undoToken, UNDOABLE_KERNEL, type FloorToken } from "./golden-floor.ts";
+import { corpusFormat, recomputeStream, slimStream, storedFields, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
+import {
+  eventToken,
+  floorHoles,
+  lineupOffers,
+  outcomeToken,
+  outcomeTokenOf,
+  overlayToken,
+  standingToken,
+  statsAwardToken,
+  STANDING_KERNEL,
+  undoToken,
+  UNDOABLE_KERNEL,
+  type FloorToken,
+} from "./golden-floor.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -72,8 +89,9 @@ function folds(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly Gol
   }
 }
 
-/** The MODULE's outcome of a state — what the corpora record (GOLDEN-POLICY), the one bare read in this file. No floor
- *  stream carries `core.settle` (it is exempt, `FLOOR_EXEMPTIONS`), so a settle that would move it cannot occur. */
+/** The MODULE's outcome of a state — what the corpora record (GOLDEN-POLICY), the one bare read in this file. No ledger it
+ *  reads carries a `core.settle` (a settle's win is the kernel's reading, `effectiveToken` and `readsAs`, and the settle story
+ *  asks those), so the module's own outcome is the whole answer wherever this is used. */
 function moduleOutcome(ctx: Ctx, state: unknown): ReturnType<AnySportModule["outcome"]> {
   return ctx.module.outcome(state);
 }
@@ -90,6 +108,11 @@ function effectiveToken(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: rea
   const folded = foldMatchWithStoppage(ctx.module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), STRICT_ALL);
   const outcome = outcomeOf(ctx.module as never, folded as never);
   return outcome === null ? null : outcomeTokenOf(JSON.stringify(outcome));
+}
+
+/** The kernel's whole reading of a ledger (state, stoppage, squads, settlement, expunged, levelWithdrawal), strictly. */
+function foldKernel(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[]): ReturnType<typeof foldMatchWithStoppage> {
+  return foldMatchWithStoppage(ctx.module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), STRICT_ALL);
 }
 
 /** The per-side score lines of a state, as one comparable string: what a scorer sees move when a point is struck. */
@@ -197,6 +220,24 @@ export function kernelStrikes(lineups: LineupPair): readonly KernelStrike[] {
     { type: "core.forfeit", event: ev("core.forfeit", { by: lineups.home.entrantId, reason: "retired" }), needsPlay: true, inForce: forfeitInForce },
     { type: "core.abandon", event: ev("core.abandon", { reason: "rain: the ground is waterlogged, called off, then play resumed" }), needsPlay: false, inForce: abandonInForce },
   ];
+}
+
+/** The kernel events `buildUndo` splices into a live match and strikes. The settle is in `UNDOABLE_KERNEL` too, but it cannot be
+ *  spliced mid-play (a settle applies only to a level or abandoned match), so its undo is the settle story's. */
+export const SPLICED_KERNEL: readonly string[] = ["core.forfeit", "core.abandon"];
+
+/** An abandon the withdrawal cascade writes (D5): the match leaves the table, `outcomeOf` reads null while it is active. */
+const expungeInForce: KernelStrike["inForce"] = (ctx, cfg, lineups, events) => foldKernel(ctx, cfg, lineups, events).expunged;
+
+/** The expunging abandon, as a strike: spliced mid-match, struck at once, and the walk plays on. Not one of `kernelStrikes` (those
+ *  are `UNDOABLE_KERNEL`'s types; an expunge is an abandon with a flag, the same type). */
+export function expungeStrike(): KernelStrike {
+  return {
+    type: "core.abandon",
+    event: ev("core.abandon", { reason: "withdrawal: the entrant left the competition, this match leaves the table", expunge: true }),
+    needsPlay: false,
+    inForce: expungeInForce,
+  };
 }
 
 /** Records the strike's event at a point of `ledger` where the match is live and the kernel admits it, strikes it with
@@ -385,7 +426,7 @@ const FORFEIT_STORIES: Readonly<Record<string, ForfeitStory>> = {
 function buildForfeit(ctx: Ctx, story: ForfeitStory): Built | null {
   // The withdrawal story carries lineup changes when the floor still wants them, in the config whose policy accepts the
   // most types (cricket's `mutable`, football's `concussed`, volleyball's libero default).
-  const wantsLineup = story.lineup === true && [...ctx.holes].some((t) => t.startsWith("event:core.lineup."));
+  const wantsLineup = story.lineup === true && [...ctx.holes].some((t) => t.startsWith("event:core.lineup.") || t === overlayToken("squads", "set"));
   const offers = wantsLineup ? lineupOffers(ctx.module, ctx.corpus) : [];
   const best = offers.reduce<(typeof offers)[number] | null>((a, o) => (a === null || o.plan.accepted.length > a.plan.accepted.length ? o : a), null);
   const cfgNames = best === null ? ctx.cfgNames : [best.cfgName];
@@ -410,6 +451,165 @@ function buildForfeit(ctx: Ctx, story: ForfeitStory): Built | null {
   return null;
 }
 
+// ------------------------------------------------------------------------------------------------------- settle
+
+/** The kernel's reading of `events`, asserted fact by fact: the story below is only kept when the FOLD says each step took
+ *  effect (never because the builder believes it did). False = a step did not take effect, or the ledger is refused. A fact the
+ *  caller does not name is not asked. A ledger the fold REFUSES (an `EngineError`) reads as nothing; any other throw is rethrown. */
+export function readsAs(ctx: Ctx, cfg: unknown, lineups: LineupPair, events: readonly GoldenEvent[], expect: { settled?: boolean; withdrawn?: boolean; expunged?: boolean }): boolean {
+  try {
+    const folded = foldKernel(ctx, cfg, lineups, events);
+    return (
+      (expect.settled === undefined || (folded.settlement !== null) === expect.settled) &&
+      (expect.withdrawn === undefined || (folded.levelWithdrawal !== null) === expect.withdrawn) &&
+      (expect.expunged === undefined || folded.expunged === expect.expunged)
+    );
+  } catch (error) {
+    // Only the fold's own refusal reads as "this step did not take effect"; anything else (a TypeError in a module, a bad
+    // payload shape) is a defect and must surface, not read as a story that merely did not fit.
+    if (error instanceof EngineError) return false;
+    throw error;
+  }
+}
+
+/** A settle: the organiser's word that decides a match the module cannot (X-ST-1), then struck, then said again by lot. */
+const settleEvent = (winner: string, method: "organiser" | "lot"): GoldenEvent =>
+  ev("core.settle", { winner, method, note: method === "organiser" ? "the committee's decision" : "drawn by lot at the table" });
+
+/** Whether a settle story's ledger is read by the kernel the way the story says, prefix by prefix (`n` = the index of its first
+ *  kernel event: the withdrawal on the level route, the abandon on the other). Every step is asked of the FOLD, never of the
+ *  builder's belief, and each prefix is asked its own fact, so a step that folds but did not take effect (a settle in front of
+ *  a match the module already decided) refuses the whole story. Each fact is asked once, at the prefix that can show it, and a
+ *  read the kernel's own refusals already make is not repeated: a void that did not take effect leaves its target standing, and
+ *  the NEXT kernel event is then refused by the strict fold (a settle over a standing withdrawal, a settle over a standing
+ *  settle: pinned in the story test), so "its void took effect" is the next read's success, not a read of its own.
+ *
+ *  A settle that stands is a WIN for the side it names (X-ST-1): that is the kernel's law, read per sport and per step by the
+ *  story test (golden-floor-streams.test.ts), so no outcome token is asked here. */
+export function settleStoryHolds(ctx: Ctx, cfg: unknown, lineups: LineupPair, ledger: readonly GoldenEvent[], n: number, route: "level" | "abandon"): boolean {
+  const at = (count: number): GoldenEvent[] => ledger.slice(0, count);
+  if (route === "level") {
+    return (
+      readsAs(ctx, cfg, lineups, at(n + 1), { withdrawn: true }) && //  the withdrawal is laid over the level result
+      readsAs(ctx, cfg, lineups, at(n + 3), { settled: true }) && //   the withdrawal's void, then the settle that decides
+      readsAs(ctx, cfg, lineups, ledger, { settled: true }) //         the settle's void, then a settle by lot
+    );
+  }
+  return (
+    readsAs(ctx, cfg, lineups, at(n + 2), { settled: true }) && //   the settle decides an abandoned match
+    readsAs(ctx, cfg, lineups, ledger, { settled: true }) //         its void, then a settle by lot
+  );
+}
+
+/** Where the sport can end level: a level result, a withdrawal laid over it (X-WD-1: an award the kernel keeps beside module
+ *  state), that withdrawal struck (the level result is back), a settle (X-ST-1), the settle struck, a settle by another method.
+ *  Where it cannot: a live match abandoned, the same settle, struck, said again. Every step is folded and read back from the
+ *  kernel's own answer before the ledger is returned. */
+function buildSettle(ctx: Ctx): Built | null {
+  // The level route only where the floor still wants a withdrawal over a level result (the kernel fact exists there alone).
+  const wantsLevel = [overlayToken("levelWithdrawal", "set"), overlayToken("levelWithdrawal", "cleared")].some((t) => ctx.holes.has(t));
+  for (const cfgName of ctx.cfgNames) {
+    const cfg = parsed(ctx, cfgName);
+    const lineups = defaultLineups(ctx, cfg);
+    const home = lineups.home.entrantId;
+    const away = lineups.away.entrantId;
+    if (wantsLevel) {
+      for (let seed = 1; seed <= SEED_BUDGET; seed++) {
+        // (a walk that did not end level is refused by the readback below: no withdrawal is laid over a decided result)
+        const walk = naturalWalk(ctx, cfg, lineups, seed);
+        if (walk === null) continue;
+        const n = walk.events.length;
+        const ledger: GoldenEvent[] = [
+          ...walk.events,
+          ev("core.forfeit", { by: home, reason: "withdrew" }), //   n
+          voidOf(n), //                                              n + 1: the level result is back
+          settleEvent(home, "organiser"), //                         n + 2
+          voidOf(n + 2), //                                          n + 3
+          settleEvent(away, "lot"), //                               n + 4
+        ];
+        if (settleStoryHolds(ctx, cfg, lineups, ledger, n, "level")) {
+          return { config: cfgName, seed: 9 * FLOOR_SEED_STRIDE + seed, events: ledger };
+        }
+      }
+      continue;
+    }
+    for (let seed = 1; seed <= 40; seed++) {
+      for (const k of [3, 1, 0]) {
+        const prefix = livePrefix(ctx, cfg, lineups, seed, k);
+        if (prefix === null) continue;
+        const n = prefix.length;
+        const ledger: GoldenEvent[] = [
+          ...prefix,
+          ev("core.abandon", { reason: "the venue closed: result to be decided by the organiser" }), // n
+          settleEvent(home, "organiser"), //                                                           n + 1
+          voidOf(n + 1), //                                                                            n + 2
+          settleEvent(away, "lot"), //                                                                 n + 3
+        ];
+        if (settleStoryHolds(ctx, cfg, lineups, ledger, n, "abandon")) {
+          return { config: cfgName, seed: 9 * FLOOR_SEED_STRIDE + seed, events: ledger };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------------------------------------------- expunge
+
+/** A withdrawal cascade's abandon (D5): `core.abandon{expunge}` takes the match off the table, struck at once (the entrant is
+ *  reinstated), and play carries on to the result it always had. The cascade's real order is "void everything newest-first, then
+ *  abandon"; this is the mid-match story that leaves the expunge in the ledger. */
+function buildExpunge(ctx: Ctx): Built | null {
+  for (const cfgName of ctx.cfgNames) {
+    const cfg = parsed(ctx, cfgName);
+    const lineups = defaultLineups(ctx, cfg);
+    for (let seed = 1; seed <= 300; seed++) {
+      const walk = naturalWalk(ctx, cfg, lineups, seed);
+      if (walk === null) continue;
+      const spliced = strikeKernelEvent(ctx, cfg, lineups, walk.events, expungeStrike(), 1);
+      if (spliced === null) continue;
+      // (The tail plays on exactly as the bare walk did - strikeKernelEvent folds the reopened ledger to the very state it
+      // held before the strike - and the story test reads the result of every committed stream against its bare walk's.)
+      return { config: cfgName, seed: 10 * FLOOR_SEED_STRIDE + seed, events: spliced };
+    }
+  }
+  return null;
+}
+
+// -------------------------------------------------------------------------------------------------------- award
+
+/** An award the sport DECLARES (`playerStats.awards`), given and struck: the match is played out, an award goes to a home player
+ *  (and is struck at once, so the undo of an award is on the record), then the same award to an away player stands. Where the
+ *  sport declares no award key there is no such token and this builds nothing.
+ *
+ *  Nothing here asks the stats fold whether the story took effect: `extendFloor` keeps a stream only when it closes a hole, and the
+ *  hole is the credit itself (`stats:award:<key>`, read off the recorded rows), so a story that credited nobody is dropped and named
+ *  in `stillMissing`. What the story is FOR (the struck award credits nobody, the standing one its person once) is read off every
+ *  committed award stream by the story test (golden-floor-streams.test.ts). */
+function buildAward(ctx: Ctx): Built | null {
+  const keys = (ctx.module.playerStats?.awards ?? []).map((a) => a.key).filter((key) => ctx.holes.has(statsAwardToken(key)));
+  if (keys.length === 0) return null;
+  for (const cfgName of ctx.cfgNames) {
+    const cfg = parsed(ctx, cfgName);
+    const lineups = defaultLineups(ctx, cfg);
+    const home = lineups.home.slots[0]?.personId;
+    const away = lineups.away.slots[0]?.personId;
+    if (home === undefined || away === undefined || home === away) continue;
+    for (let seed = 1; seed <= SEED_BUDGET; seed++) {
+      const walk = naturalWalk(ctx, cfg, lineups, seed);
+      if (walk === null) continue;
+      const events: GoldenEvent[] = [...walk.events];
+      for (const key of keys) {
+        const first = events.length;
+        events.push(ev("core.award", { person: home, key }), voidOf(first), ev("core.award", { person: away, key }));
+      }
+      if (!folds(ctx, cfg, lineups, events)) continue;
+      return { config: cfgName, seed: 11 * FLOOR_SEED_STRIDE + seed, events };
+    }
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------------------------------------------ driver
 
 export interface Scenario {
@@ -422,7 +622,8 @@ export interface Scenario {
 export const SCENARIOS: readonly Scenario[] = [
   {
     id: "undo",
-    serves: () => [eventToken("core.void"), ...UNDOABLE_KERNEL.map(undoToken)],
+    // (the settle's undo is the settle story's: a settle cannot be spliced into a live match)
+    serves: () => [eventToken("core.void"), ...SPLICED_KERNEL.map(undoToken)],
     build: buildUndo,
   },
   {
@@ -430,6 +631,8 @@ export const SCENARIOS: readonly Scenario[] = [
     serves: () => [
       ...["core.suspend", "core.resume", "core.note", "core.award", "core.finalize"].map(eventToken),
       ...NATURAL_PREFERENCE.map(outcomeToken),
+      overlayToken("stoppage", "set"),
+      overlayToken("stoppage", "cleared"),
     ],
     build: buildStoppage,
   },
@@ -440,9 +643,23 @@ export const SCENARIOS: readonly Scenario[] = [
   { id: "disqualified", serves: () => [outcomeToken("award:disqualified")], build: (c) => buildForfeit(c, FORFEIT_STORIES.disqualified!) },
   {
     id: "withdrew",
-    serves: (c) => [outcomeToken("award:withdrew"), ...[...c.holes].filter((t) => t.startsWith("event:core.lineup."))],
+    serves: (c) => [outcomeToken("award:withdrew"), overlayToken("squads", "set"), ...[...c.holes].filter((t) => t.startsWith("event:core.lineup."))],
     build: (c) => buildForfeit(c, FORFEIT_STORIES.withdrew!),
   },
+  // GF-2 T3. APPENDED, never inserted: a floor batch is reproduced by running the scenarios in this order, and a stream an
+  // earlier scenario built must not depend on one added later.
+  {
+    id: "settle",
+    serves: () => [
+      eventToken("core.settle"),
+      undoToken("core.settle"),
+      ...(["settlement", "levelWithdrawal"] as const).flatMap((fact) => [overlayToken(fact, "set"), overlayToken(fact, "cleared")]),
+    ],
+    build: buildSettle,
+  },
+  { id: "expunge", serves: () => [overlayToken("expunged", "set"), overlayToken("expunged", "cleared")], build: buildExpunge },
+  // GF-2 T4, appended for the same reason: an award the sport declares, credited in the player-stats rows format 3 records.
+  { id: "award", serves: (c) => (c.module.playerStats?.awards ?? []).map((a) => statsAwardToken(a.key)), build: buildAward },
 ];
 
 export interface FloorExtension {
@@ -473,7 +690,7 @@ export function extendFloor(module: AnySportModule, existing: GoldenCorpus, scen
       seed: built.seed,
       ...(built.lineups === undefined ? {} : { lineups: built.lineups }),
       events: built.events,
-      ...recomputeStream(module, raw, built.events, built.lineups),
+      ...storedFields(recomputeStream(module, raw, built.events, built.lineups, corpusFormat(existing))),
     };
     const grown: GoldenCorpus = { ...corpus, streams: [...corpus.streams, slimStream(module, corpus, stream)] };
     const after = new Set(floorHoles(module, grown));
@@ -484,4 +701,50 @@ export function extendFloor(module: AnySportModule, existing: GoldenCorpus, scen
     appended.push(`${scenario.id} ${built.config}:${built.seed}`);
   }
   return { corpus, appended, stillMissing: [...holes] };
+}
+
+// ------------------------------------------------------------------------------------------------- floor batches
+//
+// A floor stream is one `extendFloor` appended, and it was DERIVED from the corpus as it stood: the streams before it (the
+// recorded events a scenario borrows, the identities it must not reuse) and the configs the corpus held (which outcomes the sport
+// can reach decides what the floor requires, and which config a scenario builds in). Reproducing every floor stream "from the
+// corpus before the first one" therefore only holds while nothing is added to the corpus after the floor: a config a later wave
+// adds changes what the floor derives (W2c measured it: a carrom config that allows draws moved the stoppage story to another
+// config), and a second floor batch could never match. So a floor is reproduced one BATCH at a time.
+
+/** A floor stream is one whose seed is `scenarioIndex * FLOOR_SEED_STRIDE + generatorSeed`; a generator walk's seed is below the stride. */
+export const isFloorStream = (stream: { readonly seed: number }): boolean => stream.seed >= FLOOR_SEED_STRIDE;
+
+/** One maximal run of consecutive floor streams: what ONE `EXTEND_GOLDEN` appended (two extends with nothing between them are one
+ *  run, and are reproduced together). `start` is the index of its first stream in the corpus. */
+export interface FloorBatch {
+  readonly start: number;
+  readonly streams: readonly GoldenStream[];
+}
+
+export function floorBatches(corpus: GoldenCorpus): FloorBatch[] {
+  const out: { start: number; streams: GoldenStream[] }[] = [];
+  corpus.streams.forEach((stream, index) => {
+    if (!isFloorStream(stream)) return;
+    const last = out[out.length - 1];
+    if (last !== undefined && last.start + last.streams.length === index) last.streams.push(stream);
+    else out.push({ start: index, streams: [stream] });
+  });
+  return out;
+}
+
+/** The corpus as a floor batch starting at `index` saw it: the streams before it, and ONLY the configs those streams reference
+ *  (a config added after the batch was not there to be built in, nor to widen the floor). */
+export function corpusBefore(corpus: GoldenCorpus, index: number): GoldenCorpus {
+  const streams = corpus.streams.slice(0, index);
+  const referenced = new Set(streams.map((s) => s.config));
+  const configs = Object.fromEntries(Object.entries(corpus.configs).filter(([name]) => referenced.has(name)));
+  return { ...corpus, configs, streams };
+}
+
+/** What `extendFloor` appends to `corpusBefore(corpus, batch.start)` today. A batch is reproduced when its streams are the FIRST
+ *  of these (a later batch exists because the floor grew after this one; today's rules would append those streams here too). */
+export function reproduceFloorBatch(module: AnySportModule, corpus: GoldenCorpus, batch: FloorBatch, scenarios: readonly Scenario[] = SCENARIOS): GoldenStream[] {
+  const base = corpusBefore(corpus, batch.start);
+  return extendFloor(module, base, scenarios).corpus.streams.slice(base.streams.length);
 }

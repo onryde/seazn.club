@@ -137,9 +137,10 @@ before they update. There is no grace window, so this ordering is the only prote
   states), a harness-only rewrite that moves a state string, a removed or re-recorded golden stream, and anything the guard cannot see
   (§4) are MAJOR. Anything ambiguous is a MAJOR. The pair goes up lexicographically, and a MAJOR bump may reset the minor to 0.
 - **The phone contract this rests on (recommendation; put it to your owner).** The app must not compute or render `standingsDelta`,
-  `supportsDraws`, or credit on any metric the match summary does not show. `standingsDelta` is exported from the same `./sport` closure,
+  `supportsDraws`, or credit on any metric the match summary does not show, and a phone must not compute or render player stats
+  (`aggregatePlayerStats` and the leaderboard rows it feeds: GF-2 T4 records them in the corpora as a MINOR, owner ruling Q2). `standingsDelta` is exported from the same `./sport` closure,
   so no type stops a phone from calling it. If the app ever does, a MINOR stops meaning "no app update" and D34 has to be revisited
-  before it does. The statement is also in the header of `packages/engine/src/sport/fold-epoch.ts`.
+  before it does. The standings half of the statement (`standingsDelta`, `supportsDraws`, credit) is also in the header of `packages/engine/src/sport/fold-epoch.ts`; the player-stats half is not there yet (that file is fold source, so editing its header owes a MAJOR) and should be added to the header the next time fold source is touched.
 
 **The server's state is already returned, and is the record (exists today; S2 should use it).** Every `201` carries the server's
 own fold of the ledger up to that event: `state_summary`, `outcome`, `status`. `GET /api/v1/fixtures/{id}/state` serves the full
@@ -159,21 +160,33 @@ rules instead needs an epoch per division or fixture, which does not exist.
 
 ## 4. Known limits of the epoch guard (do not rely on it for more than it does)
 
-- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Those pin the **module layer** only. The golden
-  floor (#962, `src/testkit/golden-floor.test.ts`) now makes every sport's corpus record every `core.*` event the kernel accepts, bar
-  `core.settle`, and every outcome kind the module can produce. Recording is not pinning: pause/resume (`core.suspend` / `core.resume`),
-  notes, awards and any lineup change a module does not read are recorded but move no golden (the floor's `OVERLAY_CLAIMS` list names
-  them and goes red the day one starts to). `core.settle` (the floor's one exemption) is not recorded at all. A change to how any of these
-  folds owes a MANUAL MAJOR of every sport it reaches. GF-2 (record the kernel overlay so the guard can compare it) is the follow-up, and
-  until it lands that list is the list of manual bumps.
-- **Kernel overlays are not pinned**: the kernel's `outcomeOf` / `summaryOf` (settlement, expunge, withdrawal over a held level
-  result), stoppage, and `forfeit-credit.ts`. A rule change there moves no golden and does NOT force a bump: it owes a MANUAL MAJOR of
-  every sport it reaches. See `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
+- The guard compares the golden corpora (`packages/engine/src/sports/*/*.golden.json`). Since GF-2 they are **format 3**: besides the
+  module's states they record the **effective** outcome and summary (`outcomeOf` / `summaryOf`: a settlement, an expunge, a withdrawal
+  over a held level result laid over the module's answer), a summary digest after every event, the kernel overlay beside module
+  state (stoppage, squads, settlement, expunged, levelWithdrawal, a pending decider) and each fixture's final player-stat rows
+  (`playerStats`, a MINOR: only the server computes them). The golden floor (`src/testkit/golden-floor.test.ts`)
+  makes every sport's corpus record every `core.*` event the kernel accepts, including `core.settle`, every outcome kind the module can
+  produce, and each overlay fact leaving its kernel default and coming back. So a change to how the kernel computes any of those moves a
+  golden and owes a bump the guard now announces; it is no longer a manual MAJOR. A pause, a lineup change a module does not read,
+  mid-match summaries and the kernel's side of an undo were on this list and are off it.
+- **Still not pinned, and so still a MANUAL bump of every sport it reaches:** a note (all eleven sports) and an award in the eight
+  sports that declare no award key (the floor's `OVERLAY_CLAIMS` names them and goes red the day one starts to move a golden; football's
+  `motm`, hockey's `potm` and icehockey's `mvp` are pinned since GF-2 T4, through the stat rows). A change to how a MODULE folds either
+  (the state it keeps, which a phone computes) owes a **MAJOR**; a change to how the player-statistics fold treats an award key a sport does
+  not declare is server-only and owes a **MINOR**, by hand (owner ruling Q2). The rest of this list is MAJOR: `forfeit-credit.ts` where no corpus has
+  a forfeit that reaches it, a path no stream exercises (for example the expunge of an `abandonPolicy: "award"` football, hockey or
+  icehockey match: no recorded config sets it), and a widening of a kernel REFUSAL (X-AB-4 `ABANDONED_SETTLE_OR_VOID`, the settle
+  admission `SETTLE_NOT_APPLICABLE`: a refused ledger was never recorded, so accepting more moves no byte). See
+  `packages/engine/src/testkit/GOLDEN-POLICY.md`, "What the guard cannot see".
+- **Player statistics (`src/stats/stats.ts`) are a guarded MINOR, with a manual MINOR outside the recorded rows** (owner ruling Q2). Format 3
+  records each fixture's final rows, so a change to how a recorded stat folds moves a golden and owes a `FOLD_MINOR` the guard announces.
+  What the recorded rows do not show owes a MANUAL MINOR, raised by hand: a stat no stream earns, an award key no stream credits, the
+  division sum and re-derivation, the merged-person relabel, the entrant kind and the lineup pair the server hands the fold (the list is in
+  GOLDEN-POLICY.md, "What the guard cannot see"). Raising `STATS_FOLD_VERSION` (an engine constant, `src/stats/stats.ts`) when the fold's
+  output changes is a separate manual obligation the guard does not enforce.
 - A harness-only rewrite of a corpus (a state string that moves without changing its meaning) is a MAJOR bump and locks out every
   older phone of that sport; the guard cannot tell it from a real change. A deltas-only
   change is a MINOR bump (D34) and locks nobody out.
-- Also invisible to both halves, and so owed a MANUAL MAJOR: mid-match summaries (the corpus records `summary(finalState)` only; the pad
-  recomputes it after every event) and player-statistics folds (`src/stats/stats.ts`). See `GOLDEN-POLICY.md`, "What the guard cannot see".
 
 ## 5. Checklist for S2
 
@@ -184,7 +197,7 @@ rules instead needs an epoch per division or fixture, which does not exist.
 - [ ] Reconcile the optimistic fold against the `201` body's `state_summary` / `outcome` / `status` on every ack.
 - [ ] Only the named `sport` blocked; other sports keep scoring.
 - [ ] A test that drives the real queue through a faked epoch bump (the usecase tests' way), not a mocked transport.
-- [ ] The app never computes or renders `standingsDelta`, `supportsDraws` or non-headline credit (the phone contract in §3); if it must,
+- [ ] The app never computes or renders `standingsDelta`, `supportsDraws`, non-headline credit or player stats (the phone contract in §3); if it must,
       put D34 back in front of your owner first.
 - [ ] A MINOR change never blocks scoring; at most an optional "update available" prompt.
 - [ ] Re-read this file against `main` when S2 starts: 1f is merged (#961), and 1e-M (D34) is merged once its PR lands, so check that

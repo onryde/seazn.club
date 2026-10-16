@@ -20,7 +20,7 @@ const SPORTS_DIR = "src/sports";
 const EPOCH_FILE = "src/sport/fold-epoch.ts";
 const GUARD = "scripts/fold-epoch-guard.ts";
 
-interface Corpus { key: string; configs: Record<string, Record<string, unknown>>; streams: Array<Record<string, unknown>> }
+interface Corpus { key: string; format?: number; configs: Record<string, Record<string, unknown>>; streams: Array<Record<string, unknown>> }
 
 /** Every corpus file under src/sports, relative to it (`setbased/badminton.golden.json`). */
 const CORPORA = (readdirSync(join(ENGINE, SPORTS_DIR), { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json")).sort();
@@ -36,7 +36,10 @@ const cleanEnv = (): NodeJS.ProcessEnv => {
   for (const k of Object.keys(env)) if (k.startsWith("GIT_")) delete env[k];
   return env;
 };
+/** Every git process this file starts through `git()`: a rig's budget is checked against what it really spawned. */
+let gitSpawns = 0;
 function git(cwd: string, ...args: string[]): string {
+  gitSpawns++;
   const r = spawnSync("git", ["-C", cwd, "-c", "user.email=epoch@example.invalid", "-c", "user.name=Epoch", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=always", ...args], { encoding: "utf8", env: cleanEnv() });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
@@ -91,7 +94,15 @@ function makeRepo(name: string, prefix: string): Repo {
   git(top, "tag", "base");
   return { top, eng };
 }
-const BUILD_MS = 60_000;
+// A beforeAll's budget is derived from the work it does (AGENTS.md class 20: a flat timeout beside a derived cost is a latent red - the
+// old flat 60 s / 120 s timed out at load 100+): the repositories it builds times the git spawns each costs, at the spawn cap the other
+// tests here use.
+/** git spawns to build one scratch repository (`makeRepo`): init, one config per NO_AUTO_PACK entry, add, commit, tag. */
+const REPO_SPAWNS = 4 + NO_AUTO_PACK.length;
+/** ... and what `makeFormatRepo` adds on top of that: three `commit`s (add, commit, rev-parse each) and three tags. */
+const FORMAT_REPO_EXTRA_SPAWNS = 3 * 3 + 3;
+const BUILD_MS = spawnBudget(2 * REPO_SPAWNS); // mono and rooted
+const FORMAT_BUILD_MS = spawnBudget(2 * (REPO_SPAWNS + FORMAT_REPO_EXTRA_SPAWNS)); // fmtMono and fmtRooted
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "fold-epoch-guard-"));
   for (const f of CORPORA) {
@@ -154,6 +165,13 @@ function realEntry(table: "FOLD_EPOCH" | "FOLD_MINOR", sport: string): number {
   if (found === undefined) throw new Error(`${sport} has no entry in ${table}`);
   return Number(found);
 }
+/** The live entries, read when asked. A fixture below never holds a literal for what the table says: the first real bump (boardgame 1 -> 2
+ *  in W2c, the lineup follow-up after it) would falsify it, and the scratch repositories start from the live table. */
+const epochOf = (sport: string): number => realEntry("FOLD_EPOCH", sport);
+const minorOf = (sport: string): number => realEntry("FOLD_MINOR", sport);
+/** `epoch a -> b, minor c -> d` as the report spells it for a sport that starts at the live entries and moves by the given steps. */
+const move = (sport: string, epochBy = 0, minorBy = 0): string =>
+  `epoch ${epochOf(sport)} -> ${epochOf(sport) + epochBy}, minor ${minorOf(sport)} -> ${minorOf(sport) + minorBy}`;
 /** The table as it was before FOLD_MINOR existed: no FOLD_MINOR declaration at all. */
 function withoutMinor(text: string): string {
   const from = text.indexOf(MINOR_DECL);
@@ -261,7 +279,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([FIRST]);
-    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 1, minor 0 -> 0, matched \d+ changed 1 deltas-only 0 removed 0 added 0 - VIOLATION: major owed.*1 stream\(s\) fold differently/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`${move(FIRST)}, matched \\d+ changed 1 deltas-only 0 removed 0 added 0 recorded 0 - VIOLATION: major owed.*1 stream\\(s\\) fold differently`));
     expect(r.stdout).toContain(summary(realSports, realStreams, "HEAD^1", 1));
     expect(r.stderr).toBe("");
     // and what to do about it: the entry, the number (read from the baseline's own table, not typed here), the file as git spells it, the command
@@ -274,11 +292,11 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
   spawnIt(3)("the same change with that sport's bump is green, and the report shows the epoch moving", () => {
     atBase(mono);
     moveOutcome(mono, FIRST);
-    setEpoch(mono, FIRST, 2);
+    setEpoch(mono, FIRST, epochOf(FIRST) + 1);
     commit(mono, "rule fix with bump");
     const r = guard(mono);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 1 deltas-only 0 removed 0 added 0$/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`${move(FIRST, 1)}, matched \\d+ changed 1 deltas-only 0 removed 0 added 0 recorded 0$`));
     expect(violated(r.stdout)).toEqual([]);
   });
 
@@ -308,11 +326,11 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
       const red = guard(mono);
       expect(red.status, knob).toBe(1);
       expect(violated(red.stdout), knob).toEqual(["badminton"]);
-      expect(lineOf(red.stdout, "badminton"), knob).toMatch(/changed 0 deltas-only 0 removed [1-9]\d* added [1-9]\d* - VIOLATION: major owed/);
+      expect(lineOf(red.stdout, "badminton"), knob).toMatch(/changed 0 deltas-only 0 removed [1-9]\d* added [1-9]\d* recorded 0 - VIOLATION: major owed/);
 
       atBase(mono);
       launder();
-      setEpoch(mono, "badminton", 2);
+      setEpoch(mono, "badminton", epochOf("badminton") + 1);
       commit(mono, `${knob} written out explicitly, with the bump`);
       expect(guard(mono).status, `${knob} with the bump`).toBe(0);
     }
@@ -325,11 +343,11 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     const red = guard(mono);
     expect(red.status).toBe(1);
     expect(violated(red.stdout)).toEqual([FIRST]);
-    expect(lineOf(red.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 1 added 0 - VIOLATION: major owed/);
+    expect(lineOf(red.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 1 added 0 recorded 0 - VIOLATION: major owed/);
 
     atBase(mono);
     editCorpus(mono, FIRST, (c) => { c.streams.pop(); });
-    setEpoch(mono, FIRST, 2);
+    setEpoch(mono, FIRST, epochOf(FIRST) + 1);
     commit(mono, "stream removed, bumped");
     expect(guard(mono).status).toBe(0);
 
@@ -338,7 +356,7 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     commit(mono, "stream added");
     const added = guard(mono);
     expect(added.status).toBe(0);
-    expect(lineOf(added.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 0 added 1$/);
+    expect(lineOf(added.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 0 added 1 recorded 0$/);
   });
 
   spawnIt(4)("a sport added by the PR (absent from the baseline entirely) needs no bump, and the other sports are still compared", () => {
@@ -354,33 +372,34 @@ describe("fold-epoch-guard CLI: the sequence of a PR against HEAD^1, in a real g
     expect(withIt).not.toBe(without);
     const r = guard(mono);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(lineOf(r.stdout, LAST)).toMatch(/epoch \(none\) -> 1, minor \(none\) -> 0, matched 0 changed 0 deltas-only 0 removed 0 added \d+$/);
+    expect(lineOf(r.stdout, LAST)).toMatch(new RegExp(`epoch \\(none\\) -> ${epochOf(LAST)}, minor \\(none\\) -> ${minorOf(LAST)}, matched 0 changed 0 deltas-only 0 removed 0 added \\d+ recorded 0$`));
     expect(r.stdout).toContain(`${realSports - 1} sports checked`);
     expect(violated(r.stdout)).toEqual([]);
   });
 
   spawnIt(4)("an epoch lowered is red, even though nothing in any corpus moved", () => {
     atBase(mono);
-    setEpoch(mono, FIRST, 3);
-    commit(mono, "raise to 3");
-    setEpoch(mono, FIRST, 2);
-    commit(mono, "lower to 2");
+    const top = epochOf(FIRST) + 2; // two above the live entry, so the lowering below is still above it
+    setEpoch(mono, FIRST, top);
+    commit(mono, `raise to ${top}`);
+    setEpoch(mono, FIRST, top - 1);
+    commit(mono, `lower to ${top - 1}`);
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([FIRST]);
-    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 3 -> 2, .* - VIOLATION: .*went down/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`epoch ${top} -> ${top - 1}, .* - VIOLATION: .*went down`));
   });
 
   spawnIt(3)("two sports changed, only one bumped: red for the other sport alone", () => {
     atBase(mono);
     moveOutcome(mono, FIRST);
     moveOutcome(mono, LAST);
-    setEpoch(mono, FIRST, 2);
+    setEpoch(mono, FIRST, epochOf(FIRST) + 1);
     commit(mono, "two rule fixes, one bump");
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([LAST]);
-    expect(lineOf(r.stdout, FIRST)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 1 .* added 0$/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`${move(FIRST, 1)}, matched \\d+ changed 1 .* added 0 recorded 0$`));
   });
 
   spawnIt(3)("run from another working directory: the script finds its engine by its own location, not by the shell's cwd", () => {
@@ -428,7 +447,7 @@ describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D
     const red = guard(mono);
     expect(red.status).toBe(1);
     expect(violated(red.stdout)).toEqual([FIRST]);
-    expect(minorLine(red)).toMatch(/epoch 1 -> 1, minor 0 -> 0, matched \d+ changed 0 deltas-only 1 removed 0 added 0 - VIOLATION: minor owed/);
+    expect(minorLine(red)).toMatch(new RegExp(`${move(FIRST)}, matched \\d+ changed 0 deltas-only 1 removed 0 added 0 recorded 0 - VIOLATION: minor owed`));
     const was = realEntry("FOLD_MINOR", FIRST);
     expect(minorLine(red)).toContain(`raise FOLD_MINOR.${FIRST} to ${was + 1} in src/sport/fold-epoch.ts`);
     expect(red.stdout).not.toContain("raise FOLD_EPOCH");
@@ -440,33 +459,33 @@ describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D
     commit(mono, "standings deltas changed, minor bumped");
     const minor = guard(mono);
     expect({ status: minor.status, stderr: minor.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(minorLine(minor)).toMatch(new RegExp(`epoch 1 -> 1, minor ${was} -> ${was + 1}, matched \\d+ changed 0 deltas-only 1 removed 0 added 0$`));
+    expect(minorLine(minor)).toMatch(new RegExp(`${move(FIRST, 0, 1)}, matched \\d+ changed 0 deltas-only 1 removed 0 added 0 recorded 0$`));
     expect(violated(minor.stdout)).toEqual([]);
 
     atBase(mono);
     moveDeltas(mono, FIRST);
-    setEpoch(mono, FIRST, 2);
+    setEpoch(mono, FIRST, epochOf(FIRST) + 1);
     commit(mono, "standings deltas changed, major bumped");
     const major = guard(mono);
     expect({ status: major.status, stderr: major.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(minorLine(major)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 0 deltas-only 1 removed 0 added 0$/);
+    expect(minorLine(major)).toMatch(new RegExp(`${move(FIRST, 1)}, matched \\d+ changed 0 deltas-only 1 removed 0 added 0 recorded 0$`));
   });
 
   spawnIt(5)("a change a phone computes, with only the minor bumped, is still red and says the MAJOR is owed (and that the minor does not stand in); the major bump, with the minor reset, is green", () => {
     atBase(mono);
     moveOutcome(mono, FIRST);
-    setMinor(mono, FIRST, 1);
+    setMinor(mono, FIRST, minorOf(FIRST) + 1);
     commit(mono, "outcome changed, only the minor bumped");
     const red = guard(mono);
     expect(red.status).toBe(1);
     expect(violated(red.stdout)).toEqual([FIRST]);
-    expect(minorLine(red)).toMatch(/epoch 1 -> 1, minor 0 -> 1, matched \d+ changed 1 deltas-only 0 removed 0 added 0 - VIOLATION: major owed/);
-    expect(minorLine(red)).toContain(`raise FOLD_EPOCH.${FIRST} to 2 in src/sport/fold-epoch.ts`);
-    expect(minorLine(red)).toContain("FOLD_MINOR 0 -> 1 does not stand in for it");
+    expect(minorLine(red)).toMatch(new RegExp(`${move(FIRST, 0, 1)}, matched \\d+ changed 1 deltas-only 0 removed 0 added 0 recorded 0 - VIOLATION: major owed`));
+    expect(minorLine(red)).toContain(`raise FOLD_EPOCH.${FIRST} to ${epochOf(FIRST) + 1} in src/sport/fold-epoch.ts`);
+    expect(minorLine(red)).toContain(`FOLD_MINOR ${minorOf(FIRST)} -> ${minorOf(FIRST) + 1} does not stand in for it`);
 
     atBase(mono);
     moveOutcome(mono, FIRST);
-    setEpoch(mono, FIRST, 2);
+    setEpoch(mono, FIRST, epochOf(FIRST) + 1);
     commit(mono, "outcome changed, major bumped");
     expect(guard(mono).status).toBe(0);
   });
@@ -475,45 +494,45 @@ describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D
     atBase(mono);
     moveOutcome(mono, FIRST); // stream 0: a phone computes it
     editCorpus(mono, FIRST, (c) => { c.streams[1]!.deltas = `${String(c.streams[1]!.deltas)} `; }); // stream 1: deltas only
-    setMinor(mono, FIRST, 1);
+    setMinor(mono, FIRST, minorOf(FIRST) + 1);
     commit(mono, "an outcome and a deltas change in one sport, minor bumped");
     const red = guard(mono);
     expect(red.status).toBe(1);
-    expect(minorLine(red)).toMatch(/matched \d+ changed 1 deltas-only 1 removed 0 added 0 - VIOLATION: major owed/);
+    expect(minorLine(red)).toMatch(/matched \d+ changed 1 deltas-only 1 removed 0 added 0 recorded 0 - VIOLATION: major owed/);
 
     atBase(mono);
     editCorpus(mono, FIRST, (c) => { c.streams.pop(); });
-    setMinor(mono, FIRST, 1);
+    setMinor(mono, FIRST, minorOf(FIRST) + 1);
     commit(mono, "stream removed, only the minor bumped");
     const removed = guard(mono);
     expect(removed.status).toBe(1);
-    expect(minorLine(removed)).toMatch(/changed 0 deltas-only 0 removed 1 added 0 - VIOLATION: major owed/);
+    expect(minorLine(removed)).toMatch(/changed 0 deltas-only 0 removed 1 added 0 recorded 0 - VIOLATION: major owed/);
   });
 
   spawnIt(8)("two sports, one owing a minor and one a major: each judged by its own pair; a bump in the other sport settles neither", () => {
     atBase(mono);
     moveDeltas(mono, FIRST);
     moveOutcome(mono, LAST);
-    setMinor(mono, FIRST, 1);
-    setMinor(mono, LAST, 1); // wrong half for LAST
+    setMinor(mono, FIRST, minorOf(FIRST) + 1);
+    setMinor(mono, LAST, minorOf(LAST) + 1); // wrong half for LAST
     commit(mono, "FIRST: deltas + minor bump; LAST: outcome + minor bump");
     const red = guard(mono);
     expect(red.status).toBe(1);
     expect(violated(red.stdout)).toEqual([LAST]);
-    expect(minorLine(red, FIRST)).toMatch(/deltas-only 1 removed 0 added 0$/);
+    expect(minorLine(red, FIRST)).toMatch(/deltas-only 1 removed 0 added 0 recorded 0$/);
 
     atBase(mono);
     moveDeltas(mono, FIRST);
     moveOutcome(mono, LAST);
-    setEpoch(mono, LAST, 2);
-    setMinor(mono, FIRST, 1);
+    setEpoch(mono, LAST, epochOf(LAST) + 1);
+    setMinor(mono, FIRST, minorOf(FIRST) + 1);
     commit(mono, "FIRST: deltas + minor bump; LAST: outcome + major bump");
     expect(guard(mono).status).toBe(0);
 
     atBase(mono);
     moveDeltas(mono, FIRST);
     moveOutcome(mono, LAST);
-    setEpoch(mono, LAST, 2); // LAST is paid; FIRST's own minor is not
+    setEpoch(mono, LAST, epochOf(LAST) + 1); // LAST is paid; FIRST's own minor is not
     commit(mono, "FIRST: deltas, nothing; LAST: outcome + major bump");
     const first = guard(mono);
     expect(first.status).toBe(1);
@@ -557,16 +576,16 @@ describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D
     const launder = (): void => editCorpus(mono, "badminton", (c) => { for (const cfg of Object.values(c.configs)) if (!("cap" in cfg)) cfg.cap = 30; });
     atBase(mono);
     launder();
-    setMinor(mono, "badminton", 5);
+    setMinor(mono, "badminton", minorOf("badminton") + 5);
     commit(mono, "cap written out explicitly, only the minor bumped");
     const red = guard(mono);
     expect(red.status).toBe(1);
     expect(violated(red.stdout)).toEqual(["badminton"]);
-    expect(minorLine(red, "badminton")).toMatch(/changed 0 deltas-only 0 removed [1-9]\d* added [1-9]\d* - VIOLATION: major owed/);
+    expect(minorLine(red, "badminton")).toMatch(/changed 0 deltas-only 0 removed [1-9]\d* added [1-9]\d* recorded 0 - VIOLATION: major owed/);
 
     atBase(mono);
     launder();
-    setEpoch(mono, "badminton", 2);
+    setEpoch(mono, "badminton", epochOf("badminton") + 1);
     commit(mono, "cap written out explicitly, major bumped");
     expect(guard(mono).status).toBe(0);
   });
@@ -577,13 +596,15 @@ describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D
       editTable(mono, withoutMinor);
       commit(mono, "main before FOLD_MINOR existed");
       git(mono.top, "checkout", "-q", "base", "--", ".");
+      setMinor(mono, FIRST, 0); // the baseline reads every sport's minor as 0: a live entry above 0 would itself BE the bump this scenario withholds
       edit();
       commit(mono, "the PR that introduces FOLD_MINOR");
     };
     introduce(() => {});
     const quiet = guard(mono);
     expect({ status: quiet.status, stderr: quiet.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(minorLine(quiet)).toMatch(/epoch 1 -> 1, minor 0 -> 0, /);
+    // the baseline's table has no minor (read as 0) and the PR's FIRST is set to 0 above: the major is the live entry on both sides
+    expect(minorLine(quiet)).toContain(`epoch ${epochOf(FIRST)} -> ${epochOf(FIRST)}, minor 0 -> 0, `);
     expect(quiet.stdout).toContain(summary(realSports, realStreams, "HEAD^1", 0));
 
     introduce(() => moveDeltas(mono, FIRST));
@@ -592,7 +613,7 @@ describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D
     expect(violated(red.stdout)).toEqual([FIRST]);
     expect(minorLine(red)).toContain(`raise FOLD_MINOR.${FIRST} to 1 in src/sport/fold-epoch.ts`);
 
-    introduce(() => { moveDeltas(mono, FIRST); setMinor(mono, FIRST, 1); });
+    introduce(() => { moveDeltas(mono, FIRST); setMinor(mono, FIRST, minorOf(FIRST) + 1); });
     expect(guard(mono).status).toBe(0);
   });
 
@@ -606,7 +627,7 @@ describe("fold-epoch-guard CLI: the pair (major, minor) in a real git history (D
     expect(minorLine(red)).toContain(`raise FOLD_MINOR.${FIRST} to ${realEntry("FOLD_MINOR", FIRST) + 1} in src/sport/fold-epoch.ts`);
     atBase(rooted);
     moveDeltas(rooted, FIRST);
-    setMinor(rooted, FIRST, 1);
+    setMinor(rooted, FIRST, minorOf(FIRST) + 1);
     commit(rooted, "standings deltas changed, minor bumped");
     expect(guard(rooted).status).toBe(0);
   });
@@ -673,7 +694,7 @@ describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on t
     const c = commit(mono, "main moved on: FIRST's outcome changed (already on main)");
     git(mono.top, "checkout", "-q", "-b", `pr-${id}`, "base");
     moveOutcome(mono, LAST);
-    if (bumpTheLast) setEpoch(mono, LAST, 2);
+    if (bumpTheLast) setEpoch(mono, LAST, epochOf(LAST) + 1);
     const b = commit(mono, "the PR");
     git(mono.top, "checkout", "-q", `main-${id}`);
     git(mono.top, "merge", "--no-ff", "-q", "-m", "merge ref", `pr-${id}`);
@@ -689,7 +710,7 @@ describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on t
     expect(r.status).toBe(1);
     expect(violated(r.stdout)).toEqual([LAST]);
     // FIRST differs from the merge BASE but not from main's tip, so it is clean here ...
-    expect(lineOf(r.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 0 added 0$/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(/changed 0 deltas-only 0 removed 0 added 0 recorded 0$/);
     // ... and would be red if the comparison were against the merge base, which is not what HEAD^1 is
     const wrong = guard(mono, "base");
     expect(violated(wrong.stdout).sort()).toEqual([FIRST, LAST].sort());
@@ -699,7 +720,7 @@ describe("fold-epoch-guard CLI: what CI's checkout gives (pull_request runs on t
     mergeRef("green", true);
     const r = guard(mono);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(lineOf(r.stdout, LAST)).toMatch(/epoch 1 -> 2, minor 0 -> 0, matched \d+ changed 1 /);
+    expect(lineOf(r.stdout, LAST)).toMatch(new RegExp(`${move(LAST, 1)}, matched \\d+ changed 1 `));
     expect(violated(r.stdout)).toEqual([]);
   });
 
@@ -916,6 +937,19 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
     expect(twice.stderr).toMatch(new RegExp(`two golden corpora for sport "${FIRST}"`));
   });
 
+  spawnIt(3)("a stream that stores a key no format records is refused in a format-1 corpus too (the check is not a format-2 or 3 rule), and the key is named", () => {
+    atBase(mono);
+    editCorpus(mono, FIRST, (c) => {
+      delete c.format;
+      c.streams.forEach((st) => { for (const key of ["summaries", "overlay", "playerStats"]) delete st[key]; });
+      c.streams[0]!.dense = { initial: {}, steps: {} };
+    });
+    commit(mono, "a format-1 stream that stores dense");
+    const r = guard(mono);
+    expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 2, stdout: "" });
+    expect(r.stderr).toMatch(/stream #0 carries a key no format records \("dense"\)/);
+  });
+
   spawnIt(3)("every corpus deleted in the tree is red for every sport (an entry with no corpus), not a crash and not a pass", () => {
     atBase(mono);
     rmSync(join(mono.eng, SPORTS_DIR), { recursive: true });
@@ -923,7 +957,7 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
     const r = guard(mono);
     expect(r.status).toBe(1);
     expect(violated(r.stdout).sort()).toEqual([...KEYS].sort());
-    expect(lineOf(r.stdout, FIRST)).toMatch(/matched 0 changed 0 deltas-only 0 removed \d+ added 0 - VIOLATION: .*FOLD_EPOCH entry but no golden corpus/);
+    expect(lineOf(r.stdout, FIRST)).toMatch(/matched 0 changed 0 deltas-only 0 removed \d+ added 0 recorded 0 - VIOLATION: .*FOLD_EPOCH entry but no golden corpus/);
   });
 
   spawnIt(3)("run through a symlink to the engine directory it still runs: a guard that compared the given path with the real one would print nothing and exit 0", () => {
@@ -1052,5 +1086,778 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
       expect(r.stderr, JSON.stringify(args)).toMatch(/usage: fold-epoch-guard\.ts --against <ref>/);
       expect(r.stdout, JSON.stringify(args)).toBe("");
     }
+  });
+});
+
+// ------------------------------------------------------------------------------------------------------------------------------------
+// GF-2 T2: corpus format 2, in a real git history. The base here is a FORMAT-1 tree (the real corpora with the format-2 fields stripped,
+// whatever the tree under test holds) and the "PR" adds the fields the way REFORMAT_GOLDEN does (placeholder digests: the guard compares
+// strings and lengths, and the recorder itself is the engine's testkit, which a spawned script does not import). The scratch tree also
+// holds stand-ins for the files the owner's rule is about: a kernel source file, a testkit file, a doc, the engine's package.json (the
+// real one) and a root lockfile.
+
+const KERNEL_FILE = "src/core/events.ts";
+const TESTKIT_FILE = "src/testkit/helper.ts";
+const DOC_FILE = "src/core/README.md";
+const TEST_FILE = "src/core/events.test.ts";
+const LOCKFILE = "pnpm-lock.yaml";
+
+/** Rewrites every corpus of a scratch checkout. */
+function eachCorpus(repo: Repo, fn: (c: Corpus) => Corpus): void {
+  for (const f of CORPORA) {
+    const file = join(repo.eng, SPORTS_DIR, f);
+    writeFileSync(file, `${JSON.stringify(fn(JSON.parse(readFileSync(file, "utf8")) as Corpus), null, 0)}\n`); // the format golden.ts writes
+  }
+}
+/** A corpus as format 1: no `format` key, no `summaries`, no `overlay`, no `playerStats`. */
+function asFormat1(c: Corpus): Corpus {
+  const { format: _format, ...rest } = c;
+  return { ...rest, streams: c.streams.map(({ summaries: _s, overlay: _o, playerStats: _p, ...plain }) => plain) };
+}
+/** A corpus as format 2: `format: 2` just before `streams`, and every stream gains its two fields (one placeholder digest per event). */
+function asFormat2(c: Corpus): Corpus {
+  const { streams, ...rest } = asFormat1(c);
+  return { ...rest, format: 2, streams: streams.map((s) => ({ ...s, summaries: (s.events as unknown[]).map((_, i) => `#${c.key}${i}`), overlay: "{}" })) };
+}
+/** A corpus as format 3 (GF-2 T4): format 2 plus `playerStats` on every stream (a placeholder row per stream: the guard compares text). */
+function asFormat3(c: Corpus): Corpus {
+  const { streams, ...rest } = asFormat2(c);
+  return { ...rest, format: 3, streams: streams.map((s) => ({ ...s, playerStats: statsText(s) })) };
+}
+/** The placeholder stats of a stream: one row whose count is the stream's event count, so streams differ from each other. */
+const statsText = (s: Record<string, unknown>): string => JSON.stringify([{ personId: "p", stats: { goals: (s.events as unknown[]).length } }]);
+const recordFields = (repo: Repo): void => eachCorpus(repo, asFormat2);
+const recordStats = (repo: Repo): void => eachCorpus(repo, asFormat3);
+const put = (repo: Repo, rel: string, text: string, top = false): void => {
+  const file = join(top ? repo.top : repo.eng, rel);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, text);
+};
+const read = (repo: Repo, rel: string): string => readFileSync(join(repo.eng, rel), "utf8");
+
+let fmtMono: Repo; // format-1 base `f1`, its reformat `f2`
+let fmtRooted: Repo;
+const STREAMS = new Map<string, number>();
+/** The git processes each format repository took to build (see FORMAT_BUILD_MS). */
+const formatRepoSpawns: number[] = [];
+
+function makeFormatRepo(name: string, prefix: string): Repo {
+  const repo = makeRepo(name, prefix);
+  eachCorpus(repo, asFormat1);
+  put(repo, KERNEL_FILE, "export const settled = (m: string): string => `settled_${m}`;\n");
+  put(repo, TESTKIT_FILE, "export const helper = 1;\n");
+  put(repo, DOC_FILE, "# core\n");
+  put(repo, TEST_FILE, "export {};\n");
+  put(repo, LOCKFILE, "lockfileVersion: '9.0'\n", true);
+  commit(repo, "format 1 base");
+  git(repo.top, "tag", "f1");
+  recordFields(repo);
+  commit(repo, "the corpora gain their format-2 fields");
+  git(repo.top, "tag", "f2");
+  recordStats(repo);
+  commit(repo, "the corpora gain their format-3 playerStats");
+  git(repo.top, "tag", "f3");
+  return repo;
+}
+const atF1 = (repo: Repo): void => {
+  git(repo.top, "checkout", "-q", "--detach", "f1");
+  git(repo.top, "reset", "-q", "--hard", "f1");
+  git(repo.top, "clean", "-fdq");
+};
+const atF2 = (repo: Repo): void => {
+  git(repo.top, "checkout", "-q", "--detach", "f2");
+  git(repo.top, "reset", "-q", "--hard", "f2");
+  git(repo.top, "clean", "-fdq");
+};
+const atF3 = (repo: Repo): void => {
+  git(repo.top, "checkout", "-q", "--detach", "f3");
+  git(repo.top, "reset", "-q", "--hard", "f3");
+  git(repo.top, "clean", "-fdq");
+};
+/** The sports a run named VIOLATION for, sorted (the report is in the registry's alphabetical order, KEYS in file order). */
+const violatedSorted = (out: string): string[] => violated(out).sort();
+/** The `recorded N` of a sport's report line. */
+const recordedOf = (out: string, sport: string): number => Number(/ recorded (\d+)(?: - |$)/.exec(lineOf(out, sport))?.[1] ?? Number.NaN);
+const recordedTotal = (out: string): number => KEYS.reduce((n, k) => n + recordedOf(out, k), 0);
+const bumpAll = (repo: Repo, keys: readonly string[] = KEYS): void => { for (const k of keys) setEpoch(repo, k, realEntry("FOLD_EPOCH", k) + 1); };
+
+// The format repositories are built at FILE level, not inside one describe: both the GF-2 (format 2) and the GF-2 T4 (format 3) blocks
+// read fmtMono/fmtRooted, and a `-t "GF-2 T4"` run skips the earlier block's hooks along with its tests, leaving them undefined.
+beforeAll(() => {
+  for (const f of CORPORA) {
+    const c = JSON.parse(readFileSync(join(ENGINE, SPORTS_DIR, f), "utf8")) as Corpus;
+    STREAMS.set(c.key, c.streams.length);
+  }
+  for (const [name, prefix] of [["fmt-mono", "packages/engine"], ["fmt-rooted", ""]] as const) {
+    const before = gitSpawns;
+    const repo = makeFormatRepo(name, prefix);
+    formatRepoSpawns.push(gitSpawns - before);
+    if (prefix === "") fmtRooted = repo;
+    else fmtMono = repo;
+  }
+}, FORMAT_BUILD_MS);
+
+describe("fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes nothing only while no fold source changes)", () => {
+  // one `git show` per corpus per tag per layout: it spawns, so it states its budget like every spawning test here (a flat 5 s default
+  // measured 4.3 s on an idle machine and 5.1 s on a loaded one: a latent red, found by raising a real epoch under load)
+  spawnIt(KEYS.length * 6)("the rig: the base is format 1, its reformat is format 2 and the next is format 3, in every sport and layout (counted)", () => {
+    // the beforeAll's budget is derived from these spawn counts: a repository that costs more than the budget assumes is a latent timeout
+    expect(formatRepoSpawns, "one count per format repository").toEqual([REPO_SPAWNS + FORMAT_REPO_EXTRA_SPAWNS, REPO_SPAWNS + FORMAT_REPO_EXTRA_SPAWNS]);
+    expect(STREAMS.size).toBe(realSports);
+    let checked = 0;
+    for (const repo of [fmtMono, fmtRooted]) {
+      for (const [tag, format] of [["f1", undefined], ["f2", 2], ["f3", 3]] as const) {
+        for (const f of CORPORA) {
+          const c = JSON.parse(git(repo.top, "show", `${tag}:${relative(repo.top, join(repo.eng, SPORTS_DIR, f))}`)) as Corpus;
+          expect(c.format, `${tag} ${f}`).toBe(format);
+          expect(c.streams.every((st) => (st.summaries !== undefined) === (format !== undefined) && (st.overlay !== undefined) === (format !== undefined)), `${tag} ${f}`).toBe(true);
+          expect(c.streams.every((st) => (st.playerStats !== undefined) === (format === 3)), `${tag} ${f}`).toBe(true);
+          expect(c.streams.length, `${tag} ${f}`).toBe(STREAMS.get(c.key));
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(realSports * 6);
+  });
+
+  describe("(a) a reformat-only change", () => {
+    for (const [layout, repo] of [["monorepo (packages/engine)", () => fmtMono], ["engine at a repository root", () => fmtRooted]] as const) {
+      spawnIt(3)(`${layout}: is green, records every stream of every sport, and moves nothing - even beside edits to testkit, a doc and a test file`, () => {
+        const r0 = repo();
+        atF1(r0);
+        recordFields(r0);
+        put(r0, TESTKIT_FILE, "export const helper = 2;\n");
+        put(r0, DOC_FILE, "# core, reworded\n");
+        put(r0, TEST_FILE, "export const x = 1;\n");
+        commit(r0, "reformat the corpora; harness, doc and test edits beside it");
+        const r = guard(r0);
+        expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+        expect(r.stdout).toContain(summary(realSports, realStreams, "HEAD^1", 0));
+        for (const k of KEYS) {
+          expect(lineOf(r.stdout, k), k).toMatch(new RegExp(`matched ${STREAMS.get(k)} changed 0 deltas-only 0 removed 0 added 0 recorded ${STREAMS.get(k)}$`));
+        }
+        expect(recordedTotal(r.stdout)).toBe(realStreams);
+        expect(violated(r.stdout)).toEqual([]);
+      });
+    }
+
+    spawnIt(3)("a change that gains the fields in TWO commits is judged on its net diff against the base, not commit by commit", () => {
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      commit(fmtMono, "reformat");
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      commit(fmtMono, "a kernel change on top");
+      expect(guard(fmtMono).status, "the last commit alone records nothing and touches the kernel: green").toBe(0);
+      const net = guard(fmtMono, "f1");
+      expect(net.status, "the net diff gains the fields AND touches the kernel").toBe(1);
+      expect(violatedSorted(net.stdout)).toEqual([...KEYS].sort());
+    });
+  });
+
+  describe("(b) a reformat plus a kernel rule change in one diff", () => {
+    spawnIt(5)("is red in EVERY sport, names the file and the way out, and is settled by each sport's own bump (the 'settled_' rename of the design note)", () => {
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      commit(fmtMono, "reformat + a kernel rule change");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toBe("");
+      expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+      for (const k of KEYS) {
+        expect(lineOf(r.stdout, k), k).toMatch(new RegExp(`matched ${STREAMS.get(k)} changed ${STREAMS.get(k)} deltas-only 0 removed 0 added 0 recorded ${STREAMS.get(k)} - VIOLATION: major owed`));
+        expect(lineOf(r.stdout, k), k).toContain(`${STREAMS.get(k)} newly recorded stream(s) while the change touches fold source: packages/engine/${KERNEL_FILE}`);
+        expect(lineOf(r.stdout, k), k).toContain("land the format bump alone, or raise FOLD_EPOCH");
+        expect(lineOf(r.stdout, k), k).toContain(`raise FOLD_EPOCH.${k} to ${realEntry("FOLD_EPOCH", k) + 1} in src/sport/fold-epoch.ts`);
+      }
+      expect(r.stdout).toContain(summary(realSports, realStreams, "HEAD^1", realSports));
+
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      bumpAll(fmtMono);
+      commit(fmtMono, "reformat + a kernel rule change, every sport bumped");
+      const paid = guard(fmtMono);
+      expect({ status: paid.status, stderr: paid.stderr }).toEqual({ status: 0, stderr: "" });
+      expect(violated(paid.stdout)).toEqual([]);
+      expect(recordedTotal(paid.stdout)).toBe(realStreams);
+
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      bumpAll(fmtMono, KEYS.slice(1));
+      commit(fmtMono, "reformat + a kernel rule change, all but one sport bumped");
+      const part = guard(fmtMono);
+      expect(part.status).toBe(1);
+      expect(violatedSorted(part.stdout), "only the sport that was not bumped").toEqual([FIRST]);
+    });
+
+    spawnIt(3)("an UNTRACKED fold-source file in the working tree counts too (it is part of what the tree would ship), and so does a file moved OUT of src/", () => {
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      commit(fmtMono, "reformat");
+      expect(guard(fmtMono).status, "control: the reformat alone is green").toBe(0);
+      put(fmtMono, "src/core/untracked-rule.ts", "export const rule = 1;\n");
+      const untracked = guard(fmtMono);
+      expect(untracked.status).toBe(1);
+      expect(lineOf(untracked.stdout, FIRST)).toContain("packages/engine/src/core/untracked-rule.ts");
+
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      git(fmtMono.top, "mv", join(fmtMono.eng, KERNEL_FILE), join(fmtMono.eng, "src/testkit/events.ts"));
+      commit(fmtMono, "reformat + the kernel file moved into testkit");
+      const moved = guard(fmtMono);
+      expect(moved.status, "the OLD path of a rename is a touched path: moving a file out of src/ does not hide it").toBe(1);
+      expect(lineOf(moved.stdout, FIRST)).toContain(`packages/engine/${KERNEL_FILE}`);
+    });
+  });
+
+  describe("the change list is read in the repository's own spelling", () => {
+    spawnIt(3)("a repository configured with diff.relative=true still reports repository-relative paths, so a kernel edit is not lost to the prefix", () => {
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      commit(fmtMono, "reformat + a kernel rule change");
+      git(fmtMono.top, "config", "diff.relative", "true");
+      try {
+        const r = guard(fmtMono);
+        expect(r.status, "red whatever the repository's diff.relative says").toBe(1);
+        expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+        expect(lineOf(r.stdout, FIRST)).toContain(`packages/engine/${KERNEL_FILE}`);
+      } finally {
+        git(fmtMono.top, "config", "--unset", "diff.relative");
+      }
+    });
+  });
+
+  describe("a git that cannot list the change", () => {
+    spawnIt(3)("is a refusal (exit 2, nothing judged), never a pass: here an unreadable index, with streams that need the change list", () => {
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      commit(fmtMono, "reformat alone");
+      expect(guard(fmtMono).status, "control: the same tree is green with a readable index").toBe(0);
+      const index = join(fmtMono.top, ".git", "index");
+      const saved = readFileSync(index);
+      try {
+        writeFileSync(index, "not an index");
+        const r = guard(fmtMono);
+        expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 2, stdout: "" });
+        expect(r.stderr).toMatch(/git diff --name-only HEAD\^1 \(or git ls-files --others\) failed/);
+      } finally {
+        writeFileSync(index, saved);
+      }
+    });
+  });
+
+  describe("(c) a reformat plus a change to the engine's package.json, or to the root lockfile", () => {
+    spawnIt(4)("the engine's package.json (zod and the toolchain fold too) owes the major in every sport; so does the root lockfile; the ROOT package.json does not", () => {
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      const pkg = JSON.parse(read(fmtMono, "package.json")) as Record<string, unknown>;
+      put(fmtMono, "package.json", `${JSON.stringify({ ...pkg, "x-probe": 1 }, null, 2)}\n`);
+      commit(fmtMono, "reformat + engine package.json");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+      expect(lineOf(r.stdout, FIRST)).toContain("packages/engine/package.json");
+
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      put(fmtMono, LOCKFILE, "lockfileVersion: '9.0'\nimporters: {}\n", true);
+      commit(fmtMono, "reformat + root lockfile");
+      const lock = guard(fmtMono);
+      expect(lock.status).toBe(1);
+      expect(violatedSorted(lock.stdout)).toEqual([...KEYS].sort());
+      expect(lineOf(lock.stdout, FIRST)).toContain(LOCKFILE);
+
+      atF1(fmtMono);
+      recordFields(fmtMono);
+      put(fmtMono, "package.json", "{\"name\": \"root-not-the-engine\"}\n", true);
+      commit(fmtMono, "reformat + the ROOT package.json (not the engine's)");
+      expect(guard(fmtMono).status, "outside the owner's list").toBe(0);
+    });
+
+    spawnIt(2)("with the engine at a repository root, package.json and the lockfile beside it are both the engine's", () => {
+      atF1(fmtRooted);
+      recordFields(fmtRooted);
+      put(fmtRooted, LOCKFILE, "lockfileVersion: '9.0'\nimporters: {}\n");
+      commit(fmtRooted, "reformat + lockfile, engine at the root");
+      const r = guard(fmtRooted);
+      expect(r.status).toBe(1);
+      expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+      expect(lineOf(r.stdout, FIRST)).toContain(` ${LOCKFILE}`);
+    });
+  });
+
+  describe("(d) on a format-2 base, a recorded kernel field that moves is a MAJOR owed", () => {
+    const TWO = [FIRST, LAST] as const;
+    const SCENARIOS: ReadonlyArray<readonly [string, (c: Corpus) => void]> = [
+      ["overlay (how a suspension folds: its stoppage changed)", (c) => { c.streams[0]!.overlay = '{"stoppage":[[0,{"reason":"x"}]]}'; }],
+      ["one per-step summary digest", (c) => { const sums = c.streams[0]!.summaries as string[]; sums[sums.length - 1] = "#moved"; }],
+    ];
+    for (const [label, edit] of SCENARIOS) {
+      spawnIt(4)(`${label}, in two sports: exactly those two are red (nothing else in the corpus moved), and each is settled by its own bump`, () => {
+        atF2(fmtMono);
+        for (const k of TWO) editCorpus(fmtMono, k, edit);
+        commit(fmtMono, "a kernel rule change re-recorded by a re-baseline, no bump");
+        const r = guard(fmtMono);
+        expect(r.status).toBe(1);
+        expect(violatedSorted(r.stdout)).toEqual([...TWO].sort());
+        for (const k of TWO) {
+          expect(lineOf(r.stdout, k), k).toMatch(new RegExp(`matched ${STREAMS.get(k)} changed 1 deltas-only 0 removed 0 added 0 recorded 0 - VIOLATION: major owed, a phone computes this: 1 stream\\(s\\) fold differently`));
+        }
+
+        atF2(fmtMono);
+        for (const k of TWO) editCorpus(fmtMono, k, edit);
+        setEpoch(fmtMono, FIRST, realEntry("FOLD_EPOCH", FIRST) + 1);
+        commit(fmtMono, "same, one sport bumped");
+        expect(violatedSorted(guard(fmtMono).stdout), "the bumped sport is settled, the other is not").toEqual([LAST]);
+
+        atF2(fmtMono);
+        for (const k of TWO) editCorpus(fmtMono, k, edit);
+        bumpAll(fmtMono, TWO);
+        commit(fmtMono, "same, both bumped");
+        expect(guard(fmtMono).status).toBe(0);
+      });
+    }
+
+    spawnIt(2)("a kernel SOURCE change with no corpus change owes nothing: the freeze only decides what a newly recorded stream owes", () => {
+      atF2(fmtMono);
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      commit(fmtMono, "a kernel edit that moves no recorded value");
+      const r = guard(fmtMono);
+      expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+      expect(recordedTotal(r.stdout)).toBe(0);
+    });
+  });
+
+  describe("(e) a pre-existing field changed during the reformat", () => {
+    for (const [field, edit] of [
+      ["outcome", (c: Corpus) => { c.streams[0]!.outcome = `${String(c.streams[0]!.outcome)} `; }],
+      ["summary", (c: Corpus) => { c.streams[0]!.summary = `${String(c.streams[0]!.summary)} `; }],
+      ["a mid-match state", (c: Corpus) => { const st = c.streams[0]!.states as string[]; st[0] = `${st[0]} `; }],
+    ] as const) {
+      spawnIt(4)(`${field}: the frozen source does not hide it - that sport alone is red with a major owed (Q6), the others record cleanly`, () => {
+        atF1(fmtMono);
+        recordFields(fmtMono);
+        editCorpus(fmtMono, FIRST, edit);
+        commit(fmtMono, `reformat, and ${field} of ${FIRST} re-recorded`);
+        const r = guard(fmtMono);
+        expect(r.status).toBe(1);
+        expect(violated(r.stdout)).toEqual([FIRST]);
+        expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`matched ${STREAMS.get(FIRST)} changed 1 deltas-only 0 removed 0 added 0 recorded ${STREAMS.get(FIRST)} - VIOLATION: major owed`));
+        expect(lineOf(r.stdout, LAST)).toMatch(new RegExp(`changed 0 .* recorded ${STREAMS.get(LAST)}$`));
+        // paying it means editing src/sport/fold-epoch.ts, which IS fold source: the other sports' newly recorded streams then owe too,
+        // so the one bump settles that sport only; the reformat has to land alone, or every sport has to be bumped
+        setEpoch(fmtMono, FIRST, realEntry("FOLD_EPOCH", FIRST) + 1);
+        commit(fmtMono, "bumped");
+        const oneBump = guard(fmtMono, "f1");
+        expect(oneBump.status, "the table edit makes every other sport's recorded streams owe").toBe(1);
+        expect(violatedSorted(oneBump.stdout)).toEqual(KEYS.filter((k) => k !== FIRST).sort());
+        expect(lineOf(oneBump.stdout, FIRST), "the bumped sport is settled").toMatch(/recorded \d+$/);
+        bumpAll(fmtMono, KEYS.filter((k) => k !== FIRST));
+        commit(fmtMono, "every sport bumped");
+        expect(guard(fmtMono, "f1").status, "every sport bumped").toBe(0);
+      });
+    }
+  });
+
+  describe("the format never falls, and a malformed format is a refusal", () => {
+    spawnIt(3)("a format-2 corpus rewritten as format 1 is red in every sport, and no bump settles it", () => {
+      atF2(fmtMono);
+      eachCorpus(fmtMono, asFormat1);
+      commit(fmtMono, "the fields dropped");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+      expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`corpus format fell \\(2 -> 1\\): ${STREAMS.get(FIRST)} stream\\(s\\)`));
+      bumpAll(fmtMono);
+      commit(fmtMono, "dropped and bumped");
+      expect(guard(fmtMono, "f2").status, "a bump does not restore a dropped pin").toBe(1);
+    });
+
+    spawnIt(4)("the fall is judged on the CORPUS, not on the streams that happen to match: format 1 with every stream re-recorded, and the bump paid, is still red", () => {
+      const sport = "badminton"; // the sport of the reviewer's reproduction: 22 streams
+      expect(KEYS).toContain(sport);
+      const rerecord = (c: Corpus): void => { for (const s of c.streams) s.seed = Number(s.seed) + 1_000_003; };
+      // the control: re-recorded but still format 2, with the bump, is green - so what is red below IS the format
+      atF2(fmtMono);
+      editCorpus(fmtMono, sport, rerecord);
+      setEpoch(fmtMono, sport, realEntry("FOLD_EPOCH", sport) + 1);
+      commit(fmtMono, `${sport} re-recorded in format 2, bumped`);
+      const control = guard(fmtMono);
+      expect({ status: control.status, stderr: control.stderr, violated: violated(control.stdout) }).toEqual({ status: 0, stderr: "", violated: [] });
+      // the reproduction: format 1, every stream re-recorded (nothing matches), the epoch raised
+      atF2(fmtMono);
+      editCorpus(fmtMono, sport, (c) => {
+        rerecord(c);
+        delete c.format;
+        for (const s of c.streams) { delete s.summaries; delete s.overlay; }
+      });
+      setEpoch(fmtMono, sport, realEntry("FOLD_EPOCH", sport) + 1);
+      commit(fmtMono, `${sport} rewritten as format 1, re-recorded, bumped`);
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(violated(r.stdout)).toEqual([sport]);
+      const n = STREAMS.get(sport)!;
+      expect(lineOf(r.stdout, sport)).toMatch(new RegExp(`matched 0 changed 0 deltas-only 0 removed ${n} added ${n} recorded 0 - VIOLATION: .*corpus format fell \\(2 -> 1\\): ${n} stream\\(s\\)`));
+      // and the other sports, untouched, are not blamed
+      expect(violated(r.stdout)).not.toContain(FIRST === sport ? LAST : FIRST);
+    });
+
+    const BAD: ReadonlyArray<readonly [string, (c: Corpus) => void, RegExp]> = [
+      ["an unknown format", (c) => { c.format = 4; }, /declares corpus format 4; this guard reads formats 1, 2 and 3/],
+      ["a format-2 stream that carries playerStats (a hybrid)", (c) => { c.streams[0]!.playerStats = "[]"; }, /stream #0 records playerStats, but the corpus is format 2/],
+      // GF-2 batch review M-1: `dense` is the recorder's probe-only form, and a spread of a recomputation writes it into a corpus unnoticed
+      ["a stream that stores a key no format records (the probe-only dense overlay)", (c) => { c.streams[0]!.dense = { initial: {}, steps: {} }; }, /stream #0 carries a key no format records \("dense"\)/],
+      ["a format-2 stream without summaries", (c) => { delete c.streams[1]!.summaries; }, /stream #1 is malformed \(a format-2 stream needs summaries/],
+      ["a format-2 stream without an overlay", (c) => { delete c.streams[0]!.overlay; }, /stream #0 is malformed \(a format-2 stream needs summaries/],
+      ["summaries with fewer digests than events", (c) => { (c.streams[0]!.summaries as string[]).pop(); }, /stream #0 is malformed/],
+      ["a non-string digest", (c) => { (c.streams[0]!.summaries as unknown[])[0] = 7; }, /stream #0 is malformed/],
+      ["an overlay that is not JSON", (c) => { c.streams[0]!.overlay = "{nope"; }, /stream #0 is malformed/],
+      ["an overlay that is JSON but not an object", (c) => { c.streams[0]!.overlay = "[]"; }, /stream #0 is malformed/],
+      // JSON.parse coerces its argument to a string, so an ARRAY holding the text of an object parses as that object: only the typeof check refuses it
+      ["an overlay that is an array holding the text of an object", (c) => { c.streams[0]!.overlay = ["{}"]; }, /stream #0 is malformed/],
+    ];
+    spawnIt(BAD.length + 2)("each malformed format-2 corpus is refused (exit 2, nothing judged), whichever side holds it", () => {
+      for (const [label, edit, message] of BAD) {
+        atF2(fmtMono);
+        editCorpus(fmtMono, FIRST, edit);
+        commit(fmtMono, `current side: ${label}`);
+        const r = guard(fmtMono, "f2");
+        expect({ label, status: r.status, stdout: r.stdout }, label).toEqual({ label, status: 2, stdout: "" });
+        expect(r.stderr, label).toMatch(message);
+      }
+      // the same corpus as the BASELINE: refused too, with the baseline named
+      atF2(fmtMono);
+      editCorpus(fmtMono, FIRST, (c) => { delete c.streams[0]!.overlay; });
+      const bad = commit(fmtMono, "a baseline with a half-recorded stream");
+      atF2(fmtMono);
+      const r = guard(fmtMono, bad);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toMatch(new RegExp(`at ${bad}: stream #0 is malformed`));
+    });
+
+    spawnIt(2)("a format-1 corpus that already holds a format-2 field is refused: a half-converted corpus is not 'unrecorded'", () => {
+      atF1(fmtMono);
+      editCorpus(fmtMono, FIRST, (c) => { c.streams[0]!.overlay = "{}"; });
+      commit(fmtMono, "a hybrid");
+      const r = guard(fmtMono);
+      expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 2, stdout: "" });
+      expect(r.stderr).toMatch(/stream #0 records summaries or an overlay, but the corpus is format 1/);
+    });
+  });
+});
+
+// ------------------------------------------------------------------------------------------------------------------------------------
+// GF-2 T4: corpus format 3 (`playerStats`), in a real git history. The tags above give the history `f1` (format 1) -> `f2` (format 2) ->
+// `f3` (format 3, one placeholder stats row per stream). The classifier of "does this change touch fold source" is the SAME one (Q1): what
+// differs is only what a newly recorded `playerStats` owes when it does - the MINOR, because a phone never computes a player stat (owner
+// ruling Q2, 2026-10-15) - and that a recorded stat that moves is a minor too.
+
+/** A stats move written by hand into a scratch corpus: the first stream's recorded final rows are different. */
+const moveStats = (repo: Repo, sport: string): void => editCorpus(repo, sport, (c) => { c.streams[0]!.playerStats = '[{"personId":"p","stats":{"goals":999}}]'; });
+/** The `stats-only N` of a sport's report line (absent when 0, which is how the guard prints it). */
+const statsOnlyOf = (out: string, sport: string): number => Number(/ stats-only (\d+)(?: - |$)/.exec(lineOf(out, sport))?.[1] ?? 0);
+const bumpMinorAll = (repo: Repo, keys: readonly string[] = KEYS): void => { for (const k of keys) setMinor(repo, k, realEntry("FOLD_MINOR", k) + 1); };
+
+describe("fold-epoch-guard CLI: GF-2 T4 - corpus format 3 (player stats are a minor)", () => {
+  describe("(a) a 2 -> 3 reformat-only change", () => {
+    for (const [layout, repo] of [["monorepo (packages/engine)", () => fmtMono], ["engine at a repository root", () => fmtRooted]] as const) {
+      spawnIt(3)(`${layout}: is green, records every stream of every sport, and moves nothing - even beside edits to testkit, a doc and a test file`, () => {
+        const r0 = repo();
+        atF2(r0);
+        recordStats(r0);
+        put(r0, TESTKIT_FILE, "export const helper = 3;\n");
+        put(r0, DOC_FILE, "# core, reworded again\n");
+        put(r0, TEST_FILE, "export const y = 2;\n");
+        commit(r0, "reformat to format 3; harness, doc and test edits beside it");
+        const r = guard(r0);
+        expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+        expect(r.stdout).toContain(summary(realSports, realStreams, "HEAD^1", 0));
+        for (const k of KEYS) {
+          expect(lineOf(r.stdout, k), k).toMatch(new RegExp(`matched ${STREAMS.get(k)} changed 0 deltas-only 0 removed 0 added 0 recorded ${STREAMS.get(k)}$`));
+        }
+        expect(recordedTotal(r.stdout)).toBe(realStreams);
+        expect(violated(r.stdout)).toEqual([]);
+      });
+    }
+
+    spawnIt(3)("a change that goes from format 1 straight to format 3 follows the kernel rule: green while no fold source moves, a MAJOR when it does (a minor bump does not stand in)", () => {
+      atF1(fmtMono);
+      recordStats(fmtMono);
+      commit(fmtMono, "format 1 -> 3 in one step");
+      const green = guard(fmtMono);
+      expect({ status: green.status, stderr: green.stderr, violated: violated(green.stdout) }).toEqual({ status: 0, stderr: "", violated: [] });
+      expect(recordedTotal(green.stdout)).toBe(realStreams);
+
+      atF1(fmtMono);
+      recordStats(fmtMono);
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      bumpMinorAll(fmtMono);
+      commit(fmtMono, "format 1 -> 3 and a kernel change, every minor bumped");
+      const red = guard(fmtMono);
+      expect(red.status).toBe(1);
+      expect(violatedSorted(red.stdout)).toEqual([...KEYS].sort());
+      expect(lineOf(red.stdout, FIRST)).toContain("major owed, a phone computes this");
+
+      atF1(fmtMono);
+      recordStats(fmtMono);
+      put(fmtMono, KERNEL_FILE, "export const settled = (m: string): string => `settled-${m}`;\n");
+      bumpAll(fmtMono);
+      commit(fmtMono, "format 1 -> 3 and a kernel change, every major bumped");
+      expect(guard(fmtMono).status).toBe(0);
+    });
+  });
+
+  describe("(b) a 2 -> 3 reformat plus a change to fold source in the same diff: the MINOR is owed", () => {
+    spawnIt(6)("is red in EVERY sport as a minor, names the file and the way out, and is settled by each sport's own FOLD_MINOR (or FOLD_EPOCH) bump", () => {
+      atF2(fmtMono);
+      recordStats(fmtMono);
+      put(fmtMono, "src/stats/stats.ts", "export const bump = (n: number): number => n + 2;\n");
+      commit(fmtMono, "reformat to format 3 + a stats rule change");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toBe("");
+      expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+      for (const k of KEYS) {
+        expect(lineOf(r.stdout, k), k).toMatch(new RegExp(`matched ${STREAMS.get(k)} changed 0 deltas-only 0 removed 0 added 0 recorded ${STREAMS.get(k)} - VIOLATION: minor owed, only the server computes this`));
+        expect(lineOf(r.stdout, k), k).toContain(`${STREAMS.get(k)} newly recorded stream(s) of player stats while the change touches fold source: packages/engine/src/stats/stats.ts`);
+        expect(lineOf(r.stdout, k), k).toContain("land the stats field alone, or raise FOLD_MINOR");
+        expect(lineOf(r.stdout, k), k).toContain(`raise FOLD_MINOR.${k} to ${realEntry("FOLD_MINOR", k) + 1} in src/sport/fold-epoch.ts`);
+      }
+      expect(r.stdout).toContain(summary(realSports, realStreams, "HEAD^1", realSports));
+
+      atF2(fmtMono);
+      recordStats(fmtMono);
+      put(fmtMono, "src/stats/stats.ts", "export const bump = (n: number): number => n + 2;\n");
+      bumpMinorAll(fmtMono);
+      commit(fmtMono, "same, every FOLD_MINOR bumped");
+      const paid = guard(fmtMono);
+      expect({ status: paid.status, stderr: paid.stderr, violated: violated(paid.stdout) }).toEqual({ status: 0, stderr: "", violated: [] });
+      expect(recordedTotal(paid.stdout)).toBe(realStreams);
+
+      atF2(fmtMono);
+      recordStats(fmtMono);
+      put(fmtMono, "src/stats/stats.ts", "export const bump = (n: number): number => n + 2;\n");
+      bumpAll(fmtMono);
+      commit(fmtMono, "same, every FOLD_EPOCH bumped");
+      expect(guard(fmtMono).status, "a major settles a minor").toBe(0);
+
+      atF2(fmtMono);
+      recordStats(fmtMono);
+      put(fmtMono, "src/stats/stats.ts", "export const bump = (n: number): number => n + 2;\n");
+      bumpMinorAll(fmtMono, KEYS.slice(1));
+      commit(fmtMono, "same, all but one sport's minor bumped");
+      const part = guard(fmtMono);
+      expect(part.status).toBe(1);
+      expect(violatedSorted(part.stdout), "only the sport that was not bumped").toEqual([FIRST]);
+    });
+
+    spawnIt(2)("an UNTRACKED fold-source file counts too, and the minor still does not become a major", () => {
+      atF2(fmtMono);
+      recordStats(fmtMono);
+      commit(fmtMono, "reformat to format 3");
+      expect(guard(fmtMono).status, "control: the reformat alone is green").toBe(0);
+      put(fmtMono, "src/stats/untracked-rule.ts", "export const rule = 1;\n");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(lineOf(r.stdout, FIRST)).toContain("packages/engine/src/stats/untracked-rule.ts");
+      expect(lineOf(r.stdout, FIRST)).toContain("minor owed");
+      expect(lineOf(r.stdout, FIRST)).not.toContain("major owed");
+    });
+
+    spawnIt(2)("with the engine at a repository root the same verdicts hold", () => {
+      atF2(fmtRooted);
+      recordStats(fmtRooted);
+      put(fmtRooted, "src/stats/stats.ts", "export const bump = (n: number): number => n + 2;\n");
+      commit(fmtRooted, "reformat to format 3 + a stats rule change, engine at the root");
+      const r = guard(fmtRooted);
+      expect(r.status).toBe(1);
+      expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+      expect(lineOf(r.stdout, FIRST)).toContain(" src/stats/stats.ts");
+      expect(lineOf(r.stdout, FIRST)).toContain("minor owed");
+    });
+  });
+
+  describe("(c) on a format-3 base, a recorded stat that moves is a MINOR owed", () => {
+    const TWO = [FIRST, LAST] as const;
+    spawnIt(5)("in two sports: exactly those two are red (stats-only 1), each is settled by its own minor bump, and a major settles it too", () => {
+      atF3(fmtMono);
+      for (const k of TWO) moveStats(fmtMono, k);
+      commit(fmtMono, "a stats rule change re-recorded by a re-baseline, no bump");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(violatedSorted(r.stdout)).toEqual([...TWO].sort());
+      for (const k of TWO) {
+        expect(lineOf(r.stdout, k), k).toMatch(new RegExp(`matched ${STREAMS.get(k)} changed 0 deltas-only 0 removed 0 added 0 recorded 0 stats-only 1 - VIOLATION: minor owed, only the server computes this: 1 stream\\(s\\) differ in their player stats`));
+        expect(lineOf(r.stdout, k), k).toContain(`raise FOLD_MINOR.${k} to ${realEntry("FOLD_MINOR", k) + 1}`);
+        expect(statsOnlyOf(r.stdout, k), k).toBe(1);
+      }
+      for (const k of KEYS.filter((x) => !TWO.includes(x as never))) expect(statsOnlyOf(r.stdout, k), `${k} did not move`).toBe(0);
+
+      atF3(fmtMono);
+      for (const k of TWO) moveStats(fmtMono, k);
+      setMinor(fmtMono, FIRST, realEntry("FOLD_MINOR", FIRST) + 1);
+      commit(fmtMono, "same, one sport's minor bumped");
+      expect(violatedSorted(guard(fmtMono).stdout), "the bumped sport is settled, the other is not").toEqual([LAST]);
+
+      atF3(fmtMono);
+      for (const k of TWO) moveStats(fmtMono, k);
+      bumpMinorAll(fmtMono, TWO);
+      commit(fmtMono, "same, both minors bumped");
+      const paid = guard(fmtMono);
+      expect(paid.status).toBe(0);
+      expect(lineOf(paid.stdout, FIRST)).toMatch(/stats-only 1$/);
+
+      atF3(fmtMono);
+      for (const k of TWO) moveStats(fmtMono, k);
+      bumpAll(fmtMono, TWO);
+      commit(fmtMono, "same, both majors bumped");
+      expect(guard(fmtMono).status, "a major settles a minor").toBe(0);
+    });
+
+    spawnIt(3)("a stat that moves beside a state: a MAJOR is owed, the minor bump does not settle it, and the line counts it once as changed", () => {
+      atF3(fmtMono);
+      moveStats(fmtMono, FIRST);
+      moveOutcome(fmtMono, FIRST);
+      commit(fmtMono, "stats and outcome moved");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(lineOf(r.stdout, FIRST)).toMatch(/changed 1 deltas-only 0 removed 0 added 0 recorded 0 - VIOLATION: major owed/);
+      expect(statsOnlyOf(r.stdout, FIRST), "a changed stream is not also stats-only").toBe(0);
+      atF3(fmtMono);
+      moveStats(fmtMono, FIRST);
+      moveOutcome(fmtMono, FIRST);
+      setMinor(fmtMono, FIRST, realEntry("FOLD_MINOR", FIRST) + 1);
+      commit(fmtMono, "same, minor bumped");
+      expect(violated(guard(fmtMono).stdout), "a minor does not stand in for the major").toEqual([FIRST]);
+      atF3(fmtMono);
+      moveStats(fmtMono, FIRST);
+      moveOutcome(fmtMono, FIRST);
+      setEpoch(fmtMono, FIRST, realEntry("FOLD_EPOCH", FIRST) + 1);
+      commit(fmtMono, "same, major bumped");
+      expect(guard(fmtMono).status).toBe(0);
+    });
+
+    spawnIt(3)("nothing moved but a FOLD_MINOR bump is not a violation, and stats re-recorded to the same text are no move", () => {
+      atF3(fmtMono);
+      setMinor(fmtMono, FIRST, realEntry("FOLD_MINOR", FIRST) + 1);
+      commit(fmtMono, "a minor raised with nothing moved");
+      expect(guard(fmtMono).status).toBe(0);
+      atF3(fmtMono);
+      editCorpus(fmtMono, FIRST, (c) => { c.streams[0]!.playerStats = String(c.streams[0]!.playerStats); });
+      commit(fmtMono, "stats rewritten as the same text");
+      const same = guard(fmtMono);
+      expect({ status: same.status, violated: violated(same.stdout) }).toEqual({ status: 0, violated: [] });
+    });
+
+    spawnIt(2)("with the engine at a repository root the same verdict holds", () => {
+      atF3(fmtRooted);
+      moveStats(fmtRooted, FIRST);
+      commit(fmtRooted, "a stats move, engine at the root");
+      const r = guard(fmtRooted);
+      expect(r.status).toBe(1);
+      expect(violated(r.stdout)).toEqual([FIRST]);
+      expect(lineOf(r.stdout, FIRST)).toMatch(/stats-only 1 - VIOLATION: minor owed/);
+    });
+  });
+
+  describe("(d) the format never falls, and a malformed format 3 is a refusal", () => {
+    spawnIt(5)("format 3 rewritten as format 2, or as format 1, is red in every sport, and no bump settles it", () => {
+      atF3(fmtMono);
+      eachCorpus(fmtMono, asFormat2);
+      commit(fmtMono, "the playerStats dropped");
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(violatedSorted(r.stdout)).toEqual([...KEYS].sort());
+      expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`corpus format fell \\(3 -> 2\\): ${STREAMS.get(FIRST)} stream\\(s\\) recorded their player stats at the baseline`));
+      bumpAll(fmtMono);
+      bumpMinorAll(fmtMono);
+      commit(fmtMono, "dropped and bumped");
+      expect(guard(fmtMono, "f3").status, "a bump does not restore a dropped pin").toBe(1);
+
+      atF3(fmtMono);
+      eachCorpus(fmtMono, asFormat1);
+      commit(fmtMono, "all the new fields dropped");
+      const r1 = guard(fmtMono);
+      expect(r1.status).toBe(1);
+      expect(lineOf(r1.stdout, FIRST)).toMatch(new RegExp(`corpus format fell \\(3 -> 1\\): ${STREAMS.get(FIRST)} stream\\(s\\) recorded their summaries, overlay and player stats`));
+    });
+
+    spawnIt(4)("the fall is judged on the CORPUS: format 2 with every stream re-recorded, and the bump paid, is still red", () => {
+      const sport = "badminton";
+      expect(KEYS).toContain(sport);
+      const rerecord = (c: Corpus): void => { for (const s of c.streams) s.seed = Number(s.seed) + 1_000_003; };
+      atF3(fmtMono);
+      editCorpus(fmtMono, sport, rerecord);
+      setEpoch(fmtMono, sport, realEntry("FOLD_EPOCH", sport) + 1);
+      commit(fmtMono, `${sport} re-recorded in format 3, bumped`);
+      const control = guard(fmtMono);
+      expect({ status: control.status, violated: violated(control.stdout) }, "the control: still format 3, bumped: green").toEqual({ status: 0, violated: [] });
+      atF3(fmtMono);
+      editCorpus(fmtMono, sport, (c) => {
+        rerecord(c);
+        c.format = 2;
+        for (const s of c.streams) delete s.playerStats;
+      });
+      setEpoch(fmtMono, sport, realEntry("FOLD_EPOCH", sport) + 1);
+      commit(fmtMono, `${sport} rewritten as format 2, re-recorded, bumped`);
+      const r = guard(fmtMono);
+      expect(r.status).toBe(1);
+      expect(violated(r.stdout)).toEqual([sport]);
+      const n = STREAMS.get(sport)!;
+      expect(lineOf(r.stdout, sport)).toMatch(new RegExp(`matched 0 changed 0 deltas-only 0 removed ${n} added ${n} recorded 0 - VIOLATION: .*corpus format fell \\(3 -> 2\\): ${n} stream\\(s\\)`));
+    });
+
+    const BAD: ReadonlyArray<readonly [string, (c: Corpus) => void, RegExp]> = [
+      ["a format-3 stream without playerStats", (c) => { delete c.streams[1]!.playerStats; }, /stream #1 is malformed \(a format-3 stream needs playerStats/],
+      ["a stream that stores a key no format records (the probe-only dense overlay)", (c) => { c.streams[0]!.dense = { initial: {}, steps: {} }; }, /stream #0 carries a key no format records \("dense"\)/],
+      ["playerStats that is not a string", (c) => { c.streams[0]!.playerStats = []; }, /stream #0 is malformed \(a format-3 stream needs playerStats/],
+      // JSON.parse coerces its argument to a string, so an ARRAY holding the text of an array parses as that array: only the typeof check refuses it
+      ["playerStats that is an array holding the text of an array", (c) => { c.streams[0]!.playerStats = ["[]"]; }, /stream #0 is malformed/],
+      ["playerStats that is not JSON", (c) => { c.streams[0]!.playerStats = "{nope"; }, /stream #0 is malformed/],
+      ["playerStats that is JSON but not an array", (c) => { c.streams[0]!.playerStats = "{}"; }, /stream #0 is malformed/],
+      ["a row without a personId", (c) => { c.streams[0]!.playerStats = '[{"stats":{}}]'; }, /stream #0 is malformed/],
+      ["a row whose stats is an array", (c) => { c.streams[0]!.playerStats = '[{"personId":"p","stats":[]}]'; }, /stream #0 is malformed/],
+      ["a row whose stat is not a number", (c) => { c.streams[0]!.playerStats = '[{"personId":"p","stats":{"goals":"3"}}]'; }, /stream #0 is malformed/],
+      // `1e999` is a valid JSON number that parses to Infinity: `typeof` accepts it, only `Number.isFinite` refuses it
+      ["a row whose stat is not a finite number", (c) => { c.streams[0]!.playerStats = '[{"personId":"p","stats":{"goals":1e999}}]'; }, /stream #0 is malformed/],
+      ["a row that is not an object", (c) => { c.streams[0]!.playerStats = "[1]"; }, /stream #0 is malformed/],
+      ["a format-3 stream without its summaries", (c) => { delete c.streams[0]!.summaries; }, /stream #0 is malformed \(a format-3 stream needs summaries/],
+      ["a format-3 stream without its overlay", (c) => { delete c.streams[0]!.overlay; }, /stream #0 is malformed \(a format-3 stream needs summaries/],
+    ];
+    spawnIt(BAD.length + 2)("each malformed format-3 corpus is refused (exit 2, nothing judged), whichever side holds it", () => {
+      for (const [label, edit, message] of BAD) {
+        atF3(fmtMono);
+        editCorpus(fmtMono, FIRST, edit);
+        commit(fmtMono, `current side: ${label}`);
+        const r = guard(fmtMono, "f3");
+        expect({ label, status: r.status, stdout: r.stdout }, label).toEqual({ label, status: 2, stdout: "" });
+        expect(r.stderr, label).toMatch(message);
+      }
+      atF3(fmtMono);
+      editCorpus(fmtMono, FIRST, (c) => { delete c.streams[0]!.playerStats; });
+      const bad = commit(fmtMono, "a baseline with a half-recorded stream");
+      atF3(fmtMono);
+      const r = guard(fmtMono, bad);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toMatch(new RegExp(`at ${bad}: stream #0 is malformed`));
+    });
+
+    spawnIt(3)("a format-1 or format-2 corpus that already holds playerStats is refused: a half-converted corpus is not 'unrecorded'", () => {
+      atF1(fmtMono);
+      editCorpus(fmtMono, FIRST, (c) => { c.streams[0]!.playerStats = "[]"; });
+      commit(fmtMono, "a format-1 hybrid");
+      const one = guard(fmtMono);
+      expect({ status: one.status, stdout: one.stdout }).toEqual({ status: 2, stdout: "" });
+      expect(one.stderr).toMatch(/stream #0 records playerStats, but the corpus is format 1/);
+      atF2(fmtMono);
+      editCorpus(fmtMono, FIRST, (c) => { c.streams[0]!.playerStats = "[]"; });
+      commit(fmtMono, "a format-2 hybrid");
+      const two = guard(fmtMono);
+      expect({ status: two.status, stdout: two.stdout }).toEqual({ status: 2, stdout: "" });
+      expect(two.stderr).toMatch(/stream #0 records playerStats, but the corpus is format 2/);
+    });
   });
 });

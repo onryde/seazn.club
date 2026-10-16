@@ -5,7 +5,7 @@
 // Fixtures are built on the real GoldenCorpus/GoldenStream interfaces, and every sweep over the sports takes the list from the registry and
 // reports how many it visited (TEST-STRATEGY rule 2): zero visited is a failure, never a pass.
 import { beforeAll, describe, expect, it } from "vitest";
-import { epochViolations, compareSides, GuardRefusal, type Side } from "../scripts/fold-epoch-guard.ts";
+import { epochViolations, compareSides, foldSourceTouched, GuardRefusal, type Side } from "../scripts/fold-epoch-guard.ts";
 import { builtinModules } from "../src/sports/index.ts";
 import { forEachSport } from "../src/testkit/for-each-sport.ts";
 import { readCorpus, type GoldenCorpus, type GoldenStream } from "../src/testkit/golden.ts";
@@ -96,7 +96,7 @@ describe("fold-epoch guard: the rule", () => {
     const before = side(1, [stream("std", 1), stream("std", 2), stream("std", 3)]);
     const after = side(1, [stream("std", 1), stream("std", 2, { outcome: "B" }), stream("std", 4)]);
     expect(epochViolations(before, after)).toEqual([
-      { sport: "badminton", matched: 2, changed: 1, deltasOnly: 0, removed: 1, added: 1, before: 1, after: 1, beforeMinor: 0, afterMinor: 0, owes: "major", reason: expect.stringMatching(/1 stream\(s\) fold differently.*1 stream\(s\) removed or re-recorded.*did not rise \(1 -> 1\)/) },
+      { sport: "badminton", matched: 2, changed: 1, deltasOnly: 0, statsOnly: 0, removed: 1, added: 1, recorded: 0, before: 1, after: 1, beforeMinor: 0, afterMinor: 0, owes: "major", reason: expect.stringMatching(/1 stream\(s\) fold differently.*1 stream\(s\) removed or re-recorded.*did not rise \(1 -> 1\)/) },
     ]);
   });
   describe("a stream's input is its raw config object as well as its events and lineups", () => {
@@ -496,4 +496,566 @@ describe("fold-epoch guard: over every registered sport's real golden corpus", (
     });
     expect(checked).toBe(builtinModules.length);
   }, budget(2));
+});
+
+// ------------------------------------------------------------------------------------------------------------------------------------
+// GF-2 T2: the corpus's second format. A format-2 stream also records the kernel's per-step summary digests and its overlay (the
+// stoppage, the squads, a settlement, the effective outcome...): what a phone computes from the kernel, not from the module. The
+// fold-affecting rule is the owner's (Q1, 2026-10-15), and the table of paths below is the ruling's own list, typed from it.
+
+/** A stream recording the format-2 fields, with digests that differ per step so a single moved digest can be told from a moved length. */
+const recorded = (s: GoldenStream, over: Partial<GoldenStream> = {}): GoldenStream =>
+  ({ ...s, summaries: s.events.map((_, i) => `#d${i}`), overlay: "{}", ...over });
+const fmt2 = (streams: GoldenStream[], key = "badminton"): GoldenCorpus => ({ ...corpus(streams, key), format: 2 });
+const side2 = (epoch: number, streams: GoldenStream[]): Side => ({ epochs: { badminton: epoch }, corpora: { badminton: fmt2(streams) } });
+/** The fold-affecting changed paths a CLI would hand the guard; `[]` is a change that touches no fold source. */
+const frozen = () => [] as string[];
+const KERNEL = "src/core/events.ts";
+
+describe("fold-epoch guard: GF-2 - the kernel-overlay fields are phone outputs", () => {
+  const base = (): GoldenStream[] => [stream("std", 1, { events: [{ seq: 1 }, { seq: 2 }] as never, states: ["s1", "s2"] }), stream("std", 2)];
+  const rec = (over: Partial<GoldenStream> = {}, at = 0): GoldenStream[] => base().map((s, i) => (i === at ? recorded(s, over) : recorded(s)));
+
+  it("a moved per-step summary digest, with every state, outcome and summary the same, is a MAJOR owed (and a minor does not stand in for it)", () => {
+    const v = epochViolations(side2(1, rec()), side2(1, rec({ summaries: ["#d0", "#MOVED"] })));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ sport: "badminton", matched: 2, changed: 1, deltasOnly: 0, recorded: 0, owes: "major" });
+    expect(epochViolations(side2(1, rec()), side2(2, rec({ summaries: ["#d0", "#MOVED"] })))).toEqual([]);
+    const minorOnly = (m: number, streams: GoldenStream[]): Side => ({ epochs: { badminton: 1 }, minors: { badminton: m }, corpora: { badminton: fmt2(streams) } });
+    expect(epochViolations(minorOnly(0, rec()), minorOnly(1, rec({ summaries: ["#d0", "#MOVED"] }))).map((x) => x.owes)).toEqual(["major"]);
+  });
+  it("a summary list with another LENGTH is a move too, though every entry the two share is equal", () => {
+    expect(epochViolations(side2(1, rec()), side2(1, rec({ summaries: ["#d0"] }))).map((x) => x.sport)).toEqual(["badminton"]);
+    expect(epochViolations(side2(1, rec()), side2(1, rec({ summaries: ["#d0", "#d1", "#d2"] }))).map((x) => x.sport)).toEqual(["badminton"]);
+  });
+  it("a moved overlay is a MAJOR owed, whether one change point or the whole column moved", () => {
+    for (const overlay of ['{"stoppage":[[0,"x"]]}', '{"squads":[[1,"#s"]]}', '{ }']) {
+      const v = epochViolations(side2(1, rec()), side2(1, rec({ overlay })));
+      expect(v.map((x) => [x.sport, x.owes, x.changed]), overlay).toEqual([["badminton", "major", 1]]);
+      expect(epochViolations(side2(1, rec()), side2(2, rec({ overlay }))), `${overlay} bumped`).toEqual([]);
+    }
+  });
+  it("equal summaries and an equal overlay are not a move (the control: the cases above are not red for another reason)", () => {
+    expect(epochViolations(side2(1, rec()), side2(1, rec()))).toEqual([]);
+    const [row] = compareSides(side2(1, rec()), side2(1, rec()));
+    expect(row).toMatchObject({ matched: 2, changed: 0, recorded: 0, owes: null, reason: null });
+  });
+
+  describe("a stream that gains the fields for the first time (baseline format 1 -> format 2)", () => {
+    const before = (): Side => side(1, base());
+    const after = (over: Partial<GoldenStream> = {}, epoch = 1): Side => side2(epoch, rec(over));
+    it("owes NOTHING when the change touches no fold source, and the row counts it as recorded (not changed, not added)", () => {
+      expect(epochViolations(before(), after(), frozen)).toEqual([]);
+      const [row] = compareSides(before(), after(), frozen);
+      expect(row).toMatchObject({ matched: 2, changed: 0, deltasOnly: 0, removed: 0, added: 0, recorded: 2, owes: null, reason: null });
+    });
+    it("owes a MAJOR when the same change touches fold source, naming the paths and the way out", () => {
+      const v = epochViolations(before(), after(), () => [KERNEL]);
+      expect(v).toHaveLength(1);
+      expect(v[0]).toMatchObject({ sport: "badminton", matched: 2, changed: 2, recorded: 2, owes: "major" });
+      expect(v[0]!.reason).toContain("2 newly recorded stream(s)");
+      expect(v[0]!.reason).toContain(KERNEL);
+      expect(v[0]!.reason).toMatch(/land the format bump alone/);
+      expect(v[0]!.reason).toContain("raise FOLD_EPOCH.badminton to 2 in src/sport/fold-epoch.ts");
+      expect(epochViolations(before(), after({}, 2), () => [KERNEL]), "with the bump").toEqual([]);
+    });
+    it("lists at most a few of the touched paths, and says how many more", () => {
+      const many = Array.from({ length: 9 }, (_, i) => `src/core/f${i}.ts`);
+      const v = epochViolations(before(), after(), () => many);
+      expect(v[0]!.reason).toContain("src/core/f0.ts");
+      expect(v[0]!.reason).toMatch(/and 6 more/);
+      expect(v[0]!.reason).not.toContain("src/core/f8.ts");
+    });
+    it("FAILS CLOSED when it is not told what changed: no change list is a touched fold source, never a frozen one", () => {
+      const v = epochViolations(before(), after());
+      expect(v.map((x) => [x.sport, x.owes, x.recorded])).toEqual([["badminton", "major", 2]]);
+      expect(v[0]!.reason).toMatch(/no list of changed files/);
+    });
+    it("a minor bump does not settle it either: a phone computes this", () => {
+      const m = (n: number, streams: GoldenStream[], f2: boolean): Side => ({ epochs: { badminton: 1 }, minors: { badminton: n }, corpora: { badminton: f2 ? fmt2(streams) : corpus(streams) } });
+      expect(epochViolations(m(0, base(), false), m(1, rec(), true), () => [KERNEL]).map((x) => x.owes)).toEqual(["major"]);
+    });
+    it("a pre-existing field that ALSO moved is a change whatever the source did (Q6: a harness rewrite of an existing field is a major)", () => {
+      for (const over of [{ outcome: "B" }, { summary: '{"x":1}' }, { states: ["s1-new", "s2"] }] as Partial<GoldenStream>[]) {
+        const v = epochViolations(before(), after(over), frozen);
+        expect(v.map((x) => [x.sport, x.owes, x.changed, x.recorded]), JSON.stringify(over)).toEqual([["badminton", "major", 1, 2]]);
+      }
+      // a deltas-only move beside the new fields stays the minor it always was, and the frozen source does not hide it
+      const deltas = epochViolations(before(), after({ deltas: "[1]" }), frozen);
+      expect(deltas.map((x) => [x.owes, x.deltasOnly, x.changed, x.recorded])).toEqual([["minor", 1, 0, 2]]);
+    });
+    it("a HALF-recorded stream (one of the two fields) is not recorded: the parser refuses it, and this function must not read it as gaining the fields", () => {
+      const half = (over: Partial<GoldenStream>): Side => side(1, base().map((s) => ({ ...s, ...over })));
+      for (const over of [{ summaries: ["#d0", "#d1"] }, { overlay: "{}" }] as Partial<GoldenStream>[]) {
+        const [row] = compareSides(before(), half(over), () => [KERNEL]);
+        expect(row, JSON.stringify(over)).toMatchObject({ recorded: 0, changed: 0, owes: null, reason: null });
+      }
+    });
+    it("a stream re-recorded in the same change (events differ) is removed and added, never 'recorded'", () => {
+      const v = epochViolations(before(), side2(1, [recorded(base()[0]!, { events: [{ seq: 9 }] as never }), recorded(base()[1]!)]), frozen);
+      expect(v[0]).toMatchObject({ matched: 1, recorded: 1, removed: 1, added: 1, owes: "major" });
+    });
+    it("a stream ADDED already in format 2 owes nothing and is not counted as recorded (EXTEND_GOLDEN)", () => {
+      const v = compareSides(side2(1, rec()), side2(1, [...rec(), recorded(stream("std", 3))]), frozen);
+      expect(v[0]).toMatchObject({ matched: 2, added: 1, recorded: 0, reason: null });
+    });
+    it("a sport with no baseline is new: nothing to compare, nothing recorded", () => {
+      expect(compareSides(null, after(), frozen)).toEqual([]);
+    });
+  });
+
+  describe("the format never falls: a corpus that stops recording the kernel fields is a violation", () => {
+    it("is red whatever else is bumped, because a bump does not restore a pin that was dropped", () => {
+      for (const epoch of [1, 2, 9]) {
+        const v = epochViolations(side2(1, rec()), side(epoch, base()), frozen);
+        expect(v.map((x) => x.sport), `epoch 1 -> ${epoch}`).toEqual(["badminton"]);
+        expect(v[0]!.reason, `epoch 1 -> ${epoch}`).toMatch(/format fell.*2 -> 1.*2 stream\(s\)/);
+      }
+    });
+    it("names it even when nothing else moved, and counts the streams", () => {
+      const [row] = compareSides(side2(1, rec()), side(1, base()), frozen);
+      expect(row).toMatchObject({ matched: 2, changed: 0, recorded: 0 });
+      expect(row!.reason).not.toBeNull();
+    });
+    it("a format-2 corpus kept as it is, or format 1 kept as it is, is not a fall", () => {
+      expect(epochViolations(side2(1, rec()), side2(1, rec()), frozen)).toEqual([]);
+      expect(epochViolations(side(1, base()), side(1, base()), frozen)).toEqual([]);
+    });
+  });
+});
+
+describe("fold-epoch guard: GF-2 - which changed paths touch fold source (the owner's Q1 list)", () => {
+  const MONO = "packages/engine/";
+  // [repo-relative path, touches fold source]. Typed from the ruling: nothing in the engine's src/ outside src/testkit/**,
+  // *.test.ts, *.golden.json, *.schema.json and *.md; the engine's package.json; the root lockfile.
+  const IN_ENGINE: ReadonlyArray<readonly [string, boolean]> = [
+    ["src/core/events.ts", true],
+    ["src/core/lineup.ts", true],
+    ["src/sports/football/football.ts", true],
+    ["src/sports/setbased/badminton.ts", true],
+    ["src/sport/fold-epoch.ts", true], // the epoch table is source too: a bump there is a deliberate fold change
+    ["src/sport/module.ts", true],
+    ["src/index.ts", true],
+    ["src/testkit/golden.ts", false],
+    ["src/testkit/golden-floor.ts", false],
+    ["src/testkit/GOLDEN-POLICY.md", false],
+    ["src/testkit/deep/nested/helper.ts", false],
+    ["src/core/events.test.ts", false],
+    ["src/sports/football/football.time.test.ts", false],
+    ["src/sports/setbased/badminton.golden.json", false],
+    ["src/sports/football/football.schema.json", false],
+    ["src/core/README.md", false],
+    ["package.json", true],
+    ["scripts/fold-epoch-guard.ts", false], // outside src/: the ruling does not list it
+    ["test/fold-epoch-guard.test.ts", false],
+    ["rules/rows.ts", false],
+    ["tsconfig.json", false],
+    ["src/core/events.ts.md", false], // a .md suffix is a doc whatever precedes it
+    ["src/core/events.golden.json.ts", true], // ... and a suffix elsewhere in the name is not an exemption
+    ["src/core/events.test.ts.ts", true], // ... for .test.ts either
+    ["src/core/x.schema.json.ts", true], // ... or .schema.json
+    ["src/core/events.md.ts", true], // ... or .md
+    ["src/testkit-x/a.ts", true], // a directory that merely starts with "testkit" is not src/testkit/
+    ["pack-proof/src/x.ts", false], // a src/ that is not the engine's src/: only a path that STARTS with src/ is fold source
+    ["src/core/testkit/x.ts", true], // only src/testkit/ itself is exempt
+  ];
+  const ELSEWHERE: ReadonlyArray<readonly [string, boolean]> = [
+    ["pnpm-lock.yaml", true], // the root lockfile
+    ["package.json", false], // the ROOT package.json is not the engine's
+    ["apps/web/src/server/x.ts", false],
+    ["packages/scheduler/src/core.ts", false],
+    ["packages/engine-other/src/core/events.ts", false], // a sibling directory that merely starts with "engine"
+    ["packages/engine/../scheduler/pnpm-lock.yaml", false],
+    ["packages/engine-src/core/events.ts", false], // 16 characters in, this path reads "src/core/events.ts": only the prefix check keeps it out
+    ["apps/web/pnpm-lock.yaml", false], // a lockfile that is not the root's
+    ["docs/superpowers/specs/engine-split/gf2-kernel-overlay-design.md", false],
+  ];
+
+  it("in the monorepo (engine at packages/engine/): every path is judged by the ruling's list", () => {
+    let touched = 0;
+    let free = 0;
+    for (const [rel, fold] of IN_ENGINE) {
+      expect(foldSourceTouched([`${MONO}${rel}`], MONO), rel).toEqual(fold ? [`${MONO}${rel}`] : []);
+      if (fold) touched++;
+      else free++;
+    }
+    for (const [path, fold] of ELSEWHERE) {
+      expect(foldSourceTouched([path], MONO), path).toEqual(fold ? [path] : []);
+      if (fold) touched++;
+      else free++;
+    }
+    expect(touched).toBeGreaterThan(8);
+    expect(free).toBeGreaterThan(14);
+  });
+  it("with the engine at a repository root (engine-split 2b): the same list, with no prefix, and the lockfile beside package.json", () => {
+    for (const [rel, fold] of IN_ENGINE) expect(foldSourceTouched([rel], ""), rel).toEqual(fold ? [rel] : []);
+    expect(foldSourceTouched(["pnpm-lock.yaml"], "")).toEqual(["pnpm-lock.yaml"]);
+    expect(foldSourceTouched(["apps/web/x.ts", "docs/a.md"], "")).toEqual([]);
+  });
+  it("a change list is filtered, keeping the order and every offender, and an empty list touches nothing", () => {
+    const changed = [`${MONO}src/testkit/golden.ts`, `${MONO}src/core/b.ts`, "README.md", `${MONO}src/core/a.ts`, "pnpm-lock.yaml"];
+    expect(foldSourceTouched(changed, MONO)).toEqual([`${MONO}src/core/b.ts`, `${MONO}src/core/a.ts`, "pnpm-lock.yaml"]);
+    expect(foldSourceTouched([], MONO)).toEqual([]);
+  });
+});
+
+describe("fold-epoch guard: GF-2 - over every registered sport's real golden corpus", () => {
+  const real = new Map<string, GoldenCorpus>();
+  beforeAll(() => { forEachSport(({ key }) => { real.set(key, readCorpus(key)); }); }, treeBudget(builtinModules.length));
+  const only = (key: string, c: GoldenCorpus, epoch = 1): Side => ({ epochs: { [key]: epoch }, corpora: { [key]: c } });
+  /** The corpus as format 1 (whatever the tree holds), and as format 2 with placeholder digests: the guard compares strings and lengths. */
+  const asFormat1 = (c: GoldenCorpus): GoldenCorpus => {
+    const { format: _format, ...rest } = c;
+    return { ...rest, streams: c.streams.map(({ summaries: _s, overlay: _o, playerStats: _p, ...plain }) => plain) };
+  };
+  const asFormat2 = (c: GoldenCorpus): GoldenCorpus => ({ ...asFormat1(c), format: 2, streams: asFormat1(c).streams.map((s) => recorded(s)) });
+  const budget = (steps: number) => treeBudget(builtinModules.length, steps);
+
+  it("a reformat that touches no fold source owes nothing in any sport, and records every stream it compared (counted)", () => {
+    let sports = 0;
+    let streams = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      const [row] = compareSides(only(key, asFormat1(c)), only(key, asFormat2(c)), frozen);
+      expect(row, key).toMatchObject({ matched: c.streams.length, changed: 0, removed: 0, added: 0, recorded: c.streams.length, owes: null, reason: null });
+      expect(epochViolations(only(key, asFormat1(c)), only(key, asFormat2(c)), frozen), key).toEqual([]);
+      sports++;
+      streams += c.streams.length;
+    });
+    expect(sports).toBe(builtinModules.length);
+    expect(streams).toBeGreaterThanOrEqual(sports);
+  }, budget(4));
+
+  it("the same reformat with ANY fold-source path owes a major in every sport, and that sport's bump alone settles it", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      for (const path of [KERNEL, `src/sports/${key}/${key}.ts`, "package.json"]) {
+        const v = epochViolations(only(key, asFormat1(c)), only(key, asFormat2(c)), () => [path]);
+        expect(v.map((x) => [x.sport, x.owes, x.changed, x.recorded]), `${key}: ${path}`).toEqual([[key, "major", c.streams.length, c.streams.length]]);
+        expect(epochViolations(only(key, asFormat1(c)), only(key, asFormat2(c), 2), () => [path]), `${key}: ${path} bumped`).toEqual([]);
+        checked++;
+      }
+    });
+    expect(checked).toBe(builtinModules.length * 3);
+  }, budget(6));
+
+  const NEW_FIELDS = ["summaries (an entry)", "summaries (the length)", "overlay"] as const;
+  it("on a format-2 base, a move in either new field names exactly that sport and owes a MAJOR, whichever sport it is (the sweep that teeth tests rely on)", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const c = asFormat2(real.get(key)!);
+      const first = c.streams[0]!;
+      for (const field of NEW_FIELDS) {
+        const over: Partial<GoldenStream> =
+          field === "overlay" ? { overlay: '{"stoppage":[[0,"x"]]}' }
+          : field === "summaries (the length)" ? { summaries: first.summaries!.slice(0, -1) }
+          : { summaries: [...first.summaries!.slice(0, -1), "#moved"] };
+        const moved: GoldenCorpus = { ...c, streams: [{ ...first, ...over }, ...c.streams.slice(1)] };
+        const v = epochViolations(only(key, c), only(key, moved), frozen);
+        expect(v.map((x) => [x.sport, x.owes, x.changed, x.recorded]), `${key}: ${field}`).toEqual([[key, "major", 1, 0]]);
+        expect(epochViolations(only(key, c), only(key, moved, 2), frozen), `${key}: ${field} bumped`).toEqual([]);
+        checked++;
+      }
+    });
+    expect(checked).toBe(builtinModules.length * NEW_FIELDS.length);
+  }, budget(NEW_FIELDS.length * 2));
+
+  it("the format falling is a violation in every sport, bumped or not", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      for (const epoch of [1, 2]) {
+        const v = epochViolations(only(key, asFormat2(c)), only(key, asFormat1(c), epoch), frozen);
+        expect(v.map((x) => x.sport), `${key}: epoch 1 -> ${epoch}`).toEqual([key]);
+        expect(v[0]!.reason).toMatch(/format fell/);
+        checked++;
+      }
+    });
+    expect(checked).toBe(builtinModules.length * 2);
+  }, budget(4));
+
+  it("the fall is a fact about the CORPUS: format 1 with EVERY stream re-recorded (nothing matches) is a violation in every sport, whatever the bump", () => {
+    // New seeds: no baseline identity survives, so a count of "matched streams that lost the fields" is zero and the major the re-record
+    // owes is paid by the bump. Only the corpus-level clause sees the dropped summaries and overlay.
+    const rerecorded = (corpus: GoldenCorpus): GoldenCorpus => ({ ...corpus, streams: corpus.streams.map((s) => ({ ...s, seed: s.seed + 1_000_003 })) });
+    let checked = 0;
+    let lost = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      for (const epoch of [1, 2]) {
+        const [row] = compareSides(only(key, asFormat2(c)), only(key, rerecorded(asFormat1(c)), epoch), frozen);
+        expect(row, `${key}: precondition - nothing matched, so only the corpus-level clause can see the fall`).toMatchObject({ matched: 0, removed: c.streams.length, added: c.streams.length });
+        const v = epochViolations(only(key, asFormat2(c)), only(key, rerecorded(asFormat1(c)), epoch), frozen);
+        expect(v.map((x) => x.sport), `${key}: epoch 1 -> ${epoch}`).toEqual([key]);
+        expect(v[0]!.reason, `${key}: epoch 1 -> ${epoch}`).toContain(`corpus format fell (2 -> 1): ${c.streams.length} stream(s) recorded their summaries and overlay`);
+        lost += c.streams.length;
+        checked++;
+      }
+      // the control: the same re-record that stays format 2 is settled by the bump, so the violation above IS the format
+      expect(epochViolations(only(key, asFormat2(c)), only(key, rerecorded(asFormat2(c)), 2), frozen), `${key}: control`).toEqual([]);
+    });
+    expect(checked).toBe(builtinModules.length * 2);
+    expect(lost).toBeGreaterThan(0);
+  }, budget(5));
+
+  it("a sport that has no corpus on the current side is not also called a format fall (its own reason says it)", () => {
+    const c = asFormat2(real.get("badminton")!);
+    const v = epochViolations({ epochs: { badminton: 1 }, corpora: { badminton: c } }, { epochs: { badminton: 1 }, corpora: {} }, frozen);
+    expect(v.map((x) => x.reason)).toEqual([expect.stringContaining("no golden corpus")]);
+    expect(v[0]!.reason).not.toContain("format fell");
+  });
+});
+
+// ------------------------------------------------------------------------------------------------------------------------------------
+// GF-2 T4: the corpus's third format. A format-3 stream also records `playerStats`, the final rows of the server's stats fold. A phone never
+// computes them (the S2 contract), so a move in them is the MINOR (owner ruling Q2, 2026-10-15), and a stream that gains them follows the
+// Q1 rule with the SAME classifier (`foldSourceTouched`, passed in as the change list; there is no second one).
+
+/** A stream recording the format-3 fields (the kernel's and the stats), per-step digests differing so a moved one is tellable. */
+const stats3 = (s: GoldenStream, over: Partial<GoldenStream> = {}): GoldenStream =>
+  ({ ...recorded(s), playerStats: JSON.stringify([{ personId: "p", stats: { goals: s.events.length } }]), ...over });
+const fmt3 = (streams: GoldenStream[], key = "badminton"): GoldenCorpus => ({ ...corpus(streams, key), format: 3 });
+/** A side holding badminton at (major, minor) with the given corpus. */
+const at3 = (major: number, minor: number, c: GoldenCorpus): Side => ({ epochs: { badminton: major }, minors: { badminton: minor }, corpora: { badminton: c } });
+
+describe("fold-epoch guard: GF-2 T4 - player stats are a minor", () => {
+  const base = (): GoldenStream[] => [stream("std", 1, { events: [{ seq: 1 }, { seq: 2 }] as never, states: ["s1", "s2"] }), stream("std", 2)];
+  const rec3 = (over: Partial<GoldenStream> = {}, at = 0): GoldenStream[] => base().map((s, i) => (i === at ? stats3(s, over) : stats3(s)));
+  const MOVED = JSON.stringify([{ personId: "p", stats: { goals: 99 } }]);
+  const owes = (v: ReturnType<typeof epochViolations>) => v.map((x) => [x.sport, x.owes]);
+
+  describe("a stream whose player stats moved while every phone output stayed (both sides format 3)", () => {
+    it("owes a MINOR: red unbumped, counted as stats-only and not as a changed fold, the reason names FOLD_MINOR and the number", () => {
+      const v = epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3(rec3({ playerStats: MOVED }))), frozen);
+      expect(v).toHaveLength(1);
+      expect(v[0]).toMatchObject({ sport: "badminton", matched: 2, changed: 0, deltasOnly: 0, statsOnly: 1, removed: 0, added: 0, recorded: 0, owes: "minor" });
+      expect(v[0]!.reason).toMatch(/^minor owed, only the server computes this: 1 stream\(s\) differ in their player stats/);
+      expect(v[0]!.reason).toContain("raise FOLD_MINOR.badminton to 1 in src/sport/fold-epoch.ts");
+      expect(v[0]!.reason).not.toMatch(/standings deltas/);
+    });
+    it("a minor bump settles it, so does a major bump, and an unrelated bump of nothing does not", () => {
+      const was = at3(1, 0, fmt3(rec3()));
+      const moved = fmt3(rec3({ playerStats: MOVED }));
+      expect(epochViolations(was, at3(1, 1, moved), frozen), "minor 0 -> 1").toEqual([]);
+      expect(epochViolations(was, at3(2, 0, moved), frozen), "major 1 -> 2").toEqual([]);
+      expect(epochViolations(was, at3(1, 0, moved), frozen).map((x) => x.owes), "no bump").toEqual(["minor"]);
+      expect(epochViolations(at3(1, 2, fmt3(rec3())), at3(1, 2, moved), frozen).map((x) => x.reason), "minor held at 2").toEqual([expect.stringContaining("raise FOLD_MINOR.badminton to 3")]);
+    });
+    it("equal stats are not a move (the control: the cases above are not red for another reason)", () => {
+      const [row] = compareSides(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3(rec3())), frozen);
+      expect(row).toMatchObject({ matched: 2, changed: 0, deltasOnly: 0, statsOnly: 0, recorded: 0, owes: null, reason: null });
+    });
+    it("text that differs only in key order is a move (the record is the canonical text, byte for byte)", () => {
+      const a = '[{"personId":"p","stats":{"a":1,"b":2}}]';
+      const b = '[{"personId":"p","stats":{"b":2,"a":1}}]';
+      expect(epochViolations(at3(1, 0, fmt3(rec3({ playerStats: a }))), at3(1, 0, fmt3(rec3({ playerStats: b }))), frozen).map((x) => x.owes)).toEqual(["minor"]);
+    });
+    it("a minor bump does NOT settle a move a phone computes, stats beside it or not: the strongest class decides", () => {
+      for (const [name, over] of [["state", { states: ["s1-new", "s2"] }], ["outcome", { outcome: "B" }], ["summary", { summary: '{"x":1}' }], ["summaries", { summaries: ["#d0", "#MOVED"] }], ["overlay", { overlay: '{"stoppage":[[0,"x"]]}' }]] as [string, Partial<GoldenStream>][]) {
+        for (const withStats of [false, true]) {
+          const next = fmt3(rec3(withStats ? { ...over, playerStats: MOVED } : over));
+          const v = epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 1, next), frozen);
+          expect(owes(v), `${name} (stats beside it: ${withStats})`).toEqual([["badminton", "major"]]);
+          expect(v[0], `${name} (stats beside it: ${withStats})`).toMatchObject({ changed: 1, statsOnly: 0 });
+          expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(2, 0, next), frozen), `${name} bumped`).toEqual([]);
+        }
+      }
+    });
+    it("a stream that moved its stats AND its standings deltas counts in both columns, and the reason names both", () => {
+      const v = epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3(rec3({ playerStats: MOVED, deltas: "[1]" }))), frozen);
+      expect(v[0]).toMatchObject({ changed: 0, deltasOnly: 1, statsOnly: 1, owes: "minor" });
+      expect(v[0]!.reason).toMatch(/1 stream\(s\) differ only in their standings deltas, 1 stream\(s\) differ in their player stats/);
+      expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 1, fmt3(rec3({ playerStats: MOVED, deltas: "[1]" }))), frozen)).toEqual([]);
+    });
+    it("the deltas-only reading is unchanged by the new column: a deltas-only move beside format-3 stats that did not move is deltas-only", () => {
+      const v = epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3(rec3({ deltas: "[1]" }))), frozen);
+      expect(v[0]).toMatchObject({ changed: 0, deltasOnly: 1, statsOnly: 0, owes: "minor" });
+      expect(v[0]!.reason).not.toMatch(/player stats/);
+    });
+    it("counts every moved stream and accounts each exactly once (matched = unchanged + changed + the minor classes)", () => {
+      const next = fmt3(base().map((s, i) => stats3(s, i === 0 ? { playerStats: MOVED } : { playerStats: MOVED })));
+      const [row] = compareSides(at3(1, 0, fmt3(rec3())), at3(1, 0, next), frozen);
+      expect(row).toMatchObject({ matched: 2, statsOnly: 2, changed: 0 });
+    });
+    it("a stream ADDED already in format 3 owes nothing and is not 'recorded' (EXTEND_GOLDEN)", () => {
+      const [row] = compareSides(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3([...rec3(), stats3(stream("std", 3))])), frozen);
+      expect(row).toMatchObject({ matched: 2, added: 1, recorded: 0, statsOnly: 0, reason: null });
+    });
+    it("a stream re-recorded with other events is removed and added (a major), never a stats move", () => {
+      const v = epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 1, fmt3([stats3(base()[0]!, { events: [{ seq: 9 }] as never, playerStats: MOVED }), stats3(base()[1]!)])), frozen);
+      expect(v[0]).toMatchObject({ matched: 1, removed: 1, added: 1, statsOnly: 0, owes: "major" });
+    });
+  });
+
+  describe("a stream that gains playerStats for the first time (baseline format 2 -> format 3), with the SAME classifier as Q1", () => {
+    const before = (): Side => at3(1, 0, fmt2(base().map((s) => recorded(s))));
+    const after = (over: Partial<GoldenStream> = {}, major = 1, minor = 0): Side => at3(major, minor, fmt3(rec3(over)));
+    it("owes NOTHING when the change touches no fold source, and the row counts it as recorded", () => {
+      expect(epochViolations(before(), after(), frozen)).toEqual([]);
+      const [row] = compareSides(before(), after(), frozen);
+      expect(row).toMatchObject({ matched: 2, changed: 0, deltasOnly: 0, statsOnly: 0, removed: 0, added: 0, recorded: 2, owes: null, reason: null });
+    });
+    it("owes a MINOR (not a major) when the same change touches fold source, naming the paths and the way out", () => {
+      const v = epochViolations(before(), after(), () => [KERNEL]);
+      expect(v).toHaveLength(1);
+      expect(v[0]).toMatchObject({ sport: "badminton", matched: 2, changed: 0, recorded: 2, owes: "minor" });
+      expect(v[0]!.reason).toContain("2 newly recorded stream(s) of player stats");
+      expect(v[0]!.reason).toContain(KERNEL);
+      expect(v[0]!.reason).toMatch(/land the stats field alone, or raise FOLD_MINOR/);
+      expect(v[0]!.reason).toContain("raise FOLD_MINOR.badminton to 1 in src/sport/fold-epoch.ts");
+    });
+    it("a minor bump settles it, so does a major bump", () => {
+      expect(epochViolations(before(), after({}, 1, 1), () => [KERNEL]), "minor 0 -> 1").toEqual([]);
+      expect(epochViolations(before(), after({}, 2, 0), () => [KERNEL]), "major 1 -> 2").toEqual([]);
+    });
+    it("FAILS CLOSED when it is not told what changed: no change list is a touched fold source, never a frozen one", () => {
+      const v = epochViolations(before(), after());
+      expect(owes(v)).toEqual([["badminton", "minor"]]);
+      expect(v[0]!.reason).toMatch(/no list of changed files/);
+    });
+    it("lists the touched paths the same way Q1 does (a few, then how many more)", () => {
+      const many = Array.from({ length: 9 }, (_, i) => `src/stats/f${i}.ts`);
+      const v = epochViolations(before(), after(), () => many);
+      expect(v[0]!.reason).toContain("src/stats/f0.ts");
+      expect(v[0]!.reason).toMatch(/and 6 more/);
+    });
+    it("the classifier is asked at most once per comparison, and only when a stream gained something", () => {
+      let asked = 0;
+      const ask = () => { asked++; return [KERNEL]; };
+      compareSides(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3(rec3())), ask);
+      expect(asked, "nothing gained: git is never asked").toBe(0);
+      compareSides(before(), after(), ask);
+      expect(asked, "two streams gained: asked once").toBe(1);
+    });
+    it("a pre-existing field that ALSO moved is judged as it always was (Q6): a phone output is a major, the deltas the minor", () => {
+      for (const over of [{ outcome: "B" }, { summary: '{"x":1}' }, { states: ["s1-new", "s2"] }] as Partial<GoldenStream>[]) {
+        const v = epochViolations(before(), after(over), frozen);
+        expect(v.map((x) => [x.owes, x.changed, x.recorded]), JSON.stringify(over)).toEqual([["major", 1, 2]]);
+      }
+      expect(epochViolations(before(), after({ deltas: "[1]" }), frozen).map((x) => [x.owes, x.deltasOnly, x.changed])).toEqual([["minor", 1, 0]]);
+    });
+    it("gaining the kernel fields AND the stats in one change (format 1 -> 3) follows the kernel rule: frozen owes nothing, touched owes the MAJOR that settles the stats too", () => {
+      const one = (): Side => at3(1, 0, corpus(base()));
+      expect(epochViolations(one(), after(), frozen)).toEqual([]);
+      const [row] = compareSides(one(), after(), frozen);
+      expect(row).toMatchObject({ matched: 2, recorded: 2, changed: 0, owes: null });
+      const touched = epochViolations(one(), after(), () => [KERNEL]);
+      expect(touched[0]).toMatchObject({ changed: 2, recorded: 2, owes: "major" });
+      expect(touched[0]!.reason).toMatch(/major owed/);
+      expect(epochViolations(one(), after({}, 1, 1), () => [KERNEL]).map((x) => x.owes), "a minor bump does not stand in for the major").toEqual(["major"]);
+      expect(epochViolations(one(), after({}, 2, 0), () => [KERNEL]), "the major bump settles both").toEqual([]);
+    });
+    it("a stream re-recorded in the same change (events differ) is removed and added, never 'recorded'", () => {
+      const v = epochViolations(before(), at3(1, 0, fmt3([stats3(base()[0]!, { events: [{ seq: 9 }] as never }), stats3(base()[1]!)])), frozen);
+      expect(v[0]).toMatchObject({ matched: 1, recorded: 1, removed: 1, added: 1, owes: "major" });
+    });
+    it("a sport with no baseline is new: nothing to compare", () => {
+      expect(compareSides(null, after(), frozen)).toEqual([]);
+    });
+  });
+
+  describe("the format never falls: a corpus that stops recording the stats (or the kernel fields) is a violation no bump settles", () => {
+    it("3 -> 2 is red whatever else is bumped, and the reason says what was lost and how many streams", () => {
+      for (const [major, minor] of [[1, 0], [1, 1], [2, 0], [9, 9]] as const) {
+        const v = epochViolations(at3(1, 0, fmt3(rec3())), at3(major, minor, fmt2(base().map((s) => recorded(s)))), frozen);
+        expect(v.map((x) => x.sport), `${major}.${minor}`).toEqual(["badminton"]);
+        expect(v[0]!.reason, `${major}.${minor}`).toMatch(/^corpus format fell \(3 -> 2\): 2 stream\(s\) recorded their player stats at the baseline and no longer do; a corpus never goes back to format 2/);
+      }
+    });
+    it("3 -> 1 names everything lost; 2 -> 1 keeps the words it always had", () => {
+      const v31 = epochViolations(at3(1, 0, fmt3(rec3())), at3(2, 0, corpus(base())), frozen);
+      expect(v31[0]!.reason).toMatch(/corpus format fell \(3 -> 1\): 2 stream\(s\) recorded their summaries, overlay and player stats at the baseline/);
+      const v21 = epochViolations(at3(1, 0, fmt2(base().map((s) => recorded(s)))), at3(2, 0, corpus(base())), frozen);
+      expect(v21[0]!.reason).toMatch(/corpus format fell \(2 -> 1\): 2 stream\(s\) recorded their summaries and overlay at the baseline/);
+    });
+    it("is a fact about the CORPUS: format 2 with EVERY stream re-recorded (nothing matches) still falls from 3, whatever the bump", () => {
+      const rerecorded = base().map((s) => recorded({ ...s, seed: s.seed + 1_000_003 }));
+      const [row] = compareSides(at3(1, 0, fmt3(rec3())), at3(2, 0, fmt2(rerecorded)), frozen);
+      expect(row).toMatchObject({ matched: 0, removed: 2, added: 2 });
+      expect(row!.reason).toMatch(/corpus format fell \(3 -> 2\): 2 stream\(s\)/);
+      expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(2, 0, fmt3(rerecorded.map((s) => stats3(s)))), frozen), "the control: re-recorded but still format 3").toEqual([]);
+    });
+    it("ONE stream that stops recording its stats while the others still do is a fall too (counted per matched stream; the CLI refuses such a hybrid, the pure function must still not wave it through)", () => {
+      const [first, second] = rec3();
+      const dropped = recorded(base()[1]!); // the kernel fields stay, the stats go
+      expect(dropped.playerStats, "precondition: the stream records no stats").toBeUndefined();
+      const v = epochViolations(at3(1, 0, fmt3([first!, second!])), at3(1, 0, fmt3([first!, dropped])), frozen);
+      expect(v.map((x) => x.sport)).toEqual(["badminton"]);
+      expect(v[0]!.reason).toMatch(/corpus format fell/);
+      expect(v[0]!.reason).toMatch(/1 stream\(s\) recorded their player stats at the baseline and no longer do/);
+      expect(epochViolations(at3(1, 0, fmt3([first!, second!])), at3(1, 1, fmt3([first!, dropped])), frozen), "no bump settles it").toHaveLength(1);
+    });
+    it("a corpus that drops its `format` marker while its streams keep every field has not fallen: the format is read from the evidence too", () => {
+      const { format: _marker, ...unmarked } = fmt3(rec3());
+      expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 0, unmarked as GoldenCorpus), frozen)).toEqual([]);
+      const { format: _marker2, ...unmarked2 } = fmt2(base().map((s) => recorded(s)));
+      expect(epochViolations(at3(1, 0, fmt2(base().map((s) => recorded(s)))), at3(1, 0, unmarked2 as GoldenCorpus), frozen), "and the same for the kernel fields").toEqual([]);
+    });
+    it("a format-3 corpus kept as it is is not a fall, and neither is a rise", () => {
+      expect(epochViolations(at3(1, 0, fmt3(rec3())), at3(1, 0, fmt3(rec3())), frozen)).toEqual([]);
+      expect(epochViolations(at3(1, 0, corpus(base())), at3(1, 0, fmt2(base().map((s) => recorded(s)))), frozen)).toEqual([]);
+    });
+  });
+
+  describe("over every registered sport's real golden corpus", () => {
+    const real = new Map<string, GoldenCorpus>();
+    beforeAll(() => { forEachSport(({ key }) => { real.set(key, readCorpus(key)); }); }, treeBudget(builtinModules.length));
+    const budget = (steps: number) => treeBudget(builtinModules.length, steps);
+    /** The tree's corpus as format 3 with placeholder digests and per-stream stats: the guard compares strings, not folds. */
+    const asFormat3 = (c: GoldenCorpus): GoldenCorpus => {
+      const { format: _format, ...rest } = c;
+      return { ...rest, format: 3, streams: c.streams.map(({ summaries: _s, overlay: _o, playerStats: _p, ...plain }) => stats3(plain as GoldenStream)) };
+    };
+    const asFormat2 = (c: GoldenCorpus): GoldenCorpus => ({ ...asFormat3(c), format: 2, streams: asFormat3(c).streams.map(({ playerStats: _p, ...kept }) => kept) });
+    const only = (key: string, c: GoldenCorpus, major = 1, minor = 0): Side => ({ epochs: { [key]: major }, minors: { [key]: minor }, corpora: { [key]: c } });
+
+    it("a stats move in one stream names exactly that sport and owes a MINOR in every sport; the minor bump settles it, and nothing else is flagged (counted)", () => {
+      let checked = 0;
+      forEachSport(({ key }) => {
+        const c = asFormat3(real.get(key)!);
+        const first = c.streams[0]!;
+        const moved: GoldenCorpus = { ...c, streams: [{ ...first, playerStats: MOVED }, ...c.streams.slice(1)] };
+        const v = epochViolations(only(key, c), only(key, moved), frozen);
+        expect(v.map((x) => [x.sport, x.owes, x.changed, x.statsOnly, x.matched]), key).toEqual([[key, "minor", 0, 1, c.streams.length]]);
+        expect(epochViolations(only(key, c), only(key, moved, 1, 1), frozen), `${key}: minor bumped`).toEqual([]);
+        expect(epochViolations(only(key, c), only(key, moved, 2, 0), frozen), `${key}: major bumped`).toEqual([]);
+        checked++;
+      });
+      expect(checked).toBe(builtinModules.length);
+    }, budget(4));
+
+    it("a 2 -> 3 reformat that touches no fold source owes nothing in any sport and records every stream; with a fold-source path it owes the MINOR, settled by the minor (counted)", () => {
+      let checked = 0;
+      let streams = 0;
+      forEachSport(({ key }) => {
+        const c = real.get(key)!;
+        const [row] = compareSides(only(key, asFormat2(c)), only(key, asFormat3(c)), frozen);
+        expect(row, key).toMatchObject({ matched: c.streams.length, changed: 0, removed: 0, added: 0, recorded: c.streams.length, owes: null, reason: null });
+        for (const path of [KERNEL, `src/sports/${key}/${key}.ts`, "src/stats/stats.ts", "package.json"]) {
+          const v = epochViolations(only(key, asFormat2(c)), only(key, asFormat3(c)), () => [path]);
+          expect(v.map((x) => [x.sport, x.owes, x.changed, x.recorded]), `${key}: ${path}`).toEqual([[key, "minor", 0, c.streams.length]]);
+          expect(epochViolations(only(key, asFormat2(c)), only(key, asFormat3(c), 1, 1), () => [path]), `${key}: ${path} minor bumped`).toEqual([]);
+        }
+        streams += c.streams.length;
+        checked++;
+      });
+      expect(checked).toBe(builtinModules.length);
+      expect(streams).toBeGreaterThanOrEqual(checked);
+    }, budget(8));
+
+    it("the format falling from 3 is a violation in every sport, bumped or not (counted)", () => {
+      let checked = 0;
+      forEachSport(({ key }) => {
+        const c = real.get(key)!;
+        for (const [major, minor] of [[1, 0], [1, 1], [2, 0]] as const) {
+          const v = epochViolations(only(key, asFormat3(c)), only(key, asFormat2(c), major, minor), frozen);
+          expect(v.map((x) => x.sport), `${key}: ${major}.${minor}`).toEqual([key]);
+          expect(v[0]!.reason).toMatch(/corpus format fell \(3 -> 2\)/);
+          checked++;
+        }
+      });
+      expect(checked).toBe(builtinModules.length * 3);
+    }, budget(6));
+  });
 });

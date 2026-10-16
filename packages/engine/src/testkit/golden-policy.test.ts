@@ -14,11 +14,18 @@
 // git state or runs a re-baseline. The impure wiring is two `execFileSync`
 // probes, and the only thing asserted of them is the one behaviour that must
 // fail closed: outside a checkout there is no diff to review.
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { EngineError } from "../core/errors.ts";
+import { foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
+import { resolvePositions } from "../sport/catalog.ts";
+import type { AnySportModule } from "../sport/module.ts";
+import { builtinModules } from "../sports/index.ts";
 import { football } from "../sports/football/index.ts";
+import { sweepBudget } from "./golden-budget.ts";
+import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 import {
   MAX_EVENTS,
   MIN_EVENTS,
@@ -28,6 +35,7 @@ import {
   formatCorpusStateDiff,
   gitPorcelain,
   gitRepoRoot,
+  readCorpus,
   stateDigest,
   type GoldenCorpus,
   type GoldenStream,
@@ -370,5 +378,90 @@ describe("corpusStateDiff — what a re-baseline moved, as reviewable data", () 
     expect(text).toContain("steps=[0]");
     expect(text).toContain("keys=[phase]");
     expect(text).toContain("state keys moved: phase");
+  });
+});
+
+// ------------------------------------------------- the "cannot see" section stays true (GF-2 T3 review)
+
+describe("GOLDEN-POLICY.md — what the guard cannot see names what the engine says it cannot", () => {
+  const policy = readFileSync(join(import.meta.dirname, "GOLDEN-POLICY.md"), "utf8");
+  const bullet = (title: string): string => {
+    const at = policy.indexOf(`- **${title}`);
+    expect(at, `the bullet "${title}" exists`).toBeGreaterThan(-1);
+    const next = policy.indexOf("\n- **", at + 1);
+    return policy.slice(at, next === -1 ? undefined : next);
+  };
+
+  /** Over live prefixes of natural walks: how many abandons the fold accepted, and how many of those the MODULE answered with an
+   *  outcome (the kernel's `outcomeOf`, no settlement, no expunge). */
+  const afterAbandon = (module: AnySportModule, raw: unknown): { attempted: number; answered: number } => {
+    const cfg = module.configSchema.parse(raw) as unknown;
+    const lineups = defaultLineupPair(resolvePositions(module, cfg));
+    let attempted = 0;
+    let answered = 0;
+    for (let seed = 1; seed <= 4; seed++) {
+      const walk = buildWalk(module, cfg, lineups, seed, 80).events;
+      for (const k of new Set([1, Math.ceil(walk.length / 3), Math.ceil((2 * walk.length) / 3), walk.length - 1])) {
+        if (k < 1) continue;
+        const ledger = [...walk.slice(0, k), makeEnvelope(k, { type: "core.abandon", payload: { reason: "rain" } })];
+        try {
+          const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, ledger, { strictFromSeq: 0 });
+          attempted++;
+          if (outcomeOf(module as never, folded as never) !== null) answered++;
+        } catch (error) {
+          if (!(error instanceof EngineError)) throw error; // a refused abandon (already decided) is not an attempt
+        }
+      }
+    }
+    return { attempted, answered };
+  };
+
+  it("the sports with an abandonPolicy knob are the ones the policy names, every recorded config says 'replay', and 'award' makes the module answer an outcome after an abandon", () => {
+    const text = bullet("A kernel overlay a corpus never exercises.");
+    const withKnob: string[] = [];
+    for (const module of builtinModules) {
+      const corpus = readCorpus(module.key);
+      const raws = Object.values(corpus.configs);
+      const knob = (raw: unknown): unknown => (module.configSchema.parse(raw) as { abandonPolicy?: unknown }).abandonPolicy;
+      if (knob(raws[0]) === undefined) continue;
+      withKnob.push(module.key);
+      expect(raws.map(knob), `${module.key}: every recorded config says replay`).toEqual(raws.map(() => "replay"));
+      const replay = afterAbandon(module, raws[0]);
+      const award = afterAbandon(module, { ...(raws[0] as object), abandonPolicy: "award" });
+      expect(replay.attempted, `${module.key}: abandons were accepted under replay`).toBeGreaterThan(0);
+      expect(replay.answered, `${module.key}: under replay the module answers no outcome`).toBe(0);
+      expect(award.attempted, `${module.key}: abandons were accepted under award`).toBeGreaterThan(0);
+      expect(award.answered, `${module.key}: under award the module answers an outcome`).toBeGreaterThan(0);
+      expect(text, `the policy names ${module.key}`).toMatch(new RegExp(`\\b${module.key}\\b`, "i"));
+    }
+    expect(withKnob.sort(), "football, and hockey and icehockey through the period kernel").toEqual(["football", "hockey", "icehockey"]);
+    expect(text).toContain("abandonPolicy");
+  });
+
+  it("under the recorded configs only cricket's module answers an outcome after an abandon (the sentence the policy rests on), swept over every sport", () => {
+    const answering: string[] = [];
+    let attempted = 0;
+    for (const module of builtinModules) {
+      for (const raw of Object.values(readCorpus(module.key).configs)) {
+        const r = afterAbandon(module, raw);
+        attempted += r.attempted;
+        if (r.answered > 0 && !answering.includes(module.key)) answering.push(module.key);
+      }
+    }
+    expect(attempted, "abandons were attempted across the registry").toBeGreaterThan(builtinModules.length);
+    expect(answering).toEqual(["cricket"]);
+    expect(bullet("A kernel overlay a corpus never exercises.")).toMatch(/only\s+cricket/);
+  }, sweepBudget("probe"));
+
+  it("the widening-a-refusal bullet names both refusals by the code the kernel throws, and the kernel still throws them", () => {
+    const text = bullet("Kernel refusals, and widening what the kernel accepts.");
+    const events = readFileSync(join(import.meta.dirname, "../core/events.ts"), "utf8");
+    for (const code of ["ABANDONED_SETTLE_OR_VOID", "SETTLE_NOT_APPLICABLE"]) {
+      expect(text, `the policy names ${code}`).toContain(code);
+      expect(events, `events.ts still throws ${code}`).toContain(`"${code}"`);
+    }
+    expect(text).toContain("manual MAJOR bump");
+    expect(text).toContain("abandonActive");
+    expect(events, "the flag the policy names exists").toContain("let abandonActive");
   });
 });

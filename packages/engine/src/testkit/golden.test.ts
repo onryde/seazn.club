@@ -14,13 +14,15 @@ import { describe, expect, it } from "vitest";
 import { compareSemver } from "../sport/registry.ts";
 import { builtinModules } from "../sports/index.ts";
 import {
+  CURRENT_FORMAT,
   EXTEND_GOLDEN,
   MIN_EVENTS,
   REBASELINE_GOLDEN,
+  REFORMAT_GOLDEN,
   UPDATE_GOLDEN,
   buildCorpus,
   corpusStateDiff,
-  corpusWriteGuard,
+  corpusWriteRefusal,
   declaredOptionalConfigFields,
   declaredOptionalFields,
   eventTypesIn,
@@ -45,26 +47,25 @@ import {
   unreachableStatePathsGoneStale,
   verifyStream,
   writeCorpus,
+  type GoldenCorpus,
 } from "./golden.ts";
 import { extendFloor } from "./golden-floor-streams.ts";
+import { reformatAll } from "./golden-reformat.ts";
 
-// #429 — the corpus-write guard. Both modes that rewrite a committed corpus are
+// #429 — the corpus-write guard. Every mode that rewrites a committed corpus (UPDATE, REBASELINE, and GF-2's REFORMAT: see
+// `GUARDED_WRITE_MODES`) is
 // gated on a working tree that holds NOTHING but corpus changes, because the
 // policy they exist under ("deliberate, isolated in its own commit, reviewed as
 // a state diff" — see GOLDEN-POLICY.md) is unverifiable otherwise: a re-baseline
 // landed on top of a half-finished branch produces a commit in which no reader
 // can tell which state moved because the fold changed. The guard runs BEFORE any
 // writing test is registered, so a refusal cannot half-write the corpus.
-const corpusWriteRefusal =
-  UPDATE_GOLDEN || REBASELINE_GOLDEN ? (() => {
-    const verdict = corpusWriteGuard();
-    return verdict.ok ? null : verdict.reason;
-  })() : null;
+const corpusWriteRefusalReason = corpusWriteRefusal(process.env);
 
-if (corpusWriteRefusal !== null) {
+if (corpusWriteRefusalReason !== null) {
   describe("golden corpus write guard (#429)", () => {
     it("refuses to rewrite the corpus from a dirty working tree", () => {
-      expect.fail(corpusWriteRefusal);
+      expect.fail(corpusWriteRefusalReason);
     });
   });
 } else if (UPDATE_GOLDEN) {
@@ -128,6 +129,29 @@ if (corpusWriteRefusal !== null) {
         writeCorpus(after);
       });
     }
+  });
+} else if (REFORMAT_GOLDEN) {
+  // GF-2: bring every sport to the current format (add the fields it does not hold yet to every stream), or none. NOT a re-baseline: `reformatCorpus` refuses to run if
+  // any field, event or config the corpus already holds would change, and `reformatAll` computes EVERY sport before it writes the
+  // first one, so a refusal in one sport leaves all eleven corpora as they were (a half-reformatted tree is not a state to review).
+  describe("golden corpus reformat (REFORMAT_GOLDEN=1)", () => {
+    it("reformats every sport, or none: nothing is written unless all of them reformat", () => {
+      const bytes = (c: GoldenCorpus): number => `${JSON.stringify(c, null, 0)}\n`.length;
+      const plan = reformatAll(builtinModules, readCorpus, CURRENT_FORMAT);
+      const lines: string[] = [];
+      for (const { module, before, after } of plan) {
+        expect(after.streams.map((s) => s.events), `${module.key}: a reformat must keep the ledger`).toEqual(before.streams.map((s) => s.events));
+        expect(after.configs).toEqual(before.configs);
+        const diff = corpusStateDiff(before, after, module);
+        expect(diff.eventsMoved, `${module.key}: a reformat must keep the ledger`).toBe(false);
+        expect(diff.changedStreams, `${module.key}: a reformat must move no state, outcome, summary or deltas`).toBe(0);
+        lines.push(`${formatCorpusStateDiff(diff)}\n[reformat] ${module.key}: format ${before.format ?? 1} -> ${after.format}, ${bytes(before)} -> ${bytes(after)} bytes (+${bytes(after) - bytes(before)})`);
+      }
+      expect(plan.length, "every registered sport was reformatted").toBe(builtinModules.length);
+      for (const { after } of plan) writeCorpus(after);
+      // eslint-disable-next-line no-console
+      console.log(lines.join("\n"));
+    }, 600_000);
   });
 } else {
   // Every builtin gets a golden — a module added without one fails here rather

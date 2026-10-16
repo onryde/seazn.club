@@ -389,7 +389,7 @@ describe("jsonObjectMembers — the source-text split the order-stability rests 
       1,
       3,
     ).map((e) => ({ type: e.type, payload: e.payload }));
-    const state = recomputeStream(football, {}, events).states[0] as string;
+    const state = recomputeStream(football, {}, events, undefined, 1).states[0] as string;
     const members = jsonObjectMembers(state);
     expect(members).not.toBeNull();
     expect(`{${(members ?? []).map((m) => `${m.rawKey}:${m.rawValue}`).join(",")}}`).toBe(state);
@@ -436,7 +436,7 @@ function cfgCorpus(mutate: (state: Record<string, unknown>) => void): {
     1,
     3,
   ).map((e) => ({ type: e.type, payload: e.payload }));
-  const states = recomputeStream(football, {}, events).states;
+  const states = recomputeStream(football, {}, events, undefined, 1).states;
   const fresh = states[states.length - 1] as string;
   const state = JSON.parse(fresh) as Record<string, unknown>;
   mutate(state);

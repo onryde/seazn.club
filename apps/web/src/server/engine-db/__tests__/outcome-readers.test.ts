@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SETTLE_METHODS, settledMethod } from "@seazn/engine/core";
 
 // Finding 1 (W2a): a settle lives beside module state, so a fold's outcome is
 // `outcomeOf(module, folded)`. A bare `<module>.outcome(state)` on a FOLD
@@ -22,8 +23,8 @@ const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
   "packages/engine/src/testkit/simulation.ts": { calls: 3, reason: "testkit: simulation folds without settle" },
   "packages/engine/src/testkit/scenarios.ts": { calls: 6, reason: "testkit: scenario builder; `played.state` comes from decidedStream, which drives module.apply with the module's own generated events — never a kernel-owned type" },
   "packages/engine/src/testkit/golden-floor.ts": { calls: 1, reason: "golden floor (GF-1): the module-level outcome of a generator walk, to learn which outcome kinds a module can produce; no walk carries core.settle" },
-  "packages/engine/src/testkit/golden-floor-streams.ts": { calls: 1, reason: "golden floor (GF-1): the one bare read (`moduleOutcome`) of the module's outcome, as golden.ts records it; floor streams carry no core.settle (exempt, guarded in golden-floor.test.ts and by the corpus scan below)" },
-  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the frozen corpus records the MODULE's outcome (GOLDEN-POLICY: the per-sport back-compat tripwire); no corpus stream carries core.settle — guarded below, not assumed" },
+  "packages/engine/src/testkit/golden-floor-streams.ts": { calls: 1, reason: "golden floor (GF-1): the one bare read (`moduleOutcome`) of the module's outcome, to find a walk that is decided or a prefix that is still live; the settle story (GF-2 T3) reads the kernel's outcome through `effectiveToken`/`outcomeOf`, and the corpus scan below holds every settle stream to a settled win" },
+  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the format-1 recorder (`moduleRecorder`) records the MODULE's outcome; format 2 and later (every committed corpus since GF-2; format 3 adds the player stats) record the effective outcome through outcomeOf in golden-overlay.ts. A stream carrying core.settle is guarded below, not assumed" },
 };
 const stripComments = (text: string): string => text.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "");
 function walk(dir: string, out: string[]): string[] {
@@ -108,6 +109,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       // GF-1: the golden floor's `settleProbe` folds a settled ledger and reads its EFFECTIVE outcome through outcomeOf,
       // to prove the settle exemption is still needed (the harness records the module's bare outcome instead).
       "packages/engine/src/testkit/golden-floor.ts",
+      // GF-2 T1: the golden recorder's format 2 records the EFFECTIVE outcome of every prefix fold (`effectiveFacts`,
+      // `denseOverlay`), so a corpus pins what the server stores and the phone shows, not the module's bare answer.
+      "packages/engine/src/testkit/golden-overlay.ts",
       "packages/engine/src/testkit/play-event.ts",
       "tools/matrix/lib/fold.ts",
       "tools/matrix/lib/model/ledger-fold.ts",
@@ -150,22 +154,85 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
   it("every allowed file still exists and still holds a bare call (a stale entry is a failure)", () => {
     for (const rel of Object.keys(ALLOWED)) expect(stripComments(readFileSync(join(REPO, rel), "utf8")), rel).toMatch(BARE);
   });
-  it("golden.ts's allowance holds: no golden corpus stream carries core.settle (the reason is a guard, not a comment)", () => {
+  type ScanCorpus = { format?: number; streams: { config: string; seed: number; outcome: string; events: { type: string; voids?: string }[] }[] };
+  /** One corpus read the way the allowance in golden.ts needs it: what it holds, what was actually checked, and what is wrong. */
+  const scanSettles = (file: string, corpus: ScanCorpus, settledMethods: readonly string[]) => {
+    const out = { streams: 0, settleStreams: 0, checked: 0, struck: 0, wrong: [] as string[] };
+    corpus.streams.forEach((stream, i) => {
+      out.streams++;
+      const settles = stream.events.map((e, k) => (e.type === "core.settle" ? k : -1)).filter((k) => k >= 0);
+      if (settles.length === 0) return;
+      out.settleStreams++;
+      const label = `${file}#${i} (${stream.config}#${stream.seed})`;
+      // a settle only ever reaches a corpus recorded by the format-2 recorder or a later one (format 3 is format 2 plus the player
+      // stats): the format-1 recorder would have written the module's answer
+      if ((corpus.format ?? 1) < 2) out.wrong.push(`${label}: carries core.settle in a format-${corpus.format ?? 1} corpus`);
+      // the settle in force at the end (no later void strikes it) decides the match: the recorded outcome is a settled win
+      const standing = settles.filter((k) => !stream.events.some((e) => e.voids === `e-${k}`));
+      out.struck += settles.length - standing.length;
+      if (standing.length === 0) return;
+      out.checked++;
+      const outcome = JSON.parse(stream.outcome) as { kind?: string; method?: string } | null;
+      if (outcome === null || outcome.kind !== "win" || !settledMethods.includes(outcome.method as string)) out.wrong.push(`${label}: ends on ${stream.outcome}, not a settled win`);
+    });
+    return out;
+  };
+
+  it("golden.ts's allowance holds: every corpus stream that carries core.settle is recorded by the format-2 recorder or a later one, and ends on a settled win (the reason is a guard, not a comment)", () => {
     const SPORTS = join(REPO, "packages/engine/src/sports");
+    const settledMethods = SETTLE_METHODS.map(settledMethod);
     let streams = 0;
-    const settled: string[] = [];
+    let settleStreams = 0;
+    let checked = 0; // streams whose standing settle was read against the recorded outcome
+    let struck = 0; // settles a later void strikes (the "said again" half of every settle story)
+    const wrong: string[] = [];
+    const sports = new Set<string>();
     for (const dir of readdirSync(SPORTS)) {
       if (!statSync(join(SPORTS, dir)).isDirectory()) continue;
       for (const file of readdirSync(join(SPORTS, dir)).filter((n) => n.endsWith(".golden.json"))) {
-        const corpus = JSON.parse(readFileSync(join(SPORTS, dir, file), "utf8")) as { streams: { events: { type: string }[] }[] };
-        corpus.streams.forEach((stream, i) => {
-          streams++;
-          if (stream.events.some((e) => e.type === "core.settle")) settled.push(`${file}#${i}`);
-        });
+        const read = scanSettles(file, JSON.parse(readFileSync(join(SPORTS, dir, file), "utf8")) as ScanCorpus, settledMethods);
+        streams += read.streams;
+        settleStreams += read.settleStreams;
+        checked += read.checked;
+        struck += read.struck;
+        wrong.push(...read.wrong);
+        if (read.settleStreams > 0) sports.add(file);
       }
     }
     expect(streams).toBeGreaterThan(200);
-    expect(settled).toEqual([]);
+    expect(settleStreams, "a settle stream in every sport's corpus").toBeGreaterThanOrEqual(sports.size);
+    expect(sports.size, "every sport records a settle").toBeGreaterThanOrEqual(11);
+    // Anti-vacuity: a stream whose settle is struck and never said again is skipped, so a scan that skipped EVERY stream would
+    // read as clean. Every sport's settle story ends on a standing settle and strikes one on the way.
+    expect(checked, "a standing settle was actually checked in every sport").toBeGreaterThanOrEqual(sports.size);
+    expect(struck, "a struck settle in every sport").toBeGreaterThanOrEqual(sports.size);
+    expect(wrong).toEqual([]);
+  });
+
+  it("the settle scan has teeth: each way a settle stream can be wrong is reported, a struck-only settle is skipped, and a good stream is clean", () => {
+    const methods = SETTLE_METHODS.map(settledMethod);
+    const good = JSON.stringify({ kind: "win", method: methods[0] });
+    const stream = (outcome: string, events: { type: string; voids?: string }[]) => ({ config: "c", seed: 1, outcome, events });
+    const settle = { type: "core.settle" };
+    // control: a standing settle ending on a settled win in a format-2 corpus
+    const clean = scanSettles("f", { format: 2, streams: [stream(good, [settle])] }, methods);
+    expect(clean).toMatchObject({ settleStreams: 1, checked: 1, struck: 0, wrong: [] });
+    // the same stream in a format-3 corpus (GF-2 T4: format 2 plus the player stats) is as clean: a later format is the real recorder too
+    expect(scanSettles("f", { format: 3, streams: [stream(good, [settle])] }, methods), "format 3 is recorded by the effective-outcome recorder").toMatchObject({ settleStreams: 1, checked: 1, struck: 0, wrong: [] });
+    // struck then said again: both counted, the standing one checked
+    const again = scanSettles("f", { format: 2, streams: [stream(good, [settle, { type: "core.void", voids: "e-0" }, settle])] }, methods);
+    expect(again).toMatchObject({ settleStreams: 1, checked: 1, struck: 1, wrong: [] });
+    // struck and never said again: skipped, not judged (there is no standing settle to read)
+    const gone = scanSettles("f", { format: 2, streams: [stream("null", [settle, { type: "core.void", voids: "e-0" }])] }, methods);
+    expect(gone).toMatchObject({ settleStreams: 1, checked: 0, struck: 1, wrong: [] });
+    // each way to be wrong
+    expect(scanSettles("f", { format: 1, streams: [stream(good, [settle])] }, methods).wrong.join("|")).toContain("format-1 corpus");
+    expect(scanSettles("f", { streams: [stream(good, [settle])] }, methods).wrong.join("|"), "no format field is format 1").toContain("format-1 corpus");
+    expect(scanSettles("f", { format: 2, streams: [stream(JSON.stringify({ kind: "draw" }), [settle])] }, methods).wrong.join("|")).toContain("not a settled win");
+    expect(scanSettles("f", { format: 2, streams: [stream(JSON.stringify({ kind: "draw", method: methods[0] }), [settle])] }, methods).wrong.join("|"), "a settled METHOD on a result that is not a win").toContain("not a settled win");
+    expect(scanSettles("f", { format: 2, streams: [stream("null", [settle])] }, methods).wrong.join("|"), "no outcome at all").toContain("not a settled win");
+    expect(scanSettles("f", { format: 2, streams: [stream(JSON.stringify({ kind: "win", method: "abandoned" }), [settle])] }, methods).wrong.join("|"), "a win that is not a settled one").toContain("not a settled win");
+    expect(methods.length, "the engine declares its settled methods").toBeGreaterThan(0);
   });
 });
 

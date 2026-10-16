@@ -33,6 +33,7 @@ import {
   anchorSteps,
   comparableStateText,
   configStateKey,
+  corpusFormat,
   extendCorpus,
   isSlimStream,
   isStateDigest,
@@ -387,6 +388,7 @@ describe("verifyStream — one gate, driven by the replay test and the mutation 
       slim.configs[stream.config],
       stream.events,
       stream.lineups,
+      corpusFormat(slim),
     );
     const truncated = { ...replayed, states: replayed.states.slice(0, -1) };
     expect(verifyStream(football, slim, stream, truncated).length).toBeGreaterThan(0);
@@ -399,6 +401,7 @@ describe("verifyStream — one gate, driven by the replay test and the mutation 
       slim.configs[stream.config],
       stream.events,
       stream.lineups,
+      corpusFormat(slim),
     );
     for (const key of ["outcome", "summary", "deltas"] as const) {
       const failures = verifyStream(football, slim, stream, { ...replayed, [key]: `{"x":1}` });
