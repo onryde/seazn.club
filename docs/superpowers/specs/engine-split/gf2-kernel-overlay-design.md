@@ -321,13 +321,14 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
   refused earlier), a lone stream dropping its stats beside streams that keep them (reachable only in the pure guard; the CLI refuses the
   hybrid), and a corpus that drops its `format` marker while its streams keep every field (the format is read from the evidence). Removed
   rather than left unkillable: the stats clause of `foldChange` (its "minor" return is never read; the caller counts deltas and stats
-  beside it) and the builder's re-ask of the stats fold (`extendFloor`'s keep-rule already requires the credit to close the hole; the story
+  beside it; the review then found the deltas arm dead too, and the helper is gone: the guard asks `phoneOutputsDiffer` directly) and the builder's re-ask of the stats fold (`extendFloor`'s keep-rule already requires the credit to close the hole; the story
   test asserts the property on every committed stream). Argued equivalent: `covers: () => true` on the award claim (`uncoveredUnpinned` only
   ever calls `covers` with a verdict of "unpinned"). Second pass over the final code (73 mutants: every pass-1 kill whose failures carried the
   word "Timeout", plus the three fixed survivors): 73 killed, each with assertion failures only, 0 timeouts. Total live: 93 mutants, 93
   killed.
-- **Found while doing this.** (1) `-t "GF-2 T4"` on the guard CLI test dies with `undefined.top` in every T4 test: the format repositories are
-  built in one `beforeAll` inside the earlier "corpus format 2" describe, so a CLI mutation group must select `-t "GF-2"`. (2) A failure
+- **Found while doing this.** (1) `-t "GF-2 T4"` on the guard CLI test died with `undefined.top` in every T4 test: the format repositories were
+  built in one `beforeAll` inside the earlier "corpus format 2" describe. Fixed in review: the `beforeAll` is at file level, and
+  `-t "GF-2 T4"` passes on its own. (2) A failure
   message containing "Timeout" is not a timeout: every vitest stack carries `withTimeout`; classify on the first line. (3) A second
   mutation driver started "because `ps` showed none" raced the first (two mutations in one file); check with `pgrep -f` before and after.
 - **The recorded-void sweep read the kernel only.** `golden-floor-voids.test.ts` calls a void of `core.award` decoration unless the player stats are
@@ -340,5 +341,17 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
   (Postgres-gated).
 - **Phone contract.** `capture-s2-handoff.md` now says a phone must not compute or render player stats, beside the standings sentence it
   extends (1e-M's "must not compute or render standings"); GOLDEN-POLICY.md gained "Corpus format 3 (GF-2 T4)", the table rows and the
-  narrowed award bullet. `STATS_FOLD_VERSION` (apps/web, the cache version of stored stat snapshots) is a separate, manual obligation that
-  this guard does not drive.
+  narrowed award bullet. `STATS_FOLD_VERSION` is a separate, manual obligation that this guard does not enforce. It is an ENGINE constant
+  (`src/stats/stats.ts`, fold source and phone closure) that apps/web folds into the md5 of every stored stat snapshot: bump it when
+  the stats fold's output changes, or snapshots folded by the old rules keep being served until their division changes. The guard sees
+  the trigger (` stats-only N`) but nothing requires the rise; whether it should is an owner decision, not built here.
+
+- **Review round (gf2-t4-review.md: 1 Important, 5 Minor, all fixed in new commits).** (1) The `STATS_FOLD_VERSION` wording above, and the
+  obligation added to the policy table row for a stats-only difference. (2) `capture-s2-handoff.md` no longer says the player-stats half of the
+  phone contract is in the `fold-epoch.ts` header (it is not; that header is fold source, so the clause waits for the next change that
+  touches fold source and owes a version anyway). (3) The dead `foldChange` arm is gone. (4) `playerStatsOk`'s `Number.isFinite` has its witness: a row whose stat is `1e999`
+  (valid JSON, parses to Infinity), a new row of the existing group (d) test, so no test id moved; dropping `Number.isFinite` alone is killed by
+  an assertion naming that row, and replacing the guard's phone-output test with `false` is killed by 27 of the 112 pure tests. (5) The format
+  repositories are built in a file-level `beforeAll`: `-t "GF-2 T4"` runs 14 tests and passes on its own (it was 14 red). (6) The policy bullet
+  on player-stats folds outside the recorded rows now lists `sumPlayerStats` and the division re-derivation, the tombstone relabel, entrant
+  kind, the lineup pair and the single football `motm` witness, each read from the code. Counts after the round: 17 scoped files, 981 of 981.

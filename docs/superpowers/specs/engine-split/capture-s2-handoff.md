@@ -140,7 +140,7 @@ before they update. There is no grace window, so this ordering is the only prote
   `supportsDraws`, or credit on any metric the match summary does not show, and a phone must not compute or render player stats
   (`aggregatePlayerStats` and the leaderboard rows it feeds: GF-2 T4 records them in the corpora as a MINOR, owner ruling Q2). `standingsDelta` is exported from the same `./sport` closure,
   so no type stops a phone from calling it. If the app ever does, a MINOR stops meaning "no app update" and D34 has to be revisited
-  before it does. The statement is also in the header of `packages/engine/src/sport/fold-epoch.ts`.
+  before it does. The standings half of the statement (`standingsDelta`, `supportsDraws`, credit) is also in the header of `packages/engine/src/sport/fold-epoch.ts`; the player-stats half is not there yet (that file is fold source, so editing its header owes a MAJOR) and should be added to the header the next time fold source is touched.
 
 **The server's state is already returned, and is the record (exists today; S2 should use it).** Every `201` carries the server's
 own fold of the ledger up to that event: `state_summary`, `outcome`, `status`. `GET /api/v1/fixtures/{id}/state` serves the full

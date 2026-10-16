@@ -252,8 +252,12 @@ builds the missing story: an award to a home player, struck by a void, then the 
 the stats fold must credit the away player once and the home player never. The eight sports that declare no key
 owe no token. The same field is why `core.award` leaves the unpinned class where a key is declared (below).
 
-`STATS_FOLD_VERSION` (apps/web, the cache version of stored player-stat snapshots) is a separate, manual
-obligation: it is not driven by this guard.
+`STATS_FOLD_VERSION` is a separate, manual obligation this guard does not enforce. It is an ENGINE constant
+(`src/stats/stats.ts`, part of the fold source and the phone closure), which apps/web folds into the md5 of every stored
+player-stat snapshot (`player_stat_snapshots`). **Bump it whenever the stats fold's output changes** for the same ledger
+and inputs. If a bump is missed, every snapshot folded by the old rules keeps being served until its division changes.
+The guard does see the trigger (a stats-only difference is reported as ` stats-only N`), but nothing requires the number
+to rise; the reviewer of a stats-fold change owes that check by hand.
 
 ## A re-baseline that changes a fold must raise that sport's version
 
@@ -272,7 +276,7 @@ depending on who computes what moved:
 | format 2: the stream gains `summaries` and `overlay` for the first time, nothing it held moved, and the change touches no fold source | nothing |
 | the same, but the change touches fold source (see "Corpus format 2") | **major** |
 | format 2 -> 1: the corpus is format 1 where the baseline's was format 2 (its streams matched or re-recorded alike) | red; no bump settles it |
-| format 3: only a recorded `playerStats` differs, on a stream both sides record (the server's leaderboard fold moved; nothing a phone computes did) | **minor** |
+| format 3: only a recorded `playerStats` differs, on a stream both sides record (the server's leaderboard fold moved; nothing a phone computes did) | **minor**, plus a manual obligation: raise `STATS_FOLD_VERSION` (`src/stats/stats.ts`), or stored snapshots keep being served |
 | format 3: the stream gains `playerStats` for the first time, nothing it held moved, and the change touches no fold source | nothing |
 | the same, but the change touches fold source (see "Corpus format 3") | **minor** |
 | format 3 -> 2 or 1: the corpus fell to an earlier format | red; no bump settles it |
@@ -426,6 +430,24 @@ hand in the same PR; no tool will tell you):
   declares and no stream credits (the floor requires one per declared key), and any
   rule only reachable through a ctx the recorder does not build (it builds the
   fixture's own two team sheets and nothing else). Those owe a **manual minor**, raised by hand in the PR (`FOLD_MINOR`); no tool will tell you.
+  The parts of the server's leaderboard the recorder does not run, each read from
+  the code and each owing the same manual minor when it changes:
+  - `sumPlayerStats` and the division re-derivation of ratio metrics
+    (`stats.ts`): the recorder stops at one fixture's rows and never sums across
+    fixtures, so a `derived` metric is recorded only as that fixture folded it.
+  - The tombstone relabel (`apps/web` `usecases/player-stats.ts`): a merged person's
+    id is relabelled to the survivor before the sum; no corpus has a merged person.
+  - Entrant kind: the recorder gives both sides the sport's declared `defaultKind`
+    (through `effectiveEntrantModel`, `golden-stats.ts` `statsCtxOf`), where the
+    server reads each entrant's own row kind and falls back to `"team"` for an
+    entrant it cannot find (`entrantFoldCtx`, `entrant-members.ts`). A bye or TBD
+    side is dropped there, not padded, so the server can fold a ctx of one entrant.
+  - The lineup pair: the recorder always passes one (the corpus records them); the
+    server passes `lineupsByFixture.get(fixtureId)`, which is `undefined` for a
+    fixture with no sheets. The fold then has no non-player filter, so a coach or
+    team official is not excluded (the ctx is passed either way).
+  - Football `motm` is pinned by ONE stream (`stats:award:motm`), so the award's
+    credit path has a single witness; the floor asks for one, not for more.
 
 Which `core.*` events and outcome kinds each corpus holds is no longer a gap to
 read off a table: it is a floor a test enforces (next section). Holding an event
