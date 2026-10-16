@@ -74,6 +74,20 @@ export const readRepoFile: ReadRepoFile = (p) => readOrUndefined(join(REPO, p));
 /** The reader of the engine half: a `packages/engine/...` path read from the engine directory; any other path is undefined. */
 export const readEngineFile: ReadRepoFile = (p) => (inEngine(p) ? readOrUndefined(enginePath(p)) : undefined);
 
+/** Batch 4 review M7. The proof check reads one proving file per (row, test path) pair and parses each DISTINCT file once
+ *  (`testTitles` memoises), so its cost grows with the table: 1.4 s for 311 pairs on an idle machine (about 4.5 ms a pair),
+ *  and it timed out at 13 s under load. AGENTS.md class 20: a flat timeout beside a derived cost is a latent red, so the
+ *  budget is stated from the pairs the table has. PROOF_PAIR_MS is about 20x the idle cost, the margin a loaded machine
+ *  needed (the Stryker spawn tests budget the same way, `spawnBudget`); PROOF_SLACK_MS is the file-system and parse floor.
+ *  ONE budget for both halves of the check (the engine's paths here, the monorepo's in scripts/__tests__/rules-reference.test.ts):
+ *  two copies of the constants would drift. */
+export const PROOF_PAIR_MS = 100;
+export const PROOF_SLACK_MS = 5_000;
+export const proofBudget = (pairs: number): number => {
+  if (!Number.isInteger(pairs) || pairs < 1) throw new Error(`proofBudget: ${pairs} is not a pair count of at least 1`);
+  return PROOF_SLACK_MS + pairs * PROOF_PAIR_MS;
+};
+
 /** Test frameworks' entry points. Every title-bearing call starts at one of these. */
 const TEST_ROOTS = ["it", "test", "describe"];
 /** Modifiers that switch a test off for good: its title proves nothing and nothing inside it runs. */

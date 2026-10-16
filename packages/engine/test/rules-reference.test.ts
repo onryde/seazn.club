@@ -2,20 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { AWAITING_PROOF, ENGINE, ID, ROW_HEADER, RULES_DIR, STATUS, allRows, engineFileExists, hasToken, inEngine, isMatrixCase, parseRuleRows, proofProblems, readEngineFile, ruleFiles, testTitles, type ReadRepoFile, type RuleRow } from "./rules-reference.ts";
+import { AWAITING_PROOF, ENGINE, ID, ROW_HEADER, RULES_DIR, STATUS, allRows, engineFileExists, hasToken, inEngine, isMatrixCase, parseRuleRows, proofBudget, proofProblems, readEngineFile, ruleFiles, testTitles, type ReadRepoFile, type RuleRow } from "./rules-reference.ts";
 import { OPEN, W2B_PER_FILE, W2B_ROWS, X_BR_1, readAppendixA, signed, w2bIds, w2bProblems } from "./w2b-rows.ts";
 
-/** Batch 4 review M7. The proof check reads one proving file per (row, test path) pair and parses each DISTINCT file once
- *  (`testTitles` memoises), so its cost grows with the table: 1.4 s for 311 pairs on an idle machine (about 4.5 ms a pair),
- *  and it timed out at 13 s under load. AGENTS.md class 20: a flat timeout beside a derived cost is a latent red, so the
- *  budget is stated from the pairs the table has. PROOF_PAIR_MS is about 20x the idle cost, the margin a loaded machine
- *  needed (the Stryker spawn tests budget the same way, `spawnBudget`); SLACK_MS is the file-system and parse floor. */
-const PROOF_PAIR_MS = 100;
-const SLACK_MS = 5_000;
-const proofBudget = (pairs: number): number => {
-  if (!Number.isInteger(pairs) || pairs < 1) throw new Error(`proofBudget: ${pairs} is not a pair count of at least 1`);
-  return SLACK_MS + pairs * PROOF_PAIR_MS;
-};
 /** The (row, proving test path) pairs this file's proof check reads: every signed or deviation row not awaiting proof, each
  *  of its non-matrix paths under packages/engine/ (the monorepo's checker reads the rest). Counted from the table, not from
  *  the check's own reads. */
