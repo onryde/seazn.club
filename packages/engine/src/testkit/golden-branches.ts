@@ -33,7 +33,7 @@ import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { SHOOTOUT_ATTEMPTS_DEFAULT } from "../sports/football/football.ts";
 import { periodLabels } from "../sports/period/kernel.ts";
-import { recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
+import { corpusFormat, recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -477,7 +477,7 @@ export function extendBranches(module: AnySportModule, existing: GoldenCorpus, s
       continue;
     }
     corpus.configs[name] = raw;
-    const stream: GoldenStream = { config: name, seed: story.seed, events, ...recomputeStream(module, raw, events) };
+    const stream: GoldenStream = { config: name, seed: story.seed, events, ...recomputeStream(module, raw, events, undefined, corpusFormat(corpus)) };
     const verdict = story.reached(recordedOf(module, corpus, stream));
     if (verdict !== null) throw new Error(`golden branches: the ledger built for ${story.id} does not reach its branch: ${verdict}`);
     corpus.streams.push(slimStream(module, corpus, stream));
