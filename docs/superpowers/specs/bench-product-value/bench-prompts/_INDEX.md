@@ -174,6 +174,23 @@ fall back from, is live — no B-prompt needs its fallback path.
 
 (append as sessions run)
 
+- 2026-10-16 — **Engine lineup fix (PR #977) touched the bench; one product
+  gap LEFT by owner ruling.** Not a session row. The engine now refuses
+  `core.lineup.*` with `LINEUP_NOT_SUPPORTED` for sports that declare no
+  `lineupPolicy` (boardgame, carrom, generic; FOLD_EPOCH 1 → 2). Bench edit in
+  that PR: `tools/bench/lib/__tests__/validate-pack.test.ts`'s squad
+  bookkeeping claim moved from a generic pack to a football pack, and a generic
+  pack carrying a lineup event is now asserted `fold.rejected` naming
+  `LINEUP_NOT_SUPPORTED`. A pack must not author lineup events for those three
+  sports. **Open product gap, owner: "add a note and leave it"** — organiser
+  `PUT …/lineups` still SAVES a bench row for a catalog with `benchMax: 0`
+  (only a `bench_size` warning), so an organiser can store a bench the engine
+  will never use. API-only: the fixture-console editor is hidden for these
+  sports (`lineupEditorApplies` false). Before the fix the boardgame and carrom
+  stats folds credited every bench row on the sheet with no event touching it;
+  the re-recorded golden stream dropped the bench, so nothing pins that now. If
+  picked up: refuse bench rows when the catalog's `benchMax` is 0.
+
 - 2026-10-10 — **Format-matrix W2b moved the bench onto its outcome shape**
   (owner-approved bench edit, format-matrix `_INDEX.md` ruling 107). Not a
   session row. W2b adds a sixth outcome kind, `double_walkover`, and
