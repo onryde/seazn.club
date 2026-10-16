@@ -676,7 +676,11 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
       expect(steps).toBeGreaterThan(0);
       expect(points, `${module.key} change points`).toBeGreaterThan(0);
       expect(interesting, `${module.key}: streams with a stoppage, a squad change or a decider`).toBeGreaterThan(0);
-      expect(customLineups, `${module.key}: streams recorded with non-default team sheets (the floor's bench streams) — zero checked is a failure`).toBeGreaterThan(0);
+      // The floor's bench streams carry non-default team sheets, so zero checked is a failure - except in a sport that refuses lineup
+      // events (owner ruling 2026-10-15; read off the module's own declaration): its floor builds no bench sheet, and its catalog's
+      // benchMax is 0, so a corpus there holds none.
+      if (module.lineupPolicy === undefined) expect(customLineups, `${module.key}: a sport that refuses lineup events records no bench sheet`).toBe(0);
+      else expect(customLineups, `${module.key}: streams recorded with non-default team sheets (the floor's bench streams) — zero checked is a failure`).toBeGreaterThan(0);
       if (corpusFormat(committed) >= 2) expect(recorded, `${module.key}: a format-2 corpus's own fields were compared`).toBe(streams);
       totals.streams += streams;
       totals.steps += steps;
