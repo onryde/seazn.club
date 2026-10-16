@@ -601,7 +601,11 @@ gets: at the GF-2 batch review (2026-10-16) the overlay columns `settlement`, `e
 stream per sport (one setting it, one clearing it; stoppage by one or two), so a rule with
 branches is pinned only for the inputs that one stream happens to use. That is not a gap
 against the floor and not a defect; when a column's rule grows a branch, adding a witness for
-the new input is that change's job, because the floor will not ask for it.
+the new input is that change's job, because the floor will not ask for it. W2c's streams
+add witnesses on top of the floor's: the award+expunge branch streams set `expunged` and
+leave it standing in football, hockey and icehockey, and carrom's second floor batch
+(`sharedAbandon#900125`, the level-route settle story its draw-house config opened)
+carries a second `settlement` and carrom's only `levelWithdrawal` set and clear.
 
 **Anti-vacuity.** Every sweep reports how many sports, tokens and holes it
 checked; zero is a failure; the empty-corpus case is tested first (an emptied
