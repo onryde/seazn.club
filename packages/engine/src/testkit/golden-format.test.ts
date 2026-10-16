@@ -42,6 +42,7 @@ import {
   type GoldenEvent,
   type GoldenStream,
 } from "./golden.ts";
+import { BRANCH_STORIES } from "./golden-branches.ts";
 import { asFormatOne, reformatAll, reformatCorpus } from "./golden-reformat.ts";
 import { defaultLineupPair } from "./helpers.ts";
 
@@ -56,7 +57,8 @@ const formatOneOf = (key: string): GoldenCorpus => asFormatOne(readCorpus(key));
 
 /** The streams a FORMAT-1 recording reproduces. Format 1 records the module's own outcome, and a settle is laid over it by the kernel
  *  (the effective outcome is a win, the module's is a draw or nothing): since GF-2 T3 the committed corpora hold such a stream in every
- *  sport, and `formatOneOf` keeps its effective outcome, which no format-1 recorder would write. A rebaseline of "a format-1 corpus"
+ *  sport, and `formatOneOf` keeps its effective outcome, which no format-1 recorder would write. W2c's award+expunge branch streams are
+ *  the other such shape (the module answers the award, the expunge makes the effective outcome none). A rebaseline of "a format-1 corpus"
  *  is about the corpora a format-1 recorder could have written, so the streams it could not are set aside, by what they are (the
  *  recorder disagrees with the stored outcome), never by a seed or a name. */
 const formatOneRecordable = (key: string): { corpus: GoldenCorpus; setAside: GoldenStream[] } => {
@@ -554,16 +556,36 @@ describe("buildCorpus (UPDATE_GOLDEN, a corpus from nothing) writes the current 
 // ----------------------------------------------------- the other writers keep the corpus's format (rebaseline, extend)
 
 describe("rebaselineCorpus keeps the corpus's format", () => {
-  it("the streams a format-1 recording cannot reproduce are exactly the settle stories, in every sport (the kernel lays the settlement over the module's outcome)", () => {
+  it("the streams a format-1 recording cannot reproduce are exactly those whose kernel overlay re-decides the module's outcome: the settle stories, in every sport (the settlement laid over the module's outcome), and the award+expunge branch streams (the expunge erases the award the module answered)", () => {
     let aside = 0;
+    let settles = 0;
+    let expunges = 0;
     forEachSport(({ key }) => {
+      const module = sport(key);
+      const configs = readCorpus(key).configs;
       const { corpus, setAside } = formatOneRecordable(key);
       expect(corpus.streams.length, `${key}: the rest of the corpus is a format-1 corpus`).toBeGreaterThan(0);
-      expect(setAside.length, `${key}: one stream the module alone cannot record`).toBe(1);
-      expect(setAside[0]!.events.some((e) => e.type === "core.settle"), `${key}: and it is the settle story`).toBe(true);
+      const settled = setAside.filter((s) => s.events.some((e) => e.type === "core.settle"));
+      expect(settled.length, `${key}: a settle story the module alone cannot record`).toBeGreaterThan(0);
+      for (const s of setAside.filter((x) => !settled.includes(x))) {
+        const label = `${key} ${s.config}#${s.seed}`;
+        // the one other shape: a withdrawal's expunge that stands, over the result an `award` abandon policy made the module answer
+        const last = s.events[s.events.length - 1]!;
+        expect(last.type, label).toBe("core.abandon");
+        expect((last.payload as { expunge?: unknown }).expunge, label).toBe(true);
+        expect((module.configSchema.parse(configs[s.config]) as { abandonPolicy?: unknown }).abandonPolicy, label).toBe("award");
+        expect(recomputeStream(module, configs[s.config], s.events, s.lineups, 1).outcome, `${label}: the module answers the award`).not.toBe("null");
+        expect(s.outcome, `${label}: the recorded (effective) outcome is none`).toBe("null");
+        expunges++;
+      }
+      settles += settled.length;
       aside += setAside.length;
     });
-    expect(aside).toBe(builtinModules.length);
+    // carrom has two settle stories, one per floor batch (W2c's draw-house config opened the second)
+    expect(settles, "a settle story per sport at least").toBeGreaterThanOrEqual(builtinModules.length);
+    expect(expunges, "one per award+expunge story in the branch table").toBe(BRANCH_STORIES.filter((story) => story.id.endsWith(".award_expunge")).length);
+    expect(expunges).toBeGreaterThan(0);
+    expect(aside).toBe(settles + expunges);
   }, sweepBudget("probe"));
 
   it("format 1 stays format 1 (no field appears), format 2 stays format 2 and re-records both fields", () => {
