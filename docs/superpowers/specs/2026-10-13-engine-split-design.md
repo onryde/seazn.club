@@ -5,6 +5,15 @@ decision below was ruled by the owner in chat, one question at a time; the
 ledger (§16) records each with the owner's words. No code moves until W2e
 merges (ruling 131), except Phase 1, which the owner explicitly allowed (D7).
 
+**Progress (2026-10-16).** Phase 1 is complete: batches 1a–1f merged (#950,
+#952, #958, #955, #960, #961), with the golden floor GF-1 (#962), the
+FOLD_EPOCH/FOLD_MINOR split (#963, D34) and the release-time epoch report
+(#964, warn-only). GF-2 (corpus format 3: kernel overlay, effective results and
+player stats recorded and guarded) is this spec's last Phase 1 follow-up
+(`engine-split/gf2-kernel-overlay-design.md`). Phase 2a and 2b wait on the
+owner's go-ahead. Owed before the first capture app release to real scorers:
+a default-off per-sport epoch floor override, logged at boot.
+
 **Inputs.** Brief: `.superpowers/handoff/2026-10-08-w1d-close/engine-split-prompt.md`.
 Fact check: `engine-split-facts.md` beside it (36 claims against `origin/main`
 `5871c748e`; its corrections S1–S8 bind this spec). Read with `AGENTS.md`,
