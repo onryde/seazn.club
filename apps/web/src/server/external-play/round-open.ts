@@ -1,7 +1,7 @@
 import "server-only";
 // D12 (spec §3.2): a round is PAIRED automatically and OPENED by hand. The
 // organiser's open stamps `stage_round_opens.opened_at`, sends the invites and
-// starts the window — so T−10/T+20 hang off this stamp, never off
+// starts the window — so the window (window.ts) hangs off this stamp, never off
 // `fixtures.scheduled_at`, which is only what players are shown. A fixture
 // whose round has no stamp is not playable.
 //

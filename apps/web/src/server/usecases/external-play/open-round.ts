@@ -3,7 +3,7 @@ import "server-only";
 // itself; opening and inviting is the organiser's act, because an invite
 // starts a clock against real people who have to be at a screen. Nothing
 // seats (T8) and no game is created (T9) until this stamps
-// `stage_round_opens`, and T−10/T+20 hang off that stamp.
+// `stage_round_opens`, and the window (window.ts) hangs off that stamp.
 //
 // THE RULES (controller rulings 2026-10-10, Q1–Q3):
 //   - Refusals come first and write NOTHING: authorisation, an offline
@@ -321,7 +321,7 @@ export async function openRound(
     // organiser's hold, a board no longer played (review I1, ruling
     // 2026-10-10). Counting only the boards still taking invites let a late
     // or rescheduled board read "nobody invited" once its neighbours had
-    // moved on, and re-stamp the WHOLE round's window past T+20.
+    // moved on, and re-stamp the WHOLE round's window past DEADLINE_AFTER_MS.
     //
     // The binding, not the stamp, is the record: a row is bound by the open
     // that reaches one of its seats, and stays bound when a reschedule's

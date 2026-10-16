@@ -28,7 +28,7 @@ import {
   refreshParticipantToken,
 } from "@/server/external-play/video/realtimekit";
 import { captureError } from "@/lib/sentry";
-import { roomPhase, windowFor } from "@/server/external-play/window";
+import { DEADLINE_AFTER_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { patchDivision } from "../divisions";
 import {
   SEAT_REFUSAL_REASONS,
@@ -45,7 +45,7 @@ import { seedOnlineChessFixture } from "./_external-play-seed";
 
 /** The round is opened ten minutes before the scheduled time in these
  *  fixtures, so `now = NOW` sits inside the window (D12: the window hangs
- *  off the open stamp, T−10 … T+20 of it). */
+ *  off the open stamp, T−10 … the deadline of it). */
 const T = new Date("2026-10-01T12:10:00.000Z");
 const OPENED = new Date("2026-10-01T12:00:00.000Z");
 const NOW = new Date("2026-10-01T12:05:00.000Z");
@@ -374,18 +374,18 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer refusals", () => {
     expectInertRefusal(got, "round_not_open", rtk);
   });
 
-  it("past T+20 of the OPEN stamp ⇒ window_closed", async () => {
+  it("past the deadline (DEADLINE_AFTER_MS) of the OPEN stamp ⇒ window_closed", async () => {
     const s = await seed({ cameraPolicy: "required" });
     const rtk = fakeRealtimeKit();
-    const late = new Date(OPENED.getTime() + 20 * 60_000 + 1);
+    const late = new Date(OPENED.getTime() + DEADLINE_AFTER_MS + 1);
     const got = await seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: late, video: rtk.video });
     expectInertRefusal(got, "window_closed", rtk);
   });
 
-  it("the last millisecond before T+20 of the stamp is still inside the window (boundary pair)", async () => {
+  it("the last millisecond before the deadline of the stamp is still inside the window (boundary pair)", async () => {
     const s = await seed();
     const rtk = fakeRealtimeKit();
-    const edge = new Date(OPENED.getTime() + 20 * 60_000 - 1);
+    const edge = new Date(OPENED.getTime() + DEADLINE_AFTER_MS - 1);
     const got = await seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: edge, video: rtk.video });
     expect(got).toEqual({ seated: true, participant: null });
   });
@@ -956,9 +956,9 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
   });
 });
 
-// ─── Re-entry after T+20 (controller ruling I1; condition (c) amended in fix round 2) ───
+// ─── Re-entry after the deadline (controller ruling I1; condition (c) amended in fix round 2) ───
 //
-// "T+20 is the deadline to be seated and have the game created — not a cap on
+// "the deadline is the deadline to be seated and have the game created — not a cap on
 // the game" (spec §3.6). After the window, a caller passes the window check
 // only when ALL THREE hold:
 //   (a) they were seated on this fixture — T9's game record names their
@@ -975,9 +975,9 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
 // `core.start`, which T12 emits as it writes the result. Nothing here sets
 // `in_play`.
 
-/** Past T+20 of the OPEN stamp, derived from the window's own constants so
+/** Past the deadline of the OPEN stamp, derived from the window's own constants so
  *  moving DEADLINE_AFTER_MS moves this with it. */
-const LATE = new Date(windowFor(OPENED).deadline.getTime() + 20 * 60_000);
+const LATE = new Date(windowFor(OPENED).deadline.getTime() + DEADLINE_AFTER_MS);
 
 type Rtk = ReturnType<typeof fakeRealtimeKit>;
 type BridgeStatus = "ready" | "live" | "finished" | "needs_organiser";
@@ -1057,12 +1057,12 @@ async function seatBothLive(s: Seeded, rtk: Rtk): Promise<Record<Side, string>> 
   return pid;
 }
 
-describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amending Q1)", () => {
+describe.skipIf(!process.env.DATABASE_URL)("re-entry after the deadline (ruling I1, amending Q1)", () => {
   it("premise: LATE is past the window, by the window's own rule", () => {
     expect(roomPhase(LATE, OPENED)).toBe("closed");
   });
 
-  it("required: a seated player reloads mid-game after T+20 — on a `ready` AND a `live` game, both colours — their OWN token, then re-seated once live", async () => {
+  it("required: a seated player reloads mid-game after the deadline — on a `ready` AND a `live` game, both colours — their OWN token, then re-seated once live", async () => {
     let checked = 0;
     for (const status of ["ready", "live"] as const) {
       const s = await seed({ cameraPolicy: "required" });
@@ -1095,7 +1095,7 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
     const pid = await seatBothLive(s, rtk);
     await recordGame(s, { status: "live" });
     rtk.leave(pid.home);
-    // A long game: 15+10 runs well past T+20 (SHIP1_TIME_CONTROLS).
+    // A long game: 15+10 runs well past the deadline (SHIP1_TIME_CONTROLS).
     for (const at of [LATE, new Date(LATE.getTime() + 60 * 60_000)]) {
       const got = await claim(s, "home", rtk, at);
       expect(got.seated, "not live, so not seated").toBe(false);
@@ -1130,7 +1130,7 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
     expect(checked, "anti-vacuity: two policies").toBe(2);
   });
 
-  it("a caller NOT re-entering gets window_closed after T+20 — no token, no RealtimeKit call — each condition failing ALONE, swept and counted", async () => {
+  it("a caller NOT re-entering gets window_closed after the deadline — no token, no RealtimeKit call — each condition failing ALONE, swept and counted", async () => {
     const cases: { name: string; as: Side; arrange: (s: Seeded, rtk: Rtk) => Promise<void> }[] = [
       { name: "a no-show: nobody came in the window and no game exists (T13's)", as: "home", arrange: async () => undefined },
       {
@@ -1279,7 +1279,7 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     }
     {
       const s = await req();
-      seen.set("window_closed", await claim(s, "home", fakeRealtimeKit(), new Date(OPENED.getTime() + 21 * 60_000)));
+      seen.set("window_closed", await claim(s, "home", fakeRealtimeKit(), new Date(OPENED.getTime() + DEADLINE_AFTER_MS + 60_000)));
     }
     {
       const s = await req();
@@ -1393,7 +1393,7 @@ describe.skipIf(!process.env.DATABASE_URL)("the play grant is checked at the sea
     expect(rtk.http).toEqual([]);
   });
 
-  it("RE-ENTRY after T+20 by a player whose grant was downgraded since is refused, no token; the opponent, grant intact, re-enters", async () => {
+  it("RE-ENTRY after the deadline by a player whose grant was downgraded since is refused, no token; the opponent, grant intact, re-enters", async () => {
     const s = await seed({ cameraPolicy: "required" });
     const rtk = fakeRealtimeKit();
     await seatBothLive(s, rtk);
@@ -1607,7 +1607,7 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
 
   // Minor m1 (fix round 1): where the override sits against the window and
   // round checks. It relaxes the camera only.
-  it("the override never bypasses the window: a caller never seated is still window_closed after T+20", async () => {
+  it("the override never bypasses the window: a caller never seated is still window_closed after the deadline", async () => {
     const s = await seed({ cameraPolicy: "required" });
     await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
     const rtk = fakeRealtimeKit();
@@ -1622,7 +1622,7 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
     expectInertRefusal(await claim(s, "home", rtk), "fixture_not_playable", rtk);
   });
 
-  it("position pair: on RE-ENTRY after T+20 the override still applies — seated, no tile, no RealtimeKit call", async () => {
+  it("position pair: on RE-ENTRY after the deadline the override still applies — seated, no tile, no RealtimeKit call", async () => {
     const s = await seed({ cameraPolicy: "required" });
     await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
     const rtk = fakeRealtimeKit();
@@ -1643,7 +1643,7 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
 // token the server actually issued them), a player claims the seat, the
 // organiser DOWNGRADES the policy through the real writer (patchDivision —
 // after a round opens, T6's guard allows only relaxing), and — fix round 1 —
-// time passes BEYOND T+20, T9 creates the game (it re-verifies BOTH seats
+// time passes BEYOND the deadline, T9 creates the game (it re-verifies BOTH seats
 // through seatPlayer and records the game — bridge `ready` — only if both
 // pass), T10's first accepted move flips the bridge to `live`, the game ends
 // (bridge `finished`, or `needs_organiser`), or a game is on record for OTHER
@@ -1654,7 +1654,7 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
 // The expected result of every claim comes from a MODEL of the rules
 // (spec §5.1/§5.2/§3.6, D12, rulings Q1/Q3/I1), never from the code:
 //   round not open            ⇒ round_not_open, no token, no RealtimeKit call
-//   past T+20, not re-entry   ⇒ window_closed, no token, no RealtimeKit call
+//   past the deadline, not re-entry   ⇒ window_closed, no token, no RealtimeKit call
 //     (re-entry = seated by the create that recorded this game ∧ the game
 //      exists ∧ its bridge is `ready` or `live` — ruling I1, (c) as amended
 //      in fix round 2)
@@ -1704,10 +1704,10 @@ const act: fc.Arbitrary<Act> = fc.oneof(
 );
 /** Edge weighting. LIVE: a seated-and-live player, so the lose/re-verify
  *  paths (camera_lost) are reached, not just possible. CREATED+late: T9's game
- *  (bridge `ready`) and T+20 passed, so re-entry on a `ready` bridge is
+ *  (bridge `ready`) and the deadline passed, so re-entry on a `ready` bridge is
  *  reached. GAME: the same, flipped `live` by T10's first move; GAME_LEFT:
- *  that, with home's tab gone and T+20 passed, so a re-entering camera
- *  refusal is reached. ENDED: the game over, then T+20 passed, so condition
+ *  that, with home's tab gone and the deadline passed, so a re-entering camera
+ *  refusal is reached. ENDED: the game over, then the deadline passed, so condition
  *  (c) failing alone is reached. FOREIGN: a game on record for other
  *  accounts, so condition (a) failing alone is reached. Each is a PREFIX: the
  *  random tail can still undo any of it, and every action in it is checked
@@ -1731,7 +1731,7 @@ const ENDED_PREFIX: Act[] = [...GAME_PREFIX, { kind: "end", to: "finished" }, { 
 // tail now END WITH the claim they exist for — adding two actions to the
 // alphabet moved the seeded tails, and a path reached by luck went to zero.
 const FOREIGN_PREFIX: Act[] = [{ kind: "open" }, { kind: "foreign" }, { kind: "late" }, { kind: "seat", side: "home" }];
-/** Fix round 2: a seated player's grant goes stale after the game, then T+20
+/** Fix round 2: a seated player's grant goes stale after the game, then the deadline
  *  passes — the re-entry the grant must refuse. */
 const STALE_REENTRY_PREFIX: Act[] = [
   ...GAME_PREFIX, { kind: "narrow", side: "home" }, { kind: "late" }, { kind: "seat", side: "home" },
@@ -1783,12 +1783,12 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
     starts: 0,
     ends: 0,
     lateClaims: 0,
-    // Past T+20 and NOT re-entry, by the first of the three conditions
+    // Past the deadline and NOT re-entry, by the first of the three conditions
     // that fails in the model.
     lateNoGame: 0,
     lateForeignGame: 0,
     lateGameOver: 0,
-    // Past T+20 and re-entry, by outcome and by the bridge it re-entered on.
+    // Past the deadline and re-entry, by outcome and by the bridge it re-entered on.
     lateReentrySeated: 0,
     lateReentryCameraRefused: 0,
     lateReentryOnReady: 0,
@@ -2021,7 +2021,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
       roundsRun++;
     });
   }
-  it(`nobody is seated under required without being live, nor before the round opens, nor past T+20 except by re-entry — and every claim matches the model — across every round`, () => {
+  it(`nobody is seated under required without being live, nor before the round opens, nor past the deadline except by re-entry — and every claim matches the model — across every round`, () => {
     expect(roundsRun, "anti-vacuity: rounds run").toBe(ROUNDS);
 
     console.log(`PROPERTY_COUNTS ${JSON.stringify(totals)}`);
@@ -2029,7 +2029,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
     expect(totals.violationsRequiredNotLive, "INVARIANT: nobody seated under required without being live").toBe(0);
     expect(
       totals.violationsOutsideWindow,
-      "INVARIANT: no token and no seat past T+20 except re-entry under exactly the three conditions",
+      "INVARIANT: no token and no seat past the deadline except re-entry under exactly the three conditions",
     ).toBe(0);
     // Anti-vacuity: zero checked is a failure, per path the property is named for.
     expect(totals.runs, "runs").toBe(RUNS);
@@ -2042,18 +2042,18 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
     expect(totals.seatedOff, "seats after a downgrade to off").toBeGreaterThan(0);
     expect(totals.leavesApplied, "leaves").toBeGreaterThan(0);
     expect(totals.gamesCreated, "games T9 created").toBeGreaterThan(0);
-    expect(totals.lateClaims, "claims past T+20").toBeGreaterThan(0);
-    expect(totals.lateNoGame, "past T+20, no game").toBeGreaterThan(0);
-    expect(totals.lateForeignGame, "past T+20, a game for other accounts").toBeGreaterThan(0);
-    expect(totals.lateGameOver, "past T+20, the game over (finished / needs_organiser)").toBeGreaterThan(0);
-    expect(totals.lateReentrySeated, "re-entry past T+20, seated").toBeGreaterThan(0);
-    expect(totals.lateReentryCameraRefused, "re-entry past T+20, a camera refusal with a token").toBeGreaterThan(0);
+    expect(totals.lateClaims, "claims past the deadline").toBeGreaterThan(0);
+    expect(totals.lateNoGame, "past the deadline, no game").toBeGreaterThan(0);
+    expect(totals.lateForeignGame, "past the deadline, a game for other accounts").toBeGreaterThan(0);
+    expect(totals.lateGameOver, "past the deadline, the game over (finished / needs_organiser)").toBeGreaterThan(0);
+    expect(totals.lateReentrySeated, "re-entry past the deadline, seated").toBeGreaterThan(0);
+    expect(totals.lateReentryCameraRefused, "re-entry past the deadline, a camera refusal with a token").toBeGreaterThan(0);
     expect(totals.lateReentryOnReady, "re-entry on a `ready` bridge").toBeGreaterThan(0);
     expect(totals.lateReentryOnLive, "re-entry on a `live` bridge").toBeGreaterThan(0);
     expect(totals.violationsSeatedWithoutGrant, "INVARIANT: nobody seated without the full grant").toBe(0);
     expect(totals.narrows, "grants gone stale").toBeGreaterThan(0);
     expect(totals.relinks, "grants restored").toBeGreaterThan(0);
     expect(totals.reconsentRefused, "re-consent refusals").toBeGreaterThan(0);
-    expect(totals.lateReentryReconsentRefused, "re-entry past T+20 refused on a stale grant").toBeGreaterThan(0);
+    expect(totals.lateReentryReconsentRefused, "re-entry past the deadline refused on a stale grant").toBeGreaterThan(0);
   });
 });

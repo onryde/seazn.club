@@ -254,7 +254,7 @@ describe.skipIf(!process.env.DATABASE_URL)("readiness", () => {
     noHttp();
   });
 
-  it("past T+20 of the open stamp ⇒ not_ready", async () => {
+  it("past the deadline of the open stamp ⇒ not_ready", async () => {
     const { DEADLINE_AFTER_MS } = await import("@/server/external-play/window");
     const s = await seed();
     expect(
@@ -528,7 +528,7 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     expect(row?.white_side).toBe("home");
     expect(row?.white_lichess_id).toBe(s.home.lichessId);
     expect(row?.black_lichess_id).toBe(s.away.lichessId);
-    // D12: T+20 of the organiser's OPEN, never of the timetable (T is ten
+    // D12: the deadline of the organiser's OPEN, never of the timetable (T is ten
     // minutes later than OPENED here, so the two deadlines differ).
     expect(row?.expires_at?.toISOString()).toBe(windowFor(OPENED).deadline.toISOString());
     expect(windowFor(OPENED).deadline.getTime(), "premise: the anchors differ").not.toBe(
@@ -1041,7 +1041,7 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     expect(row?.last_error).toBe("no_stored_token");
   });
 
-  it("a create that WAITED past T+20 in the queue creates nothing (the deadline is read at dequeue)", async () => {
+  it("a create that WAITED past the deadline in the queue creates nothing (the deadline is read at dequeue)", async () => {
     // Production path: no injected clock. Only Date is faked (after the
     // seed, so setup runs on the real clock); timers and I/O stay real.
     const s = await seed();

@@ -343,7 +343,7 @@ describe.skipIf(!HAS_DB)("openRound — the window (Q2)", () => {
   // stamps on EVERY bridge row bound to this open, whatever became of its
   // board — a game, a result, a hold. Before the fix the neighbour dropped
   // out of the count, the late board read "zero invited", and the WHOLE
-  // round's window was re-stamped past T+20.
+  // round's window was re-stamped past the deadline.
   const neighbour: [string, (fixtureId: string, t0: Date) => Promise<void>][] = [
     [
       "holds a game (real T9 create)",
@@ -394,7 +394,7 @@ describe.skipIf(!HAS_DB)("openRound — the window (Q2)", () => {
     },
   );
 
-  it("a round whose only board was invited and then RESCHEDULED: after T+20 its re-invite is window_closed and opened_at does not move", async () => {
+  it("a round whose only board was invited and then RESCHEDULED: after the deadline its re-invite is window_closed and opened_at does not move", async () => {
     // The reschedule's reset (T7) clears the board's stamps so its players
     // are re-mailed with the new time — inside the round's window. It must not
     // read as "nobody was ever invited" and re-stamp the round.
@@ -630,7 +630,7 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     const t0 = new Date(Date.now() - 2 * MIN);
     expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, skipped: [] });
     expect(sentTo()).toEqual(emailsOf(r).sort());
-    // The mail's one time is the deadline — the OPEN's T+20 (T14, review
+    // The mail's one time is the deadline — the OPEN's the deadline (T14, review
     // M2), never a start time and never the epoch a NULL formats as. A
     // locale may print a 12- or a 24-hour clock ("07:09 PM" / "19:09"), so
     // either form is accepted — a fixed one went red every afternoon UTC.

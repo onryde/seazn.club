@@ -256,10 +256,10 @@ describe("windowWire", () => {
   });
 });
 
-describe("realtimeExpiry (T10 carry — the subscriber token must outlive a game running past T+20)", () => {
+describe("realtimeExpiry (T10 carry — the subscriber token must outlive a game running past the deadline)", () => {
   it("a read made AFTER the deadline still mints a token that expires in the future", () => {
     const opened = new Date("2026-10-12T10:00:00Z");
-    const readAt = new Date(opened.getTime() + DEADLINE_AFTER_MS + 5 * 60_000); // 5 min past T+20, mid-game
+    const readAt = new Date(opened.getTime() + DEADLINE_AFTER_MS + 5 * 60_000); // 5 min past the deadline, mid-game
     const exp = realtimeExpiry(readAt);
     expect(exp.getTime()).toBeGreaterThan(readAt.getTime());
     expect(exp.getTime()).toBeGreaterThan(windowFor(opened).deadline.getTime());

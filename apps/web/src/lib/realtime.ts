@@ -243,10 +243,10 @@ export function externalPlayLobbyTopic(fixtureId: string): string {
  * `external-play:{fixtureId}` (V407) is a private, unpaid channel with its
  * own policy keyed on `lobby_fixture_id` — sharing the claim name would let a
  * paid-realtime subscriber JWT also authorize the free lobby topic, or vice
- * versa. `expiresAt` is the fixture's own deadline (T+20, `windowFor`'s
+ * versa. `expiresAt` is the fixture's own deadline (DEADLINE_AFTER_MS, `windowFor`'s
  * `deadline`), not a flat TTL — the room's realtime subscription should never
  * outlive the window it was minted for (spec §12.1: "the realtime subscriber
- * JWT is issued per room load and expires at T+20").
+ * JWT is issued per room load and expires at the deadline").
  */
 export async function mintExternalPlayLobbyToken(
   fixtureId: string,

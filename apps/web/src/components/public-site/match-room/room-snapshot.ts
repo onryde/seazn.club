@@ -206,7 +206,7 @@ export type RoomSnapshot = {
 
 /** D12 (spec §3.2): a fixture with no `round_opened_at` is NOT yet playable
  *  and must say so — it is not "before the window", because no window
- *  exists. Once opened, T−10/T+20 are measured from the open, so the shipped
+ *  exists. Once opened, the window is measured from the open, so the shipped
  *  `roomPhase` is reused unchanged with `round_opened_at` in the argument
  *  slot its parameter name still calls `scheduledAt`. The schedule is what
  *  players are SHOWN; it never reaches this function. */
@@ -365,7 +365,7 @@ export function withSettle(result: RoomResult | null, settleWinner: string | nul
 export const ABANDONED_RESULT: RoomResult = { outcome: "no_result", method: null, score: "" };
 
 /** How long the room's realtime subscriber token lives. It used to be the
- *  window's deadline (T+20), which cut a running game's broadcasts off
+ *  window's deadline (DEADLINE_AFTER_MS), which cut a running game's broadcasts off
  *  mid-game (T10 review carry). Now every snapshot read mints one that lives
  *  ROOM_REALTIME_TTL_MS from the read, and the client re-reads well inside
  *  that, so the subscription outlives any game. */

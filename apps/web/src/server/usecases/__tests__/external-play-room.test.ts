@@ -80,7 +80,7 @@ vi.mock("../external-play/guard", async (importOriginal) => {
 
 // `stampFixtureCheckIn` stamps the DB's own now() (real wall clock) and
 // `checkInCounts` judges THAT stamp against the open's window, so the open is
-// anchored to the real clock: T five minutes ahead, the window T-10..T+20.
+// anchored to the real clock: T five minutes ahead, the window T-10..the deadline.
 const T = new Date(Date.now() + 5 * 60_000);
 const now = new Date();
 

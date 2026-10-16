@@ -3,7 +3,7 @@
 //
 //   open       openRound                     (a re-open is the same act again)
 //   flaky      the provider refuses one current seat's next invite
-//   advance    the clock moves 5 or 25 minutes (25 closes a window: T+20)
+//   advance    the clock moves 5 or 25 minutes (25 passes the deadline, DEADLINE_AFTER_MS; so do two 5s)
 //   downgrade  patchDivision camera_policy one step down (required→optional→off)
 //   repair     unpairSwissRound + generateStageFixtures, alternating styles
 //              (refused 409 ONLINE_GAME_EXISTS while a game stands)

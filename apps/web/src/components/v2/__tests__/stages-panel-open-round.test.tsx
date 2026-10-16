@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import type { OpenRoundView } from "@/lib/open-round";
+import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -25,7 +26,7 @@ const ROUND = (stageId: string, fixtureId: string): OpenRoundView => ({
   state: "paired",
   openedAt: null,
   deadlineAt: null,
-  windowMinutes: 20,
+  windowMinutes: DEADLINE_AFTER_MS / 60_000,
   scheduledAt: null,
   press: "open",
   earlierInPlay: [],

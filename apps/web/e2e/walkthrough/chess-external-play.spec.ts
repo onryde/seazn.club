@@ -443,7 +443,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       clock: TC,
     });
     const board = r.boards[0]!;
-    // Past BOTH the T-10 lead and the T+20 deadline: a window anchored on
+    // Past BOTH the T-10 lead and the deadline: a window anchored on
     // scheduled_at instead of the open would read "closed, nobody came".
     const longPast = new Date(Date.now() - (WINDOW_OPEN_LEAD_MS + DEADLINE_AFTER_MS + 60_000)).toISOString();
     await setFixtureScheduledAtSql(board.fixtureId, longPast);

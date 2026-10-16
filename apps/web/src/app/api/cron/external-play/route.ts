@@ -7,7 +7,7 @@ import { sweepExternalPlay } from "@/server/usecases/external-play";
 import type { SweepReport } from "@/server/usecases/external-play/sweep";
 
 /** POST /api/cron/external-play — the 5-minute cron (chess in-page board
- *  design §4): one pass of the external-play sweep (T13) — the T+20 no-show,
+ *  design §4): one pass of the external-play sweep (T13) — the deadline no-show,
  *  the mint retry for a create Lichess throttled, meeting teardown, the
  *  reconcile sweep that reads every game on file, the camera evidence after
  *  a match and the removal of arbiter watches that must end (T15 fix round

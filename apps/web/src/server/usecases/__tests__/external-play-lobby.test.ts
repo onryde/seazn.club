@@ -22,7 +22,7 @@ import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_ex
 
 const HAS_DB = !!process.env.DATABASE_URL;
 // The open is anchored to the real clock: two minutes ago, so the window
-// (T−10..T+20, windowFor) is open now.
+// (T−10..the deadline, windowFor) is open now.
 const OPENED = new Date(Date.now() - 2 * 60_000);
 
 function deps(over: Partial<RoomDeps> = {}): RoomDeps & { publish: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> } {

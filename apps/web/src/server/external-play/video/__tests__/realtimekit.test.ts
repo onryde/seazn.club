@@ -232,7 +232,7 @@ describe.skipIf(!process.env.DATABASE_URL)("ensureMeeting", () => {
   // the fixture's only row. Without this refusal the insert below conflicts,
   // the "lost race" branch deactivates a brand-new billable meeting, and the
   // caller is handed the ENDED (INACTIVE, unjoinable) meeting as if it were
-  // live. A fixture's meeting is torn down at the result or at T+20 (spec
+  // live. A fixture's meeting is torn down at the result or at the deadline (spec
   // §5.2); there is nothing left to join after that.
   it("after teardown: refuses with 409 and makes NO HTTP call (no billable orphan)", async () => {
     configure();
@@ -1245,7 +1245,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
   });
 
   it("no active session is not a failure: the deactivate still happens", async () => {
-    // Order matters and so does this case: at T+20 with nobody present
+    // Order matters and so does this case: at the deadline with nobody present
     // there IS no session to kick, and skipping the PATCH would leave a
     // joinable meeting behind.
     configure();

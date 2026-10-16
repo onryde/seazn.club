@@ -218,7 +218,7 @@ export async function releaseSeat(db: AnySql, fixtureId: string, colour: Colour,
  * whether or not a seat was invited before; it does not create a game.
  *
  * It holds openRound's rules (review M6, fix round 1):
- *   - the WINDOW: after the round's T+20 nobody is invited, ⇒ 409
+ *   - the WINDOW: after the round's deadline (DEADLINE_AFTER_MS) nobody is invited, ⇒ 409
  *     WINDOW_CLOSED (an organiser who wants a fresh window opens the round);
  *   - the GAME rule: no invite into a board a game stands — or may stand —
  *     behind (409 ONLINE_GAME_EXISTS), nor one held for the organiser (409

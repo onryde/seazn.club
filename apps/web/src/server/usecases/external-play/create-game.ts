@@ -355,7 +355,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   ) {
     return { stage: "refused" }; // re-paired or rescheduled while queued
   }
-  // T+20 is the deadline to have the game created (spec §3.6), measured at
+  // DEADLINE_AFTER_MS is the deadline to have the game created (spec §3.6), measured at
   // the create, not where it joined the queue.
   if (roomPhase(claimAt, plan.roundOpenedAt) !== "open") return { stage: "refused" };
   if ((await whiteSideOf(g)) !== plan.whiteSide) return { stage: "refused" }; // colours re-allocated
@@ -438,7 +438,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   if (gameId === null && !plan.startOffered) {
     // T20 (fix round 1, m3): nothing of an earlier send to adopt — what is left is a NEW send, which starts online
     // play, and the club is not offered it. The claim goes; the marker stays, so whoever comes next looks again
-    // before it ever sends (and the sweep's T+20 hold still sees a create whose outcome nobody recorded).
+    // before it ever sends (and the sweep's deadline hold still sees a create whose outcome nobody recorded).
     await releaseClaim(fixtureId, claim, "online_chess_disabled");
     return { stage: "disabled" };
   }
@@ -508,7 +508,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
 
   // Ready: create + accept. T10's first accepted move flips it to `live`;
   // nothing here writes 'live'. white_side and BOTH Lichess ids are what T8's
-  // re-entry after T+20 reads to recognise a seated player.
+  // re-entry after the deadline reads to recognise a seated player.
   let ready: { fixture_id: string }[];
   try {
     ready = await sql<{ fixture_id: string }[]>`

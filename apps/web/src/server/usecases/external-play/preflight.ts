@@ -186,7 +186,7 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
   // "before" is a stamp more than T−10 in the future: the window has not
   // started, which is the round_not_open story, never "closed".
   if (phase === "before") return { seated: false, reason: "round_not_open" };
-  // T+20 is the deadline to be seated and have the game created, not a cap on
+  // DEADLINE_AFTER_MS is the deadline to be seated and have the game created, not a cap on
   // the game (spec §3.6): a seated player reloading mid-game comes back in.
   if (phase === "closed" && !isReentry(f, player)) return { seated: false, reason: "window_closed" };
 

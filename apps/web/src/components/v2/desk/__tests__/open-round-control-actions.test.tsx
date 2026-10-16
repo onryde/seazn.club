@@ -15,6 +15,7 @@ import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harn
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
+import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -62,7 +63,7 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   state: "paired",
   openedAt: null,
   deadlineAt: null,
-  windowMinutes: 20,
+  windowMinutes: DEADLINE_AFTER_MS / 60_000,
   scheduledAt: null,
   press: "open",
   earlierInPlay: [],

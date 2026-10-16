@@ -104,7 +104,7 @@ export const JOBS: readonly Job[] = [
     failureCounts: ["data.failed"],
   },
   // Chess in-page board design §4: "The 5-minute cron … is NOT optional". One pass of the external-play sweep: the
-  // T+20 no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence
+  // deadline no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence
   // and ending arbiter watches. Every one of them happens when no page is open, so without this row none of them runs.
   // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
   // re-send with `skipped`. Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when

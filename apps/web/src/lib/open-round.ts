@@ -112,7 +112,7 @@ export function isOnlineGameExists(err: unknown): boolean {
 }
 
 /** The resend's refusals beyond the board's own (review M6, fix round 1): the
- *  round's window closed (T+20), or the board is held for the organiser. A
+ *  round's window closed (DEADLINE_AFTER_MS), or the board is held for the organiser. A
  *  board a game stands behind answers `ONLINE_GAME_EXISTS_CODE`. */
 export const RESEND_WINDOW_CLOSED_CODE = "WINDOW_CLOSED";
 export const RESEND_BOARD_HELD_CODE = "BOARD_HELD";

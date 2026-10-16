@@ -15,7 +15,10 @@ describe("windowFor", () => {
     expect(w.deadline.getTime()).toBe(T.getTime() + DEADLINE_AFTER_MS);
   });
   it("pins the owner-approved values", () => {
-    expect([EMAIL_LEAD_MS, WINDOW_OPEN_LEAD_MS, DEADLINE_AFTER_MS]).toEqual([900_000, 600_000, 1_200_000]);
+    // The ONE typed number in this file, on purpose: its job is to pin the OWNER's value, copied from the ruling and not
+    // derived from the code under test, so changing the constant is deliberate. DEADLINE_AFTER_MS is 10 minutes, not the
+    // 20 it was: owner proposal of 2026-10-15, C7 (spec §0, §3.2.1). Every other test derives its minutes from the constant.
+    expect([EMAIL_LEAD_MS, WINDOW_OPEN_LEAD_MS, DEADLINE_AFTER_MS]).toEqual([900_000, 600_000, 600_000]);
   });
 });
 
@@ -24,7 +27,7 @@ describe("roomPhase", () => {
     expect(roomPhase(at(-WINDOW_OPEN_LEAD_MS - 1), T)).toBe("before");
     expect(roomPhase(at(-WINDOW_OPEN_LEAD_MS), T)).toBe("open");
   });
-  it("is open one ms before T+20, closed at T+20 exactly", () => {
+  it("is open one ms before the deadline (DEADLINE_AFTER_MS), closed at the deadline exactly", () => {
     expect(roomPhase(at(DEADLINE_AFTER_MS - 1), T)).toBe("open");
     expect(roomPhase(at(DEADLINE_AFTER_MS), T)).toBe("closed");
   });
@@ -37,7 +40,7 @@ describe("checkInCounts", () => {
   it("a stamp before the window (e.g. before a reschedule) does not count", () => {
     expect(checkInCounts(at(-WINDOW_OPEN_LEAD_MS - 1), T)).toBe(false);
   });
-  it("counts from T−10 inclusive to T+20 exclusive", () => {
+  it("counts from T−10 inclusive to the deadline (DEADLINE_AFTER_MS) exclusive", () => {
     expect(checkInCounts(at(-WINDOW_OPEN_LEAD_MS), T)).toBe(true);
     expect(checkInCounts(at(DEADLINE_AFTER_MS - 1), T)).toBe(true);
     expect(checkInCounts(at(DEADLINE_AFTER_MS), T)).toBe(false);

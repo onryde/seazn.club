@@ -2,7 +2,7 @@
 // `fixture_id`: V403's paid `fixture:{id}` score-channel policy reads
 // `fixture_id`, so the two claim names must never collide (V407 SQL comment,
 // `mintExternalPlayLobbyToken`'s own doc comment). `expiresAt` is the
-// fixture's own T+20 deadline, not a flat TTL.
+// fixture's own the deadline, not a flat TTL.
 import { decodeJwt } from "jose";
 import { describe, expect, it, vi } from "vitest";
 import { mintExternalPlayLobbyToken } from "../realtime";

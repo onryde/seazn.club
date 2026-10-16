@@ -304,7 +304,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     expect(mail.sent).toHaveLength(0);
   });
 
-  it("the window rule openRound holds: after T+20 a resend is refused 409 WINDOW_CLOSED and mails nobody", async () => {
+  it("the window rule openRound holds: after the deadline a resend is refused 409 WINDOW_CLOSED and mails nobody", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
     const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - MIN);

@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 /** The fixture server stamps peers on the REAL clock, so the round is opened on it too: five minutes ago, well
- *  inside the window (T−10 … T+20 of the open) for every `now` below. */
+ *  inside the window (T−10 … the deadline of the open) for every `now` below. */
 async function seed() {
   const opened = new Date(Date.now() - 5 * 60_000);
   return seedOnlineChessFixture({

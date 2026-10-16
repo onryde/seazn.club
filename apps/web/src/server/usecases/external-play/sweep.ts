@@ -3,9 +3,9 @@ import "server-only";
 //
 // The 5-minute cron's FIVE jobs, every one of which happens when no page is
 // open (spec §4):
-//   1. the T+20 no-show      → `core.forfeit {by, reason: "walkover"}`;
+//   1. the deadline no-show     → `core.forfeit {by, reason: "walkover"}`;
 //   2. the mint retry         for a create that hit Lichess's 429 wall (M3);
-//   3. meeting teardown       at the result, or at T+20 when nobody played;
+//   3. meeting teardown       at the result, or at the deadline when nobody played;
 //   4. the reconcile sweep    every game on file, read from the BOARD STREAM by
 //                             T11's reconcile — the abandoned-board sweep and
 //                             the main detector of moves made at Lichess;
@@ -16,7 +16,7 @@ import "server-only";
 // The T-10 notice is NOT here: under D12 the organiser's open-round action
 // sends the invites and stamps the window (T19).
 //
-// D12: T+20 is relative to the round being OPENED (`stage_round_opens.opened_at`),
+// D12: the deadline (DEADLINE_AFTER_MS) is relative to the round being OPENED (`stage_round_opens.opened_at`),
 // never to `fixtures.scheduled_at`. A fixture whose round was never opened is
 // unreachable here — every job that rules on the window INNER-joins the open.
 //
@@ -176,7 +176,7 @@ export const SWEEP_SETTLING_READS_PER_PASS = 2;
 export const SWEEP_RECONCILE_BUDGET_MS = 20_000;
 
 /** I-1: the jobs that call Lichess or RealtimeKit, so the pass budget applies to them. Job 0 (close) and job 1 (the
- *  T+20 no-show) touch only our own database, and the no-show is time-critical: a slow Lichess must never push a
+ *  deadline no-show) touch only our own database, and the no-show is time-critical: a slow Lichess must never push a
  *  forfeit past its tick. */
 const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>(["reconcile", "mint_retry", "teardown", "camera_evidence", "arbiter_revoke"]);
 
@@ -341,7 +341,7 @@ function gameMayBeOnFile(pass: Pass, r: BridgeFacts): boolean {
   return r.bridgeStatus === "pending" && claimIsLive(pass, r.mintClaimedAt);
 }
 
-// ─── Job 1: the T+20 no-show ───────────────────────────────────────────────
+// ─── Job 1: the deadline no-show ───────────────────────────────────────────────
 //
 // A board is a no-show candidate only when its round was OPENED (inner join),
 // the fixture is still playable (T8's predicate — never needs_decision, never a
@@ -526,7 +526,7 @@ async function holdUnknownCreate(pass: Pass, c: NoShowCandidate, deadline: Date)
 //      create:rate_limited (<reason>) retry_at=<ISO | unknown>
 //    (create-game.ts noteThrottled - "recorded for the cron's mint retry, which is what honours retryAt"). The queue
 //    never waits a hold out; this job does: a board is retried only once `retry_at` has passed, and only inside its
-//    round's window - past T+20 no game can be made (T9's createAtDequeue refuses), and the board belongs to job 1 or
+//    round's window - past DEADLINE_AFTER_MS no game can be made (T9's createAtDequeue refuses), and the board belongs to job 1 or
 //    the organiser.
 //
 // 2. A board STRANDED with both players in (D21-fix-3, F2b; found by the D22 load test). Both are seated, both check-ins
@@ -633,7 +633,7 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
 //   - the board is settled: the fixture is no longer playable (withdrawn,
 //     decided by hand, cancelled, held for a decision);
 //   - nobody played: the round's deadline has passed and no game is, or may
-//     be, on file (gameMayBeOnFile — the predicate job 1 waits on). Past T+20
+//     be, on file (gameMayBeOnFile — the predicate job 1 waits on). Past DEADLINE_AFTER_MS
 //     no game can be made (T9 refuses), so the room has no further use.
 //   - it is STALE: made for another pairing than the board's current one, with
 //     no game behind it (D16 review G1). The claim that finds one ends the room
@@ -642,7 +642,7 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
 //     leaves the row; this is the pass that asks again, whatever the round's
 //     window says - an old pair's tokens must not stay live in an ACTIVE room
 //     until the deadline just because no new claim came.
-// A game on file that is not finished keeps its meeting, past T+20 or not:
+// A game on file that is not finished keeps its meeting, past the deadline or not:
 // "nothing in our system ends a live game early" (spec §3.6).
 
 type TeardownCandidate = BridgeFacts & {

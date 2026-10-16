@@ -22466,7 +22466,7 @@
     },
     "/api/v1/stages/{id}/open-round": {
       "post": {
-        "summary": "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (T−10/T+20 hang off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) (asked after those two, so a re-open is refused alike and nothing is written); 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route",
+        "summary": "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (the 10-minute check-in window hangs off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) (asked after those two, so a re-open is refused alike and nothing is written); 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route",
         "tags": [
           "stages"
         ],
@@ -52736,7 +52736,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/resend": {
       "post": {
-        "summary": "Re-email the Seazn fixture URL to both players of an online-play fixture (does not mint a new Lichess challenge). Session only, never an API key. 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) — nobody is mailed. 409 ROUND_NOT_OPEN before the round is opened, WINDOW_CLOSED after its T+20 deadline, ONLINE_GAME_EXISTS when a game exists (or may exist) on the board, BOARD_HELD while it awaits an organiser decision, ALREADY_RESOLVED / FIXTURE_NOT_PLAYABLE for a settled board, ROUND_CHANGED when it was re-paired mid-call",
+        "summary": "Re-email the Seazn fixture URL to both players of an online-play fixture (does not mint a new Lichess challenge). Session only, never an API key. 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) — nobody is mailed. 409 ROUND_NOT_OPEN before the round is opened, WINDOW_CLOSED after its 10-minute deadline, ONLINE_GAME_EXISTS when a game exists (or may exist) on the board, BOARD_HELD while it awaits an organiser decision, ALREADY_RESOLVED / FIXTURE_NOT_PLAYABLE for a settled board, ROUND_CHANGED when it was re-paired mid-call",
         "tags": [
           "fixtures"
         ],

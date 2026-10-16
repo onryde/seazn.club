@@ -286,7 +286,7 @@ async function cfEnvelope(
 
 /** `(fixture_id, side)` is the table's primary key, so a player has exactly one
  *  meeting row at a time — an ENDED one included. Once torn down (at the
- *  result, or at T+20 when nobody came — spec §5.2) there is nothing left to
+ *  result, or at the deadline when nobody came — spec §5.2) there is nothing left to
  *  join for THAT pairing, and creating another would only make a billable
  *  meeting the row can never point at. */
 function meetingEnded(fixtureId: string): HttpError {
@@ -761,7 +761,7 @@ function cameraFromReport(data: unknown): "on" | "off" | "blocked" | "starting" 
   return "starting";
 }
 
-/** Torn down at the result, or at T+20 if nobody came (spec §5.2). There is
+/** Torn down at the result, or at the deadline if nobody came (spec §5.2). There is
  *  no "delete meeting" endpoint — the recipe is kick-all then
  *  status INACTIVE, which is what stops anyone joining afterwards. The
  *  kick's 404 ("no active session") is the ordinary quiet-room case and must

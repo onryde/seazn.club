@@ -3,7 +3,7 @@ import type { NeedsReason } from "./types";
 /** Spec §8.1 — the only definition of these values. */
 export const EMAIL_LEAD_MS = 15 * 60_000;
 export const WINDOW_OPEN_LEAD_MS = 10 * 60_000;
-export const DEADLINE_AFTER_MS = 20 * 60_000;
+export const DEADLINE_AFTER_MS = 10 * 60_000;
 export const MATCH_ROOM_TOKEN_TTL_MS = 24 * 60 * 60_000;
 export const MINT_CLAIM_STALE_MS = 30_000;
 
