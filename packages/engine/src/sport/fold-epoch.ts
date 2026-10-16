@@ -19,7 +19,10 @@
 // Frozen: the server holds these objects for the life of its process, and nothing may edit, add to or empty them.
 export const FOLD_EPOCH = Object.freeze({
   // Boardgame, carrom and generic are at their second major: the kernel refuses core.lineup.* for a sport that declares no lineupPolicy (owner ruling
-  // 2026-10-15), so a phone that still offers (or folds) a lineup change there must update; their golden withdrawal stream was re-recorded without the four lineup events.
+  // 2026-10-15), so a phone that still OFFERS a lineup change there must update; their golden withdrawal stream was re-recorded without the four lineup events.
+  // It is the write path that refuses. Replay is lenient, so a ledger that already holds such an event still reads and folds on an old phone; "folds" is not
+  // what moved the major. ROLLOUT COST, stated plainly: the server's 426 epoch gate refuses ALL scoring writes of these three sports from a client on the
+  // old epoch, not just the lineup ones. No such client exists in this repo today; one outside it must update before it can score these sports again.
   football: 1, cricket: 1, boardgame: 2, carrom: 2, generic: 2, volleyball: 1,
   badminton: 1, tabletennis: 1, tennis: 1, icehockey: 1, hockey: 1,
 } as const satisfies Readonly<Record<string, number>>);

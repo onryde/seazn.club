@@ -1460,7 +1460,9 @@ export interface NestedPreset {
    * format that permits a replacement partner would answer differently for
    * the same code.
    *
-   * Omitted ⇒ `DEFAULT_LINEUP_POLICY`.
+   * Omitted ⇒ the sport takes no lineup event at all (`LINEUP_NOT_SUPPORTED`,
+   * owner ruling 2026-10-15), NOT the kernel default: state
+   * `() => DEFAULT_LINEUP_POLICY` to get it.
    */
   lineupPolicy?: (cfg: NestedCfg) => LineupPolicy;
 }

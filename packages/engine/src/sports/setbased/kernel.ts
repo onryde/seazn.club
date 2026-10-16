@@ -1570,7 +1570,9 @@ export interface SetBasedPreset {
    * while ITTF and BWF have no substitution at all and so no return either. A
    * kernel constant would be right for at most one of the three.
    *
-   * Omitted ⇒ `DEFAULT_LINEUP_POLICY`.
+   * Omitted ⇒ the sport takes no lineup event at all (`LINEUP_NOT_SUPPORTED`,
+   * owner ruling 2026-10-15), NOT the kernel default: state
+   * `() => DEFAULT_LINEUP_POLICY` to get it, as table tennis does.
    */
   lineupPolicy?: (cfg: SetBasedCfg) => LineupPolicy;
 }

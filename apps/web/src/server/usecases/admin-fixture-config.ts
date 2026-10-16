@@ -243,6 +243,16 @@ export async function resnapshotFixtureConfig(
     //     `core.finalize`, so the whole recovery vocabulary — including the undo
     //     whose absence made the original W4a defect unrecoverable — survives
     //     every cfg.
+    //   * There is now ONE strict gate that is not in a sport handler: the
+    //     kernel's own `LINEUP_NOT_SUPPORTED` refusal in `core/events.ts`
+    //     (engine lineup fix, owner ruling 2026-10-15). It is keyed on the five
+    //     `core.lineup.*` types plus the MODULE'S declaration (`lineupPolicy`
+    //     present or not), so it is not reachable from `core.void`,
+    //     `core.abandon`, `core.forfeit`, `core.note` or `core.finalize` either,
+    //     and it is not cfg-derived: this hatch rewrites cfg, never the module,
+    //     so no re-snapshot can move a fixture into or out of it. A recorded
+    //     lineup event of such a sport (a ledger from before the ruling) replays
+    //     non-strict and stays readable, and can still be voided.
     //   * The one cfg-derived write refusal that IS type-independent is not a
     //     module seam at all: `append-event.ts`'s DRAW_NOT_ALLOWED gate, which
     //     this preflight does not evaluate. Reaching it needs a cfg under which
@@ -258,7 +268,9 @@ export async function resnapshotFixtureConfig(
     //     cannot change.
     //
     // WHAT WOULD BREAK IT: widening `strictFromSeq` to cover recorded events; a
-    // `strict &&` refusal added to a `core.*` handler; or a `supportsDraws` whose
+    // `strict &&` refusal added to a `core.*` handler, or a kernel-level strict
+    // gate (like the `LINEUP_NOT_SUPPORTED` one) widened from the five
+    // `core.lineup.*` types to the recovery vocabulary or keyed on cfg; or a `supportsDraws` whose
     // cfg key does not also change the folded outcome. The first two are pinned
     // by `admin-fixture-config.test.ts` ("does not leave the fixture in a state
     // where every future write is refused"); the third is not, and is the one to

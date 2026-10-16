@@ -189,7 +189,11 @@ rules instead needs an epoch per division or fixture, which does not exist.
   cricket, volleyball, badminton, table tennis, tennis, ice hockey and hockey, and NOT boardgame, carrom or generic). For the others the
   write path refuses all five types with **`LINEUP_NOT_SUPPORTED`** and the server answers **422** (`POST /api/v1/fixtures/{id}/events`),
   so a lineup event queued for such a sport is rejected, never parked and never retried. The refusal is the write path's only: a ledger
-  that already holds one still folds on replay, so read it as a fold input and keep it. Before this a substitution was accepted there and
+  that already holds one still folds on replay, so read it as a fold input and keep it. **A whole-stream strict fold is a write path too:**
+  the event import (`importEvents`, `strictFromSeq: 1`) folds every event of the stream as a new write, so a legacy ledger of one of these
+  three sports that carries a lineup event is refused as a stream, **`import.fold_rejected` with `engineCode` `LINEUP_NOT_SUPPORTED`**
+  at that event's index, and nothing is written. That is intended (a pinned test: `event-import-dryrun.test.ts`); strip the lineup events
+  from the export before importing it. Before this a substitution was accepted there and
   moved the kernel's squads but nothing the sport shows (in generic the pad kept offering the player taken off, and a tap credited
   them). This is a MAJOR for those three sports: **`foldEpochOf` of boardgame, carrom and generic is 2**, so a phone bundled at epoch 1
   is `426 ENGINE_OUTDATED` for them. Drive the offer from the module's own declaration, never from a list of sport names.

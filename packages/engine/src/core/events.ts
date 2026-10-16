@@ -691,9 +691,15 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
    * not. A module that hard-codes any of them has answered for the wrong
    * competition.
    *
-   * Absent ⇒ DEFAULT_LINEUP_POLICY — no growth, no return, no exemption, no
-   * cap. Nothing a module could do before this wave becomes impossible, and
-   * nothing new becomes possible without a variant asking for it.
+   * Absent ⇒ the module takes NO `core.lineup.*` event on the write path (owner
+   * ruling 2026-10-15; `LINEUP_NOT_SUPPORTED`, see `admitsLineupEvents`): the
+   * declaration is the opt-in, because a module that declares none reads no
+   * squad, and a substitution recorded there moved the kernel's squads and
+   * nothing the sport shows. A module that wants the kernel's most restrictive
+   * answer (no growth, no return, no exemption, no cap) says so, with
+   * `lineupPolicy: () => DEFAULT_LINEUP_POLICY`, as table tennis does. A ledger
+   * that already holds a lineup event for such a module still REPLAYS: only the
+   * write path refuses.
    */
   lineupPolicy?(cfg: Cfg): LineupPolicy;
 
@@ -877,6 +883,8 @@ export function foldMatchWithStoppage<Cfg, State>(
   // S3/W4b (#426) — the squads start as the team sheets declared them, with
   // positions intact, and the module is offered the snapshot immediately so its
   // own State and the kernel's can never be two constructions of one fact.
+  // (a module with no `lineupPolicy` reaches the fallback only on REPLAY of a ledger that already holds a lineup event: the
+  // write path refuses the event before the reducer is asked, see the gate below)
   const lineupPolicy = module.lineupPolicy?.(cfg) ?? DEFAULT_LINEUP_POLICY;
   let squads = initSquads(lineups);
   if (module.onLineup !== undefined) state = module.onLineup(state, squads);
