@@ -377,4 +377,12 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
   test dropping its format-1 condition, flipping its replay-clean test, losing that test altogether, and not counting its streams; the policy
   paragraph renamed under the message's pointer. Counts: scoped 1570 of 1570 over 24 files (the golden and guard files plus boundary-gate,
   stryker-changed-lines, release-epoch-report-cli, fold-epoch, schema-snapshot, generator-fields, dossiers); parity ledger
-  `ledgers/gf2-batch-review.json` against ff84756d9: 3 rewritten + 10 added, 0 unaccounted (6470 -> 6480 collected).
+  `ledgers/gf2-batch-review.json` against ff84756d9: 3 rewritten + 11 added, 0 unaccounted (6470 -> 6481 collected; the verify pass added one, below).
+  **Verify-pass nits (Opus verify, clean).** (N1) Two `extendCorpus` budgets went from `sweepBudget("build", 3)` (32 s) to `("build", 5)` (50 s):
+  one hit 34.6 s under contention and the pair runs 8-12 s isolated. Every other converted budget was checked against its isolated time; the
+  per-module reformat tests (cricket, 2.5-2.9 s against 9 s) moved to `("probe", 2)`, and the rest sit below a tenth of theirs. (N2) The
+  ablation probe throws `DenseOverlayMissing` for a recording that has an `overlay` but no `dense`, on either side of the ablation, instead
+  of skipping its kernel comparison; a test reaches both sides and the two controls (the real recorder, the module-only one), and three
+  mutants (throw removed, far side unchecked, `overlay` condition dropped) are each killed by an assertion failure. (N3) The S2 handoff's
+  "still not pinned" bullet carries the split: a module-state change to a note or an award is a MAJOR, a stats-fold change for an undeclared
+  award key a MINOR.

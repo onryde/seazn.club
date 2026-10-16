@@ -169,9 +169,11 @@ rules instead needs an epoch per division or fixture, which does not exist.
   produce, and each overlay fact leaving its kernel default and coming back. So a change to how the kernel computes any of those moves a
   golden and owes a bump the guard now announces; it is no longer a manual MAJOR. A pause, a lineup change a module does not read,
   mid-match summaries and the kernel's side of an undo were on this list and are off it.
-- **Still not pinned, and so still a MANUAL MAJOR of every sport it reaches:** a note (all eleven sports) and an award in the eight
+- **Still not pinned, and so still a MANUAL bump of every sport it reaches:** a note (all eleven sports) and an award in the eight
   sports that declare no award key (the floor's `OVERLAY_CLAIMS` names them and goes red the day one starts to move a golden; football's
-  `motm`, hockey's `potm` and icehockey's `mvp` are pinned since GF-2 T4, through the stat rows), `forfeit-credit.ts` where no corpus has
+  `motm`, hockey's `potm` and icehockey's `mvp` are pinned since GF-2 T4, through the stat rows). A change to how a MODULE folds either
+  (the state it keeps, which a phone computes) owes a **MAJOR**; a change to how the player-statistics fold treats an award key a sport does
+  not declare is server-only and owes a **MINOR**, by hand (owner ruling Q2). The rest of this list is MAJOR: `forfeit-credit.ts` where no corpus has
   a forfeit that reaches it, a path no stream exercises (for example the expunge of an `abandonPolicy: "award"` football, hockey or
   icehockey match: no recorded config sets it), and a widening of a kernel REFUSAL (X-AB-4 `ABANDONED_SETTLE_OR_VOID`, the settle
   admission `SETTLE_NOT_APPLICABLE`: a refused ledger was never recorded, so accepting more moves no byte). See

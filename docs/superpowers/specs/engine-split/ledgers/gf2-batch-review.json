@@ -1,6 +1,6 @@
 {
  "batch": "gf2-batch-review",
- "note": "Test-id ledger for the GF-2 batch-review fix round (Opus review of the whole batch, reviews/gf2.md: I-1 the reformat dead end, M-1 probe-only dense stored silently, n2 flat sweep budgets), built against base ff84756d9 (the GF-2 tip the review read, after the rebase onto main). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. The round retitles 3 tests and adds 10 (6470 -> 6480 collected), none retired, all under packages/engine/src/testkit and packages/engine/test. Scope: no file under tools/matrix, scripts or apps/web changes in this round.",
+ "note": "Test-id ledger for the GF-2 batch-review fix round (Opus review of the whole batch, reviews/gf2.md: I-1 the reformat dead end, M-1 probe-only dense stored silently, n2 flat sweep budgets), built against base ff84756d9 (the GF-2 tip the review read, after the rebase onto main). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. The round retitles 3 tests and adds 11 (6470 -> 6481 collected), none retired, all under packages/engine/src/testkit and packages/engine/test. Scope: no file under tools/matrix, scripts or apps/web changes in this round.",
  "entries": [
   {
    "id": "src/testkit/golden-format.test.ts › reformatCorpus — it is NEVER a re-baseline: it refuses when anything already recorded would change › a stream recorded under format 1 whose EFFECTIVE outcome differs from the module's (a settle): the stored outcome would move",
@@ -69,6 +69,11 @@
    "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: a run that compared nothing, or read something it cannot trust, is refused (exit 2) › a stream that stores a key no format records is refused in a format-1 corpus too (the check is not a format-2 or 3 rule), and the key is named",
    "fate": "added",
    "reason": "GF-2 batch review M-1: the guard refuses a stream key no format records, in a format-1 corpus too"
+  },
+  {
+   "id": "src/testkit/golden-floor-overlay.test.ts › ablationProbe — every clause of the format-2 comparison is reached (a comparison nothing kills is not tested) › a recording with an overlay but no dense overlay, on either side of the ablation, is a named failure: it is never read as 'nothing moved' (which would turn every event unpinned)",
+   "fate": "added",
+   "reason": "GF-2 batch review verify pass N2: the probe throws DenseOverlayMissing for a recording that has an overlay but no dense overlay, on either side of the ablation, instead of skipping its kernel comparison"
   }
  ]
 }
