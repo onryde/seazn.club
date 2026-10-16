@@ -2097,6 +2097,118 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
     expect(rt.slice(-2).map((x) => `${x.from_state}-${x.type}->${x.to_state}`)).toEqual(["destroyed-create_ok->lost", "lost-destroy_ok->destroyed"]);
     expect(await seconds()).toBe(120);                                   // the old anchor re-billed booting → now: 120 + 360
   });
+
+  // Billing under-count (introduced 14591fb90): `decide`'s runner arm writes a runner_transition for EVERY step, same-state
+  // ones included, so each look at a booting Machine is a booting→booting row. Those rows are ledger, not noise — an
+  // observation's payload, and R2003b's crashCount rides the playing→playing row of a crash beat — so they stay. What
+  // machine_seconds must anchor on is the attempt's FIRST entry into booting: the Machine has existed since then.
+  // Every expectation below is the clock the test fed in (its ticks), never a value read back from the code under test.
+  const machineSecondsOf = async (sid: string) =>
+    (await sql<{ machine_seconds: number }[]>`select machine_seconds from fixture_stream_sessions where id = ${sid}`)[0]!.machine_seconds;
+  /** The compute term of the estimate for `secs` on the default guest, from the declared rates (the Df test's formula). */
+  const computeMinorFor = (secs: number) => {
+    const cpu = (RUNNER_DEFAULT_GUEST.cpus * FLY_PERFORMANCE_CPU_MICROS_PER_MONTH * secs) / FLY_BILLING_SECONDS_PER_MONTH;
+    const extraGb = Math.max(0, RUNNER_DEFAULT_GUEST.memoryMb / 1024 - RUNNER_DEFAULT_GUEST.cpus * FLY_PERFORMANCE_INCLUDED_GB_PER_CPU);
+    return Math.round((cpu + (extraGb * FLY_RAM_MICROS_PER_GB_MONTH * secs) / FLY_BILLING_SECONDS_PER_MONTH) / 10_000);
+  };
+  /** The fake clock moves `ms`, and the paired phone is still present on it (W5's phone-lost end watches the pairing; these
+   *  tests are about the Machine, not the phone). */
+  const step = async (r: Awaited<ReturnType<typeof rig>>, ms: number) => {
+    r.tick(ms);
+    await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+  };
+  const selfRowsOf = async (sid: string, state: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events
+                                 where session_id = ${sid} and kind = 'runner_transition' and from_state = ${state} and to_state = ${state}`)[0]!.n;
+
+  it("billing: a Machine LOOKED AT N times while booting (a booting→booting row each) is billed from its FIRST boot entry to destroyed, and est_cost_minor with it (mutant: anchor on the newest booting row → the last look, 120 s)", async () => {
+    const LOOKS = 4, LOOK_MS = 120_000, PLAY_MS = 120_000;
+    // A guard, not a comment: the looks stay inside the warming window, or the session would time out instead of boot.
+    expect(LOOKS * LOOK_MS, "premise: the boot looks fit the warming window").toBeLessThan(WARMING_TIMEOUT_MINUTES * 60_000);
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);   // creating → booting at T0
+    expect(await r.row(sessionId)).toMatchObject({ state: "warming", runner_state: "booting" });
+    for (let i = 0; i < LOOKS; i++) {
+      await step(r, LOOK_MS);
+      await currentSession(r.auth, r.fixtureId, r.deps);                  // observed running: booting → booting, a row each
+    }
+    expect(await selfRowsOf(sessionId, "booting"), "premise: every look wrote its booting→booting row — the ledger the anchor reads past").toBe(LOOKS);
+    await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);   // booting → playing → live
+    await step(r, PLAY_MS);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);                    // observed stopped → exited → destroyed → completed
+    expect(await r.row(sessionId)).toMatchObject({ state: "completed", runner_state: "destroyed" });
+    const expected = (LOOKS * LOOK_MS + PLAY_MS) / 1000;                  // boot entry at T0; destroyed at T0 + every tick since
+    const newestLook = PLAY_MS / 1000;                                    // what the defect billed: the last look → destroyed
+    expect(await machineSecondsOf(sessionId)).toBe(expected);
+    // The estimate (internal cost only) follows: recording_seconds is still 0 at the terminal transition, so it is compute.
+    expect(computeMinorFor(expected), "the differential: the estimate can tell the two anchors apart").not.toBe(computeMinorFor(newestLook));
+    const [f] = await sql<{ est_cost_minor: number | null }[]>`select est_cost_minor from fixture_stream_sessions where id = ${sessionId}`;
+    expect(f!.est_cost_minor).toBe(computeMinorFor(expected));
+  });
+
+  it("billing SEQUENCE: boot (looked at) → playing → a crash restarted in place (R2003b) → playing → lost → the ONE retry, whose boot (looked at) → playing → stopped bills separately; the create's own wait and the gap between attempts are never billed", async () => {
+    const BOOT_LOOK_MS = 120_000, BEAT_MS = 5_000, RESTART_MS = 2_000, CREATE_MS = 30_000, RETRY_LOOK_MS = 10_000, PLAY2_MS = 120_000;
+    const r = await rig({ credits: 1 });
+    const crashExit: ExitInfo = { exitCode: 1, oomKilled: false, requestedStop: false };
+    // Attempt 2's create call takes CREATE_MS on the fake clock: the Machine is not ours to bill until create_ok.
+    const realCreate = r.runner.create.bind(r.runner);
+    r.runner.create = async (spec) => { if (spec.attempt === 2) r.tick(CREATE_MS); return realCreate(spec); };
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);   // attempt 1 boots at T0
+    // ---- attempt 1
+    let attempt1 = 0;
+    for (let i = 0; i < 2; i++) { await step(r, BOOT_LOOK_MS); attempt1 += BOOT_LOOK_MS; await currentSession(r.auth, r.fixtureId, r.deps); }
+    const token1 = r.runner.created[0]!.jobToken;
+    await heartbeat(sessionId, token1, { state: "playing" }, r.deps);    // live
+    await step(r, BEAT_MS); attempt1 += BEAT_MS;
+    await heartbeat(sessionId, token1, { state: "stopped", exitReason: "fatal" }, r.deps);   // R2003b: a counted crash, below the cap
+    const first = (await r.row(sessionId)).machine_id!;
+    await step(r, RESTART_MS); attempt1 += RESTART_MS;
+    // Fly restarting the crashed run IN PLACE (F-007): read stopped mid-restart, inside its bound — the same attempt.
+    r.runner.setObserved(first, "stopped", crashExit, { since: new Date(r.deps.now().getTime() - 1_000), count: 1 });
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    await step(r, RESTART_MS); attempt1 += RESTART_MS;
+    r.runner.setObserved(first, "running");
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    await heartbeat(sessionId, token1, { state: "playing" }, r.deps);    // the restarted process beats again
+    expect(await r.row(sessionId)).toMatchObject({ state: "live", runner_state: "playing", machine_id: first, runner_retries: 0 });
+    // The crash's ledger witness IS a self-transition: the reason those rows are kept (and the anchor must read past them).
+    const crashRows = await sql<{ from_state: string; to_state: string }[]>`
+      select from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' and payload ? 'crashCount'`;
+    expect(crashRows).toEqual([{ from_state: "playing", to_state: "playing" }]);
+    await step(r, BEAT_MS); attempt1 += BEAT_MS;
+    // Lost for good: observed failed with no restart → lost → force_destroy → destroy_ok → destroyed → the ONE retry, inline.
+    r.runner.setObserved(first, "failed", crashExit);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect(await machineSecondsOf(sessionId), "attempt 1: its boot entry → its destroyed").toBe(attempt1 / 1000);
+    // ---- attempt 2
+    expect(await r.row(sessionId)).toMatchObject({ state: "live", runner_state: "booting", runner_retries: 1 });
+    expect(r.runner.created.map((c) => c.attempt)).toEqual([1, 2]);
+    let attempt2 = 0;
+    for (let i = 0; i < 2; i++) { await step(r, RETRY_LOOK_MS); attempt2 += RETRY_LOOK_MS; await currentSession(r.auth, r.fixtureId, r.deps); }
+    const token2 = r.runner.created[1]!.jobToken;
+    await heartbeat(sessionId, token2, { state: "playing" }, r.deps);
+    await step(r, PLAY2_MS); attempt2 += PLAY2_MS;
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect(await r.row(sessionId)).toMatchObject({ state: "completed", runner_state: "destroyed" });
+    // Anti-vacuity: both boots really were looked at — each attempt wrote booting→booting rows the anchor had to read past.
+    expect(await selfRowsOf(sessionId, "booting"), "premise: two looks per boot").toBe(4);
+    expect(await selfRowsOf(sessionId, "playing"), "premise: the crash and the restart wrote playing→playing rows").toBeGreaterThan(0);
+    expect(await machineSecondsOf(sessionId), "attempt 1 + attempt 2, each from its OWN boot entry; CREATE_MS unbilled").toBe((attempt1 + attempt2) / 1000);
+  });
+
+  it("billing, the EMPTY case: a PASSTHROUGH session books no Machine — looked at N times and stopped, it has no runner_transition row to anchor on and bills 0 machine seconds", async () => {
+    const LOOKS = 3;
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    for (let i = 0; i < LOOKS; i++) { await step(r, STREAM_POLL_MS); await currentSession(r.auth, r.fixtureId, r.deps); }
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    expect(await r.row(sessionId)).toMatchObject({ state: "completed" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition'`;
+    expect(n).toBe(0);
+    expect(await machineSecondsOf(sessionId)).toBe(0);
+  });
 });
 
 // B3 N-3 (re-review): DB-FREE — hoisted out of the DB-gated describe it sat in, so the I-1 kill tests run in EVERY

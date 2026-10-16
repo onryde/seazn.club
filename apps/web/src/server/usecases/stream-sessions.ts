@@ -237,8 +237,9 @@ function logDecision(before: Session, dec: Decision, now: Date): void {
 /** Ruling 13 item 4: the facts a transition just made true, written beside
  *  the state in the same transaction. Each is `coalesce`d so a repeat never
  *  moves a timestamp. machine_seconds is computed from the events table —
- *  the last `booting` runner_transition AFTER the last `destroyed` one, its
- *  occurred_at to NOW on entering `destroyed` (each boot billed once, M2). */
+ *  the FIRST `booting` runner_transition AFTER the last `destroyed` one (the
+ *  attempt's boot entry), its occurred_at to NOW on entering `destroyed` (each
+ *  boot billed once, M2). */
 async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command, now: Date): Promise<void> {
   if (before.state !== "live" && next.state === "live") {
     await tx`update fixture_stream_sessions set live_at = coalesce(live_at, ${now}) where id = ${next.id}`;
@@ -269,12 +270,18 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
     // whole span a second time (and already over-counted an attempt-2 create_failed after attempt 1 booted). Only a boot
     // AFTER the last recorded entry into destroyed is still unbilled. This decision's own rows are written after
     // persistFacts, so the max(seq) below is the PREVIOUS destroyed. Witness: "machine_seconds counts each boot ONCE …".
+    // The FIRST booting row past it, never the newest: `decide` writes a runner_transition for every step, same-state ones
+    // included, so each look at a booting Machine is a booting→booting row (the ledger keeps them — an observation's
+    // payload, R2003b's crashCount). Anchoring on the newest restarted the bill at every look (14591fb90). The window holds
+    // ONE attempt (a create starts only from none or destroyed, invariant 1), so its first booting row is that attempt's
+    // boot entry — and a ledger written before this fix, self rows and all, reads the same. Witness: "billing: a Machine
+    // LOOKED AT N times while booting …".
     const [boot] = await tx<{ occurred_at: string }[]>`
       select b.occurred_at from fixture_stream_events b
        where b.session_id = ${next.id} and b.kind = 'runner_transition' and b.to_state = 'booting'
          and b.seq > coalesce((select max(d.seq) from fixture_stream_events d
                                 where d.session_id = ${next.id} and d.kind = 'runner_transition' and d.to_state = 'destroyed'), 0)
-       order by b.seq desc limit 1`;
+       order by b.seq asc limit 1`;
     if (boot) {
       const seconds = Math.max(0, Math.round((now.getTime() - new Date(boot.occurred_at).getTime()) / 1000));
       await tx`update fixture_stream_sessions set machine_seconds = machine_seconds + ${seconds} where id = ${next.id}`;
