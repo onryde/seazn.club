@@ -173,9 +173,11 @@ export const RUNNER_RESTART_STUCK_SECONDS = 10;
  *  recorded exit that is non-zero/OOM and not requested — never `signalled` (exit 0, a stop someone else asked for, which
  *  Fly does not restart) and never the refusal (RELAY_EXIT_REFUSED, which has its own path). domain/runner.ts
  *  `CrashTally` counts it. A consequence, pinned in config.test.ts: with RUNNER_INPLACE_RESTARTS = 2, the crash Fly itself
- *  declines to restart inside one window is a 3rd crash, so a fast burst whose three crashes are SEEN (their final beats)
- *  reaches this cap too and fails rather than spending the retry on a cold start of the same image. A burst seen only by
- *  Fly's final exit counts its restart count (2) and keeps the retry — the tally never guesses a crash it cannot see. */
+ *  declines to restart inside one window is a 3rd crash, so a fast burst reaches this cap too and fails rather than
+ *  spending the retry on a cold start of the same image. That holds whether its crashes are seen by their final beats or
+ *  only by Fly's final exit. F-007 measured that exit as restart_count 2 after 3 crashes, so it proves its count + 1
+ *  (R2003b review m1). A slow loop (each crash past the ~330 s refill, restart_count back to 1) is counted one exit at a
+ *  time, including on a `running` read after Fly already restarted it (review I2). */
 export const RUNNER_CRASH_CAP = 3;
 /** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. OUR stop — the organiser's or the
  *  deadline's — and since R2004 PR 0 (coordinator decision I4, 2026-10-15) the R2 compositor reads it as "hold the Final

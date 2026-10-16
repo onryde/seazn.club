@@ -160,11 +160,16 @@ export interface RunnerListing { runnerId: string; sessionId: string | null; nam
  *  run's. `restartingSince` is the exit's instant (null
  *  when not restarting, or when the provider gave none); `restartCount` the provider's count, when it reports one.
  *  `exitAt` (R2003b) — the instant of the exit `exit` describes, restarting or not: its IDENTITY, so the crash cap counts
- *  one exit once however often it is read (domain/runner.ts CrashTally). null when there is no exit, or no instant. */
+ *  one exit once however often it is read (domain/runner.ts CrashTally). null when there is no exit, or no instant.
+ *  `exitRestarted` (R2003b review m1) — the exit's OWN record of whether the provider restarts that run in place, kept
+ *  after the restart completes: true for an in-place restart; false for the final exit of the provider's window, whose
+ *  count is one fewer than the crashes it closes; null when it says neither. `restarting` is a different claim: a
+ *  restart is in flight NOW. `running` (R2003b review I2) reports the newest exit too. That is the previous run's exit,
+ *  the only witness of a crash the provider restarted before anyone read it. */
 export interface RunnerObservation {
   state: ObservedRunnerState; exit: ExitInfo | null;   // both types from domain/runner.ts
   restarting: boolean | null; restartingSince: Date | null; restartCount: number | null;
-  exitAt: Date | null;
+  exitAt: Date | null; exitRestarted: boolean | null;
 }
 export interface RunnerProvider {
   /** m1 (Task 12 fix round 1): how long a runner created just before a `list()` may still be MISSING from it — the

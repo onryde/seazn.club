@@ -21,9 +21,9 @@
 // own tests; what is proved here is that `FlyRunner` routes through them.
 import { describe, expect, it, vi } from "vitest";
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "../fly-client";
-import { ENDING_TIMEOUT_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_INPLACE_RESTARTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
+import { ENDING_TIMEOUT_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_CRASH_CAP, RUNNER_DEFAULT_REGION, RUNNER_INPLACE_RESTARTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, ENV_METADATA_KEY, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, fromFlyState, isUnestablishedCreate, runnerCreateErrorFrom } from "../runner-fly";
-import { CRASHES_NONE, OBSERVED_STATES, RUNNER_NONE, machineNameFor, stepRunner } from "../domain/runner";
+import { CRASHES_NONE, OBSERVED_STATES, RUNNER_NONE, machineNameFor, stepRunner, type Runner } from "../domain/runner";
 import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
 import { log } from "@/server/logger";
 import { FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
@@ -264,8 +264,8 @@ describe("FlyRunner", () => {
     // T5-f: `requestedStop` is PRODUCED here and pinned. Nothing READS it yet —
     // `failReasonFromExit` ignores it — so the consumer side stays owed by Task 10.
     // R2003b: `exitAt` is the exit event's own `timestamp` (1 ms here) — the exit's identity; a 404 has no exit, so none
-    expect(await runner.observe("m_1")).toEqual({ state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true }, restarting: false, restartingSince: null, restartCount: null, exitAt: new Date(1) });
-    expect(await runner.observe("m_gone")).toEqual({ state: "destroyed", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null });
+    expect(await runner.observe("m_1")).toEqual({ state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true }, restarting: false, restartingSince: null, restartCount: null, exitAt: new Date(1), exitRestarted: null });
+    expect(await runner.observe("m_gone")).toEqual({ state: "destroyed", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null });
   });
 
   // R2004 PR 0 (coordinator decision I4): OUR stop is SIGINT, so C06 holds the Final scene; a stop Fly starts is SIGTERM
@@ -344,7 +344,7 @@ describe("FlyRunner", () => {
       return { status: 200, body: { id: "m_dead", name: NAME, state: "destroyed" } };
     });
     const runner = new FlyRunner({ client: s.client, image: "img" });
-    expect(await runner.observe("m_dead")).toEqual({ state: "destroyed", exit: { exitCode: 1, oomKilled: false, requestedStop: false }, restarting: false, restartingSince: null, restartCount: null, exitAt: new Date(4) });
+    expect(await runner.observe("m_dead")).toEqual({ state: "destroyed", exit: { exitCode: 1, oomKilled: false, requestedStop: false }, restarting: false, restartingSince: null, restartCount: null, exitAt: new Date(4), exitRestarted: null });
     expect(s.calls.map((c) => c.url.replace(`${FLY_MACHINES_BASE}/apps/seazn-relay`, ""))).toEqual(["/machines/m_dead", "/machines/m_dead/events"]);
   });
 
@@ -370,26 +370,77 @@ describe("FlyRunner", () => {
     const runner = new FlyRunner({ client: s.client, image: "img" });
     const CRASH = { exitCode: 1, oomKilled: false, requestedStop: false };
     // +0 ms: the exit, restarting
-    expect(await runner.observe("m_r")).toEqual({ state: "stopped", exit: CRASH, restarting: true, restartingSince: new Date(EXIT_1), restartCount: 1, exitAt: new Date(EXIT_1) });
+    expect(await runner.observe("m_r")).toEqual({ state: "stopped", exit: CRASH, restarting: true, restartingSince: new Date(EXIT_1), restartCount: 1, exitAt: new Date(EXIT_1), exitRestarted: true });
     // +109 ms: the restart event, Fly says `starting`
     machineState = "starting"; events = [ev.restart1, ev.exit1, ev.started0, ev.launch];
-    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: CRASH, restarting: true, restartingSince: new Date(EXIT_1), restartCount: 1, exitAt: new Date(EXIT_1) });
-    // +1407 ms: started — running, nothing in flight, and no events call made for it
+    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: CRASH, restarting: true, restartingSince: new Date(EXIT_1), restartCount: 1, exitAt: new Date(EXIT_1), exitRestarted: true });
+    // +1407 ms: started — running, nothing in flight, and no events call made for it. This GET body carries no `events`, so
+    // there is no exit to report (no claim); the R2003b I2 test below reads a running Machine's exit off the body's own events
     machineState = "started"; events = [ev.started1, ev.restart1, ev.exit1, ev.started0, ev.launch];
     const callsBefore = s.calls.length;
-    expect(await runner.observe("m_r")).toEqual({ state: "running", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null });
+    expect(await runner.observe("m_r")).toEqual({ state: "running", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null });
     expect(s.calls.slice(callsBefore).map((c) => c.url.replace(`${FLY_MACHINES_BASE}/apps/seazn-relay`, ""))).toEqual(["/machines/m_r"]);
     // the final exit: max_retries spent, `restarting: false` — a loss, not a restart
     machineState = "stopped"; events = [ev.exit3, ev.started1, ev.restart1, ev.exit1, ev.started0, ev.launch];
     // R2003b: not restarting, but still an exit with an instant — the crash cap's identity for it
-    expect(await runner.observe("m_r")).toEqual({ state: "stopped", exit: CRASH, restarting: false, restartingSince: null, restartCount: 2, exitAt: new Date(EXIT_3) });
+    expect(await runner.observe("m_r")).toEqual({ state: "stopped", exit: CRASH, restarting: false, restartingSince: null, restartCount: 2, exitAt: new Date(EXIT_3), exitRestarted: false });
     // a restart that already COMPLETED (a `start` newer than the restarting exit) is not one in flight: a later
     // `starting` is no claim of a restart — and so never runs the stuck clock from that old exit
     machineState = "starting"; events = [ev.started1, ev.restart1, ev.exit1, ev.started0, ev.launch];
-    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null });
+    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null });
     // a cold boot: starting with no exit in its history — pending, not a restart
     machineState = "starting"; events = [ev.launch];
-    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null });
+    expect(await runner.observe("m_r")).toEqual({ state: "pending", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null });
+  });
+
+  // R2003b review I2. F-007's slow loop: a compositor crashing more slowly than Fly's window refills (~330 s, M2) is
+  // restarted in place EVERY time, each exit carrying restart_count 1, so the count never builds a floor. A runtime crash
+  // (panic, OOM kill, SIGSEGV) sends no final beat, so the Machine's own read is the only witness. A read inside the
+  // ~1.4 s restart window is luck. The read that reliably follows each restart, the restarted process's own job GET,
+  // finds Fly `started`. A running read that reports no exit therefore leaves the loop uncapped forever. The GET's own
+  // `events` carry the exit (the F-007 probe read every exit event off this GET), so a running read reports the newest
+  // exit with no extra Fly call (the events action is limited to 1 req/s per Machine).
+  it("R2003b I2: a SLOW beat-less crash loop, each crash read only AFTER its restart completed (Fly `started`), reaches RUNNER_CRASH_CAP through the real domain step. The running read reports the newest exit off the Machine GET itself (no events call), and a re-read of the same exit counts nothing", async () => {
+    const T = Date.UTC(2026, 9, 15, 18, 0, 0);
+    const SLOW_MS = 331_000;   // F-007 M2: past the ~330 s refill, so Fly restarts each crash with restart_count 1
+    const PANIC = { exitCode: 101, oomKilled: false, requestedStop: false };   // a Rust panic: no final beat (C08)
+    let events: unknown[] = [
+      { id: "s0", type: "start", status: "started", source: "flyd", timestamp: T - 3_000, request: null },
+      { id: "l0", type: "launch", status: "created", source: "user", timestamp: T - 5_000, request: null },
+    ];
+    const s = scripted((url) => (url.endsWith("/events")
+      ? { status: 500, body: { error: "a running read must not cost an events call" } }
+      : { status: 200, body: { id: "m_slow", name: NAME, state: "started", events } }));
+    const runner = new FlyRunner({ client: s.client, image: "img" });
+    let r: Runner = { ...RUNNER_NONE, state: "playing", attempt: 1, name: machineNameFor("s1", 1), machineId: "m_slow" };
+    let checked = 0;
+    for (let k = 1; k <= RUNNER_CRASH_CAP; k++) {
+      const exitAt = T + k * SLOW_MS;
+      // Fly sends events NEWEST FIRST: the restarted run's start, the restart, then crash k's exit
+      events = [
+        { id: `s${k}`, type: "start", status: "started", source: "flyd", timestamp: exitAt + 1_407, request: null },
+        { id: `r${k}`, type: "restart", status: "starting", source: "flyd", timestamp: exitAt + 109, request: null },
+        { id: `x${k}`, type: "exit", status: "stopped", source: "flyd", timestamp: exitAt,
+          request: { exit_event: { exit_code: PANIC.exitCode, oom_killed: false, requested_stop: false, restarting: true }, restart_count: 1 } },
+        ...events,
+      ];
+      const observed = await runner.observe("m_slow");
+      expect(observed, `crash ${k}: read while running`).toEqual({ state: "running", exit: PANIC, restarting: false, restartingSince: null, restartCount: 1, exitAt: new Date(exitAt), exitRestarted: true });
+      const now = new Date(exitAt + 5_000);
+      const step = stepRunner(r, { type: "observed", ...observed }, now);
+      if (k < RUNNER_CRASH_CAP) {
+        expect(step, `crash ${k}`).toMatchObject({ next: { state: "playing", crashes: { count: k } }, effects: [], signal: null });
+        // the same exit read again (the organiser's poll) is the same crash
+        const again = stepRunner(step.next, { type: "observed", ...(await runner.observe("m_slow")) }, now);
+        expect(again.next.crashes.count, `crash ${k}, read again`).toBe(k);
+        r = again.next;
+      } else {
+        expect(step, "the cap").toMatchObject({ next: { state: "lost", crashes: { count: RUNNER_CRASH_CAP } }, effects: [{ type: "force_destroy" }], signal: { type: "failed", reason: "machine_crash" } });
+      }
+      checked++;
+    }
+    expect(checked).toBe(RUNNER_CRASH_CAP);
+    expect(s.calls.filter((c) => c.url.endsWith("/events")), "no events call for a running Machine").toEqual([]);
   });
 
   it("F-007 race (appendix M2, exits 78): `stopped` polled BEFORE its exit event is recorded — the newest exit is older than the newest start — is reported UNRECORDED (restarting null, exit null): never the stale previous exit, never \"not restarting\"", async () => {
@@ -409,19 +460,19 @@ describe("FlyRunner", () => {
     let events: unknown[] = [];
     const s = scripted((url) => (url.endsWith("/events") ? { status: 200, body: events } : { status: 200, body: { id: "m_78", name: NAME, state: machineState } }));
     const runner = new FlyRunner({ client: s.client, image: "img" });
-    const UNRECORDED = { state: "stopped", exit: null, restarting: null, restartingSince: null, restartCount: null, exitAt: null };
+    const UNRECORDED = { state: "stopped", exit: null, restarting: null, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null };
     // 18:12:33.913 — stopped, 90 ms before the FIRST exit event: no exit at all after the start
     events = [ev.start0, ev.launch];
     expect(await runner.observe("m_78")).toEqual(UNRECORDED);
     // 18:12:34.113 — starting; the exit is in now
     machineState = "starting"; events = [ev.restart1, ev.exit1, ev.start0, ev.launch];
-    expect(await runner.observe("m_78")).toEqual({ state: "pending", exit: REFUSED, restarting: true, restartingSince: new Date(ev.exit1.timestamp), restartCount: 1, exitAt: new Date(ev.exit1.timestamp) });
+    expect(await runner.observe("m_78")).toEqual({ state: "pending", exit: REFUSED, restarting: true, restartingSince: new Date(ev.exit1.timestamp), restartCount: 1, exitAt: new Date(ev.exit1.timestamp), exitRestarted: true });
     // 18:12:45.767 — stopped, 320 ms before the SECOND exit event: the newest exit (#1) is older than the newest start
     machineState = "stopped"; events = [ev.start1, ev.restart1, ev.exit1, ev.start0, ev.launch];
     expect(await runner.observe("m_78")).toEqual(UNRECORDED);
     // 18:12:46.098 — the second exit recorded, Fly still says stopped: restarting, with that exit
     machineState = "stopped"; events = [ev.exit2, ev.start1, ev.restart1, ev.exit1, ev.start0, ev.launch];
-    expect(await runner.observe("m_78")).toEqual({ state: "stopped", exit: REFUSED, restarting: true, restartingSince: new Date(ev.exit2.timestamp), restartCount: 2, exitAt: new Date(ev.exit2.timestamp) });
+    expect(await runner.observe("m_78")).toEqual({ state: "stopped", exit: REFUSED, restarting: true, restartingSince: new Date(ev.exit2.timestamp), restartCount: 2, exitAt: new Date(ev.exit2.timestamp), exitRestarted: true });
   });
 
   it("pass-3 regression: a FAILED launch (Fly `failed` / `launch_failed`, a launch event only — it never ran, so Fly writes NO exit) is NOT unrecorded: observe says failed, not restarting, and the real domain step makes it lost → torn down → the ONE retry at once, not after the warming timeout", async () => {
@@ -431,7 +482,7 @@ describe("FlyRunner", () => {
         ? { status: 200, body: [{ id: "e0", type: "launch", status: "created", source: "user", timestamp: 1_760_550_000_000, request: null }] }
         : { status: 200, body: { id: "m_f", name: NAME, state: flyState } }));
       const observed = await new FlyRunner({ client: s.client, image: "img" }).observe("m_f");
-      expect(observed, flyState).toEqual({ state: "failed", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null });
+      expect(observed, flyState).toEqual({ state: "failed", exit: null, restarting: false, restartingSince: null, restartCount: null, exitAt: null, exitRestarted: null });
       // through the domain's own step, as reconcileSession feeds it
       const booting = { ...RUNNER_NONE, state: "booting" as const, attempt: 1, name: machineNameFor("s1", 1), machineId: "m_f" };
       const lost = stepRunner(booting, { type: "observed", ...observed }, new Date());

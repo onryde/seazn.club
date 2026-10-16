@@ -728,8 +728,9 @@ export async function reconcileSession(sessionId: string, deps: SessionDeps): Pr
   if (!r.machineId) return s;
   const observed = await deps.drivers.runner.observe(r.machineId);
   return apply(sessionId, { type: "runner", trigger: { type: "observed", state: observed.state, exit: observed.exit, restarting: observed.restarting, restartingSince: observed.restartingSince,
-    // R2003b: the exit's identity and the provider's restart count — what the crash cap counts an observed crash by
-    exitAt: observed.exitAt, restartCount: observed.restartCount } }, deps);
+    // R2003b: the exit's identity, the provider's restart count and the exit's own restart record — what the crash cap
+    // counts an observed crash by
+    exitAt: observed.exitAt, restartCount: observed.restartCount, exitRestarted: observed.exitRestarted } }, deps);
 }
 
 async function runEffects(session: Session, effects: Effect[], deps: SessionDeps): Promise<Session> {
