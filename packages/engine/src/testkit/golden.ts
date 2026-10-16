@@ -255,17 +255,21 @@ function deltasOf(module: AnySportModule, cfg: unknown, outcome: MatchOutcome | 
  *  the MODULE's outcome, summary and deltas of the final state, four fields. 2 records what a phone computes — the EFFECTIVE
  *  outcome, summary and deltas (`outcomeOf` / `summaryOf`, a settlement, an expunge and a withdrawal over a held level
  *  result laid over the module's answer), a digest of the effective summary after every event (`summaries`), the kernel
- *  overlay as change points (`overlay`) and, for the ablation probe, the dense per-step overlay (`dense`, never stored).
- *  3 is 2 plus `playerStats`, the fixture's final stat rows (golden-stats.ts). */
+ *  overlay as change points (`overlay`).
+ *  3 is 2 plus `playerStats`, the fixture's final stat rows (golden-stats.ts).
+ *
+ *  The result holds ONLY the fields a stream stores (`storedFields`): the ablation probe's dense per-step overlay is on
+ *  `recomputeKernel` / `recomputeStats`, which the probe calls itself, so a spread of this result into a stream cannot write it
+ *  into a corpus (a spread skips TypeScript's excess-property check). */
 export function recomputeStream(
   module: AnySportModule,
   rawConfig: unknown,
   events: readonly GoldenEvent[],
   recordedLineups: LineupPair | undefined,
   format: CorpusFormat,
-): Recomputed {
-  if (format === 3) return recomputeStats(module, rawConfig, events, recordedLineups);
-  if (format === 2) return recomputeKernel(module, rawConfig, events, recordedLineups);
+): ReplayedStream {
+  if (format === 3) return storedFields(recomputeStats(module, rawConfig, events, recordedLineups));
+  if (format === 2) return storedFields(recomputeKernel(module, rawConfig, events, recordedLineups));
   const cfg = module.configSchema.parse(rawConfig);
   const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
   const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));

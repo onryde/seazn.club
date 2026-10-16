@@ -28,10 +28,13 @@ import {
   overlayMismatch,
   readCorpus,
   rebaselineCorpus,
+  recomputeKernel,
+  recomputeStats,
   recomputeStream,
   storedFields,
   verifyStream,
   writeRefusal,
+  type CorpusFormat,
   type GoldenCorpus,
   type WriteGateProbes,
   type GoldenEvent,
@@ -571,5 +574,69 @@ describe("corpusStateDiff — the new fields are part of the reviewed diff", () 
     const diff = corpusStateDiff(after2, dropped, module);
     expect(diff.streamsDropped).toBe(after2.streams.length);
     expect(formatCorpusStateDiff(diff)).toContain("RECORDED FIELDS DROPPED");
+  });
+});
+
+// ------------------------------------------------------------------------------------------- stored fields only (GF-2 batch review M-1)
+//
+// `dense` is the recorder's probe-only form of the overlay. A spread of a recomputation (`{ ...recomputeStream(...) }`) skips TypeScript's
+// excess-property check, so a recomputation that carried `dense` could write 1.8 KB of it into a corpus stream with every test green. The
+// expected sets below are the format definitions in `GoldenStream`'s own documentation (golden.ts), not read from the code under test.
+
+/** What a stream stores beyond its input (`config`, `seed`, `events`, and `lineups` where it has them), by corpus format. */
+const STORED: Record<CorpusFormat, readonly string[]> = {
+  1: ["states", "outcome", "summary", "deltas"],
+  2: ["states", "outcome", "summary", "deltas", "summaries", "overlay"],
+  3: ["states", "outcome", "summary", "deltas", "summaries", "overlay", "playerStats"],
+};
+const INPUT = ["config", "seed", "events"] as const;
+
+describe("a recomputation hands out only the fields a stream stores; the probe-only dense overlay stays on the recorder that needs it", () => {
+  it("recomputeStream returns exactly the format's stored fields, for every sport and every format, so a spread of it cannot carry dense", () => {
+    let checked = 0;
+    forEachSport(({ module }) => {
+      const corpus = readCorpus(module.key);
+      const stream = corpus.streams[0]!;
+      for (const format of [1, 2, 3] as const) {
+        const recomputed = recomputeStream(module, corpus.configs[stream.config], stream.events, stream.lineups, format);
+        expect(Object.keys(recomputed).sort(), `${module.key} format ${format}`).toEqual([...STORED[format]].sort());
+        expect(Object.keys({ ...recomputed }), `${module.key} format ${format}: a spread`).not.toContain("dense");
+        checked++;
+      }
+    });
+    expect(checked, "every sport in every format").toBe(builtinModules.length * 3);
+  });
+
+  it("the recorders the ablation probe uses still carry the dense overlay: dropping it from recomputeStream did not drop it from them", () => {
+    let checked = 0;
+    forEachSport(({ module }) => {
+      const corpus = readCorpus(module.key);
+      const stream = corpus.streams[0]!;
+      const raw = corpus.configs[stream.config];
+      for (const recomputed of [recomputeKernel(module, raw, stream.events, stream.lineups), recomputeStats(module, raw, stream.events, stream.lineups)]) {
+        expect(recomputed.dense, module.key).toBeDefined();
+        expect(recomputed.dense.steps.outcome.length, `${module.key}: one outcome per event`).toBe(stream.events.length);
+        checked++;
+      }
+    });
+    expect(checked).toBe(builtinModules.length * 2);
+  });
+
+  it("every stream in every committed corpus stores exactly its corpus format's fields and no other key (swept, counted)", () => {
+    let streams = 0;
+    let withLineups = 0;
+    forEachSport(({ module }) => {
+      const corpus = readCorpus(module.key);
+      const format = corpusFormat(corpus);
+      expect(format, `${module.key}: the committed corpora are format ${CURRENT_FORMAT}`).toBe(CURRENT_FORMAT);
+      corpus.streams.forEach((stream, i) => {
+        const lineups = stream.lineups === undefined ? [] : ["lineups"];
+        expect(Object.keys(stream).sort(), `${module.key} stream #${i} (${stream.config}#${stream.seed})`).toEqual([...INPUT, ...lineups, ...STORED[format]].sort());
+        streams++;
+        if (lineups.length > 0) withLineups++;
+      });
+    });
+    expect(streams, "the sweep reached the streams of every sport").toBeGreaterThan(builtinModules.length);
+    expect(withLineups, "some committed stream carries lineups, so the optional key was exercised").toBeGreaterThan(0);
   });
 });
