@@ -514,6 +514,14 @@ function playerStatsOk(text: unknown): boolean {
   );
 }
 
+/** Every key a stored stream may hold, in any format: the input (`config`, `seed`, `lineups`, `events`), the four fields of format 1, the two
+ *  of format 2 and the one of format 3. A key outside it is a probe-only field that reached a corpus (the recorder's `dense` overlay is the
+ *  one that can: a spread of a recomputation writes it), and the guard would compare nothing of it. The per-format all-or-nothing rules below
+ *  say which of these a given format may hold. */
+const STREAM_KEYS: ReadonlySet<string> = new Set([
+  "config", "seed", "lineups", "events", "states", "outcome", "summary", "deltas", "summaries", "overlay", "playerStats",
+]);
+
 function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
   let v: unknown;
   try {
@@ -537,6 +545,10 @@ function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
       Array.isArray(s.states) && s.states.every((x: unknown) => typeof x === "string") &&
       typeof s.outcome === "string" && typeof s.summary === "string" && typeof s.deltas === "string";
     if (!ok) throw new GuardRefusal(`${label}: stream #${i} is malformed (it needs config, seed, events, states, outcome, summary and deltas)`);
+    const unknownKey = Object.keys(s as object).find((key) => !STREAM_KEYS.has(key));
+    if (unknownKey !== undefined) {
+      throw new GuardRefusal(`${label}: stream #${i} carries a key no format records (${JSON.stringify(unknownKey)}): a probe-only field is never stored in a corpus`);
+    }
     const kernel = s as { events: unknown[]; summaries?: unknown; overlay?: unknown; playerStats?: unknown };
     if (format === 1 && (kernel.summaries !== undefined || kernel.overlay !== undefined)) {
       throw new GuardRefusal(`${label}: stream #${i} records summaries or an overlay, but the corpus is format 1 (it declares no "format": 2): a half-converted corpus is refused`);

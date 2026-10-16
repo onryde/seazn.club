@@ -937,6 +937,19 @@ describe("fold-epoch-guard CLI: a run that compared nothing, or read something i
     expect(twice.stderr).toMatch(new RegExp(`two golden corpora for sport "${FIRST}"`));
   });
 
+  spawnIt(3)("a stream that stores a key no format records is refused in a format-1 corpus too (the check is not a format-2 or 3 rule), and the key is named", () => {
+    atBase(mono);
+    editCorpus(mono, FIRST, (c) => {
+      delete c.format;
+      c.streams.forEach((st) => { for (const key of ["summaries", "overlay", "playerStats"]) delete st[key]; });
+      c.streams[0]!.dense = { initial: {}, steps: {} };
+    });
+    commit(mono, "a format-1 stream that stores dense");
+    const r = guard(mono);
+    expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 2, stdout: "" });
+    expect(r.stderr).toMatch(/stream #0 carries a key no format records \("dense"\)/);
+  });
+
   spawnIt(3)("every corpus deleted in the tree is red for every sport (an entry with no corpus), not a crash and not a pass", () => {
     atBase(mono);
     rmSync(join(mono.eng, SPORTS_DIR), { recursive: true });
@@ -1495,6 +1508,8 @@ describe("fold-epoch-guard CLI: GF-2 - corpus format 2 (Q1: a reformat owes noth
     const BAD: ReadonlyArray<readonly [string, (c: Corpus) => void, RegExp]> = [
       ["an unknown format", (c) => { c.format = 4; }, /declares corpus format 4; this guard reads formats 1, 2 and 3/],
       ["a format-2 stream that carries playerStats (a hybrid)", (c) => { c.streams[0]!.playerStats = "[]"; }, /stream #0 records playerStats, but the corpus is format 2/],
+      // GF-2 batch review M-1: `dense` is the recorder's probe-only form, and a spread of a recomputation writes it into a corpus unnoticed
+      ["a stream that stores a key no format records (the probe-only dense overlay)", (c) => { c.streams[0]!.dense = { initial: {}, steps: {} }; }, /stream #0 carries a key no format records \("dense"\)/],
       ["a format-2 stream without summaries", (c) => { delete c.streams[1]!.summaries; }, /stream #1 is malformed \(a format-2 stream needs summaries/],
       ["a format-2 stream without an overlay", (c) => { delete c.streams[0]!.overlay; }, /stream #0 is malformed \(a format-2 stream needs summaries/],
       ["summaries with fewer digests than events", (c) => { (c.streams[0]!.summaries as string[]).pop(); }, /stream #0 is malformed/],
@@ -1797,6 +1812,7 @@ describe("fold-epoch-guard CLI: GF-2 T4 - corpus format 3 (player stats are a mi
 
     const BAD: ReadonlyArray<readonly [string, (c: Corpus) => void, RegExp]> = [
       ["a format-3 stream without playerStats", (c) => { delete c.streams[1]!.playerStats; }, /stream #1 is malformed \(a format-3 stream needs playerStats/],
+      ["a stream that stores a key no format records (the probe-only dense overlay)", (c) => { c.streams[0]!.dense = { initial: {}, steps: {} }; }, /stream #0 carries a key no format records \("dense"\)/],
       ["playerStats that is not a string", (c) => { c.streams[0]!.playerStats = []; }, /stream #0 is malformed \(a format-3 stream needs playerStats/],
       // JSON.parse coerces its argument to a string, so an ARRAY holding the text of an array parses as that array: only the typeof check refuses it
       ["playerStats that is an array holding the text of an array", (c) => { c.streams[0]!.playerStats = ["[]"]; }, /stream #0 is malformed/],
