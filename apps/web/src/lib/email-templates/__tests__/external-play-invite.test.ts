@@ -69,4 +69,69 @@ describe("externalPlayInviteTemplate", () => {
       expect(out.html, loc).toContain("Alice &lt;b&gt;Bold&lt;/b&gt;");
     }
   });
+
+  // Capacity test 12 (spec §3.2.1, §8.1): a board in a later check-in group is told WHEN its check-in opens.
+  const LATER_KEYS = ["bodyLater", "textLater"] as const;
+  const OPENS = "Wed 1 Oct, 12:04 UTC";
+
+  it("the later-batch keys exist, non-empty and different from the first-batch ones, in every locale", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const k of LATER_KEYS) {
+        const v = DICTS[loc][`externalPlayInvite.${k}`];
+        expect(typeof v === "string" && v.trim().length > 0, `${loc} externalPlayInvite.${k}`).toBe(true);
+        expect(v, `${loc} ${k} takes the opening time`).toContain("{opens}");
+        checked++;
+      }
+      expect(DICTS[loc]["externalPlayInvite.bodyLater"], loc).not.toBe(DICTS[loc]["externalPlayInvite.body"]);
+      expect(DICTS[loc]["externalPlayInvite.textLater"], loc).not.toBe(DICTS[loc]["externalPlayInvite.text"]);
+    }
+    expect(checked).toBe(LOCALES.length * LATER_KEYS.length);
+  });
+
+  it("with an opens label the mail names when check-in opens AND the deadline, in html and text, with no placeholder left", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const out = externalPlayInviteTemplate({ ...ARGS, opensLabel: OPENS }, DICTS[loc]);
+      expect(out.html, `${loc} html`).toContain(OPENS);
+      expect(out.text, `${loc} text`).toContain(OPENS);
+      expect(out.html, `${loc} html deadline`).toContain(ARGS.deadlineLabel);
+      expect(out.text, `${loc} text deadline`).toContain(ARGS.deadlineLabel);
+      expect(out.html, loc).not.toMatch(/\{[a-zA-Z]+\}/);
+      expect(out.text, loc).not.toMatch(/\{[a-zA-Z]+\}/);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("the pair: without one (batch 0) the mail never names an opening time and uses the original copy", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const out = externalPlayInviteTemplate(ARGS, DICTS[loc]);
+      expect(out.html, loc).not.toContain(OPENS);
+      expect(out.text, loc).not.toContain(OPENS);
+      const base = externalPlayInviteTemplate({ ...ARGS, opensLabel: OPENS }, DICTS[loc]);
+      expect(out.text, `${loc}: the later copy differs from the first-batch copy`).not.toBe(base.text);
+      // The first-batch text, filled from the dictionary's own template (never the template under test).
+      const want = DICTS[loc]["externalPlayInvite.text"]!
+        .replaceAll("{opponentName}", ARGS.opponentName)
+        .replaceAll("{roundNo}", String(ARGS.roundNo))
+        .replaceAll("{deadline}", ARGS.deadlineLabel)
+        .replaceAll("{orgName}", ARGS.orgName)
+        .replaceAll("{fixtureUrl}", ARGS.fixtureUrl);
+      expect(out.text, `${loc}: exactly the first-batch copy`).toBe(want);
+      expect(out.html, loc).not.toMatch(/\{opens\}/);
+      expect(out.text, loc).not.toMatch(/\{opens\}/);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("the opens label is escaped in the HTML body like the other supplied text", () => {
+    for (const loc of LOCALES) {
+      const out = externalPlayInviteTemplate({ ...ARGS, opensLabel: "12:04 <i>UTC</i>" }, DICTS[loc]);
+      expect(out.html, loc).not.toContain("<i>UTC</i>");
+      expect(out.html, loc).toContain("12:04 &lt;i&gt;UTC&lt;/i&gt;");
+    }
+  });
 });

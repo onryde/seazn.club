@@ -10,7 +10,8 @@ import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { backendPid, pollWaitersBehind, waitersBehind } from "./_lock-waiters";
 import { HttpError } from "@/lib/errors";
-import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS } from "@/server/external-play/window";
+import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
+import { boardOpenFor } from "@/server/external-play/round-open";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 
 // The email seam: the real `send` no-ops without RESEND_API_KEY (vitest.config
@@ -131,6 +132,7 @@ import { readRoom } from "../room";
 import { mintMatchRoomToken } from "../../match-room-token";
 import {
   seedOnlineChessRound,
+  seedOnlineChessRoundWithRankedBoard,
   seedOnlineSwiss,
   seedOwner,
   type SeedOnlineChessRoundResult,
@@ -2695,5 +2697,115 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
       }
     }
     expect(checked).toBe(2);
+  });
+});
+
+// ─── Whether a round staggers is decided at the open and STORED (spec §3.2.1; the review's I4; capacity test 5) ────────────────
+// Every instant is written from the constants (T + batch x CHECKIN_BATCH_GAP_MS), never read back from boardAnchor.
+describe.skipIf(!HAS_DB)("openRound — the stored `staggered` flag decides the batches", () => {
+  const S = CHECKIN_BATCH_SIZE;
+  const T0 = new Date("2026-10-01T12:00:30.000Z");
+  const seedRanked = (cameraPolicy?: "off" | "optional" | "required") =>
+    seedOnlineChessRoundWithRankedBoard({ roundNo: 1, ...(cameraPolicy ? { cameraPolicy } : {}) }, 2 * S);
+  const storedFlag = async (stageId: string) =>
+    (await sql<{ staggered: boolean }[]>`select staggered from stage_round_opens where stage_id = ${stageId} and round_no = 1`)[0]!.staggered;
+  const anchorOf = async (fixtureId: string) => (await boardOpenFor(sql, fixtureId))!.anchor;
+
+  it("(a) an `off` round is ONE batch: nothing is staggered, and the board at rank 2S opens at T like board 1", async () => {
+    const r = await seedRanked("off");
+    await open(r, 1, T0);
+    expect(await storedFlag(r.stageId)).toBe(false);
+    const a = await anchorOf(r.ranked.fixtureId);
+    expect([a.batch, a.at.getTime()]).toEqual([0, T0.getTime()]);
+    expect(windowFor(a)).toEqual(windowFor(await anchorOf(r.boards[0]!.fixtureId)));
+  });
+
+  it("(a, pair) required and optional round ARE staggered: the same board sits in batch 2, 2 x gap after T", async () => {
+    let checked = 0;
+    for (const policy of ["required", "optional"] as const) {
+      const r = await seedRanked(policy);
+      await open(r, 1, T0);
+      expect(await storedFlag(r.stageId), policy).toBe(true);
+      const a = await anchorOf(r.ranked.fixtureId);
+      expect([a.batch, a.at.getTime() - T0.getTime()], policy).toEqual([2, 2 * CHECKIN_BATCH_GAP_MS]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
+  it("(b) a `required` round DOWNGRADED to off after the open keeps batch 2's open time and deadline - and they are not T's", async () => {
+    const r = await seedRanked("required");
+    await open(r, 1, T0);
+    const before = windowFor(await anchorOf(r.ranked.fixtureId));
+    await patchDivision(r.owner, r.divisionId, { camera_policy: "off" });
+    const [d] = await sql<{ camera_policy: string | null }[]>`select camera_policy from divisions where id = ${r.divisionId}`;
+    expect(d!.camera_policy, "premise: the downgrade landed").toBe("off");
+    const after = windowFor(await anchorOf(r.ranked.fixtureId));
+    expect(after, "the window of a board that was told its time does not move").toEqual(before);
+    expect(after.opensAt.getTime(), "batch 2 opens 2 x gap after T").toBe(T0.getTime() + 2 * CHECKIN_BATCH_GAP_MS);
+    expect(after.deadline.getTime()).toBe(T0.getTime() + 2 * CHECKIN_BATCH_GAP_MS + DEADLINE_AFTER_MS);
+    expect(after.opensAt.getTime(), "the case where the wrong answer is not the right one's constant").not.toBe(T0.getTime());
+  });
+
+  it("(c) a policy change BEFORE the open counts: required -> off before the first press stores false", async () => {
+    const r = await seedRanked("required");
+    await patchDivision(r.owner, r.divisionId, { camera_policy: "off" });
+    await open(r, 1, T0);
+    expect(await storedFlag(r.stageId)).toBe(false);
+  });
+
+  it("(c) a RE-OPEN decides afresh: a round nobody was invited into, re-stamped after a downgrade, stores the new answer", async () => {
+    const r = await seedRanked("required");
+    for (const b of [...r.boards, r.ranked]) mail.fail.add(b.home.email).add(b.away.email);
+    await open(r, 1, T0);
+    expect(await storedFlag(r.stageId), "premise: the first open staggered").toBe(true);
+    expect((await bridgeOf(r.ranked.fixtureId))?.round_open_id, "premise: every send failed, nobody is bound").toBeNull();
+    await patchDivision(r.owner, r.divisionId, { camera_policy: "off" });
+    mail.fail.clear();
+    const T1 = new Date(T0.getTime() + MIN);
+    expect(await open(r, 1, T1)).toMatchObject({ opened: true });
+    expect(await storedFlag(r.stageId), "the re-stamp decided afresh from the live policy").toBe(false);
+    const a = await anchorOf(r.ranked.fixtureId);
+    expect([a.batch, a.at.getTime()], "and the board is now an unbatched one, from the new T").toEqual([0, T1.getTime()]);
+  });
+
+  it("(d) a row from before the delta: the column defaults to false and not-null, so every board opens at T as it did", async () => {
+    const [col] = await sql<{ column_default: string | null; is_nullable: string }[]>`
+      select column_default, is_nullable from information_schema.columns
+       where table_name = 'stage_round_opens' and column_name = 'staggered'`;
+    expect([col?.column_default, col?.is_nullable]).toEqual(["false", "NO"]);
+    const r = await seedRanked("required");
+    // A pre-delta row: inserted WITHOUT naming the column (what the migration's default gave every existing row).
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+      values (${r.stageId}, ${r.orgId}, 1, ${T0}, ${r.ownerUserId})`;
+    expect(await storedFlag(r.stageId)).toBe(false);
+    const a = await anchorOf(r.ranked.fixtureId);
+    expect([a.batch, a.at.getTime()]).toEqual([0, T0.getTime()]);
+  });
+
+  it("[reader:reinvite] a re-invite after batch 0's window closed: the board whose own batch is still running IS invited, the one whose batch closed is reported window_closed", async () => {
+    const r = await seedRanked("required");
+    const first = r.boards[0]!;
+    // Board 1's second player and the whole ranked board fail to receive the first mail - both have a seat still owed.
+    mail.fail.add(first.away.email).add(r.ranked.home.email).add(r.ranked.away.email);
+    await open(r, 1, T0);
+    mail.fail.clear();
+    mail.sent.length = 0;
+    const afterBatch0 = new Date(T0.getTime() + DEADLINE_AFTER_MS + 1);
+    expect(afterBatch0.getTime(), "premise: batch 2's window still runs").toBeLessThan(T0.getTime() + 2 * CHECKIN_BATCH_GAP_MS + DEADLINE_AFTER_MS);
+    const out = await open(r, 1, afterBatch0);
+    expect(out).toEqual({
+      opened: true,
+      invited: 2,
+      skipped: [{ fixtureId: first.fixtureId, reason: "window_closed" }],
+    });
+    expect(sentTo(), "only the ranked board's players were mailed").toEqual([r.ranked.home.email, r.ranked.away.email].sort());
+    // The pair: once batch 2's own deadline has passed too, nobody is left to invite.
+    const afterAll = new Date(T0.getTime() + 2 * CHECKIN_BATCH_GAP_MS + DEADLINE_AFTER_MS);
+    mail.sent.length = 0;
+    const none = await open(r, 1, afterAll);
+    expect(none).toMatchObject({ opened: false, reason: "already_open" });
+    expect(mail.sent).toHaveLength(0);
   });
 });

@@ -7,7 +7,7 @@
 // is the engine's boardgame fold.
 import { foldMatchWithStoppage, outcomeOf, summaryOf } from "@seazn/engine/core";
 import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
-import { roomPhase, windowFor } from "@/server/external-play/window";
+import { roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
 
 /** Fix round 4b: GET and POST room's answer (409) while the organiser re-pairs the board's round — the board names
  *  nobody for now. The open room reads on through it (room-state), where the room's one 404 stops it for good. */
@@ -28,6 +28,7 @@ export type SeatRefusal =
   | "window_closed"
   | "not_a_player"
   | "round_not_open"
+  | "checkin_not_open"
   | "fixture_not_playable"
   | "video_unavailable"
   | "lichess_link_required"
@@ -204,21 +205,19 @@ export type RoomSnapshot = {
   realtime: { topic: string; token: string; expiresAt: string } | null;
 };
 
-/** D12 (spec §3.2): a fixture with no `round_opened_at` is NOT yet playable
- *  and must say so — it is not "before the window", because no window
- *  exists. Once opened, the window is measured from the open, so the shipped
- *  `roomPhase` is reused unchanged with `round_opened_at` in the argument
- *  slot its parameter name still calls `scheduledAt`. The schedule is what
+/** D12 (spec §3.2): a fixture whose round has no open stamp is NOT yet playable and must say so — it is not "before the
+ *  window", because no window exists. Once opened, the window is measured from the BOARD's anchor (spec §3.2.1: the round's
+ *  open plus its batch), and `roomPhase` takes nothing else: a raw round stamp does not compile. The schedule is what
  *  players are SHOWN; it never reaches this function. */
-export function roomPhaseWire(a: { now: Date; roundOpenedAt: Date | null }): RoomPhaseWire {
-  if (a.roundOpenedAt === null) return "not_opened";
-  return roomPhase(a.now, a.roundOpenedAt);
+export function roomPhaseWire(a: { now: Date; anchor: BoardAnchor | null }): RoomPhaseWire {
+  if (a.anchor === null) return "not_opened";
+  return roomPhase(a.now, a.anchor);
 }
 
-/** The open's window, or nulls while the round is unopened. */
-export function windowWire(roundOpenedAt: Date | null): { opensAt: string | null; deadline: string | null } {
-  if (roundOpenedAt === null) return { opensAt: null, deadline: null };
-  const w = windowFor(roundOpenedAt);
+/** The board's window, or nulls while the round is unopened. */
+export function windowWire(anchor: BoardAnchor | null): { opensAt: string | null; deadline: string | null } {
+  if (anchor === null) return { opensAt: null, deadline: null };
+  const w = windowFor(anchor);
   return { opensAt: w.opensAt.toISOString(), deadline: w.deadline.toISOString() };
 }
 

@@ -19,7 +19,15 @@ import EN from "@/dictionaries/en/ui.json";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
-import { roomPhase, windowFor, DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import {
+  boardAnchor,
+  CHECKIN_BATCH_GAP_MS,
+  CHECKIN_BATCH_SIZE,
+  DEADLINE_AFTER_MS,
+  roomPhase,
+  WINDOW_OPEN_LEAD_MS,
+  windowFor,
+} from "@/server/external-play/window";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
@@ -269,7 +277,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — D12 phase and window"
 
   it("an opened round reads the open's window (derived from windowFor), and closes at the deadline", async () => {
     const s = await seed();
-    const w = windowFor(T);
+    const w = windowFor(boardAnchor(T, 0, false));
     const open = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
     expect(open).toMatchObject({ phase: "open", opensAt: w.opensAt.toISOString(), deadline: w.deadline.toISOString() });
     const closed = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ now: w.deadline }));
@@ -278,12 +286,12 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — D12 phase and window"
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("match room — taking the seat", () => {
-  it("before the window: refused round_not_open, nothing stamped, nothing published", async () => {
+  it("before the window: refused checkin_not_open (the round is open, the board's window is not), nothing stamped, nothing published", async () => {
     const s = await seed();
-    const early = new Date(T.getTime() - 11 * 60_000);
+    const early = new Date(T.getTime() - WINDOW_OPEN_LEAD_MS - 60_000);
     const d = deps({ now: early });
     const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
-    expect(c.seat).toEqual({ seated: false, reason: "round_not_open", participant: null });
+    expect(c.seat).toEqual({ seated: false, reason: "checkin_not_open", participant: null });
     expect((await rows(s.fixtureId)).availability).toEqual([]);
     expect(d.publish).not.toHaveBeenCalled();
   });
@@ -831,7 +839,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     const exp = (mint.mock.calls[0] as unknown as [string, string, Date])[2];
     expect(exp.getTime()).toBeGreaterThan(late.getTime());
     expect(v.realtime).toMatchObject({ topic: `external-play:${s.fixtureId}`, token: "rt" });
-    expect(roomPhase(late, T)).toBe("closed");
+    expect(roomPhase(late, boardAnchor(T, 0, false))).toBe("closed");
   });
 });
 
@@ -1791,5 +1799,114 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — a board the organiser
     expect(b!.status, "a fresh bridge").toBe("pending");
     const fresh = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
     expect([fresh.boardClosed, fresh.creation], "the room follows the new bridge").toEqual([false, { state: "creating" }]);
+  });
+});
+
+// ─── Timed check-in batches in the room (spec §3.2.1; capacity tests 6 [reader:compose] [reader:checkin-counts] [reader:claim], 8, 9, 11's server half) ───
+// Every instant below is OPENED + batch x CHECKIN_BATCH_GAP_MS (+ DEADLINE_AFTER_MS), written from the constants and never
+// read back from windowFor. The seed stores `staggered`, as the open does; the camera policy stays `off`, so the real seat
+// seats without a vendor and the window is the only thing under test.
+describe.skipIf(!process.env.DATABASE_URL)("match room — timed batches", () => {
+  const OPENED = new Date("2026-10-01T12:00:00.000Z");
+  const startOf = (batch: number) => new Date(OPENED.getTime() + batch * CHECKIN_BATCH_GAP_MS);
+  const opensOf = (batch: number) => (batch === 0 ? new Date(OPENED.getTime() - WINDOW_OPEN_LEAD_MS) : startOf(batch));
+  const closesOf = (batch: number) => new Date(startOf(batch).getTime() + DEADLINE_AFTER_MS);
+  /** [batch, rank]: the first board of batch 0 and the first of batch 2. */
+  const BATCHES: [number, number][] = [
+    [0, 0],
+    [2, 2 * CHECKIN_BATCH_SIZE],
+  ];
+  const seedAt = (rank: number) =>
+    seed({ roundOpenedAt: OPENED, staggered: true, rank, scheduledAt: new Date(OPENED.getTime() + 10 * 60_000) });
+  const view = (s: SeedOnlineChessFixtureResult, at: Date) =>
+    readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ now: at }));
+
+  it("[reader:compose] the room of batch 0 and of batch 2 reads its OWN window: opensAt, deadline, and the phase either side of each edge", async () => {
+    let checked = 0;
+    for (const [batch, rank] of BATCHES) {
+      const s = await seedAt(rank);
+      const v = await view(s, opensOf(batch));
+      expect(v.opensAt, `batch ${batch} opensAt`).toBe(opensOf(batch).toISOString());
+      expect(v.deadline, `batch ${batch} deadline`).toBe(closesOf(batch).toISOString());
+      expect(v.roundOpenedAt, "the round's own stamp rides along unchanged").toBe(OPENED.toISOString());
+      expect((await view(s, new Date(opensOf(batch).getTime() - 1))).phase, `batch ${batch}, 1 ms before it opens`).toBe("before");
+      expect((await view(s, opensOf(batch))).phase, `batch ${batch}, at its opening`).toBe("open");
+      expect((await view(s, new Date(closesOf(batch).getTime() - 1))).phase, `batch ${batch}, 1 ms before its deadline`).toBe("open");
+      expect((await view(s, closesOf(batch))).phase, `batch ${batch}, at its deadline`).toBe("closed");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: batches read").toBe(BATCHES.length);
+  });
+
+  it("[reader:checkin-counts] a check-in counts only inside ITS board's window: a batch-2 stamp placed in batch 0's window does not count for it", async () => {
+    let checked = 0;
+    for (const [batch, rank] of BATCHES) {
+      const s = await seedAt(rank);
+      await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
+      const stampAt = async (at: Date) => {
+        await sql`update fixture_availability set checked_in_at = ${at} where fixture_id = ${s.fixtureId} and person_id = ${s.home.personId}`;
+        return (await view(s, opensOf(batch))).you.checkedIn;
+      };
+      expect(await stampAt(new Date(opensOf(batch).getTime() - 1)), `batch ${batch}: a stamp 1 ms before the window`).toBe(false);
+      expect(await stampAt(opensOf(batch)), `batch ${batch}: a stamp at its opening`).toBe(true);
+      expect(await stampAt(new Date(closesOf(batch).getTime() - 1)), `batch ${batch}: a stamp 1 ms before the deadline`).toBe(true);
+      expect(await stampAt(closesOf(batch)), `batch ${batch}: a stamp at the deadline`).toBe(false);
+      checked += 1;
+    }
+    // The differential: the SAME instant (the first millisecond of batch 0's window) counts for batch 0 and not for batch 2.
+    const inBatch0 = opensOf(0);
+    const counts: boolean[] = [];
+    for (const [, rank] of BATCHES) {
+      const s = await seedAt(rank);
+      await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
+      await sql`update fixture_availability set checked_in_at = ${inBatch0} where fixture_id = ${s.fixtureId} and person_id = ${s.home.personId}`;
+      counts.push((await view(s, inBatch0)).you.checkedIn);
+    }
+    expect(counts, "one instant, two boards: counted for batch 0, not for batch 2").toEqual([true, false]);
+    expect(checked, "anti-vacuity").toBe(BATCHES.length);
+  });
+
+  it("[reader:claim] and test 8: a claim before the board's batch opens is refused `checkin_not_open`, stamps nothing, publishes nothing, creates nothing; at the opening it seats", async () => {
+    const s = await seedAt(2 * CHECKIN_BATCH_SIZE);
+    const early = deps({ now: new Date(opensOf(2).getTime() - 1) });
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, early);
+    expect(c.seat).toEqual({ seated: false, reason: "checkin_not_open", participant: null });
+    expect(c.snapshot.phase, "the answer's own snapshot agrees with the refusal").toBe("before");
+    expect((await rows(s.fixtureId)).availability, "no check-in").toEqual([]);
+    expect(early.publish).not.toHaveBeenCalled();
+    expect(early.create).not.toHaveBeenCalled();
+    const open = deps({ now: opensOf(2) });
+    const seated = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, open);
+    expect(seated.seat?.seated, "the same claim at the opening").toBe(true);
+    expect((await rows(s.fixtureId)).availability.length, "the check-in is written").toBe(1);
+  });
+
+  it("test 9: arriving DEADLINE_AFTER_MS - 1 min after the batch opened seats, and the game is asked for when the SECOND side is seated - no clock penalty", async () => {
+    // The check-in stamp is the database's own now() (stampFixtureCheckIn), so the round is opened relative to the REAL clock
+    // for the stamps to count; the claims' `now` is injected, the way the sweep and the other suites move time.
+    const GAP = CHECKIN_BATCH_GAP_MS;
+    const opened = new Date(Date.now() - 2 * GAP - 60_000);
+    const start = new Date(opened.getTime() + 2 * GAP);
+    const s = await seed({ roundOpenedAt: opened, staggered: true, rank: 2 * CHECKIN_BATCH_SIZE, scheduledAt: opened });
+    const first = deps({ now: new Date(start.getTime() + 1_000) });
+    expect((await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, first)).seat?.seated).toBe(true);
+    expect(first.create, "one side in: nothing to ask for yet").not.toHaveBeenCalled();
+    const late = deps({ now: new Date(start.getTime() + DEADLINE_AFTER_MS - 60_000) });
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, late);
+    expect(c.seat?.seated, "seated, a minute before the deadline").toBe(true);
+    expect(late.create, "the game is asked for when the second side is seated").toHaveBeenCalledTimes(1);
+  });
+
+  it("test 9 (boundary pair): at the deadline exactly the claim is window_closed - nothing stamped; one ms before it is seated", async () => {
+    const GAP = CHECKIN_BATCH_GAP_MS;
+    const opened = new Date(Date.now() - 2 * GAP - 60_000);
+    const start = new Date(opened.getTime() + 2 * GAP);
+    const s = await seed({ roundOpenedAt: opened, staggered: true, rank: 2 * CHECKIN_BATCH_SIZE, scheduledAt: opened });
+    const deadline = new Date(start.getTime() + DEADLINE_AFTER_MS);
+    const closed = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, deps({ now: deadline }));
+    expect(closed.seat).toEqual({ seated: false, reason: "window_closed", participant: null });
+    expect((await rows(s.fixtureId)).availability, "a refusal stamps no check-in").toEqual([]);
+    const edge = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, deps({ now: new Date(deadline.getTime() - 1) }));
+    expect(edge.seat?.seated).toBe(true);
   });
 });

@@ -32,8 +32,8 @@ import { log } from "@/server/logger";
 import { routes } from "@/lib/routes";
 import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlayLobby } from "@/lib/realtime";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
-import { roundOpenFor, type RoundOpenRow } from "@/server/external-play/round-open";
-import { checkInCounts } from "@/server/external-play/window";
+import { boardOpenFor, roundOpenFor, type BoardOpen } from "@/server/external-play/round-open";
+import { checkInCounts, type BoardAnchor } from "@/server/external-play/window";
 import { isSeatHold } from "@/server/external-play/types";
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, GUARD_FAULT_MAX_STAMPS, hasOpenGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
@@ -138,7 +138,7 @@ export type Resolved = {
   player: SidePlayer & { personId: string };
   home: SidePlayer;
   away: SidePlayer;
-  open: RoundOpenRow | null;
+  open: BoardOpen | null;
 };
 
 /**
@@ -155,7 +155,7 @@ export type Resolved = {
 export async function resolveRoom(identity: RoomIdentity, fixtureId: string, opts: { tellRepairing?: boolean } = {}): Promise<Resolved> {
   const f = await loadOnlinePlayFixture(fixtureId);
   if (!f) throw opts.tellRepairing === true && (await boardBeingRepaired(identity, fixtureId)) ? ROOM_REPAIRING() : ROOM_NOT_FOUND();
-  const [{ home, away }, open] = await Promise.all([loadSides(f), roundOpenFor(sql, fixtureId)]);
+  const [{ home, away }, open] = await Promise.all([loadSides(f), boardOpenFor(sql, fixtureId)]);
   let player: SidePlayer | undefined;
   if (identity.kind === "session") {
     player = [home, away].find((s) => s.userId !== null && s.userId === identity.userId);
@@ -222,7 +222,7 @@ export async function checkIns(
   f: OnlinePlayFixture,
   home: SidePlayer,
   away: SidePlayer,
-  anchor: Date | null,
+  anchor: BoardAnchor | null,
 ): Promise<{ home: boolean; away: boolean }> {
   // An unopened round has no window, so no check-in can count toward it —
   // and one stamped during a PREVIOUS round's window must not either (D12).
@@ -315,10 +315,10 @@ async function opponentCameraReport(
 
 async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnapshot> {
   const { f, player, home, away, open } = r;
-  const anchor = open?.roundOpenedAt ?? null;
+  const anchor = open?.anchor ?? null;
   const bridge = effectiveBridge(f);
   const facts = await roomFacts(f.fixtureId);
-  const phase = roomPhaseWire({ now, roundOpenedAt: anchor });
+  const phase = roomPhaseWire({ now, anchor });
   const ci = await checkIns(f, home, away, anchor);
   const opponent = player.side === "home" ? away : home;
 
@@ -459,7 +459,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     serverNow: (deps.now ?? new Date()).toISOString(),
     phase,
     scheduledAt: f.scheduledAt?.toISOString() ?? null,
-    roundOpenedAt: anchor?.toISOString() ?? null,
+    roundOpenedAt: open?.roundOpenedAt.toISOString() ?? null,
     ...windowWire(anchor),
     links: {
       fixture: routes.sharedFixture(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId),
@@ -566,8 +566,8 @@ export async function claimRoomSeat(
     await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
   }
   let create: CreateOutcome | null = null;
-  const anchor = r.open?.roundOpenedAt ?? null;
-  if (seat.seated && !gameOnFile && roomPhaseWire({ now, roundOpenedAt: anchor }) === "open") {
+  const anchor = r.open?.anchor ?? null;
+  if (seat.seated && !gameOnFile && roomPhaseWire({ now, anchor }) === "open") {
     await stampFixtureCheckIn(r.player.personId, fixtureId, r.f.orgId);
     await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
     const ci = await checkIns(r.f, r.home, r.away, anchor);

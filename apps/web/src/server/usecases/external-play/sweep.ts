@@ -47,7 +47,8 @@ import {
   type RealtimeKitDeps,
 } from "@/server/external-play/video/realtimekit";
 import { EDITOR_ROLES } from "@/lib/types";
-import { liveMintClaimSince, windowFor } from "@/server/external-play/window";
+import { anchorOfRow, boardRankSql } from "@/server/external-play/round-open";
+import { liveMintClaimSince, windowFor, type BoardAnchor } from "@/server/external-play/window";
 import { getFixtureState, listEvents } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
@@ -180,14 +181,18 @@ export const SWEEP_RECONCILE_BUDGET_MS = 20_000;
  *  forfeit past its tick. */
 const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>(["reconcile", "mint_retry", "teardown", "camera_evidence", "arbiter_revoke"]);
 
-/** The window a board is playable in, anchored on the ROUND being opened
- *  (D12). Gate B (2026-10-11): every merged reader — T9's create, T8's seat
- *  and room, T19's invite and openRound — judges it as
- *  `roomPhase(now, roundOpenedAt)`, so the deadline is window.ts's own
- *  `windowFor(opened).deadline` (opened + DEADLINE_AFTER_MS). `opensAt` is
- *  the open itself: before it nothing exists to play. */
-export function playableWindow(roundOpenedAt: Date): { opensAt: Date; deadline: Date } {
-  return { opensAt: roundOpenedAt, deadline: windowFor(roundOpenedAt).deadline };
+/** The window a board is playable in, anchored on the BOARD's batch of the round being opened (D12; spec §3.2.1). Every
+ *  merged reader - T9's create, T8's seat and room, T19's invite and openRound - judges it as `roomPhase(now, anchor)`,
+ *  so the deadline is window.ts's own `windowFor(anchor).deadline` (the batch's start + DEADLINE_AFTER_MS). `opensAt` is
+ *  the batch's start: before it nothing exists to play. */
+export function playableWindow(anchor: BoardAnchor): { opensAt: Date; deadline: Date } {
+  return { opensAt: anchor.at, deadline: windowFor(anchor).deadline };
+}
+
+/** The anchor of a sweep candidate row that carries its round's stamp, the board's rank (`boardRankSql`) and the round's
+ *  stored `staggered` flag; `null` for a board whose round was never opened. */
+function candidateAnchor(c: { openedAt: Date | null; rank: number; staggered: boolean | null }): BoardAnchor | null {
+  return c.openedAt === null ? null : anchorOfRow({ openedAt: c.openedAt, rank: c.rank, staggered: c.staggered === true });
 }
 
 /** T8's predicate, as the SQL list the candidate queries filter on — derived,
@@ -353,13 +358,13 @@ function gameMayBeOnFile(pass: Pass, r: BridgeFacts): boolean {
 /** The sweep's no-show forfeit's idempotency key, per fixture. */
 const NO_SHOW_KEY_PREFIX = "extplay-noshow:";
 
-type NoShowCandidate = BridgeFacts & { fixtureId: string; openedAt: Date };
+type NoShowCandidate = BridgeFacts & { fixtureId: string; openedAt: Date; anchor: BoardAnchor };
 
 async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
   // Millisecond stamps, as a JS Date holds them, so the I3 takeover compares
   // like with like whatever precision a writer used.
-  return sql<NoShowCandidate[]>`
-    select f.id as "fixtureId", o.opened_at as "openedAt",
+  const rows = await sql<(Omit<NoShowCandidate, "anchor"> & { rank: number; staggered: boolean })[]>`
+    select f.id as "fixtureId", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank,
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId",
            date_trunc('milliseconds', ep.create_sent_at) as "createSentAt",
            date_trunc('milliseconds', ep.mint_claimed_at) as "mintClaimedAt"
@@ -374,10 +379,11 @@ async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
                         where se.fixture_id = f.id and se.idempotency_key = ${NO_SHOW_KEY_PREFIX} || f.id::text)
        ${orgScope(pass)}
      order by o.opened_at, f.id`;
+  return rows.map((r) => ({ ...r, anchor: anchorOfRow(r) }));
 }
 
 async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
-  const { deadline } = playableWindow(c.openedAt);
+  const { deadline } = playableWindow(c.anchor);
   if (pass.now.getTime() < deadline.getTime()) return;
   if (gameMayBeOnFile(pass, c)) return;
   // THE guard (spec §6): online play still on, a boardgame, both entrants.
@@ -390,7 +396,7 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
     return;
   }
   const { home, away } = await loadSides(f);
-  const came = await checkIns(f, home, away, c.openedAt);
+  const came = await checkIns(f, home, away, c.anchor);
   if (came.home && came.away) {
     // Controller ruling C2 (spec §3.2; §9's deadlineReason): both players
     // came and no game was made — a create Lichess throttled to the end, or
@@ -400,7 +406,7 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
     const held = await holdForOrganiser({
       fixtureId: f.fixtureId,
       reason: "not_started",
-      detail: `sweep: both players checked in, no game was made by the deadline (${playableWindow(c.openedAt).deadline.toISOString()})`,
+      detail: `sweep: both players checked in, no game was made by the deadline (${deadline.toISOString()})`,
     });
     if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
     return;
@@ -551,12 +557,13 @@ const THROTTLED_MARKER = "create:rate_limited";
  *  the seats' re-verify. Two creates racing past it are still safe: the claim is one statement and the loser is `lost`. */
 export const STRANDED_CREATE_AFTER_MS = 10_000;
 
-type RetryCandidate = { fixtureId: string; openedAt: Date; lastError: string | null };
+type RetryCandidate = { fixtureId: string; openedAt: Date; anchor: BoardAnchor; lastError: string | null };
 
 async function retryCandidates(pass: Pick<Pass, "now" | "orgIds">): Promise<RetryCandidate[]> {
   const gracedBefore = new Date(pass.now.getTime() - STRANDED_CREATE_AFTER_MS);
-  return sql<RetryCandidate[]>`
-    select f.id as "fixtureId", o.opened_at as "openedAt", ep.last_error as "lastError"
+  const rows = await sql<(Omit<RetryCandidate, "anchor"> & { rank: number; staggered: boolean })[]>`
+    select f.id as "fixtureId", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank,
+           ep.last_error as "lastError"
       from fixtures f
       join divisions d on d.id = f.division_id
       join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
@@ -580,6 +587,7 @@ async function retryCandidates(pass: Pick<Pass, "now" | "orgIds">): Promise<Retr
        )
        ${orgScope(pass)}
      order by o.opened_at, f.id`;
+  return rows.map((r) => ({ ...r, anchor: anchorOfRow(r) }));
 }
 
 /** Test seam (D21-fix-3): the candidate set the SQL above judges, on its own. The arm-2 predicates (two check-ins, both
@@ -604,7 +612,7 @@ export function throttledRetryAt(lastError: string): Date | null {
 async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<SweepDeps["createGameIfReady"]>): Promise<void> {
   // Only the deadline bounds it: a marker is written after the open, so a
   // pass can never see one before the window opened.
-  if (pass.now.getTime() >= playableWindow(c.openedAt).deadline.getTime()) return;
+  if (pass.now.getTime() >= playableWindow(c.anchor).deadline.getTime()) return;
   if (c.lastError !== null) {
     // 1. A throttle's marker: Lichess's hold is honoured.
     const retryAt = throttledRetryAt(c.lastError);
@@ -615,7 +623,7 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
     const f = await loadOnlinePlayFixture(c.fixtureId);
     if (!f) return;
     const { home, away } = await loadSides(f);
-    const came = await checkIns(f, home, away, c.openedAt);
+    const came = await checkIns(f, home, away, c.anchor);
     if (!(came.home && came.away)) return;
   }
   pass.report.mintRetries++;
@@ -651,6 +659,8 @@ type TeardownCandidate = BridgeFacts & {
   meetingId: string;
   fixtureStatus: string;
   openedAt: Date | null;
+  /** The board's anchor; null when its round was never opened. */
+  anchor: BoardAnchor | null;
   /** Made for another pairing than the fixture's CURRENT one, with no game behind it: the retire's own judgement (gameEvidenceOn).
    *  Only on a board that HAS a pairing: an unpaired board's rooms are left to the window rules below (ended at the deadline,
    *  stamped), as before - an organiser who unpairs and re-pairs the same players a minute later keeps their rooms. */
@@ -658,10 +668,10 @@ type TeardownCandidate = BridgeFacts & {
 };
 
 async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
-  return sql<TeardownCandidate[]>`
+  const rows = await sql<(Omit<TeardownCandidate, "anchor"> & { rank: number; staggered: boolean | null })[]>`
     select m.fixture_id as "fixtureId", m.side, m.meeting_id as "meetingId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
-           ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt",
+           ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank,
            (f.home_entrant_id is not null and f.away_entrant_id is not null
             and (m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
             and not coalesce(${gameEvidenceOn(pass.now)}, false)) as "retirable"
@@ -672,13 +682,14 @@ async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
      where m.ended_at is null
        ${orgScope(pass)}
      order by m.created_at, m.fixture_id, m.side`;
+  return rows.map((r) => ({ ...r, anchor: candidateAnchor(r) }));
 }
 
 function meetingIsDone(pass: Pass, c: TeardownCandidate): boolean {
   if (c.bridgeStatus === "finished") return true;
   if (!isPlayableFixtureStatus(c.fixtureStatus)) return true;
-  if (c.openedAt === null) return false;
-  const { deadline } = playableWindow(c.openedAt);
+  if (c.anchor === null) return false;
+  const { deadline } = playableWindow(c.anchor);
   return pass.now.getTime() >= deadline.getTime() && !gameMayBeOnFile(pass, c);
 }
 
@@ -817,14 +828,17 @@ type ReconcileCandidate = {
   lastPolledAt: Date | null;
   noTruthReads: number;
   openedAt: Date | null;
+  /** The board's anchor; null when its round was never opened. */
+  anchor: BoardAnchor | null;
   clock: BoardgameClockInput | null;
 };
 
 async function reconcileCandidates(pass: Pass): Promise<ReconcileCandidate[]> {
-  return sql<ReconcileCandidate[]>`
+  const rows = await sql<(Omit<ReconcileCandidate, "anchor"> & { rank: number; staggered: boolean | null })[]>`
     select ep.fixture_id as "fixtureId", ep.status as "bridgeStatus", ep.challenge_id as "gameId",
            ep.started_at as "startedAt", date_trunc('milliseconds', ep.last_polled_at) as "lastPolledAt",
-           ep.sweep_no_truth_reads as "noTruthReads", o.opened_at as "openedAt", d.config->'clock' as clock
+           ep.sweep_no_truth_reads as "noTruthReads", o.opened_at as "openedAt", o.staggered,
+           ${boardRankSql(sql)} as rank, d.config->'clock' as clock
       from fixture_external_play ep
       join fixtures f on f.id = ep.fixture_id
       join divisions d on d.id = f.division_id
@@ -837,6 +851,7 @@ async function reconcileCandidates(pass: Pass): Promise<ReconcileCandidate[]> {
                 and f.status in ${sql(PLAYABLE_STATUSES as string[])}))
        ${orgScope(pass)}
      order by ep.last_polled_at nulls first, ep.fixture_id`;
+  return rows.map((r) => ({ ...r, anchor: candidateAnchor(r) }));
 }
 
 /** addendum 1: the sweep calls assertTimeControl itself. A clock outside the
@@ -864,7 +879,7 @@ function expectedEnd(c: ReconcileCandidate): Date | null {
   // Never started on our side. T9 creates no game after the round's deadline
   // and Lichess aborts one whose first move does not come, so the deadline is
   // its base; any read that brings the truth resets the count regardless.
-  return c.openedAt === null ? null : expectedEndAt(playableWindow(c.openedAt).deadline, tc);
+  return c.anchor === null ? null : expectedEndAt(playableWindow(c.anchor).deadline, tc);
 }
 
 async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullable<SweepDeps["reconcile"]>): Promise<void> {

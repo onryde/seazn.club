@@ -78,10 +78,10 @@ import {
   type GameMeta,
   type OutgoingChallenge,
 } from "@/server/external-play/lichess/board-api";
-import { roundOpenFor } from "@/server/external-play/round-open";
+import { boardOpenFor } from "@/server/external-play/round-open";
 import { assertTimeControl, type TimeControl } from "@/server/external-play/time-controls";
 import type { BoardErrorCode, NeedsReason } from "@/server/external-play/types";
-import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
 import {
@@ -170,9 +170,9 @@ export async function createGameIfReady(
   // D12: the window hangs off the organiser's open, never off the timetable.
   // A paired-but-unopened round has fixtures and no invitation; creating a
   // game for it would start a clock against people who were never called.
-  const open = await roundOpenFor(sql, fixtureId);
+  const open = await boardOpenFor(sql, fixtureId);
   if (!open) return { created: false, reason: "not_ready" };
-  if (roomPhase(now, open.roundOpenedAt) !== "open") return { created: false, reason: "not_ready" };
+  if (roomPhase(now, open.anchor) !== "open") return { created: false, reason: "not_ready" };
 
   // T20: a new game STARTS online play, so the club must be offered it (the PostHog flag `online-chess`). Asked only
   // of a board otherwise ready to create — after `already` (a recorded game is never refused) and before any token
@@ -249,7 +249,7 @@ export async function createGameIfReady(
     homeEntrantId: f.homeEntrantId,
     awayEntrantId: f.awayEntrantId,
     scheduledAt: f.scheduledAt,
-    roundOpenedAt: open.roundOpenedAt,
+    anchor: open.anchor,
     whiteSide,
     white: { userId: whiteSide === "home" ? homeUserId : awayUserId, lichessId: whiteLichess.id },
     black: {
@@ -313,7 +313,8 @@ type CreationPlan = {
   awayEntrantId: string;
   /** The board's start time as planned; `null` ⇒ none (ruling 2026-10-10). */
   scheduledAt: Date | null;
-  roundOpenedAt: Date;
+  /** The BOARD's anchor (spec §3.2.1): its window, not the round's, decides whether a create is still allowed. */
+  anchor: BoardAnchor;
   whiteSide: Side;
   white: { userId: string; lichessId: string };
   black: { userId: string; lichessId: string; username: string };
@@ -357,7 +358,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   }
   // DEADLINE_AFTER_MS is the deadline to have the game created (spec §3.6), measured at
   // the create, not where it joined the queue.
-  if (roomPhase(claimAt, plan.roundOpenedAt) !== "open") return { stage: "refused" };
+  if (roomPhase(claimAt, plan.anchor) !== "open") return { stage: "refused" };
   if ((await whiteSideOf(g)) !== plan.whiteSide) return { stage: "refused" }; // colours re-allocated
   const sides = await loadSides(g);
   const whiteNow = plan.whiteSide === "home" ? sides.home : sides.away;
@@ -515,7 +516,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
     update fixture_external_play
        set status = 'ready', challenge_id = ${gameId}, white_side = ${plan.whiteSide},
            white_lichess_id = ${plan.white.lichessId}, black_lichess_id = ${plan.black.lichessId},
-           expires_at = ${windowFor(plan.roundOpenedAt).deadline},
+           expires_at = ${windowFor(plan.anchor).deadline},
            ${resetLedger()},
            mint_claimed_at = null, create_sent_at = null, last_error = null, updated_at = now()
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claim}

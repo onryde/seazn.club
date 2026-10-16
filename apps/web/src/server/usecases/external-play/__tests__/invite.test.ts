@@ -6,10 +6,10 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { backendPid, pollWaitersBehind } from "./_lock-waiters";
 import { HttpError } from "@/lib/errors";
-import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
 const mail = vi.hoisted(() => ({
-  sent: [] as { to: string; fixtureUrl: string }[],
+  sent: [] as { to: string; fixtureUrl: string; deadlineLabel: string; opensLabel: string | undefined; locale: string }[],
   fail: new Set<string>(),
   throws: new Set<string>(),
   // The FIRST send to this address waits on `gate` (review M6's staging).
@@ -20,7 +20,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
   return {
     ...actual,
     sendExternalPlayInviteEmail: vi.fn(
-      async (to: string, args: Parameters<typeof actual.sendExternalPlayInviteEmail>[1]) => {
+      async (to: string, args: Parameters<typeof actual.sendExternalPlayInviteEmail>[1], locale: string) => {
         const hold = mail.holdFirst;
         if (hold && hold.to === to) {
           mail.holdFirst = null;
@@ -29,7 +29,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
         }
         if (mail.throws.has(to)) throw new Error("provider exploded");
         if (mail.fail.has(to)) return false;
-        mail.sent.push({ to, fixtureUrl: args.fixtureUrl });
+        mail.sent.push({ to, fixtureUrl: args.fixtureUrl, deadlineLabel: args.deadlineLabel, opensLabel: args.opensLabel, locale });
         return true;
       },
     ),
@@ -52,7 +52,12 @@ import { readRoom } from "../room";
 import { createGameIfReady } from "../create-game";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import { addFixture } from "../../stages";
-import { seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult } from "../../__tests__/_external-play-seed";
+import {
+  seedOnlineChessRound,
+  seedOnlineChessRoundWithRankedBoard,
+  seedOwner,
+  type SeedOnlineChessRoundResult,
+} from "../../__tests__/_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const MIN = 60_000;
@@ -473,6 +478,68 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     expect(await refusal(resendExternalPlayNotice(r.owner, b!.fixtureId, ORIGIN))).toEqual({
       status: 409,
       code: "FIXTURE_NOT_PLAYABLE",
+    });
+    expect(mail.sent).toHaveLength(0);
+  });
+});
+
+// ─── Timed check-in batches in the mail and the resend (spec §3.2.1; capacity tests 6 [reader:invite] [reader:resend], 12) ───
+// The expected instants are written from the constants (OPENED + batch x CHECKIN_BATCH_GAP_MS + DEADLINE_AFTER_MS). The label
+// FORMAT is the mail's own and is not what is under test, so the expected label is made with the same Intl options.
+describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
+  const OPENED = new Date("2026-10-01T12:00:30.000Z");
+  const S = CHECKIN_BATCH_SIZE;
+  const batchStart = (batch: number) => new Date(OPENED.getTime() + batch * CHECKIN_BATCH_GAP_MS);
+  const label = (at: Date, locale: string) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: "UTC",
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(at);
+  const seedRound = () => seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * S);
+
+  it("[reader:invite] each mail names its BOARD's own deadline; a board in batch 2 also names when its check-in opens, batch 0 does not", async () => {
+    const r = await seedRound();
+    await open(r, OPENED);
+    const first = r.boards[0]!;
+    let checked = 0;
+    for (const [b, batch] of [[first, 0], [r.ranked, 2]] as const) {
+      for (const p of [b.home, b.away]) {
+        const m = mail.sent.find((x) => x.to === p.email);
+        expect(m, `batch ${batch}: ${p.email} was mailed`).toBeDefined();
+        expect(m!.deadlineLabel, `batch ${batch} deadline`).toBe(label(new Date(batchStart(batch).getTime() + DEADLINE_AFTER_MS), m!.locale));
+        if (batch === 0) expect(m!.opensLabel, "batch 0 opens at the Open press: no opens-at line").toBeUndefined();
+        else expect(m!.opensLabel, `batch ${batch} opens-at`).toBe(label(batchStart(batch), m!.locale));
+        checked += 1;
+      }
+    }
+    expect(mail.sent.length, "exactly the four seats of the two real boards").toBe(4);
+    expect(checked, "anti-vacuity").toBe(4);
+    expect(label(batchStart(2), "en"), "premise: the two boards' deadlines read differently").not.toBe(label(batchStart(0), "en"));
+  });
+
+  it("[reader:resend] the organiser's Resend judges the BOARD's window: inside batch 2's own, refused for batch 0 once ITS has closed; at batch 2's deadline exactly, refused", async () => {
+    const r = await seedRound();
+    await open(r, OPENED);
+    const afterBatch0 = new Date(batchStart(0).getTime() + DEADLINE_AFTER_MS + 1);
+    expect(afterBatch0.getTime(), "premise: batch 2's window is still running").toBeLessThan(batchStart(2).getTime() + DEADLINE_AFTER_MS);
+    mail.sent.length = 0;
+    expect(await refusal(resendExternalPlayNotice(r.owner, r.boards[0]!.fixtureId, ORIGIN, { now: afterBatch0 }))).toEqual({
+      status: 409,
+      code: "WINDOW_CLOSED",
+    });
+    expect(mail.sent, "batch 0 mailed nobody").toHaveLength(0);
+    expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: afterBatch0 })).toEqual({ emailed: 2 });
+    const edge = new Date(batchStart(2).getTime() + DEADLINE_AFTER_MS);
+    expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: new Date(edge.getTime() - 1) })).toEqual({ emailed: 2 });
+    mail.sent.length = 0;
+    expect(await refusal(resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: edge }))).toEqual({
+      status: 409,
+      code: "WINDOW_CLOSED",
     });
     expect(mail.sent).toHaveLength(0);
   });

@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
-import { windowFor } from "@/server/external-play/window";
+import { boardAnchor, windowFor } from "@/server/external-play/window";
 import type { RoomDeps } from "../external-play/room";
 import { readExternalPlayLobby, LOBBY_STATES } from "../external-play/lobby";
 import { stampFixtureCheckIn } from "../me";
@@ -132,8 +132,14 @@ describe.skipIf(!HAS_DB)("readExternalPlayLobby — the state the door states", 
     const unopened = await seed({ roundOpenedAt: undefined });
     expect((await readExternalPlayLobby(unopened.home.userId, unopened.fixtureId, deps())).state).toBe("not_opened");
     const open = await seed();
-    const w = windowFor((await sql<{ opened_at: Date }[]>`
-      select opened_at from stage_round_opens where stage_id = ${open.stageId} and round_no = 1`)[0]!.opened_at);
+    const w = windowFor(
+      boardAnchor(
+        (await sql<{ opened_at: Date }[]>`
+          select opened_at from stage_round_opens where stage_id = ${open.stageId} and round_no = 1`)[0]!.opened_at,
+        0,
+        false,
+      ),
+    );
     expect(await readExternalPlayLobby(open.home.userId, open.fixtureId, deps())).toMatchObject({
       state: "check_in",
       deadline: w.deadline.toISOString(),
@@ -142,7 +148,7 @@ describe.skipIf(!HAS_DB)("readExternalPlayLobby — the state the door states", 
 
   it("after the deadline with no game ⇒ closed; a game on file ⇒ playing; a held board ⇒ held", async () => {
     const s = await seed();
-    const w = windowFor(OPENED);
+    const w = windowFor(boardAnchor(OPENED, 0, false));
     expect((await readExternalPlayLobby(s.home.userId, s.fixtureId, deps({ now: new Date(w.deadline.getTime() + 1_000) }))).state).toBe("closed");
     const live = await seed();
     await gameOnFile(live, { status: "live" });

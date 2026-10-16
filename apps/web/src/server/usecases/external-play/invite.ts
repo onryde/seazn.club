@@ -23,8 +23,8 @@ import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { roundOpenAt } from "@/server/external-play/round-open";
-import { roomPhase, windowFor } from "@/server/external-play/window";
+import { boardOpenFor, roundOpenAt } from "@/server/external-play/round-open";
+import { roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
 import {
   loadOnlinePlayFixture,
   loadSides,
@@ -132,6 +132,9 @@ export async function sendFixtureInvite(a: {
    *  it (T14, T19 review M4), and its window is the deadline the mail names. */
   roundOpenId: string;
   roundOpenedAt: Date;
+  /** The BOARD's anchor (spec §3.2.1): the deadline the mail names is this board's own, and a board whose batch opens
+   *  later is told when. */
+  anchor: BoardAnchor;
   origin?: string;
 }): Promise<boolean> {
   const { fixture: f, seat } = a;
@@ -149,7 +152,11 @@ export async function sendFixtureInvite(a: {
           roundOpenedAt: a.roundOpenedAt.toISOString(),
         });
   const fixtureUrl = `${origin}${routes.sharedFixturePlay(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId, token)}`;
-  const deadline = windowFor(a.roundOpenedAt).deadline;
+  const w = windowFor(a.anchor);
+  const deadline = w.deadline;
+  // A later batch's check-in has not opened when this is sent: the mail says when (externalPlayInvite.bodyLater). Batch 0
+  // opens at the Open press, so it reads as it always did.
+  const laterBatch = a.anchor.batch > 0;
   let accepted = 0;
   for (const r of seat.player.recipients) {
     const locale = toLocale(r.locale);
@@ -161,6 +168,7 @@ export async function sendFixtureInvite(a: {
           opponentName: seat.opponent.displayName,
           roundNo: a.roundNo,
           deadlineLabel: utcLabel(deadline, locale),
+          ...(laterBatch ? { opensLabel: utcLabel(w.opensAt, locale) } : {}),
           fixtureUrl,
         },
         locale,
@@ -275,8 +283,8 @@ export async function resendExternalPlayNotice(
     }
     // The open row is never deleted (FK RESTRICT); re-read under the lock for
     // the window it carries now (a re-stamp may have moved it).
-    const open = (await roundOpenAt(tx, pos.stageId, pos.roundNo))!;
-    if (roomPhase(now, open.roundOpenedAt) === "closed") {
+    const open = (await boardOpenFor(tx, fixtureId))!;
+    if (roomPhase(now, open.anchor) === "closed") {
       throw new HttpError(409, "This round's window has closed. Open the round again to invite its players.", RESEND_WINDOW_CLOSED_CODE);
     }
     const [b] = await tx<{ status: string; challenge_id: string | null; create_sent_at: Date | null }[]>`
@@ -306,6 +314,7 @@ export async function resendExternalPlayNotice(
         roundNo: pos.roundNo,
         roundOpenId: decision.open.id,
         roundOpenedAt: decision.open.roundOpenedAt,
+        anchor: decision.open.anchor,
         origin,
       });
     } catch (err) {

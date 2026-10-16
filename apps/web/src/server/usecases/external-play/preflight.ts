@@ -14,7 +14,7 @@ import "server-only";
 // `window_closed`: the room says different things about the two.
 import type postgres from "postgres";
 import { roomPhase } from "@/server/external-play/window";
-import { roundOpenFor } from "@/server/external-play/round-open";
+import { boardOpenFor } from "@/server/external-play/round-open";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
@@ -60,6 +60,8 @@ export const SEAT_REFUSAL_REASONS = [
   "window_closed",
   "not_a_player",
   "round_not_open",
+  // Spec §3.2.1: the round is open but THIS board's check-in batch has not opened yet.
+  "checkin_not_open",
   "fixture_not_playable",
   "video_unavailable",
   // Fix round 2 (controller ruling): T2's play gate, asked by the seat.
@@ -86,6 +88,7 @@ export type SeatResult =
         | "window_closed"
         | "not_a_player"
         | "round_not_open"
+        | "checkin_not_open"
         | "fixture_not_playable"
         | "video_unavailable"
         | GrantRefusal;
@@ -180,12 +183,13 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
   // Only now, to a confirmed player: a withdrawn or walked-over board.
   if (!isPlayableFixtureStatus(f.fixtureStatus)) return { seated: false, reason: "fixture_not_playable" };
 
-  const open = await roundOpenFor(sql, a.fixtureId);
+  const open = await boardOpenFor(sql, a.fixtureId);
   if (!open) return { seated: false, reason: "round_not_open" };
-  const phase = roomPhase(now, open.roundOpenedAt);
-  // "before" is a stamp more than T−10 in the future: the window has not
-  // started, which is the round_not_open story, never "closed".
-  if (phase === "before") return { seated: false, reason: "round_not_open" };
+  const phase = roomPhase(now, open.anchor);
+  // "before" with no stamp at all was answered above: round_not_open. A round that IS stamped but whose BOARD's window has
+  // not opened (its batch is later, spec §3.2.1; or, in a test, a stamp in the future) is `checkin_not_open`: the room
+  // says WHEN. It is refused before any vendor call, check-in or stay, so an early claim costs nothing. Never "closed".
+  if (phase === "before") return { seated: false, reason: "checkin_not_open" };
   // DEADLINE_AFTER_MS is the deadline to be seated and have the game created, not a cap on
   // the game (spec §3.6): a seated player reloading mid-game comes back in.
   if (phase === "closed" && !isReentry(f, player)) return { seated: false, reason: "window_closed" };

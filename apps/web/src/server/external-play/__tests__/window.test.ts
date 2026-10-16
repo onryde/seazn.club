@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEADLINE_AFTER_MS, EMAIL_LEAD_MS, WINDOW_OPEN_LEAD_MS,
-  checkInCounts, deadlineReason, roomPhase, windowFor,
+  CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS, EMAIL_LEAD_MS, WINDOW_OPEN_LEAD_MS,
+  batchCount, batchOfRank, boardAnchor, checkInCounts, deadlineReason, roomPhase, windowFor,
 } from "../window";
 
 const T = new Date("2026-10-01T19:00:00.000Z");
@@ -9,7 +9,7 @@ const at = (ms: number) => new Date(T.getTime() + ms);
 
 describe("windowFor", () => {
   it("derives every edge from the constants, not literals", () => {
-    const w = windowFor(T);
+    const w = windowFor(boardAnchor(T, 0, false));
     expect(w.emailAt.getTime()).toBe(T.getTime() - EMAIL_LEAD_MS);
     expect(w.opensAt.getTime()).toBe(T.getTime() - WINDOW_OPEN_LEAD_MS);
     expect(w.deadline.getTime()).toBe(T.getTime() + DEADLINE_AFTER_MS);
@@ -24,26 +24,130 @@ describe("windowFor", () => {
 
 describe("roomPhase", () => {
   it("is before one ms ahead of T−10, open at T−10 exactly", () => {
-    expect(roomPhase(at(-WINDOW_OPEN_LEAD_MS - 1), T)).toBe("before");
-    expect(roomPhase(at(-WINDOW_OPEN_LEAD_MS), T)).toBe("open");
+    expect(roomPhase(at(-WINDOW_OPEN_LEAD_MS - 1), boardAnchor(T, 0, false))).toBe("before");
+    expect(roomPhase(at(-WINDOW_OPEN_LEAD_MS), boardAnchor(T, 0, false))).toBe("open");
   });
   it("is open one ms before the deadline (DEADLINE_AFTER_MS), closed at the deadline exactly", () => {
-    expect(roomPhase(at(DEADLINE_AFTER_MS - 1), T)).toBe("open");
-    expect(roomPhase(at(DEADLINE_AFTER_MS), T)).toBe("closed");
+    expect(roomPhase(at(DEADLINE_AFTER_MS - 1), boardAnchor(T, 0, false))).toBe("open");
+    expect(roomPhase(at(DEADLINE_AFTER_MS), boardAnchor(T, 0, false))).toBe("closed");
   });
 });
 
 describe("checkInCounts", () => {
   it("null never counts", () => {
-    expect(checkInCounts(null, T)).toBe(false);
+    expect(checkInCounts(null, boardAnchor(T, 0, false))).toBe(false);
   });
   it("a stamp before the window (e.g. before a reschedule) does not count", () => {
-    expect(checkInCounts(at(-WINDOW_OPEN_LEAD_MS - 1), T)).toBe(false);
+    expect(checkInCounts(at(-WINDOW_OPEN_LEAD_MS - 1), boardAnchor(T, 0, false))).toBe(false);
   });
   it("counts from T−10 inclusive to the deadline (DEADLINE_AFTER_MS) exclusive", () => {
-    expect(checkInCounts(at(-WINDOW_OPEN_LEAD_MS), T)).toBe(true);
-    expect(checkInCounts(at(DEADLINE_AFTER_MS - 1), T)).toBe(true);
-    expect(checkInCounts(at(DEADLINE_AFTER_MS), T)).toBe(false);
+    expect(checkInCounts(at(-WINDOW_OPEN_LEAD_MS), boardAnchor(T, 0, false))).toBe(true);
+    expect(checkInCounts(at(DEADLINE_AFTER_MS - 1), boardAnchor(T, 0, false))).toBe(true);
+    expect(checkInCounts(at(DEADLINE_AFTER_MS), boardAnchor(T, 0, false))).toBe(false);
+  });
+});
+
+// ─── Timed check-in batches (spec §3.2.1; capacity tests 1, 4, 5a and the window of a later batch) ────────────────────────
+describe("batchOfRank / boardAnchor — the batch boundaries (capacity test 1)", () => {
+  const S = CHECKIN_BATCH_SIZE;
+  it("boards ranked S-1 and S sit in batches 0 and 1; 2S-1 and 2S in batches 1 and 2 (the owner's '10/11 and 20/21' in one-based terms)", () => {
+    // From the RULING (boards 1 to 10 are batch 0, 11 to 20 batch 1, 21 to 30 batch 2), in zero-based ranks - never from
+    // batchOfRank's own division. S enters only as the constant that names the ruling's "10".
+    const want: [number, number][] = [[0, 0], [S - 1, 0], [S, 1], [2 * S - 1, 1], [2 * S, 2]];
+    let checked = 0;
+    for (const [rank, batch] of want) {
+      expect(batchOfRank(rank), `rank ${rank}`).toBe(batch);
+      expect(boardAnchor(T, rank, true).batch, `anchor of rank ${rank}`).toBe(batch);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: boundary ranks checked").toBe(want.length);
+  });
+
+  it("a 25-board round gives batches of 10, 10 and 5 (the per-batch counts, 25 in total)", () => {
+    const boards = 2 * S + Math.floor(S / 2);
+    const perBatch = new Map<number, number>();
+    for (let rank = 0; rank < boards; rank++) {
+      const b = boardAnchor(T, rank, true).batch;
+      perBatch.set(b, (perBatch.get(b) ?? 0) + 1);
+    }
+    expect([...perBatch.entries()], "batches of S, S and half an S, in order").toEqual([[0, S], [1, S], [2, Math.floor(S / 2)]]);
+    expect([...perBatch.values()].reduce((a, b) => a + b, 0), "anti-vacuity: every board counted once").toBe(boards);
+    expect(batchCount(boards), "the round runs in three batches").toBe(3);
+    // batchCount's edges: a round of exactly S boards is ONE batch, S+1 is two, none is still one.
+    expect([batchCount(0), batchCount(1), batchCount(S), batchCount(S + 1), batchCount(2 * S)]).toEqual([1, 1, 1, 2, 2]);
+  });
+
+  it("a rank that is not a non-negative integer is refused, not rounded into a batch (a guard, not a comment)", () => {
+    let refused = 0;
+    for (const bad of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => batchOfRank(bad), String(bad)).toThrow(RangeError);
+      refused += 1;
+    }
+    expect(refused, "anti-vacuity").toBe(4);
+  });
+});
+
+describe("boardAnchor — T_batch and the window of a batch (capacity tests 4, 5a)", () => {
+  it("the gap and the size are the owner's values, pinned HERE so changing either is deliberate and no other test moves (C1)", () => {
+    // The typed numbers in this block: the OWNER's, copied from the ruling (2026-10-15: start at 120 s; the load re-run may
+    // tighten the gap to 60 s, which is a change to this one line). Every other test derives from the constants.
+    expect([CHECKIN_BATCH_SIZE, CHECKIN_BATCH_GAP_MS]).toEqual([10, 120_000]);
+  });
+
+  it("T_batch(i) = round_opened_at + i x CHECKIN_BATCH_GAP_MS, for every batch up to the ninth (100 boards)", () => {
+    let checked = 0;
+    for (let rank = 0; rank < 10 * CHECKIN_BATCH_SIZE; rank++) {
+      const batch = Math.floor(rank / CHECKIN_BATCH_SIZE);
+      expect(boardAnchor(T, rank, true).at.getTime() - T.getTime(), `rank ${rank}`).toBe(batch * CHECKIN_BATCH_GAP_MS);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: boards checked").toBe(10 * CHECKIN_BATCH_SIZE);
+  });
+
+  it("a round of at most S boards is unchanged: one batch, opens T - WINDOW_OPEN_LEAD_MS, closes T + DEADLINE_AFTER_MS", () => {
+    let checked = 0;
+    for (let rank = 0; rank < CHECKIN_BATCH_SIZE; rank++) {
+      const a = boardAnchor(T, rank, true);
+      const w = windowFor(a);
+      expect(a.at.getTime(), `rank ${rank}`).toBe(T.getTime());
+      expect(w.opensAt.getTime()).toBe(T.getTime() - WINDOW_OPEN_LEAD_MS);
+      expect(w.deadline.getTime()).toBe(T.getTime() + DEADLINE_AFTER_MS);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(CHECKIN_BATCH_SIZE);
+  });
+
+  it("a later batch opens AT its own start (the lead does not apply) and has its own full DEADLINE_AFTER_MS", () => {
+    const rank = 2 * CHECKIN_BATCH_SIZE; // batch 2
+    const w = windowFor(boardAnchor(T, rank, true));
+    const start = T.getTime() + 2 * CHECKIN_BATCH_GAP_MS;
+    expect(w.opensAt.getTime(), "opens at T_batch, not T_batch - WINDOW_OPEN_LEAD_MS").toBe(start);
+    expect(w.deadline.getTime() - w.opensAt.getTime(), "the same DEADLINE_AFTER_MS a batch-0 board has after T").toBe(DEADLINE_AFTER_MS);
+    const a = boardAnchor(T, rank, true);
+    expect(roomPhase(new Date(start - 1), a), "one ms before its start").toBe("before");
+    expect(roomPhase(new Date(start), a), "at its start").toBe("open");
+    expect(roomPhase(new Date(start + DEADLINE_AFTER_MS - 1), a), "one ms before its deadline").toBe("open");
+    expect(roomPhase(new Date(start + DEADLINE_AFTER_MS), a), "at its deadline").toBe("closed");
+    // A check-in stamped inside batch 0's window but before batch 2 opened does not count for the batch-2 board.
+    expect(checkInCounts(at(0), a), "a stamp before the board's own window").toBe(false);
+    expect(checkInCounts(new Date(start), a), "a stamp at its own start").toBe(true);
+  });
+
+  it("an `off` round is ONE batch whatever the rank: every board opens at T (capacity test 5a)", () => {
+    let checked = 0;
+    for (let rank = 0; rank < 3 * CHECKIN_BATCH_SIZE; rank++) {
+      const a = boardAnchor(T, rank, false);
+      expect(a.batch, `rank ${rank}`).toBe(0);
+      expect(a.at.getTime()).toBe(T.getTime());
+      expect(windowFor(a)).toEqual(windowFor(boardAnchor(T, 0, false)));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(3 * CHECKIN_BATCH_SIZE);
+  });
+
+  it("the same rank differs between a staggered and an unstaggered round (the case where the wrong answer is not the right one's constant)", () => {
+    const rank = 2 * CHECKIN_BATCH_SIZE;
+    expect(boardAnchor(T, rank, true).at.getTime()).not.toBe(boardAnchor(T, rank, false).at.getTime());
   });
 });
 

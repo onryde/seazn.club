@@ -17,14 +17,38 @@ import "server-only";
 // the chesslep DB 2026-10-09 — which is why patchDivision asks BEFORE it opens
 // its tenant transaction, the same placement as its `requireFeature` reads.
 import type postgres from "postgres";
+import { boardAnchor, type BoardAnchor } from "./window";
 
 type AnySql = postgres.TransactionSql | postgres.Sql;
 
 export type RoundOpen = { roundOpenedAt: Date; openedBy: string | null };
 
 /** The stamp row itself — what T19's open writes and re-reads under its lock.
- *  `id` is what `fixture_external_play.round_open_id` names. */
-export type RoundOpenRow = RoundOpen & { id: string };
+ *  `id` is what `fixture_external_play.round_open_id` names. `staggered` is the flag the open STORED (V461, spec §3.2.1):
+ *  whether this round's check-in runs in timed batches, decided once at the open from the camera policy of that moment. */
+export type RoundOpenRow = RoundOpen & { id: string; staggered: boolean };
+
+/** A board's place in its round's batches: its zero-based RANK among every fixture row of its (stage, round), and the
+ *  anchor its window hangs off (spec §3.2.1). */
+export type BoardPlacement = { rank: number; anchor: BoardAnchor };
+export type BoardOpen = RoundOpenRow & BoardPlacement;
+
+/** The anchor of a board from a candidate row that carries its round's stamp, its rank and its round's `staggered` flag.
+ *  The sweep's four candidate queries select exactly these three beside the board (`boardRankSql` is the rank). */
+export function anchorOfRow(r: { openedAt: Date; rank: number; staggered: boolean }): BoardAnchor {
+  return boardAnchor(r.openedAt, r.rank, r.staggered);
+}
+
+/** THE board rank, in SQL: the zero-based position of fixture `f` among EVERY fixture row of its (stage, round), ordered
+ *  `(seq_in_round, id)` (spec §3.2.1). Every row counts, a bye and a withdrawn board included, so no board's batch moves
+ *  after its invite was sent. It is a fragment and not a stored column, and EVERY query that needs a board's rank
+ *  interpolates this one: the sweep's no-show, retry, teardown and reconcile candidates, and `boardOpenFor` below. The
+ *  caller names its fixtures table `f`. */
+export function boardRankSql(db: AnySql) {
+  return db`(select count(*)::int from fixtures rk
+              where rk.stage_id = f.stage_id and rk.round_no = f.round_no
+                and (rk.seq_in_round, rk.id) < (f.seq_in_round, f.id))`;
+}
 
 /** THE read of `stage_round_opens` (T19 folded the by-key read in here rather
  *  than add a second reader — controller addendum 3). `null` ⇒ this
@@ -32,7 +56,7 @@ export type RoundOpenRow = RoundOpen & { id: string };
  *  type keeps the plan's declared `string | null`.) */
 export async function roundOpenAt(db: AnySql, stageId: string, roundNo: number): Promise<RoundOpenRow | null> {
   const rows = await db<RoundOpenRow[]>`
-    select id, opened_at as "roundOpenedAt", opened_by as "openedBy"
+    select id, opened_at as "roundOpenedAt", opened_by as "openedBy", staggered
       from stage_round_opens
      where stage_id = ${stageId} and round_no = ${roundNo}`;
   return rows[0] ?? null;
@@ -49,7 +73,8 @@ export function roundKey(stageId: string, roundNo: number): string {
 export async function roundOpensOfDivisions(db: AnySql, divisionIds: readonly string[]): Promise<Map<string, RoundOpenRow>> {
   if (divisionIds.length === 0) return new Map();
   const rows = await db<(RoundOpenRow & { stageId: string; roundNo: number })[]>`
-    select o.id, o.opened_at as "roundOpenedAt", o.opened_by as "openedBy", o.stage_id as "stageId", o.round_no as "roundNo"
+    select o.id, o.opened_at as "roundOpenedAt", o.opened_by as "openedBy", o.staggered,
+           o.stage_id as "stageId", o.round_no as "roundNo"
       from stage_round_opens o
       join stages s on s.id = o.stage_id
      where s.division_id = any(${divisionIds as string[]}::uuid[])`;
@@ -64,6 +89,21 @@ export async function roundOpenFor(db: AnySql, fixtureId: string): Promise<Round
   if (!f) return null;
   // The row's `id` rides along (T14): the match-room link is bound to it.
   return roundOpenAt(db, f.stageId, f.roundNo);
+}
+
+/** `null` ⇒ this fixture's round has never been opened (or there is no such fixture). Otherwise the stamp row AND the
+ *  board's place in it: the rank (`boardRankSql`) and the anchor its window hangs off. THE reader every window question about
+ *  a board starts from (the seat, the room, the create, the invite), so none of them can hand `roomPhase` the round's
+ *  stamp instead of the board's own. */
+export async function boardOpenFor(db: AnySql, fixtureId: string): Promise<BoardOpen | null> {
+  const [r] = await db<(RoundOpenRow & { rank: number })[]>`
+    select o.id, o.opened_at as "roundOpenedAt", o.opened_by as "openedBy", o.staggered,
+           ${boardRankSql(db)} as rank
+      from fixtures f
+      join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
+     where f.id = ${fixtureId}`;
+  if (!r) return null;
+  return { ...r, anchor: boardAnchor(r.roundOpenedAt, r.rank, r.staggered) };
 }
 
 /** Has ANY round of this division been opened at or before `now`? T6's

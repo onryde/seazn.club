@@ -21,11 +21,21 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isRoundPaired } from "@/lib/division-phase";
-import type { OpenRoundPairing, OpenRoundPress, OpenRoundView } from "@/lib/open-round";
+import type { OpenRoundBatch, OpenRoundPairing, OpenRoundPress, OpenRoundView } from "@/lib/open-round";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { stageCameraPolicy } from "@/server/external-play/camera-policy";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { roundKey, roundOpensOfDivisions, type RoundOpenRow } from "@/server/external-play/round-open";
-import { DEADLINE_AFTER_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import { boardRankSql, roundKey, roundOpensOfDivisions, type RoundOpenRow } from "@/server/external-play/round-open";
+import {
+  CHECKIN_BATCH_GAP_MS,
+  CHECKIN_BATCH_SIZE,
+  DEADLINE_AFTER_MS,
+  batchCount,
+  batchOfRank,
+  boardAnchor,
+  roomPhase,
+  windowFor,
+} from "@/server/external-play/window";
 import { loadSideNames, whiteSideOf, type Side } from "./guard";
 import { bridgeTakesInvites } from "./invite";
 import { isPlayableFixtureStatus } from "./preflight";
@@ -38,6 +48,8 @@ type Row = {
   /** `fixtures.seq_in_round`, NOT NULL in the schema: every board has its own number (N3, T16 fix round 2 — as M4 for
    *  the arbiter: an `i + 1` fallback could never run). */
   seq: number;
+  /** The board's zero-based position among EVERY row of its (stage, round) - `boardRankSql`, the one authority for it. */
+  rank: number;
   status: string;
   homeEntrantId: string | null;
   awayEntrantId: string | null;
@@ -58,6 +70,10 @@ type RoundFacts = {
   stageName: string;
   roundNo: number;
   boards: Paired[];
+  /** EVERY fixture row of the (stage, round) in rank order (`seq_in_round`, `id`), byes and withdrawn boards included.
+   *  A board's rank, and so its batch, is its `rank` (spec §3.2.1), read from `boardRankSql` with the row and not derived
+   *  from its place in this list. */
+  group: Row[];
   open: RoundOpenRow | null;
   press: OpenRoundPress;
   closed: boolean;
@@ -98,7 +114,7 @@ export async function listOpenRounds(
 
   const rows = await sql<Row[]>`
     select f.id as "fixtureId", f.stage_id as "stageId", s.name as "stageName", f.round_no as "roundNo",
-           f.seq_in_round as "seq", f.status,
+           f.seq_in_round as "seq", ${boardRankSql(sql)} as "rank", f.status,
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId", f.scheduled_at as "scheduledAt",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
            ep.round_open_id as "roundOpenId", ep.white_emailed_at as "whiteEmailedAt",
@@ -154,12 +170,18 @@ export async function listOpenRounds(
     const boards = live as Paired[];
     const open = opens.get(roundKey(first.stageId, first.roundNo)) ?? null;
     const owed = boards.reduce((n, b) => n + owedSeats(b, open), 0);
-    const closed = open !== null && roomPhase(now, open.roundOpenedAt) === "closed";
+    // Spec §3.2.1: each board's window is its OWN batch's. The round is closed when its LAST batch has closed (rank
+    // order, so the last row's anchor is the latest); a re-invite is offered only while some board it would still invite
+    // has a window that has not closed - openRound skips the rest, and would answer already_open if nothing is left.
+    const anchorOf = (b: Row) => boardAnchor(open!.roundOpenedAt, b.rank, open!.staggered);
+    const lastRank = Math.max(...group.map((r) => r.rank));
+    const closed = open !== null && roomPhase(now, boardAnchor(open.roundOpenedAt, lastRank, open.staggered)) === "closed";
+    const owedOpen = open === null ? owed : boards.reduce((n, b) => n + (roomPhase(now, anchorOf(b)) === "closed" ? 0 : owedSeats(b, open)), 0);
     let press: OpenRoundPress;
     if (open === null) press = "open";
     else if (owed === 0) press = "none";
-    else press = !boundOpenIds.has(open.id) ? "reopen" : closed ? "none" : "reinvite";
-    facts.push({ stageId: first.stageId, stageName: first.stageName, roundNo: first.roundNo, boards, open, press, closed });
+    else press = !boundOpenIds.has(open.id) ? "reopen" : owedOpen === 0 ? "none" : "reinvite";
+    facts.push({ stageId: first.stageId, stageName: first.stageName, roundNo: first.roundNo, boards, group, open, press, closed });
   }
 
   // Of the paired rounds, only each stage's lowest is the next to open; an opened round stays while it still has a
@@ -181,6 +203,14 @@ export async function listOpenRounds(
   ]);
   const whiteSideByFixture = new Map(shownBoards.map((b, i) => [b.fixtureId, colours[i]!]));
   const nameOf = (entrantId: string) => names.get(entrantId) ?? "—";
+
+  // Whether a round that is not yet open WOULD stagger: the camera policy of this moment, which is what the open will store.
+  const policyByStage = new Map<string, boolean>();
+  for (const f of shown) {
+    if (f.open === null && !policyByStage.has(f.stageId)) {
+      policyByStage.set(f.stageId, (await stageCameraPolicy(sql, f.stageId)) !== "off");
+    }
+  }
 
   const out: OpenRoundView[] = [];
   for (const f of shown) {
@@ -204,6 +234,35 @@ export async function listOpenRounds(
       });
     }
     const openedAt = f.open?.roundOpenedAt ?? null;
+    const staggered = f.open !== null ? f.open.staggered : (policyByStage.get(f.stageId) ?? false);
+    const batches: OpenRoundBatch[] = [];
+    const nBatches = staggered ? batchCount(f.group.length) : 1;
+    for (let i = 0; i < nBatches; i++) {
+      const slice = staggered ? f.group.filter((r) => batchOfRank(r.rank) === i) : f.group;
+      // The batch's own anchor (its first board's), so its start and deadline come from window.ts and from nowhere else.
+      const anchor = f.open === null ? null : boardAnchor(f.open.roundOpenedAt, staggered ? i * CHECKIN_BATCH_SIZE : 0, staggered);
+      const w = anchor === null ? null : windowFor(anchor);
+      const start = anchor === null ? null : anchor.at;
+      batches.push({
+        fromBoard: slice[0]!.seq,
+        toBoard: slice[slice.length - 1]!.seq,
+        offsetMs: staggered ? i * CHECKIN_BATCH_GAP_MS : 0,
+        opensAt: start?.toISOString() ?? null,
+        closesAt: w?.deadline.toISOString() ?? null,
+      });
+    }
+    // The deadline a re-invite names is the earliest among the boards it would still invite (never later than the truth);
+    // otherwise the LAST batch's, when the round as a whole closes.
+    const lastClose = batches[batches.length - 1]!.closesAt;
+    let deadlineAt = openedAt === null ? null : lastClose;
+    if (f.open !== null && f.press === "reinvite") {
+      const open = f.open;
+      const ahead = f.boards
+        .filter((b) => owedSeats(b, open) > 0)
+        .map((b) => windowFor(boardAnchor(open.roundOpenedAt, b.rank, open.staggered)).deadline)
+        .filter((d) => d.getTime() > now.getTime());
+      if (ahead.length > 0) deadlineAt = new Date(Math.min(...ahead.map((d) => d.getTime()))).toISOString();
+    }
     const times = f.boards.map((b) => b.scheduledAt?.getTime()).filter((t): t is number => t !== undefined);
     const view: OpenRoundView = {
       stageId: f.stageId,
@@ -211,8 +270,11 @@ export async function listOpenRounds(
       roundNo: f.roundNo,
       state: isRoundPaired({ roundOpenedAt: openedAt?.toISOString() ?? null, fixtureCount: f.boards.length }) ? "paired" : "open",
       openedAt: openedAt?.toISOString() ?? null,
-      deadlineAt: openedAt === null ? null : windowFor(openedAt).deadline.toISOString(),
+      deadlineAt,
       windowMinutes: DEADLINE_AFTER_MS / 60_000,
+      staggered,
+      batches,
+      staggerSpanMinutes: Math.ceil(((nBatches - 1) * (staggered ? CHECKIN_BATCH_GAP_MS : 0)) / 60_000),
       scheduledAt: times.length === 0 ? null : new Date(Math.min(...times)).toISOString(),
       press: f.press,
       pairings,

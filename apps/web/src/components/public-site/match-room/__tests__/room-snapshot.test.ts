@@ -15,7 +15,7 @@ import {
   turnAfter,
   windowWire,
 } from "../room-snapshot";
-import { DEADLINE_AFTER_MS, windowFor } from "@/server/external-play/window";
+import { boardAnchor, DEADLINE_AFTER_MS, windowFor } from "@/server/external-play/window";
 
 describe("frozenFor (T11 M7 — which seat a token_revoked hold froze, seen by the viewer)", () => {
   it("the empty case: no frozen seat ⇒ null for either viewer", () => {
@@ -251,8 +251,8 @@ describe("windowWire", () => {
   });
   it("opened ⇒ windowFor's own instants", () => {
     const at = new Date("2026-10-12T10:00:00Z");
-    const w = windowFor(at);
-    expect(windowWire(at)).toEqual({ opensAt: w.opensAt.toISOString(), deadline: w.deadline.toISOString() });
+    const w = windowFor(boardAnchor(at, 0, false));
+    expect(windowWire(boardAnchor(at, 0, false))).toEqual({ opensAt: w.opensAt.toISOString(), deadline: w.deadline.toISOString() });
   });
 });
 
@@ -262,7 +262,7 @@ describe("realtimeExpiry (T10 carry — the subscriber token must outlive a game
     const readAt = new Date(opened.getTime() + DEADLINE_AFTER_MS + 5 * 60_000); // 5 min past the deadline, mid-game
     const exp = realtimeExpiry(readAt);
     expect(exp.getTime()).toBeGreaterThan(readAt.getTime());
-    expect(exp.getTime()).toBeGreaterThan(windowFor(opened).deadline.getTime());
+    expect(exp.getTime()).toBeGreaterThan(windowFor(boardAnchor(opened, 0, false)).deadline.getTime());
     expect(exp.getTime() - readAt.getTime()).toBe(ROOM_REALTIME_TTL_MS);
   });
 });

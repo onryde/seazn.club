@@ -28,7 +28,7 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { sql } from "@/lib/db";
-import { DEADLINE_AFTER_MS, roomPhase } from "@/server/external-play/window";
+import { boardAnchor, DEADLINE_AFTER_MS, roomPhase } from "@/server/external-play/window";
 
 const mail = vi.hoisted(() => ({
   sent: [] as { to: string; fixtureUrl: string }[],
@@ -365,7 +365,7 @@ describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
             // inside its window, on a board with no game, when both players
             // can be seated (RealtimeKit is down: only off/optional seat).
             const eligible =
-              m.stampAt !== null && roomPhase(m.clock, m.stampAt) === "open" && !m.games.has(f) && m.policy < 2;
+              m.stampAt !== null && roomPhase(m.clock, boardAnchor(m.stampAt, 0, false)) === "open" && !m.games.has(f) && m.policy < 2;
             if (c.t === "held") {
               board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "outcome_unknown", raw: "timeout" });
             }
@@ -392,10 +392,12 @@ describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
             if (open.length > 0) {
               const who = open[c.pick % open.length]!;
               // Expectation BEFORE the call.
-              const phase = m.stampAt ? roomPhase(m.clock, m.stampAt) : null;
+              const phase = m.stampAt ? roomPhase(m.clock, boardAnchor(m.stampAt, 0, false)) : null;
               const want =
                 phase === null
                   ? "round_not_open"
+                  : phase === "before"
+                    ? "checkin_not_open"
                   : phase === "closed"
                     ? "window_closed"
                     : m.policy === 2
@@ -405,7 +407,7 @@ describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
               // I2: a seat exists only after the open and inside its window.
               expect(got.seated ? "seated" : got.reason).toBe(want);
               if (got.seated) expect(m.stampAt).not.toBeNull();
-              if (want === "round_not_open") paths.seatBeforeOpen += 1;
+              if (want === "round_not_open" || want === "checkin_not_open") paths.seatBeforeOpen += 1;
               else if (want === "window_closed") paths.seatWindowClosed += 1;
               else if (want === "video_unavailable") paths.seatVideoDown += 1;
               else paths.seated += 1;

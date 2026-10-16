@@ -54,10 +54,11 @@ import type { OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
 import { EDITOR_ROLES } from "@/lib/types";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
+import { stageCameraPolicy } from "@/server/external-play/camera-policy";
+import { boardRankSql, roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import { RETIRED_PAIR, endMeeting, gameEvidenceOn, retireStaleMeeting } from "@/server/external-play/video/realtimekit";
-import { roomPhase } from "@/server/external-play/window";
+import { boardAnchor, roomPhase, type BoardAnchor } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
@@ -147,11 +148,18 @@ type BridgeFactsRow = InviteBridgeFacts & {
   black_emailed_at: Date | null;
 };
 
-type Claim = { board: Board; seat: InviteSeat };
+type Claim = { board: Board; seat: InviteSeat; anchor: BoardAnchor };
 
 type Decision =
   | { kind: "nothing"; skipped: OpenRoundSkip[] }
-  | { kind: "opened" | "reopened" | "reinvited"; open: RoundOpenRow; claims: Claim[]; retireBoards: string[] };
+  | {
+      kind: "opened" | "reopened" | "reinvited";
+      open: RoundOpenRow;
+      claims: Claim[];
+      retireBoards: string[];
+      /** A re-open's boards whose own batch window had already closed (spec §3.2.1): not invited, reported. */
+      closedSkips: OpenRoundSkip[];
+    };
 
 const AUDIT_TYPE = {
   opened: "external_play.round_opened",
@@ -357,11 +365,17 @@ export async function openRound(
     let open: RoundOpenRow;
     let kind: "opened" | "reopened" | "reinvited";
     let retireBoards: string[] = [];
+    // Spec §3.2.1: whether this round's check-in runs in timed batches is decided HERE, once per stamp (the insert AND the
+    // re-stamp), from the camera policy of this moment, and stored: an `off` round spends no vendor calls so it is one
+    // batch; required and optional stagger. Read only when a stamp is about to be written, and never again - a later
+    // downgrade must not move a board's open time underneath a player who was told it.
+    const staggerNow = async (): Promise<boolean> => (await stageCameraPolicy(tx, a.stageId)) !== "off";
     if (!existing) {
+      const staggered = await staggerNow();
       const [row] = await tx<RoundOpenRow[]>`
-        insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
-        values (${a.stageId}, ${st.orgId}, ${a.roundNo}, ${now}, ${a.actorUserId})
-        returning id, opened_at as "roundOpenedAt", opened_by as "openedBy"`;
+        insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by, staggered)
+        values (${a.stageId}, ${st.orgId}, ${a.roundNo}, ${now}, ${a.actorUserId}, ${staggered})
+        returning id, opened_at as "roundOpenedAt", opened_by as "openedBy", staggered`;
       open = row!;
       kind = "opened";
     } else if (pending.length === 0) {
@@ -370,10 +384,11 @@ export async function openRound(
       // Nobody this round was invited (a re-pair deleted the rows, or every
       // send failed), or — D17 — the only boards still playable are the ones
       // this open re-arms: the window starts now, for everyone.
+      const staggered = await staggerNow();
       const [row] = await tx<RoundOpenRow[]>`
-        update stage_round_opens set opened_at = ${now}, opened_by = ${a.actorUserId}
+        update stage_round_opens set opened_at = ${now}, opened_by = ${a.actorUserId}, staggered = ${staggered}
          where id = ${existing.id}
-        returning id, opened_at as "roundOpenedAt", opened_by as "openedBy"`;
+        returning id, opened_at as "roundOpenedAt", opened_by as "openedBy", staggered`;
       open = row!;
       kind = "reopened";
       // N-2: the meetings of the last window's pairing. A board a game IS or MAY BE on file behind keeps its
@@ -387,12 +402,35 @@ export async function openRound(
     } else {
       open = existing;
       kind = "reinvited";
-      if (roomPhase(now, open.roundOpenedAt) === "closed") {
-        return {
-          kind: "nothing",
-          skipped: pending.map((p) => ({ fixtureId: p.board.f.fixtureId, reason: "window_closed" as const })),
-        };
+    }
+
+    // Each board's place in its round (spec §3.2.1): its zero-based rank among EVERY fixture row, ordered `(seq_in_round,
+    // id)`, read here under the division lock so a board added a moment ago is counted. Its anchor is its batch's start.
+    const rankOf = new Map(
+      (
+        await tx<{ id: string; rank: number }[]>`
+          select f.id, ${boardRankSql(tx)} as rank from fixtures f where f.stage_id = ${a.stageId} and f.round_no = ${a.roundNo}`
+      ).map((r) => [r.id, r.rank]),
+    );
+    const anchorOf = (fixtureId: string): BoardAnchor => {
+      const rank = rankOf.get(fixtureId);
+      // Not "cannot happen" in a comment: a board of this open that is not in its own round would be given batch 0's time.
+      if (rank === undefined) throw roundChanged();
+      return boardAnchor(open.roundOpenedAt, rank, open.staggered);
+    };
+
+    // A re-open into a window that is already running (nobody-invited and re-arm re-stamped above): a board whose OWN batch
+    // window has closed is not invited - it is the sweep's now - while a board whose has not is still invited (§3.2.1).
+    const closedSkips: OpenRoundSkip[] = [];
+    if (kind === "reinvited") {
+      for (let i = pending.length - 1; i >= 0; i--) {
+        const p = pending[i]!;
+        if (roomPhase(now, anchorOf(p.board.f.fixtureId)) === "closed") {
+          closedSkips.unshift({ fixtureId: p.board.f.fixtureId, reason: "window_closed" });
+          pending.splice(i, 1);
+        }
       }
+      if (pending.length === 0) return { kind: "nothing", skipped: closedSkips };
     }
 
     // D17: the re-arm, only now that the board WILL be invited (a reset answered `window_closed` would hand it to the
@@ -412,11 +450,11 @@ export async function openRound(
       await attachToOpen(tx, p.board.f, open);
       for (const seat of p.seats) {
         if (await claimSeat(tx, p.board.f.fixtureId, seat.colour, open.id, now)) {
-          claims.push({ board: p.board, seat });
+          claims.push({ board: p.board, seat, anchor: anchorOf(p.board.f.fixtureId) });
         }
       }
     }
-    return { kind, open, claims, retireBoards: [...new Set(retireBoards)] };
+    return { kind, open, claims, retireBoards: [...new Set(retireBoards)], closedSkips };
   });
 
   if (decision.kind === "nothing") {
@@ -457,6 +495,7 @@ export async function openRound(
           roundNo: a.roundNo,
           roundOpenId: decision.open.id,
           roundOpenedAt: decision.open.roundOpenedAt,
+          anchor: c.anchor,
           origin: deps.origin,
         });
       } catch (err) {
@@ -476,7 +515,10 @@ export async function openRound(
       }
     }
   } finally {
-    const skipped: OpenRoundSkip[] = [...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" }));
+    const skipped: OpenRoundSkip[] = [
+      ...decision.closedSkips,
+      ...[...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" as const })),
+    ];
     await audit(
       sql,
       st.competitionId,
@@ -492,6 +534,9 @@ export async function openRound(
       a.actorUserId,
     );
   }
-  const skipped: OpenRoundSkip[] = [...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" }));
+  const skipped: OpenRoundSkip[] = [
+    ...decision.closedSkips,
+    ...[...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" as const })),
+  ];
   return { opened: true, invited, skipped };
 }

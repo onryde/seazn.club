@@ -15,7 +15,16 @@ import {
   __setCreationQueueDeps,
   enqueueCreation,
 } from "@/server/external-play/creation-queue";
-import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
+import {
+  boardAnchor,
+  CHECKIN_BATCH_GAP_MS,
+  CHECKIN_BATCH_SIZE,
+  DEADLINE_AFTER_MS,
+  LICHESS_TIMEOUT_MS,
+  MINT_CLAIM_STALE_MS,
+  WINDOW_OPEN_LEAD_MS,
+  windowFor,
+} from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { PLAY_SCOPES, getLichessLink } from "../external-accounts";
@@ -530,9 +539,9 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     expect(row?.black_lichess_id).toBe(s.away.lichessId);
     // D12: the deadline of the organiser's OPEN, never of the timetable (T is ten
     // minutes later than OPENED here, so the two deadlines differ).
-    expect(row?.expires_at?.toISOString()).toBe(windowFor(OPENED).deadline.toISOString());
-    expect(windowFor(OPENED).deadline.getTime(), "premise: the anchors differ").not.toBe(
-      windowFor(T).deadline.getTime(),
+    expect(row?.expires_at?.toISOString()).toBe(windowFor(boardAnchor(OPENED, 0, false)).deadline.toISOString());
+    expect(windowFor(boardAnchor(OPENED, 0, false)).deadline.getTime(), "premise: the anchors differ").not.toBe(
+      windowFor(boardAnchor(T, 0, false)).deadline.getTime(),
     );
     expect(row?.mint_claimed_at, "the claim is released on success").toBeNull();
     expect(row?.last_error).toBeNull();
@@ -1051,7 +1060,7 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
       const blocker = blockQueue();
       const pending = createGameIfReady(s.fixtureId);
       await waitUntilQueued(s.fixtureId);
-      vi.setSystemTime(new Date(windowFor(OPENED).deadline.getTime() + 1_000));
+      vi.setSystemTime(new Date(windowFor(boardAnchor(OPENED, 0, false)).deadline.getTime() + 1_000));
       await blocker.release();
       expect(await pending).toEqual({ created: false, reason: "not_ready" });
       noHttp();
@@ -2360,5 +2369,101 @@ describe.skipIf(!process.env.DATABASE_URL)("T16: a new game on a row that carrie
     expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
     expect((await bridge(s.fixtureId))?.status).toBe("needs_organiser");
     expect(await ledger(s.fixtureId)).toEqual(EMPTY);
+  });
+});
+
+// ─── Timed check-in batches at the create (spec §3.2.1; capacity tests 6 [reader:create] [reader:dequeue] [reader:expires-at], and 9's create half) ───
+// T_batch = OPENED + batch x CHECKIN_BATCH_GAP_MS, written from the constants - never read back from windowFor.
+describe.skipIf(!process.env.DATABASE_URL)("createGameIfReady — timed batches", () => {
+  const startOf = (batch: number) => new Date(OPENED.getTime() + batch * CHECKIN_BATCH_GAP_MS);
+  const opensOf = (batch: number) => (batch === 0 ? new Date(OPENED.getTime() - WINDOW_OPEN_LEAD_MS) : startOf(batch));
+  const closesOf = (batch: number) => new Date(startOf(batch).getTime() + DEADLINE_AFTER_MS);
+  /** [batch, rank]: the first board of batch 0 and of batch 2. */
+  const BATCHES: [number, number][] = [
+    [0, 0],
+    [2, 2 * CHECKIN_BATCH_SIZE],
+  ];
+  const seedAt = (rank: number) => seed({ staggered: true, rank });
+
+  it("[reader:create] a create is `not_ready` before its board's batch opens and at its deadline, and runs inside it (boundary pairs, batch 0 and batch 2)", async () => {
+    let checked = 0;
+    for (const [batch, rank] of BATCHES) {
+      board.createChallengeToUser.mockClear();
+      board.acceptChallenge.mockClear();
+      const s = await seedAt(rank);
+      for (const [why, at] of [
+        ["1 ms before the batch opens", new Date(opensOf(batch).getTime() - 1)],
+        ["at the deadline", closesOf(batch)],
+      ] as const) {
+        expect(await createGameIfReady(s.fixtureId, { now: at }), `batch ${batch}, ${why}`).toEqual({ created: false, reason: "not_ready" });
+        noHttp();
+        checked += 1;
+      }
+      const inside = await createGameIfReady(s.fixtureId, { now: new Date(closesOf(batch).getTime() - 1) });
+      expect(inside, `batch ${batch}, 1 ms before its deadline`).toEqual({ created: true, gameId: GM });
+      GM = freshGameId();
+      board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+    }
+    expect(checked, "anti-vacuity: refused instants checked").toBe(2 * BATCHES.length);
+  });
+
+  it("[reader:expires-at] the bridge row's expires_at is the BOARD's deadline - batch 2's is T_batch + DEADLINE_AFTER_MS, which is not the round's", async () => {
+    let checked = 0;
+    for (const [batch, rank] of BATCHES) {
+      const s = await seedAt(rank);
+      expect(await createGameIfReady(s.fixtureId, { now: startOf(batch) })).toMatchObject({ created: true });
+      expect((await bridge(s.fixtureId))?.expires_at?.toISOString(), `batch ${batch}`).toBe(closesOf(batch).toISOString());
+      GM = freshGameId();
+      board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+      checked += 1;
+    }
+    expect(closesOf(2).getTime(), "premise: batch 2's deadline differs from batch 0's").not.toBe(closesOf(0).getTime());
+    expect(checked, "anti-vacuity").toBe(BATCHES.length);
+  });
+
+  it("[reader:dequeue] a create that WAITED in the queue past its BATCH's deadline creates nothing - and one still inside it does", async () => {
+    // Batch 2: a create waiting when the batch-0 deadline has long passed but batch 2's has not is still inside its window.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const s = await seedAt(2 * CHECKIN_BATCH_SIZE);
+      vi.setSystemTime(startOf(2));
+      const blocker = blockQueue();
+      const pending = createGameIfReady(s.fixtureId);
+      await waitUntilQueued(s.fixtureId);
+      vi.setSystemTime(new Date(closesOf(0).getTime() + 1_000));
+      expect(closesOf(0).getTime(), "premise: batch 0's deadline is in the past, batch 2's is not").toBeLessThan(closesOf(2).getTime());
+      await blocker.release();
+      expect(await pending, "inside batch 2's own window at dequeue").toEqual({ created: true, gameId: GM });
+      GM = freshGameId();
+      board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+
+      const t = await seedAt(2 * CHECKIN_BATCH_SIZE);
+      vi.setSystemTime(startOf(2));
+      const blocker2 = blockQueue();
+      const waited = createGameIfReady(t.fixtureId);
+      await waitUntilQueued(t.fixtureId);
+      board.createChallengeToUser.mockClear();
+      board.acceptChallenge.mockClear();
+      vi.setSystemTime(closesOf(2));
+      await blocker2.release();
+      expect(await waited, "at batch 2's deadline at dequeue").toEqual({ created: false, reason: "not_ready" });
+      noHttp();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("test 9: the game is created when the SECOND side is seated, however late in its batch - DEADLINE_AFTER_MS - 1 min after the batch opened, no clock penalty", async () => {
+    const s = await seedAt(2 * CHECKIN_BATCH_SIZE);
+    const arrived = new Set<string>([s.away.personId]);
+    preflight.seatPlayer.mockImplementation(async (a: { personId: string }) =>
+      arrived.has(a.personId) ? { seated: true, participant: null } : { seated: false, reason: "camera_required", participant: {} },
+    );
+    const lateNow = new Date(startOf(2).getTime() + DEADLINE_AFTER_MS - 60_000);
+    expect(await createGameIfReady(s.fixtureId, { now: lateNow })).toEqual({ created: false, reason: "not_ready" });
+    arrived.add(s.home.personId);
+    expect(await createGameIfReady(s.fixtureId, { now: lateNow })).toEqual({ created: true, gameId: GM });
+    const challenge = board.createChallengeToUser.mock.calls[0]?.[0] as { limitSeconds: number };
+    expect(challenge.limitSeconds, "the stored clock, untouched by how late the pair arrived").toBe(300);
   });
 });

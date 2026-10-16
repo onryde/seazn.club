@@ -385,8 +385,10 @@
   "externalPlayInvite.preheader": "Ocupa tu puesto en Seazn antes de {deadline}.",
   "externalPlayInvite.title": "Tu ronda está abierta",
   "externalPlayInvite.body": "El organizador ha abierto la ronda {roundNo}. Tu partida de ajedrez en línea contra <strong>{opponentName}</strong> ya se puede jugar.",
+  "externalPlayInvite.bodyLater": "El organizador ha abierto la ronda {roundNo}. Tu partida de ajedrez en línea contra <strong>{opponentName}</strong> estará lista para entrar a las <strong>{opens}</strong>.",
   "externalPlayInvite.deadline": "Abre la partida en Seazn y ocupa tu puesto antes de <strong>{deadline}</strong>.",
   "externalPlayInvite.button": "Abrir partida",
   "externalPlayInvite.footer": "Recibes esto porque estás inscrito en una división de ajedrez en línea de {orgName} en Seazn Club.",
-  "externalPlayInvite.text": "La ronda {roundNo} está abierta. Tu partida contra {opponentName} ya se puede jugar. Ocupa tu puesto antes de {deadline}: {fixtureUrl}"
+  "externalPlayInvite.text": "La ronda {roundNo} está abierta. Tu partida contra {opponentName} ya se puede jugar. Ocupa tu puesto antes de {deadline}: {fixtureUrl}",
+  "externalPlayInvite.textLater": "La ronda {roundNo} está abierta. Tu partida contra {opponentName} estará lista a las {opens}. Ocupa tu puesto antes de {deadline}: {fixtureUrl}"
 }

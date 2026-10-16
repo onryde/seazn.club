@@ -57,6 +57,17 @@ export type OpenRoundPairing = {
   canResend: boolean;
 };
 
+/** One check-in batch of a round (spec §3.2.1): boards `fromBoard`..`toBoard` (their board numbers), which open
+ *  `offsetMs` after the Open press and, once the round is open, at `opensAt`..`closesAt`. A round that does not stagger is
+ *  one batch of every board. */
+export type OpenRoundBatch = {
+  fromBoard: number;
+  toBoard: number;
+  offsetMs: number;
+  opensAt: string | null;
+  closesAt: string | null;
+};
+
 export type OpenRoundView = {
   stageId: string;
   stageName: string;
@@ -64,11 +75,20 @@ export type OpenRoundView = {
   /** `paired`: no open stamp yet (`isRoundPaired`); `open`: stamped. */
   state: "paired" | "open";
   openedAt: string | null;
-  /** When a player who has not taken their seat is reported: the open plus
-   *  the window. Null before the open. */
+  /** When a player who has not taken their seat is reported: the LAST batch's open plus the window (the round is closed
+   *  when its last batch has closed); on a re-invite press, the earliest deadline among the boards it would still invite.
+   *  Null before the open. */
   deadlineAt: string | null;
-  /** Minutes from an open to its deadline (window.ts DEADLINE_AFTER_MS). */
+  /** Minutes from a batch's open to its deadline (window.ts DEADLINE_AFTER_MS). */
   windowMinutes: number;
+  /** Whether this round's check-in runs in timed batches: the flag the open STORED, or - before the open - what the stage's
+   *  camera policy would store now (spec §3.2.1). */
+  staggered: boolean;
+  /** The batches, in order (at least one). More than one only for a staggered round of more than one batch of boards. */
+  batches: OpenRoundBatch[];
+  /** Minutes from the Open press to the LAST batch's start: `(batches - 1) × gap`, rounded UP (never less than the truth).
+   *  0 for a round of one batch. */
+  staggerSpanMinutes: number;
   /** The earliest scheduled time on the round's boards — only what players
    *  were shown — or null when none carries one. */
   scheduledAt: string | null;

@@ -48,7 +48,15 @@ import { RealtimeKitDeferred, RealtimeKitError, addParticipant, endMeeting, ensu
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
-import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import {
+  boardAnchor,
+  CHECKIN_BATCH_GAP_MS,
+  CHECKIN_BATCH_SIZE,
+  DEADLINE_AFTER_MS,
+  MINT_CLAIM_STALE_MS,
+  roomPhase,
+  windowFor,
+} from "@/server/external-play/window";
 
 /** The deadline in whole minutes after the open, derived from the constant (C7): every "before" and "past" below is
  *  relative to it, so moving DEADLINE_AFTER_MS moves the tests. */
@@ -512,7 +520,7 @@ async function expectQueued(
  *  through T19's REAL action. The TIMETABLE says three hours from now, so a
  *  sweep that anchored on `scheduled_at` would see a different window. */
 async function openedBoard(
-  o: { checkedIn: readonly Side[]; kind?: string; openedMinutesAgo?: number; cameraPolicy?: CameraPolicy } = {
+  o: { checkedIn: readonly Side[]; kind?: string; openedMinutesAgo?: number; cameraPolicy?: CameraPolicy; rank?: number } = {
     checkedIn: [],
   },
 ): Promise<Board> {
@@ -524,6 +532,7 @@ async function openedBoard(
     linked: true,
     clock: SEED_CLOCK,
     ...(o.cameraPolicy ? { cameraPolicy: o.cameraPolicy } : {}),
+    ...(o.rank ? { rank: o.rank } : {}),
   });
   if (o.kind) await sql`update stages set kind = ${o.kind} where id = ${s.stageId}`;
   const res = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }, { now: opened });
@@ -581,7 +590,7 @@ describe("playableWindow — anchored on the round being OPENED", () => {
   const t = new Date("2026-10-09T10:00:00.000Z");
 
   it("opens exactly when the organiser opened the round", () => {
-    expect(playableWindow(t).opensAt.toISOString()).toBe(t.toISOString());
+    expect(playableWindow(boardAnchor(t, 0, false)).opensAt.toISOString()).toBe(t.toISOString());
   });
 
   it("closes at the instant the match room itself closes — window.ts's own reading, not a literal", () => {
@@ -590,12 +599,27 @@ describe("playableWindow — anchored on the round being OPENED", () => {
     // `roomPhase(now, roundOpenedAt)`, so the deadline is opened + the deadline, not
     // opened + T-10 + the deadline. The sweep's deadline is pinned to the room's own
     // predicate: one millisecond before it the room is open, at it closed.
-    const { deadline } = playableWindow(t);
-    expect(roomPhase(new Date(deadline.getTime() - 1), t)).toBe("open");
-    expect(roomPhase(deadline, t)).toBe("closed");
-    expect(deadline.getTime()).toBe(windowFor(t).deadline.getTime());
+    const { deadline } = playableWindow(boardAnchor(t, 0, false));
+    expect(roomPhase(new Date(deadline.getTime() - 1), boardAnchor(t, 0, false))).toBe("open");
+    expect(roomPhase(deadline, boardAnchor(t, 0, false))).toBe("closed");
+    expect(deadline.getTime()).toBe(windowFor(boardAnchor(t, 0, false)).deadline.getTime());
     expect(deadline.getTime() - t.getTime(), "DEADLINE_AFTER_MS from the open").toBe(DEADLINE_AFTER_MS);
     expect(DEADLINE_AFTER_MS).toBeGreaterThan(0);
+  });
+});
+
+describe("playableWindow — a board's own batch (spec §3.2.1; capacity test 6 [reader:sweep-window])", () => {
+  const t = new Date("2026-10-09T10:00:00.000Z");
+  it("batch 0 and batch 2: opens at the batch's start, closes DEADLINE_AFTER_MS after it", () => {
+    let checked = 0;
+    for (const [batch, rank] of [[0, 0], [2, 2 * CHECKIN_BATCH_SIZE]] as const) {
+      const w = playableWindow(boardAnchor(t, rank, true));
+      const start = t.getTime() + batch * CHECKIN_BATCH_GAP_MS;
+      expect(w.opensAt.getTime(), `batch ${batch} opens`).toBe(start);
+      expect(w.deadline.getTime(), `batch ${batch} closes`).toBe(start + DEADLINE_AFTER_MS);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
   });
 });
 
@@ -740,7 +764,7 @@ describe.runIf(HAS_DB)("job 1 — the deadline no-show (the chess forfeit no oth
 
   it("C2 at the edge: both present a millisecond BEFORE the deadline is nobody's yet; AT it, held", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
-    const { deadline } = playableWindow(b.opened);
+    const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
     // D21-fix-3 (F2b): a board with both players in and no game is now the mint retry's before the deadline - this test is
     // about the no-show edge, so the create is a recorded no-op (the retry arm has its own describe).
     const early = await sweep(b, { now: new Date(deadline.getTime() - 1), createGameIfReady: async () => ({ created: false, reason: "not_ready" }) });
@@ -762,7 +786,7 @@ describe.runIf(HAS_DB)("job 1 — the deadline no-show (the chess forfeit no oth
 
   it("BEFORE the deadline nobody is ruled absent — the minute before, and the deadline itself", async () => {
     const b = await openedBoard({ checkedIn: [] });
-    const { deadline } = playableWindow(b.opened);
+    const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
     await sweep(b, { now: new Date(deadline.getTime() - 1) });
     expect(forfeitsAttempted(b.fixtureId), "one millisecond before the deadline").toEqual([]);
     await sweep(b, { now: deadline });
@@ -798,7 +822,7 @@ describe.runIf(HAS_DB)("job 1 — the deadline no-show (the chess forfeit no oth
     const b = await openedBoard({ checkedIn: ["away"], openedMinutesAgo: 30 });
     const [ci] = await sql<{ checked_in_at: Date }[]>`
       select checked_in_at from fixture_availability where fixture_id = ${b.fixtureId} and person_id = ${b.away.personId}`;
-    expect(ci!.checked_in_at.getTime(), "premise: stamped past the deadline").toBeGreaterThanOrEqual(playableWindow(b.opened).deadline.getTime());
+    expect(ci!.checked_in_at.getTime(), "premise: stamped past the deadline").toBeGreaterThanOrEqual(playableWindow(boardAnchor(b.opened, 0, false)).deadline.getTime());
     await sweep(b, { now: b.at(45) });
     expect(forfeitsAttempted(b.fixtureId).map((c) => c.input.payload)).toEqual([{ by: "both", reason: WALKOVER }]);
   });
@@ -1283,7 +1307,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
   it("M1 (probe P5): a claim taken a second before the deadline, no marker yet — job 1 waits AND job 3 keeps the room; once stale, both rule", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     await ensureMeeting(b.fixtureId, "home", RTK);
-    const { deadline } = playableWindow(b.opened);
+    const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
     // Stands for T9's claim (taken before its marker), live at the deadline.
     await sql`update fixture_external_play set mint_claimed_at = ${new Date(deadline.getTime() - 1_000)} where fixture_id = ${b.fixtureId}`;
     const at = await sweep(b, { now: deadline, endMeeting: (id) => endMeeting(id, RTK) });
@@ -1298,7 +1322,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
   it("…and a sent marker under a LIVE claim past the deadline (T9 still in flight) is not held until the claim goes stale", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     await ensureMeeting(b.fixtureId, "home", RTK);
-    const { deadline } = playableWindow(b.opened);
+    const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
     // Stands for T9 mid-call: its marker and its renewed claim, a second before the deadline.
     const sent = new Date(deadline.getTime() - 1_000);
     await sql`update fixture_external_play set create_sent_at = ${sent}, mint_claimed_at = ${sent} where fixture_id = ${b.fixtureId}`;
@@ -1326,7 +1350,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
     for (let i = 0; i < 6; i++) {
       const write = i % 2 === 0 ? "record" : "released_429";
       const b = await openedBoard({ checkedIn: ["home", "away"] });
-      const { deadline } = playableWindow(b.opened);
+      const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
       // Stands for a slow T9: marker sent, claim gone stale, its record late.
       const sent = new Date(deadline.getTime() - 60_000);
       await sql`update fixture_external_play set create_sent_at = ${sent}, mint_claimed_at = ${sent} where fixture_id = ${b.fixtureId}`;
@@ -1453,7 +1477,7 @@ describe.runIf(HAS_DB)("job 2 — retry a create that lost to Lichess's 429 wall
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     await throttled(b, DL_MIN - 1);
     const { tried, createGame } = recordingCreate();
-    await sweep(b, { now: playableWindow(b.opened).deadline, createGameIfReady: createGame });
+    await sweep(b, { now: playableWindow(boardAnchor(b.opened, 0, false)).deadline, createGameIfReady: createGame });
     expect(tried, "at the deadline").toEqual([]);
     await sweep(b, { now: b.at(45), createGameIfReady: createGame });
     expect(tried, "long after").toEqual([]);
@@ -1888,7 +1912,7 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
     const b = await openedBoard({ checkedIn: ["home"] });
     await meetingFor(b);
     const { ended, end } = recordingEnd();
-    const { deadline } = playableWindow(b.opened);
+    const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
     await sweep(b, { now: new Date(deadline.getTime() - 1), endMeeting: end });
     expect(ended, "one millisecond before the deadline").toEqual([]);
     await sweep(b, { now: deadline, endMeeting: end });
@@ -2539,7 +2563,7 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
   it("a READY game (never started) has its end measured from the round's deadline: held after the empties too", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     await readyGame(b);
-    const end = endOf(playableWindow(b.opened).deadline);
+    const end = endOf(playableWindow(boardAnchor(b.opened, 0, false)).deadline);
     expect((await sweep(b, { now: new Date(end.getTime() - 60_000) })).reconciled).toBe(1);
     expect((await bridge(b)).sweep_no_truth_reads, "before the end: not counted").toBe(0);
     let t = new Date(end.getTime() + 60_000);
@@ -2861,8 +2885,8 @@ describe.runIf(HAS_DB)("D20 — flag-due boards cannot starve the pass (review I
     const retryAt = await throttledCreate(throttled, 3);
     const at = now(throttled);
     expect(at.getTime(), "premise: past the retry's hold").toBeGreaterThanOrEqual(retryAt.getTime());
-    expect(at.getTime(), "premise: inside the retry's window").toBeLessThan(playableWindow(throttled.opened).deadline.getTime());
-    expect(at.getTime(), "premise: past the idle room's deadline").toBeGreaterThanOrEqual(playableWindow(idle.opened).deadline.getTime());
+    expect(at.getTime(), "premise: inside the retry's window").toBeLessThan(playableWindow(boardAnchor(throttled.opened, 0, false)).deadline.getTime());
+    expect(at.getTime(), "premise: past the idle room's deadline").toBeGreaterThanOrEqual(playableWindow(boardAnchor(idle.opened, 0, false)).deadline.getTime());
     const ended: string[] = [];
     const tried: string[] = [];
     const deps: Pick<SweepDeps, "endMeeting" | "createGameIfReady"> = {
@@ -5689,3 +5713,148 @@ describe.runIf(HAS_DB)("N-1 — `failed` equals the listed failures, over every 
     expect(kinds.length, "7 jobs and the give-up").toBe(8);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Timed check-in batches in the sweep (spec §3.2.1; capacity tests 6 [reader:no-show] [reader:mint-retry] [reader:teardown]
+// [reader:expected-end], and 7). Every instant is T + batch x CHECKIN_BATCH_GAP_MS (+ DEADLINE_AFTER_MS), written from the
+// constants; the camera is `optional` so the round STAGGERS (the open stores it) without a camera verdict in the way.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("the sweep in timed batches - each board's window is its own batch's", () => {
+  const S = CHECKIN_BATCH_SIZE;
+  const GAP = CHECKIN_BATCH_GAP_MS;
+  const MIN = 60_000;
+  /** The batch-2 board's start and deadline relative to its round's open, from the constants. */
+  const startOf = (b: Board, batch: number) => new Date(b.opened.getTime() + batch * GAP);
+  const deadlineOf = (b: Board, batch: number) => new Date(startOf(b, batch).getTime() + DEADLINE_AFTER_MS);
+  /** The round is opened far enough back that the REAL clock (which stamps `stampFixtureCheckIn`) falls one minute into the
+   *  board's own batch: a player cannot check in before their batch opens, so an earlier stamp would not count. */
+  const batched = (checkedIn: readonly Side[], rank: number) =>
+    openedBoard({
+      checkedIn,
+      cameraPolicy: "optional",
+      rank,
+      openedMinutesAgo: Math.ceil((Math.floor(rank / S) * GAP) / MIN) + 1,
+    });
+  /** The deadline of batch 0 plus three minutes: past the round's own deadline, before batch 2's at the starting gap. */
+  const afterBatch0 = (b: Board) => new Date(b.opened.getTime() + DEADLINE_AFTER_MS + 3 * MIN);
+
+  it("test 7 / [reader:no-show]: three minutes past T + DEADLINE_AFTER_MS the batch-0 board's absent player is forfeited, the batch-2 board's is NOT - until ITS deadline", async () => {
+    const b0 = await batched(["home"], 0);
+    const b2 = await batched(["home"], 2 * S);
+    expect(deadlineOf(b2, 2).getTime(), "premise: at the starting gap batch 2's deadline is after the 3-minute mark").toBeGreaterThan(afterBatch0(b2).getTime());
+    expect(deadlineOf(b0, 0).getTime(), "premise: batch 0's deadline is before it").toBeLessThan(afterBatch0(b0).getTime());
+
+    const r0 = await sweep(b0, { now: afterBatch0(b0) });
+    expect(r0.noShows, "batch 0, absent away player: forfeited").toBe(1);
+    expect(forfeitsAttempted(b0.fixtureId).map((c) => c.input.payload)).toEqual([{ by: b0.away.entrantId, reason: WALKOVER }]);
+
+    const r2 = await sweep(b2, { now: afterBatch0(b2) });
+    expect(r2.noShows, "batch 2, same minute: NOT forfeited").toBe(0);
+    expect(forfeitsAttempted(b2.fixtureId), "not even attempted").toEqual([]);
+    expect((await fixtureRow(b2.fixtureId)).status).toBe("scheduled");
+
+    // The boundary pair on batch 2's own deadline.
+    const justBefore = await sweep(b2, { now: new Date(deadlineOf(b2, 2).getTime() - 1) });
+    expect(justBefore.noShows, "1 ms before the batch's deadline").toBe(0);
+    const atDeadline = await sweep(b2, { now: deadlineOf(b2, 2) });
+    expect(atDeadline.noShows, "at the batch's deadline").toBe(1);
+    expect(forfeitsAttempted(b2.fixtureId).map((c) => c.input.payload)).toEqual([{ by: b2.away.entrantId, reason: WALKOVER }]);
+    expect((await fixtureRow(b2.fixtureId)).status).toBe("forfeited");
+  });
+
+  it("test 7: a batch-2 player who checks in at that same minute is SEATED, and the sweep does not forfeit the board", async () => {
+    const b2 = await batched(["home"], 2 * S);
+    const now = afterBatch0(b2);
+    const seat = await seatPlayer({ fixtureId: b2.fixtureId, personId: b2.away.personId }, { now });
+    expect(seat.seated, "the late player is seated, no clock penalty").toBe(true);
+    await stampFixtureCheckIn(b2.away.personId, b2.fixtureId, b2.orgId);
+    const report = await sweep(b2, { now });
+    expect(report.noShows).toBe(0);
+    expect(forfeitsAttempted(b2.fixtureId)).toEqual([]);
+  });
+
+  it("[reader:mint-retry] a create Lichess throttled is retried inside the BOARD's window - past batch 0's deadline but before batch 2's - and not at batch 2's deadline", async () => {
+    const b = await batched(["home", "away"], 2 * S);
+    const throttleAt = startOf(b, 2);
+    __setCreationQueueDeps({ now: () => throttleAt.getTime() });
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "rate_limited", raw: "Too many requests. Try again later." });
+    for (const side of ["home", "away"] as const) {
+      for (let claim = 0; claim < 2; claim += 1) await seatPlayer({ fixtureId: b.fixtureId, personId: b[side].personId }, { now: throttleAt });
+    }
+    expect(await createGameIfReady(b.fixtureId, { now: throttleAt, publish: async () => {} }), "premise: T9 was throttled").toEqual({
+      created: false,
+      reason: "provider_error",
+    });
+    const retryAt = new Date(throttleAt.getTime() + CREATION_429_HOLD_MS);
+    const now = new Date(b.opened.getTime() + DEADLINE_AFTER_MS + 2 * MIN);
+    expect(now.getTime(), "premise: past the hold").toBeGreaterThanOrEqual(retryAt.getTime());
+    expect(now.getTime(), "premise: past batch 0's deadline").toBeGreaterThan(deadlineOf(b, 0).getTime());
+    expect(now.getTime(), "premise: inside batch 2's").toBeLessThan(deadlineOf(b, 2).getTime());
+    const tried: Date[] = [];
+    const createGame: NonNullable<SweepDeps["createGameIfReady"]> = async (fixtureId, d) => {
+      tried.push(d.now);
+      __setCreationQueueDeps({ now: () => d.now.getTime() });
+      return createGameIfReady(fixtureId, { now: d.now, publish: async () => {} });
+    };
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
+    board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+    const report = await sweep(b, { now, createGameIfReady: createGame });
+    expect([report.mintRetries, tried.length], "retried: the board's own window runs").toEqual([1, 1]);
+
+    // The pair on a second throttled board: at batch 2's own deadline nothing is retried.
+    const c = await batched(["home", "away"], 2 * S);
+    const at2 = startOf(c, 2);
+    __setCreationQueueDeps({ now: () => at2.getTime() });
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "rate_limited", raw: "Too many requests. Try again later." });
+    for (const side of ["home", "away"] as const) {
+      for (let claim = 0; claim < 2; claim += 1) await seatPlayer({ fixtureId: c.fixtureId, personId: c[side].personId }, { now: at2 });
+    }
+    await createGameIfReady(c.fixtureId, { now: at2, publish: async () => {} });
+    tried.length = 0;
+    await sweep(c, { now: deadlineOf(c, 2), createGameIfReady: createGame });
+    expect(tried, "at the batch's deadline").toEqual([]);
+  });
+
+  it("[reader:teardown] a room with no game stays up past batch 0's deadline when the board is batch 2, and comes down at the batch's own deadline", async () => {
+    const b = await batched(["home"], 2 * S);
+    const { meetingId } = await ensureMeeting(b.fixtureId, "home", RTK);
+    rtk.calls = [];
+    const ended: string[] = [];
+    const end: NonNullable<SweepDeps["endMeeting"]> = async (m) => {
+      ended.push(m);
+      await endMeeting(m, RTK);
+    };
+    await sweep(b, { now: afterBatch0(b), endMeeting: end });
+    expect(ended, "past the ROUND's deadline, inside the board's: somebody may still come").toEqual([]);
+    await sweep(b, { now: new Date(deadlineOf(b, 2).getTime() - 1), endMeeting: end });
+    expect(ended, "1 ms before the board's deadline").toEqual([]);
+    await sweep(b, { now: deadlineOf(b, 2), endMeeting: end });
+    expect(ended, "at the board's deadline").toEqual([meetingId]);
+  });
+
+  it("[reader:expected-end] a ready game that never started has its expected end counted from the BOARD's deadline: an empty read between the two ends is not counted", async () => {
+    const b = await batched(["home", "away"], 2 * S);
+    const t = new Date(startOf(b, 2).getTime() + MIN);
+    await readyGame(b, (t.getTime() - b.opened.getTime()) / MIN);
+    // The rulebook's end: the deadline plus both clocks running out, B moves of increment each (the seed's clock, M13).
+    const endAfter = (deadline: Date) =>
+      new Date(deadline.getTime() + 2 * (SEED_CLOCK.base + M13_MOVE_WEIGHT * SEED_CLOCK.increment) * 1000);
+    const endBatch0 = endAfter(deadlineOf(b, 0));
+    const endBatch2 = endAfter(deadlineOf(b, 2));
+    expect(endBatch2.getTime(), "premise: the two ends differ").toBeGreaterThan(endBatch0.getTime());
+    const empty: NonNullable<SweepDeps["reconcile"]> = async () => null;
+    const mid = new Date(endBatch0.getTime() + 1);
+    expect((await sweep(b, { now: mid, reconcile: empty })).reconciled, "premise: the read ran").toBe(1);
+    expect((await bridge0(b)).sweep_no_truth_reads, "past the round's end, before the board's: not counted").toBe(0);
+    const past = new Date(endBatch2.getTime() + 1);
+    expect((await sweep(b, { now: past, reconcile: empty })).reconciled, "premise: the read ran again").toBe(1);
+    expect((await bridge0(b)).sweep_no_truth_reads, "past the board's own end: counted").toBe(1);
+  });
+});
+
+/** The count the back-off keeps (job 4's `bridge` reader lives inside its describe). */
+async function bridge0(b: Board): Promise<{ sweep_no_truth_reads: number }> {
+  const [r] = await sql<{ sweep_no_truth_reads: number }[]>`
+    select sweep_no_truth_reads from fixture_external_play where fixture_id = ${b.fixtureId}`;
+  return r!;
+}

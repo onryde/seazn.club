@@ -16,7 +16,7 @@ import { HttpError } from "@/lib/errors";
 import { isRoundPaired } from "@/lib/division-phase";
 import type { OpenRoundView } from "@/lib/open-round";
 import { appendEvent } from "@/server/engine-db";
-import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
 // The email seam, as open-round.test.ts: the real `send` no-ops without
 // RESEND_API_KEY and would report every invite as failed. `fail` names
@@ -41,6 +41,7 @@ import { getFixtureState } from "../../fixtures";
 import { scoreEvent } from "../../scoring";
 import {
   seedOnlineChessRound,
+  seedOnlineChessRoundWithRankedBoard,
   seedOnlineSwiss,
   type SeedOnlineChessRoundResult,
 } from "../../__tests__/_external-play-seed";
@@ -405,5 +406,81 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     const rounds = await view(s, T0);
     expect(rounds.map((v) => [v.roundNo, v.state, v.pairings.length])).toEqual([[1, "paired", 2]]);
     await expectPressAgrees(s, rounds[0]!, T0);
+  });
+});
+
+// ─── Timed check-in batches in the organiser's view (spec §3.2.1; capacity tests 6 [reader:open-round-view] and 12) ──────────
+// Instants are T0 + batch x CHECKIN_BATCH_GAP_MS (+ DEADLINE_AFTER_MS), from the constants.
+describe.skipIf(!HAS_DB)("listOpenRounds — timed batches", () => {
+  const S = CHECKIN_BATCH_SIZE;
+  const GAP = CHECKIN_BATCH_GAP_MS;
+  const startOf = (batch: number) => at(batch * GAP);
+  const closesOf = (batch: number) => at(batch * GAP + DEADLINE_AFTER_MS);
+
+  it("[reader:open-round-view] a staggered round lists its batches - board ranges, opens-at and closes-at of EACH - and its deadline is the last batch's", async () => {
+    const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * S);
+    await press(r, 1, T0);
+    const v = roundOf(await view(r, at(MIN)), 1);
+    expect(v.staggered).toBe(true);
+    expect(v.batches).toHaveLength(3);
+    let checked = 0;
+    v.batches.forEach((b, i) => {
+      expect(b.offsetMs, `batch ${i} offset`).toBe(i * GAP);
+      expect(b.opensAt, `batch ${i} opens`).toBe(startOf(i).toISOString());
+      expect(b.closesAt, `batch ${i} closes`).toBe(closesOf(i).toISOString());
+      checked += 1;
+    });
+    // The rows are 1 real board, 2S - 1 abandoned rows and 1 real board (seq 1..2S+1): batches of S, S and 1 by RANK.
+    expect(v.batches.map((b) => [b.fromBoard, b.toBoard])).toEqual([
+      [1, S],
+      [S + 1, 2 * S],
+      [2 * S + 1, 2 * S + 1],
+    ]);
+    expect(v.deadlineAt, "the round closes when its LAST batch does").toBe(closesOf(2).toISOString());
+    expect(v.staggerSpanMinutes, "2 gaps").toBe(Math.ceil((2 * GAP) / MIN));
+    expect(checked, "anti-vacuity: batches read").toBe(3);
+  });
+
+  it("a round that is not staggered (camera off) is one batch with no span, and its deadline is T + DEADLINE_AFTER_MS", async () => {
+    const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "off" }, 2 * S);
+    await press(r, 1, T0);
+    const v = roundOf(await view(r, at(MIN)), 1);
+    expect([v.staggered, v.batches.length, v.staggerSpanMinutes]).toEqual([false, 1, 0]);
+    expect(v.batches[0]).toMatchObject({ offsetMs: 0, opensAt: T0.toISOString(), closesAt: closesOf(0).toISOString() });
+    expect(v.deadlineAt).toBe(closesOf(0).toISOString());
+  });
+
+  it("an UNOPENED round predicts what the open will store: required staggers, off does not (the organiser sees the stagger before pressing)", async () => {
+    const on = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * S);
+    const off = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "off" }, 2 * S);
+    const a = roundOf(await view(on, T0), 1);
+    const b = roundOf(await view(off, T0), 1);
+    expect([a.staggered, a.batches.length, a.openedAt]).toEqual([true, 3, null]);
+    expect([b.staggered, b.batches.length, b.openedAt]).toEqual([false, 1, null]);
+    expect(a.batches.every((x) => x.opensAt === null && x.closesAt === null), "nothing is scheduled before the press").toBe(true);
+  });
+
+  it("100 boards at the gap: the stagger is 9 x gap long (ten batches)", async () => {
+    const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 10 * S - 1);
+    const v = roundOf(await view(r, T0), 1);
+    expect(v.pairings.length, "two real boards; the rest are abandoned rows that still count in the rank").toBe(2);
+    expect(v.batches.length, "a hundred rows = ten batches of ten").toBe(10);
+    expect(v.staggerSpanMinutes).toBe(Math.ceil((9 * GAP) / MIN));
+    expect(v.batches[9]!.offsetMs).toBe(9 * GAP);
+  });
+
+  it("a re-invite is offered while ANY owed board's own window runs, and the deadline it names is the earliest of those", async () => {
+    const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * S);
+    // Board 1's away seat and both of the ranked board's seats were not reached.
+    mail.fail.add(r.boards[0]!.away.email).add(r.ranked.home.email).add(r.ranked.away.email);
+    await press(r, 1, T0);
+    const afterBatch0 = at(DEADLINE_AFTER_MS + 1);
+    const mid = roundOf(await view(r, afterBatch0), 1);
+    expect(mid.press, "the ranked board's window still runs").toBe("reinvite");
+    expect(mid.deadlineAt, "the earliest deadline among the boards a re-invite would reach").toBe(closesOf(2).toISOString());
+    // At the LAST batch's deadline every owed board's window has closed: nothing to press and nothing running, so the
+    // round is not listed at all (the control offers no re-invite that openRound would answer already_open).
+    expect((await view(r, closesOf(2))).filter((x) => x.roundNo === 1), "every owed board's window has closed").toEqual([]);
+    expect((await view(r, new Date(closesOf(2).getTime() - 1))).filter((x) => x.roundNo === 1).map((x) => x.press), "one ms earlier").toEqual(["reinvite"]);
   });
 });

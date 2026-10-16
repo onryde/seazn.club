@@ -108,6 +108,13 @@ export type SeedOnlineChessFixtureOpts = {
    *  opened by the seeded owner. Omitted ⇒ the round has never been opened,
    *  which is the DEFAULT state of a freshly paired round. */
   roundOpenedAt?: Date;
+  /** Spec §3.2.1: the flag the round's open STORED (`stage_round_opens.staggered`): whether its check-in runs in timed batches.
+   *  Omitted ⇒ false, which is what every row that existed before the capacity delta reads. */
+  staggered?: boolean;
+  /** The fixture's zero-based RANK among the round's fixture rows (spec §3.2.1): that many ABANDONED rows (a withdrawn board's
+   *  shape - they count in the rank and are never played, so a round with them still opens) are inserted AHEAD of it
+   *  (`seq_in_round` 1..rank), and it sits at seq rank + 1. Omitted ⇒ 0, the first board. */
+  rank?: number;
   /** T14 (F5): the PERSON names. When given, the entrants' display_name
    *  snapshots become "Entry 1" / "Entry 2" — the text an entry flow leaves on
    *  a singles entrant — so a test can tell the resolved name from the
@@ -203,10 +210,17 @@ export async function seedOnlineChessFixture(
     name: "RR",
     config: {},
   });
+  const rank = opts.rank ?? 0;
+  for (let i = 1; i <= rank; i++) {
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, scheduled_at)
+      values (${stage.id}, ${division.id}, ${owner.orgId}, 1, ${i}, ${`ep7-shell-${i}-${randomUUID().slice(0, 6)}`},
+              'abandoned', ${opts.scheduledAt})`;
+  }
   const [fixture] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
                           status, home_entrant_id, away_entrant_id, scheduled_at)
-    values (${stage.id}, ${division.id}, ${owner.orgId}, 1, 1, ${`ep7-${randomUUID().slice(0, 6)}`},
+    values (${stage.id}, ${division.id}, ${owner.orgId}, 1, ${rank + 1}, ${`ep7-${randomUUID().slice(0, 6)}`},
             'scheduled', ${home.id}, ${away.id}, ${opts.scheduledAt})
     returning id`;
   if (opts.stageCameraPolicy) {
@@ -214,8 +228,8 @@ export async function seedOnlineChessFixture(
   }
   if (opts.roundOpenedAt) {
     await sql`
-      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
-      values (${stage.id}, ${owner.orgId}, 1, ${opts.roundOpenedAt}, ${ownerUserId})`;
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by, staggered)
+      values (${stage.id}, ${owner.orgId}, 1, ${opts.roundOpenedAt}, ${ownerUserId}, ${opts.staggered ?? false})`;
   }
   if (opts.divisionStarted) {
     await startDivision(owner, division.id);
@@ -384,6 +398,33 @@ export async function seedOnlineChessRound(opts: SeedOnlineChessRoundOpts): Prom
     bye,
     spares,
   };
+}
+
+/** A round with a REAL board at a chosen zero-based RANK among its fixture rows (spec §3.2.1): board 1 is rank 0, then `rank - 1`
+ *  ABANDONED rows (a withdrawn board's shape: they count in the rank, are never played, and do not stop the round opening), then `ranked` - a second real board built from a spare
+ *  linked pair - at rank `rank`. Both real boards go through the product's own producers (`openRound` invites them, the seat
+ *  and the room read them); only the rows between them are filler, there to put the second board in a later batch. */
+export async function seedOnlineChessRoundWithRankedBoard(
+  opts: Omit<SeedOnlineChessRoundOpts, "fixtures" | "spares">,
+  rank: number,
+): Promise<SeedOnlineChessRoundResult & { ranked: SeedRoundBoard }> {
+  if (!Number.isInteger(rank) || rank < 1) throw new Error(`seedOnlineChessRoundWithRankedBoard: rank must be an integer >= 1, got ${rank}`);
+  const r = await seedOnlineChessRound({ ...opts, fixtures: 1, spares: 1 });
+  const at = opts.scheduledAt === undefined ? ROUND_T : opts.scheduledAt;
+  const roundNo = r.roundNo;
+  for (let seq = 2; seq <= rank; seq++) {
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, scheduled_at)
+      values (${r.stageId}, ${r.divisionId}, ${r.orgId}, ${roundNo}, ${seq}, ${`t19-shell-${seq}-${randomUUID().slice(0, 6)}`}, 'abandoned', ${at})`;
+  }
+  const pair = r.spares[0]!;
+  const [row] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                          home_entrant_id, away_entrant_id, scheduled_at)
+    values (${r.stageId}, ${r.divisionId}, ${r.orgId}, ${roundNo}, ${rank + 1}, ${`t19-ranked-${randomUUID().slice(0, 6)}`},
+            'scheduled', ${pair.home.entrantId}, ${pair.away.entrantId}, ${at})
+    returning id`;
+  return { ...r, ranked: { fixtureId: row!.id, home: pair.home, away: pair.away } };
 }
 
 export type SeedOnlineSwissResult = {

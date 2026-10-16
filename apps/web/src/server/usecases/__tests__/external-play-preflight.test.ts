@@ -20,28 +20,30 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 // mocked so the tests can see it was reported.
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 import { sql } from "@/lib/db";
-import {
-  RealtimeKitError,
-  addParticipant,
-  ensureMeeting,
-  seatCameraEvidence,
-  refreshParticipantToken,
-} from "@/server/external-play/video/realtimekit";
+import { RealtimeKitError } from "@/server/external-play/video/realtimekit";
 import { captureError } from "@/lib/sentry";
-import { DEADLINE_AFTER_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import {
+  boardAnchor,
+  CHECKIN_BATCH_GAP_MS,
+  CHECKIN_BATCH_SIZE,
+  DEADLINE_AFTER_MS,
+  roomPhase,
+  WINDOW_OPEN_LEAD_MS,
+  windowFor,
+} from "@/server/external-play/window";
 import { patchDivision } from "../divisions";
 import {
   SEAT_REFUSAL_REASONS,
   isPlayableFixtureStatus,
   organiserOverrideVideo,
   seatPlayer,
-  type PreflightDeps,
   type SeatResult,
 } from "../external-play/preflight";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { PLAY_SCOPES, unlinkLichess } from "../external-accounts";
 import { seedOnlineChessFixture } from "./_external-play-seed";
+import { RUN, RTK_ENV, configureRealtimeKit, fakeRealtimeKit, json, type FailRule } from "./_external-play-rtk-fake";
 
 /** The round is opened ten minutes before the scheduled time in these
  *  fixtures, so `now = NOW` sits inside the window (D12: the window hangs
@@ -50,197 +52,7 @@ const T = new Date("2026-10-01T12:10:00.000Z");
 const OPENED = new Date("2026-10-01T12:00:00.000Z");
 const NOW = new Date("2026-10-01T12:05:00.000Z");
 
-// ─── A fake RealtimeKit backend ────────────────────────────────────────────
-
-const RUN = randomUUID().slice(0, 8);
-const RTK_PREFIX = "/client/v4/accounts/acct-1/realtime/kit/app-1";
-
-const RTK_ENV: Record<string, string> = {
-  CLOUDFLARE_ACCOUNT_ID: "acct-1",
-  REALTIMEKIT_API_TOKEN: "rtk-test-token",
-  REALTIMEKIT_APP_ID: "app-1",
-  REALTIMEKIT_PLAYER_PRESET: "seazn_chess_player",
-  REALTIMEKIT_ARBITER_PRESET: "seazn_chess_arbiter",
-};
-function configureRealtimeKit(): void {
-  for (const [k, v] of Object.entries(RTK_ENV)) vi.stubEnv(k, v);
-}
-
-/** One connected (or departed) tab: a RealtimeKit PEER, with its own peer report (T17B fix 2, D2). `events` null ⇒
- *  RealtimeKit has no report for it. */
-type FakePeer = { id: string; joinedAt: string; left: boolean; events: unknown[] | null };
-type FakeParticipant = { meetingId: string; subject: string; peers: number; everJoined: boolean; peerList: FakePeer[] };
-
-/** The measured camera-ON peer's events (T17B evidence t17b-peer-reports-live.json, peer "on"): what an honest
- *  browser that granted the camera reports — and no producer samples (they arrive late, so the seat never reads them). */
-const CAMERA_ON_EVENTS = (at: string) => [
-  { name: "audio_off", timestamp: at },
-  { name: "video_on", timestamp: at },
-  { name: "media_permission", metadata: { device_type: "VIDEO", permission: "ACCEPTED" }, timestamp: at },
-  { name: "precall_begin", timestamp: at },
-];
-type FailRule = (method: string, path: string) => Response | "network" | null;
-
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-}
-
-/** RealtimeKit's documented shapes, in memory. A participant is LIVE while at
- *  least one peer (tab) is connected with one of its tokens — measured
- *  2026-10-09 (rtk-token-regen.log): two tabs on one participant are one
- *  session row carrying both peers, and a regenerated token does not
- *  invalidate the earlier one. Nothing here touches the network. */
-function fakeRealtimeKit() {
-  /** HTTP requests, `METHOD /path` relative to the app. */
-  const http: string[] = [];
-  /** Adapter functions seatPlayer called, in order. */
-  const adapter: string[] = [];
-  const participants = new Map<string, FakeParticipant>();
-  const tokens = new Map<string, string>(); // token → participant id
-  // meeting_id is UNIQUE across the (reused) test DB: every fake instance
-  // gets its own prefix on top of the file's RUN suffix.
-  const FAKE = `${RUN}-${randomUUID().slice(0, 6)}`;
-  let seq = 0;
-  let fail: FailRule = () => null;
-  // Two-tab race: hold every add-participant answer until N have arrived.
-  let holdMintsFor = 0;
-  let mintsArrived = 0;
-  let releaseMints: () => void = () => undefined;
-  const mintsReleased = new Promise<void>((r) => {
-    releaseMints = r;
-  });
-
-  const doFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
-    const method = init?.method ?? "GET";
-    const path = new URL(String(url)).pathname.replace(RTK_PREFIX, "");
-    http.push(`${method} ${path}`);
-    const failed = fail(method, path);
-    if (failed === "network") throw new TypeError("fetch failed");
-    if (failed) return failed;
-    let m: RegExpMatchArray | null;
-    if (method === "POST" && path === "/meetings") {
-      seq += 1;
-      return json(201, { success: true, data: { id: `mtg-${FAKE}-${seq}` } });
-    }
-    if (method === "PATCH" && (m = path.match(/^\/meetings\/([^/]+)$/))) {
-      return json(200, { success: true, data: { id: m[1], status: "INACTIVE" } });
-    }
-    if (method === "POST" && (m = path.match(/^\/meetings\/([^/]+)\/participants$/))) {
-      mintsArrived += 1;
-      if (holdMintsFor > 0) {
-        if (mintsArrived >= holdMintsFor) releaseMints();
-        await mintsReleased;
-      }
-      const body = JSON.parse(String(init?.body)) as { custom_participant_id: string };
-      seq += 1;
-      const id = `p-${FAKE}-${seq}`;
-      const token = `jwt-add-${id}`;
-      participants.set(id, { meetingId: m[1]!, subject: body.custom_participant_id, peers: 0, everJoined: false, peerList: [] });
-      tokens.set(token, id);
-      return json(201, { success: true, data: { id, token } });
-    }
-    if (method === "POST" && (m = path.match(/^\/meetings\/([^/]+)\/participants\/([^/]+)\/token$/))) {
-      const id = decodeURIComponent(m[2]!);
-      if (!participants.has(id)) return json(404, { success: false, error: { code: 404, message: "not found" } });
-      seq += 1;
-      const token = `jwt-regen-${id}-${seq}`;
-      tokens.set(token, id);
-      return json(200, { success: true, data: { token } });
-    }
-    if (method === "GET" && (m = path.match(/^\/meetings\/([^/]+)\/active-session$/))) {
-      const mid = m[1]!;
-      const anyone = [...participants.values()].some((p) => p.meetingId === mid && p.peers > 0);
-      if (!anyone) return json(404, { success: false, error: { code: 404, message: "no active session" } });
-      return json(200, { success: true, data: { id: `sess-${mid}`, status: "LIVE" } });
-    }
-    if (method === "GET" && (m = path.match(/^\/sessions\/sess-([^/]+)\/participants$/))) {
-      const mid = m[1]!;
-      const rows = [...participants.entries()]
-        .filter(([, p]) => p.meetingId === mid && p.everJoined)
-        .map(([id, p]) => ({
-          id: `conn-${id}`,
-          user_id: id,
-          custom_participant_id: p.subject,
-          joined_at: "2026-10-01T12:01:00Z",
-          left_at: p.peers > 0 ? null : "2026-10-01T12:04:00Z",
-          peer_events: p.peerList.flatMap((peer) => [
-            { event_name: "PEER_JOINING", peer_id: peer.id, created_at: peer.joinedAt },
-            ...(peer.left ? [{ event_name: "PEER_LEAVING", peer_id: peer.id, created_at: "2026-10-01T12:04:00Z" }] : []),
-          ]),
-        }));
-      return json(200, { success: true, data: { participants: rows } });
-    }
-    if (method === "GET" && (m = path.match(/^\/sessions\/peer-report\/([^/]+)$/))) {
-      const peer = [...participants.values()].flatMap((p) => p.peerList).find((x) => x.id === decodeURIComponent(m![1]!));
-      if (!peer || peer.events === null) return json(404, { success: false, error: { code: 404, message: "No peer event exists" } });
-      return json(200, { success: true, data: { participant: { peer_report: { metadata: { events: peer.events } } } } });
-    }
-    throw new Error(`fake RealtimeKit: unrouted ${method} ${path}`);
-  };
-  const fetch = doFetch as unknown as typeof globalThis.fetch;
-
-  const video: NonNullable<PreflightDeps["video"]> = {
-    ensureMeeting: (fixtureId, side) => {
-      adapter.push("ensureMeeting");
-      return ensureMeeting(fixtureId, side, { fetch });
-    },
-    addParticipant: (a) => {
-      adapter.push(`addParticipant:${a.preset}`);
-      return addParticipant(a, { fetch });
-    },
-    seatCameraEvidence: (a) => {
-      adapter.push("seatCameraEvidence");
-      return seatCameraEvidence(a, { fetch });
-    },
-    refreshParticipantToken: (a) => {
-      adapter.push("refreshParticipantToken");
-      return refreshParticipantToken(a, { fetch });
-    },
-  };
-
-  return {
-    video,
-    http,
-    adapter,
-    participants,
-    /** A browser tab joining the meeting WITH a token the server handed out — a new PEER, whose report shows the
-     *  measured honest camera (granted and on) unless `events` says otherwise. It joined a second before NOW. */
-    joinWith(token: string, events: (at: string) => unknown[] | null = CAMERA_ON_EVENTS): void {
-      const id = tokens.get(token);
-      const p = id === undefined ? undefined : participants.get(id);
-      if (!p) throw new Error(`fake RealtimeKit: no participant holds token ${token}`);
-      p.peers += 1;
-      p.everJoined = true;
-      seq += 1;
-      const at = new Date(NOW.getTime() - 1_000).toISOString();
-      p.peerList.push({ id: `peer-${FAKE}-${seq}`, joinedAt: at, left: false, events: events(at) });
-    },
-    /** One tab of this participant closes: its latest connected peer leaves. */
-    leave(participantId: string): void {
-      const p = participants.get(participantId);
-      if (!p || p.peers === 0) throw new Error(`fake RealtimeKit: ${participantId} is not connected`);
-      p.peers -= 1;
-      const peer = p.peerList.filter((x) => !x.left).at(-1);
-      if (peer) peer.left = true;
-    },
-    failWhen(rule: FailRule): void {
-      fail = rule;
-    },
-    /** Every add-participant request waits until `n` have arrived, so
-     *  concurrent first claims all mint before any of them stores. */
-    holdMintsUntilArrived(n: number): void {
-      holdMintsFor = n;
-    },
-    /** The token a result carries, joined in a NEW tab. */
-    join(result: SeatResult): string {
-      const token = "participant" in result && result.participant ? result.participant.authToken : null;
-      if (!token) throw new Error(`fake RealtimeKit: nothing to join with in ${JSON.stringify(result)}`);
-      this.joinWith(token);
-      return token;
-    },
-  };
-}
-
+// The fake RealtimeKit backend lives in _external-play-rtk-fake.ts (shared with the capacity suites).
 const seed = (over: Partial<Parameters<typeof seedOnlineChessFixture>[0]> = {}) =>
   seedOnlineChessFixture({
     onlinePlay: "lichess",
@@ -390,13 +202,13 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer refusals", () => {
     expect(got).toEqual({ seated: true, participant: null });
   });
 
-  it("a stamp more than ten minutes in the future: the window has not STARTED ⇒ round_not_open, not window_closed", async () => {
-    // roomPhase answers "before" here. A window that has not begun is the
-    // round_not_open story (D12), never "closed".
-    const s = await seed({ roundOpenedAt: new Date(NOW.getTime() + 10 * 60_000 + 1) });
+  it("a stamp more than WINDOW_OPEN_LEAD_MS in the future: the board's window has not STARTED ⇒ checkin_not_open (the round IS open), not round_not_open and not window_closed", async () => {
+    // roomPhase answers "before" here. A stamped round whose board's window has not begun is `checkin_not_open` (spec
+    // §3.2.1): the round is open, this board's check-in is not - "the organiser has not opened it" would be false.
+    const s = await seed({ roundOpenedAt: new Date(NOW.getTime() + WINDOW_OPEN_LEAD_MS + 1) });
     const rtk = fakeRealtimeKit();
     const got = await seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: NOW, video: rtk.video });
-    expectInertRefusal(got, "round_not_open", rtk);
+    expectInertRefusal(got, "checkin_not_open", rtk);
   });
 
   it("someone who is neither player ⇒ not_a_player, with the SAME shape as a missing fixture", async () => {
@@ -977,7 +789,7 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
 
 /** Past the deadline of the OPEN stamp, derived from the window's own constants so
  *  moving DEADLINE_AFTER_MS moves this with it. */
-const LATE = new Date(windowFor(OPENED).deadline.getTime() + DEADLINE_AFTER_MS);
+const LATE = new Date(windowFor(boardAnchor(OPENED, 0, false)).deadline.getTime() + DEADLINE_AFTER_MS);
 
 type Rtk = ReturnType<typeof fakeRealtimeKit>;
 type BridgeStatus = "ready" | "live" | "finished" | "needs_organiser";
@@ -1059,7 +871,7 @@ async function seatBothLive(s: Seeded, rtk: Rtk): Promise<Record<Side, string>> 
 
 describe.skipIf(!process.env.DATABASE_URL)("re-entry after the deadline (ruling I1, amending Q1)", () => {
   it("premise: LATE is past the window, by the window's own rule", () => {
-    expect(roomPhase(LATE, OPENED)).toBe("closed");
+    expect(roomPhase(LATE, boardAnchor(OPENED, 0, false))).toBe("closed");
   });
 
   it("required: a seated player reloads mid-game after the deadline — on a `ready` AND a `live` game, both colours — their OWN token, then re-seated once live", async () => {
@@ -1259,6 +1071,8 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     const TOKEN_BEARING = new Set(["camera_required", "camera_lost", "camera_starting", "camera_blocked"]);
     const TOKENLESS = new Set([
       "window_closed", "not_a_player", "round_not_open", "fixture_not_playable", "video_unavailable",
+      // Spec §3.2.1: the board's own check-in batch has not opened - refused before any vendor call, so no token.
+      "checkin_not_open",
       // Fix round 2: the play grant, checked before any token is minted.
       "lichess_link_required", "lichess_reconsent_required",
     ]);
@@ -1276,6 +1090,10 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     {
       const s = await seed({ cameraPolicy: "required", roundOpenedAt: undefined });
       seen.set("round_not_open", await claim(s, "home", fakeRealtimeKit()));
+    }
+    {
+      const s = await seed({ cameraPolicy: "required", roundOpenedAt: new Date(NOW.getTime() + WINDOW_OPEN_LEAD_MS + 1) });
+      seen.set("checkin_not_open", await claim(s, "home", fakeRealtimeKit()));
     }
     {
       const s = await req();
@@ -2055,5 +1873,95 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
     expect(totals.relinks, "grants restored").toBeGreaterThan(0);
     expect(totals.reconsentRefused, "re-consent refusals").toBeGreaterThan(0);
     expect(totals.lateReentryReconsentRefused, "re-entry past the deadline refused on a stale grant").toBeGreaterThan(0);
+  });
+});
+
+// ─── Timed check-in batches at the seat (spec §3.2.1; capacity tests 6 [reader:seat], 8 and 9) ─────────────────────────────
+// A board's window hangs off ITS batch's start: T_batch = OPENED + batch x CHECKIN_BATCH_GAP_MS, written out from the
+// constants here (the rulebook), never read back from windowFor. Rank 2 x CHECKIN_BATCH_SIZE is batch 2.
+describe.skipIf(!process.env.DATABASE_URL)("seatPlayer — timed batches", () => {
+  const S = CHECKIN_BATCH_SIZE;
+  const GAP = CHECKIN_BATCH_GAP_MS;
+  const MIN = 60_000;
+  const startOf = (batch: number) => new Date(OPENED.getTime() + batch * GAP);
+  /** [batch, the board's rank]: the first board of batch 0 and of batch 2 (the readers table drives both). */
+  const BATCHES: [number, number][] = [
+    [0, 0],
+    [2, 2 * S],
+  ];
+  const seedAt = (rank: number, over: Partial<Parameters<typeof seed>[0]> = {}) =>
+    seed({ cameraPolicy: "required", staggered: true, rank, ...over });
+  const seatLines = async (fixtureId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_seat_line where fixture_id = ${fixtureId}`)[0]!.n;
+
+  it("[reader:seat] the window of batch 0 and of batch 2: opens at its own start, closes DEADLINE_AFTER_MS after it (boundary pairs)", async () => {
+    let checked = 0;
+    for (const [batch, rank] of BATCHES) {
+      const s = await seedAt(rank);
+      const opens = batch === 0 ? new Date(OPENED.getTime() - WINDOW_OPEN_LEAD_MS) : startOf(batch);
+      const closes = new Date(startOf(batch).getTime() + DEADLINE_AFTER_MS);
+      const before = fakeRealtimeKit();
+      expectInertRefusal(await claim(s, "home", before, new Date(opens.getTime() - 1)), "checkin_not_open", before);
+      const atOpen = fakeRealtimeKit();
+      const got = await claim(s, "home", atOpen, opens);
+      expect(!got.seated && got.reason, `batch ${batch} at its opening`).toBe("camera_required");
+      // The same vendor world as the opening claim: the meeting it made is the one this claim finds.
+      const lastMs = await claim(s, "home", atOpen, new Date(closes.getTime() - 1));
+      expect(!lastMs.seated && lastMs.reason, `batch ${batch} one ms before its deadline: still inside the window`).toBe("camera_required");
+      const late = fakeRealtimeKit();
+      expectInertRefusal(await claim(s, "home", late, closes), "window_closed", late);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: batches driven").toBe(BATCHES.length);
+  });
+
+  it("test 8: a claim before its batch opens is refused `checkin_not_open` - ZERO vendor calls, no meeting, no check-in, no stay", async () => {
+    const s = await seedAt(2 * S);
+    const rtk = fakeRealtimeKit();
+    const early = new Date(startOf(2).getTime() - 1);
+    expectInertRefusal(await claim(s, "home", rtk, early), "checkin_not_open", rtk);
+    expect(rtk.http.length, "zero vendor calls, counted at the fixture server").toBe(0);
+    expect(await meetingRows(s.fixtureId), "no meeting").toBe(0);
+    expect((await participantRows(s.fixtureId)).length, "no participant").toBe(0);
+    const [avail] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_availability where fixture_id = ${s.fixtureId}`;
+    expect(avail!.n, "no check-in written").toBe(0);
+    expect(await seatLines(s.fixtureId), "no stay written").toBe(0);
+    // The pair: at its start the SAME claim spends (so the refusal above was the batch, not a broken board)...
+    const rtk2 = fakeRealtimeKit();
+    const open = await claim(s, "home", rtk2, startOf(2));
+    expect(!open.seated && open.reason).toBe("camera_required");
+    expect(rtk2.http.length, "the open claim spends").toBeGreaterThan(0);
+    // ...and a round with no stamp at all is still `round_not_open` (the organiser has not opened it).
+    const unopened = await seed({ cameraPolicy: "required", roundOpenedAt: undefined, rank: 2 * S });
+    const rtk3 = fakeRealtimeKit();
+    expectInertRefusal(await claim(unopened, "home", rtk3), "round_not_open", rtk3);
+  });
+
+  it("test 8 (sequence): the second player of the same early board is refused the same way, and the batch-0 board beside it is not", async () => {
+    const late = await seedAt(2 * S);
+    const first = await seedAt(0);
+    const rtk = fakeRealtimeKit();
+    const at = new Date(startOf(0).getTime() + 1);
+    expectInertRefusal(await claim(late, "home", rtk, at), "checkin_not_open", rtk);
+    expectInertRefusal(await claim(late, "away", rtk, at), "checkin_not_open", rtk);
+    const ok = await claim(first, "home", rtk, at);
+    expect(!ok.seated && ok.reason, "the batch-0 board, same instant").toBe("camera_required");
+  });
+
+  it("test 9: late arrival - DEADLINE_AFTER_MS minus a minute after its batch opened is seated when the camera passes; at the deadline exactly, window_closed (boundary pair)", async () => {
+    const s = await seedAt(2 * S);
+    const rtk = fakeRealtimeKit();
+    const arrives = new Date(startOf(2).getTime() + DEADLINE_AFTER_MS - MIN);
+    rtk.join(await claim(s, "home", rtk, arrives));
+    const got = await claim(s, "home", rtk, arrives);
+    expect(got.seated, "seated when the camera passes, no clock penalty").toBe(true);
+    // The boundary pair on a second board of the same batch.
+    const t = await seedAt(2 * S);
+    const rtk2 = fakeRealtimeKit();
+    const edge = new Date(startOf(2).getTime() + DEADLINE_AFTER_MS);
+    rtk2.join(await claim(t, "home", rtk2, new Date(edge.getTime() - 1)));
+    expect((await claim(t, "home", rtk2, new Date(edge.getTime() - 1))).seated, "1 ms before the deadline: seated").toBe(true);
+    const closed = fakeRealtimeKit();
+    expectInertRefusal(await claim(t, "away", closed, edge), "window_closed", closed);
   });
 });

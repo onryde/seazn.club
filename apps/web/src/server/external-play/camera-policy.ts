@@ -9,6 +9,7 @@ import "server-only";
 // pre-existing data reads 'off' (spec §5.1: "Off for all existing data").
 // Columns, not config keys: divisions.config / stages.config are
 // sport-module-validated snapshots that strip unknown keys.
+import type postgres from "postgres";
 import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
@@ -111,6 +112,26 @@ export async function fixtureCameraPolicy(fixtureId: string): Promise<CameraPoli
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
      where f.id = ${fixtureId}`;
+  if (!row) return "off";
+  return effectivePolicy({
+    stage: readCameraPolicy(row.stagePolicy),
+    division: readCameraPolicy(row.divisionPolicy),
+    competition: readCameraPolicy(row.competitionPolicy),
+  });
+}
+
+/** The effective policy for one STAGE, read through `db` (the open-round transaction): the same three-level chain as
+ *  `fixtureCameraPolicy`, asked of the stage a round is being opened in. `openRound` stores whether the round staggers from
+ *  this, at the moment it stamps (spec §3.2.1). A stage that does not exist reads `off`. */
+export async function stageCameraPolicy(db: postgres.TransactionSql | postgres.Sql, stageId: string): Promise<CameraPolicy> {
+  const [row] = await db<{ stagePolicy: unknown; divisionPolicy: unknown; competitionPolicy: unknown }[]>`
+    select s.camera_policy as "stagePolicy",
+           d.camera_policy as "divisionPolicy",
+           c.camera_policy as "competitionPolicy"
+      from stages s
+      join divisions d on d.id = s.division_id
+      join competitions c on c.id = d.competition_id
+     where s.id = ${stageId}`;
   if (!row) return "off";
   return effectivePolicy({
     stage: readCameraPolicy(row.stagePolicy),
