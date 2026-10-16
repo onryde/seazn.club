@@ -1254,7 +1254,7 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
 // fails machine_crash — torn down, no retry. Each crash's evidence arrives the way production's does: its final beat on
 // the heartbeat route, and its exit on the next read of the Machine (the facts route's reconcile → the fake provider's
 // observation). Every request loads the row and persists it, so the count surviving request to request IS the witness
-// that V449's columns round-trip (cols → toSession → persist). Expected counts are the crashes each test makes.
+// that V450's columns round-trip (cols → toSession → persist). Expected counts are the crashes each test makes.
 // ---------------------------------------------------------------------------------------------------------------
 const CRASH_EXIT: ExitInfo = { exitCode: 70, oomKilled: false, requestedStop: false };   // C06: the compositor's Fatal exit
 /** The ledger's crash counts, in order: the `crashCount` each runner_transition carried (session.ts eventRowsOf). */

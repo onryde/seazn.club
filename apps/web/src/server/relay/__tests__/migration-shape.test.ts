@@ -633,10 +633,10 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(refused * accepted).toBeGreaterThan(0);
   });
 
-  // R2003b (V449): the crash tally's four columns. Every existing row reads "nothing counted" (0/0/0/null), and the table
+  // R2003b (V450): the crash tally's four columns. Every existing row reads "nothing counted" (0/0/0/null), and the table
   // holds the domain's invariant — the session's count includes the current attempt's — so a write that breaks it is
   // refused, beside its accepted twin. The CHECK's name is the migration's.
-  it("runner_crash_* (V449, R2003b): three smallint NOT NULL DEFAULT 0 counts and a nullable timestamptz; a new row reads 0/0/0/null; negatives and a count below either bound are REFUSED, the tally the domain writes is accepted", async () => {
+  it("runner_crash_* (V450, R2003b): three smallint NOT NULL DEFAULT 0 counts and a nullable timestamptz; a new row reads 0/0/0/null; negatives and a count below either bound are REFUSED, the tally the domain writes is accepted", async () => {
     const r = await rig();
     const shapes = await sql<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }[]>`
       select column_name, data_type, is_nullable, column_default from information_schema.columns

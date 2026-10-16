@@ -77,7 +77,7 @@ interface Row {
   runner_attempts: number;
   runner_state: Session["runner"]["state"]; runner_name: string | null; runner_stop_requested_at: string | null;
   runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
-  // R2003b (V449): the crash tally (domain/runner.ts CrashTally) — the session's count, this attempt's two bounds, the newest exit's instant
+  // R2003b (V450): the crash tally (domain/runner.ts CrashTally) — the session's count, this attempt's two bounds, the newest exit's instant
   runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number; runner_crash_exit_at: string | null;
   created_by: string; created_at: string;
   output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)

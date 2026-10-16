@@ -30,7 +30,7 @@ export interface ExitInfo { exitCode: number | null; oomKilled: boolean | null; 
  *  So each is kept as its own LOWER BOUND on this attempt's crashes and the attempt counts their MAX, never their sum: one
  *  crash seen both ways is one crash, by construction, whichever arrives first. Mixed evidence (one crash seen only by its
  *  beat, another only by its exit) can undercount — the safe direction: the cap then fires a few crashes late, never early.
- *  Persisted in V449's four runner_crash_* columns (stream-sessions.ts `persist`). */
+ *  Persisted in V450's four runner_crash_* columns (stream-sessions.ts `persist`). */
 export interface CrashTally {
   /** The SESSION's crashes, summed over its attempts (it spans the ONE retry) — what the cap reads. */
   count: number;
