@@ -118,12 +118,16 @@ export class FakeIngest implements IngestProvider {
     const inputId = `fake-in-${createdAt}-${randomBytes(4).toString("hex")}`;
     this.record("createLiveInput", "POST", "/live_inputs", [], inputId, spec.sessionId);
     this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false, outputUids: [] });
-    const streamId = `${spec.sessionId}-${spec.slot}`;
+    // R2004: a composed session's programme input shares the camera's session and slot, so its stream id names the role.
+    // The camera's is the id it always was (`role` absent is the camera).
+    const streamId = spec.role === "programme" ? `${spec.sessionId}-programme-${spec.slot}` : `${spec.sessionId}-${spec.slot}`;
     const passphrase = randomBytes(12).toString("hex");
     return {
       inputId,
       srt: { url: "srt://fake.ingest.invalid:778", streamId, passphrase },
       rtmps: { url: "rtmps://fake.ingest.invalid:443/live/", streamKey: randomBytes(12).toString("hex") },
+      // R2004: Cloudflare's `srtPlayback` — a credential of its own (never the ingest pair), url bare like `srt`.
+      srtPlayback: { url: "srt://fake.ingest.invalid:778", streamId: `play-${streamId}`, passphrase: randomBytes(12).toString("hex") },
     };
   }
 
@@ -261,6 +265,12 @@ export class FakeIngest implements IngestProvider {
     // Cloudflare lists videos on the account's bare `/stream` (Task 4's adapter, `?end=`), not on a `/videos` path.
     this.record("listVideos", "GET", `?end=${encodeURIComponent(opts.createdBefore.toISOString())}`, [], null);
     return this.videos.filter((v) => new Date(v.createdAt).getTime() < opts.createdBefore.getTime()).map((v) => ({ ...v }));
+  }
+
+  /** R2004: one input's recordings — Cloudflare's `GET /live_inputs/{uid}/videos` (ingest-cf.ts). */
+  async listInputVideos(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestVideo[]> {
+    this.record("listInputVideos", "GET", `/live_inputs/${inputId}/videos`, [inputId], inputId, meta.sessionId ?? null);
+    return this.videos.filter((v) => v.inputId === inputId).map((v) => ({ ...v }));
   }
 
   async deleteVideo(videoId: string): Promise<DeleteVideoResult> {

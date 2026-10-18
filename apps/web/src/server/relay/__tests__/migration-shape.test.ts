@@ -94,6 +94,26 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     ).rejects.toMatchObject({ code: "23505" });
   });
 
+  // R2004 (V462): the organiser's overlay delay is bounded by the DB, not only by a form. The bounds are the brief's
+  // (0..30000 ms), typed here; null is "the default" and 0 a real override.
+  it("R2004 test 5: fixture_stream_settings.overlay_delay_ms refuses -1 and 30001 at the CHECK; 0, 30000 and null land", async () => {
+    let checked = 0;
+    for (const bad of [-1, 30001]) {
+      const r = await rig();
+      await expect(sql`insert into fixture_stream_settings (fixture_id, org_id, overlay_delay_ms) values (${r.fixtureId}, ${r.orgId}, ${bad})`, String(bad))
+        .rejects.toMatchObject({ code: "23514", constraint_name: "fixture_stream_settings_overlay_delay_ms_check" });
+      checked++;
+    }
+    for (const good of [0, 30000, null]) {
+      const r = await rig();
+      await sql`insert into fixture_stream_settings (fixture_id, org_id, overlay_delay_ms) values (${r.fixtureId}, ${r.orgId}, ${good})`;
+      const [row] = await sql<{ d: number | null }[]>`select overlay_delay_ms as d from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+      expect(row!.d, String(good)).toBe(good);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both refusals and all three accepted values ran").toBe(5);
+  });
+
   it("fixture_stream_sessions_one_active: a second non-terminal session on one fixture is refused; a second COMPLETED one is not (r1)", async () => {
     const r = await rig();
     await insertSession(r, "live");

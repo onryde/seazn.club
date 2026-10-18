@@ -21,7 +21,8 @@ import { log } from "@/server/logger";
 import { fingerprintDestination, seal } from "../crypto";
 import {
   KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, TargetSecretUnreadableError, archiveStreamTarget, insertStreamTarget, keyHintOf,
-  lockStreamTarget, readFirstInput, readInputBySlot, readKeyHints, readTargetSecret, replaceTargetKey, storeInputCredentials,
+  lockStreamTarget, readCameraPlayback, readFirstInput, readInputBySlot, readKeyHints, readTargetSecret, replaceTargetKey, storeInputCredentials,
+  storePlaybackCredentials,
 } from "../secret-columns";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -306,6 +307,51 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
       .toEqual({ id: zero!.id, slot: 0, ingestInputId: null, srt: null, rtmps: null });
     // The neighbour's first input is its own.
     expect((await sql.begin((tx) => readFirstInput(tx, other.sessionId)))!.id).toBe(other.inputId);
+  });
+
+  // R2004: a composed session holds a CAMERA row (Input A, the phone's) and a PROGRAMME row (Input B, the compositor's) on
+  // the same slot. Every existing reader means the camera — the phone's credential, the organiser projection, the ingest
+  // read — so `role` absent IS the camera, and only a caller that names the programme ever gets it.
+  it("R2004: the readers default to the CAMERA input; the programme row on the same slot is read only by name, and a session with only a programme row has no first input", async () => {
+    const r = await rig();
+    const cam = observed();
+    const prog = observed();
+    await sql.begin((tx) => storeInputCredentials(tx, r.inputId, cam.uid, cam.creds));
+    const [p] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot, role) values (${r.sessionId}, 0, 'programme') returning id`;
+    await sql.begin((tx) => storeInputCredentials(tx, p!.id, prog.uid, prog.creds));
+    expect(await sql.begin((tx) => readFirstInput(tx, r.sessionId))).toEqual({ id: r.inputId, slot: 0, ingestInputId: cam.uid, srt: cam.creds.srt, rtmps: cam.creds.rtmps });
+    expect(await sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0))).toEqual({ id: r.inputId, slot: 0, ingestInputId: cam.uid, srt: cam.creds.srt, rtmps: cam.creds.rtmps });
+    expect(await sql.begin((tx) => readFirstInput(tx, r.sessionId, "programme"))).toEqual({ id: p!.id, slot: 0, ingestInputId: prog.uid, srt: prog.creds.srt, rtmps: prog.creds.rtmps });
+    expect(await sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0, "programme"))!).toMatchObject({ id: p!.id });
+    // The constraint widened to (session, role, slot): a second camera slot 0 is still refused by name.
+    await expect(sql`insert into fixture_stream_inputs (session_id, slot) values (${r.sessionId}, 0)`).rejects.toMatchObject({ code: "23505", constraint_name: "fixture_stream_inputs_session_id_role_slot_key" });
+    await expect(sql`insert into fixture_stream_inputs (session_id, slot, role) values (${r.sessionId}, 0, 'phone')`).rejects.toMatchObject({ code: "23514" });
+    // The empty case: the camera row gone, the programme row is NOT promoted to "first input".
+    await sql`delete from fixture_stream_inputs where id = ${r.inputId}`;
+    expect(await sql.begin((tx) => readFirstInput(tx, r.sessionId))).toBeNull();
+    expect(await sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0))).toBeNull();
+    expect((await sql.begin((tx) => readFirstInput(tx, r.sessionId, "programme")))!.id).toBe(p!.id);
+  });
+
+  it("R2004: the camera's SRT PLAYBACK credential is stored like the SRT ingest one — bare url, { passphrase, streamId } sealed together — and reads back; no raw column holds its plaintext; null before it is stored", async () => {
+    const r = await rig();
+    expect(await sql.begin((tx) => readCameraPlayback(tx, r.sessionId)), "the empty case: nothing stored").toBeNull();
+    const play = { url: "srt://live.cloudflare.com:778?streamid=leak#frag", streamId: randomBytes(16).toString("hex"), passphrase: secret65() };
+    await sql.begin((tx) => storePlaybackCredentials(tx, r.inputId, play));
+    expect(await sql.begin((tx) => readCameraPlayback(tx, r.sessionId))).toEqual({ url: "srt://live.cloudflare.com:778", streamId: play.streamId, passphrase: play.passphrase });
+    const [raw] = await sql<{ playback_srt_url: string; playback_srt_key_enc: Uint8Array }[]>`
+      select playback_srt_url, playback_srt_key_enc from fixture_stream_inputs where id = ${r.inputId}`;
+    expect(raw!.playback_srt_url, "the url column keeps no query or fragment").toBe("srt://live.cloudflare.com:778");
+    expect(holds(raw!.playback_srt_key_enc, play.passphrase)).toBe(false);
+    expect(holds(raw!.playback_srt_key_enc, play.streamId)).toBe(false);
+    // A programme row's playback is never served as the camera's.
+    const [p] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot, role) values (${r.sessionId}, 1, 'programme') returning id`;
+    await sql.begin((tx) => storePlaybackCredentials(tx, p!.id, { url: "srt://other:778", streamId: "prog-sid", passphrase: secret65() }));
+    expect((await sql.begin((tx) => readCameraPlayback(tx, r.sessionId)))!.streamId).toBe(play.streamId);
+    // A damaged envelope throws and echoes none of the plaintext (the ingest envelope's rule).
+    await sql`update fixture_stream_inputs set playback_srt_key_enc = ${seal("not json")} where id = ${r.inputId}`;
+    const msg = await messageOf(sql.begin((tx) => readCameraPlayback(tx, r.sessionId)));
+    expect(msg).toBe("relay envelope does not hold a JSON credential");
   });
 
   it("one flipped byte in a stored envelope makes the read throw, echoing none of the plaintext; the untouched read opens", async () => {

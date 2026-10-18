@@ -212,6 +212,25 @@ export const RELAY_EXIT_REFUSED = 78;
  *  nullable, null = this default, 0 a real override). PROVISIONAL: n=2 — C11 owes a ≥10-sample in-chain re-measure
  *  and moves THIS line. */
 export const RELAY_OVERLAY_DELAY_DEFAULT_MS = 3_100;
+/** R2004 decision 3 (compositor ADR 0005): the composed Machine's output — what the compositor renders and publishes to
+ *  the session's programme input. These MUST equal the compositor's `OutputProfile`; the shared contract fixtures
+ *  `docs/contracts/fixtures/relay-job.v1/session-composed-{720p,1080p}.json` carry the same numbers, and config.test.ts
+ *  deep-equals each profile to its fixture. */
+const OUTPUT_PROFILES = {
+  "720p": { width: 1280, height: 720, fps: 30, videoKbps: 4000 },
+  "1080p": { width: 1920, height: 1080, fps: 30, videoKbps: 6000 },
+} as const;
+export type RelayOutputProfile = { width: number; height: number; fps: number; videoKbps: number };
+/** `RELAY_OUTPUT_PROFILE`: `720p` (the default; unset or blank) or `1080p`. Anything else throws, naming the variable —
+ *  a typo must not silently stream the default. Read at the call, never cached, and a fresh object every call. */
+export function relayOutputProfile(env: Record<string, string | undefined> = process.env): RelayOutputProfile {
+  const v = env.RELAY_OUTPUT_PROFILE?.trim();
+  const key = v ? v : "720p";
+  if (key !== "720p" && key !== "1080p") {
+    throw new Error(`RELAY_OUTPUT_PROFILE must be "720p" or "1080p" (unset = 720p), got ${JSON.stringify(env.RELAY_OUTPUT_PROFILE)}`);
+  }
+  return { ...OUTPUT_PROFILES[key] };
+}
 /** §5.2: a consume row for the same fixture within 24 h → no second consume. */
 export const CREDIT_REUSE_HOURS = 24;
 /** W23 (capture QR v2, owner 2026-10-01): inside one reuse window, the first THREE restarts that reach video are free;

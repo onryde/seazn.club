@@ -46,6 +46,9 @@ const CREATE_RESULT = {
   uid: "in_abc",
   rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: "rk" },
   srt: { url: "srt://live.cloudflare.com:778", streamId: "sid", passphrase: "pp" },
+  // R2004: Cloudflare's SRT PLAYBACK credential (OpenAPI `srtPlayback`: url, streamId, passphrase) — how the compositor
+  // reads the camera. Its own values, never the ingest pair's.
+  srtPlayback: { url: "srt://live.cloudflare.com:778", streamId: "play-sid", passphrase: "play-pp" },
   webRTC: { url: "https://x/webrtc/publish" },
   webRTCPlayback: { url: "https://x/webrtc/play" },
   status: null,
@@ -76,6 +79,7 @@ function cfReply(c: Call): Reply {
     if (name.includes("s_orphan")) return { status: 200, body: { success: true, result: CREATE_RESULT_ORPHAN } };
     if (name.includes("s_dropped")) return { status: 200, body: { success: true, result: CREATE_RESULT_DROPPED } };
     if (name.includes("s_notimeout")) return { status: 200, body: { success: true, result: CREATE_RESULT_TIMEOUT_NULL } };
+    if (name.includes("s_noplay")) return { status: 200, body: { success: true, result: { ...CREATE_RESULT, srtPlayback: undefined } } };
     return { status: 200, body: { success: true, result: CREATE_RESULT } };
   }
   if (c.init.method === "GET" && /\/live_inputs\/in_abc$/.test(c.url))
@@ -121,6 +125,15 @@ function cfReply(c: Call): Reply {
       { uid: "v_done", created: "2026-09-01T00:00:00Z", status: { state: "ready" }, liveInput: null, duration: 61.5, size: 734003200, input: { width: 1280, height: 720 } },
       { uid: "v_err", created: "2026-09-01T00:00:00Z", status: { state: "error", errorReasonCode: "ERR_NON_VIDEO" }, liveInput: null, duration: -1, size: -1, input: { width: 0, height: 0 } },
     ] } };
+  // R2004: ONE input's recordings (Cloudflare "Watch a live stream": GET /live_inputs/{uid}/videos). Two of in_abc's, in
+  // the probe's -1/0 placeholder shape for the live one; `in_failed_list` is a failed envelope.
+  if (c.init.method === "GET" && /\/live_inputs\/in_abc\/videos$/.test(c.url))
+    return { status: 200, body: { success: true, result: [
+      { uid: "v_cam_live", created: "2026-09-01T00:00:00Z", status: { state: "live-inprogress" }, liveInput: "in_abc", duration: -1, size: -1, input: { width: 0, height: 0 } },
+      { uid: "v_cam_done", created: "2026-09-01T01:00:00Z", status: { state: "ready" }, liveInput: "in_abc", duration: 30, size: 1000, input: { width: 1280, height: 720 } },
+    ] } };
+  if (c.init.method === "GET" && /\/live_inputs\/in_failed_list\/videos$/.test(c.url))
+    return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error for tok" }] } };
   if (c.init.method === "DELETE" && /\/stream\/v_live$/.test(c.url))
     return { status: 409, body: { success: false, errors: [{ code: 10046, message: "recording in progress" }] } };
   if (c.init.method === "DELETE" && /\/stream\/v_done$/.test(c.url)) return { status: 200, body: { success: true } };
@@ -200,12 +213,43 @@ describe("CloudflareIngest", () => {
       inputId: "in_abc",
       srt: { url: "srt://live.cloudflare.com:778", streamId: "sid", passphrase: "pp" },
       rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: "rk" },
+      srtPlayback: { url: "srt://live.cloudflare.com:778", streamId: "play-sid", passphrase: "play-pp" },   // R2004
     });
     // Negative pair for the bare-URL ruling: no secret, and no query string at
     // all, rides in the URL the session row stores.
     expect(creds.srt.url).not.toContain("?");
     expect(creds.srt.url).not.toContain("pp");
     expect(JSON.stringify(creds).toLowerCase()).not.toContain("webrtc");
+  });
+
+  // R2004. The camera's SRT PLAYBACK credential crosses the port (the compositor reads Input A with it); a response without
+  // one is `null`, never a credential built from the ingest pair. A programme input is named for its role, and — owner
+  // ruling 2026-10-18, option (a): both inputs of a composed session record — it is created with the SAME settings.
+  it("R2004: create returns Cloudflare's srtPlayback, null when the response carries none; a programme create names its role and sends the camera's settings exactly", async () => {
+    const camera = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    expect(camera.srtPlayback).toEqual({ url: "srt://live.cloudflare.com:778", streamId: "play-sid", passphrase: "play-pp" });
+    const none = await ingest.createLiveInput({ sessionId: "s_noplay", slot: 0 });
+    expect(none.srtPlayback, "absent in the response: null").toBeNull();
+    expect(none.srt, "the ingest pair is untouched by it").toEqual({ url: "srt://live.cloudflare.com:778", streamId: "sid", passphrase: "pp" });
+    await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
+    const bodies = rec.calls.filter((c) => c.init.method === "POST").map((c) => JSON.parse(String(c.init.body)) as { meta: { name: string } });
+    expect(bodies.map((b) => b.meta.name)).toEqual(["seazn-session-s1-slot-0", "seazn-session-s_noplay-slot-0", "seazn-session-s1-programme-slot-0"]);
+    const settings = (b: Record<string, unknown>) => ({ ...b, meta: undefined });
+    expect(settings(bodies[2]!), "the programme input records as the camera does").toEqual(settings(bodies[0]!));
+  });
+
+  it("R2004: listInputVideos GETs live_inputs/{uid}/videos, maps the recording facts exactly as listVideos does, and records the call under the input and session; a failed envelope throws with the token redacted", async () => {
+    const vids = await ingest.listInputVideos("in_abc", { sessionId: "s1" });
+    expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc/videos`);
+    expect(rec.calls[0]!.init.method).toBe("GET");
+    expect(vids).toEqual([
+      { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
+      { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null },
+    ]);
+    const err = await ingest.listInputVideos("in_failed_list").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/^cloudflare list input videos: HTTP 500/);
+    expect((err as Error).message, "the account token is redacted").not.toContain("tok");
   });
 
   it("capabilities: hold = timeoutSeconds + 3 for RTMPS only; SRT is null (C8)", () => {
@@ -913,6 +957,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await real.removeOutput(realCreds.inputId, realOut);
     await real.storageUsage();
     await real.listVideos({ createdBefore: BEFORE });
+    await real.listInputVideos(realCreds.inputId);
     await real.deleteVideo("v_done");
     await real.deleteInput(realCreds.inputId);
 
@@ -926,24 +971,26 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await fake.removeOutput(fakeCreds.inputId, fakeOut);
     await fake.storageUsage();
     await fake.listVideos({ createdBefore: BEFORE });
+    await fake.listInputVideos(fakeCreds.inputId);
     await fake.deleteVideo("v_done");
     await fake.deleteInput(fakeCreds.inputId);
 
     await new Promise((r) => setImmediate(r));
     const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done", output: realOut });
     const fakeShapes = shapes(fakePort.calls, { input: fakeCreds.inputId, video: "v_done", output: fakeOut });
-    // Present twin for the comparison's own vacuity: nine operations, in order,
+    // Present twin for the comparison's own vacuity: ten operations, in order,
     // and the templates really are Cloudflare's account-scoped Stream paths.
     expect(realShapes.map((s) => s.operation)).toEqual([
-      "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "storageUsage", "listVideos", "deleteVideo", "deleteInput",
+      "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "storageUsage", "listVideos", "listInputVideos", "deleteVideo", "deleteInput",
     ]);
     expect(realShapes[1]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");
     expect(realShapes[4]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/outputs/{id}");   // C1: the output, never the input
     expect(realShapes[6]!.template).toBe("/client/v4/accounts/{id}/stream");
-    expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
+    expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/videos");   // R2004
+    expect(realShapes[8]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
     // m4: the subject id per operation. The adapter is the authority — the
-    // object the call is ABOUT — and the fake agrees on all nine (C1: the removal is about the OUTPUT).
-    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "none", "none", "video", "input"]);
+    // object the call is ABOUT — and the fake agrees on all ten (C1: the removal is about the OUTPUT).
+    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "none", "none", "input", "video", "input"]);
     expect(fakeShapes).toEqual(realShapes);
   });
 });

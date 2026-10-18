@@ -13,6 +13,7 @@ import { machineNameFor } from "../domain/runner";
 import { FlyApiError } from "../fly-client";
 import { CREATE_REFUSED_STATUSES } from "../runner-fly";
 import { RunnerCreateError, createFailureOf } from "../ports";
+import { RelayJobInput } from "@/server/api-v1/schemas";
 
 describe("FakeIngest", () => {
   it("createLiveInput returns both credential shapes and no webRTC (C1/R-A, C10)", async () => {
@@ -30,6 +31,38 @@ describe("FakeIngest", () => {
     expect(creds.rtmps.url).toMatch(/^rtmps:\/\//);
     expect(creds.rtmps.streamKey.length).toBeGreaterThan(0);
     expect("webRTC" in creds).toBe(false);
+  });
+
+  // R2004 (fakes first): the composed session's two new port facts. The compositor reads the camera over SRT PLAYBACK, so
+  // the create returns Cloudflare's `srtPlayback` beside the ingest pair — a credential of its own, shaped like the
+  // contract's `input` (bare srt:// url, the secrets as fields). And the sweep deletes the camera's recordings by INPUT
+  // (owner ruling 2026-10-18, option (a)), so the fake lists one input's videos and no other's.
+  it("R2004: createLiveInput returns the SRT PLAYBACK credential, its own and bare; a programme input is a second credential on the same slot; listInputVideos lists ONE input's recordings", async () => {
+    const fake = new FakeIngest();
+    const camera = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    const programme = await fake.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
+    const play = camera.srtPlayback;
+    expect(play, "the camera's playback credential").not.toBeNull();
+    expect(play!.url).toBe("srt://fake.ingest.invalid:778");   // bare, by value (the ingest url's rule)
+    expect(play!.streamId, "playback is its own credential, never the ingest one").not.toBe(camera.srt.streamId);
+    expect(play!.passphrase).not.toBe(camera.srt.passphrase);
+    expect(RelayJobInput.safeParse({ protocol: "srt", ...play }).success, "the contract's input accepts it").toBe(true);
+    // The programme input: same session, same slot, a different input and different credentials.
+    expect(programme.inputId).not.toBe(camera.inputId);
+    expect(programme.srt.streamId).not.toBe(camera.srt.streamId);
+    expect(programme.srtPlayback!.streamId).not.toBe(play!.streamId);
+    // The listing is per input: each input's own, nothing unattributed, and the empty case.
+    const at = "2026-09-01T00:00:00Z";
+    fake.addVideo({ videoId: "v-cam", inputId: camera.inputId, createdAt: at, inProgress: false });
+    fake.addVideo({ videoId: "v-prog", inputId: programme.inputId, createdAt: at, inProgress: true });
+    fake.addVideo({ videoId: "v-none", inputId: null, createdAt: at, inProgress: false });
+    expect((await fake.listInputVideos(camera.inputId)).map((v) => v.videoId)).toEqual(["v-cam"]);
+    expect((await fake.listInputVideos(programme.inputId)).map((v) => [v.videoId, v.inProgress])).toEqual([["v-prog", true]]);
+    expect(await fake.listInputVideos("fake-in-0-none")).toEqual([]);
+    // The second call, after a delete: the deleted recording is gone from its input's listing, the other input keeps its own.
+    expect(await fake.deleteVideo("v-cam")).toBe("deleted");
+    expect(await fake.listInputVideos(camera.inputId)).toEqual([]);
+    expect((await fake.listInputVideos(programme.inputId)).map((v) => v.videoId)).toEqual(["v-prog"]);
   });
 
   it("inputStatus has the per-input GET's shape and flips at connectAfterMs exactly", async () => {

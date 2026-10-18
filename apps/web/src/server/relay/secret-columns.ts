@@ -6,6 +6,7 @@ import { HttpError } from "@/lib/errors";
 import { STREAM_PLATFORM_PRESETS, checkDestination, isStreamPlatform, type DestinationRefusal } from "@/lib/stream-destinations";
 import { assertKek, fingerprintDestination, hasValidKek, open, seal } from "./crypto";
 import { log } from "@/server/logger";
+import type { InputRole } from "./ports";
 
 export interface InputCredentials {
   srt: { url: string; streamId: string; passphrase: string };
@@ -75,7 +76,9 @@ export async function storeInputCredentials(
  *  request only. `null` when the row is missing — the empty case, never a
  *  default object (the qr projection then reads `null`). The SRT streamId is the
  *  sealed one; it is never derived from the url. */
-export async function readInputBySlot(tx: Tx, sessionId: string, slot: number): Promise<InputRow | null> {
+/** R2004: `role` absent is the CAMERA input — the phone's, and the only one a passthrough session has. A composed
+ *  session's programme input sits on the same slot and is read only by a caller that names it. */
+export async function readInputBySlot(tx: Tx, sessionId: string, slot: number, role: InputRole = "camera"): Promise<InputRow | null> {
   const [row] = await tx<{
     id: string; slot: number; ingest_input_id: string | null;
     ingest_srt_url: string | null; ingest_srt_key_enc: Uint8Array | null;
@@ -84,7 +87,7 @@ export async function readInputBySlot(tx: Tx, sessionId: string, slot: number): 
     select id, slot, ingest_input_id, ingest_srt_url, ingest_srt_key_enc,
            ingest_rtmps_url, ingest_rtmps_key_enc
       from fixture_stream_inputs
-     where session_id = ${sessionId} and slot = ${slot}`;
+     where session_id = ${sessionId} and role = ${role} and slot = ${slot}`;
   if (!row) return null;
   let srt: InputRow["srt"] = null;
   if (row.ingest_srt_url && row.ingest_srt_key_enc) {
@@ -190,12 +193,37 @@ export class StreamTargetVanishedError extends HttpError {
   }
 }
 
-/** The session's FIRST input (lowest slot) — the row the organiser projection
- *  reads. The slot VALUE travels with the row; nothing types a `0`. */
-export async function readFirstInput(tx: Tx, sessionId: string): Promise<InputRow | null> {
+/** The session's FIRST input of a role (lowest slot) — the camera's is the row the organiser projection reads. The slot
+ *  VALUE travels with the row; nothing types a `0`. R2004: `role` absent is the camera, and a session with only a
+ *  programme row has no first camera input (null) — the programme is never promoted to it. */
+export async function readFirstInput(tx: Tx, sessionId: string, role: InputRole = "camera"): Promise<InputRow | null> {
   const [row] = await tx<{ slot: number }[]>`
-    select slot from fixture_stream_inputs where session_id = ${sessionId} order by slot asc limit 1`;
-  return row ? readInputBySlot(tx, sessionId, row.slot) : null;
+    select slot from fixture_stream_inputs where session_id = ${sessionId} and role = ${role} order by slot asc limit 1`;
+  return row ? readInputBySlot(tx, sessionId, row.slot, role) : null;
+}
+
+/** R2004: an input's SRT PLAYBACK credential (Cloudflare's `srtPlayback`) — how the compositor READS a composed session's
+ *  camera. Stored exactly as the SRT ingest credential is: the url bare, `{ passphrase, streamId }` sealed TOGETHER into
+ *  `playback_srt_key_enc`. */
+export async function storePlaybackCredentials(tx: Tx, inputRowId: string, playback: { url: string; streamId: string; passphrase: string }): Promise<void> {
+  const sealed = { passphrase: playback.passphrase, streamId: playback.streamId };
+  await tx`
+    update fixture_stream_inputs
+       set playback_srt_url = ${bareUrl(playback.url)},
+           playback_srt_key_enc = ${seal(JSON.stringify(sealed))}
+     where id = ${inputRowId}`;
+}
+
+/** R2004: the session's CAMERA playback credential, DECRYPTED for this request only (the job facts' `input`). The
+ *  camera's lowest slot; a programme row's playback is never read here. `null` when nothing is stored — the caller
+ *  decides what that means (the job facts refuse by name). */
+export async function readCameraPlayback(tx: Tx, sessionId: string): Promise<{ url: string; streamId: string; passphrase: string } | null> {
+  const [row] = await tx<{ playback_srt_url: string | null; playback_srt_key_enc: Uint8Array | null }[]>`
+    select playback_srt_url, playback_srt_key_enc from fixture_stream_inputs
+     where session_id = ${sessionId} and role = 'camera' order by slot asc limit 1`;
+  if (!row?.playback_srt_url || !row.playback_srt_key_enc) return null;
+  const { passphrase, streamId } = openFields(row.playback_srt_key_enc, SRT_SEALED);
+  return { url: row.playback_srt_url, streamId, passphrase };
 }
 
 /** M3: a decrypt that failed under a missing or malformed RELAY_KEK is the DEPLOYMENT's fault, answered with the KEK's
