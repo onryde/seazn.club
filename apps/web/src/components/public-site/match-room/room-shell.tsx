@@ -55,6 +55,7 @@ import {
 import { HeldSeam } from "./room-seams";
 import { cameraEnds, roomScreen } from "./room-screen";
 import { canMove, cameraRetryDue, moveNotice, ownMeetingRetired, plyOf, type RoomState } from "./room-state";
+import { lineOf } from "./line-view";
 import { formatCountdown, formatPromisedTime, formatTimeOfDay, useFlagFallen, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
@@ -482,6 +483,8 @@ export function Screen({
     snap.game === null ? null : optimisticOwnMs({ optimistic: state.optimistic, game: snap.game, resultWritten: snap.result !== null, nowMs: now });
   const flagged = flagFallen && !movePending && ownGuess === null;
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);
+  // Spec §6.1 (2): a `queued` seat answer is the check-in card with the line in it.
+  const queued = lineOf(state.seat);
   const countdownTo = (iso: string | null) => (iso !== null && now !== null ? formatCountdown(Date.parse(iso) - now) : null);
 
   switch (screen.kind) {
@@ -558,11 +561,11 @@ export function Screen({
       return <BatchWaitCard time={snap.opensAt !== null && now !== null ? formatPromisedTime(snap.opensAt, locale) : null} t={t} />;
     case "cameraRequired":
     case "cameraLost":
-      return <CameraCard dropped={screen.kind === "cameraLost"} busy={busy} onRetry={tryAgain} t={t} />;
+      return <CameraCard dropped={screen.kind === "cameraLost"} busy={busy} onRetry={tryAgain} seatWaitS={room.seatWaitS ?? null} t={t} />;
     case "cameraBlocked":
       return <CameraBlockedCard onReload={reload} t={t} />;
     case "videoDown":
-      return <VideoDownCard busy={busy} onRetry={tryAgain} t={t} />;
+      return <VideoDownCard busy={busy} onRetry={tryAgain} seatWaitS={room.seatWaitS ?? null} t={t} />;
     case "creating":
       return <CreatingCard busyIn={screen.retryAt !== null ? countdownTo(screen.retryAt) : null} t={t} />;
     case "closed":
@@ -584,6 +587,8 @@ export function Screen({
             cameraTest={cameraDuty && !snap.you.checkedIn ? { ...camTest, view: meetingJoined ? HANDED : camTest.view, onHandOver: handOver } : null}
             handover={handover}
             cameraPending={cameraRetryDue(state)}
+            line={queued === null ? null : { wire: queued, closesAt: timeOf(queued.closesAt), left: state.lineLeft }}
+            seatWaitS={room.seatWaitS ?? null}
             onCheckIn={tryAgain}
             t={t}
             plural={plural}

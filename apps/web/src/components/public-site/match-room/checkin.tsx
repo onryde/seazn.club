@@ -13,6 +13,8 @@ import { canCheckIn, type CameraTestView } from "./camera-test";
 import { isHandoverActive, type HandoverView } from "./camera-handover";
 import { spokenClock, type RoomPlural, type RoomT } from "./room-copy";
 import type { RoomSnapshot } from "./room-snapshot";
+import { LineBlock, type LineCardView } from "./line-card";
+import { SeatWaitNote } from "./seat-wait-note";
 
 type Props = {
   snap: Pick<RoomSnapshot, "you" | "opponent" | "meta" | "cameraPolicy">;
@@ -41,6 +43,11 @@ type Props = {
   /** D21-fix-3: an optional camera seated with no token because the platform's call budget was spent, the room asking
    *  again (cameraRetryDue): the tile says "Connecting your camera…" - nothing is wrong, the token is late. */
   cameraPending?: boolean;
+  /** Spec §5.7.9, §6.1 (2): the platform's call budget is holding the claim in the check-in line. The line replaces the
+   *  preflight actions (the camera test and the button); everything else on the card is the check-in's own. */
+  line?: LineCardView | null;
+  /** Spec §6.1 (3): whole seconds left of the seat door's 429 wait, or null. The button is shut for as long as it runs. */
+  seatWaitS?: number | null;
   onCheckIn: () => void;
   t: RoomT;
   plural: RoomPlural;
@@ -57,6 +64,8 @@ export function Checkin({
   cameraTest = null,
   handover = null,
   cameraPending = false,
+  line = null,
+  seatWaitS = null,
   onCheckIn,
   t,
   plural,
@@ -83,15 +92,20 @@ export function Checkin({
           })}
         </p>
       </div>
-      <div className="flex items-center justify-between rounded-xl bg-[#f3effc] px-3.5 py-2.5">
-        <div className="flex flex-col text-xs text-[#6b5b8a]">
-          <span>{t("externalPlay.room.checkin.closesIn")}</span>
-          {closesAt !== null ? <span>{t("externalPlay.room.checkin.closesAt", { time: closesAt })}</span> : null}
+      {/* The line is the player's place; the check-in's own countdown is to the DEADLINE, which a queued player is allowed to pass
+          (the line card says when their check-in really closes). */}
+      {line !== null ? <LineBlock view={line} t={t} plural={plural} /> : null}
+      {line === null ? (
+        <div className="flex items-center justify-between rounded-xl bg-[#f3effc] px-3.5 py-2.5">
+          <div className="flex flex-col text-xs text-[#6b5b8a]">
+            <span>{t("externalPlay.room.checkin.closesIn")}</span>
+            {closesAt !== null ? <span>{t("externalPlay.room.checkin.closesAt", { time: closesAt })}</span> : null}
+          </div>
+          <span data-testid="room-checkin-countdown" className="font-display text-[34px] font-semibold tabular-nums">
+            {closesIn ?? ""}
+          </span>
         </div>
-        <span data-testid="room-checkin-countdown" className="font-display text-[34px] font-semibold tabular-nums">
-          {closesIn ?? ""}
-        </span>
-      </div>
+      ) : null}
       {snap.cameraPolicy !== "off" ? (
         <>
           <OwnTile
@@ -105,7 +119,7 @@ export function Checkin({
             connecting={covered?.view.status === "connecting" || cameraPending}
             t={t}
           />
-          {test !== null ? <CameraTestRow view={test.view} onTest={test.onTest} t={t} /> : null}
+          {test !== null && line === null ? <CameraTestRow view={test.view} onTest={test.onTest} t={t} /> : null}
           <p data-testid="room-checkin-privacy" className="m-0 text-xs leading-[1.45] text-[#6b5b8a]">
             {t("externalPlay.room.checkin.privacy")}
           </p>
@@ -133,19 +147,22 @@ export function Checkin({
       </div>
       <div className="flex-1" />
       {snap.cameraPolicy === "required" ? <CameraNotice t={t} /> : null}
-      <button
-        type="button"
-        data-testid="room-checkin-cta"
-        disabled={done || busy || checkingCamera || untested}
-        onClick={() => {
-          // The ruling's order: the test camera is released first, so the SDK's join never meets a busy device.
-          test?.onHandOver();
-          onCheckIn();
-        }}
-        className="min-h-12 cursor-pointer rounded-xl border-0 bg-[#7c3aed] text-base font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#c9bdf0]"
-      >
-        {t(done ? "externalPlay.room.checkin.done" : checkingCamera ? "externalPlay.room.checkin.cameraStarting" : "externalPlay.room.checkin.cta")}
-      </button>
+      {line === null ? <SeatWaitNote remainingS={seatWaitS} t={t} /> : null}
+      {line === null ? (
+        <button
+          type="button"
+          data-testid="room-checkin-cta"
+          disabled={done || busy || checkingCamera || untested || seatWaitS !== null}
+          onClick={() => {
+            // The ruling's order: the test camera is released first, so the SDK's join never meets a busy device.
+            test?.onHandOver();
+            onCheckIn();
+          }}
+          className="min-h-12 cursor-pointer rounded-xl border-0 bg-[#7c3aed] text-base font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#c9bdf0]"
+        >
+          {t(done ? "externalPlay.room.checkin.done" : checkingCamera ? "externalPlay.room.checkin.cameraStarting" : "externalPlay.room.checkin.cta")}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@
 // a body and, where the state has one, an action at the bottom.
 import Link from "next/link";
 import type { RoomT } from "./room-copy";
+import { SeatWaitNote } from "./seat-wait-note";
 
 const ICON = {
   clock: (
@@ -136,11 +137,14 @@ export function CameraCard({
   dropped,
   busy,
   onRetry,
+  seatWaitS = null,
   t,
 }: {
   dropped: boolean;
   busy: boolean;
   onRetry: () => void;
+  /** Spec §6.1 (3): whole seconds left of the seat door's 429 wait, or null. The button is shut for as long as it runs. */
+  seatWaitS?: number | null;
   t: RoomT;
 }) {
   return (
@@ -149,12 +153,13 @@ export function CameraCard({
       icon={dropped ? "cameraOff" : "camera"}
       title={t(dropped ? "externalPlay.room.state.cameraLost.title" : "externalPlay.room.state.cameraRequired.title")}
       action={
-        <button type="button" data-testid="room-state-retry" className={PRIMARY} disabled={busy} onClick={onRetry}>
+        <button type="button" data-testid="room-state-retry" className={PRIMARY} disabled={busy || seatWaitS !== null} onClick={onRetry}>
           {t("externalPlay.room.state.tryAgain")}
         </button>
       }
     >
       <Body>{t(dropped ? "externalPlay.room.state.cameraLost.body" : "externalPlay.room.state.cameraRequired.body")}</Body>
+      <SeatWaitNote remainingS={seatWaitS} t={t} />
     </StateCard>
   );
 }
@@ -179,19 +184,31 @@ export function CameraBlockedCard({ onReload, t }: { onReload: () => void; t: Ro
 }
 
 /** 4 · Video service down: Check again. */
-export function VideoDownCard({ busy, onRetry, t }: { busy: boolean; onRetry: () => void; t: RoomT }) {
+export function VideoDownCard({
+  busy,
+  onRetry,
+  seatWaitS = null,
+  t,
+}: {
+  busy: boolean;
+  onRetry: () => void;
+  /** Spec §6.1 (3): see CameraCard. */
+  seatWaitS?: number | null;
+  t: RoomT;
+}) {
   return (
     <StateCard
       testId="room-state-video-down"
       icon="warning"
       title={t("externalPlay.room.state.videoDown.title")}
       action={
-        <button type="button" data-testid="room-state-retry" className={OUTLINE} disabled={busy} onClick={onRetry}>
+        <button type="button" data-testid="room-state-retry" className={OUTLINE} disabled={busy || seatWaitS !== null} onClick={onRetry}>
           {t("externalPlay.room.state.checkAgain")}
         </button>
       }
     >
       <Body>{t("externalPlay.room.state.videoDown.body")}</Body>
+      <SeatWaitNote remainingS={seatWaitS} t={t} />
     </StateCard>
   );
 }

@@ -111,7 +111,7 @@ describe("roomScreen", () => {
     });
   });
 
-  it("every seat refusal has its screen (preflight's twelve reasons; canvas cards 1, 2, 3, 4, 6, 7, 8, T17B's blocked card, and the check-in for a camera still starting)", () => {
+  it("every seat refusal has its screen (preflight's thirteen reasons; canvas cards 1, 2, 3, 4, 6, 7, 8, T17B's blocked card, and the check-in for a camera still starting)", () => {
     const want: Record<SeatRefusal, string> = {
       camera_required: "cameraRequired",
       camera_lost: "cameraLost",
@@ -126,6 +126,8 @@ describe("roomScreen", () => {
       round_not_open: "notOpened",
       // Spec §3.2.1 / §6.1: the round is open but THIS board's batch is not - its own card, never the "not opened" one.
       checkin_not_open: "batchWait",
+      // Spec §5.7 / §6.1: the budget holding the claim in the line is the check-in card, which shows the line itself.
+      queued: "checkin",
       not_a_player: "unavailable",
       fixture_not_playable: "unavailable",
     };
@@ -135,7 +137,7 @@ describe("roomScreen", () => {
       expect(roomScreen(st({}, { seat: refused(reason) })).kind, reason).toBe(kind);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: refusal reasons").toBe(12);
+    expect(checked, "anti-vacuity: refusal reasons").toBe(13);
   });
 
   it("a game on file is the live room — whatever stale seat refusal or window the state still holds", () => {

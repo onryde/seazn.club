@@ -4,7 +4,7 @@
 // room usecase's `SeatWire` and T9's `CreateOutcome`, and room-api.test.ts
 // pins each mirror against
 // its source at the type level, so the two cannot drift silently.
-import type { RoomSnapshot, SeatRefusal } from "./room-snapshot";
+import type { LineWire, RoomSnapshot, SeatRefusal } from "./room-snapshot";
 
 export type RoomActBody =
   | { kind: "move"; uci: string }
@@ -33,7 +33,11 @@ export type SeatAnswer =
    *  every other tokenless seat (camera Off, an organiser's video override): there the null is final, and no
    *  inference from a null token may say otherwise. */
   | { seated: true; participant: ParticipantWire | null; cameraRetry?: true }
-  | { seated: false; reason: SeatRefusal; participant: ParticipantWire | null };
+  | { seated: false; reason: SeatRefusal; participant: ParticipantWire | null }
+  /** Spec §5.7.3: the platform's call budget is holding this claim in the check-in line. The wire carries no token (`null`;
+   *  the room keeps the one it holds - room-state copies it onto this answer through the variant above, which `queued` is
+   *  also a reason of). `line` is the player's place and the cadence to ask again at. */
+  | { seated: false; reason: "queued"; participant: null; line: LineWire };
 
 /** The camera route's answer (`RoomCameraAnswer`, api-v1/schemas.ts): the token, or null; `retry` says whether to ask
  *  again (the budget was spent again) or to stop (null and final: the policy, an override or a closed window). */
@@ -58,7 +62,11 @@ export type RoomClaimAnswer = {
 
 /** A call's outcome: the envelope's data, or the HTTP status and error code
  *  (`status: 0` ⇒ the request never got an answer). */
-export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; code: string | null };
+export type ApiResult<T> =
+  | { ok: true; data: T }
+  /** `retryAfter`: the raw `Retry-After` header of the refusal (the seat door's 429 sends the seconds until its minute reopens),
+   *  present only when the response carried one. Parsed by seat-wait.ts, which clamps it; nothing else reads it. */
+  | { ok: false; status: number; code: string | null; retryAfter?: string };
 
 export type Fetcher = typeof fetch;
 
@@ -82,7 +90,8 @@ async function call<T>(f: Fetcher, url: string, init: RequestInit): Promise<ApiR
     body = null;
   }
   if (res.ok && body?.ok === true && body.data !== undefined) return { ok: true, data: body.data };
-  return { ok: false, status: res.status, code: body?.error?.code ?? null };
+  const retryAfter = res.headers?.get?.("retry-after");
+  return { ok: false, status: res.status, code: body?.error?.code ?? null, ...(retryAfter ? { retryAfter } : {}) };
 }
 
 export function fetchRoom(fixtureId: string, token: string | null, f: Fetcher = fetch) {

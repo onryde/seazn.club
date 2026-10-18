@@ -16,7 +16,8 @@
 //     re-runs token, seat and Lichess reads, so the poll must stop on it.
 import type { CameraAnswer, RoomActAnswer, RoomActBody, RoomClaimAnswer, SeatAnswer } from "./room-api";
 import { optimisticAfterDrop, type OptimisticClock } from "./clock-math";
-import { ROOM_BEING_REPAIRED, type Colour, type RoomGame, type RoomSnapshot } from "./room-snapshot";
+import { ROOM_BEING_REPAIRED, type Colour, type LineWire, type RoomGame, type RoomSnapshot } from "./room-snapshot";
+import { lineOf } from "./line-view";
 
 /** Lichess statuses past which the game is over (LICHESS_STATUSES minus the
  *  two live ones: `created`, `started`). */
@@ -107,6 +108,10 @@ export type RoomState = {
   /** Fix round 4b: the last read (or seat call) found the board being re-paired — it names nobody for now. The
    *  room reads on; the next answered read or seat call says where the player stands. */
   repairing: boolean;
+  /** Spec §5.7.3, §6.1 (2): why the player is at the back of the line again. The server says it ONCE, on the first queued
+   *  answer of the replacement stay (`line.left`); the card keeps saying it for as long as the line card shows, and the
+   *  moment a seat answer is anything but `queued` it is gone. */
+  lineLeft: LineWire["left"];
 };
 
 export type RoomEvent =
@@ -157,6 +162,7 @@ export function initialRoomState(snap: RoomSnapshot, receivedAt: number, grantRe
     grantRefused,
     optimistic: null,
     repairing: false,
+    lineLeft: null,
   };
 }
 
@@ -249,13 +255,17 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       // answer keeps it (and ONLY this answer does: every other tokenless answer means there is none).
       // D21-fix-3: the same for an optional camera seated with no token because the budget was spent (`cameraRetry`): the
       // claim could not look, so a token the room already holds stays (and then nothing is owed - cameraRetryDue).
+      // Spec §5.7.3: the same for `queued` - the budget is holding the claim, it looked at nothing, and the token the room
+      // holds (a player queued on a LATER claim already has one) is still the room's.
       const heldToken = s.seat?.participant ?? null;
       const a = e.answer.seat;
       const couldNotLook =
-        a !== null && a.participant === null && (a.seated ? a.cameraRetry === true : a.reason === "camera_starting");
+        a !== null && a.participant === null && (a.seated ? a.cameraRetry === true : a.reason === "camera_starting" || a.reason === "queued");
       const seat = couldNotLook ? { ...a, participant: heldToken } : a;
+      const queued = lineOf(seat);
+      const lineLeft = queued === null ? null : (queued.left ?? s.lineLeft);
       const relink = seat !== null && !seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required");
-      return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false };
+      return { ...merged, seat, lineLeft, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false };
     }
     case "camera_answered": {
       // Only the seat that asked is changed: a seat that has since been refused, or replaced by a claim that carried its

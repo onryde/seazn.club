@@ -13,7 +13,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { claimSeat, fetchRoom, requestCamera, sendAct, sendClockZero, type ApiResult, type CameraAnswer, type RoomActBody, type RoomClaimAnswer } from "./room-api";
 import { cameraRetryDue, initialRoomState, parseRoomBroadcast, plyOf, roomReducer } from "./room-state";
-import type { RoomSnapshot } from "./room-snapshot";
+import { LINE_POLL_MIN_MS, LINE_POLL_MS, type RoomSnapshot } from "./room-snapshot";
+import { lineOf } from "./line-view";
+import { useSeatWait } from "./seat-wait";
 
 export const LIVE_POLL_MS = 3_000;
 export const IDLE_POLL_MS = 15_000;
@@ -38,6 +40,14 @@ export const CAMERA_RETRY_MAX_MS = 30_000;
 /** The wait before the `attempt`-th ask (0-based). */
 export function cameraRetryDelayMs(attempt: number): number {
   return Math.min(CAMERA_RETRY_BASE_MS * 2 ** Math.min(Math.max(attempt, 0), 16), CAMERA_RETRY_MAX_MS);
+}
+
+/** Spec §5.7.9: the wait before a queued claim is repeated. The server's `pollMs`, never under LINE_POLL_MIN_MS; an absent,
+ *  zero, negative, non-finite or non-numeric one counts as LINE_POLL_MS, so neither a bug nor a hostile response can make the
+ *  room poll faster than the floor. */
+export function linePollDelayMs(pollMs: unknown): number {
+  if (typeof pollMs !== "number" || !Number.isFinite(pollMs) || pollMs <= 0) return LINE_POLL_MS;
+  return Math.max(pollMs, LINE_POLL_MIN_MS);
 }
 
 /** Spec §6.1 (1): a board whose check-in batch has not opened re-reads AT its `opensAt`, plus a jitter of up to this much,
@@ -203,19 +213,47 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
   }, [canSubscribe, topic, refresh]);
 
   // ── seat ───────────────────────────────────────────────────────────────
+  // Spec §6.1 (3): a 429 from the seat door starts a wait (a countdown on the monotonic clock) during which NO seat request
+  // goes out, from anywhere - this guard is the one place every caller passes. Never while the card shows the line (§5.7.9):
+  // a queued player's claim loop must not pause, or the place is lost in silence.
+  const seatWait = useSeatWait();
+  const { start: startSeatWait, blocked: seatWaitBlocked } = seatWait;
   const claim = useCallback(async (): Promise<RoomClaimAnswer | null> => {
     if (stateRef.current.pending !== null) return null;
+    if (seatWaitBlocked()) return null;
     dispatch({ type: "seat_sent" });
     // The participant whose token this browser holds, if any (D21-fix-3, F1): the room keeps it across a
-    // `camera_starting` answer (roomReducer), so the server need not hand it over again.
+    // `camera_starting` or `queued` answer (roomReducer), so the server need not hand it over again.
     const r = await claimSeat(fixtureId, token, stateRef.current.seat?.participant?.participantId ?? null);
     if (!r.ok) {
+      if (r.status === 429 && lineOf(stateRef.current.seat) === null) startSeatWait(r.retryAfter);
       dispatch({ type: "seat_failed", status: r.status, code: r.code });
       return null;
     }
     dispatch({ type: "seat_answered", answer: r.data, receivedAt: Date.now() });
     return r.data;
-  }, [fixtureId, token]);
+  }, [fixtureId, token, seatWaitBlocked, startSeatWait]);
+
+  // ── the check-in line's claim loop (spec §5.7.9) ────────────────────────
+  // While the seat answer is `queued` the room claims again after the server's `pollMs` (clamped to the floor), with NO upper
+  // bound - CAMERA_EVIDENCE_MAX_POLLS bounds `camera_starting` and does not apply - until the answer changes; and at once when
+  // the tab comes back into view. A 429 or a failed call leaves the answer as it was and the loop re-arms at its normal cadence
+  // (`pending` returning to null re-runs this effect).
+  const line = lineOf(state.seat);
+  useEffect(() => {
+    if (line === null || !state.polling || state.pending !== null) return;
+    const id = setTimeout(() => void claim(), linePollDelayMs(line.pollMs));
+    return () => clearTimeout(id);
+  }, [line, state.polling, state.pending, claim]);
+  const inLine = line !== null;
+  useEffect(() => {
+    if (!inLine || !state.polling || typeof document === "undefined" || typeof document.addEventListener !== "function") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void claim();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [inLine, state.polling, claim]);
 
   // ── camera token, asked again (D21-fix-3) ───────────────────────────────
   // The seat said, explicitly, that an optional camera has no token YET (the platform's call budget was spent): ask for
@@ -286,5 +324,5 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
     if (r.ok && r.data.reconciled) await refresh();
   }, [fixtureId, token, refresh]);
 
-  return { state, refresh, claim, act, clockZero, subscribed };
+  return { state, refresh, claim, act, clockZero, subscribed, seatWaitS: seatWait.remainingS };
 }

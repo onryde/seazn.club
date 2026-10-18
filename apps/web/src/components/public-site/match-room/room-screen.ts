@@ -49,6 +49,8 @@ const REFUSAL_SCREEN: Record<SeatRefusal, CardKind> = {
   round_not_open: "notOpened",
   // Spec §3.2.1: the round is open but THIS board's batch has not opened - the card says when.
   checkin_not_open: "batchWait",
+  // Spec §5.7: the call budget is holding the claim in the check-in line - the check-in card itself shows the line (§6.1).
+  queued: "checkin",
   not_a_player: "unavailable",
   fixture_not_playable: "unavailable",
 };
