@@ -1957,9 +1957,13 @@ claim, in one short sequence:
      waiting stay and no live admitted stay) → **go, today's path.** No admission, no reservation,
      nothing written but the upsert. **One exception (the capacity fix, 2026-10-18):** a COMPLETING
      claim (the board's other side has an open stay or a counted check-in, as in the candidate below)
-     goes only while `tokens >= LINE_RECHECK_COST`: nothing is reserved for it on an idle line, and
-     its seat's create re-verifies the opponent (3 reads, exempt from the line and not from the
-     bucket). Below that level it is **held** exactly as step 4 holds a claim that meets a dry
+     goes only while `tokens >= LINE_COMPLETING_LEVEL` (`LINE_READ_CALLS + LINE_TOKEN_CALLS +
+     LINE_RECHECK_COST` = 7): nothing is reserved for it on an idle line, its seating claim spends its
+     own reads and token first, and the seat's create then re-verifies the opponent (3 reads, exempt
+     from the line and not from the bucket). The level is the whole of that spend, not the re-verify's
+     price alone: the first build tested `LINE_RECHECK_COST` (3), and the load run still created one
+     board 268.7 s late because the claim passed at 3.9 tokens, spent four on its own calls, and met
+     a dry bucket at the re-verify. Below the level it is **held** exactly as step 4 holds a claim that meets a dry
      bucket: `queued_at` if null, `last_gate = 'held'`, answered `queued` at its position, nothing
      spent. It is then a waiting stay, so its next claim is a candidate and pays the pool test with
      the reservation it would hold (`LINE_RESERVATION + LINE_RECHECK_COST`), and a later arrival
@@ -2036,10 +2040,12 @@ claim, in one short sequence:
    retried by the sweep (exempt), and the player is already served.
    **The idle path is funded by a level check (the capacity fix, 2026-10-18).** A stay that passed on an
    idle line holds no reservation, so nothing funds its re-verify but the bucket's level at its gate:
-   a completing claim goes only at `tokens >= LINE_RECHECK_COST` (step 3, the idle bullet). The check
-   is the re-verify's own price, not the claim's whole remaining spend, so the same residual as an
-   admitted stay's remains (test 37 (d)): a claim that passes at the threshold and then spends its own
-   reads can still meet a dry bucket at the re-verify, and the sweep creates the board.
+   a completing claim goes only at `tokens >= LINE_COMPLETING_LEVEL` (step 3, the idle bullet): the
+   seating claim's own reads and token plus the re-verify behind them, so nothing the claim itself
+   spends can leave the re-verify short. What remains is only a SECOND spender: another line's claim,
+   or a sweep pass, taking from the bucket between this claim's gate and its create (the bucket is
+   shared across boards; the gate reads it but holds nothing). That residual is named, not fixed,
+   and is the same one an admitted stay has (test 37 (d)): the sweep creates the board.
 
 **Windowed admission (fix 3): what it is.** The first design admitted one stay at a time and held it
 through its camera's warm-up, so the line's pace was the SUM of the warm-ups (§5.6.8). The gate
@@ -2448,6 +2454,7 @@ player in line well before the deadline has all the time before it as well.
 | `LINE_TOKEN_CALLS` | 1 | the participant token handed with a seat or a refused camera; asserted equal to the fixture server's count for a refresh |
 | `LINE_RESERVATION` | 21 (derived) | `LINE_MINT_CALLS + LINE_READ_CALLS × CAMERA_EVIDENCE_MAX_POLLS + (LINE_READ_CALLS + LINE_TOKEN_CALLS)` = 2 + 3 × 5 + 4: the most the room's own schedule can make a stay spend inside `ADMIT_HOLD_MS` (§5.6.8, "What one stay costs"). Replaces `LINE_PLAYER_COST` (10), which was the measured average used as a reservation. The reservation of an admitted stay, the pool test (§5.7.3) and the ETA use it; the drain floor and the capacity figures use the MEASURED `D̄`, not this |
 | `ADMIT_HOLD_MS` | 54,500 (derived) | `MINT_TO_READ_MS + CAMERA_EVIDENCE_DEADLINE_MS + max(CAMERA_EVIDENCE_BACKOFF_MS)` = 31.5 s + 15 s + 8 s: the dead-camera bound on an admitted stay, with the margin for the verdict read one back-off step after the deadline (§5.7.5); a test asserts it is at least `LINE_RELEASE_GRACE_MS` |
+| `LINE_COMPLETING_LEVEL` | 7 (derived: `LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST`) | what an idle line's COMPLETING claim must find in the bucket to go (§5.7.3 step 3): the seating claim's own reads and token, then the opponent's re-verify; never typed, and a test asserts it is above `LINE_RECHECK_COST` |
 | `LINE_SERVE_TAIL_S` | 23 (derived) | `(CAMERA_EVIDENCE_DEADLINE_MS + max(CAMERA_EVIDENCE_BACKOFF_MS)) / 1000`: the longest from a stay's first read to its verdict; added to `etaS` in `mayTimeOut` (§5.7.3) |
 | `LINE_LOCK_TIMEOUT_MS` | 1,000 | the gate lock's `lock_timeout` (§5.7.3): 1,000 times the few milliseconds the lock is held, and under `LINE_POLL_MIN_MS`, so a busy claim answers before the client's next poll; a test asserts it is below `LINE_POLL_MIN_MS` |
 | `LINE_ASK_LIMIT` | 64 | derived from the poll floor, as V458's two are |
@@ -2802,7 +2809,7 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
 18. **The line empty is today's path.** A recorded call sequence for one board with the line empty
     equals the pre-amendment sequence, call for call, and writes no `queued_at` or `admitted_at`
     (idle means no waiting stay and no live admitted stay; the one exception is a COMPLETING claim
-    at a bucket under `LINE_RECHECK_COST`, test 37 (e), which the golden never meets: its bucket has no row, and a bucket nobody has spent from reads full). **The golden is
+    at a bucket under `LINE_COMPLETING_LEVEL`, test 37 (e), which the golden never meets: its bucket has no row, and a bucket nobody has spent from reads full). **The golden is
     recorded from the pre-amendment commit `00e5179b6` by running its code against the fixture
     server, committed as a fixture with that hash in its header, and never regenerated from the code
     under test.** Mutant: the gate spends one call or writes `queued_at` or `admitted_at` for a fresh arrival: red.
@@ -2978,20 +2985,25 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
     idle (no waiting stay, no live admitted stay) and the bucket is pinned at a stated level at the
     claim's instant. Through the gate, for each of the three causes of `completing` (an open stay on
     the other side, a counted check-in, neither) and each level 0, `LINE_RECHECK_COST - 1`,
-    `LINE_RECHECK_COST`, `LINE_RECHECK_COST + 1`, `LINE_RESERVATION + LINE_RECHECK_COST`: a completing
-    claim goes (`go_idle`, nothing written but the upsert) at `LINE_RECHECK_COST` and above and is
-    `queued` at position 1 (`queued_at` set, `last_gate = 'held'`, nothing admitted) below it; the
-    non-completing claim goes at all five levels (15 claims, with 4 held and 6 completing claims let
-    through, reported). Sequence: after the hold a later arrival queues behind it at any bucket level;
-    the held stay's re-ask is a candidate, so it is `queued` at `LINE_RECHECK_COST` and at
-    `LINE_RESERVATION + LINE_RECHECK_COST - 1` and admitted at `LINE_RESERVATION + LINE_RECHECK_COST`; a
-    held stay silent for `LINE_ABANDON_AFTER_MS` stops holding the line, and the next completing claim
-    at `LINE_RECHECK_COST` goes. Through the real route and the fixture server: HOME, whose opponent
-    is counted, arrives at a bucket one token under `LINE_RECHECK_COST` and is held with ZERO vendor
-    calls; its re-asks at `LINE_RECHECK_COST` and at `LINE_RESERVATION + LINE_RECHECK_COST - 1` are held
-    with zero calls; at `LINE_RESERVATION + LINE_RECHECK_COST` it is admitted, mints, seats, and the
-    opponent's re-verify reads equal `LINE_RECHECK_COST`, none deferred, and the game is created inside
-    the claim (no late create). At exactly `LINE_RECHECK_COST` the claim goes and writes nothing.
+    `LINE_RECHECK_COST`, `LINE_COMPLETING_LEVEL - 1`, `LINE_COMPLETING_LEVEL`, `LINE_COMPLETING_LEVEL + 1`,
+    `LINE_RESERVATION + LINE_RECHECK_COST`: a completing claim goes (`go_idle`, nothing written but
+    the upsert) at `LINE_COMPLETING_LEVEL` and above and is `queued` at position 1 (`queued_at` set,
+    `last_gate = 'held'`, nothing admitted) below it, `LINE_RECHECK_COST` and `LINE_COMPLETING_LEVEL - 1`
+    included (the two levels a too-low check lets through); the non-completing claim goes at all seven
+    levels (21 claims, with the held and let-through counts reported, and the control row asserted).
+    `LINE_COMPLETING_LEVEL` is asserted above `LINE_RECHECK_COST`, so the two checks differ. Sequence:
+    after the hold a later arrival queues behind it at any bucket level; the held stay's re-ask is a
+    candidate, so it is `queued` at `LINE_COMPLETING_LEVEL` and at `LINE_RESERVATION +
+    LINE_RECHECK_COST - 1` and admitted at `LINE_RESERVATION + LINE_RECHECK_COST`; a held stay silent
+    for `LINE_ABANDON_AFTER_MS` stops holding the line, and the next completing claim at
+    `LINE_COMPLETING_LEVEL` goes. Through the real route and the fixture server: HOME, whose opponent
+    is counted, arrives at a bucket under `LINE_COMPLETING_LEVEL` (`LINE_RECHECK_COST - 1`,
+    `LINE_RECHECK_COST`, `LINE_COMPLETING_LEVEL - 1`) and is held with ZERO vendor calls; its re-asks at
+    `LINE_COMPLETING_LEVEL` and at `LINE_RESERVATION + LINE_RECHECK_COST - 1` are held with zero calls;
+    at `LINE_RESERVATION + LINE_RECHECK_COST` it is admitted, mints, seats, and the opponent's
+    re-verify reads equal `LINE_RECHECK_COST`, none deferred, and the game is created inside the claim
+    (no late create). At exactly `LINE_COMPLETING_LEVEL` the claim goes, writes nothing, and its seat
+    and re-verify fit what it found.
     Mutants, one at a time: delete the level check; `>=` to `>`; drop the `completing` condition (the
     control row is red); test the level against `LINE_RESERVATION`; drop the open-stay or the
     counted cause of `completing`; hold nothing (let the claim through): each red. Mutants, one at a

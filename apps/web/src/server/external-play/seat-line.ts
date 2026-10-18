@@ -64,6 +64,11 @@ export const LINE_RESERVATION =
  * LINE_RELEASE_GRACE_MS (the re-claims take 4.5 s), after which the silent stay lapses and its reservation is returned. */
 /** The opponent's re-verify (T9's three reads), held beside the reservation of a stay whose seat could complete its board. */
 export const LINE_RECHECK_COST = 3;
+/** What an idle line's COMPLETING claim must find in the bucket before it goes (spec §5.7.3, the idle bullet): the reads of the seating
+ *  claim itself and the token handed with the seat, THEN the opponent's re-verify that the seat's create makes. A level of
+ *  `LINE_RECHECK_COST` alone is spent by the claim's own reads before the re-verify runs (measured: spec B, instant cameras, still created
+ *  one board 268.7 s late with the check at `LINE_RECHECK_COST`). DERIVED, never typed. */
+export const LINE_COMPLETING_LEVEL = LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST;
 /** The most ONE claim spends (a re-paired board's minting claim: two stale meetings ended, its own created, the participant
  *  added). Not a threshold; a declared maximum the reservation must cover (asserted). */
 export const LINE_CLAIM_COST = 6;
@@ -352,7 +357,7 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
       const pool = st.tokens - st.reserved;
       const position = st.ahead + 1;
       const trace = (decision: string) =>
-        log.info({ fixtureId: a.fixtureId, decision, position, lockWaitMs }, "seat-line: gate decision");
+        log.info({ fixtureId: a.fixtureId, decision, position, lockWaitMs, tokens: Math.round(st.tokens * 10) / 10 }, "seat-line: gate decision");
 
       // Step 3. An ADMITTED, live stay is entitled to its reservation: no level check.
       if (st.mineAdmitted) {
@@ -371,12 +376,13 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
       // A new arrival joins the tail without spending: a stay is never admitted ahead of an earlier stay that is waiting.
       if (st.ahead > 0) return hold(reservationIf(completing), "hold_blocked");
       // Idle - this stay is not waiting, nobody is, and no admitted stay is live: today's path, nothing written but the upsert.
-      // EXCEPT a COMPLETING claim, which goes only while the bucket holds its re-verify (`tokens >= LINE_RECHECK_COST`): on an idle
-      // line nothing is reserved for it, so a bucket that cannot pay the re-verify would defer it INSIDE the create, and the board
-      // would wait for the sweep (spec §5.7.3, test 37 (e)). Below it the claim is held like any stay that meets a dry bucket
-      // (step 4): it becomes a waiting stay, and its next claim pays the pool test with the reservation it would hold.
+      // EXCEPT a COMPLETING claim, which goes only while the bucket holds its own seating reads and token AND the opponent's re-verify
+      // (`tokens >= LINE_COMPLETING_LEVEL`): on an idle line nothing is reserved for it, so a bucket that cannot pay the re-verify after
+      // the claim's own spend would defer it INSIDE the create, and the board would wait for the sweep (spec §5.7.3, test 37 (e)). Below
+      // it the claim is held like any stay that meets a dry bucket (step 4): it becomes a waiting stay, and its next claim pays the pool
+      // test with the reservation it would hold.
       if (st.waiting === 0 && st.admittedLive === 0) {
-        if (!completing || st.tokens >= LINE_RECHECK_COST) {
+        if (!completing || st.tokens >= LINE_COMPLETING_LEVEL) {
           trace("go_idle");
           return { kind: "go", decision: "idle" } as GateAnswer;
         }

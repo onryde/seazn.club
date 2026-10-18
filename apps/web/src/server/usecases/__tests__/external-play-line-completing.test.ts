@@ -9,7 +9,7 @@ import {
   CAMERA_EVIDENCE_BACKOFF_MS,
   cameraEvidenceDelayMs,
 } from "@/components/public-site/match-room/room-snapshot";
-import { LINE_RECHECK_COST, LINE_RESERVATION } from "@/server/external-play/seat-line";
+import { LINE_READ_CALLS, LINE_RECHECK_COST, LINE_RESERVATION, LINE_TOKEN_CALLS } from "@/server/external-play/seat-line";
 import { STRANDED_CREATE_AFTER_MS } from "../external-play/sweep";
 import { SEAT_RECHECK_TRUST_MS, seatPlayer } from "../external-play/preflight";
 import { holdReservation, putStay, stayRow } from "./_external-play-line";
@@ -282,9 +282,12 @@ describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", 
 // (e) THE IDLE PATH. (d) names the residual of an ADMITTED stay: the reservation covers its schedule to the fifth read, and a seat past it
 // meets a dry bucket at the re-verify. A stay that passed on an IDLE line holds no reservation at all, so before this test's fix the same
 // deferral met a COMPLETING claim whenever the bucket was low when it arrived (the capacity load's spec B, instant cameras: one board in
-// thirty created 268.7 s late by the sweep, twice). A completing claim on an idle line now goes only while the bucket holds its
-// re-verify (`tokens >= LINE_RECHECK_COST`), and is otherwise held like any stay that meets a dry bucket.
-describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its re-verify (test 37 (e))", () => {
+// thirty created 268.7 s late by the sweep, twice). A completing claim on an idle line now goes only while the bucket holds the seating
+// claim's own spend (LINE_READ_CALLS reads and the LINE_TOKEN_CALLS token) AND the re-verify behind it - LEVEL below - and is otherwise held
+// like any stay that meets a dry bucket. A check at the re-verify's price alone (R) was tried first and did NOT fix B: the load held a claim
+// at 3.9 tokens, which passes R, and the claim's own four calls then left the re-verify short; so R is one of the levels driven below.
+describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its seat and its re-verify (test 37 (e))", () => {
+  const LEVEL = LINE_READ_CALLS + LINE_TOKEN_CALLS + R;
   /** AWAY is seated and counted on an idle line; HOME's mint comes next, with the bucket at `tokens`. */
   async function homeArrives(tokens: number) {
     const w = world();
@@ -297,16 +300,27 @@ describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its re-ve
     return { w, board, t, got, spent: w.rtk.http.length - before };
   }
 
-  it("one token under the re-verify: HOME is held and spends nothing; at exactly the re-verify's price it is still held (a waiting stay pays the pool test); once the pool holds its reservation it is admitted, seats, and the create's re-verify reads equal LINE_RECHECK_COST, none deferred - no late create", async () => {
-    const { w, board, t, got, spent } = await homeArrives(R - 1);
-    expect(got.seat, "held: the bucket cannot pay the opponent's re-verify").toMatchObject({ seated: false, reason: "queued" });
-    expect(spent, "a held claim spends nothing at the vendor").toBe(0);
-    const held = await stayRow(board.fixtureId, board.home.personId);
-    expect([held?.queued_at != null, held?.admitted_at, held?.last_gate], "held: in line, not admitted").toEqual([true, null, "held"]);
+  it("below LEVEL - including the re-verify's price alone and one token under LEVEL - HOME is held and spends nothing", async () => {
+    let held = 0;
+    for (const tokens of [R - 1, R, LEVEL - 1]) {
+      const { board, got, spent } = await homeArrives(tokens);
+      expect(got.seat, `tokens ${tokens}: held, the bucket cannot pay the seat and the re-verify`).toMatchObject({ seated: false, reason: "queued" });
+      expect(spent, `tokens ${tokens}: a held claim spends nothing at the vendor`).toBe(0);
+      const row = await stayRow(board.fixtureId, board.home.personId);
+      expect([row?.queued_at != null, row?.admitted_at, row?.last_gate], `tokens ${tokens}: in line, not admitted`).toEqual([true, null, "held"]);
+      held += 1;
+    }
+    expect(held, "levels driven").toBe(3);
+  }, 120_000);
 
-    // Re-asks while the bucket recovers. At the re-verify's price alone it is not enough: a waiting stay needs the reservation it would hold.
+  it("the sequence: held one token under LEVEL; its re-asks at LEVEL and at LINE_RESERVATION + LINE_RECHECK_COST - 1 are still held (a waiting stay pays the pool test); once the pool holds its reservation it is admitted, seats, and the create's re-verify reads equal LINE_RECHECK_COST, none deferred - no late create", async () => {
+    const { w, board, t, got, spent } = await homeArrives(LEVEL - 1);
+    expect(got.seat, "held").toMatchObject({ seated: false, reason: "queued" });
+    expect(spent, "a held claim spends nothing at the vendor").toBe(0);
+
+    // Re-asks while the bucket recovers. LEVEL alone is not enough now: a waiting stay needs the reservation it would hold.
     let reAsks = 0;
-    for (const tokens of [R, L + R - 1]) {
+    for (const tokens of [LEVEL, L + R - 1]) {
       await fund(w.key, tokens);
       const c0 = w.rtk.http.length;
       const again = await claimRoom(w, board, "home", new Date(t.getTime() + (20 + reAsks) * SEC));
@@ -345,10 +359,29 @@ describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its re-ve
     expect(created, "the game is created inside the claim: no late create for the sweep to make").toEqual({ created: true, gameId: "g-idle" });
   }, 120_000);
 
-  it("at exactly LINE_RECHECK_COST the claim goes: the line stays idle (nothing queued, nothing admitted) and HOME mints", async () => {
-    const { board, got } = await homeArrives(R);
+  it("at exactly LEVEL the claim goes: the line stays idle (nothing queued, nothing admitted), HOME mints, and its seat and re-verify fit what it found (the seating claim's calls, then the re-verify)", async () => {
+    const { w, board, t, got } = await homeArrives(LEVEL);
     expect(got.seat, "the claim went").toMatchObject({ seated: false, reason: "camera_required" });
     const row = await stayRow(board.fixtureId, board.home.personId);
     expect([row?.queued_at, row?.admitted_at], "the idle path writes nothing but the upsert").toEqual([null, null]);
-  }, 60_000);
+    // The bucket held exactly LEVEL, the mint took 2 and the line is idle: the seating claim (reads + token) then the re-verify spend the rest.
+    const mintAt = new Date(t.getTime() + 10 * SEC);
+    const joined = new Date(mintAt.getTime() + 2 * SEC);
+    joinAt(w, got.seat, new Date(joined.getTime() + 8_500));
+    cameraOn(w, got.seat, new Date(joined.getTime() - SEC));
+    await fund(w.key, LEVEL); // the level the gate saw, as a claim of its own finds it
+    let verify: { seated: boolean; calls: number } | null = null;
+    const seated = await claimRoom(w, board, "home", joined, {
+      create: async () => {
+        const c0 = w.rtk.http.length;
+        const later = new Date(joined.getTime() + SEAT_RECHECK_TRUST_MS + SEC);
+        const re = await seatPlayer({ fixtureId: board.fixtureId, personId: board.away.personId, recheck: true }, { now: later, video: w.rtk.video, line: { at: later } });
+        verify = { seated: re.seated, calls: w.rtk.http.length - c0 };
+        return (re.seated ? { created: true as const, gameId: "g-level" } : { created: false as const, reason: "not_ready" as const }) as never;
+      },
+    });
+    expect(seated.seat?.seated, "seated from a bucket of exactly LEVEL").toBe(true);
+    expect(verify, "the create asked for the re-verify").not.toBeNull();
+    expect(verify!.seated, "and the re-verify was not deferred: LEVEL is the seat's reads and token plus the re-verify, no more").toBe(true);
+  }, 120_000);
 });
