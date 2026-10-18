@@ -1490,10 +1490,42 @@ describe("the online-chess fixture servers' wiring", () => {
     // not) would run against a server pointed nowhere — so it reds here first.
     const starters = specFiles().filter((f) => STARTERS.test(readFileSync(join(E2E_DIR, f), "utf8")));
     expect(starters.length, "anti-vacuity: some spec starts the fixture servers").toBeGreaterThan(0);
-    expect(
-      starters.filter((f) => !selects(walkthrough, f)),
-      "these specs start a Lichess/RealtimeKit fixture server outside the walkthrough leg; their job's env must point the server at it too, and this test must pin that",
-    ).toEqual([]);
+    // A starter OUTSIDE the walkthrough project is allowed only where the server IS pointed at the fixtures: the `parallel` project, which
+    // the e2e-parallel job runs (its job-level env is pinned by the next test). match-room.spec.ts's capacity block is one: it starts the
+    // RealtimeKit fixture so the check-in line, the budget's 429 and the deadline are driven through the real route. Every other project
+    // (serial, the mobile and tablet widths, the gallery) runs under a job that leaves video unconfigured, so a starter selected there
+    // would be an INERT seam: a fixture the server never calls.
+    const outside = starters.filter((f) => !selects(walkthrough, f));
+    expect(outside, "premise: match-room.spec.ts's capacity block starts the RealtimeKit fixture outside the walkthrough project").toContain("match-room.spec.ts");
+    const pointed = new Set(["setup", "parallel", "walkthrough"]);
+    const configs = [await configFor(undefined), await configFor("heavy"), await configFor("rest")];
+    let checked = 0;
+    try {
+      for (const f of outside) {
+        expect(
+          configs.some((c) => selects(projectNamed(c, "parallel"), f)),
+          `${f} starts a fixture but no slice of the parallel project selects it: the fixture would never be reached`,
+        ).toBe(true);
+        for (const c of configs) {
+          for (const project of c.projects) {
+            if (pointed.has(project.name)) continue;
+            expect(
+              selects(project, f),
+              `${f} starts a Lichess/RealtimeKit fixture and the ${project.name} project selects it, but that leg's job does not point the server at it`,
+            ).toBe(false);
+            checked++;
+          }
+        }
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(checked, "anti-vacuity: (spec, project) pairs checked").toBeGreaterThan(0);
+    // And the job side of the same fact: e2e-parallel runs the parallel project, and no later job does.
+    expect(job("e2e-parallel", "e2e-serial"), "premise: e2e-parallel runs the parallel project").toMatch(/^\s+project: parallel\s*$/m);
+    expect(yml.slice(yml.indexOf("\n  e2e-serial:\n")), "premise: no later job runs the parallel project").not.toMatch(
+      /--project=parallel|^\s+project: parallel\s*$/m,
+    );
   });
 
   it("e2e-parallel's job-level env points the server at both fixtures, with the video fixture's credentials", () => {
