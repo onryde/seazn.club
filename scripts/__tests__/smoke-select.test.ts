@@ -10,11 +10,23 @@ import { SmokeSelectionError, selectSmokeSuites } from "../smoke-select.ts";
 const KNOWN = ["streamTargets", "v1", "captureV2", "captureRecord", "bracketFinish", "walkoverCredit", "streamOverlay", "matchRoom", "arbiter", "onlineChessDesk"] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
-  it("UNSET means run everything, and unset is the default: CI never sets SMOKE_ONLY, so CI's smoke is unchanged", () => {
+  it("UNSET means run everything, and unset is the default: CI's FULL smoke never sets SMOKE_ONLY, so it is unchanged — the one SMOKE_ONLY in CI is the R2004 composed step's own, on its second server", () => {
     expect(selectSmokeSuites(KNOWN, undefined)).toEqual({ mode: "all" });
-    const workflows = ["ci.yml", "e2e.yml"].map((f) => readFileSync(join(import.meta.dirname, "..", "..", ".github", "workflows", f), "utf8"));
-    expect(workflows.length).toBe(2);
-    for (const w of workflows) expect(w).not.toContain("SMOKE_ONLY");
+    const read = (f: string) => readFileSync(join(import.meta.dirname, "..", "..", ".github", "workflows", f), "utf8");
+    expect(read("e2e.yml")).not.toContain("SMOKE_ONLY");
+    // R2004 (PR #981 review): ci.yml runs captureV2 ALONE against a second server that names a compositor image. That
+    // step — and nothing else in the workflow, no job env, not `Run smoke test` — carries SMOKE_ONLY.
+    const ci = read("ci.yml");
+    const lines = ci.split("\n");
+    const at = lines.flatMap((l, i) => (l.includes("SMOKE_ONLY") ? [i] : []));
+    expect(at, "exactly one SMOKE_ONLY line in ci.yml").toHaveLength(1);
+    let i = at[0]!;
+    while (i > 0 && !/^ {6}- name: /.test(lines[i]!)) i--;
+    expect(lines[i], "it belongs to the composed step").toBe("      - name: Run composed smoke (captureV2 against the compositor-image server)");
+    expect(lines[at[0]!]).toMatch(/^ {10}SMOKE_ONLY: captureV2$/);
+    const full = ci.indexOf("      - name: Run smoke test\n");
+    expect(full, "premise: the full smoke step").toBeGreaterThan(-1);
+    expect(ci.slice(full, ci.indexOf("\n      - name: ", full + 1)), "the full smoke sets no subset").not.toContain("SMOKE_ONLY");
   });
   it("a named subset returns exactly those names, in the given order, de-duplicated and trimmed", () => {
     expect(selectSmokeSuites(KNOWN, "streamTargets")).toEqual({ mode: "subset", names: ["streamTargets"] });
