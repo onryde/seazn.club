@@ -108,6 +108,12 @@ export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
   /** RT: the signed overlay key from the OBS URL (server/overlay/overlay-key.ts), sent beside the purpose. A string for
    *  the same reason. The route verifies it; the client never can. */
   overlayKey?: string;
+  /** R2005 (change 2): poll at exactly this interval in EVERY tier — open, settled past its listen window, locked, and
+   *  with a realtime channel up — in place of the tier's own (15 s, 60 s, never). The compositor host passes
+   *  `STREAM_POLL_MS` (5 s), because its score-stale rule (`SCORE_STALE_AFTER_MS`, 10 s) would read any of the tier
+   *  intervals as a dead feed between two healthy polls. Absent: the tiers, unchanged. A number, so a caller that
+   *  re-mints its options object every render never re-arms the interval. */
+  steadyPollMs?: number;
 }
 
 export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureData> {
@@ -131,6 +137,11 @@ export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureDat
    * exactly the I1 defect (below).
    */
   awaitingDelay: boolean;
+  /** R2005: the newest snapshot the TRANSPORT took and the wall time it took it — `initial` at mount, then every
+   *  successful fetch (a failed one moves nothing). Not the presented `data`: a delayed hook presents late on purpose,
+   *  and the compositor's score-stale signal measures the feed, not the picture. The programme phase rides it too
+   *  (fallback B), because a phase describes the compositor NOW, not `delayMs` ago. */
+  received: { at: number; snapshot: T };
 }
 
 export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
@@ -203,6 +214,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // (the buffer is a list scan, not a cost), not a rounded delayMs.
   const seededRef = useRef(false);
   const [awaitingDelay, setAwaitingDelay] = useState(delayMs > 0);
+  const [received, setReceived] = useState<{ at: number; snapshot: T }>(() => ({ at: Date.now(), snapshot: initial }));
   // NO `updatedAt` state here. The freshness line ("Updated 5s ago") derives
   // from `header.updatedAt` — the DOCUMENT's own timestamp, ticked every
   // second by `useNow()` in `court-card.tsx` — never from when this hook last
@@ -226,6 +238,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     try {
       const next = await fetcherRef.current(fixtureId);
       if (!mountedRef.current) return;
+      setReceived({ at: Date.now(), snapshot: next });
       if (delayMs <= 0) {
         setData(next);
         return;
@@ -386,18 +399,23 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // NEWER undelayed tip first (I1 regression). Interval still arms either way.
   // A NUMBER in the deps, so a settled transition on a subscribed channel
   // (60 s either way) does not re-arm the interval or re-fetch.
-  const pollMs = tier === "settled" ? SETTLED_POLL_MS : subscribed ? SUBSCRIBED_POLL_MS : POLL_MS;
+  const steadyPollMs = options.steadyPollMs;
+  const pollMs = steadyPollMs ?? (tier === "settled" ? SETTLED_POLL_MS : subscribed ? SUBSCRIBED_POLL_MS : POLL_MS);
+  // A steady interval polls whatever the tier says (R2005): the compositor host must hear from the feed every
+  // `steadyPollMs`, a finished match included, or its score-stale signal would fire on a healthy page.
+  const polling = steadyPollMs !== undefined || live;
   useEffect(() => {
-    if (!live) return;
+    if (!polling) return;
     if (delayMs <= 0) void refresh();
     const id = setInterval(refresh, pollMs);
     return () => clearInterval(id);
-  }, [live, pollMs, refresh, delayMs]);
+  }, [polling, pollMs, refresh, delayMs]);
 
   return {
     data,
     transport: subscribed ? "realtime" : "poll",
     presentationNowOffsetMs: delayMs,
     awaitingDelay,
+    received,
   };
 }

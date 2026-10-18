@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { negotiateLocale } from "@/lib/i18n-negotiate";
 import { hasLocale } from "@/lib/i18n-constants";
 import { SESSION_HINT_COOKIE, SESSION_MAX_AGE_S, hasSessionHint } from "@/lib/session-hint";
+import { RELAY_PHASE_PORT } from "@/lib/relay-phase";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -16,6 +17,20 @@ const CACHEABLE_PUBLIC = /^\/(shared|embed)(\/|$)/;
 
 export function isCacheablePublicPath(pathname: string): boolean {
   return CACHEABLE_PUBLIC.test(pathname);
+}
+
+/** The `/overlay` tree (`/overlay` or `/overlay/…`, never `/overlayx…`): the stream overlay a club adds to OBS, and the
+ *  page the compositor renders (`host=compositor`). */
+const OVERLAY_TREE = /^\/overlay(\/|$)/;
+
+/** R2005 change 8 (compositor `_FINDINGS.md` F-009; coordinator decision 2026-10-16): the compositor's loopback phase
+ *  endpoint (overlay templates spec §4.3), allowed in `connect-src` on the `/overlay` tree ONLY, as a ` <origin>`
+ *  suffix. F-009 proved CEF 139 reaches it from a page with NO policy; without this, `CSP_MODE=enforce` would block
+ *  every phase poll before it left the page and the hook would fall back to the heartbeat in silence. The OBS page
+ *  carries the source too and never fetches it: the hook makes no request without `host=compositor`. Derived from
+ *  `RELAY_PHASE_PORT`, never a second literal. */
+function overlayLoopbackOrigin(pathname: string): string {
+  return OVERLAY_TREE.test(pathname) ? ` http://127.0.0.1:${RELAY_PHASE_PORT}` : "";
 }
 
 /** The PostHog first-party proxy origin (prod), as a ` <origin>` connect-src suffix; "" when events ride the same-origin /ingest rewrite. */
@@ -43,7 +58,10 @@ function posthogApiOrigin(): string {
  * browser console on staging) to switch to blocking. Enforcing nonce CSP forces
  * dynamic rendering (no static/CDN caching), which is why it is opt-in.
  */
-export function cspHeader(nonce: string, opts: { forceReportOnly?: boolean } = {}): { name: string; value: string } {
+export function cspHeader(
+  nonce: string,
+  opts: { forceReportOnly?: boolean; pathname?: string } = {},
+): { name: string; value: string } {
   const isDev = process.env.NODE_ENV === "development";
   const enforce = process.env.CSP_MODE === "enforce" && !opts.forceReportOnly;
   const value = [
@@ -59,7 +77,8 @@ export function cspHeader(nonce: string, opts: { forceReportOnly?: boolean } = {
     // RealtimeKit: the match room's camera tile joins from the browser; its
     // Core SDK talks to *.realtime.cloudflare.com, signalling over wss
     // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
-    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}`,
+    // R2005: the compositor's loopback phase channel, on `/overlay` only (overlayLoopbackOrigin).
+    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}`,
     // Embedded Checkout renders inside a Stripe-hosted iframe.
     `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com`,
     `object-src 'none'`,
@@ -158,7 +177,7 @@ export function proxy(request: NextRequest) {
   // Page requests: attach a per-request nonce + CSP.
   const cacheable = isCacheablePublicPath(request.nextUrl.pathname);
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
-  const csp = cspHeader(nonce, { forceReportOnly: cacheable });
+  const csp = cspHeader(nonce, { forceReportOnly: cacheable, pathname: request.nextUrl.pathname });
 
   const requestHeaders = new Headers(request.headers);
   if (!cacheable) {
