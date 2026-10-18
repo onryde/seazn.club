@@ -600,6 +600,7 @@ export async function claimRoomSeat(
       // The stamp is dated at the instant the window was JUDGED (`now`, read once at the top of the claim), never at the database's now()
       // after the seat: the seat takes as long as the vendor takes, and a claim judged open a moment before the deadline was stamped past
       // it, so a player seated in time read as never having come and the board was never created (the B-end load run, 234 s to a forfeit).
+      // Debounce: the stamp can be older than the seat, so the sweep's `STRANDED_CREATE_AFTER_MS` is already met and a pass may try its own create beside this one; a create has one claimant and the loser reads `lost` (spec §5.7.8).
       await stampFixtureCheckIn(r.player.personId, fixtureId, r.f.orgId, { at: arrival ?? now, window: { opensAt: w.opensAt, deadline: w.deadline } });
       await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
       const ci = await checkIns(r.f, r.home, r.away, anchor);
