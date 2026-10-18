@@ -102,6 +102,13 @@ export async function attachToOpen(
        and fixture_external_play.create_sent_at is null`;
 }
 
+/** The opening time the mail PROMISES: the instant rounded UP to the next whole minute (one already on a minute is not moved), so the
+ *  mail never names a minute before the door opens. The batch-wait card applies the same rule (`formatPromisedTime`). The DEADLINE's
+ *  label is not rounded: truncating names a time a few seconds earlier than the real cut-off, which is the safe direction there. */
+function ceilToMinute(at: Date): Date {
+  return new Date(Math.ceil(at.getTime() / 60_000) * 60_000);
+}
+
 function utcLabel(at: Date, locale: string): string {
   try {
     return new Intl.DateTimeFormat(locale, {
@@ -168,7 +175,7 @@ export async function sendFixtureInvite(a: {
           opponentName: seat.opponent.displayName,
           roundNo: a.roundNo,
           deadlineLabel: utcLabel(deadline, locale),
-          ...(laterBatch ? { opensLabel: utcLabel(w.opensAt, locale) } : {}),
+          ...(laterBatch ? { opensLabel: utcLabel(ceilToMinute(w.opensAt), locale) } : {}),
           fixtureUrl,
         },
         locale,

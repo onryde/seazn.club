@@ -501,6 +501,8 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
       timeZoneName: "short",
     }).format(at);
   const seedRound = () => seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * S);
+  /** What the mail may name for an opening: the instant rounded UP to the next whole minute (written here, not read from the mail). */
+  const promised = (at: Date) => new Date(Math.ceil(at.getTime() / MIN) * MIN);
 
   it("[reader:invite] each mail names its BOARD's own deadline; a board in batch 2 also names when its check-in opens, batch 0 does not", async () => {
     const r = await seedRound();
@@ -513,13 +515,41 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
         expect(m, `batch ${batch}: ${p.email} was mailed`).toBeDefined();
         expect(m!.deadlineLabel, `batch ${batch} deadline`).toBe(label(new Date(batchStart(batch).getTime() + DEADLINE_AFTER_MS), m!.locale));
         if (batch === 0) expect(m!.opensLabel, "batch 0 opens at the Open press: no opens-at line").toBeUndefined();
-        else expect(m!.opensLabel, `batch ${batch} opens-at`).toBe(label(batchStart(batch), m!.locale));
+        else expect(m!.opensLabel, `batch ${batch} opens-at`).toBe(label(promised(batchStart(batch)), m!.locale));
         checked += 1;
       }
     }
     expect(mail.sent.length, "exactly the four seats of the two real boards").toBe(4);
     expect(checked, "anti-vacuity").toBe(4);
     expect(label(batchStart(2), "en"), "premise: the two boards' deadlines read differently").not.toBe(label(batchStart(0), "en"));
+  });
+
+  it("the mail's opens-at never names a minute BEFORE the batch really opens: an opening at :00 s is named as it is, at :01 and :59 s it is named at the next whole minute (the build review's M-1)", async () => {
+    // Batch 2 opens 2 x CHECKIN_BATCH_GAP_MS after the open, and the gap is whole minutes, so the seconds of the open ARE the seconds of the opening.
+    expect(CHECKIN_BATCH_GAP_MS % MIN, "premise: the gap is a whole number of minutes").toBe(0);
+    const cases = [
+      { sec: "00", roundsUp: false },
+      { sec: "01", roundsUp: true },
+      { sec: "59", roundsUp: true },
+    ] as const;
+    const seen: string[] = [];
+    for (const c of cases) {
+      mail.sent.length = 0;
+      const opened = new Date(`2026-10-01T12:00:${c.sec}.000Z`);
+      const r = await seedRound();
+      await open(r, opened);
+      const m = mail.sent.find((x) => x.to === r.ranked.home.email);
+      expect(m, `:${c.sec}: the ranked board's player was mailed`).toBeDefined();
+      const real = new Date(opened.getTime() + 2 * CHECKIN_BATCH_GAP_MS);
+      const named = c.roundsUp ? new Date(Math.floor(real.getTime() / MIN) * MIN + MIN) : real;
+      expect(named.getTime(), `:${c.sec}: the named minute is never before the real opening`).toBeGreaterThanOrEqual(real.getTime());
+      expect(named.getTime() - real.getTime(), `:${c.sec}: and no more than a minute after it`).toBeLessThan(MIN);
+      expect(m!.opensLabel, `:${c.sec}: opens-at`).toBe(label(named, m!.locale));
+      seen.push(m!.opensLabel!);
+    }
+    expect(seen.length, "openings driven").toBe(3);
+    expect(seen[0], "premise: :00 and :01 name different minutes (rounding moved it)").not.toBe(seen[1]);
+    expect(seen[1], ":01 and :59 name the same next minute").toBe(seen[2]);
   });
 
   it("[reader:resend] the organiser's Resend judges the BOARD's window: inside batch 2's own, refused for batch 0 once ITS has closed; at batch 2's deadline exactly, refused", async () => {

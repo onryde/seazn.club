@@ -105,6 +105,8 @@ describe.skipIf(!HAS_DB)("every reader follows the mocked gap (capacity tests 2 
   const S = CHECKIN_BATCH_SIZE;
   const T = new Date("2026-10-01T12:00:30.000Z");
   const startOf = (batch: number, gap: number) => new Date(T.getTime() + batch * gap);
+  /** The opening as the mail names it: rounded UP to the next whole minute (written here, not read from the mail). */
+  const promised = (at: Date) => new Date(Math.ceil(at.getTime() / MIN) * MIN);
   const seed = () => seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "optional" }, 2 * S);
   const label = (at: Date, locale: string) =>
     new Intl.DateTimeFormat(locale, {
@@ -159,7 +161,7 @@ describe.skipIf(!HAS_DB)("every reader follows the mocked gap (capacity tests 2 
       for (const p of [r.ranked.home, r.ranked.away]) {
         const m = mail.sent.find((x) => x.to === p.email);
         expect(m, `${p.email} was mailed`).toBeDefined();
-        expect(m!.opensLabel, `gap ${g}: opens`).toBe(label(startOf(2, g), m!.locale));
+        expect(m!.opensLabel, `gap ${g}: opens`).toBe(label(promised(startOf(2, g)), m!.locale));
         expect(m!.deadlineLabel, `gap ${g}: deadline`).toBe(label(new Date(startOf(2, g).getTime() + DEADLINE_AFTER_MS), m!.locale));
         checked += 1;
       }
