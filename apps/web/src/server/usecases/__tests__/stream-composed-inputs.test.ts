@@ -397,3 +397,52 @@ describe.skipIf(!HAS_DB)("R2004 review I3: a failing addOutput fails the start c
     expect(await consumes(sessionId)).toBe(1);
   });
 });
+
+// #981 follow-up (C07 review; coordinator decision): a composed session's facts carry `/overlay/fixtures/<fixtureId>`, so a
+// session must never come to exist without its fixture. A create for a fixture that is gone is refused with the existing
+// named shape — 404 "fixture not found" — whether the fixture was gone before the start or vanished while the start was
+// weighing it (the insert reads the fixture it copies its facts from; it used to answer a bare TypeError 500 then).
+describe.skipIf(!HAS_DB)("#981 follow-up: a start for a fixture that is gone is refused 404 fixture not found — no row, no input, no Machine, no credit", () => {
+  const rowsFor = async (fixtureId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fixtureId}`)[0]!.n;
+
+  it("the fixture deleted BEFORE the start, in both modes: the entry's 404, and the provider is asked nothing", async () => {
+    let checked = 0;
+    for (const mode of ["composed", "passthrough"] as const) {
+      const r = await rig();
+      const made = vi.spyOn(r.ingest, "createLiveInput");
+      await sql`delete from fixtures where id = ${r.fixtureId}`;
+      const err = await r.start(mode).catch((e: unknown) => e);
+      expect(err, mode).toBeInstanceOf(HttpError);
+      expect(err, mode).toMatchObject({ status: 404, message: "fixture not found" });
+      expect(made, `${mode}: no input`).not.toHaveBeenCalled();
+      expect(r.runner.created, `${mode}: no Machine`).toHaveLength(0);
+      expect(await rowsFor(r.fixtureId), `${mode}: no row`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the fixture deleted WHILE the start weighs it (during the storage read, after the entry's check): the same 404, never a TypeError 500 — no row, no input, no Machine (mutant: the insert's guard is removed → red)", async () => {
+    let checked = 0;
+    for (const mode of ["composed", "passthrough"] as const) {
+      const r = await rig();
+      const made = vi.spyOn(r.ingest, "createLiveInput");
+      const read = r.ingest.storageUsage.bind(r.ingest);
+      let deleted = 0;
+      r.ingest.storageUsage = async () => {
+        deleted += (await sql`delete from fixtures where id = ${r.fixtureId}`).count;
+        return read();
+      };
+      const err = await r.start(mode).catch((e: unknown) => e);
+      expect(deleted, `${mode}: premise — the fixture went during the start`).toBe(1);
+      expect(err, `${mode}: ${String(err)}`).toBeInstanceOf(HttpError);
+      expect(err, mode).toMatchObject({ status: 404, message: "fixture not found" });
+      expect(made, `${mode}: no input`).not.toHaveBeenCalled();
+      expect(r.runner.created, `${mode}: no Machine`).toHaveLength(0);
+      expect(await rowsFor(r.fixtureId), `${mode}: no row`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});

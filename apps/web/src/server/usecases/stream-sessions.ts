@@ -1568,7 +1568,11 @@ export async function startBroadcast(
         left join fixture_stream_settings st on st.fixture_id = f.id   -- R2004: the fixture's stored overlay choices
        where f.id = ${fixtureId}
       returning id`;
-    const sid = s!.id;
+    // #981 follow-up: the insert copies its facts FROM the fixture row, so a fixture deleted after the entry's check
+    // (`fixtureContext`) inserts nothing. Refused with that check's own 404 — never a bare TypeError 500, and never a
+    // session (composed: one whose overlay page would name no fixture). Inside the transaction: nothing is written.
+    if (!s) throw new HttpError(404, "fixture not found");
+    const sid = s.id;
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
     // R2004: a composed session's programme input (Input B) — the compositor publishes to it and the output attaches to it.
     if (body.mode === "composed") await tx`insert into fixture_stream_inputs (session_id, slot, role) values (${sid}, 0, 'programme')`;
@@ -2439,6 +2443,16 @@ export async function sessionFactsForJob(sessionId: string, token: string, deps:
     const target = (await sql.begin((tx) => readTargetSecret(tx, s.orgId, row.target_id))) as { url: string; streamKey: string };
     return { ...base, target };
   }
+  // #981 follow-up (C07 review; coordinator decision): the overlay page is `/overlay/fixtures/<fixtureId>`, and a fixture
+  // deleted mid-session (V410 `on delete set null`) left the compositor `/overlay/fixtures/null`, which it accepted. A
+  // composed session with no fixture has no page to render, so its facts are refused — 404 FIXTURE_GONE, a status C07's
+  // GET table maps to `Refused` (exit 78, fatal config: the host does not restart it). Passthrough has no page; its facts
+  // still answer `fixtureId: null`.
+  if (s.fixtureId === null) {
+    log.warn({ sid: sessionId, orgId: s.orgId, state: s.state }, "stream session: a composed session's fixture has been deleted — its job facts are refused");
+    throw new HttpError(404, "the session's fixture has been deleted", "FIXTURE_GONE");
+  }
+  const fixtureId = s.fixtureId;
   // R2004 (spec §5.3): the Machine READS the camera (Input A) over SRT playback and PUBLISHES to the programme (Input B)
   // over RTMPS. The destination is a Cloudflare output on B, so its key is never read here and never reaches the Machine.
   const { programme, playback, sportKey } = (await sql.begin(async (tx) => ({
@@ -2452,7 +2466,7 @@ export async function sessionFactsForJob(sessionId: string, token: string, deps:
   if (!playback) throw new Error(`stream session ${sessionId}: a composed session has no camera playback credential to read`);
   // R2004 decision 5 / 7: the overlay page the compositor renders. `sid` because verifyRelayToken needs the expected sid;
   // `template` RESOLVED from the session's copy, so the URL always names a live, non-retired template.
-  const overlay = new URL(`/overlay/fixtures/${s.fixtureId}`, deps.appUrl);
+  const overlay = new URL(`/overlay/fixtures/${encodeURIComponent(fixtureId)}`, deps.appUrl);
   overlay.search = new URLSearchParams({
     sid: sessionId, st: pageToken, host: "compositor", delay: String(row.overlay_delay_ms), template: resolveTemplate(row.theme_id, sportKey).id,
   }).toString();

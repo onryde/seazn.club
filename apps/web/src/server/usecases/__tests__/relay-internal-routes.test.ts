@@ -442,7 +442,15 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     expect((await samples(s.sessionId)).map((r) => r.fps)).toEqual([12, 12]);
     const f1 = ((await json(await getFacts(s.sessionId, { token: s.jobToken }))) as { data: Record<string, unknown> }).data;
     const f2 = ((await json(await getFacts(s.sessionId, { token: s.jobToken }))) as { data: Record<string, unknown> }).data;
-    expect({ ...f2, pageToken: null }).toEqual({ ...f1, pageToken: null });
+    // The page token is minted per read (its iat moves with the clock's second), and a composed overlayUrl carries it as
+    // `st` — so both are compared as "the read's own token", and everything else must be identical.
+    const minted = (f: Record<string, unknown>) => {
+      const u = new URL(String(f.overlayUrl));
+      expect(u.searchParams.get("st"), "the URL's st is this read's page token").toBe(f.pageToken);
+      u.searchParams.set("st", "<page token>");
+      return { ...f, pageToken: null, overlayUrl: u.toString() };
+    };
+    expect(minted(f2)).toEqual(minted(f1));
     expect(Object.keys(f1).length).toBeGreaterThan(1);
   });
 
@@ -808,21 +816,39 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
   });
 
   // Review M4: Session.fixtureId is `string | null` — V410 `on delete set null`, the session outlives its fixture. The
-  // runtime witness: the Machine's own GET after the fixture is gone, in both modes.
-  it("review M4: delete the fixture mid-session and GET facts answers fixtureId null — still a strict RelayJobSession", async () => {
+  // runtime witness: the Machine's own GET after the fixture is gone. PASSTHROUGH answers fixtureId null, a strict
+  // RelayJobSession. COMPOSED is refused (#981 follow-up, C07 review; coordinator decision): its facts carry the overlay
+  // page `/overlay/fixtures/<fixtureId>`, and a null there reached the compositor as `/overlay/fixtures/null`, which C07
+  // accepted. Refused 404 FIXTURE_GONE: C07's GET table (seazn.club.compositor crates/adapters/src/control_http.rs, branch
+  // feat/c07-control-plane) maps 401/404/410 to `Refused`, which exits 78 — fatal config, never restarted.
+  it("review M4 + #981 follow-up: delete the fixture mid-session — passthrough's GET facts answers fixtureId null (strict); composed's is refused 404 FIXTURE_GONE, and no URL it ever served names null", async () => {
     let checked = 0;
     for (const mode of ["composed", "passthrough"] as const) {
       const x = await session(mode);
       const before = ((await json(await getFacts(x.sessionId, { token: x.jobToken }))) as { data: Record<string, unknown> }).data;
       expect(before.fixtureId, `${mode}: the positive pair — before, the fixture's id`).toBe(x.fixtureId);
+      if (mode === "composed") {
+        const overlay = new URL(String(before.overlayUrl));
+        expect(overlay.pathname, "the overlay page names the session's fixture").toBe(`/overlay/fixtures/${x.fixtureId}`);
+        expect(String(before.overlayUrl), "never a null or undefined in the URL").not.toMatch(/null|undefined/);
+      }
       await sql`delete from fixtures where id = ${x.fixtureId}`;
       const [{ fixture_id }] = await sql<{ fixture_id: string | null }[]>`select fixture_id from fixture_stream_sessions where id = ${x.sessionId}`;
       expect(fixture_id, `${mode}: premise — the session row survives with a null fixture`).toBeNull();
       const res = await getFacts(x.sessionId, { token: x.jobToken });
-      expect(res.status, mode).toBe(200);
-      const data = ((await json(res)) as { data: Record<string, unknown> }).data;
-      expect(data, mode).toHaveProperty("fixtureId", null);
-      expect(RelayJobSession.parse(data), `${mode}: parse keeps every key`).toEqual(data);
+      const body = (await json(res)) as { ok: boolean; code?: string; data?: Record<string, unknown> };
+      if (mode === "composed") {
+        expect(res.status, "composed: refused with a status C07 maps to Refused (exit 78)").toBe(404);
+        expect(body).toMatchObject({ ok: false, code: "FIXTURE_GONE" });
+        expect(JSON.stringify(body), "no overlay URL, no credential, no null path").not.toMatch(/overlay\/fixtures|streamKey|passphrase/);
+        expect(res.headers.get("cache-control"), "the refusal is private too").toBe("private, no-store");
+        // The second call: still refused (the fixture does not come back), never a 200 on a retry.
+        expect((await getFacts(x.sessionId, { token: x.jobToken })).status, "the second GET").toBe(404);
+      } else {
+        expect(res.status, mode).toBe(200);
+        expect(body.data, mode).toHaveProperty("fixtureId", null);
+        expect(RelayJobSession.parse(body.data), `${mode}: parse keeps every key`).toEqual(body.data);
+      }
       checked++;
     }
     expect(checked).toBe(2);
