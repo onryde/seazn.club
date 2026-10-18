@@ -290,8 +290,7 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
     // `budgetDeferred` is the claim's own word to claimRoomSeat that the BUDGET cut a GATED claim short (a stay to queue). A claim
     // that was never gated (a seated player's re-claim, T9's re-verify) has no stay, so the mark is dropped: it is "starting".
     if (!line.gated && !seat.seated && "budgetDeferred" in seat) {
-      const { budgetDeferred: _dropped, ...plain } = seat;
-      return plain;
+      return { seated: false, reason: seat.reason, participant: seat.participant };
     }
     return seat;
   } catch (err) {

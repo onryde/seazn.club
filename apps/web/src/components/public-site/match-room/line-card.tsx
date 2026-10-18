@@ -25,10 +25,13 @@ export function LineBlock({ view, t, plural }: { view: LineCardView; t: RoomT; p
   const eta = etaPhrase(wire.etaS);
   // Best effort: a sleeping phone stops the claim loop and costs the place.
   useWakeLock(true);
-  // The warning, spoken once: set the first time the server says so, never cleared.
+  // The warning, spoken once: set the first time the server says so, never cleared. Set from a timer, not in the effect body: the
+  // live region must be committed EMPTY and then gain the words, which is what a screen reader announces (text present at mount is not).
   const [spoken, setSpoken] = useState(false);
   useEffect(() => {
-    if (wire.mayTimeOut) setSpoken(true);
+    if (!wire.mayTimeOut) return undefined;
+    const id = setTimeout(() => setSpoken(true), 0);
+    return () => clearTimeout(id);
   }, [wire.mayTimeOut]);
   return (
     <section

@@ -21,7 +21,6 @@ import {
   fund,
   inWindow,
   joinAt,
-  seatAndCount,
   seedBoard,
   world,
   OPENED,
