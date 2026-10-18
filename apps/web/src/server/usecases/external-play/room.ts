@@ -597,8 +597,10 @@ export async function claimRoomSeat(
     if (open) {
       const arrival = base === "closed" ? await ownStayArrival({ fixtureId, personId: r.player.personId }) : null;
       const w = windowFor(anchor);
-      // `deps.now` is the seam of every clock in this call (production passes nothing, and the stamp is the database's now()).
-      await stampFixtureCheckIn(r.player.personId, fixtureId, r.f.orgId, { at: arrival ?? deps.now, window: { opensAt: w.opensAt, deadline: w.deadline } });
+      // The stamp is dated at the instant the window was JUDGED (`now`, read once at the top of the claim), never at the database's now()
+      // after the seat: the seat takes as long as the vendor takes, and a claim judged open a moment before the deadline was stamped past
+      // it, so a player seated in time read as never having come and the board was never created (the B-end load run, 234 s to a forfeit).
+      await stampFixtureCheckIn(r.player.personId, fixtureId, r.f.orgId, { at: arrival ?? now, window: { opensAt: w.opensAt, deadline: w.deadline } });
       await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
       const ci = await checkIns(r.f, r.home, r.away, anchor);
       if (ci.home && ci.away) create = await (deps.create ?? ((id: string) => createGameIfReady(id, { now })))(fixtureId);

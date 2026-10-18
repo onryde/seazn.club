@@ -1909,4 +1909,26 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — timed batches", () =>
     const edge = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, deps({ now: new Date(deadline.getTime() - 1) }));
     expect(edge.seat?.seated).toBe(true);
   });
+
+  it("a claim that STARTS inside the window and is seated AFTER the deadline is dated at the instant it was judged open - the check-in counts and the game is asked for (the B-end load run's board that was never created)", async () => {
+    // Production passes no clock: the claim's `now` is read once, at its start, and the window judged against it. The seat then takes
+    // as long as the vendor takes (here 6 s); the stamp used to be the database's now() AFTER the seat, which lay past the deadline,
+    // so a player seated and judged in time read as never having come and the board was never created (it forfeited 234 s later).
+    const opened = new Date(Date.now() - DEADLINE_AFTER_MS + 5_000);
+    const deadline = new Date(opened.getTime() + DEADLINE_AFTER_MS);
+    const s = await seed({ roundOpenedAt: opened, staggered: false, scheduledAt: opened });
+    // The other side is in, honestly, a minute before the deadline.
+    const away = deps({ now: new Date(deadline.getTime() - 60_000) });
+    expect((await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, away)).seat?.seated, "premise: the other side is seated").toBe(true);
+    expect(away.create, "premise: one side in, nothing to ask for").not.toHaveBeenCalled();
+    const claim = deps({ seat: vi.fn(async () => { await new Promise((r) => setTimeout(r, 6_000)); return { seated: true as const, participant: null }; }) });
+    delete (claim as { now?: Date }).now; // the production clock
+    expect(Date.now(), "premise: the claim starts before the deadline (a loaded machine fails here, loudly, and is not a pass)").toBeLessThan(deadline.getTime());
+    const got = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, claim);
+    expect(got.seat?.seated, "seated").toBe(true);
+    expect(Date.now(), "premise: the seat came back AFTER the deadline - the case under test").toBeGreaterThan(deadline.getTime());
+    const stamped = (await rows(s.fixtureId)).availability.find((a) => a.person_id === s.home.personId);
+    expect(stamped?.checked_in_at && new Date(stamped.checked_in_at).getTime(), "dated before the deadline, at the instant it was judged open").toBeLessThan(deadline.getTime());
+    expect(claim.create, "both sides count, so the game is asked for").toHaveBeenCalledTimes(1);
+  }, 30_000);
 });
