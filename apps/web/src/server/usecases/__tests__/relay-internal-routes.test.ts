@@ -42,6 +42,7 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { recordEvent, recordSample } from "@/server/relay/telemetry";
 import { mintRelayToken, verifyRelayToken } from "@/server/relay/tokens";
+import { log } from "@/server/logger";
 import { GET as facts } from "@/app/api/internal/relay/sessions/[sid]/route";
 import { POST as beat } from "@/app/api/internal/relay/sessions/[sid]/heartbeat/route";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
@@ -810,7 +811,7 @@ describe.skipIf(!HAS_DB)("R2002: docs/runbooks/relay-health-review.sql reads the
       { state: "playing", programmePhase: "live", input: "connected", output: "connected", graphics: "ready", rung: "full", inputKicks: 1, inputKickAlert: false, pipelineRebuilds: 0, sinkSwaps: 0, scoreStale: false },
       vector("heartbeat-full"),   // frozen, input backoff, graphics restarting, 4 kicks + alert, 2 rebuilds, 1 swap, overlay_half_rate, score stale
       vector("heartbeat-minimal"),   // unmeasured: counted as a beat, never as a measured anything — and it does not end the run
-      { state: "playing", programmePhase: "reconnecting", input: "backoff", output: "connected", graphics: "failed", rung: "fast_preset", inputKicks: 4, inputKickAlert: true, pipelineRebuilds: 3, sinkSwaps: 1, scoreStale: true },
+      { state: "playing", programmePhase: "reconnecting", input: "backoff", output: "connected", graphics: "failed", rung: "overlay_half_rate", inputKicks: 4, inputKickAlert: true, pipelineRebuilds: 3, sinkSwaps: 1, scoreStale: true },
       { state: "playing", programmePhase: "live", input: "connected", output: "backoff", graphics: "ready", rung: "full", inputKicks: 2, inputKickAlert: false, pipelineRebuilds: 3, sinkSwaps: 2, scoreStale: false },
       { state: "playing", programmePhase: "live", input: "backoff", output: "connected", graphics: "ready", rung: "full", inputKicks: 2, inputKickAlert: false, pipelineRebuilds: 3, sinkSwaps: 2 },
       // The first Machine's final beat (it was signalled), then the retry's (fatal) — R2003's one retry, as beats.
@@ -1403,5 +1404,95 @@ describe.skipIf(!HAS_DB)("R2003b: the crash-loop cap through the heartbeat and f
     expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_boot_timeout", runner_crash_count: 0 });
     expect(await lastHeartbeat(s.sessionId), "the beat is recorded").toMatchObject({ state: "stopped", exitReason: "fatal" });
     expect(await crashCounts(s.sessionId)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Owner 2026-10-18 (compositor `docs/_INDEX.md` Owed 20): any production step-down is a SIZING alarm. The compositor's
+// ladder is `full → overlay_half_rate` and the bottom holds (the score is never taken off air), so a beat whose rung is
+// not `full` says the Machine is short of CPU, and ops raise its size (compositor C17 runbook). The web side, which
+// receives the beats, raises it: a structured warning in the log AND the house alerting path (Sentry, route
+// `relay.sizing_alarm`) — ONCE per step down, never on every 5 s beat. Driven through the REAL route, with the
+// contract's own vectors where one fits.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("owner 2026-10-18: a ladder step-down on a composed beat raises the sizing alarm", () => {
+  const ROUTE = "relay.sizing_alarm";
+  /** The house alerting path's sizing reports for one session. */
+  const reportsFor = (sid: string) => sentry.captureError.mock.calls.filter(([, c]) =>
+    (c as { route?: string } | undefined)?.route === ROUTE && (c as { extra?: { sessionId?: string } }).extra?.sessionId === sid);
+  /** The structured warnings for one session (pino's `(object, message)` form). */
+  const warningsFor = (spy: { mock: { calls: unknown[][] } }, sid: string) => spy.mock.calls.filter(([o]) =>
+    typeof o === "object" && o !== null && (o as { sid?: string; alarm?: string }).sid === sid && (o as { alarm?: string }).alarm === "sizing");
+
+  it("the sequence a match produces: full, a step, the bottom held, a climb, a second step, an unreported beat, a third — one alarm per step, each in the log AND the alerting path, naming the session, the org, the attempt and the rung", async () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const s = await session();
+      const full = vector("heartbeat-full");
+      expect(full.rung, "premise: the contract's full vector is on the bottom rung").toBe("overlay_half_rate");
+      const beats: [body: Record<string, unknown>, alarms: number][] = [
+        [{ state: "starting", rung: "full" }, 0],
+        [{ state: "playing", rung: "full" }, 0],                         // a second call on the top rung
+        [{ state: "playing", rung: "overlay_half_rate" }, 1],            // THE step down
+        [{ state: "playing", rung: "overlay_half_rate" }, 1],            // the bottom holds: no second alarm
+        [full, 1],                                                       // the contract's vector, still the bottom
+        [{ state: "playing", rung: "full" }, 1],                         // a climb is no alarm
+        [{ state: "playing", rung: "overlay_half_rate" }, 2],            // a second step is a second alarm
+        [vector("heartbeat-minimal"), 2],                                // an unreported rung alarms nothing…
+        [{ state: "playing", rung: "overlay_half_rate" }, 3],            // …and after it the rung is unknown: alarm again
+      ];
+      let posted = 0;
+      for (const [body, alarms] of beats) {
+        expect((await postBeat(s.sessionId, body, { token: s.jobToken })).status, JSON.stringify(body)).toBe(200);
+        expect(reportsFor(s.sessionId), `after beat ${posted + 1}: alerting path`).toHaveLength(alarms);
+        expect(warningsFor(warn, s.sessionId), `after beat ${posted + 1}: log`).toHaveLength(alarms);
+        posted++;
+      }
+      expect(posted, "anti-vacuity: every beat posted").toBe(beats.length);
+      const machine = (await row(s.sessionId)).machine_id;
+      expect(machine, "premise: the composed session has its Machine").not.toBeNull();
+      for (const [err, c] of reportsFor(s.sessionId)) {
+        // One message for every alarm, so the alerting path groups them as ONE issue; the facts ride beside it.
+        expect((err as Error).message).toMatch(/^relay sizing alarm: /);
+        expect(c).toMatchObject({ orgId: s.auth.orgId, route: ROUTE, extra: { sessionId: s.sessionId, rung: "overlay_half_rate", attempt: 1, machineId: machine } });
+      }
+      for (const [o, message] of warningsFor(warn, s.sessionId)) {
+        expect(o).toMatchObject({ sid: s.sessionId, orgId: s.auth.orgId, alarm: "sizing", rung: "overlay_half_rate", attempt: 1, machineId: machine });
+        expect(String(message), "the log line tells ops what to do").toMatch(/raise the Machine size/);
+      }
+      // The second step's warning names the rung it stepped FROM; the third's previous rung was unreported.
+      expect(warningsFor(warn, s.sessionId).map(([o]) => (o as { previousRung: unknown }).previousRung)).toEqual(["full", "full", null]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("the first beat already stepped alarms at once; a passthrough session (no compositor, no Machine) never alarms; a refused beat (the retired fast_preset, 400) writes nothing and alarms nothing; another session's step is its own", async () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const a = await session();
+      expect((await postBeat(a.sessionId, { state: "starting", rung: "overlay_half_rate" }, { token: a.jobToken })).status).toBe(200);
+      expect(reportsFor(a.sessionId), "a first beat on the bottom rung").toHaveLength(1);
+      // The retired rung: 400, nothing written, nothing alarmed — the stored beat is still the previous one.
+      const before = await lastHeartbeat(a.sessionId);
+      expect((await postBeat(a.sessionId, { state: "playing", rung: "fast_preset" }, { token: a.jobToken })).status, "fast_preset is refused").toBe(400);
+      expect(await lastHeartbeat(a.sessionId), "a refused beat writes nothing").toEqual(before);
+      expect(reportsFor(a.sessionId)).toHaveLength(1);
+      // A second session's step alarms for THAT session, and leaves the first's count alone.
+      const b = await session();
+      expect((await postBeat(b.sessionId, { state: "playing", rung: "full" }, { token: b.jobToken })).status).toBe(200);
+      expect((await postBeat(b.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: b.jobToken })).status).toBe(200);
+      expect(reportsFor(b.sessionId)).toHaveLength(1);
+      expect(reportsFor(a.sessionId)).toHaveLength(1);
+      // Passthrough: the beat is recorded (200, stored whole) and never alarms — there is no Machine to resize.
+      const p = await session("passthrough");
+      expect((await postBeat(p.sessionId, { state: "playing", rung: "full" }, { token: p.jobToken })).status).toBe(200);
+      expect((await postBeat(p.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: p.jobToken })).status).toBe(200);
+      expect(await lastHeartbeat(p.sessionId), "premise: the beat landed").toMatchObject({ rung: "overlay_half_rate" });
+      expect(reportsFor(p.sessionId), "passthrough: no alerting").toHaveLength(0);
+      expect(warningsFor(warn, p.sessionId), "passthrough: no warning").toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

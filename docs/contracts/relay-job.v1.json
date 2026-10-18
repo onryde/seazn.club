@@ -409,14 +409,13 @@
           ]
         },
         "rung": {
-          "description": "The degrade ladder's rung: full, overlay_half_rate, fast_preset. Anything but full means the encoder overran and the ladder stepped down.",
+          "description": "The degrade ladder's rung (compositor C05): full, or overlay_half_rate, the bottom, where the overlay is refreshed at half rate. The score is never removed (owner ruling 2026-10-18), so the ladder has no lower rung, and the bottom holds: the compositor never steps back up (a restarted process starts on full). Anything but full means the encoder overran and the ladder stepped down: the Machine is short of CPU, and the server raises a sizing alarm.",
           "anyOf": [
             {
               "type": "string",
               "enum": [
                 "full",
-                "overlay_half_rate",
-                "fast_preset"
+                "overlay_half_rate"
               ]
             },
             {

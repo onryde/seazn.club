@@ -48,7 +48,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "7091c0c4e10ad627e2aea34e85af085f31c391cbb7d2d8a8003b21c2a9ed6037";
+const SHA256 = "fc99d44899ee543cfe36c48902573501f815d68b4ec7c2e4bbb50d096608dc50";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -71,7 +71,9 @@ const SPEC_BEAT: Record<string, string[]> = {
   input: ["connecting", "connected", "backoff"],
   output: ["connecting", "connected", "backoff"],
   graphics: ["starting", "ready", "restarting", "failed"],
-  rung: ["full", "overlay_half_rate", "fast_preset"],
+  // C05 `Rung`, as the owner amended it 2026-10-18 (compositor `docs/_INDEX.md` Owed 20): the score is never taken off
+  // air, so the ladder is `full → overlay_half_rate` and the bottom holds. `fast_preset` is retired (RETIRED_RUNG below).
+  rung: ["full", "overlay_half_rate"],
   // The final beat's why (owner scope addition 2026-10-15): C06 lifecycle.rs `ExitReason { Ended, Deadline, Signalled,
   // SessionGone, Refused, Fatal }`, snake_case on the wire.
   exitReason: ["ended", "deadline", "signalled", "session_gone", "refused", "fatal"],
@@ -79,6 +81,10 @@ const SPEC_BEAT: Record<string, string[]> = {
   // or from this beat through its data poll (B, `web`); R2005 reports which one is live.
   phaseChannel: ["loopback", "web"],
 };
+/** The rung the owner retired on 2026-10-18 (compositor `docs/_INDEX.md` Owed 20, "no lite mode"): its only possible
+ *  meaning (compositor F-001, C09's decision rule) was "drop the overlay entirely", and the score is never removed. A beat
+ *  carrying it is refused by the twin (400) and by the published bytes. */
+const RETIRED_RUNG = "fast_preset";
 /** The plan's phase endpoint (compositor `_INDEX.md` 2026-10-15: "`127.0.0.1:7419` `GET /phase?after=<seq>`, long-poll
  *  ≤ 10 s"; spec §4.3 "held ≤ 10 s"). */
 const PLAN_PHASE_ENDPOINT = { port: 7419, path: "/phase", longPollMaxMs: 10_000 };
@@ -404,7 +410,33 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       const outsider = field === "state" ? { state: "healthy" } : { state: EXIT_FIELDS.includes(field) ? "stopped" : "playing", [field]: "Live" };
       expect(parses(S.RelayHeartbeat, outsider), `${field}: an outsider`).toBe(false);
     }
-    expect(words).toBe(4 + 5 + 3 + 3 + 4 + 3 + 6 + 2);
+    expect(words).toBe(4 + 5 + 3 + 3 + 4 + 2 + 6 + 2);
+  });
+
+  it("owner 2026-10-18: the ladder's bottom is overlay_half_rate — the retired fast_preset is refused by the twin AND the published bytes, beside the two rungs both admit", () => {
+    const fileAdmits = fileValidator();
+    const beat = (rung: string) => ({ state: "playing", rung });
+    expect(parses(S.RelayHeartbeat, beat(RETIRED_RUNG)), "the twin refuses the retired rung").toBe(false);
+    expect(fileAdmits("heartbeat", beat(RETIRED_RUNG)), "the file refuses the retired rung").toBe(false);
+    let admitted = 0;
+    for (const rung of SPEC_BEAT.rung!) {
+      expect(parses(S.RelayHeartbeat, beat(rung)), `the twin admits ${rung}`).toBe(true);
+      expect(fileAdmits("heartbeat", beat(rung)), `the file admits ${rung}`).toBe(true);
+      admitted++;
+    }
+    expect(admitted, "the positive pair: both rungs").toBe(2);
+    // The prose says what the rung means now: no word the file no longer carries, and the bottom named as the bottom.
+    const prose = propOf(defOf(contract(), "heartbeat"), "rung").description as string;
+    expect(prose).not.toContain(RETIRED_RUNG);
+    expect(prose).toContain("overlay_half_rate");
+    expect(prose).toMatch(/never removed/);
+    // No hand-written vector still carries it.
+    let vectors = 0;
+    for (const name of fixtureNames()) {
+      expect(JSON.stringify(fixture(name)), name).not.toContain(RETIRED_RUNG);
+      vectors++;
+    }
+    expect(vectors, "anti-vacuity: every vector read").toBe(19);
   });
 
   it("optional-versus-null and absent-versus-zero: each field R2 adds is optional and nullable (file and twin); counters are whole and non-negative, a present 0 admitted; only `state` is required", () => {

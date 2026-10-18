@@ -65,6 +65,9 @@ import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } f
 // standalone generator load them. (phone-health.ts itself imports ../config extensionlessly and cannot be loaded here.)
 import { AUTO_START_REFUSALS, AUTO_WONT_START } from "../relay/domain/auto-stream.ts";
 import { HEALTH_REASONS } from "../relay/domain/health-reasons.ts";
+// The compositor's degrade-ladder rungs (owner 2026-10-18: `full → overlay_half_rate`, the score is never removed). The
+// heartbeat use-case reads the same declaration for its sizing alarm. Import-free, like health-reasons.ts.
+import { LADDER_RUNGS } from "../relay/domain/ladder.ts";
 // m2 — the ONE Intl-backed zone validator, reused rather than restated, so
 // `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
 // and `organizations.timezone` (api/orgs/[id]/route.ts) already refuse.
@@ -1701,7 +1704,7 @@ export const RelayHeartbeat = z
     inputKickAlert: z.boolean().nullish(),
     pipelineRebuilds: z.number().int().min(0).nullish(),
     sinkSwaps: z.number().int().min(0).nullish(),
-    rung: z.enum(["full", "overlay_half_rate", "fast_preset"]).nullish(),
+    rung: z.enum(LADDER_RUNGS).nullish(),
     scoreStale: z.boolean().nullish(),
     // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from — the
     // compositor's loopback endpoint, or this beat through its data poll. R2005 reports it; stored as sent, like the rest.
