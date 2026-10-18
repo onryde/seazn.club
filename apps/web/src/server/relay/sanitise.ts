@@ -10,7 +10,7 @@ const MAX_ARRAY = 50;
 export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   // domain
   "state", "from", "to", "trigger", "effect", "event", "reason", "endReason", "failReason", "desiredState",
-  "mode", "slot", "attempt", "attempts", "staleAttempt", "retries", "expiry", "deadlineAt", "at", "seconds", "minutes",
+  "mode", "slot", "role", "attempt", "attempts", "staleAttempt", "retries", "expiry", "deadlineAt", "at", "seconds", "minutes",
   // runner / Fly (config.env VALUES are never here — only ids and states)
   "runnerState", "observed", "machineId", "machineName", "region", "cpus", "memoryMb", "cpuKind", "instanceId",
   "exit", "exitCode", "oomKilled", "requestedStop", "signal", "timeoutSeconds", "flyState", "eventType", "status",
@@ -79,11 +79,17 @@ const REDACTED = "[redacted]";
 /** Below this a "secret" would redact ordinary words — and the replacement could lengthen the text. */
 const MIN_SECRET_LENGTH = REDACTED.length;
 
+/** The RTMP(S) application paths a stream key follows (`rtmps://live.cloudflare.com:443/live/<key>`, YouTube's
+ *  `rtmp://a.rtmp.youtube.com/live2/<key>`). Everything after the first one is cut. */
+const STREAM_KEY_PATHS = ["/live/", "/live2/"] as const;
+
 /** R2002 review Q3 — defence in depth for a Machine's free text (the final beat's `exitDetail`). The compositor redacts
  *  it before sending; the server scrubs it again before EITHER beat store keeps it: each named secret (the job token the
- *  handler holds) AND each of its dot-separated parts (confirm pass: a JWT's signature alone is not JWT-shaped), anything
- *  JWT-shaped, and everything from the first `?` (the cut `sanitise` makes for samples.raw, so both stores keep the same
- *  text). Never lengthens the text, and idempotent. */
+ *  handler holds; R2004 review m1: a composed session's programme stream key and its camera's SRT passphrase and stream
+ *  id) AND each of its dot-separated parts (confirm pass: a JWT's signature alone is not JWT-shaped), anything
+ *  JWT-shaped, everything from the first `?` (the cut `sanitise` makes for samples.raw, so both stores keep the same
+ *  text), and everything after the first `/live/` or `/live2/` (where an RTMP stream key sits in a URL). Never lengthens
+ *  the text, and idempotent. */
 export function scrubBeatText(text: string, secrets: readonly string[]): string {
   const redact = (from: string, patterns: readonly string[]): string =>
     patterns.filter((p) => p.length >= MIN_SECRET_LENGTH).reduce((acc, p) => acc.split(p).join(REDACTED), from);
@@ -93,7 +99,9 @@ export function scrubBeatText(text: string, secrets: readonly string[]): string 
   out = out.replace(JWT_SHAPED, REDACTED);
   out = redact(out, secrets.flatMap((s) => s.split(".")));
   const q = out.indexOf("?");
-  return q === -1 ? out : out.slice(0, q);
+  if (q !== -1) out = out.slice(0, q);
+  const cuts = STREAM_KEY_PATHS.map((p) => { const i = out.indexOf(p); return i === -1 ? -1 : i + p.length; }).filter((i) => i !== -1);
+  return cuts.length === 0 ? out : out.slice(0, Math.min(...cuts));
 }
 
 /** Allowlisted keys only; strings cut at `?` and at EVENT_PAYLOAD_MAX_STRING;

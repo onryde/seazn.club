@@ -103,6 +103,7 @@ export const STATE_PILL_KEYS: Record<PhoneTabState, MessageKey> = {
 export const FAIL_REASON_KEYS: Record<StreamFailReason, MessageKey> = {
   no_inbound_timeout: "stream.fail.no_inbound_timeout",
   target_rejected: "stream.fail.target_rejected",
+  output_failed: "stream.fail.output_failed",
   no_credits: "stream.fail.no_credits",
   // the timed exits every non-terminal state now owns (F18/F19/F23). Both are
   // organiser-visible: `provision_timeout` is a create that never came back, and

@@ -438,6 +438,7 @@ describe("a session whose fixture was deleted (fixtureId null)", () => {
 const PASSTHROUGH_COMMANDS: Command[] = [
   { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" },
   { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }, { type: "relay_disabled" },
+  { type: "output_failed" },
 ];
 const ALL_STATES: SessionState[] = [...ACTIVE_STATES, ...TERMINAL_STATES];
 
@@ -463,6 +464,9 @@ const PASSTHROUGH_LEGAL: Record<string, SessionState> = {
   "warming × relay_disabled": "failed",
   "live × relay_disabled": "failed",
   "ending × relay_disabled": "failed",
+  // R2004 review I3: the add_output effect failed — from the two states the add can return into.
+  "warming × output_failed": "failed",
+  "live × output_failed": "failed",
 };
 
 describe("decide — relay_disabled (M10, Task 14b review): a deployment with no relay ends a leftover session as failed", () => {
@@ -851,6 +855,32 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(passthrough.events).toEqual([{ type: "SessionEnded", reason: "no_credits" }]);
   });
 
+  // R2004, PR #981 review I3: the add_output effect THREW. Mutant: delete the composed branch → red (the Machine keeps
+  // booting toward a go-live nobody sees).
+  it("R2004 I3: output_failed tears a COMPOSED Machine down like the credit refusal — the SIGINT stop, desiredState ending, failed(output_failed) with no end reason; no Machine, nothing torn; passthrough just fails; from warming and live only", () => {
+    const d = decide(C(), { type: "output_failed" }, T0);
+    expect(d.next).toMatchObject({ state: "failed", failReason: "output_failed", desiredState: "ending", endReason: null, endedAt: T0, runner: { state: "stopping", stopRequestedAt: T0 } });
+    expect(d.effects).toEqual([STOP_EFFECT]);
+    expect(d.events).toEqual([{ type: "RunnerChanged", from: "booting", to: "stopping", trigger: "session_stop" }, { type: "SessionEnded", reason: "output_failed" }]);
+    const bare = decide(C({ runner: RUNNER_NONE }), { type: "output_failed" }, T0);
+    expect(bare.next).toMatchObject({ state: "failed", failReason: "output_failed", runner: RUNNER_NONE });
+    expect(bare.effects).toEqual([]);
+    const passthrough = decide(S({ state: "warming" }), { type: "output_failed" }, T0);
+    expect(passthrough.next).toMatchObject({ state: "failed", failReason: "output_failed", endedAt: T0 });
+    expect(passthrough.effects).toEqual([]);
+    expect(passthrough.events).toEqual([{ type: "SessionEnded", reason: "output_failed" }]);
+    // From live too (a passthrough phone can connect while the add is still out), never consuming.
+    const live = decide(S({ state: "live", startedAt: T0 }), { type: "output_failed" }, T0);
+    expect(live.next.state).toBe("failed");
+    expect(live.effects.filter((e) => e.type === "consume_credit")).toEqual([]);
+    let refused = 0;
+    for (const state of ["requested", "provisioning", "ending", "completed", "failed"] as const) {
+      expect(() => decide(S({ state }), { type: "output_failed" }, T0), state).toThrow();
+      refused++;
+    }
+    expect(refused).toBe(5);
+  });
+
   // Task 2C carry C5 (M6 from the Task 2B review): F19's backstop completed an `ending` session over an UNMARKED creating
   // runner — a create still in flight — so the Machine it later made was caught only by the daily orphan sweep.
   it("C5 (M6): an ending_timeout over an UNMARKED creating runner MARKS the stop instead of completing blind — the grace then ends it on a lazy read, and a late create_ok is destroyed, never booted", () => {
@@ -1087,7 +1117,7 @@ describe("decide — a composed session's Machine events go through the runner t
     : t === "create_ok" ? [{ type: "create_ok", machineId: "m9" }]
     : [{ type: t } as RunnerTrigger]);
   const EXPIRIES: Expiry["kind"][] = ["none", "requested_timeout", "provision_timeout", "warming_timeout", "wall_clock", "stale_beat", "grace_expired", "ending_timeout"];
-  const SESSION_COMMANDS: Command[] = [{ type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }];
+  const SESSION_COMMANDS: Command[] = [{ type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }, { type: "output_failed" }];
   const commandsFor = (s: Session): Command[] => [
     ...triggers(s.runner).map((trigger): Command => ({ type: "runner", trigger })),
     ...EXPIRIES.map((kind): Command => ({ type: "expire", expiry: { kind } } as Command)),
@@ -1113,6 +1143,7 @@ describe("decide — a composed session's Machine events go through the runner t
       ["ending × ending_timeout (C5)", C({ state: "ending", desiredState: "ending", endReason: "stopped", startedAt: T0, endingAt: T0, runner: CREATING }), { type: "expire", expiry: { kind: "ending_timeout" } }],
       ["warming × warming_timeout", C({ state: "warming", runner: CREATING }), { type: "expire", expiry: { kind: "warming_timeout" } }],
       ["warming × credit_refused", C({ state: "warming", runner: CREATING }), { type: "credit_refused" }],
+      ["warming × output_failed", C({ state: "warming", runner: CREATING }), { type: "output_failed" }],
       ["provisioning × provision_timeout", C({ state: "provisioning", runner: CREATING }), { type: "expire", expiry: { kind: "provision_timeout" } }],
     ];
     let decisions = 0, keptCellsTaken = 0;
@@ -1466,7 +1497,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
   const COMMANDS: Record<Command["type"], Command[]> = {
     provision: [{ type: "provision" }], provisioned: [{ type: "provisioned" }], ingest_connected: [{ type: "ingest_connected" }],
     credit_refused: [{ type: "credit_refused" }], target_rejected: [{ type: "target_rejected" }], stop: [{ type: "stop", reason: "stopped" }],
-    complete: [{ type: "complete" }], relay_disabled: [{ type: "relay_disabled" }],
+    complete: [{ type: "complete" }], relay_disabled: [{ type: "relay_disabled" }], output_failed: [{ type: "output_failed" }],
     expire: Object.values(EXPIRIES).map((expiry) => ({ type: "expire" as const, expiry })),
     runner: [{ type: "runner", trigger: { type: "observed", state: "destroyed" } }],
   };
@@ -1478,6 +1509,8 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
     "requested × expire:requested_timeout", "provisioning × expire:provision_timeout",
     "warming × credit_refused", "warming × target_rejected", "warming × expire:warming_timeout",
     "live × target_rejected", "live × complete",
+    // R2004 review I3: the add_output failure fails the session from either state it can be in when the add returns.
+    "warming × output_failed", "live × output_failed",
     // m-5 (controller ruling, capture QR v2 T7): a passthrough live session with no first ingest is judged by the warming rule.
     "live × expire:warming_timeout",
     "ending × complete", "ending × expire:ending_timeout",

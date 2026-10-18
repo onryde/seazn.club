@@ -5701,6 +5701,7 @@
   "stream.fail.machine_crash": "Le relais s'est arrêté de manière inattendue. Réessayez.",
   "stream.fail.machine_refused": "Le relais a refusé la configuration de cette diffusion. Réessayez, et contactez le support si cela se reproduit.",
   "stream.fail.target_rejected": "La destination a refusé la clé. Sur une nouvelle chaîne YouTube, le direct peut mettre environ 24 heures à s'activer.",
+  "stream.fail.output_failed": "Le direct n'a pas pu être relié à votre destination, il a donc été arrêté. Réessayez dans une minute.",
   "stream.fail.no_credits": "Plus aucun crédit au démarrage de la diffusion. Achetez des crédits et réessayez.",
   "stream.fail.machine_create_failed": "Le relais n'a pas pu démarrer. Réessayez dans une minute.",
   "stream.fail.machine_boot_timeout": "Le relais n'a pas démarré à temps. Réessayez.",

@@ -354,6 +354,28 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(msg).toBe("relay envelope does not hold a JSON credential");
   });
 
+  // R2004 review m3: a credential is its url AND its sealed half. The composed facts refuse a missing credential by name
+  // (stream-composed-inputs.test.ts wipes the bare url, the half a usecase test may name); the OTHER half — an envelope
+  // gone while the url stays — is witnessed here, where the sealed columns may be named.
+  it("R2004 m3: either half alone is no credential — the sealed half NULL with the url kept reads null, for the camera's SRT playback and for the RTMPS the programme input is published with", async () => {
+    const r = await rig();
+    const play = { url: "srt://live.cloudflare.com:778", streamId: randomBytes(16).toString("hex"), passphrase: secret65() };
+    await sql.begin((tx) => storePlaybackCredentials(tx, r.inputId, play));
+    expect(await sql.begin((tx) => readCameraPlayback(tx, r.sessionId)), "premise: the whole credential reads").not.toBeNull();
+    await sql`update fixture_stream_inputs set playback_srt_key_enc = null where id = ${r.inputId}`;
+    const [kept] = await sql<{ playback_srt_url: string | null }[]>`select playback_srt_url from fixture_stream_inputs where id = ${r.inputId}`;
+    expect(kept!.playback_srt_url, "premise: the url half is still there").toBe(play.url);
+    expect(await sql.begin((tx) => readCameraPlayback(tx, r.sessionId)), "the envelope gone: no playback credential").toBeNull();
+    const [p] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot, role) values (${r.sessionId}, 0, 'programme') returning id`;
+    const { uid, creds } = observed();
+    await sql.begin((tx) => storeInputCredentials(tx, p!.id, uid, creds));
+    expect((await sql.begin((tx) => readFirstInput(tx, r.sessionId, "programme")))!.rtmps, "premise: the programme's RTMPS reads").toEqual(creds.rtmps);
+    await sql`update fixture_stream_inputs set ingest_rtmps_key_enc = null where id = ${p!.id}`;
+    const after = (await sql.begin((tx) => readFirstInput(tx, r.sessionId, "programme")))!;
+    expect(after.rtmps, "the RTMPS envelope gone, the url kept: no RTMPS credential").toBeNull();
+    expect(after.ingestInputId, "the row itself still reads").toBe(uid);
+  });
+
   it("one flipped byte in a stored envelope makes the read throw, echoing none of the plaintext; the untouched read opens", async () => {
     const r = await rig();
     const { uid, creds } = observed();

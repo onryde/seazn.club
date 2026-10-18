@@ -13,7 +13,9 @@ import {
 } from "./runner";
 
 export type SessionState = "requested" | "provisioning" | "warming" | "live" | "ending" | "completed" | "failed";
-export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "no_credits" | "relay_disabled" | RunnerFailReason;
+/** `output_failed` (R2004, PR #981 review I3): the destination output could not be ADDED at provisioning — the session
+ *  had no destination, so it fails closed rather than broadcast to nobody and be charged for it. */
+export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "output_failed" | "no_credits" | "relay_disabled" | RunnerFailReason;
 export type Mode = "passthrough" | "composed";
 
 export const ACTIVE_STATES: readonly SessionState[] = ["requested", "provisioning", "warming", "live", "ending"];
@@ -137,7 +139,7 @@ export type Command =
   | { type: "provision" } | { type: "provisioned" }
   | { type: "ingest_connected" } | { type: "credit_refused" }
   | { type: "target_rejected" } | { type: "stop"; reason: StopReason } | { type: "complete" }
-  | { type: "relay_disabled" }
+  | { type: "relay_disabled" } | { type: "output_failed" }
   | { type: "expire"; expiry: Expiry }
   | { type: "runner"; trigger: RunnerTrigger };
 
@@ -387,6 +389,19 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
     case "target_rejected":
       if (s.state !== "warming" && s.state !== "live") throw illegal();
       return fail(s, "target_rejected", now);
+    case "output_failed":
+      // R2004, PR #981 review I3 (coordinator ruling, money): the add_output effect `provisioned` emits THREW — the
+      // session has no destination. Fail closed: a composed session's Machine is already up (provisioning's first
+      // composed edge created it), so it is torn down exactly as a composed credit refusal tears it down — the runner's
+      // `session_stop` step, then fail, dropping the stop step's SessionEnding (P1-F-b) — with desiredState `ending`
+      // so nothing re-wants it live. From `live` too: a passthrough phone can connect while the add is still out.
+      if (s.state !== "warming" && s.state !== "live") throw illegal();
+      if (s.mode === "composed" && s.runner.state !== "none") {
+        const torn = runner(s, { type: "session_stop" }, now, illegal);
+        const f = fail({ ...torn.next, desiredState: "ending" }, "output_failed", now);
+        return { next: f.next, events: [...torn.events.filter(keptBeforeFailure), ...f.events], effects: [...torn.effects, ...f.effects] };
+      }
+      return fail(s, "output_failed", now);
     case "stop":
       // §5.3: `ending × stop` stays identity — the FIRST reason wins.
       if (s.state === "ending") return identity(s);

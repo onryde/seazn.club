@@ -19584,7 +19584,7 @@ async function captureV2Suite(): Promise<void> {
         // the passthrough Go live in step 3 admits on the same fixture.
         const csid = (composed.json.data as { sessionId?: string } | undefined)?.sessionId ?? null;
         const ins = csid ? await quiet<{ role: string; ingest_input_id: string | null; playback: boolean }[]>`
-          select role, ingest_input_id, (playback_srt_key_enc is not null) as playback from fixture_stream_inputs where session_id = ${csid} order by role` : [];
+          select role, ingest_input_id, (playback_srt_url is not null) as playback from fixture_stream_inputs where session_id = ${csid} order by role` : [];
         const [srow] = csid ? await quiet<{ ingest_input_uid: string | null; output_uid: string | null; reserved_minutes: number; overlay_delay_ms: number }[]>`
           select ingest_input_uid, output_uid, reserved_minutes, overlay_delay_ms from fixture_stream_sessions where id = ${csid}` : [];
         step(

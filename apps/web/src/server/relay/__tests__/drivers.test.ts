@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeIngest, FakeRunner } from "../fakes";
 import { FlyClient } from "../fly-client";
 import { FlyRunner } from "../runner-fly";
-import { FLY_RELAY_APP_RETIRED_DEFAULT, relayDriverMode } from "../config";
+import { FLY_RELAY_APP_RETIRED_DEFAULT, relayDriverMode, relayOutputProfile } from "../config";
 import { RelayDriversDisabled, composedUnavailable, disabledRelayDrivers, relayDrivers, relayUnavailable, setRelayDriversForTest } from "../drivers";
 
 // m-2: the live pair's report reaches Sentry (last describe); the provider-call recorder's DB write is stubbed out.
@@ -279,6 +279,30 @@ describe("R2001: composedUnavailable() — the relay up/down × RELAY_IMAGE set/
     }
     expect(checked).toBe(IMAGES.length);
     expect(refused, "the two unset shapes are both refused by the constructor").toBe(2);
+  });
+
+  it("R2004 review m5: RELAY_OUTPUT_PROFILE — with the relay up and the image set, unavailable EXACTLY when the job facts' own reader (relayOutputProfile) refuses the value; under the test override too; the predicate never throws", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("RELAY_DRIVERS", "");
+    vi.stubEnv("RELAY_IMAGE", IMAGE);
+    const VALUES: (string | undefined)[] = [undefined, "", "   ", "720p", "1080p", " 1080p ", "4k", "720", "1080P"];
+    let checked = 0;
+    let refused = 0;
+    for (const override of [false, true]) {
+      for (const value of VALUES) {
+        vi.stubEnv("RELAY_OUTPUT_PROFILE", value);
+        setRelayDriversForTest(override ? { ingest: new FakeIngest(), runner: new FakeRunner() } : null);
+        const label = `${override ? "override" : "env"} × ${JSON.stringify(value)}`;
+        let throws = false;
+        try { relayOutputProfile(); } catch (e) { expect(String(e), label).toMatch(/RELAY_OUTPUT_PROFILE/); throws = true; }
+        expect(() => composedUnavailable(), label).not.toThrow();
+        expect(composedUnavailable(), label).toBe(throws);
+        if (throws) refused++;
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(VALUES.length * 2);
+    expect(refused, "both halves of the differential: the three bad values, under both drivers").toBe(6);
   });
 
   it("answers without constructing anything: a live deployment short FLY_API_TOKEN (which the runner's constructor refuses) does not make the predicate throw", () => {

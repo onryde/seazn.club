@@ -14,6 +14,7 @@ import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT, type 
 import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS, d3Warning } from "@/lib/stream-session-view";
 import { FakeIngest, FakeRecorder } from "../fakes";
 import { pathTemplate } from "../sanitise";
+import { LIST_VIDEOS_BY_INPUT_200, LIST_VIDEOS_LIMIT_MAX, LIST_VIDEOS_QUERY } from "./cf-stream-list-videos.fixture";
 import type { IngestState, OutputState, ProviderCallRecord } from "../ports";
 import {
   CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT,
@@ -125,14 +126,11 @@ function cfReply(c: Call): Reply {
       { uid: "v_done", created: "2026-09-01T00:00:00Z", status: { state: "ready" }, liveInput: null, duration: 61.5, size: 734003200, input: { width: 1280, height: 720 } },
       { uid: "v_err", created: "2026-09-01T00:00:00Z", status: { state: "error", errorReasonCode: "ERR_NON_VIDEO" }, liveInput: null, duration: -1, size: -1, input: { width: 0, height: 0 } },
     ] } };
-  // R2004: ONE input's recordings (Cloudflare "Watch a live stream": GET /live_inputs/{uid}/videos). Two of in_abc's, in
-  // the probe's -1/0 placeholder shape for the live one; `in_failed_list` is a failed envelope.
-  if (c.init.method === "GET" && /\/live_inputs\/in_abc\/videos$/.test(c.url))
-    return { status: 200, body: { success: true, result: [
-      { uid: "v_cam_live", created: "2026-09-01T00:00:00Z", status: { state: "live-inprogress" }, liveInput: "in_abc", duration: -1, size: -1, input: { width: 0, height: 0 } },
-      { uid: "v_cam_done", created: "2026-09-01T01:00:00Z", status: { state: "ready" }, liveInput: "in_abc", duration: 30, size: 1000, input: { width: 1280, height: 720 } },
-    ] } };
-  if (c.init.method === "GET" && /\/live_inputs\/in_failed_list\/videos$/.test(c.url))
+  // R2004 (review I2): ONE input's recordings — the documented account listing filtered by input (OpenAPI "List videos",
+  // `?live_input_id=`), its body pinned from the document's schema in cf-stream-list-videos.fixture.ts; `in_failed_list`
+  // is a failed envelope.
+  if (c.init.method === "GET" && /\/stream\?live_input_id=in_abc&/.test(c.url)) return { status: 200, body: LIST_VIDEOS_BY_INPUT_200 };
+  if (c.init.method === "GET" && /\/stream\?live_input_id=in_failed_list&/.test(c.url))
     return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error for tok" }] } };
   if (c.init.method === "DELETE" && /\/stream\/v_live$/.test(c.url))
     return { status: 409, body: { success: false, errors: [{ code: 10046, message: "recording in progress" }] } };
@@ -238,14 +236,21 @@ describe("CloudflareIngest", () => {
     expect(settings(bodies[2]!), "the programme input records as the camera does").toEqual(settings(bodies[0]!));
   });
 
-  it("R2004: listInputVideos GETs live_inputs/{uid}/videos, maps the recording facts exactly as listVideos does, and records the call under the input and session; a failed envelope throws with the token redacted", async () => {
+  it("R2004 (review I2): listInputVideos GETs the DOCUMENTED filtered listing — /stream?live_input_id=<uid>&limit=<the document's max> — maps the recording facts exactly as listVideos does (an ABSENT liveInput reads null, never the id asked about), and records the call under the input and session; a failed envelope throws with the token redacted", async () => {
     const vids = await ingest.listInputVideos("in_abc", { sessionId: "s1" });
-    expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc/videos`);
+    const url = new URL(rec.calls[0]!.url);
+    expect(`${url.origin}${url.pathname}`).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream`);
+    // The parameter NAMES and the bound come from the OpenAPI document (the fixture), not from the adapter's constant.
+    expect([...url.searchParams.keys()].sort()).toEqual([LIST_VIDEOS_QUERY.limit, LIST_VIDEOS_QUERY.liveInputId].sort());
+    expect(url.searchParams.get(LIST_VIDEOS_QUERY.liveInputId)).toBe("in_abc");
+    expect(Number(url.searchParams.get(LIST_VIDEOS_QUERY.limit))).toBe(LIST_VIDEOS_LIMIT_MAX);
     expect(rec.calls[0]!.init.method).toBe("GET");
     expect(vids).toEqual([
       { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
       { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null },
+      { videoId: "v_cam_unnamed", inputId: null, createdAt: "2026-09-01T02:00:00Z", inProgress: false, durationSeconds: 12, sizeBytes: 500, width: 1280, height: 720, state: "ready", errorReasonCode: null },
     ]);
+    expect(vids, "anti-vacuity: every fixture item mapped").toHaveLength(LIST_VIDEOS_BY_INPUT_200.result.length);
     const err = await ingest.listInputVideos("in_failed_list").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/^cloudflare list input videos: HTTP 500/);
@@ -986,7 +991,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     expect(realShapes[1]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");
     expect(realShapes[4]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/outputs/{id}");   // C1: the output, never the input
     expect(realShapes[6]!.template).toBe("/client/v4/accounts/{id}/stream");
-    expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/videos");   // R2004
+    expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream");   // R2004 review I2: the filtered account listing
     expect(realShapes[8]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
     // m4: the subject id per operation. The adapter is the authority — the
     // object the call is ABOUT — and the fake agrees on all ten (C1: the removal is about the OUTPUT).

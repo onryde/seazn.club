@@ -30,6 +30,7 @@ const END_TO_WIRE: Record<DbEndReason, WireEndReason> = {
 const FAIL_TO_WIRE: Record<FailReason, WireEndReason> = {
   no_inbound_timeout: "no_inbound_timeout",
   target_rejected: "target_rejected",
+  output_failed: "failed",
   no_credits: "failed",
   provision_timeout: "failed",
   admission_timeout: "failed",

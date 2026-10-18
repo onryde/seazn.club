@@ -390,13 +390,22 @@ export async function apply(
       if (!monthly) {
         throw new HttpError(500, `Session ${sessionId} went live (${peek.state} at the rate read, ${before.state} under the lock) with no monthly credit rate resolved; refusing to consume without the monthly rollover`, "monthly_rate_unresolved");
       }
-      try {
-        const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId, monthly }, now);
-        if (c.ledgerId) await tx`update fixture_stream_sessions set credit_ledger_id = ${c.ledgerId} where id = ${sessionId}`;
-      } catch (e) {
-        if (!(e instanceof NoCreditsError)) throw e;
-        applied = { type: "credit_refused" };
-        dec = decide(before, applied, now);   // same transaction, the refusal is the state
+      if (before.mode === "composed" && before.outputUid === null) {
+        // R2004, PR #981 review I3 — "cannot happen" as a guard: a composed session going live with NO destination output
+        // (the add failed and the fail-closed path did not land, or a row seeded without one). The broadcast reaches
+        // nobody, so it is never charged: refused by name, logged and reported, and the decision goes on unconsumed.
+        log.error({ sid: sessionId, orgId: before.orgId, code: "composed_live_without_output" }, "stream session: a composed session went live with no destination output — the credit is NOT consumed");
+        captureError(new Error(`stream session ${sessionId}: a composed session went live with no destination output — credit not consumed`),
+          { orgId: before.orgId, route: "relay.credits.went_live_without_output", extra: { sessionId, code: "composed_live_without_output" } });
+      } else {
+        try {
+          const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId, monthly }, now);
+          if (c.ledgerId) await tx`update fixture_stream_sessions set credit_ledger_id = ${c.ledgerId} where id = ${sessionId}`;
+        } catch (e) {
+          if (!(e instanceof NoCreditsError)) throw e;
+          applied = { type: "credit_refused" };
+          dec = decide(before, applied, now);   // same transaction, the refusal is the state
+        }
       }
     }
     await persist(tx, dec.next);
@@ -751,6 +760,27 @@ export async function reconcileSession(sessionId: string, deps: SessionDeps): Pr
     exitAt: observed.exitAt, restartCount: observed.restartCount, exitRestarted: observed.exitRestarted } }, deps);
 }
 
+/** R2004, PR #981 review I3 (coordinator ruling, money): the destination output could not be added. Reported, then the
+ *  session is FAILED on the locked row (`output_failed`) — which for composed also tears its Machine down (the runner's
+ *  stop, then destroy: the credit refusal's teardown) — and, when it never went live, both of its inputs are deleted:
+ *  nothing has broadcast into them, so they hold no recording for the delete to leak (C2), exactly the refused programme
+ *  create's cleanup. A failed cleanup is reported with the uid and left to the retention sweep (the rows keep the uids).
+ *  No credit: the session is terminal before anything can go live, and the went_live guard (apply) backs that. */
+async function failClosedOnOutput(s: Session, inputUid: string, err: unknown, deps: SessionDeps): Promise<void> {
+  captureError(err, { orgId: s.orgId, route: "relay.add_output", extra: { sessionId: s.id, mode: s.mode, inputUid } });
+  log.error({ sid: s.id, mode: s.mode, inputUid, err }, "stream session: the destination output could not be added — the session fails closed");
+  const failed = await apply(s.id, (cur) => (cur.state === "warming" || cur.state === "live" ? { type: "output_failed" } : null), deps);
+  if (!failed || failed.startedAt !== null) return;
+  const uids = (await sql<{ uid: string }[]>`
+    select ingest_input_id as uid from fixture_stream_inputs where session_id = ${s.id} and ingest_input_id is not null order by role, slot`).map((r) => r.uid);
+  for (const uid of uids) {
+    await deps.drivers.ingest.deleteInput(uid).catch((cleanup: unknown) => {
+      captureError(cleanup, { orgId: s.orgId, route: "relay.provision_cleanup", extra: { sessionId: s.id, inputUid: uid } });
+      log.error({ sid: s.id, inputUid: uid, err: cleanup }, "stream session: an input of a session that failed closed was NOT deleted — the retention sweep retries it");
+    });
+  }
+}
+
 async function runEffects(session: Session, effects: Effect[], deps: SessionDeps): Promise<Session> {
   let current = session;
   for (const e of effects) {
@@ -763,7 +793,15 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
           return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, current.orgId, (await readRow(current.id, tx))!.target_id) };
         })) as { inputId: string | null; target: { url: string; streamKey: string } };
         if (inputId) {
-          const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target, { sessionId: current.id }), { inputUid: inputId });   // C9: exactly one, on the session's output input
+          let outputUid: string;
+          try {
+            outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target, { sessionId: current.id }), { inputUid: inputId });   // C9: exactly one, on the session's output input
+          } catch (err) {
+            // R2004, PR #981 review I3: a session with no destination fails CLOSED — never warming on, booting a Machine
+            // and going live to nobody, which would consume a credit (went_live) for a broadcast no one can see.
+            await failClosedOnOutput(current, inputId, err, deps);
+            throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+          }
           // Dg: the slot-0 destination output's uid, beside ingest_input_uid (not a secret). The port
           // RETURNS it (Tasks 3/4); throwing that return away is what would leave the column inert.
           // coalesce so a re-run of an idempotent effect cannot move a recorded uid.
@@ -1598,7 +1636,7 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
         () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0, role: "programme" }), { slot: 0, role: "programme" });
     }
   } catch (err) {
-    log.error({ sid: sessionId, err: String(err) }, "stream session: ingest create failed");
+    log.error({ sid: sessionId, err }, "stream session: ingest create failed");
     // R2004: an input this attempt DID make is not left at the provider — nothing has connected to it, so it holds no
     // recording for the delete to leak (C2). A failed cleanup is reported with the uid; the sweep cannot reclaim an input
     // whose row is about to go with its session, so the alarm is the only trace.
@@ -2242,6 +2280,24 @@ async function jobSession(sessionId: string, token: string, deps: SessionDeps): 
   return s;
 }
 
+/** R2004 review m1: the secrets a composed Machine HOLDS, for scrubbing its free text — its job token, the programme
+ *  input's stream key (it publishes there) and the camera's SRT playback passphrase and stream id (it reads there). The
+ *  destination key never reaches a Machine (spec §5.3), so it is not one of them. Read only for a beat that carries
+ *  free text; a read that fails still scrubs the token and every shape `scrubBeatText` knows, and says so. */
+async function beatSecretsOf(sessionId: string, mode: string, token: string): Promise<string[]> {
+  if (mode !== "composed") return [token];
+  try {
+    const { programme, playback } = await sql.begin(async (tx) => ({
+      programme: await readFirstInput(tx, sessionId, "programme"),
+      playback: await readCameraPlayback(tx, sessionId),
+    })) as { programme: Awaited<ReturnType<typeof readFirstInput>>; playback: Awaited<ReturnType<typeof readCameraPlayback>> };
+    return [token, programme?.rtmps?.streamKey, playback?.passphrase, playback?.streamId].filter((x): x is string => typeof x === "string" && x.length > 0);
+  } catch (err) {
+    log.warn({ sid: sessionId, err }, "stream session: a composed beat's credentials could not be read to scrub its exit detail — scrubbed by shape and token only");
+    return [token];
+  }
+}
+
 export async function heartbeat(sessionId: string, token: string, body: RelayHeartbeat, deps: SessionDeps): Promise<{ desiredState: "live" | "ending" }> {
   await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
   const before = await readRow(sessionId);
@@ -2252,7 +2308,7 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero).
   // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
   // JWT-shaped, everything from the first `?`), so last_heartbeat and the sample's raw hold the same detail.
-  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, [token]) };
+  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, await beatSecretsOf(sessionId, before.mode, token)) };
   const previousRung = await previousRungOf(before);   // read BEFORE this beat is stored or sampled
   await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
               egress_bytes = coalesce(${beat.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;

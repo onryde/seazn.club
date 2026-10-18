@@ -74,7 +74,8 @@ export interface SweepResult {
   cameraInputsCleared: number;     // R2004 1c: ended composed sessions whose camera recordings are all gone — marked this pass
   cameraRecordingsDeleted: number; // R2004 1c: camera recordings deleted this pass
   cameraRecordingsDeferred: number;// R2004 1c: still finalising (409), or their delete failed — retried tomorrow
-  cameraRecordingsRefused: number; // R2004 1c: listed under the camera but naming ANOTHER input — never deleted, reported
+  cameraRecordingsRefused: number; // R2004 1c: listed under the camera but naming ANOTHER input, or none — never deleted
+  cameraListingsTruncated: number; // R2004 1c (review I2): a camera listing that came back a FULL page — no mark that pass
   videosListed: number; listingTruncated: boolean;
   videosDeleted: number; videosDeferred: number; inputsDeleted: number; inputsDeferred: number; retentionFailed: number;
   foreignVideosSkipped: number;    // I1(c): past retention, but traceable to no input this database owns — never deleted
@@ -112,6 +113,8 @@ const failureBucket = (reason: FailReason | null): BackstopBucket => {
     // M10 (Task 14b review): produced by the organiser's poll on a deployment with no relay, where this sweep does not
     // run at all (its route returns `disabled` first) — a visit that ever sees one raced a mode change.
     case "relay_disabled": return "otherFailures";
+    // R2004 review I3: produced by the organiser's create (the add_output effect failing), never by the reconcile.
+    case "output_failed": return "otherFailures";
     // A failed session always carries its reason (session.ts `fail`); a null one is not something the report can name.
     case null: return "otherFailures";
   }
@@ -195,6 +198,29 @@ async function destroySessionless(m: RunnerListing, deps: SessionDeps): Promise<
   }
 }
 
+/** R2004 1c (PR #981 review I2): the B-guard's refusal, reported to Sentry ONCE per session — the sweep runs daily and
+ *  a refused recording stays listed until a person looks, so a per-recording, per-day report would be noise that buries
+ *  the first one. The session's ledger is the memory: a `camera_recordings_refused` event row (source `sweep`) is written
+ *  with the report, and its presence silences every later pass. Every pass still logs. */
+async function reportCameraRefusalOnce(
+  cam: { session_id: string; org_id: string; ingest_input_id: string },
+  refused: readonly { videoId: string; videoInput: string | null }[],
+): Promise<void> {
+  log.warn({ sid: cam.session_id, cameraInput: cam.ingest_input_id, refused: refused.length }, "relay sweep: a camera listing returned recordings that do not name the camera input — not deleted, not marked");
+  const first = await sql.begin(async (tx) => {
+    await tx`select id from fixture_stream_sessions where id = ${cam.session_id} for update`;
+    const [seen] = await tx`select 1 from fixture_stream_events where session_id = ${cam.session_id} and source = 'sweep' and type = 'camera_recordings_refused' limit 1`;
+    if (seen) return false;
+    await recordEvent(tx, { sessionId: cam.session_id, orgId: cam.org_id, source: "sweep", kind: "event", type: "camera_recordings_refused", payload: { inputUid: cam.ingest_input_id, count: refused.length } });
+    return true;
+  });
+  if (!first) return;
+  captureError(new Error("relay sweep: a camera input's listing returned recordings that do not name it (another input, or none) — not deleted"), {
+    orgId: cam.org_id, route: "relay.sweep.camera_recordings",
+    extra: { sessionId: cam.session_id, cameraInput: cam.ingest_input_id, refusedCount: refused.length, refused: refused.slice(0, 10) },
+  });
+}
+
 export async function sweepStreamSessions(
   deps: SessionDeps,
   opts: { sampleRetentionDays?: number | null; orgIds?: readonly string[] } = {},
@@ -220,7 +246,7 @@ export async function sweepStreamSessions(
     },
     runnerListing: "not_needed", machinesListed: 0, orphansDestroyed: 0, orphanDestroysFailed: 0, foreignRunnersSkipped: 0,
     runnerGoneConfirmed: 0, runnerGoneDeferred: 0, outputsReleased: 0, outputReleasesFailed: 0,
-    cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0,
+    cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0, cameraListingsTruncated: 0,
     videosListed: 0, listingTruncated: false,
     videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0, foreignVideosSkipped: 0,
     headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0, recordsDeleted: 0,
@@ -291,28 +317,35 @@ export async function sweepStreamSessions(
   //     camera (A) because Cloudflare serves an input's HLS only while it records and the phone's delivery watch reads
   //     A's, the programme (B) because its recording is the product. A's is a by-product, so it goes at the first pass
   //     after the session ends — and the storage it held stays reserved until then (stream-sessions.ts
-  //     `storageReservations`). Selected by ROLE: a programme row is never listed here. Listed by INPUT, and each listed
-  //     recording must NAME the camera input (its own `liveInput`) before it is deleted — the B-guard: a recording that
-  //     names any other input is refused, reported and left, and the row stays unmarked so a person looks. A recording
-  //     still finalising (409) or a delete that fails leaves the row unmarked; tomorrow's pass lists again. The mark
-  //     (`recordings_deleted_at`) is written only when every listed recording is gone, so a second pass asks nothing.
+  //     `storageReservations`). Selected by ROLE: a programme row is never listed here. Listed by INPUT through the
+  //     documented filtered listing (`GET /stream?live_input_id=`, PR #981 review I2), and each listed recording must
+  //     NAME the camera input (its own `liveInput`) before it is deleted — the B-guard: a recording that names any other
+  //     input, OR NONE (the schema makes `liveInput` optional), is refused and left, and the row stays unmarked so a
+  //     person looks. The refusal is reported to Sentry ONCE per session, ever (its ledger row is the memory), never once
+  //     per recording per day. A recording still finalising (409) or a delete that fails leaves the row unmarked;
+  //     tomorrow's pass lists again. A FULL page means "there may be more" (the account listing's rule, A13): what it
+  //     listed is deleted, but no mark is written that pass. The mark (`recordings_deleted_at`) is written only when the
+  //     listing was short of a page and every listed recording is gone, so a second pass asks nothing.
   const cameras = await sql<{ id: string; session_id: string; org_id: string; ingest_input_id: string }[]>`
     select i.id, i.session_id, s.org_id, i.ingest_input_id from fixture_stream_inputs i
       join fixture_stream_sessions s on s.id = i.session_id
      where s.mode = 'composed' and s.state in ${sql([...TERMINAL_STATES])}
        and i.role = 'camera' and i.ingest_input_id is not null and i.recordings_deleted_at is null ${inScopeS()}
      order by s.created_at`;
+  const cameraPage = deps.drivers.ingest.capabilities.listVideosPageLimit;
   for (const cam of cameras) {
     const camera = cam.ingest_input_id;
     try {
       const listed = await deps.drivers.ingest.listInputVideos(camera, { sessionId: cam.session_id });
+      const truncated = listed.length >= cameraPage;
+      if (truncated) out.cameraListingsTruncated++;
       let remaining = 0;
+      const refused: { videoId: string; videoInput: string | null }[] = [];
       for (const v of listed) {
         if (v.inputId !== camera) {
           remaining++;
           out.cameraRecordingsRefused++;
-          captureError(new Error("relay sweep: a camera input's listing returned a recording of another input — not deleted"),
-            { orgId: cam.org_id, route: "relay.sweep.camera_recordings", extra: { sessionId: cam.session_id, cameraInput: camera, videoId: v.videoId, videoInput: v.inputId } });
+          refused.push({ videoId: v.videoId, videoInput: v.inputId });
           continue;
         }
         try {
@@ -323,16 +356,19 @@ export async function sweepStreamSessions(
           remaining++;
           out.cameraRecordingsDeferred++;
           captureError(err, { orgId: cam.org_id, route: "relay.sweep.camera_recordings", extra: { sessionId: cam.session_id, videoId: v.videoId } });
-          log.error({ sid: cam.session_id, videoId: v.videoId, err: String(err) }, "relay sweep: a camera recording's delete failed — the next pass retries it");
+          log.error({ sid: cam.session_id, videoId: v.videoId, err }, "relay sweep: a camera recording's delete failed — the next pass retries it");
         }
       }
-      if (remaining === 0) {
+      if (refused.length > 0) await reportCameraRefusalOnce(cam, refused);
+      if (truncated) {
+        log.warn({ sid: cam.session_id, listed: listed.length, page: cameraPage }, "relay sweep: a camera listing came back a full page — the tail may be missing; not marked this pass");
+      } else if (remaining === 0) {
         await sql`update fixture_stream_inputs set recordings_deleted_at = coalesce(recordings_deleted_at, ${now}) where id = ${cam.id}`;
         out.cameraInputsCleared++;
       }
     } catch (err) {
       captureError(err, { orgId: cam.org_id, route: "relay.sweep.camera_recordings", extra: { sessionId: cam.session_id, cameraInput: camera } });
-      log.error({ sid: cam.session_id, err: String(err) }, "relay sweep: a camera input's recordings could not be listed — the next pass retries it");
+      log.error({ sid: cam.session_id, err }, "relay sweep: a camera input's recordings could not be listed — the next pass retries it");
     }
   }
 

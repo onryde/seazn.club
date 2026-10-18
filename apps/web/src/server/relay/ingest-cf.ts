@@ -515,12 +515,16 @@ export class CloudflareIngest implements IngestProvider {
     return r.json.result.map(videoOf);
   }
 
-  /** R2004 (owner ruling 2026-10-18, option (a)): ONE input's recordings — Cloudflare's `GET /live_inputs/{uid}/videos`
-   *  ("Watch a live stream", developers.cloudflare.com/stream/stream-live/watch-live-stream; the endpoint is not in the
-   *  Stream OpenAPI document). Mapped exactly as `listVideos` maps, `inputId` included: it is the video's own
-   *  `liveInput`, never the id this call asked about, so the sweep's guard on it is a check and not an echo. */
+  /** R2004 (owner ruling 2026-10-18, option (a); PR #981 review I2): ONE input's recordings — the account listing
+   *  filtered by input, `GET /accounts/{account_id}/stream?live_input_id=<uid>&limit=<page>` ("List videos" in
+   *  Cloudflare's API OpenAPI document: `live_input_id` "filter by live input ID", `limit` 1..1000, default 1000;
+   *  fetched 2026-10-18, pinned in __tests__/cf-stream-list-videos.fixture.ts). The documented operation, where the
+   *  first build called the undocumented `/live_inputs/{uid}/videos`. The same page bound as `listVideos`, so a FULL page
+   *  means "there may be more" to the sweep that reads it. Mapped exactly as `listVideos` maps, `inputId` included: it is
+   *  the video's own `liveInput` — optional in the schema, so null when absent — never the id this call asked about,
+   *  so the sweep's guard on it is a check and not an echo. */
   async listInputVideos(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestVideo[]> {
-    const r = await this.call<CfVideo[]>("GET", `/live_inputs/${encodeURIComponent(inputId)}/videos`, undefined,
+    const r = await this.call<CfVideo[]>("GET", `?live_input_id=${encodeURIComponent(inputId)}&limit=${LIST_VIDEOS_PAGE_LIMIT}`, undefined,
       { operation: "listInputVideos", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (!r.json.success || !r.json.result) this.fail("list input videos", r);
     return r.json.result.map(videoOf);

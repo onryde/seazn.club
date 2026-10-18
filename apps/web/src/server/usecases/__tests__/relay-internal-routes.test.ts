@@ -778,6 +778,35 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect((await newestRaw(t.sessionId)).raw, "samples.raw").toHaveProperty("exitDetail", "signature [redacted] rejected");
   });
 
+  // R2004 review m1: through the ROUTE, a composed Machine's exit detail that echoes the credentials it HOLDS — the
+  // programme input's stream key, the camera's SRT passphrase and stream id — or an RTMPS key path is scrubbed in both
+  // stores. The expected secrets are the PROVIDER's own answers (the rig's `inputs`), never the rows the handler reads.
+  it("R2004 m1: a composed final beat's exitDetail loses the programme key, the camera's SRT passphrase and stream id, and everything after /live/ — in both stores", async () => {
+    // One fresh session per credential, so each beat is that session's FIRST final beat.
+    const picks = [
+      ["programme key", (i: Awaited<ReturnType<typeof session>>["inputs"]) => i.find((x) => x.role === "programme")!.creds.rtmps.streamKey],
+      ["SRT passphrase", (i: Awaited<ReturnType<typeof session>>["inputs"]) => i.find((x) => x.role === "camera")!.creds.srtPlayback!.passphrase],
+      ["SRT stream id", (i: Awaited<ReturnType<typeof session>>["inputs"]) => i.find((x) => x.role === "camera")!.creds.srtPlayback!.streamId],
+    ] as const;
+    let checked = 0;
+    for (const [name, pick] of picks) {
+      const t = await session("composed");
+      const value = pick(t.inputs);
+      expect(value.length, `${name}: premise — long enough to be a pattern`).toBeGreaterThanOrEqual(10);
+      const detail = `sink failed (${value}) twice`;
+      expect((await postBeat(t.sessionId, { state: "stopped", exitReason: "refused", exitDetail: detail }, { token: t.jobToken })).status, name).toBe(200);
+      expect(await lastHeartbeat(t.sessionId), `${name}: last_heartbeat`).toHaveProperty("exitDetail", "sink failed ([redacted]) twice");
+      expect((await newestRaw(t.sessionId)).raw, `${name}: samples.raw`).toHaveProperty("exitDetail", "sink failed ([redacted]) twice");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all three credentials").toBe(3);
+    const u = await session("composed");
+    const { url } = u.inputs.find((i) => i.role === "programme")!.creds.rtmps;
+    expect(url, "premise: the provider's RTMPS url ends at its key path").toMatch(/\/live\/$/);
+    expect((await postBeat(u.sessionId, { state: "stopped", exitReason: "refused", exitDetail: `publish ${url}someotherkey123 EOF` }, { token: u.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(u.sessionId), "the key path is cut").toHaveProperty("exitDetail", `publish ${url}`);
+  });
+
   // Review M4: Session.fixtureId is `string | null` — V410 `on delete set null`, the session outlives its fixture. The
   // runtime witness: the Machine's own GET after the fixture is gone, in both modes.
   it("review M4: delete the fixture mid-session and GET facts answers fixtureId null — still a strict RelayJobSession", async () => {

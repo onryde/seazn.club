@@ -39328,7 +39328,8 @@
                                     "machine_refused",
                                     "provision_timeout",
                                     "admission_timeout",
-                                    "relay_disabled"
+                                    "relay_disabled",
+                                    "output_failed"
                                   ]
                                 },
                                 {
@@ -40036,7 +40037,8 @@
                                 "machine_refused",
                                 "provision_timeout",
                                 "admission_timeout",
-                                "relay_disabled"
+                                "relay_disabled",
+                                "output_failed"
                               ]
                             },
                             {

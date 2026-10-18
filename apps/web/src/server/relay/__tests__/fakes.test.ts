@@ -63,6 +63,11 @@ describe("FakeIngest", () => {
     expect(await fake.deleteVideo("v-cam")).toBe("deleted");
     expect(await fake.listInputVideos(camera.inputId)).toEqual([]);
     expect((await fake.listInputVideos(programme.inputId)).map((v) => v.videoId)).toEqual(["v-prog"]);
+    // Review I2: at most ONE page — the instance's declared listVideosPageLimit, as the real listing's `limit` bounds it.
+    for (const id of ["v-cam-1", "v-cam-2", "v-cam-3"]) fake.addVideo({ videoId: id, inputId: camera.inputId, createdAt: at, inProgress: false });
+    const small = Object.assign(Object.create(fake) as FakeIngest, { capabilities: { ...fake.capabilities, listVideosPageLimit: 2 } });
+    expect((await small.listInputVideos(camera.inputId)).map((v) => v.videoId), "a full page of 2, the third withheld").toEqual(["v-cam-1", "v-cam-2"]);
+    expect(await fake.listInputVideos(camera.inputId), "the fake's own page holds all three").toHaveLength(3);
   });
 
   it("inputStatus has the per-input GET's shape and flips at connectAfterMs exactly", async () => {

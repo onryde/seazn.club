@@ -5,8 +5,10 @@ import { defaultDeps, sessionFactsForJob } from "@/server/usecases/stream-sessio
 
 type Ctx = { params: Promise<{ sid: string }> };
 
-/** GET /api/internal/relay/sessions/[sid] — the facts a Machine needs (design §6.3): mode, theme, delay, the DECRYPTED
- *  destination, a page token. Job token only (`Authorization: Bearer <jwt>`, verified for THIS sid and the job scope by
+/** GET /api/internal/relay/sessions/[sid] — the facts a Machine needs (design §6.3): mode, theme, delay, a page token,
+ *  and a DECRYPTED publish target — for composed, the programme input's RTMPS (Input B, R2004: the destination output
+ *  hangs off B, so the destination key never reaches a Machine) plus the camera's SRT playback; for passthrough, the
+ *  destination itself. Job token only (`Authorization: Bearer <jwt>`, verified for THIS sid and the job scope by
  *  the usecase); 410 SESSION_ENDED once the session is terminal. The read also ticks the session's policy (a reconcile),
  *  which is how a Machine's own reads persist its exit facts (A5). Never a redirect (R8).
  *

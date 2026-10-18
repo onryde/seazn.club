@@ -67,6 +67,10 @@ describe("sanitise — allowlist", () => {
     expect(sanitise(written)).toEqual(written);
     expect(Object.keys(written).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
   });
+  it("R2004 review m4: `role` is kept — a create_live_input effect's payload says which input it made (camera or programme)", () => {
+    expect(sanitise({ slot: 0, role: "programme" })).toEqual({ slot: 0, role: "programme" });
+    expect(ALLOWED_KEYS.has("role")).toBe(true);
+  });
   it("the allowlist holds no key that names a credential (the list is the guard; this pins it) — every key, the R2 beat's thirteen included", () => {
     let checked = 0;
     for (const k of ALLOWED_KEYS) {
@@ -169,9 +173,35 @@ describe("scrubBeatText (R2002 review Q3)", () => {
     expect(scrubBeatText(`GET https://relay.example.test/v1/x?st=${JWT}&host=compositor failed`, [])).toBe("GET https://relay.example.test/v1/x");
     expect(scrubBeatText(`with ${JWT} at /a?b=1`, [])).toBe("with [redacted] at /a");
   });
+  // R2004 review m1: a composed Machine also HOLDS the programme input's stream key and the camera's SRT playback
+  // passphrase and stream id — and an RTMP(S) URL carries its key as the path segment after /live/ (Cloudflare) or
+  // /live2/ (YouTube), which no secret list can know in advance.
+  it("R2004 m1: cuts everything after the first /live/ — Cloudflare's RTMPS key path — and after /live2/ — YouTube's", () => {
+    expect(scrubBeatText("publish to rtmps://live.cloudflare.com:443/live/9f3a1c0b7e2d4a6f8c1b3d5e7f9a0b2cka1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 failed: EOF", []))
+      .toBe("publish to rtmps://live.cloudflare.com:443/live/");
+    expect(scrubBeatText("sink rtmp://a.rtmp.youtube.com/live2/abcd-efgh-ijkl-mnop-qrst refused", [])).toBe("sink rtmp://a.rtmp.youtube.com/live2/");
+    // The FIRST of the two wins, whichever it is.
+    expect(scrubBeatText("a /live2/k1 then /live/k2", [])).toBe("a /live2/");
+    expect(scrubBeatText("a /live/k1 then /live2/k2", [])).toBe("a /live/");
+    // The differential: a path that only LOOKS like one is left alone.
+    expect(scrubBeatText("the /lives/ and /livestream/ pages", [])).toBe("the /lives/ and /livestream/ pages");
+  });
+  it("R2004 m1: redacts each composed credential the handler names — the programme stream key, the camera's SRT passphrase, its stream id — each one alone", () => {
+    const KEY = "2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7fk9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3";
+    const PASSPHRASE = "pp-4f3e2d1c0b9a8f7e6d5c";
+    const STREAM_ID = "#!::r=fc0a8dc887b16759bfd9ad922230a014,m=request";
+    let checked = 0;
+    for (const [name, secret] of [["programme key", KEY], ["passphrase", PASSPHRASE], ["stream id", STREAM_ID]] as const) {
+      const text = `srt read failed (${secret}) after 3 tries`;
+      expect(scrubBeatText(text, ["job-token-not-here", KEY, PASSPHRASE, STREAM_ID]), name).toBe("srt read failed ([redacted]) after 3 tries");
+      expect(scrubBeatText(text, ["job-token-not-here"]), `${name}: unnamed, it survives`).toBe(text);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
   it("never lengthens a text (both stores keep the same text, under the beat's own bound), and is idempotent", () => {
     const secret = "opaque-secret-0123456789";
-    const cases = [`x ${secret}`, `y ${JWT}`, `z ${JWT.slice(0, 11)}`, "short eyJabc", "plain", `/p?q=${secret}`];
+    const cases = [`x ${secret}`, `y ${JWT}`, `z ${JWT.slice(0, 11)}`, "short eyJabc", "plain", `/p?q=${secret}`, "rtmps://h/live/k", "rtmp://h/live2/k /live/j"];
     let checked = 0;
     for (const text of cases) {
       const once = scrubBeatText(text, [secret]);

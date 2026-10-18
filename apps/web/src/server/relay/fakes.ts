@@ -267,10 +267,12 @@ export class FakeIngest implements IngestProvider {
     return this.videos.filter((v) => new Date(v.createdAt).getTime() < opts.createdBefore.getTime()).map((v) => ({ ...v }));
   }
 
-  /** R2004: one input's recordings — Cloudflare's `GET /live_inputs/{uid}/videos` (ingest-cf.ts). */
+  /** R2004: one input's recordings — the account listing filtered by input, `GET /stream?live_input_id=` (ingest-cf.ts),
+   *  at most a page: the provider's declared `listVideosPageLimit`, read from THIS instance's capabilities so a test that
+   *  declares a small page sees the full-page case. */
   async listInputVideos(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestVideo[]> {
-    this.record("listInputVideos", "GET", `/live_inputs/${inputId}/videos`, [inputId], inputId, meta.sessionId ?? null);
-    return this.videos.filter((v) => v.inputId === inputId).map((v) => ({ ...v }));
+    this.record("listInputVideos", "GET", `?live_input_id=${inputId}`, [inputId], inputId, meta.sessionId ?? null);
+    return this.videos.filter((v) => v.inputId === inputId).slice(0, this.capabilities.listVideosPageLimit).map((v) => ({ ...v }));
   }
 
   async deleteVideo(videoId: string): Promise<DeleteVideoResult> {

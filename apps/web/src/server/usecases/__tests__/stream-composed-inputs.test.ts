@@ -25,7 +25,7 @@ import { readTargetSecret } from "@/server/relay/secret-columns";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
-import { type SessionDeps, createSession, currentSession, sessionFactsForJob, storageReservations, stopSession } from "../stream-sessions";
+import { type SessionDeps, createSession, currentSession, heartbeat, reconcileSession, sessionFactsForJob, storageReservations, stopSession } from "../stream-sessions";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
@@ -116,6 +116,10 @@ describe.skipIf(!HAS_DB)("R2004: composed provisioning — two inputs, the outpu
     await expect(r.start("composed")).rejects.toMatchObject({ code: "active_session" });
     expect(spy, "no input made by the refused start").toHaveBeenCalledTimes(2);
     expect((await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_inputs where session_id = ${sessionId}`)[0]!.n).toBe(2);
+    // Review m4: the ledger says WHICH input each create made — the role survives the payload allowlist.
+    const creates = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from fixture_stream_events where session_id = ${sessionId} and kind = 'effect' and type = 'create_live_input' order by seq`;
+    expect(creates.map((c) => c.payload), "the camera's create, then the programme's, by role").toEqual([{ slot: 0 }, { slot: 0, role: "programme" }]);
   });
 
   it("passthrough_provisioning_is_unchanged: ONE create (the same call), ONE camera row with no playback stored, the output on A, one recording reserved", async () => {
@@ -304,5 +308,92 @@ describe.skipIf(!HAS_DB)("R2004: storage reservations (owner ruling 2026-10-18, 
     expect(await mine([sessionId], at), "failed is terminal: the camera's share stays").toEqual([{ sessionId, minutes: MAX_DURATION_MINUTES }]);
     await sql`update fixture_stream_inputs set ingest_input_id = null where session_id = ${sessionId} and role = 'camera'`;
     expect(await mine([sessionId], at), "no camera input at the provider: nothing recorded, nothing reserved").toEqual([]);
+  });
+});
+
+// PR #981 review I3 (coordinator ruling, money): a start whose destination output cannot be added fails CLOSED. Before,
+// the throw left the session warming with no destination — a composed one with its Machine booting — and the Machine's
+// `playing` (or the phone's connection) then consumed a credit for a broadcast nobody could see.
+describe.skipIf(!HAS_DB)("R2004 review I3: a failing addOutput fails the start closed, and a composed go-live without an output is never charged", () => {
+  const consumes = async (sessionId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`)[0]!.n;
+  const routeReports = (route: string) => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === route);
+
+  it("addOutput THROWS, in BOTH modes: 503 ingest_unavailable, the session FAILED output_failed with no output, every input deleted, a composed Machine stopped and gone, no credit — and the retry, with the provider back, streams (mutant: the catch is removed → red)", async () => {
+    let checked = 0;
+    for (const mode of ["passthrough", "composed"] as const) {
+      const r = await rig();
+      const made = vi.spyOn(r.ingest, "createLiveInput");
+      const add = vi.spyOn(r.ingest, "addOutput").mockRejectedValueOnce(new Error("cloudflare add output: HTTP 503"));
+      sentry.captureError.mockClear();
+      const err = await r.start(mode).catch((e: unknown) => e);
+      expect(err, `${mode}: the organiser's error`).toBeInstanceOf(HttpError);
+      expect(err, mode).toMatchObject({ status: 503, code: "ingest_unavailable" });
+      expect(add, `${mode}: premise — the add was asked, once`).toHaveBeenCalledTimes(1);
+      const [row] = await sql<{ id: string; state: string; fail_reason: string | null; output_uid: string | null; credit_ledger_id: string | null; started_at: Date | null; runner_state: string; machine_id: string | null }[]>`
+        select id, state, fail_reason, output_uid, credit_ledger_id, started_at, runner_state, machine_id from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+      expect(row, `${mode}: the session is kept, FAILED`).toMatchObject({ state: "failed", fail_reason: "output_failed", output_uid: null, credit_ledger_id: null, started_at: null });
+      const uids = await Promise.all(made.mock.results.map(async (x) => (await (x.value as ReturnType<FakeIngest["createLiveInput"]>)).inputId));
+      expect(uids, `${mode}: premise — the inputs made`).toHaveLength(mode === "composed" ? 2 : 1);
+      expect([...r.ingest.deletedInputs].sort(), `${mode}: every input deleted at the provider`).toEqual([...uids].sort());
+      if (mode === "composed") {
+        expect(r.runner.created, "premise: the Machine was created before the add").toHaveLength(1);
+        expect(r.runner.stops.map((x) => x.runnerId), "the Machine is torn down").toEqual([row!.machine_id]);
+        // The teardown finishes on the FAILED row (C27): the lazy reconcile observes the stopped Machine, then its absence.
+        let looks = 0;
+        for (; looks < 4; looks++) {
+          const [now] = await sql<{ runner_state: string }[]>`select runner_state from fixture_stream_sessions where id = ${row!.id}`;
+          if (now!.runner_state === "destroyed") break;
+          await reconcileSession(row!.id, r.deps);
+        }
+        const [after] = await sql<{ runner_state: string; state: string }[]>`select runner_state, state from fixture_stream_sessions where id = ${row!.id}`;
+        expect(after, `gone at the provider, recorded (after ${looks} looks)`).toMatchObject({ runner_state: "destroyed", state: "failed" });
+        expect((await r.runner.list()).filter((m) => m.sessionId === row!.id), "no Machine of the session is listed").toEqual([]);
+      } else {
+        expect(r.runner.created, "passthrough asks for no Machine").toHaveLength(0);
+      }
+      expect(await consumes(row!.id), `${mode}: no credit`).toBe(0);
+      expect(routeReports("relay.add_output"), `${mode}: reported once`).toHaveLength(1);
+      // The second call: the provider is back (the one rejection is spent) — a fresh start streams, its output on the
+      // mode's output input, and the failed session does not hold the fixture.
+      made.mockClear();
+      const { sessionId } = await r.start(mode);
+      expect(sessionId).not.toBe(row!.id);
+      const next = await sessionRow(sessionId);
+      expect(next!.state, `${mode}: the retry is up`).not.toBe("failed");
+      expect(next!.output_uid, `${mode}: and has its output`).not.toBeNull();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both modes").toBe(2);
+  });
+
+  it("the went_live guard: a COMPOSED session that reaches playing with NO output_uid goes live UNCHARGED — logged and reported by name — while the same session with its output pays exactly once (mutant: the guard is removed → red)", async () => {
+    let checked = 0;
+    for (const withOutput of [true, false]) {
+      const r = await rig();
+      const { sessionId } = await r.start("composed");
+      if (!withOutput) await sql`update fixture_stream_sessions set output_uid = null where id = ${sessionId}`;
+      sentry.captureError.mockClear();
+      await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+      const row = await sessionRow(sessionId);
+      expect(row!.state, `output ${withOutput}: live either way`).toBe("live");
+      expect(await consumes(sessionId), `output ${withOutput}`).toBe(withOutput ? 1 : 0);
+      const reports = routeReports("relay.credits.went_live_without_output");
+      expect(reports, `output ${withOutput}: reported only without`).toHaveLength(withOutput ? 0 : 1);
+      if (!withOutput) expect(reports[0]![1]).toMatchObject({ extra: { sessionId, code: "composed_live_without_output" } });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the guard is composed-only: a PASSTHROUGH session goes live on the phone's connection and pays, whatever the output column says", async () => {
+    const r = await rig();
+    const { sessionId } = await r.start("passthrough");
+    await sql`update fixture_stream_sessions set output_uid = null where id = ${sessionId}`;
+    const [{ camera }] = await sql<{ camera: string }[]>`select ingest_input_id as camera from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera'`;
+    r.ingest.setState(camera, "connected");   // the phone's connection, as the provider reports it
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect((await sessionRow(sessionId))!.state, "premise: live on the connection").toBe("live");
+    expect(await consumes(sessionId)).toBe(1);
   });
 });
