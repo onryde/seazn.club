@@ -114,6 +114,10 @@ describe.skipIf(!DB)("two admitted stays warm up concurrently and are served wit
   }, 120_000);
 });
 
+// MUTANT ATTRIBUTION (the capacity build's P4, measured): the spec says dropping the update of the OTHER side's stay (gateClaim's
+// `update fixture_seat_line set completing = true ... otherPersonId`) turns (b) and (c) red. Run, it turns (b) red ALONE: (c)'s bucket is
+// funded for the re-verify whether or not the reservation held it, so (c) cannot see the missing hold. The kill is (b)'s: the pool fell
+// by LINE_RECHECK_COST at the opponent's claim, or it did not.
 describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", () => {
   /** A held stay makes the line active (its reservation is out), the bucket holds exactly what the candidate needs above it. */
   async function candidate(opts: { other: "open" | "counted" | "none"; shortBy: number }) {
