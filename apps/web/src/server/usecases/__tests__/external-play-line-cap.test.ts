@@ -185,6 +185,10 @@ describe.skipIf(!DB)("a counted check-in is never re-stamped (test 28)", () => {
     await sql`update fixture_availability set checked_in_at = ${DEADLINE} where fixture_id = ${b.fixtureId} and person_id = ${b.home.personId}`;
     const edge = await stampFixtureCheckIn(b.home.personId, b.fixtureId, b.orgId, { at: first, window: win });
     expect(new Date(edge.checked_in_at!), "a stamp AT the deadline is outside the window").toEqual(first);
+    // ...and the stamp AT the opening is inside it (the window is [opensAt, deadline), window.ts roomPhase).
+    await sql`update fixture_availability set checked_in_at = ${win.opensAt} where fixture_id = ${b.fixtureId} and person_id = ${b.home.personId}`;
+    const lower = await stampFixtureCheckIn(b.home.personId, b.fixtureId, b.orgId, { at: first, window: win });
+    expect(new Date(lower.checked_in_at!), "a stamp AT the opening is inside the window and is kept").toEqual(win.opensAt);
   });
 
   it("a seated re-claim past the deadline leaves checked_in_at unchanged (both players counted, so the board is still open to them)", async () => {

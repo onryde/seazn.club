@@ -213,6 +213,54 @@ describe("the order checkers can fail (test 13, mutation targets)", () => {
   });
 });
 
+describe("the order checkers: every boundary (test 13, mutation targets of the edges)", () => {
+  const stay = (id: string, first: number, queued: number | null, admitted: number | null, served: number | null = null): StayFacts => ({
+    id,
+    firstClaimAt: first,
+    queuedAt: queued,
+    admittedAt: admitted,
+    servedAt: served,
+  });
+
+  it("admission inversions: a tie in ARRIVAL has no order to invert and is not a pair; admitted in the SAME instant is not inverted (2 cases, pairs reported)", () => {
+    const tie = admissionInversions([stay("a", 100, 110, 900), stay("b", 100, 110, 500)]);
+    expect(tie.pairs, "a tie in arrival is no pair at all").toBe(0);
+    expect(tie.inversions).toBe(0);
+    const sameInstant = admissionInversions([stay("a", 100, 110, 500), stay("b", 200, 210, 500)]);
+    expect(sameInstant.pairs, "anti-vacuity: the pair was looked at").toBe(1);
+    expect(sameInstant.inversions, "admitted in the same instant is in order").toBe(0);
+    const oneApart = admissionInversions([stay("a", 100, 110, 501), stay("b", 200, 210, 500)]);
+    expect([oneApart.pairs, oneApart.inversions], "one millisecond the wrong way IS an inversion").toEqual([1, 1]);
+  });
+
+  it("completion reorders: two stays admitted in the same instant have no admission order to reorder and are not a pair", () => {
+    const got = completionReorders([stay("a", 100, 110, 500, 900), stay("b", 200, 210, 500, 700)]);
+    expect(got, "same admission instant: no pair").toEqual({ pairs: 0, reorders: 0 });
+    expect(completionReorders([stay("a", 100, 110, 500, 900), stay("b", 200, 210, 501, 700)]), "one millisecond apart IS a pair, and a reorder").toEqual({ pairs: 1, reorders: 1 });
+  });
+
+  it("a rise is excused only by a stay first held AFTER the previous sample (strictly), up to and INCLUDING this sample, with an EARLIER arrival key (strictly) - each edge, one at a time (4 cases)", () => {
+    // Y arrived at 200, was held at 210; samples at 400 then 900: Y's number rose from 1 to 2. X is the candidate cause.
+    const rise = (x: StayFacts) =>
+      positionRises(
+        [
+          { id: "Y", at: 400, position: 1 },
+          { id: "Y", at: 900, position: 2 },
+        ],
+        [x, stay("Y", 200, 210, null)],
+      );
+    const causeOf = (x: StayFacts) => rise(x).excused.map((r) => r.cause);
+    expect(causeOf(stay("X", 100, 401, null)), "held one ms after the previous sample: a cause").toEqual(["X"]);
+    expect(causeOf(stay("X", 100, 400, null)), "held AT the previous sample: already there, not a cause").toEqual([]);
+    expect(causeOf(stay("X", 100, 900, null)), "held AT this sample: a cause (the sample saw it)").toEqual(["X"]);
+    expect(causeOf(stay("X", 100, 901, null)), "held after this sample: not yet").toEqual([]);
+    expect(causeOf(stay("X", 199, 500, null)), "arrived one ms before: a cause").toEqual(["X"]);
+    expect(causeOf(stay("X", 200, 500, null)), "arrived at the SAME instant: no earlier key, not a cause").toEqual([]);
+    expect(causeOf(stay("X", 201, 500, null)), "arrived after: not a cause").toEqual([]);
+    expect(rise(stay("X", 200, 500, null)).unexcused.map((r) => r.id), "and the rise is then unexcused").toEqual(["Y"]);
+  });
+});
+
 describe.skipIf(!DB)("the excused rise, through the real gate (test 13 (e), the re-review's N3)", () => {
   it("X passes on an empty line and is never held; Y arrives and is held at 1; X's next claim is deferred, so X is first held AFTER Y with an earlier key: Y's number rises 1 -> 2, once, excused with X as the cause", async () => {
     const [x, y, z] = [await seed(), await seed(), await seed()];

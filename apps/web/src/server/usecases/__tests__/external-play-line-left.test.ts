@@ -151,3 +151,40 @@ describe.skipIf(!DB)("`left` travels only on a queued answer, with a fixed prece
     expect(again.seat, "the replacement says why the old one left").toMatchObject({ reason: "queued", line: { left: "silent" } });
   }, 60_000);
 });
+
+describe.skipIf(!DB)("`released_at`: the last time the gate let a claim spend (spec §5.7.2, §5.7.3 steps 3 and 5)", () => {
+  it("an idle pass writes nothing, an admission stamps it, an admitted stay's next claim moves it, and a restart clears it (4 readings)", async () => {
+    const key = scene();
+    const b = await sceneBoard();
+    let checked = 0;
+    const released = async () => (await stayRow(b.fixtureId, b.home.personId))?.released_at ?? null;
+
+    // The idle line: today's path, nothing written but the upsert.
+    await setBucket(key, 1000, sceneAt(0));
+    expect(await claimAt(key, b, "home", sceneAt(0)), "premise: the idle line lets it go").toEqual({ kind: "go", decision: "idle" });
+    expect(await released(), "an idle pass writes nothing").toBeNull();
+    checked += 1;
+
+    // A stay held alone, then funded: admitted, and the admission is the gate letting a claim spend.
+    await putStay({ fixtureId: b.fixtureId, personId: b.home.personId, budgetKey: key, firstClaimAt: sceneAt(1_000), seenAt: sceneAt(1_000), gate: "held", queuedAt: sceneAt(1_000) });
+    await setBucket(key, 1000, sceneAt(8_000));
+    expect(await claimAt(key, b, "home", sceneAt(8_000)), "premise: funded, the held stay is admitted").toEqual({ kind: "go", decision: "admit" });
+    expect(await released(), "an admission stamps it").toEqual(sceneAt(8_000));
+    checked += 1;
+
+    // The admitted stay's next claim goes with no level check and moves the stamp.
+    expect(await claimAt(key, b, "home", sceneAt(12_000)), "premise: an admitted stay goes").toEqual({ kind: "go", decision: "admitted" });
+    expect(await released(), "the admitted stay's next claim moves it").toEqual(sceneAt(12_000));
+    checked += 1;
+
+    // Silent for the release grace, then back behind a waiting stay with a dry bucket: a NEW stay, held, never yet released.
+    const pressMs = 12_000 + LINE_RELEASE_GRACE_MS;
+    await holdWaiting(key, sceneAt(pressMs - 5_000), sceneAt(pressMs - 1_000));
+    await setBucket(key, 0, sceneAt(pressMs));
+    expect((await claimAt(key, b, "home", sceneAt(pressMs))).kind, "premise: the replacement waits").toBe("queued");
+    expect((await stayRow(b.fixtureId, b.home.personId))?.first_claim_at, "premise: a new stay").toEqual(sceneAt(pressMs));
+    expect(await released(), "a restart clears it: the new stay has not spent").toBeNull();
+    checked += 1;
+    expect(checked, "readings checked").toBe(4);
+  }, 120_000);
+});
