@@ -4,6 +4,7 @@ import type { OverlayCricketToss } from "@/lib/overlay-cricket";
 import type { OverlayMoment } from "@/lib/overlay-moments";
 import type { OverlayMsg } from "@/lib/overlay-model";
 import { EVENT_KEY } from "@/lib/scoring-vocab";
+import type { OverlayToss } from "@/lib/overlay-toss";
 
 /** Toss opener card — denser copy than a SIX slab (design 2026-09-12). */
 export const OVERLAY_TOSS_HOLD_MS = 8_000;
@@ -43,35 +44,33 @@ export function tossMoment(args: {
  * engine registry); `overlay-openers-end-of-over.test.ts` sweeps this answer against every overlay sport's own
  * `eventSchemas`. Review d (PR #974, from #782):
  * the warming card promised "Toss pending" on every sport — football, badminton, tennis — that will never have one.
- *
- * KNOWN GAP (follow-up owed, recorded on PR #974): CARROM declares `carrom.toss`, so it answers yes here, but the
- * overlay reads only cricket's toss (`load.ts` → `cricketToss`; `warmingLine` takes no other). So after a recorded
- * carrom toss the warming card still says "Toss pending" until play starts. The fix is plumbing carrom's toss through
- * the loader to `warmingLine`, not narrowing this answer: carrom does have a toss.
  */
 export function declaresToss(sportKey: string): boolean {
   return sportKey !== "" && Object.hasOwn(EVENT_KEY, `${sportKey}.toss`);
 }
 
-/** The warming card's line: the toss (pending, or won-and-elected once known — A1 enrichment while the match card owns
- *  the canvas) for a sport that has one; the start alone for every other sport. */
+/** The warming card's line: the toss (pending, or that sport's own result once known — A1 enrichment while the match
+ *  card owns the canvas) for a sport that has one; the start alone for every other sport. R2005 change 11: the toss is
+ *  a PER-SPORT union — cricket's won-and-elected, carrom's breaks-first — so each sport says what its toss recorded. */
 export function warmingLine(args: {
   sportKey: string;
-  toss: OverlayCricketToss | null | undefined;
+  toss: OverlayToss | null | undefined;
   sideNames: readonly [string, string];
   startContext: string;
   msg: OverlayMsg;
 }): string {
   if (!declaresToss(args.sportKey)) return args.startContext;
-  if (!args.toss) {
-    return args.msg("overlay.slate.warmingLineTossPending", { start: args.startContext });
+  const pending = () => args.msg("overlay.slate.warmingLineTossPending", { start: args.startContext });
+  const toss = args.toss;
+  if (!toss) return pending();
+  if (toss.sport === "carrom") {
+    const team = args.sideNames[toss.toss.firstBreakSide] ?? "";
+    return team === "" ? pending() : args.msg("overlay.toss.breaksFirst", { team });
   }
-  const team = args.sideNames[args.toss.wonBySide] ?? "";
-  if (team === "") {
-    return args.msg("overlay.slate.warmingLineTossPending", { start: args.startContext });
-  }
+  const team = args.sideNames[toss.toss.wonBySide] ?? "";
+  if (team === "") return pending();
   const choice = args.msg(
-    args.toss.elected === "bat" ? "overlay.toss.bat" : "overlay.toss.bowl",
+    toss.toss.elected === "bat" ? "overlay.toss.bat" : "overlay.toss.bowl",
   );
   return args.msg("overlay.toss.wonAndElected", { team, choice });
 }

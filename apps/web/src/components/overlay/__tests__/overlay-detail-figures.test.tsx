@@ -8,10 +8,12 @@
 // like. The layout half (the name yields, the figures stay whole and inside the band, at every frame) is
 // `e2e/overlay-gallery.spec.ts` check 8, which reads it in a browser.
 //
-// And the bug (same review, same cause): its 512 px footer at the 30 px floor cannot hold a crease pair's figures
-// beside the chase, let alone the bowler's analysis and this over's glyphs. The crease is the BAR band's content (the
-// W2 plan: "The cricket bar's second band carries the batters at the crease and the bowler's figures"), so the bug
-// draws the chase or result and no crease line — never a crease it can only show by cutting its numbers.
+// And the bug (same review, same cause): its 512 px footer at the 30 px floor cannot hold a crease PAIR's figures
+// beside the chase, let alone the bowler's analysis and this over's glyphs. The pair, the bowler and the glyphs are the
+// BAR band's content (the W2 plan: "The cricket bar's second band carries the batters at the crease and the bowler's
+// figures"). R2005 change 12 (owner, 2026-10-18) gives the bug back the STRIKER alone — one batter's figures fit whole
+// beside the chase where a pair's did not — so the bug draws the chase or result and the striker, never the pair.
+// `bug-striker-line.test.tsx` owns the striker line's own rules; this file keeps the "never the pair" half.
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -199,23 +201,40 @@ describe("the bar draws each person as a NAME that may ellipse beside FIGURES th
   });
 });
 
-describe("the bug draws the chase and no crease line", () => {
-  it("cricket live on the bug: the chase leads, and the crease's people are the bar's", () => {
+describe("the bug draws the chase and the striker — never the crease pair (R2005 change 12)", () => {
+  const strikerName = (lines[0]!.people ?? []).find((p) => p.mark !== undefined)!.name;
+  const otherNames = [
+    ...(lines[0]!.people ?? []).filter((p) => p.mark === undefined).map((p) => p.name),
+    ...(lines[1]?.people ?? []).map((p) => p.name),
+  ];
+
+  it("the ledger's crease is a pair and a bowler (so 'only the striker' is a real narrowing)", () => {
+    expect(lines[0]!.people, "a pair at the crease").toHaveLength(2);
+    expect(otherNames.length, "a non-striker and a bowler to leave out").toBeGreaterThanOrEqual(2);
+  });
+
+  it("cricket live on the bug: the chase leads, then ONE person — the striker; the pair and the bowler are the bar's", () => {
     const tree = render(OverlayBug, { ...MODEL, chase: "Need 45 off 30" });
     console.log(`bug entries: ${ofClass(tree, "ovl-detail-entry").length}`);
     expect(textOf(tree.find((el) => propsOf(el)["data-testid"] === "ovl-chase")!)).toBe("Need 45 off 30");
-    expect(ofClass(tree, "ovl-detail-entry")).toEqual([]);
-    expect(ofClass(tree, "ovl-detail-figures")).toEqual([]);
+    expect(ofClass(tree, "ovl-detail-entry")).toHaveLength(1);
+    expect(ofClass(tree, "ovl-detail-name").map((n) => textOf(n))).toEqual([strikerName]);
+    expect(ofClass(tree, "ovl-detail-figures")).toHaveLength(1);
+    const text = textOf(tree.find((el) => propsOf(el)["data-testid"] === "ovl-detail")!);
+    for (const name of otherNames) expect(text, name).not.toContain(name);
   });
 
-  it("with nothing but the crease to say, the bug has no footer at all — never an empty band", () => {
+  it("with nothing but the crease to say, the footer is the striker alone", () => {
     const tree = render(OverlayBug, MODEL);
-    expect(tree.filter((el) => propsOf(el)["data-testid"] === "ovl-detail")).toEqual([]);
+    expect(tree.filter((el) => propsOf(el)["data-testid"] === "ovl-detail")).toHaveLength(1);
+    expect(ofClass(tree, "ovl-detail-entry").map((e) => textOf(ofClass(walk(e), "ovl-detail-name")[0]!))).toEqual([strikerName]);
   });
 
-  it("a non-crease line still reaches the bug (the filter is the crease's, not the detail list's)", () => {
+  it("a non-crease line still reaches the bug, after the striker (the filter is the crease's, not the detail list's)", () => {
     const tree = render(OverlayBug, { ...MODEL, detail: [...lines, { text: "AWA Red card", tone: "dismissal" }] });
-    expect(ofClass(tree, "ovl-detail-entry").map((e) => textOf(e))).toEqual(["AWA Red card"]);
+    const entries = ofClass(tree, "ovl-detail-entry");
+    expect(entries).toHaveLength(2);
+    expect(textOf(entries[1]!)).toContain("AWA Red card");
   });
 });
 

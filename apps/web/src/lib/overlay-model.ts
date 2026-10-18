@@ -124,7 +124,7 @@ export interface OverlayDetailLine {
   /** Cricket this-over ball chips (already notated). When set, bar/bug render
    *  circular LED pills after `text` instead of flattening glyphs into the string. */
   glyphs?: readonly string[];
-  /** A crease line (`cricketDetail`): the bar band's, never drawn by the bug (review a, PR #974). */
+  /** A crease line (`cricketDetail`): the bar band's (review a, PR #974); the bug draws only its striker (R2005). */
   crease?: true;
   /** The people on a crease line, each a name that may ellipse beside figures that may not. When set, the renderers
    *  draw these instead of `text` (which stays their spoken join). */

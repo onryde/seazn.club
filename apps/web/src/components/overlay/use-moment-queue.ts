@@ -21,8 +21,11 @@ import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "./moment-timing"
 
 export function useMomentQueue(
   incoming: readonly OverlayMoment[],
-  opts: { reducedMotion: boolean },
+  /** `discard` (R2005, spec §4.8): the active scene's `momentsFire` is false, so every new moment is marked seen and
+   *  never queued. The stage reads it off the scene's declaration (`momentsFireIn`), never off a scene id. */
+  opts: { reducedMotion: boolean; discard?: boolean },
 ): { current: OverlayMoment | null; phase: Phase } {
+  const discard = opts.discard === true;
   // Reduced motion shortens the folds to nothing but keeps the PHASES, so the
   // slab still appears and leaves on the same schedule and `data-phase` still
   // reaches the DOM for the e2e to read. Skipping the phases would make the
@@ -44,7 +47,7 @@ export function useMomentQueue(
     const now = Date.now();
     dispatch({ type: "sync", live: incoming, now, foldMs, holdMs });
     if (incoming.length > 0) {
-      dispatch({ type: "enqueue", moments: incoming, now, foldMs, holdMs });
+      dispatch(discard ? { type: "discard", moments: incoming } : { type: "enqueue", moments: incoming, now, foldMs, holdMs });
     }
     // `incoming` is read from the closure and deliberately NOT a dependency: a
     // fresh array arrives on every poll even when nothing changed, so the
@@ -54,7 +57,7 @@ export function useMomentQueue(
     // the score tick in `overlay-stage.tsx` carries the same exemption for the
     // same reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, foldMs, holdMs]);
+  }, [key, foldMs, holdMs, discard]);
 
   const deadline = nextDeadline(state);
   // `state.revision` is in the deps, and it is NOT redundant with `deadline`: a

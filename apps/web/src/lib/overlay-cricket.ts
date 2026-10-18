@@ -317,7 +317,7 @@ export type CricketDetailLine = {
   text: string;
   /** Review a (PR #974): this is the CREASE, the bar band's content (W2 plan: "the cricket bar's second band carries
    *  the batters at the crease and the bowler's figures"). The bug's 512 px footer cannot hold it beside the chase at
-   *  the 30 px floor without cutting its numbers, so the bug draws no crease line. */
+   *  the 30 px floor without cutting its numbers, so the bug draws only the striker off it (`strikerLineOf`, R2005). */
   crease: true;
   /** Each person as THREE facts, so a band can let the name yield and never the figures: at the 30 px floor the one
    *  `${name} ${figures}` label ellipsised the bowler's analysis to "0.3-0-…" while the name stayed whole. */
@@ -336,6 +336,23 @@ export type CricketDetailPerson = {
 
 const spoken = (people: readonly CricketDetailPerson[]): string =>
   people.map((p) => `${p.mark ?? ""}${p.name} ${p.figures}`).join(" · ");
+
+/**
+ * R2005 change 12 — the corner bug's crease: the STRIKER, alone, off the crease line `cricketDetail` built (the one
+ * person who carries the mark; the engine says who is on strike). Null when nobody does — between innings, before the
+ * first ball, or a crease with no named striker — so the bug draws no line rather than an unmarked one. Never the
+ * non-striker, the bowler or this over's glyphs: those are the bar band's, which has the width for them.
+ */
+export function strikerLineOf(
+  lines: readonly { crease?: true; people?: readonly CricketDetailPerson[] }[],
+): CricketDetailLine | null {
+  for (const line of lines) {
+    if (!line.crease) continue;
+    const striker = line.people?.find((p) => p.mark !== undefined);
+    if (striker) return { text: spoken([striker]), crease: true, people: [striker] };
+  }
+  return null;
+}
 
 export function cricketDetail(
   live: OverlayCricketLive | null | undefined,

@@ -7,6 +7,7 @@ import type { FoldedFixture } from "@/server/engine-db/fold";
 import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
+import { carromTossOf } from "@/lib/overlay-toss";
 
 interface RowSnapshot {
   status: string;
@@ -202,5 +203,9 @@ export function projectOverlayLiveData(input: {
   if (clock) out.clock = clock;
   const cricket = cricketOf(folded.state);
   if (cricket) out.cricket = cricket;
+  // R2005 change 11: carrom's toss, off its own folded state (the engine's `tossTaken` / `firstBreak`), beside
+  // cricket's. Absent until a toss is taken — and again once one is voided, because the fold no longer holds it.
+  const carromToss = carromTossOf(folded.state);
+  if (carromToss) out.carromToss = carromToss;
   return out;
 }

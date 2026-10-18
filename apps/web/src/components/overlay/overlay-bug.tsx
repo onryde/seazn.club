@@ -3,8 +3,9 @@
 // so the stream matches the app. `cells[].value` is always "home–away" by
 // construction in `overlayModel`, so each row renders its own half of it —
 // that split lives here, in the renderer, rather than widening the model.
-import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import type { OverlayDetailLine, OverlayModel, OverlayMsg } from "@/lib/overlay-model";
 import { detailCopy, detailEntryClass } from "./overlay-detail-copy";
+import { strikerLineOf } from "@/lib/overlay-cricket";
 
 const halfOf = (value: string, row: 0 | 1): string => {
   const parts = value.split("–");
@@ -20,11 +21,16 @@ export function OverlayBug({
   tick: [boolean, boolean];
   msg: OverlayMsg;
 }) {
-  // §4 rule 1 (at most the two most recent entries), over the lines a corner footer can carry: never the CREASE
-  // (review a, PR #974). At the 30 px floor the bug's 512 px footer cannot hold a pair's figures beside the chase, let
-  // alone the bowler's analysis and this over's glyphs — it showed "Haruto Fuj… · J…", every figure gone. The crease
-  // is the bar band's (W2 plan); the bug keeps the chase or result, which it can draw whole.
-  const footer = model.detail.filter((line) => !line.crease).slice(-2);
+  // §4 rule 1 (at most TWO entries), over the lines a corner footer can carry. Review a (PR #974) took the whole
+  // crease off the bug: at the 30 px floor its 512 px footer could not hold a PAIR's figures beside the chase, let alone
+  // the bowler's analysis and this over's glyphs — it showed "Haruto Fuj… · J…", every figure gone. R2005 change 12
+  // puts back the one batter a viewer is watching: the STRIKER alone, `▸ <name> <runs> (<balls>)`. One batter's
+  // figures are ~6 characters where the pair's were ~14 plus the joint, so they fit whole beside the chase, and the
+  // name is the thing that yields (`.ovl-detail-name` ellipses; `.ovl-detail-figures` never shrinks). The non-striker,
+  // the bowler and the glyphs stay the bar band's. The cap stays two: the striker, then the most recent other line.
+  const others = model.detail.filter((line) => !line.crease);
+  const striker = strikerLineOf(model.detail);
+  const footer: readonly OverlayDetailLine[] = striker ? [striker, ...others.slice(-1)] : others.slice(-2);
   return (
     <div className="ovl-bug">
       <div className="ovl-bug-header">
