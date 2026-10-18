@@ -8,14 +8,14 @@
 // Then each field from its source, the R7 length fit, the 503s, the served counter and C1b both directions through the
 // REAL reissue.
 //
-// "Another sport": the descriptor reads a sport in ONE place — the overlay theme a sport opens on (defaultThemeFor). The
+// "Another sport": the descriptor reads a sport in ONE place — the overlay theme a sport opens on (defaultTemplateFor). The
 // cricket case pins that row; nothing else here varies by sport, so the rest runs on the generic rig.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sql } from "@/lib/db";
-import { defaultThemeFor } from "@/components/overlay/theme-registry";
+import { defaultTemplateFor } from "@/components/overlay/template-registry";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { CaptureDescriptor } from "@/server/api-v1/capture-schemas";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
@@ -97,7 +97,7 @@ async function expectedWaiting(r: CaptureRig, o: { label: string; pollSeconds: n
   return {
     code: r.code, label: o.label, venueTimezone: "UTC", pollSeconds: o.pollSeconds, autoAllowed: false,
     destinationName: o.destinationName,
-    overlayUrl: `${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=${defaultThemeFor("generic")}&key=${encodeURIComponent(key!)}`,
+    overlayUrl: `${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=${defaultTemplateFor("generic")}&key=${encodeURIComponent(key!)}`,
     heartbeatUrl: `${ORIGIN}/api/v1/capture/codes/${r.code}/beats`,
     startUrl: `${ORIGIN}/api/v1/capture/codes/${r.code}/start`,
     ...(o.scheduledStart !== undefined ? { scheduledStart: o.scheduledStart } : {}),
@@ -295,7 +295,7 @@ describe.skipIf(!HAS_DB)("getCode — each field from its §6.4 source", () => {
     const sid = await r.start(mine);
     const key = overlayKeyFor(r.fixtureId)!;
     const on = await get(r, mine);
-    expect(on).toMatchObject({ overlayUrl: `${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=${defaultThemeFor("generic")}&key=${encodeURIComponent(key)}`, scoreUpdates: "realtime" });
+    expect(on).toMatchObject({ overlayUrl: `${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=${defaultTemplateFor("generic")}&key=${encodeURIComponent(key)}`, scoreUpdates: "realtime" });
     await sql`update fixture_stream_sessions set theme_id = 'bar' where id = ${sid}`;
     expect((await get(r, mine)).overlayUrl).toBe(`${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=bar&key=${encodeURIComponent(key)}`);
     setEnv("AUTH_SECRET", undefined);
@@ -307,10 +307,10 @@ describe.skipIf(!HAS_DB)("getCode — each field from its §6.4 source", () => {
     expect((await get(r, null)).overlayUrl).toBeNull();
   });
 
-  it("ANOTHER SPORT: a cricket fixture's overlay opens on cricket's own theme (defaultThemeFor), not the generic one", async () => {
-    expect(defaultThemeFor("cricket"), "PREMISE: the two sports open on different themes").not.toBe(defaultThemeFor("generic"));
+  it("ANOTHER SPORT: a cricket fixture's overlay opens on cricket's own theme (defaultTemplateFor), not the generic one", async () => {
+    expect(defaultTemplateFor("cricket"), "PREMISE: the two sports open on different themes").not.toBe(defaultTemplateFor("generic"));
     const r = await captureRig({ sport: "cricket" });
-    expect((await get(r, null)).overlayUrl).toBe(`${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=${defaultThemeFor("cricket")}&key=${encodeURIComponent(overlayKeyFor(r.fixtureId)!)}`);
+    expect((await get(r, null)).overlayUrl).toBe(`${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=${defaultTemplateFor("cricket")}&key=${encodeURIComponent(overlayKeyFor(r.fixtureId)!)}`);
   });
 
   it("origin: OAUTH_BASE_URL, else NEXT_PUBLIC_BASE_URL, else deps.appUrl — never the request's host", async () => {

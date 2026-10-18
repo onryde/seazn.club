@@ -296,7 +296,7 @@ describe("overlay + panel copy is complete in every locale", () => {
     expect(referencedKeys("overlay").size).toBeGreaterThanOrEqual(8);
     // RE-PIN (2026-09-10, task 6): the panel has landed, so the floor moves
     // past the brief's own `>= 12`. `fixture-stream-panel.tsx` resolves 29
-    // `stream.*` literals and `theme-registry.ts` two more (`stream.tab.bar`
+    // `stream.*` literals and `template-registry.ts` (née `theme-registry.ts`) two more (`stream.tab.bar`
     // / `.bug`) — slate's tab key retired with the match-card layer (2026-09-12).
     // 24 is a FLOOR, not that count: it is low enough that adding or merging a
     // key does not red this test, and high enough that a panel which stopped

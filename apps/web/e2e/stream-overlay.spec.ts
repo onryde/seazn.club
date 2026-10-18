@@ -339,7 +339,7 @@ test.describe("the overlay route", () => {
         expect(res?.status(), `?style=${JSON.stringify(bad)} must not take a club off air`).toBe(
           200,
         );
-        // hockey's default is `bug` (`theme-registry.ts` `defaultThemeFor`:
+        // hockey's default is `bug` (`template-registry.ts` `defaultTemplateFor`:
         // everything but cricket). Read from the registry's behaviour, not
         // retyped: `bar` above proves the parameter is honoured when valid.
         await expect(page.locator('[data-testid="ovl-root"]')).toHaveAttribute("data-style", "bug");
@@ -531,6 +531,8 @@ test.describe("§4's corner bug and its footer", () => {
 
 interface FooterProbe {
   tileWidth: number;
+  /** `--ovl-bug-w`, the width the stylesheet declares for the tile (R2007: 560, was 480) — read, never retyped. */
+  declaredWidth: number;
   overhang: number;
   vclip: number;
   entryMinWidths: string[];
@@ -555,6 +557,7 @@ async function readBugFooter(page: Page, fixtureId: string, lang: string): Promi
       [...document.querySelectorAll<HTMLElement>(sel)].map((el) => getComputedStyle(el)[prop]);
     return {
       tileWidth: tile.getBoundingClientRect().width,
+      declaredWidth: parseFloat(getComputedStyle(tile).getPropertyValue("--ovl-bug-w")),
       overhang: tile.scrollWidth - tile.clientWidth,
       vclip: tile.scrollHeight - tile.clientHeight,
       entryMinWidths: read(".ovl-bug-footer .ovl-detail-entry", "minWidth"),
@@ -632,7 +635,8 @@ test.describe("§4's footer at a non-English locale", () => {
       // THE SHEET'S INVARIANT. Not the discriminating assertion on this seed
       // (see the block comment above), but it is what §4 binds and it is what
       // will bite first when a longer sport reaches this route.
-      expect(es.tileWidth, "the tile must never grow — an OBS operator frames it").toBe(480);
+      expect(es.declaredWidth, "premise: the stylesheet declares --ovl-bug-w").toBeGreaterThan(0);
+      expect(es.tileWidth, "the tile must never grow — an OBS operator frames it").toBe(es.declaredWidth);
       expect(
         es.overhang,
         `the es footer overhangs the tile by ${es.overhang}px; §4 says nothing may`,
@@ -1753,6 +1757,35 @@ test.describe("cricket crease band (W2 Task 3)", () => {
       // band owes is that people appear at all — the resolver being the route
       // is pinned by `recent.test.ts`, which drives it against the real one.
       await expect(band).toContainText(/Bat \d+ /);
+    } finally {
+      await anon.context().close();
+    }
+  });
+
+  // R2007 decision 2 (spec 2026-10-15 §4.4): `?template=` names the template and `?style=` stays its alias for every
+  // OBS URL written before it. Cricket because its default is `bar`, so `?template=bug` is a choice the route has to
+  // HONOUR rather than one it lands on by default — the hockey rig above opens on `bug` either way.
+  test("?template= picks the template; ?style= is the alias; an unknown template never falls through to style", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const anon = await anonPage(browser);
+    const root = anon.locator('[data-testid="ovl-root"]');
+    try {
+      const cases: [string, "bar" | "bug"][] = [
+        ["", "bar"], // the sport default — the positive pair for every row below
+        ["?template=bug", "bug"],
+        ["?style=bar", "bar"],
+        ["?style=bug", "bug"],
+        ["?template=bug&style=bar", "bug"],
+        ["?template=nonsense&style=bug", "bar"],
+      ];
+      for (const [query, want] of cases) {
+        const res = await anon.goto(`/overlay/fixtures/${cricket.fixtureId}${query}`);
+        expect(res?.status(), query || "(no query)").toBe(200);
+        await expect(root, query || "(no query)").toHaveAttribute("data-style", want);
+      }
+      console.log(`template query cases: ${cases.length}`);
     } finally {
       await anon.context().close();
     }

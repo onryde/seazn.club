@@ -5,8 +5,8 @@
 // confirmed 2026-09-10. The design canvas the sheet was drawn on is gone, so
 // the sheet is the authority and nothing here invents a value it does not state.
 //
-// THE REGISTRY IS THE POINT. The style strip renders `themesForSport(sportKey)`
-// in registry order and opens on `defaultThemeFor(sportKey)`. Three themes
+// THE REGISTRY IS THE POINT. The style strip renders `templatesForSport(sportKey)`
+// in registry order and opens on `defaultTemplateFor(sportKey)`. Three themes
 // today, four when a fourth lands — with no edit to this file. There is
 // deliberately NO theme id written as a literal anywhere below, not even for
 // the "this style is opaque" caption: that caption is looked up as
@@ -35,7 +35,7 @@ import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RefreshCw, Rotate
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
-import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
+import { defaultTemplateFor, templatesForSport, type TemplateId } from "@/components/overlay/template-registry";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import { useDict, useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -288,7 +288,7 @@ export function FixtureStreamPanel({
   const dict = useDict() as Record<string, unknown>;
   const locale = useLocaleOrDefault();
 
-  const themes = themesForSport(stream.sportKey);
+  const themes = templatesForSport(stream.sportKey);
   // The TAB half of the return: a lazy initialiser, so the page's word picks the opening tab and never overrides the
   // organiser's own choice afterwards. Read ONCE into state: G5 below strips the params, and the answer must survive it.
   const searchParams = useSearchParams();
@@ -332,7 +332,7 @@ export function FixtureStreamPanel({
   );
   // OPENS ON the sport's own default, resolved through the registry — a lazy
   // initialiser so a re-render never re-seeds it over the organiser's choice.
-  const [style, setStyle] = useState<ThemeId>(() => defaultThemeFor(stream.sportKey));
+  const [style, setStyle] = useState<TemplateId>(() => defaultTemplateFor(stream.sportKey));
   const [copied, setCopied] = useState(false);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);

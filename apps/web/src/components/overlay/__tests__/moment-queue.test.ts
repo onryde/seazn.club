@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { INITIAL, momentQueueReducer as reduce, nextDeadline } from "../moment-queue";
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../moment-timing";
 import type { OverlayMoment } from "@/lib/overlay-moments";
-import { OVERLAY_THEMES, slabPlacementFor, type ThemeId } from "../theme-registry";
+import { OVERLAY_TEMPLATES } from "../template-registry";
 
 const m = (seq: number, kind = "goal"): OverlayMoment => ({
   seq,
@@ -152,18 +152,18 @@ describe("momentQueueReducer", () => {
   });
 });
 
-describe("slabPlacementFor — which scorebug the slab attaches to", () => {
+describe("slabPlacement — which scorebug the slab attaches to (R2007: the registry entry's own field)", () => {
   it("bar and bug answer for themselves", () => {
-    expect(slabPlacementFor("bar")).toBe("bar");
-    expect(slabPlacementFor("bug")).toBe("bug");
+    expect(OVERLAY_TEMPLATES.bar.slabPlacement).toBe("bar");
+    expect(OVERLAY_TEMPLATES.bug.slabPlacement).toBe("bug");
   });
 
-  // The sport used to be a (dead) second argument; placement is by style
-  // alone, so the sweep is over every theme the registry declares.
-  it("every theme the registry declares resolves to a placement the CSS defines", () => {
-    const themes = Object.keys(OVERLAY_THEMES) as ThemeId[];
-    expect(themes.length, "anti-vacuity: the registry declares no themes").toBeGreaterThan(0);
-    for (const style of themes) expect(["bar", "bug"]).toContain(slabPlacementFor(style));
+  // Placement is by template alone (the sport was a dead second argument before), so the sweep is over every entry
+  // the registry declares.
+  it("every template the registry declares carries a placement the CSS defines", () => {
+    const defs = Object.values(OVERLAY_TEMPLATES);
+    expect(defs.length, "anti-vacuity: the registry declares no templates").toBeGreaterThan(0);
+    for (const def of defs) expect(["bar", "bug"], def.id).toContain(def.slabPlacement);
   });
 });
 

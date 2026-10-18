@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
-import { defaultThemeFor } from "../theme-registry";
+import { defaultTemplateFor } from "../template-registry";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { t } from "@/lib/i18n-runtime";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
@@ -122,7 +122,8 @@ describe("OverlayStage threads its dictionary to the theme (`msg`)", () => {
       "overlay.slate.warmingLineTossPending": "TOSS|{start}",
       "overlay.brand": "seazn",
     };
-    const html = renderToStaticMarkup(<OverlayStage {...props({ dict: partial })} />);
+    // Cricket: the toss line is a sport WITH a toss's (review d, PR #974) — the only line here a dictionary writes.
+    const html = renderToStaticMarkup(<OverlayStage {...props({ dict: partial, sportKey: "cricket", style: "bar" })} />);
     expect(headlineOf(html), "the theme reads props.dict").toBe("ZZTOP Milton Keynes Rovers Northbridge Athletic");
     expect(lineOf(html)).toBe("TOSS|Sat 14:30 BST");
     expect(headlineOf(html), "not some other en dictionary").not.toBe(
@@ -159,16 +160,16 @@ describe("OverlayStage mounts scorebug + match card when scheduled", () => {
   };
 
   it.each(SPORTS)("%s with style=default shows that sport's scorebug under the match card", (sportKey) => {
-    const expected = `ovl-${defaultThemeFor(sportKey)}`;
+    const expected = `ovl-${defaultTemplateFor(sportKey)}`;
     const html = renderToStaticMarkup(
-      <OverlayStage {...props({ sportKey, style: defaultThemeFor(sportKey) })} />,
+      <OverlayStage {...props({ sportKey, style: defaultTemplateFor(sportKey) })} />,
     );
     expect(scorebugRootOf(html), `${sportKey} scorebug`).toBe(expected);
     expect(html, "warming card layer").toContain('data-testid="ovl-slate-card"');
   });
 
   it("cricket bar + football bug — and both carry the match card when scheduled", () => {
-    expect(defaultThemeFor("cricket"), "premise").not.toBe(defaultThemeFor("football"));
+    expect(defaultTemplateFor("cricket"), "premise").not.toBe(defaultTemplateFor("football"));
     const cricket = renderToStaticMarkup(
       <OverlayStage {...props({ sportKey: "cricket", style: "bar" })} />,
     );
@@ -185,8 +186,8 @@ describe("OverlayStage mounts scorebug + match card when scheduled", () => {
 
   it("retired ?style=slate is not a ThemeId — page resolveTheme maps it before the stage", () => {
     // Stage props are ThemeId only; the page's resolveTheme maps "slate" → default.
-    expect(defaultThemeFor("cricket")).toBe("bar");
-    expect(defaultThemeFor("football")).toBe("bug");
+    expect(defaultTemplateFor("cricket")).toBe("bar");
+    expect(defaultTemplateFor("football")).toBe("bug");
   });
 });
 

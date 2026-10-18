@@ -253,16 +253,23 @@ taken because it would move `board-2`, which every theme reads.
 > per-sport cell table — paired with one registry entry and one component.
 > Nothing below changes, and nothing below is per-sport: the sport enters
 > through the palette (§2), never through the theme.
+>
+> **Amended 2026-10-15 (R2007, spec `2026-10-15-overlay-templates-and-scenes-design.md` §4.5, D9).** Two floors
+> now bind this sheet: no overlay text under **30 px** at 1920×1080, and the bar's bottom edge at least **150 px**
+> off the canvas floor (clear of a player's controls). The values below are amended in place where they broke a
+> floor; every other value stands. The registry is `OVERLAY_TEMPLATES` in `template-registry.ts` (renamed from
+> `OVERLAY_THEMES` / `theme-registry.ts`), and each entry now also declares its `slabPlacement` and the canvas box
+> cards keep clear of (`sceneCardSafeArea`).
 
 Anchored bottom, full width. Two stacked bands, one shadow, radius 6 px.
 
 ```
-inset:            left 72   right 72   bottom 54
+inset:            left 72   right 72   bottom 162   (D9; was 54)
 main band:        height 126   background board   ink
   live cell:      min-width 225, MAX-WIDTH 480, padding 0 33, background board-2
                   dot 15 (#ef4444) + 1-px --sport-ink hairline (see below)
-                  "Live" Geist 24/600 letter-spacing .02em
-                  context line Geist 21/500 ink 70 %      e.g. "T20, 2nd innings"
+                  "Live" Geist 30/600 letter-spacing .02em   (D9; was 24)
+                  context line Geist 30/500 ink 70 %      e.g. "T20, 2nd innings"   (D9; was 21)
   team cell ×2:   flex 1 1 auto, padding 0 42, gap 24
                   name  Barlow 45/600 letter-spacing .01em nowrap
                   score Barlow 78/700 line-height 1 tabular   (margin-left auto)
@@ -271,8 +278,8 @@ main band:        height 126   background board   ink
   side in play:   inset bottom bar 8 px LED, score colour LED
   brand cell:     "seazn" Barlow 30/600 letter-spacing .08em ink 75 %,
                   padding 0 33, background board-2
-detail band:      height 51, padding 0 33, gap 33, background board @ 90 %
-                  Geist 24/500 ink 92 %; separators 1.5×24 rgba(255,255,255,.2)
+detail band:      height 60, padding 0 33, gap 33, background board @ 90 %   (D9; was 51)
+                  Geist 30/500 ink 92 %; separators 1.5×30 rgba(255,255,255,.2)   (D9; was 24 / 1.5×24)
                   emphasis item Geist 600 ink 100 % (chase line)
                   striker/server marker: 10.5 px LED dot before the name
 ```
@@ -491,23 +498,30 @@ The status WORDS — "Final", "Abandoned", "Cancelled", "Forfeited" — are NOT 
 > to the route, the panel or the projection. If a theme is ever designed for a
 > subset of sports, that is the entry's `sports` field, and this sheet says
 > which sports in its own preamble.
+>
+> **Amended 2026-10-15 (R2007, spec `2026-10-15-overlay-templates-and-scenes-design.md` §4.5, D9).** Two floors
+> now bind this sheet: no overlay text under **30 px** at 1920×1080, and the bar's bottom edge at least **150 px**
+> off the canvas floor (clear of a player's controls). The values below are amended in place where they broke a
+> floor; every other value stands. The registry is `OVERLAY_TEMPLATES` in `template-registry.ts` (renamed from
+> `OVERLAY_THEMES` / `theme-registry.ts`), and each entry now also declares its `slabPlacement` and the canvas box
+> cards keep clear of (`sceneCardSafeArea`).
 
-Anchored top-left. Width 480, radius 12, one shadow. The pad's own
+Anchored top-left. Width 560 (D9; was 480), radius 12, one shadow. The pad's own
 "stadium-night tile", so the stream matches the app.
 
 ```
 inset:            left 60   top 54
-header:           height 48, padding 0 21, background board-2
+header:           height 60, padding 0 21, background board-2   (D9; was 48)
                   dot 13.5 (#ef4444) + 1-px --sport-ink hairline (§3's rule)
-                  "Live" Geist 21/600, context Geist 19.5/500 ink 65 %
-                  right: brand Barlow 24/600 .08em ink 70 %  — football family: clock Barlow 33/700 LED instead
+                  "Live" Geist 30/600, context Geist 30/500 ink 65 %   (D9; was 21 / 19.5)
+                  right: brand Barlow 30/600 .08em ink 70 % (D9; was 24)  — football family: clock Barlow 33/700 LED instead
 row ×2:           height 90, padding 0 24, gap 18
                   code  Barlow 48/600 width 96         ("MK", "NBR", "RDG"; tennis: surname Barlow 42/600 width 144)
                   cells Barlow 39/600 ink 70 %, gap 18 (sets / games / sets-won), current 700 ink 100 %
                   score Barlow 69/700 line-height 1 tabular (margin-left auto)
                   meta  Barlow 30/500 ink 65 % width 78 right-aligned (overs)
 side in play:     row background board-2 + inset-left bar 8 px LED, score colour LED
-footer:           height 45, padding 0 24, Geist 21/500 ink 85 %
+footer:           height 56, padding 0 24, Geist 30/500 ink 85 %   (D9; was 45 / 21)
                   start-aligned, gap 18 (NOT space-between)
                   AT MOST 2 detail entries, most recent last, ONE line, nowrap
                   overflowing text ELLIPSES; it never clips and never wraps
