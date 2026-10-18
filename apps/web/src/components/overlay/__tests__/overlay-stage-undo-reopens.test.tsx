@@ -176,8 +176,9 @@ const serverStatus = async (fixtureId: string) =>
 // ---------------------------------------------------------------------------------------------------------------------
 const THEME_COMPONENTS = new Set<unknown>(Object.values(OVERLAY_TEMPLATES).map((t) => t.component));
 
-async function mountOverlay(r: Rig) {
+async function mountOverlay(r: Rig, extra: Partial<OverlayStageProps> = {}) {
   const props: OverlayStageProps = {
+    ...extra,
     fixtureId: r.fixtureId,
     initial: JSON.parse(JSON.stringify(await loadOverlayLiveData(r.fixtureId))),
     realtime: false,
@@ -331,4 +332,46 @@ describe.skipIf(!HAS_DB)("the overlay's end card follows an undo of the deciding
 
     o.island.unmount();
   }, 120_000);
+
+  it("R2005 change 4 — a void AFTER the delay window: the presented card comes down, re-derived from the void's snapshot", async () => {
+    // single-sport: the delay buffer and the re-derivation are sport-agnostic (`use-live-fixture.ts`); badminton is
+    // the rig above whose deciding write is one rally. The compositor's URL carries `delay` (R2004 decision 5).
+    const DELAY_MS = 3_000;
+    const STEP_MS = 1_000;
+    const r = await seedPublicFixture("badminton", "short");
+    await score(r, "core.start");
+    for (let i = 0; i < 21; i++) await score(r, "badminton.rally", { wonBy: r.home });
+    // The delay buffer stamps each receipt with `Date.now()` and the drain compares against it, so this case fakes the
+    // Date beside the intervals (timeouts stay real: Postgres I/O must still complete on its own).
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    const o = await mountOverlay(r, { delayMs: DELAY_MS });
+    await advance(DELAY_MS); // the seed matures (a delayed mount presents nothing before it)
+    expect(o.cardUp(), "empty case first: in play, no end card").toBe(false);
+
+    const decided = await score(r, "badminton.rally", { wonBy: r.home });
+    expect(await serverStatus(r.fixtureId)).toBe("decided");
+    // Walk the clock a second at a time until the poll that RECEIVES the decision, then prove the delay holds it.
+    const walkToReceipt = async (step: string, budgetMs: number) => {
+      for (let t = 0; t < budgetMs; t += STEP_MS) if ((await advance(STEP_MS)) > 0) return;
+      throw new Error(`${step}: no poll within ${budgetMs} ms`);
+    };
+    await walkToReceipt("the decision", POLL_MS + STEP_MS);
+    expect(o.cardUp(), "received but held: the delay window has not passed").toBe(false);
+    await advance(DELAY_MS);
+    expect(o.cardUp(), "presented one delay after its receipt").toBe(true);
+
+    // The void lands AFTER the decided snapshot was presented (its delay window is over).
+    await undo(r, decided.event_id);
+    expect(await serverStatus(r.fixtureId), "the void reopens the fixture server-side").toBe("in_play");
+    await walkToReceipt("the void", SETTLED_POLL_MS + STEP_MS);
+    expect(o.cardUp(), "the void's snapshot is received but still held — the card stays up for the delay").toBe(true);
+    await advance(DELAY_MS);
+    expect(
+      o.cardUp(),
+      `the presented model is re-derived from the void's snapshot (no append-only display state): ${JSON.stringify(o.model())}`,
+    ).toBe(false);
+    expect(o.model()?.decided, "the theme's model is no longer decided").toBe(false);
+
+    o.island.unmount();
+  }, 180_000);
 });
