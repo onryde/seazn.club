@@ -24,7 +24,11 @@ import { join } from "node:path";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { SOUND_SIGNATURE } from "../src/components/public-site/match-room/room-sound-synth";
 import { HANDOVER_COVER_MS } from "../src/components/public-site/match-room/camera-handover";
+import { LINE_ABANDON_AFTER_MS, LINE_POLL_MIN_MS, LINE_POLL_MS, SEAT_ASK_WINDOW_S } from "../src/components/public-site/match-room/room-snapshot";
+import { WINDOW_OPEN_LEAD_MS } from "../src/server/external-play/window";
 import { apiJson, loginUi, withDb } from "./helpers";
+import { REALTIMEKIT_FIXTURE_ENV, REALTIMEKIT_FIXTURE_URL, startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "./realtimekit-fixture-server";
+import { mintMatchRoomLink } from "./match-room-link";
 import {
   bridgeRow,
   checkedInAt,
@@ -3029,4 +3033,241 @@ test("D16: the opponent's pill is the OTHER browser's own camera report - a real
   expect(consoleErrors.some((e) => /^Invalid auth token provided\. /.test(e)), "the camera joined with the staged token").toBe(true);
   consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
   await ctxBlack.close();
+});
+
+// ─── Capacity (design 2026-10-09 §5.7, §6.1; plan: capacity-build-brief.md): the batch wait, the seat 429 wait and the check-in line ───
+// Each state is reached the way a player reaches it - the real browser, the real room route, the real server - and only TIME and
+// the other players' places are staged (by SQL, said where). The batch wait and the 429 wait spend no vendor call; the line does,
+// so its describe starts the RealtimeKit fixture server the app server is pointed at (REALTIMEKIT_FIXTURE_ENV, port 4322).
+
+/** The expected face of a time the page promises (spec §6.1 (1)): the instant rounded UP to the next whole minute, as a 24-hour
+ *  clock in the BROWSER's own zone. Worked out here from the rule, not by the room's formatter; the zone is the browser's. */
+async function promisedFace(p: Page, instantMs: number): Promise<string> {
+  const upMs = Math.ceil(instantMs / 60_000) * 60_000;
+  return p.evaluate((ms) => new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms)), upMs);
+}
+
+/** The seat claims (POST …/room) a context sends, with the time each left. */
+function watchSeatClaims(ctx: BrowserContext): number[] {
+  const at: number[] = [];
+  ctx.on("request", (r) => {
+    if (r.method() === "POST" && /\/external-play\/room$/.test(new URL(r.url()).pathname)) at.push(Date.now());
+  });
+  return at;
+}
+
+test("capacity, the batch wait: a board whose check-in group has not opened says when it will, in the viewer's zone and rounded up, sends no seat claim, and the room re-reads at the opening on its own — at every width", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  // STAGED: the round was opened so that this board's window opens in OPENS_IN_MS. A board's window opens WINDOW_OPEN_LEAD_MS before
+  // its anchor (the round's opening, for the first batch), so the anchor is set that far past the instant wanted.
+  const OPENS_IN_MS = 9_000;
+  const opensAtMs = Date.now() + OPENS_IN_MS;
+  const openedAt = new Date(opensAtMs + WINDOW_OPEN_LEAD_MS);
+  await withDb((sql) => sql`update stage_round_opens set opened_at = ${openedAt} where id = ${room.roundOpen!.id}`);
+  const token = await mintMatchRoomLink({ fixtureId: room.fixtureId, personId: room.white.personId, roundOpenId: room.roundOpen!.id, openedAt });
+
+  const ctx = await cold(browser);
+  const claims = watchSeatClaims(ctx);
+  const p = await openRoom(ctx, room, token);
+  expect(await screenOf(p), "the round is open and this board's group is not: the batch wait, not 'not opened'").toBe("batchWait");
+  const face = await promisedFace(p, opensAtMs);
+  await expect(p.getByTestId("room-batch-wait-time")).toHaveText(fill("externalPlay.room.state.batchWait.time", { time: face }));
+  await expect(p.getByText(fill("externalPlay.room.state.batchWait.body", { time: face }))).toBeVisible();
+  await expect(p.getByTestId("room-checkin-cta"), "no check-in to press yet").toHaveCount(0);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "capacity-batch-wait");
+
+  // The opening: the room re-reads at it (plus a jitter of up to 2 s, spec §6.1 (1)) with nobody touching the page, and never before.
+  // The deadline is the opening plus that jitter plus 3.5 s of slack - and NOT the 15 s idle poll's reach: the page's first read was
+  // made at least OPENS_IN_MS - (the setup before it) earlier, so a lost timer would flip at the idle poll, at least 6 s after the
+  // opening, which this deadline refuses (the timer is what is being proved, not the poll behind it).
+  await expect
+    .poll(() => screenOf(p), { timeout: Math.max(1_000, opensAtMs + 2_000 + 3_500 - Date.now()), message: "the batch opens and the page shows the check-in, on the timer" })
+    .toBe("checkin");
+  expect(Date.now(), "never before the door opens").toBeGreaterThanOrEqual(opensAtMs - 500);
+  await expect(p.getByTestId("room-checkin-cta")).toBeVisible();
+  expect(claims, "waiting sent no seat claim: the door was shut and the page knew").toEqual([]);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await ctx.close();
+});
+
+test("capacity, the seat 429 wait: a refused check-in shows 'Try again in N s' from Retry-After, the button stays shut and NOTHING is sent until the time is up, then the same press seats — at every width", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  // STAGED: this player has already used the seat door's 20 asks (D21-fix-4, KEEP 20) in a window that has WAIT_S seconds left.
+  const WAIT_S = 7;
+  await withDb(
+    (sql) => sql`
+      insert into fixture_seat_asks (fixture_id, person_id, route, window_started_at, asks)
+      values (${room.fixtureId}, ${room.white.personId}, 'seat', now() - make_interval(secs => ${SEAT_ASK_WINDOW_S - WAIT_S}), 20)
+      on conflict (fixture_id, person_id, route) do update
+         set window_started_at = excluded.window_started_at, asks = excluded.asks`,
+  );
+  const ctx = await cold(browser);
+  const claims = watchSeatClaims(ctx);
+  const p = await openRoom(ctx, room, room.white.token);
+  expect(await screenOf(p)).toBe("checkin");
+  const cta = p.getByTestId("room-checkin-cta");
+  const refused = p.waitForResponse((r) => r.request().method() === "POST" && /\/external-play\/room$/.test(new URL(r.url()).pathname));
+  await cta.click();
+  const res = await refused;
+  const refusedAt = Date.now();
+  expect(res.status(), "the real limiter refuses the 21st ask").toBe(429);
+  const retryAfter = Number(res.headers()["retry-after"]);
+  expect(Number.isInteger(retryAfter) && retryAfter >= 1 && retryAfter <= SEAT_ASK_WINDOW_S, `a whole-second Retry-After inside the window (${res.headers()["retry-after"]})`).toBe(true);
+  expect(retryAfter, "the window the test staged had about WAIT_S left").toBeGreaterThanOrEqual(WAIT_S - 3);
+  expect(retryAfter).toBeLessThanOrEqual(WAIT_S);
+
+  const countdown = p.getByTestId("room-seat-wait-countdown");
+  await expect(countdown, "the wait is shown at once, from the header").toBeVisible();
+  await expect(p.getByTestId("room-seat-wait")).toHaveAttribute("data-waiting", "true");
+  await expect(p.getByText(uiEn["externalPlay.room.state.seatWait.title"]!, { exact: true }), "the title (the screen-reader copy beside it is the same words)").toBeVisible();
+  const first = Number(/\d+/.exec(await countdown.innerText())![0]);
+  expect(first, "the face starts at (or one tick under) Retry-After").toBeGreaterThanOrEqual(retryAfter - 1);
+  expect(first).toBeLessThanOrEqual(retryAfter);
+  await expect(cta, "the button is shut for the whole wait").toBeDisabled();
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "capacity-seat-wait");
+  // The wait is on the page, not just in the markup: the screen reader hears it start.
+  await expect(p.getByTestId("room-seat-wait-announce")).toContainText(uiEn["externalPlay.room.state.seatWait.title"]!);
+
+  // Nothing is sent while it runs - not by a tab coming back into view, not by anything else.
+  await p.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await p.waitForTimeout(1_500);
+  expect(claims.length, "only the refused press so far").toBe(1);
+  // It ends on time: not before Retry-After, and the button comes back.
+  await expect(cta).toBeEnabled({ timeout: (retryAfter + 4) * 1_000 });
+  const waited = Date.now() - refusedAt;
+  expect(waited, "not before Retry-After").toBeGreaterThanOrEqual(retryAfter * 1_000 - 250);
+  expect(waited, "and not much after it").toBeLessThan(retryAfter * 1_000 + 3_500);
+  expect(claims.length, "still nothing sent while it waited").toBe(1);
+  await expect(p.getByTestId("room-seat-wait"), "the note is quiet").toHaveAttribute("data-waiting", "false");
+  await expect(p.getByTestId("room-seat-wait-announce")).toContainText(uiEn["externalPlay.room.state.seatWait.ready"]!);
+
+  // The same press, now, is answered: the window reopened.
+  await cta.click();
+  await expect.poll(() => checkedInAt(room.fixtureId, room.white.personId), { timeout: 15_000, message: "the seat is taken and the check-in stamped" }).not.toBeNull();
+  expect(claims.length, "the second press went out").toBe(2);
+  // The browser logs the refused request itself ("Failed to load resource ... 429"): expected here, exactly once, and only here.
+  const refusedLogs = consoleErrors.filter((e) => /^Failed to load resource: the server responded with a status of 429 /.test(e));
+  expect(refusedLogs.length, "the one refused press is the only 429 the console saw").toBe(1);
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !refusedLogs.includes(e)));
+  await ctx.close();
+});
+
+test.describe("capacity, the check-in line", () => {
+  // One worker owns the fixture server's port for the whole block (the app server is pointed at 4322).
+  test.describe.configure({ mode: "serial" });
+  let fx: RealtimeKitFixtureServer;
+  test.beforeAll(async () => {
+    fx = await startRealtimeKitFixtureServer();
+  });
+  test.afterAll(async () => {
+    await fx.close();
+  });
+
+  test("a player the budget is holding sees their place, is asked about nothing at the vendor, polls at the server's cadence on the line door, is told why when they fall to the back, and is let through when the line drains — at every width", async ({ page }, testInfo) => {
+    test.setTimeout(240_000);
+    fx.reset();
+    // The line is per budget bucket: budgetKey(baseUrl, accountId) (budget.ts - server-only, so its format is restated here; if it
+    // drifts the stay below is in another bucket, nobody is ahead, and the line card never appears: this test fails loudly).
+    const bucket = `${REALTIMEKIT_FIXTURE_URL}|${REALTIMEKIT_FIXTURE_ENV.CLOUDFLARE_ACCOUNT_ID}`;
+    const names = (n: string): [string, string] => [`Bo ${n} ${Date.now() % 1e5}`, `Ada ${n} ${Date.now() % 1e5}`];
+    const room = await seedMatchRoom(page.request, { names: names("Lind"), cameraPolicy: "required" });
+    const ahead = await seedMatchRoom(page.request, { names: names("Ahead"), cameraPolicy: "required" });
+    const aheadId = { fixtureId: ahead.fixtureId, personId: ahead.white.personId };
+    // STAGED: somebody else is waiting in this bucket, arrived 30 s ago, and keeps asking (refreshed each second until drained).
+    await withDb(
+      (sql) => sql`
+        insert into fixture_seat_line (fixture_id, person_id, budget_key, first_claim_at, last_seen_at, last_gate, queued_at)
+        values (${aheadId.fixtureId}, ${aheadId.personId}, ${bucket}, now() - interval '30 seconds', now(), 'held', now() - interval '30 seconds')`,
+    );
+    let keeping = true;
+    const keep = setInterval(() => {
+      if (keeping) void withDb((sql) => sql`update fixture_seat_line set last_seen_at = now() where fixture_id = ${aheadId.fixtureId} and person_id = ${aheadId.personId}`).catch(() => {});
+    }, 1_000);
+    const camBrowser = await page.context().browser()!.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+    try {
+      const ctx = await cold(camBrowser);
+      await ctx.grantPermissions(["camera"]);
+      const claims = watchSeatClaims(ctx);
+      const p = await openRoom(ctx, room, room.white.token);
+      expect(await screenOf(p)).toBe("checkin");
+      // The camera is tested on the page, then Check in is pressed (the D15 flow): the real claim reaches the gate.
+      await p.getByTestId("room-checkin-test-cta").click();
+      const cta = p.getByTestId("room-checkin-cta");
+      await expect(cta).toBeEnabled({ timeout: 15_000 });
+      await cta.click();
+
+      // The line card: the place (behind the one waiting), the estimate, the instruction, when check-in closes. Not the button, not
+      // the deadline countdown.
+      const line = p.getByTestId("room-line");
+      await expect(line).toBeVisible({ timeout: 15_000 });
+      await expect(line).toHaveAttribute("data-position", "2");
+      await expect(p.getByTestId("room-line-position")).toHaveText(fill("externalPlay.room.state.line.title", { position: 2 }));
+      await expect(p.getByTestId("room-line-eta")).toContainText(/\d/);
+      await expect(p.getByTestId("room-line-body")).toHaveText(fill("externalPlay.room.state.line.body", { seconds: LINE_ABANDON_AFTER_MS / 1_000 }));
+      await expect(p.getByTestId("room-line-closes")).toBeVisible();
+      await expect(p.getByTestId("room-checkin-cta"), "the line replaces the button").toHaveCount(0);
+      await expect(p.getByTestId("room-checkin-countdown"), "and the deadline countdown").toHaveCount(0);
+      await expect(p.getByTestId("room-line-left"), "nobody has left yet: no explanation").toHaveCount(0);
+      expect(fx.calls.length, "held in line, the claim reached the vendor NOT AT ALL").toBe(0);
+      expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+      await shoot(p, "capacity-line");
+
+      // The cadence: the room asks again after the server's pollMs (3 s for the first five places), never faster than the floor,
+      // and with no upper bound. Three more claims observed.
+      await expect.poll(() => claims.length, { timeout: 30_000, message: "the room keeps asking" }).toBeGreaterThanOrEqual(4);
+      const gaps = claims.slice(1, 4).map((t, i) => t - claims[i]!);
+      expect(gaps.length, "anti-vacuity: three gaps").toBe(3);
+      for (const g of gaps) {
+        expect(g, "never faster than the floor").toBeGreaterThanOrEqual(LINE_POLL_MIN_MS - 100);
+        expect(g, "the near cadence, as the server said").toBeGreaterThanOrEqual(LINE_POLL_MS - 150);
+        expect(g, "and not lost").toBeLessThan(LINE_POLL_MS + 2_500);
+      }
+      // The door: the first press counted on the seat door, the polls on the line door (so a queued player never eats the 20).
+      const asks = await withDb((sql) =>
+        sql<{ route: string; asks: number }[]>`select route, asks from fixture_seat_asks where fixture_id = ${room.fixtureId} and person_id = ${room.white.personId} order by route`,
+      );
+      const byRoute = Object.fromEntries(asks.map((a) => [a.route, a.asks]));
+      expect(byRoute.seat, "one press on the seat door").toBe(1);
+      expect(byRoute.line, "the polls on the line door").toBeGreaterThanOrEqual(3);
+      expect(fx.calls.length, "and still nothing at the vendor").toBe(0);
+
+      // STAGED: the page went to sleep - the stay's last word is older than LINE_ABANDON_AFTER_MS. The next claim finds it lapsed,
+      // starts a new stay at the back, and the room says why (once, on the claim that starts it; the card keeps it).
+      await withDb(
+        (sql) => sql`update fixture_seat_line set last_seen_at = now() - make_interval(secs => ${LINE_ABANDON_AFTER_MS / 1_000 + 5}) where fixture_id = ${room.fixtureId} and person_id = ${room.white.personId}`,
+      );
+      const left = p.getByTestId("room-line-left");
+      await expect(left, "the card says why the player is at the back again").toBeVisible({ timeout: 15_000 });
+      await expect(left).toHaveAttribute("data-left", "silent");
+      await expect(left).toHaveText(uiEn["externalPlay.room.state.line.left"]!);
+      await expect(line).toHaveAttribute("data-position", "2");
+      const sawLeft = claims.length;
+      await expect.poll(() => claims.length, { timeout: 15_000 }).toBeGreaterThan(sawLeft + 1);
+      await expect(left, "and it stays for as long as the card shows").toBeVisible();
+      expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+      await shoot(p, "capacity-line-left");
+
+      // The line drains (the player ahead is served or gone): the next claim is let through, the card goes, and the vendor is
+      // called for the first time - the mint.
+      keeping = false;
+      await withDb((sql) => sql`delete from fixture_seat_line where fixture_id = ${aheadId.fixtureId} and person_id = ${aheadId.personId}`);
+      await expect(line, "the line is over for this player").toHaveCount(0, { timeout: 20_000 });
+      await expect.poll(() => fx.calls.length, { timeout: 15_000, message: "the claim spends, now it may" }).toBeGreaterThan(0);
+      expect(fx.calls.some((c) => /POST \/meetings$/.test(c.route)), "the meeting is minted only after the line let the claim through").toBe(true);
+      await ctx.close();
+      // The SDK then joins with the fixture's token, which the vendor's SDK refuses: expected here, and only here.
+      consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
+    } finally {
+      keeping = false;
+      clearInterval(keep);
+      await camBrowser.close();
+      // Leave the bucket as found: no stay of this test may hold a later test's optional claim.
+      await withDb((sql) => sql`delete from fixture_seat_line where budget_key = ${bucket}`);
+    }
+    testInfo.annotations.push({ type: "capacity", description: "line card, cadence, door split, left, drain" });
+  });
 });
