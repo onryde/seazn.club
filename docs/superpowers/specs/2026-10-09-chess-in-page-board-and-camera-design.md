@@ -304,7 +304,8 @@ the round's open row, below), and a player can read when they are due.
   check-in opens at HH:MM", in the viewer's local time, rounded UP to the minute so the page never
   promises a time earlier than the door opens (§6.1). The room re-reads at `opensAt`, not on the
   idle poll. The invite mail names the board's own deadline (`T_batch + 10`) and, for batch 1
-  onwards, when check-in opens; its body, "is ready to play now", is false for a later batch and
+  onwards, when check-in opens (rounded UP to the minute like the card, so the mail never names a minute before the door opens; the
+  deadline's label is not rounded, because naming it a few seconds early is the safe direction); its body, "is ready to play now", is false for a later batch and
   gets a variant that says when (`externalPlayInvite.bodyLater`, four locales).
 - **What the organiser sees.** The open-round confirmation says how long the stagger runs before the press, and the existing
   copy has to change to say it (the re-review's m-c): `runsheet.round.confirmWindow` reads "They can
@@ -2313,8 +2314,12 @@ conflict update KEEPS an existing stamp that lies inside it (`checked_in_at = ca
 existing >= opensAt and existing < deadline then existing else <at> end`). `claimRoomSeat` passes
 the board's window, and, for a seat granted under the protection after the deadline, `at =
 first_claim_at`, which is inside the window by condition 2. In every other case `at` is `now()` as
-before. The QR self check-in (`checkInToFixture`) passes no window and keeps today's behaviour; if it
-can reach an online board the build passes the same window there. One consequence, harmless and
+before. The QR self check-in (`checkInToFixture`) passes the board's window for any fixture whose
+round has been opened (the build review's I-1: it CAN reach an online board - the fixture page shows its QR for
+any scheduled board, and `POST /api/checkin/[token]` takes any valid token at any time - and a scan after the
+deadline would otherwise turn a player who came into one who never did, so the no-show sweep forfeits BOTH
+sides instead of giving the player who came the walkover); a fixture whose round was never opened keeps today's
+re-stamp. One consequence, harmless and
 stated (the re-review's m-e): a seat granted under the protection is stamped at `first_claim_at`,
 which is old, so the stranded-board arm's debounce (`STRANDED_CREATE_AFTER_MS` = 10 s, the
 `max(fa.checked_in_at) <= now − 10 s` test at `sweep.ts:568`) is satisfied at once, and the sweep may
@@ -2449,12 +2454,12 @@ player in line well before the deadline has all the time before it as well.
 | `LINE_POLL_MIN_MS` | 2,000 | the floor under every `pollMs`, server and client |
 | `LINE_CLAIM_COST` | 6 | the largest one claim spends: a re-pair mint, 2 × 2 + 1 + 1. No longer a threshold (§5.7.3, fix 3), and no longer the basis of any ETA (fix 4: an admitted stay deferred mid-claim is answered `camera_starting`): a declared maximum the reservation must cover; a test asserts `LINE_RESERVATION` is at least it and at least the largest count the fixture server sees for any claim shape |
 | `LINE_RECHECK_COST` | 3 | the opponent's re-verify reads, added to the reservation of a completing stay and to the admission threshold of a completing candidate; replaces `LINE_COMPLETING_COST` (7, a level); a test asserts it is at least the re-verify's count at the fixture server |
+| `LINE_COMPLETING_LEVEL` | 7 (derived: `LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST`) | what an idle line's COMPLETING claim must find in the bucket to go (§5.7.3 step 3): the seating claim's own reads and token, then the opponent's re-verify; never typed, and a test asserts it is above `LINE_RECHECK_COST` |
 | `LINE_MINT_CALLS` | 2 | the calls of a player's minting claim that the line funds: the meeting create and the participant add (§5.6.8). A re-pair's four stale-meeting ends are housekeeping, exempt (§5.7.7); a test asserts the value equals the fixture server's count for a mint |
 | `LINE_READ_CALLS` | 3 | one vendor read of a starting camera: the live session, its participants, the peer report; asserted equal to the fixture server's count for a read |
 | `LINE_TOKEN_CALLS` | 1 | the participant token handed with a seat or a refused camera; asserted equal to the fixture server's count for a refresh |
 | `LINE_RESERVATION` | 21 (derived) | `LINE_MINT_CALLS + LINE_READ_CALLS × CAMERA_EVIDENCE_MAX_POLLS + (LINE_READ_CALLS + LINE_TOKEN_CALLS)` = 2 + 3 × 5 + 4: the most the room's own schedule can make a stay spend inside `ADMIT_HOLD_MS` (§5.6.8, "What one stay costs"). Replaces `LINE_PLAYER_COST` (10), which was the measured average used as a reservation. The reservation of an admitted stay, the pool test (§5.7.3) and the ETA use it; the drain floor and the capacity figures use the MEASURED `D̄`, not this |
 | `ADMIT_HOLD_MS` | 54,500 (derived) | `MINT_TO_READ_MS + CAMERA_EVIDENCE_DEADLINE_MS + max(CAMERA_EVIDENCE_BACKOFF_MS)` = 31.5 s + 15 s + 8 s: the dead-camera bound on an admitted stay, with the margin for the verdict read one back-off step after the deadline (§5.7.5); a test asserts it is at least `LINE_RELEASE_GRACE_MS` |
-| `LINE_COMPLETING_LEVEL` | 7 (derived: `LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST`) | what an idle line's COMPLETING claim must find in the bucket to go (§5.7.3 step 3): the seating claim's own reads and token, then the opponent's re-verify; never typed, and a test asserts it is above `LINE_RECHECK_COST` |
 | `LINE_SERVE_TAIL_S` | 23 (derived) | `(CAMERA_EVIDENCE_DEADLINE_MS + max(CAMERA_EVIDENCE_BACKOFF_MS)) / 1000`: the longest from a stay's first read to its verdict; added to `etaS` in `mayTimeOut` (§5.7.3) |
 | `LINE_LOCK_TIMEOUT_MS` | 1,000 | the gate lock's `lock_timeout` (§5.7.3): 1,000 times the few milliseconds the lock is held, and under `LINE_POLL_MIN_MS`, so a busy claim answers before the client's next poll; a test asserts it is below `LINE_POLL_MIN_MS` |
 | `LINE_ASK_LIMIT` | 64 | derived from the poll floor, as V458's two are |
@@ -2676,7 +2681,7 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
    (b) red.
 6. **The deadline shift reaches every reader.** One table lists the readers (§3.2.1): seat, check-in
    counts, compose, claim, create, dequeue, `expires_at`, sweep window, no-show, mint retry, teardown,
-   `expectedEnd`, invite, resend, open-round-view. The test drives each at batch 0 and at batch 2 and
+   `expectedEnd`, invite, resend, open-round-view, and (the build review's I-1) the QR self check-in. The test drives each at batch 0 and at batch 2 and
    asserts the deadline is `T_batch + DEADLINE_AFTER_MS` for that board; it reports the number of
    readers checked and fails if it is not the number in the table, so a new reader must be added to
    both. A source guard (counts reported) forbids a reader that calls `windowFor(round_opened_at)`
@@ -2706,7 +2711,9 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
     before, no request; at it, one request). Mutants: round down; re-read on the idle poll: red.
 12. **The mail and the organiser's copy.** The invite names the board's own deadline and, for batch 1
     onwards, its opens-at time, from `DEADLINE_AFTER_MS` (no typed minutes), with the `bodyLater`
-    variant in four locales (count). The organiser's confirm copy: a round of one batch shows
+    variant in four locales (count). The mail's opens-at is rounded UP to the minute, pinned at an opening
+    on :00 (named as it is), :01 and :59 seconds (the next whole minute; the named time is never before the
+    real opening and less than a minute after it). Mutant: round down: the :01 and :59 cases are red. The organiser's confirm copy: a round of one batch shows
     `runsheet.round.confirmWindow`, a staggered round shows `runsheet.round.confirmWindowStaggered`, and
     the staggered copy never says "straight away" or counts its minutes from the press (four locales,
     count checked); both show `DEADLINE_AFTER_MS / 60_000`, and the round view shows the stagger length
@@ -2885,7 +2892,12 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
 28. **A counted check-in is never re-stamped.** `stampFixtureCheckIn` with a `window` keeps an
     existing stamp inside it; a seated re-claim past the deadline leaves `checked_in_at` unchanged;
     a seat granted under the protection stamps `first_claim_at` and `checkInCounts` is true; the QR
-    path with no window re-stamps as it does today. Mutant: always `now()`: red.
+    scan (`checkInToFixture`, through the real function) of an OPENED round after the deadline leaves a
+    counted check-in where it was, and a fixture whose round was never opened is re-stamped as today (the
+    control). Sequence: a player checks in on time through the real claim, the QR is scanned after the
+    deadline, the no-show sweep runs: the board is forfeited by the ABSENT entrant alone (`core.forfeit` with
+    `by` that entrant, reason `walkover`), never by `both`. Mutants: always `now()`: red; the QR path without
+    the window: the scan test and the sequence are red.
 29. **`expectedEnd`'s base (m8).** A game created at `cap − 1 ms` has a base of its creation time, not
     the deadline. Mutant: base the deadline: the board is overdue early: red.
 30. **The `line` limit is derived from the floor, and the client enforces it.** `LINE_ASK_LIMIT` is
