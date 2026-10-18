@@ -2206,14 +2206,21 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
 
 /** The relay sizing alarm (owner ruling 2026-10-18, compositor `docs/_INDEX.md` Owed 20: "no lite mode; if CPU impacts,
  *  measure and raise the CPU size"). The compositor's ladder is `full → overlay_half_rate` and the bottom holds, so a
- *  composed beat that STEPPED DOWN says its Machine is short of CPU. It is raised once per step (domain/ladder.ts
- *  `steppedDownTo`, against the previous beat's stored rung), on two channels: a structured warning (`alarm: "sizing"`)
+ *  composed beat that STEPPED DOWN says its Machine is short of CPU. It is raised once per step and per attempt
+ *  (domain/ladder.ts `steppedDownTo`, against the previous beat's STORED rung — so a web restart keeps the dedupe — when
+ *  that beat belongs to this attempt), on two channels: a structured warning (`alarm: "sizing"`)
  *  and the house alerting path, Sentry, under route `relay.sizing_alarm` with ONE message so every alarm groups as one
  *  issue. Ops answer it by raising the Machine size (compositor C17 runbook). A passthrough session has no Machine, so it
  *  never alarms. Telemetry, like the sample: it never throws into the beat. */
 function raiseSizingAlarm(before: Row, beat: RelayHeartbeat): void {
   if (before.mode !== "composed") return;
-  const previousRung = before.last_heartbeat?.rung ?? null;
+  // #980 review M2: the dedupe is per ATTEMPT. A retry boots a new Machine — a new process, whose ladder starts on
+  // `full` — and restarts the beat window (beat_window_at, I4: "booted a replacement … restarts the window here"). A
+  // stored beat from before that anchor is the OLD Machine's, so its rung says nothing about this one: the new attempt's
+  // first stepped beat alarms. (The stale-beat arm moves the anchor too; a re-alarm after it is the safe direction.)
+  const storedIsThisAttempt = before.beat_window_at == null
+    || (before.heartbeat_at != null && new Date(before.heartbeat_at).getTime() > new Date(before.beat_window_at).getTime());
+  const previousRung = storedIsThisAttempt ? (before.last_heartbeat?.rung ?? null) : null;
   const rung = steppedDownTo(previousRung, beat.rung);
   if (rung === null) return;
   const facts = { sessionId: before.id, rung, previousRung, attempt: before.runner_attempts, machineId: before.machine_id };

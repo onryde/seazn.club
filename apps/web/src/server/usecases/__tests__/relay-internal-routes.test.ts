@@ -1495,4 +1495,70 @@ describe.skipIf(!HAS_DB)("owner 2026-10-18: a ladder step-down on a composed bea
       warn.mockRestore();
     }
   });
+
+  it("#980 review M2: a retry's Machine is a new process on a NEW attempt — its first beat already stepped alarms again, naming attempt 2 and the new Machine, then holds", async () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const s = await session();
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      expect(reportsFor(s.sessionId), "attempt 1 steps down: one alarm").toHaveLength(1);
+      const first = (await row(s.sessionId)).machine_id!;
+      // Attempt 1 dies uncleanly; the Machine's own facts read notices, and the ONE retry boots (the A5 test's path).
+      s.runner.setObserved(first, "failed", { exitCode: 1, oomKilled: false, requestedStop: false });
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+      expect(s.runner.created, "premise: the retry created a second Machine").toHaveLength(RUNNER_MAX_ATTEMPTS);
+      const second = (await row(s.sessionId)).machine_id!;
+      expect(second, "premise: a new Machine").not.toBe(first);
+      // The replacement's FIRST beat is already on the bottom rung — the very word attempt 1's last beat stored. Compared
+      // against that stored beat it reads as "held", and a short Machine on its new attempt would never alarm.
+      expect((await postBeat(s.sessionId, { state: "starting", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      const reports = reportsFor(s.sessionId);
+      expect(reports, "attempt 2's step is its own alarm").toHaveLength(2);
+      expect(reports[1]![1]).toMatchObject({ route: ROUTE, extra: { sessionId: s.sessionId, rung: "overlay_half_rate", previousRung: null, attempt: 2, machineId: second } });
+      // …and attempt 2 then holds its bottom: no third alarm.
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      expect(reportsFor(s.sessionId), "the new attempt's bottom holds").toHaveLength(2);
+      expect(warningsFor(warn, s.sessionId), "the log agrees").toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("#980 review M1: the dedupe reads the STORED beat, so it survives a web restart — a bottom rung stored by SQL (no beat through this process), then the same rung, alarms nothing; the next ENTRY still alarms", async () => {
+    const s = await session();
+    // A previous web process stored this attempt's stepped beat (and alarmed it); this process has never seen the session.
+    await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json({ state: "playing", rung: "overlay_half_rate" } as never)} where id = ${s.sessionId}`;
+    expect(await lastHeartbeat(s.sessionId), "premise: the stored rung").toMatchObject({ rung: "overlay_half_rate" });
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+    expect(reportsFor(s.sessionId), "the stored step was alarmed by the process that stored it").toHaveLength(0);
+    // The positive pair: a climb, then a real entry to the bottom, alarms once.
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+    expect(reportsFor(s.sessionId), "a fresh step after the restart").toHaveLength(1);
+  });
+
+  it("#980 review M4: an alerting path that throws never fails the beat — 200, the beat is stored, and the failure is logged as an error once", async () => {
+    const error = vi.spyOn(log, "error");
+    let thrown = 0;
+    sentry.captureError.mockImplementation((_e: unknown, c: unknown) => {
+      if ((c as { route?: string } | undefined)?.route === ROUTE && thrown === 0) { thrown++; throw new Error("sentry transport down"); }
+    });
+    try {
+      const s = await session();
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+      const res = await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken });
+      expect(thrown, "anti-vacuity: the alerting path DID throw").toBe(1);
+      expect(res.status, "the beat is answered").toBe(200);
+      expect(await lastHeartbeat(s.sessionId), "the beat is stored").toMatchObject({ rung: "overlay_half_rate" });
+      const failures = error.mock.calls.filter(([o, m]) => typeof o === "object" && o !== null
+        && (o as { sid?: string }).sid === s.sessionId && /sizing alarm was not raised/.test(String(m)));
+      expect(failures, "the swallowed failure is logged").toHaveLength(1);
+      // The NEXT beat still answers, and the bottom holds (the throw consumed no state).
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+    } finally {
+      sentry.captureError.mockImplementation(() => undefined);
+      error.mockRestore();
+    }
+  });
 });
