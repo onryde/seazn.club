@@ -244,7 +244,7 @@ async function loadMatchCentreBefore(q: Sql, fixture: PublicFixture, ctx: MatchC
       ? resolveModule(ctx.division.sportKey, ctx.division.moduleVersion)
       : resolveLatestModule(ctx.division.sportKey);
   // W2a: resolveFixtureCfg takes the stage row (kind + config) and the module (the bracket overlay).
-  // W2c (V462): and the fixture ROW (snapshot + rules_override), with the same absent-row fallback the loader uses.
+  // W2c (V463): and the fixture ROW (snapshot + rules_override), with the same absent-row fallback the loader uses.
   const rawCfg = resolveFixtureCfg(
     fixtureRow ?? { config_snapshot: undefined, rules_override: undefined },
     divisionRow?.config,

@@ -22,7 +22,7 @@ import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache } from "./scoring";
 
 /**
- * W2c Task 14 — THE ONE WRITER of `fixtures.rules_override` (V462): one match's own format (X-SR-2), and the live
+ * W2c Task 14 — THE ONE WRITER of `fixtures.rules_override` (V463): one match's own format (X-SR-2), and the live
  * correction of a started match's format (X-SR-5, owner Q11 / P-1 / P-4). Nothing else in `apps/web` writes the column;
  * `fixture-cfg.ts` `resolveFixtureCfg` is its one reader (every call site pinned in `bracket-overlay-callers.test.ts`).
  *

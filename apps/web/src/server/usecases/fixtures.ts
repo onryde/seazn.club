@@ -109,7 +109,7 @@ export async function fixtureFeedsNextMatch(auth: AuthCtx, fixtureId: string): P
  * absence exactly like `null` (fixture-cfg.ts:53-64), so a caller that joined
  * the stage but dropped the snapshot would serve live config for every scored
  * fixture and raise nothing. One select, one place to get it wrong. The same
- * holds for `f.rules_override` beside it (W2c, V462): dropped, the pad would
+ * holds for `f.rules_override` beside it (W2c, V463): dropped, the pad would
  * show the stage's format for a match the organiser changed.
  *
  * No `rejectDeviceLink` guard: this has no route of its own, and the

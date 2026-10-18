@@ -82,7 +82,7 @@ interface Row {
   outcome: unknown;
   config_snapshot: unknown;
   config_snapshot_at: Date | null;
-  /** W2c (V462) — the match's own format override. Live config INCLUDES it: it is frozen with everything else at the
+  /** W2c (V463) — the match's own format override. Live config INCLUDES it: it is frozen with everything else at the
    *  first event, so a re-freeze that dropped it would silently put the match back on its stage's format. */
   rules_override: unknown;
   division_config: unknown;

@@ -2,8 +2,9 @@
 -- tail was V438; V439-V442 are chess's, on staging). Main has since merged V450__stream_runner_crash_count.sql,
 -- and Flyway runs no out-of-order migrations here, so a V443 reaching a database that has applied V450 is
 -- refused. Renumbered (not corrected forward: this delta has never run in production) to V462, past main's
--- V450 and the V451-V461 the chess session has reserved for its own deltas. Chess must still merge first,
--- or this moves again.
+-- V450 and the V451-V461 the chess session has reserved for its own deltas; then to V463 on 2026-10-18, because
+-- r2 PR #981 holds V462 (V462__relay_composed_stream_input_b.sql) and merges first. Chess and r2 must still
+-- merge first, or this moves again.
 --
 -- W2c (spec §4.3): a fixture's own match-format override — engine ruleKeys of
 -- scope "match" only, written by writeFixtureRulesOverride alone. Null = the

@@ -72,7 +72,7 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null before its
    *  first event. See `fixture-cfg.ts` for why it exists. */
   config_snapshot: unknown;
-  /** W2c (V462) — this match's own format override, resolved last (`fixture-cfg.ts`). */
+  /** W2c (V463) — this match's own format override, resolved last (`fixture-cfg.ts`). */
   rules_override: unknown;
 }
 interface DivisionRow {

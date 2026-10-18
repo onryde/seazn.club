@@ -9,7 +9,7 @@ import { foldFixture } from "./fold";
  * into line. Extracted from the staff re-snapshot hatch (`admin-fixture-config.ts` `resnapshotFixtureConfig`) so that
  * hatch and the organiser's live correction (`fixture-rules.ts` `writeFixtureRulesOverride`, Q11) are ONE write.
  *
- * `rules_version` (V462) moves here and nowhere else: a correction and a staff re-freeze are the only two writes that
+ * `rules_version` (V463) moves here and nowhere else: a correction and a staff re-freeze are the only two writes that
  * change the cfg of a match already in play, so they are the only two bumps — the first event FREEZES a cfg, it never
  * bumps one, and an unstarted override write has no frozen cfg to move. An open pad compares the version it loaded
  * with this one (Task 15). Returned so the caller can tell the pad.

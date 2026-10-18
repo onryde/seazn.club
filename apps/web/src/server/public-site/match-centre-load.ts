@@ -330,7 +330,7 @@ function buildSides(
   ];
 }
 
-/** The fixture's config snapshot and match override (W2c, V462) beside its
+/** The fixture's config snapshot and match override (W2c, V463) beside its
  *  division and stage rows — what `resolveFixtureCfg` merges. Where the caller
  *  already read the division and stage rows (`configRows`), only the fixture's
  *  two columns are read; otherwise all three

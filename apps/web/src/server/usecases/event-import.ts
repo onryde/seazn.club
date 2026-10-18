@@ -71,7 +71,7 @@ interface FixtureRow {
   away_entrant_id: string | null;
   status: string;
   config_snapshot: unknown;
-  /** W2c (V462) — the match's own format override; the dry run folds under it exactly as the writer will. */
+  /** W2c (V463) — the match's own format override; the dry run folds under it exactly as the writer will. */
   rules_override: unknown;
   stage_id: string;
 }
