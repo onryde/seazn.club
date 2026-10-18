@@ -1805,6 +1805,49 @@ jobs:
       - name: Run per-sport smoke (deciders)
         run: npm run test:smoke:sports
 
+      # R2004 (PR #981 review): the job's server above names no RELAY_IMAGE, so `Run smoke test` witnesses only a
+      # composed Go live's 503 composed_unavailable. A SECOND server from the SAME build names a dummy compositor image
+      # (the fake drivers never pull it), and captureV2 runs alone against it, so the composed 201 — two inputs, the
+      # output on the programme, two matches reserved — and its Stop are witnessed over real HTTP too. The image is on
+      # BOTH processes: the server admits on it, and the smoke process takes its composed branch (27 steps, not 26) on
+      # it. The greps are the gate, not the exit code: the same suite run against the imageless server, or without the
+      # image in the smoke process's env, exits 0 having run the 503 branch instead.
+      - name: Start a second server with a compositor image (R2004)
+        env:
+          PORT: "3001"
+          RELAY_IMAGE: registry.fly.io/ci-smoke-compositor:dummy
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-smoke-secret
+          LOG_LEVEL: error
+          AUTH_DEV_LINKS: "1"
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
+          CAPTURE_QR_V2_ALWAYS: "1"
+        run: |
+          node apps/web/.next/standalone/apps/web/server.js > composed-server.log 2>&1 &
+          up=""
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3001/api/health >/dev/null; then
+              echo "second server up after ${i} tries"; up=1; break
+            fi
+            sleep 2
+          done
+          if [ -z "$up" ]; then
+            echo "second server did not become healthy"; cat composed-server.log; exit 1
+          fi
+
+      - name: Run composed smoke (captureV2 against the compositor-image server)
+        env:
+          SMOKE_BASE: http://localhost:3001
+          SMOKE_ONLY: captureV2
+          RELAY_IMAGE: registry.fly.io/ci-smoke-compositor:dummy
+        run: |
+          set -o pipefail
+          npm run test:smoke 2>&1 | tee composed-smoke.log
+          grep -F "PASS  capture-v2 smoke: R2004: a composed Go live with a compositor image → 201" composed-smoke.log
+          grep -F "PASS  capture-v2 smoke: R2004: the composed session's Stop → 200, and it completes" composed-smoke.log
+          grep -F "PASS  capture-v2 smoke: all 27 steps ran (ran 27)" composed-smoke.log
+
       # The Playwright UI e2e suite moved to its own workflow (e2e.yml): it
       # runs on pushes to main, or on demand against a PR by number.
 
@@ -1866,7 +1909,10 @@ jobs:
 
       - name: Dev server log (on failure)
         if: failure()
-        run: cat dev-server.log || true
+        run: |
+          cat dev-server.log || true
+          echo "--- the compositor-image server (R2004) ---"
+          cat composed-server.log || true
 
       - name: Placement service logs and teardown
         if: always()
