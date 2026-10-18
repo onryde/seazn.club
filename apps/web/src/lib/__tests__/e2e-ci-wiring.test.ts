@@ -1508,7 +1508,8 @@ describe("the online-chess fixture servers' wiring", () => {
         ).toBe(true);
         for (const c of configs) {
           for (const project of c.projects) {
-            if (pointed.has(project.name)) continue;
+            // A Playwright project's name is optional: an unnamed one is never in `pointed`, so it falls through to the check below.
+            if (project.name !== undefined && pointed.has(project.name)) continue;
             expect(
               selects(project, f),
               `${f} starts a Lichess/RealtimeKit fixture and the ${project.name} project selects it, but that leg's job does not point the server at it`,
