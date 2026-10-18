@@ -2454,7 +2454,7 @@ describe.skipIf(!process.env.DATABASE_URL)("createGameIfReady — timed batches"
     }
   });
 
-  it("[reader:dequeue] the create's allowance (spec §5.7.8) is judged at the DEQUEUE too: past the deadline and before the cap, a queued create runs iff BOTH check-ins count - one side alone, or the cap itself, refuses (4 dequeues)", async () => {
+  it("(allowance) the create's allowance (spec §5.7.8) is judged at the DEQUEUE too: past the deadline and before the cap, a queued create runs iff BOTH check-ins count - one side alone, or the cap itself, refuses (4 dequeues)", async () => {
     const stamp = async (s: Awaited<ReturnType<typeof seedAt>>, who: ("home" | "away")[], at: Date) => {
       for (const side of who) {
         await sql`
