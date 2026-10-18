@@ -181,6 +181,52 @@ describe.skipIf(!DB)("a dead-camera admitted stay ends at ADMIT_HOLD_MS, not bef
     expect(dAfter.seat, "after the deadline D takes the normal rules").toMatchObject({ reason: "window_closed" });
   }, 180_000);
 
+  it("the hold ends BEFORE the deadline: the dead stay's next press is a new stay at the back, QUEUED behind a waiting stay, and says `left: camera` once (spec 35, the variant)", async () => {
+    const w = world();
+    const d = await seedBoard();
+    const wBoard = await seedBoard();
+    // Early enough that the hold's end (A + ADMIT_HOLD_MS) falls well inside the board's window.
+    const t0 = new Date(DEADLINE.getTime() - 3 * MIN);
+    await fund(w.key, 1000);
+    const minted = await claimRoom(w, d, "home", t0);
+    joinAt(w, minted.seat, new Date(t0.getTime() + SEC));
+    await fund(w.key, 0);
+    const wAt = new Date(t0.getTime() + 2 * SEC);
+    await putStay({ fixtureId: wBoard.fixtureId, personId: wBoard.home.personId, budgetKey: w.key, firstClaimAt: wAt, seenAt: wAt, gate: "held", queuedAt: wAt });
+    expect((await claimRoom(w, d, "home", new Date(t0.getTime() + 5 * SEC))).seat, "D is held").toMatchObject({ reason: "queued" });
+    const A = new Date(t0.getTime() + 10 * SEC);
+    await fund(w.key, 1000);
+    await claimRoom(w, d, "home", A);
+    expect((await stayRow(d.fixtureId, d.home.personId))?.admitted_at, "admitted at A").toEqual(A);
+    // D keeps claiming (never silent) with a camera that never reports, up to the hold.
+    let t = A.getTime();
+    let dClaims = 0;
+    while (t + 8 * SEC < A.getTime() + ADMIT_HOLD_MS - 1) {
+      t += 8 * SEC;
+      await fund(w.key, 1000);
+      await claimRoom(w, d, "home", new Date(t));
+      dClaims += 1;
+      // W keeps polling too (a silent stay would lapse), and is held behind D's reservation.
+      await fund(w.key, 2 * L - 1);
+      expect((await claimRoom(w, wBoard, "home", new Date(t + 1))).seat, `W waits at A + ${(t + 1 - A.getTime()) / 1000} s`).toMatchObject({ reason: "queued" });
+    }
+    expect(dClaims, "anti-vacuity: D kept claiming").toBeGreaterThan(3);
+    const atHold = new Date(A.getTime() + ADMIT_HOLD_MS);
+    expect(atHold.getTime(), "premise: the hold ends INSIDE the window, before the deadline").toBeLessThan(DEADLINE.getTime());
+    // A second waiting stay, behind W and ahead of whatever D becomes; W is admitted with D's freed tokens and the pool is then short.
+    await holdWaiting(w.key, new Date(t0.getTime() + 3 * SEC), new Date(atHold.getTime() - SEC));
+    await fund(w.key, 2 * L - 1);
+    expect((await claimRoom(w, wBoard, "home", atHold)).seat, "W takes the freed tokens and runs").toMatchObject({ reason: "camera_required" });
+    // D presses again: a NEW stay, at the back (after the second waiting stay), with the reason it left.
+    await fund(w.key, L);
+    const again = await claimRoom(w, d, "home", atHold);
+    expect(again.seat, "queued behind the waiting stay, not window_closed (the window is still open) and not admitted").toMatchObject({ reason: "queued", line: { left: "camera" } });
+    expect((again.seat as { line: { position: number } }).line.position, "behind the waiting stay").toBe(2);
+    expect((await stayRow(d.fixtureId, d.home.personId))?.first_claim_at, "a NEW stay").toEqual(atHold);
+    const next = await claimRoom(w, d, "home", new Date(atHold.getTime() + 3 * SEC));
+    expect(next.seat, "the reason is said once").toMatchObject({ reason: "queued", line: { left: null } });
+  }, 180_000);
+
   it("the margin: a stay whose verdict read is the LAST step of the schedule, falling at ADMIT_HOLD_MS - 1 ms, is still admitted and protected and is served at that read", async () => {
     const w = world();
     const m = await seedBoard();

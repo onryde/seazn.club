@@ -114,6 +114,29 @@ describe.skipIf(!DB)("`left` travels only on a queued answer, with a fixed prece
     expect(checked, "cases checked").toBe(3);
   }, 120_000);
 
+  it("(f) a stay that was in line and then SERVED or ENDED (a seat, camera_blocked) is not a stay that left: its next press behind a waiting stay says nothing - `left` is null, not `camera` and not `silent`", async () => {
+    let checked = 0;
+    for (const how of ["served", "ended"] as const) {
+      const key = scene();
+      const b = await sceneBoard();
+      const pressMs = 10_000; // inside the abandon window: the stay is neither silent nor past its hold
+      await putStay({
+        fixtureId: b.fixtureId, personId: b.home.personId, budgetKey: key,
+        firstClaimAt: sceneAt(0), seenAt: sceneAt(pressMs - 1_000), gate: "passed", queuedAt: sceneAt(0), admittedAt: sceneAt(1_000),
+        servedAt: how === "served" ? sceneAt(pressMs - 1_000) : null,
+        endedAt: how === "ended" ? sceneAt(pressMs - 1_000) : null,
+      });
+      await holdWaiting(key, sceneAt(pressMs - 5_000), sceneAt(pressMs - 1_000));
+      await setBucket(key, 0, sceneAt(pressMs));
+      const got = await claimAt(key, b, "home", sceneAt(pressMs));
+      expect(got.kind, `${how}: the new stay waits behind the line`).toBe("queued");
+      expect(leftOf(got), `${how}: it did not leave, it was finished`).toBe(null);
+      expect((await stayRow(b.fixtureId, b.home.personId))?.first_claim_at, `${how}: a NEW stay`).toEqual(sceneAt(pressMs));
+      checked += 1;
+    }
+    expect(checked, "cases checked").toBe(2);
+  }, 120_000);
+
   it("through the real route: the seat answer's `line.left` is `silent` for a player who went quiet and pressed again behind a waiting stay", async () => {
     const w = world();
     const b = await seedBoard();
