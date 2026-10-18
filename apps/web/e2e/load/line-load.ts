@@ -19,6 +19,10 @@ export const LINE_LOAD = {
   /** seat-line.ts: what one stay reserves, and the re-verify held beside it while it could complete its board. */
   reservation: 21,
   recheckCost: 3,
+  /** seat-line.ts: when a stay stops counting - a held one silent this long, a passed one silent this long, an admitted one past its hold. */
+  abandonAfterMs: 20_000,
+  releaseGraceMs: 35_000,
+  admitHoldMs: 54_500,
   /** sweep.ts: the cron cadence and the stranded-create arm's wait. */
   sweepCadenceMs: 300_000,
   strandedCreateAfterMs: 10_000,

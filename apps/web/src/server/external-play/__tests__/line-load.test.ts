@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { BATCH_REREAD_JITTER_MS } from "../../../components/public-site/match-room/use-room";
 import { LINE_POLL_MIN_MS, LINE_POLL_MS } from "../../../components/public-site/match-room/room-snapshot";
 import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS } from "../../usecases/external-play/sweep";
-import { LINE_RECHECK_COST, LINE_RESERVATION } from "../seat-line";
+import { ADMIT_HOLD_MS, LINE_ABANDON_AFTER_MS, LINE_RECHECK_COST, LINE_RELEASE_GRACE_MS, LINE_RESERVATION } from "../seat-line";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S } from "../video/budget";
 import {
   CHECKIN_BATCH_GAP_MS,
@@ -47,6 +47,9 @@ describe("LINE_LOAD: every number the run copies is the server's own", () => {
     expect(LINE_LOAD.lineGraceMs).toBe(LINE_DEADLINE_GRACE_MS);
     expect(LINE_LOAD.reservation).toBe(LINE_RESERVATION);
     expect(LINE_LOAD.recheckCost).toBe(LINE_RECHECK_COST);
+    expect(LINE_LOAD.abandonAfterMs).toBe(LINE_ABANDON_AFTER_MS);
+    expect(LINE_LOAD.releaseGraceMs).toBe(LINE_RELEASE_GRACE_MS);
+    expect(LINE_LOAD.admitHoldMs).toBe(ADMIT_HOLD_MS);
     expect(LINE_LOAD.sweepCadenceMs).toBe(SWEEP_CADENCE_MS);
     expect(LINE_LOAD.strandedCreateAfterMs).toBe(STRANDED_CREATE_AFTER_MS);
     expect(LINE_LOAD.batchRereadJitterMs).toBe(BATCH_REREAD_JITTER_MS);

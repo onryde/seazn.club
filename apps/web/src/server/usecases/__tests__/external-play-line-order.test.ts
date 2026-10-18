@@ -197,10 +197,10 @@ describe("the order checkers can fail (test 13, mutation targets)", () => {
     // X arrived first and was first held late (800); Y arrived at 200 and was held at 210; Z is ahead of everyone.
     const stays = [stay("X", 100, 800, null), stay("Y", 200, 210, null), stay("Z", 50, 60, null)];
     const samples: PositionSample[] = [
-      { id: "Y", at: 400, position: 1 },
-      { id: "Y", at: 900, position: 2 }, // X was first held in (400, 900] with an earlier key: excused
-      { id: "Z", at: 400, position: 1 },
-      { id: "Z", at: 900, position: 2 }, // nothing was first held ahead of Z's key: unexcused
+      { id: "Y", sentAt: 400, at: 400, position: 1 },
+      { id: "Y", sentAt: 900, at: 900, position: 2 }, // X was first held in (400, 900] with an earlier key: excused
+      { id: "Z", sentAt: 400, at: 400, position: 1 },
+      { id: "Z", sentAt: 900, at: 900, position: 2 }, // nothing was first held ahead of Z's key: unexcused
     ];
     const got = positionRises(samples, stays);
     expect(got.looked, "anti-vacuity: consecutive sample pairs looked at").toBe(2);
@@ -208,7 +208,7 @@ describe("the order checkers can fail (test 13, mutation targets)", () => {
     expect(got.unexcused.map((r) => r.id)).toEqual(["Z"]);
     expect([got.excused.length, got.unexcused.length]).toEqual([1, 1]);
     // A number that falls, or holds, is not a rise at all.
-    const flat = positionRises([{ id: "Y", at: 1, position: 3 }, { id: "Y", at: 2, position: 2 }, { id: "Y", at: 3, position: 2 }], stays);
+    const flat = positionRises([{ id: "Y", sentAt: 1, at: 1, position: 3 }, { id: "Y", sentAt: 2, at: 2, position: 2 }, { id: "Y", sentAt: 3, at: 3, position: 2 }], stays);
     expect([flat.looked, flat.excused.length, flat.unexcused.length]).toEqual([2, 0, 0]);
   });
 });
@@ -244,8 +244,8 @@ describe("the order checkers: every boundary (test 13, mutation targets of the e
     const rise = (x: StayFacts) =>
       positionRises(
         [
-          { id: "Y", at: 400, position: 1 },
-          { id: "Y", at: 900, position: 2 },
+          { id: "Y", sentAt: 400, at: 400, position: 1 },
+          { id: "Y", sentAt: 900, at: 900, position: 2 },
         ],
         [x, stay("Y", 200, 210, null)],
       );
@@ -261,6 +261,27 @@ describe("the order checkers: every boundary (test 13, mutation targets of the e
   });
 });
 
+describe("a rise is judged against the request's SEND, not the answer's receipt (the A-slow run's two unexcused rises)", () => {
+  const stay = (id: string, first: number, queued: number | null): StayFacts => ({ id, firstClaimAt: first, queuedAt: queued, admittedAt: null, servedAt: null });
+
+  it("the answer to the previous number took 40 ms: a stay with an earlier key held INSIDE that flight is a cause; one held when the request left, or before, is not (4 cases; a receipt-based window misses the first two)", () => {
+    // Y's number was computed somewhere in [380, 420]; it rose to 2 at 900. X arrived first (100); Y arrived at 200.
+    const rise = (heldAt: number) =>
+      positionRises(
+        [
+          { id: "Y", sentAt: 380, at: 420, position: 1 },
+          { id: "Y", sentAt: 900, at: 900, position: 2 },
+        ],
+        [stay("X", 100, heldAt), stay("Y", 200, 210)],
+      );
+    expect(rise(400).excused.map((r) => r.cause), "held in the flight (after the send, before the receipt): a cause").toEqual(["X"]);
+    expect(rise(381).excused.map((r) => r.cause), "held one ms after the send: a cause").toEqual(["X"]);
+    expect(rise(380).unexcused.map((r) => r.id), "held AT the send: counted in the number already, so the rise is unexplained").toEqual(["Y"]);
+    expect(rise(379).unexcused.map((r) => r.id), "held before the send: the same").toEqual(["Y"]);
+    expect(rise(400).looked, "anti-vacuity: the pair of samples was looked at").toBe(1);
+  });
+});
+
 describe.skipIf(!DB)("the excused rise, through the real gate (test 13 (e), the re-review's N3)", () => {
   it("X passes on an empty line and is never held; Y arrives and is held at 1; X's next claim is deferred, so X is first held AFTER Y with an earlier key: Y's number rises 1 -> 2, once, excused with X as the cause", async () => {
     const [x, y, z] = [await seed(), await seed(), await seed()];
@@ -271,14 +292,14 @@ describe.skipIf(!DB)("the excused rise, through the real gate (test 13 (e), the 
     const samples: PositionSample[] = [];
     const a = await gateClaim(ask(y, at(10)));
     expect(a.kind).toBe("queued");
-    if (a.kind === "queued") samples.push({ id: "Y", at: 10, position: a.line.position });
+    if (a.kind === "queued") samples.push({ id: "Y", sentAt: 10, at: 10, position: a.line.position });
     expect(samples[0]!.position, "Y is first in line").toBe(1);
     // X's next claim meets a dry bucket mid-claim: the budget holds X now, behind nobody - but AHEAD of Y by key.
     const deferred = await settleDeferral(ask(x, at(500)));
     expect(deferred.kind).toBe("queued");
     const b = await gateClaim(ask(y, at(900)));
     expect(b.kind).toBe("queued");
-    if (b.kind === "queued") samples.push({ id: "Y", at: 900, position: b.line.position });
+    if (b.kind === "queued") samples.push({ id: "Y", sentAt: 900, at: 900, position: b.line.position });
     expect(samples[1]!.position, "Y's number rose").toBe(2);
 
     const stays: StayFacts[] = [];
@@ -286,7 +307,7 @@ describe.skipIf(!DB)("the excused rise, through the real gate (test 13 (e), the 
       const r = await stayRow(s.fixtureId, s.home.personId);
       stays.push({ id, firstClaimAt: r!.first_claim_at.getTime(), queuedAt: r!.queued_at?.getTime() ?? null, admittedAt: null, servedAt: null });
     }
-    const rises = positionRises(samples.map((smp) => ({ ...smp, at: T0.getTime() + smp.at })), stays);
+    const rises = positionRises(samples.map((smp) => ({ ...smp, sentAt: T0.getTime() + smp.sentAt, at: T0.getTime() + smp.at })), stays);
     expect(rises.looked, "anti-vacuity: a pair of samples looked at").toBe(1);
     expect(rises.excused.map((r) => [r.id, r.from, r.to, r.cause])).toEqual([["Y", 1, 2, "X"]]);
     expect(rises.unexcused, "and nothing unexplained").toEqual([]);

@@ -48,15 +48,19 @@ export function completionReorders(stays: StayFacts[]): { pairs: number; reorder
   return { pairs, reorders };
 }
 
-/** One position a client was SHOWN (`line.position` of a `queued` answer). */
-export type PositionSample = { id: string; at: number; position: number };
+/** One position a client was SHOWN (`line.position` of a `queued` answer): `sentAt` is when the request that returned it LEFT, `at` when the
+ *  answer ARRIVED. The server computed the number somewhere between the two. */
+export type PositionSample = { id: string; sentAt: number; at: number; position: number };
 
 export type Rise = { id: string; from: number; to: number; between: [number, number]; cause: string | null };
 
 /** A player's number must not go UP. It can, once and for a reason the ledger shows (§8.1 test 13 (e), the re-review's N3): a stay
  *  that arrived EARLIER was first held after the samples (a pass on an empty line whose next claim the budget then deferred), so it
- *  entered the line ahead of this one. A rise is EXCUSED when such a stay exists - one whose `queuedAt` falls between the two
- *  samples and whose `firstClaimAt` is before this stay's - and the cause is named; every other rise is UNEXCUSED. */
+ *  entered the line ahead of this one. A rise is EXCUSED when such a stay exists - one whose `queuedAt` falls after the previous number's
+ *  request LEFT (the only instant known to precede its computation: a stay held earlier was counted in it and cannot have caused the rise;
+ *  one held in the flight of the answer, after the computation and before the receipt, can - measured under load, where an answer took
+ *  ~60 ms to arrive and a cluster of deferred earlier arrivals was held inside that gap) and up to the next number's arrival, and whose
+ *  `firstClaimAt` is before this stay's - and the cause is named; every other rise is UNEXCUSED. */
 export function positionRises(
   samples: PositionSample[],
   stays: StayFacts[],
@@ -77,7 +81,7 @@ export function positionRises(
       const cause =
         mine === undefined
           ? undefined
-          : stays.find((x) => x.id !== id && x.queuedAt !== null && x.queuedAt > prev.at && x.queuedAt <= cur.at && x.firstClaimAt < mine.firstClaimAt);
+          : stays.find((x) => x.id !== id && x.queuedAt !== null && x.queuedAt > prev.sentAt && x.queuedAt <= cur.at && x.firstClaimAt < mine.firstClaimAt);
       const rise: Rise = { id, from: prev.position, to: cur.position, between: [prev.at, cur.at], cause: cause?.id ?? null };
       (cause ? excused : unexcused).push(rise);
     }
