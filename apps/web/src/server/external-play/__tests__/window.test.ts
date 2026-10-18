@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS, EMAIL_LEAD_MS, WINDOW_OPEN_LEAD_MS,
-  batchCount, batchOfRank, boardAnchor, checkInCounts, deadlineReason, roomPhase, windowFor,
+  LINE_DEADLINE_GRACE_MS, batchCount, batchOfRank, boardAnchor, boardCap, checkInCounts, deadlineReason, roomPhase, windowFor,
 } from "../window";
 
 const T = new Date("2026-10-01T19:00:00.000Z");
@@ -177,5 +177,26 @@ describe("deadlineReason (spec §9)", () => {
   });
   it("a missing check-in outranks a Lichess status (order differential)", () => {
     expect(deadlineReason({ whiteCheckedIn: true, blackCheckedIn: false, lichessStatus: "aborted" })).toBe("no_show_black");
+  });
+});
+
+// Capacity test 27's pure half (spec §5.7.8): the ONE bound on every protection the check-in line gives. All of it derived:
+// cap = T_batch + DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS, for each board's own batch.
+describe("boardCap (spec 5.7.8)", () => {
+  it("is the board's deadline plus LINE_DEADLINE_GRACE_MS, in batch 0 and in batch 2 (the case where it is not the round's)", () => {
+    let checked = 0;
+    for (const rank of [0, CHECKIN_BATCH_SIZE - 1, 2 * CHECKIN_BATCH_SIZE]) {
+      const anchor = boardAnchor(T, rank, true);
+      const batch = batchOfRank(rank);
+      expect(boardCap(anchor).getTime(), `rank ${rank}`).toBe(T.getTime() + batch * CHECKIN_BATCH_GAP_MS + DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS);
+      expect(boardCap(anchor).getTime() - windowFor(anchor).deadline.getTime(), `rank ${rank}: the grace past ITS deadline`).toBe(LINE_DEADLINE_GRACE_MS);
+      checked += 1;
+    }
+    expect(checked, "boards checked").toBe(3);
+    expect(boardCap(boardAnchor(T, 2 * CHECKIN_BATCH_SIZE, true)).getTime(), "batch 2 differs from batch 0").not.toBe(boardCap(boardAnchor(T, 0, true)).getTime());
+  });
+  it("pins the owner's value: five minutes past the deadline (Q4, 2026-10-15)", () => {
+    // The typed number on purpose: it is the OWNER's 5-minute cap, and changing it is deliberate.
+    expect(LINE_DEADLINE_GRACE_MS).toBe(300_000);
   });
 });

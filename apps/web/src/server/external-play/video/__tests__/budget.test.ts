@@ -18,6 +18,7 @@ import {
   RTK_CALLS_PER_WINDOW,
   RTK_VENDOR_LIMIT_PER_WINDOW,
   budgetKey,
+  peekRealtimeKitCall,
   takeRealtimeKitCall,
 } from "../budget";
 
@@ -224,4 +225,55 @@ describe.skipIf(!DB)("the bucket", () => {
     // …and the worst window really did reach the ceiling (the burst plus one window's refill), so the bound is tight.
     expect(worst).toBe(RTK_CALLS_PER_WINDOW);
   }, 120_000);
+});
+
+// Capacity test 26 (spec §5.7.3, §8.1): the check-in line reads the bucket's level WITHOUT spending (`peekRealtimeKitCall`).
+// The expected levels come from the bucket's own declarations (burst, refill) - never from the code under test - and the
+// agreement with the spender is checked at ONE clock: whatever level the peek reports is the level a take then finds.
+describe.skipIf(!DB)("peekRealtimeKitCall (capacity test 26)", () => {
+  /** Put a bucket at `tokens` as of `T0`, without going through the spender. */
+  async function seedBucket(tokens: number): Promise<string> {
+    const key = fresh();
+    await sql`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${key}, ${tokens}::float8, ${T0}::timestamptz)`;
+    return key;
+  }
+  const row = async (key: string) => (await sql<{ tokens: number; refilled_at: Date }[]>`select tokens, refilled_at from realtimekit_call_budget where key = ${key}`)[0];
+
+  it("empty case: a vendor never asked about reads FULL, and the peek creates no row", async () => {
+    const key = fresh();
+    expect(await peekRealtimeKitCall(key, { at: at(0) })).toBe(RTK_BUDGET_BURST);
+    expect(await row(key), "a peek writes nothing").toBeUndefined();
+  });
+
+  it("agrees with the spender at one clock: after k seconds the peek reads tokens + rate * k (capped at the burst), and a take then finds exactly that level", async () => {
+    let checked = 0;
+    for (const [tokens, elapsedS] of [[10, 0], [10, 7], [0, 31], [250, 20], [299.5, 1]] as const) {
+      const key = await seedBucket(tokens);
+      const want = Math.min(RTK_BUDGET_BURST, tokens + RTK_BUDGET_REFILL_PER_S * elapsedS);
+      const level = await peekRealtimeKitCall(key, { at: at(elapsedS * 1_000) });
+      expect(level, `${tokens} tokens after ${elapsedS} s`).toBeCloseTo(want, 6);
+      // The spender at the same instant: it spends ONE token from that level, so a second peek reads one less.
+      expect(await takeRealtimeKitCall(key, { at: at(elapsedS * 1_000) }), "a take at that level").toBe(want >= 1);
+      if (want >= 1) expect(await peekRealtimeKitCall(key, { at: at(elapsedS * 1_000) }), "the take spent exactly one").toBeCloseTo(want - 1, 6);
+      checked += 1;
+    }
+    expect(checked, "levels checked").toBe(5);
+  });
+
+  it("any number of peeks leaves the bucket unchanged (the stamp does not move, no token is spent)", async () => {
+    const key = await seedBucket(120);
+    const before = await row(key);
+    for (let i = 0; i < 25; i += 1) await peekRealtimeKitCall(key, { at: at(i * 1_000) });
+    const after = await row(key);
+    expect(after!.tokens).toBe(before!.tokens);
+    expect(after!.refilled_at.getTime()).toBe(before!.refilled_at.getTime());
+  });
+
+  it("never reads above the burst or below zero, and a clock behind the stamp reads the stored level (elapsed is floored at zero)", async () => {
+    const key = await seedBucket(RTK_BUDGET_BURST - 1);
+    expect(await peekRealtimeKitCall(key, { at: at(3_600_000) }), "an hour idle: the burst, no more").toBe(RTK_BUDGET_BURST);
+    expect(await peekRealtimeKitCall(key, { at: at(-60_000) }), "a clock behind the stamp").toBe(RTK_BUDGET_BURST - 1);
+    const empty = await seedBucket(0);
+    expect(await peekRealtimeKitCall(empty, { at: at(0) })).toBe(0);
+  });
 });

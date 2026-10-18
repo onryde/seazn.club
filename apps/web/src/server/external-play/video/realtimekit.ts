@@ -103,6 +103,19 @@ function requireConfig(): Config {
 
 const CF_BASE = "https://api.cloudflare.com/client/v4";
 
+/** The vendor base a request goes to: the caller's, else the environment's, else Cloudflare's own (no trailing slash). */
+function baseUrlOf(deps: RealtimeKitDeps): string {
+  return (deps.baseUrl ?? process.env.REALTIMEKIT_BASE_URL ?? CF_BASE).replace(/\/$/, "");
+}
+
+/** The bucket this process's requests spend from (budget.ts): the vendor host and the account, which is what `cfEnvelope`
+ *  hands the spender for every request. The check-in line (seat-line.ts) orders claims PER BUCKET, so it asks the same
+ *  question the adapter answers - `null` when RealtimeKit is not configured, where there is no vendor to spend on. */
+export function currentBudgetKey(): string | null {
+  const cfg = readConfig();
+  return cfg === null ? null : budgetKey(baseUrlOf({}), cfg.accountId);
+}
+
 export type MeetingRef = { meetingId: string };
 
 /** The player's side of the board (D16): the ENTRANT side, fixed for a pairing, unlike the colour. */
@@ -196,7 +209,7 @@ async function cfEnvelope(
   init: { method: string; body?: unknown; notFound?: (body: unknown) => boolean },
   deps: RealtimeKitDeps,
 ): Promise<CfBody & { data: NonNullable<unknown> }> {
-  const base = (deps.baseUrl ?? process.env.REALTIMEKIT_BASE_URL ?? CF_BASE).replace(/\/$/, "");
+  const base = baseUrlOf(deps);
   const url = `${base}/accounts/${cfg.accountId}/realtime/kit/${cfg.appId}${path}`;
   const doFetch = deps.fetch ?? fetch;
   // D21: ONE token per request, taken BEFORE it is made (never after — a refused request must not reach the vendor, whose

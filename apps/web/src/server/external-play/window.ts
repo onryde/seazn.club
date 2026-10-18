@@ -60,6 +60,15 @@ export function windowFor(anchor: BoardAnchor): PlayWindow {
   };
 }
 
+/** Spec §5.7.8: how long past a board's deadline the check-in line can still protect a player the platform's call budget is
+ *  holding. ONE cap for the three things it covers - line admission, the no-show skip and the create - and nothing is uncapped. */
+export const LINE_DEADLINE_GRACE_MS = 5 * 60_000;
+
+/** The board's cap: its deadline plus the line's grace. After it the window is closed to everyone, protected or not. */
+export function boardCap(anchor: BoardAnchor): Date {
+  return new Date(windowFor(anchor).deadline.getTime() + LINE_DEADLINE_GRACE_MS);
+}
+
 export type RoomPhase = "before" | "open" | "closed";
 
 export function roomPhase(now: Date, anchor: BoardAnchor): RoomPhase {

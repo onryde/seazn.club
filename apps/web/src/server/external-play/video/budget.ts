@@ -44,6 +44,14 @@ export function budgetKey(baseUrl: string, accountId: string): string {
   return `${baseUrl.replace(/\/+$/, "")}|${accountId}`;
 }
 
+/** The bucket's level as of `asOf`, refilled by the time since it was last stamped, capped at the burst, elapsed floored at
+ *  zero. THE one formula: the spender (`takeRealtimeKitCall`) and the reader (`peekRealtimeKitCall`) both build on it, so the
+ *  level the line sees is the level a take would find. The row is the alias `b`. */
+function refilledTokens(asOf: postgres.PendingQuery<postgres.Row[]>) {
+  return sql`least(${RTK_BUDGET_BURST}::float8,
+    b.tokens + ${RTK_BUDGET_REFILL_PER_S}::float8 * greatest(0, extract(epoch from (${asOf} - b.refilled_at))::float8))`;
+}
+
 /**
  * Take one call's token from `key`'s bucket. True: spent, make the call. False: none left, do not.
  *
@@ -72,8 +80,7 @@ export async function takeRealtimeKitCall(key: string, opts: { at?: Date; clockS
   // the stamp would go back, and the next caller would be credited that interval a second time (D21-fix N1). The cost
   // of the monotone stamp is the safe direction: a clock that stepped back refills nothing until it has caught up with
   // the stamp, never a credit for time the vendor has already counted.
-  const refilled = sql`least(${RTK_BUDGET_BURST}::float8,
-    b.tokens + ${RTK_BUDGET_REFILL_PER_S}::float8 * greatest(0, extract(epoch from (excluded.refilled_at - b.refilled_at))::float8))`;
+  const refilled = refilledTokens(sql`excluded.refilled_at`);
   const spent = await sql`
     insert into realtimekit_call_budget as b (key, tokens, refilled_at)
     values (${key}, ${RTK_BUDGET_BURST}::float8 - 1, ${clock})
@@ -82,4 +89,23 @@ export async function takeRealtimeKitCall(key: string, opts: { at?: Date; clockS
      where ${refilled} >= 1
     returning b.key`;
   return spent.length > 0;
+}
+
+/**
+ * The bucket's level, as a take at the same instant would find it, WITHOUT spending (the check-in line's reader, spec §5.7.3:
+ * it admits a stay only while the pool - this level less the reservations - holds the stay's reservation). Writes nothing: no
+ * token is spent, the stamp does not move, and a vendor nobody has asked about (no row) reads FULL, as the first take will
+ * find it. `opts.at` is the same test seam as the spender's.
+ */
+export async function peekRealtimeKitCall(
+  key: string,
+  opts: { at?: Date; db?: postgres.Sql | postgres.TransactionSql } = {},
+): Promise<number> {
+  const clock = opts.at ? sql`${opts.at}::timestamptz` : sql`clock_timestamp()`;
+  // `opts.db`: the caller's own connection. The check-in line reads the level INSIDE its gate transaction, which holds one
+  // pooled connection for the length of the advisory lock; a peek on a SECOND connection would let every waiter for the lock
+  // hold the pool while the holder waited for a connection of its own.
+  const [row] = await (opts.db ?? sql)<{ tokens: number }[]>`
+    select ${refilledTokens(clock)} as tokens from realtimekit_call_budget b where b.key = ${key}`;
+  return row ? Number(row.tokens) : RTK_BUDGET_BURST;
 }

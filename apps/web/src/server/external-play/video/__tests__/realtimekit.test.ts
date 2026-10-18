@@ -8,6 +8,7 @@ import {
   RealtimeKitDeferred,
   RealtimeKitError,
   addParticipant,
+  currentBudgetKey,
   endMeeting,
   ensureMeeting,
   fetchVideoOffCoverage,
@@ -2042,6 +2043,36 @@ describe("the call budget (D21): every vendor request spends a token first, and 
     } as never);
     expect(keys, "three requests, three spends, one bucket").toEqual([DEFAULT_KEY, DEFAULT_KEY, DEFAULT_KEY]);
     expect(order, "each spend precedes its request").toEqual(["spend", "request", "spend", "request", "spend", "request"]);
+  });
+
+  // Capacity (spec §5.7.3): the check-in line orders claims by the bucket they spend from, so it must name the SAME bucket the
+  // adapter's own requests spend - `currentBudgetKey()` is asked of the process, the spender's key is what a request hands it.
+  it("currentBudgetKey() names the bucket a request spends from: the default vendor, a configured base (trailing slash trimmed), and none when unconfigured", async () => {
+    let checked = 0;
+    for (const base of [undefined, "http://127.0.0.1:41777/client/v4", "http://127.0.0.1:41778/client/v4/"]) {
+      configure();
+      vi.stubEnv("REALTIMEKIT_BASE_URL", base);
+      const keys: string[] = [];
+      await refreshParticipantToken({ meetingId: "mtg-b", participantId: "p-b" }, {
+        fetch: stubFetch([{ status: 200, body: { success: true, data: { token: "t" } } }]).fetch,
+        budget: async (k: string) => {
+          keys.push(k);
+          return true;
+        },
+      } as never);
+      expect(keys, `a request under base ${String(base)}`).toHaveLength(1);
+      expect(currentBudgetKey(), `base ${String(base)}`).toBe(keys[0]);
+      checked += 1;
+    }
+    expect(checked, "bases checked").toBe(3);
+    // Two different bases are two different buckets (so a line pre-seeded on one cannot touch the other).
+    vi.stubEnv("REALTIMEKIT_BASE_URL", "http://127.0.0.1:41777/client/v4");
+    const a = currentBudgetKey();
+    vi.stubEnv("REALTIMEKIT_BASE_URL", "http://127.0.0.1:41778/client/v4");
+    expect(currentBudgetKey()).not.toBe(a);
+    // The empty case: unconfigured has no bucket, and says so with null rather than a made-up key.
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+    expect(currentBudgetKey()).toBeNull();
   });
 
   it("a deferral message names no secret and no body, like every adapter failure", async () => {

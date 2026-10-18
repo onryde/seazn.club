@@ -277,12 +277,25 @@ export async function stampFixtureCheckIn(
   personId: string,
   fixtureId: string,
   orgId: string,
+  opts: { at?: Date; window?: { opensAt: Date; deadline: Date } } = {},
 ): Promise<AvailabilityRow> {
+  // Spec §5.7.8 - a check-in counts only inside the board's window, so a re-stamp must not move a COUNTED one out of it. With
+  // a `window`, the conflict update KEEPS an existing stamp that lies inside it (`opensAt <= stamp < deadline`, the window's own
+  // edges, window.ts `roomPhase`) and otherwise stamps `at`. `at` is the instant to stamp, `now()` unless a seat granted under
+  // the deadline protection dates it at the player's arrival. With no window it is today's: re-stamped on every call.
+  const stamp = opts.at ? sql`${opts.at}::timestamptz` : sql`now()`;
+  const w = opts.window;
   const [row] = await sql<AvailabilityRow[]>`
     insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
-    values (${fixtureId}, ${personId}, ${orgId}, 'in', now())
+    values (${fixtureId}, ${personId}, ${orgId}, 'in', ${stamp})
     on conflict (fixture_id, person_id) do update
-      set checked_in_at = now(), updated_at = now()
+      set checked_in_at = ${
+        w
+          ? sql`case when fixture_availability.checked_in_at >= ${w.opensAt}::timestamptz
+                      and fixture_availability.checked_in_at < ${w.deadline}::timestamptz
+                     then fixture_availability.checked_in_at else ${stamp} end`
+          : stamp
+      }, updated_at = now()
     returning ${sql(FA_COLS)}`;
   return row;
 }
