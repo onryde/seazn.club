@@ -350,16 +350,30 @@ describe.skipIf(!HAS_DB)("getCode — each field from its §6.4 source", () => {
     expect(rows.map((x) => x.role), "PREMISE: both inputs exist").toEqual(["camera", "programme"]);
     const camera = rows[0]!;
     const programme = rows[1]!;
-    const playback = async () => {
-      const body = await get(r, mine);
+    // Both roads to the uid: the session's OWN phone (served its cred, the uid read with it) and any other reader of
+    // the code (no cred; the uid read on its own).
+    const other = phoneId("other");
+    const playback = async (phone: string) => {
+      const body = await get(r, phone);
       if (body.state === "waiting") throw new Error(`PREMISE: a session shape, got ${body.state}`);
+      expect("cred" in body, `PREMISE: ${phone === mine ? "the" : "no"} cred road`).toBe(phone === mine);
       return body.playbackUrl;
     };
-    expect(await playback()).toBe(`https://${FAKE_PLAYBACK_HOST}/${camera.ingest_input_id}/manifest/video.m3u8`);
+    const want = `https://${FAKE_PLAYBACK_HOST}/${camera.ingest_input_id}/manifest/video.m3u8`;
+    let checked = 0;
+    for (const phone of [mine, other]) {
+      expect(await playback(phone)).toBe(want);
+      checked++;
+    }
     // The order cannot decide it: the camera moved to slot 1, the programme left on slot 0.
     await sql`update fixture_stream_inputs set slot = 1 where session_id = ${sessionId} and role = 'camera'`;
-    expect(await playback(), "still the camera").toBe(`https://${FAKE_PLAYBACK_HOST}/${camera.ingest_input_id}/manifest/video.m3u8`);
-    expect(await playback()).not.toContain(programme.ingest_input_id);
+    for (const phone of [mine, other]) {
+      const url = await playback(phone);
+      expect(url, "still the camera").toBe(want);
+      expect(url).not.toContain(programme.ingest_input_id);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both roads, both slot orders").toBe(4);
   });
 
   it("origin: OAUTH_BASE_URL, else NEXT_PUBLIC_BASE_URL, else deps.appUrl — never the request's host", async () => {
