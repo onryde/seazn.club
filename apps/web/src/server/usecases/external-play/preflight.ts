@@ -13,7 +13,8 @@ import "server-only";
 // "The window has not started" is its OWN refusal (`round_not_open`), not
 // `window_closed`: the room says different things about the two.
 import type postgres from "postgres";
-import { roomPhase } from "@/server/external-play/window";
+import { answerBusy, boardPhase, gateClaim, lineActive, SeatLineBusy, type GateAsk } from "@/server/external-play/seat-line";
+import { takeSeatAsk } from "@/server/external-play/seat-ask-limit";
 import { boardOpenFor } from "@/server/external-play/round-open";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -29,10 +30,12 @@ import {
   ensureMeeting,
   refreshParticipantToken,
   seatCameraEvidence,
+  currentBudgetKey,
   type ParticipantToken,
   type SeatCamera,
 } from "@/server/external-play/video/realtimekit";
-import { CAMERA_EVIDENCE_BACKOFF_MS, CAMERA_EVIDENCE_DEADLINE_MS } from "@/components/public-site/match-room/room-snapshot";
+import { CAMERA_EVIDENCE_BACKOFF_MS, CAMERA_EVIDENCE_DEADLINE_MS, type LineWire } from "@/components/public-site/match-room/room-snapshot";
+import { countedCheckIns } from "./check-ins";
 import {
   effectiveBridge,
   ensureBridgeRow,
@@ -62,6 +65,8 @@ export const SEAT_REFUSAL_REASONS = [
   "round_not_open",
   // Spec §3.2.1: the round is open but THIS board's check-in batch has not opened yet.
   "checkin_not_open",
+  // Spec §5.7: the platform's call budget is holding this claim in the check-in line; the answer carries `line`.
+  "queued",
   "fixture_not_playable",
   "video_unavailable",
   // Fix round 2 (controller ruling): T2's play gate, asked by the seat.
@@ -81,7 +86,11 @@ export type SeatResult =
   // The camera refusals carry the caller's own token - except where there is none to hand: a `camera_starting` answered
   // to a browser that already holds this participant's (D21-fix-3, F1), one a deferral cut short (D21), and any answer to
   // T9's re-verify (`recheck`), which nobody joins with.
-  | { seated: false; reason: CameraRefusal; participant: ParticipantToken | null }
+  //   `budgetDeferred` (spec §5.7.3): a `camera_starting` that the call budget cut short (RealtimeKitDeferred) and not a read
+  //   that found the camera still coming up. claimRoomSeat turns it into `queued` for a stay not yet admitted.
+  | { seated: false; reason: CameraRefusal; participant: ParticipantToken | null; budgetDeferred?: true }
+  // The check-in line holds this claim (spec §5.7.3): no token, the position and the cadence to ask again.
+  | { seated: false; reason: "queued"; participant: null; line: LineWire }
   | {
       seated: false;
       reason:
@@ -108,6 +117,9 @@ type Video = {
 export type PreflightDeps = {
   now?: Date;
   video?: Video;
+  /** The check-in line's two test seams (seat-line.ts): `at` is the clock of the gate's whole decision (production passes
+   *  nothing and the database's clock decides); `afterRead` runs inside the gate's transaction between its read and its decision. */
+  line?: { at?: Date; afterRead?: () => void | Promise<void> };
 };
 
 const REAL_VIDEO: Video = { ensureMeeting, addParticipant, seatCameraEvidence, refreshParticipantToken };
@@ -154,6 +166,9 @@ export type SeatAsk = {
   personId: string;
   heldParticipantId?: string | null;
   recheck?: boolean;
+  /** Spec §5.7.3: this claim came in through the `line` door (the caller's own stay is in line). When the gate then lets it
+   *  SPEND, one `seat` ask is counted too, so nothing that can reach the vendor escapes the per-seat bound. */
+  viaLine?: boolean;
 };
 
 /** D21-fix-3 (F2): how long a camera read as ON stands for T9's re-verify. Both players' check-ins read their camera, and
@@ -185,13 +200,27 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
 
   const open = await boardOpenFor(sql, a.fixtureId);
   if (!open) return { seated: false, reason: "round_not_open" };
-  const phase = roomPhase(now, open.anchor);
+  // The counted check-ins, read once and only when a question needs them: the closed window's protection, and the gate.
+  let counted: ReturnType<typeof countedCheckIns> | null = null;
+  const checkedIn = () => (counted ??= countedCheckIns(f, home, away, open.anchor));
+  const phase = await boardPhase(
+    now,
+    { fixtureId: a.fixtureId, anchor: open.anchor },
+    {
+      personId: a.personId,
+      facts: async () => {
+        const ci = await checkedIn();
+        return { own: ci[player.side], both: ci.home && ci.away };
+      },
+    },
+  );
   // "before" with no stamp at all was answered above: round_not_open. A round that IS stamped but whose BOARD's window has
   // not opened (its batch is later, spec §3.2.1; or, in a test, a stamp in the future) is `checkin_not_open`: the room
   // says WHEN. It is refused before any vendor call, check-in or stay, so an early claim costs nothing. Never "closed".
   if (phase === "before") return { seated: false, reason: "checkin_not_open" };
   // DEADLINE_AFTER_MS is the deadline to be seated and have the game created, not a cap on
-  // the game (spec §3.6): a seated player reloading mid-game comes back in.
+  // the game (spec §3.6): a seated player reloading mid-game comes back in. `boardPhase` (spec §5.7.8) also holds the window
+  // open, until the board's cap, for a player the call budget is holding in the check-in line - they came in time.
   if (phase === "closed" && !isReentry(f, player)) return { seated: false, reason: "window_closed" };
 
   // T2's play gate (fix round 2, controller ruling): AFTER the checks above —
@@ -225,6 +254,14 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
     // whose answer is ignored is how a later refactor turns `optional` into
     // `required`.
     try {
+      // Spec §5.7.1 (Q3, ruled): an optional claim YIELDS to the check-in line. While it is active in this bucket (a live
+      // in-line stay or a live admitted stay) the claim makes no vendor call and answers the shape the budget already has:
+      // seated, no tile yet, `cameraRetry`. The tile is a nicety, the seat is not.
+      const budgetKey = currentBudgetKey();
+      if (budgetKey !== null && (await lineActive({ budgetKey, at: deps.line?.at }))) {
+        log.info({ fixtureId: a.fixtureId, orgId: f.orgId }, "seat: the check-in line is active; optional camera seated with no tile");
+        return { seated: true, participant: null, cameraRetry: true };
+      }
       const meeting = await video.ensureMeeting(a.fixtureId, player.side);
       return { seated: true, participant: await issuePlayerToken(a, player.side, meeting.meetingId, video) };
     } catch (err) {
@@ -243,8 +280,20 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
     }
   }
 
+  // Spec §5.7.3: the check-in line, on the `required` path only - after the window, the grant, `off`, the override and the
+  // optional branch, and before the first vendor call. A T9 re-verify never reaches it.
+  const line = await passTheLine(a, { f, home, away, player, anchor: open.anchor, checkedIn }, deps);
+  if (line.held !== null) return line.held;
+
   try {
-    return await verifyRequiredSeat(a, player.side, now, video);
+    const seat = await verifyRequiredSeat(a, player.side, now, video);
+    // `budgetDeferred` is the claim's own word to claimRoomSeat that the BUDGET cut a GATED claim short (a stay to queue). A claim
+    // that was never gated (a seated player's re-claim, T9's re-verify) has no stay, so the mark is dropped: it is "starting".
+    if (!line.gated && !seat.seated && "budgetDeferred" in seat) {
+      const { budgetDeferred: _dropped, ...plain } = seat;
+      return plain;
+    }
+    return seat;
   } catch (err) {
     // An outage (or an answer the adapter cannot read — T7 THROWS on those)
     // is the vendor's failure, never the player's camera: it is its own
@@ -256,6 +305,53 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
     reportOutage(err, f.orgId, a.fixtureId, policy);
     return { seated: false, reason: "video_unavailable" };
   }
+}
+
+/** The gate (spec §5.7.3) for a claim that reached it: `held` is `null` when the claim may spend (carry on to the camera), else
+ *  the answer that holds it; `gated` says whether the claim met the gate at all. A claim is gated when the caller has no counted check-in yet (a reload or the camera's re-entry of a
+ *  seated player is not an arrival), RealtimeKit is configured (there is no bucket otherwise), and it is not T9's re-verify. */
+async function passTheLine(
+  a: SeatAsk,
+  w: {
+    f: OnlinePlayFixture;
+    home: SidePlayer;
+    away: SidePlayer;
+    player: SidePlayer;
+    anchor: Parameters<typeof countedCheckIns>[3];
+    checkedIn: () => ReturnType<typeof countedCheckIns>;
+  },
+  deps: PreflightDeps,
+): Promise<{ held: SeatResult | null; gated: boolean }> {
+  const through = { held: null, gated: false };
+  if (a.recheck) return through;
+  const budgetKey = currentBudgetKey();
+  if (budgetKey === null || w.anchor === null) return through;
+  const ci = await w.checkedIn();
+  if (ci[w.player.side]) return through;
+  const other = w.player.side === "home" ? w.away : w.home;
+  const ask: GateAsk = {
+    fixtureId: a.fixtureId,
+    personId: a.personId,
+    otherPersonId: other.personId,
+    otherCounted: ci[other.side],
+    budgetKey,
+    anchor: w.anchor,
+    at: deps.line?.at,
+    afterRead: deps.line?.afterRead,
+  };
+  let answer;
+  try {
+    answer = await gateClaim(ask);
+  } catch (err) {
+    // The gate's ONE named refusal; anything else is a defect and propagates as itself.
+    if (!(err instanceof SeatLineBusy)) throw err;
+    answer = await answerBusy(ask, err.left);
+  }
+  if (answer.kind === "queued") return { held: { seated: false, reason: "queued", participant: null, line: answer.line }, gated: true };
+  if (answer.kind === "camera_starting") return { held: { seated: false, reason: "camera_starting", participant: null }, gated: true };
+  // Let through to spend: a claim that came in by the `line` door counts one `seat` ask too (spec §5.7.3, "Which door counts").
+  if (a.viaLine) await takeSeatAsk({ fixtureId: a.fixtureId, personId: a.personId, route: "seat" }, { at: deps.line?.at });
+  return { held: null, gated: true };
 }
 
 /** What the camera door answers (D21-fix-3): the caller's token if there is one to hand, and whether asking again can
@@ -373,7 +469,7 @@ async function verifyRequiredSeat(a: SeatAsk, side: Side, now: Date, video: Vide
       log.info({ fixtureId: a.fixtureId }, "seat: RealtimeKit call budget spent; the seat answered camera_starting, the player asks again");
       // No token: a deferral can only come before the claim has one - the mint is the claim's own token, and the refresh
       // runs only after a verdict (a claim that minted makes no read, so a deferral never meets a minted token).
-      return { seated: false, reason: "camera_starting", participant: null };
+      return { seated: false, reason: "camera_starting", participant: null, budgetDeferred: true };
     }
     throw err;
   }

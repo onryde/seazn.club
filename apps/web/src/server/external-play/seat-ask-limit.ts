@@ -1,6 +1,7 @@
 import "server-only";
-// A per-seat limit on the match room's two doors that can cost the platform's RealtimeKit budget (T17B fix 2, D21-fix-4,
-// review I2): the seat claim (POST …/room) and the camera-token ask (POST …/room/camera).
+// A per-seat limit on the match room's three doors that can cost the platform's RealtimeKit budget (T17B fix 2, D21-fix-4,
+// review I2; the third, spec §5.7.3): the seat claim (POST …/room), the camera-token ask (POST …/room/camera), and the same
+// seat claim when the caller's own stay is IN LINE (seat-line.ts) - the `line` door.
 //
 // THE THREAT. Both routes answer to any signed-in player of a board, and one claim is up to four vendor calls (a token
 // refresh and the three reads of a camera). The budget (video/budget.ts) is ONE bucket for the whole account, refilled at
@@ -21,30 +22,42 @@ import "server-only";
 //            1.5 s apart, so a whole attempt is ~28 s - inside one window.
 //   camera = DEVICES x the densest minute of the tile retry's back-off (2, 4, 8, 16, then every 30 s: asks at 2, 6, 14, 30,
 //            60 s = 5) = 10.
-// seat-ask-limit.test.ts DERIVES both from the room's own declarations and replays the room's real schedule against this
+//   line   = DEVICES x (the polls of a queued player at the FASTEST cadence the line ever sends or the client allows,
+//            LINE_POLL_MIN_MS, over one window + the first claim + the one on visibilitychange) = 2 x (30 + 2) = 64. A queued
+//            player's polls are counted here and NOT under `seat`: they would eat the asks a check-in attempt needs and leave
+//            the button dead for a minute (D21-fix-4 re-review, m-a). When the gate then lets such a claim SPEND, it also
+//            counts one `seat` ask, so nothing that can reach the vendor escapes the per-seat bound.
+// seat-ask-limit.test.ts DERIVES all three from the room's own declarations and replays the room's real schedule against this
 // limiter, so a change to the room's bounds moves the test, not a number typed twice.
 //
 // WHAT AN OVER-LIMIT ASK COSTS THE PLAYER. A 429 with the window's true remaining seconds in Retry-After, nothing else done:
-// no claim, no vendor call. The room treats a 429 as "later" on both doors (use-room.ts: the camera door asks again on its
-// back-off; a refused seat claim leaves the seat as it was and the screen reads on). What it does NOT do is tell the player
-// - there is no new copy in this change - so a person who presses Check in more than the limit inside a minute sees the
-// button do nothing until the window ends. That is a person mashing a button for a minute, which is the thing this exists
-// to bound.
+// no claim, no vendor call. The room SHOWS it (capacity change, spec §6.1 (3), owner decision C5): a refused seat claim starts
+// a countdown from Retry-After on the check-in card, the button is disabled until it reaches zero, and the room sends no seat
+// request meanwhile (use-room.ts + seat-wait.ts) - so a second attempt inside the minute (Try again after the camera was slow)
+// is told "try again in 23 s" instead of seeing a dead button. A player on the line card never gets the countdown: their
+// claim loop must not pause (a 60 s wait is longer than LINE_ABANDON_AFTER_MS), so a 429 there changes nothing. The camera
+// door's 429 is still "later" (the tile's own back-off asks again).
 //
 // WHAT IT DOES NOT BOUND. The sum over players: N seats at their limit still spend N x the limit. That is the budget's
 // (reserved lane for a game's create, spec §5.6) and the owner's, not a per-seat number's.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { LINE_POLL_MIN_MS, SEAT_ASK_WINDOW_S } from "@/components/public-site/match-room/room-snapshot";
 
 /** The two doors. Mirrors V458's CHECK: a third is a migration as well as a line here. */
-export const SEAT_ASK_ROUTES = ["seat", "camera"] as const;
+export const SEAT_ASK_ROUTES = ["seat", "camera", "line"] as const;
 export type SeatAskRoute = (typeof SEAT_ASK_ROUTES)[number];
 
-/** The window every limit below is counted in. */
-export const SEAT_ASK_WINDOW_S = 60;
+/** The window every limit below is counted in. Declared in room-snapshot.ts - the room's seat-wait countdown clamps a
+ *  `Retry-After` to it - and re-exported here. */
+export { SEAT_ASK_WINDOW_S };
+
+/** The most the room's own line card sends to the `line` door inside one window: two devices, each polling at the line's
+ *  shortest allowed interval, plus the first claim and one on `visibilitychange`. */
+export const LINE_ASK_LIMIT = 2 * (Math.ceil((SEAT_ASK_WINDOW_S * 1_000) / LINE_POLL_MIN_MS) + 2);
 
 /** Asks one (fixture, person) may make of each door inside one window. Derivation above; pinned by seat-ask-limit.test.ts. */
-export const SEAT_ASK_LIMIT: Readonly<Record<SeatAskRoute, number>> = { seat: 20, camera: 10 };
+export const SEAT_ASK_LIMIT: Readonly<Record<SeatAskRoute, number>> = { seat: 20, camera: 10, line: LINE_ASK_LIMIT };
 
 const TOO_MANY = "Too many requests — slow down and try again.";
 

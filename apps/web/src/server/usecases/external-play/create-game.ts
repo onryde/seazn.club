@@ -81,7 +81,9 @@ import {
 import { boardOpenFor } from "@/server/external-play/round-open";
 import { assertTimeControl, type TimeControl } from "@/server/external-play/time-controls";
 import type { BoardErrorCode, NeedsReason } from "@/server/external-play/types";
-import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
+import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, boardCap, windowFor, type BoardAnchor } from "@/server/external-play/window";
+import { boardPhase } from "@/server/external-play/seat-line";
+import { countedCheckIns } from "./check-ins";
 import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
 import {
@@ -172,7 +174,17 @@ export async function createGameIfReady(
   // game for it would start a clock against people who were never called.
   const open = await boardOpenFor(sql, fixtureId);
   if (!open) return { created: false, reason: "not_ready" };
-  if (roomPhase(now, open.anchor) !== "open") return { created: false, reason: "not_ready" };
+  // Spec §5.7.8: past the deadline and before the board's cap the create is still owed iff BOTH players' check-ins count (a
+  // player the call budget was holding in the check-in line was seated and stamped at their arrival, in the window).
+  const phase = await boardPhase(now, { fixtureId, anchor: open.anchor }, {
+    personId: null,
+    bothOnly: true,
+    facts: async () => {
+      const ci = await countedCheckIns(f, home, away, open.anchor);
+      return { own: false, both: ci.home && ci.away };
+    },
+  });
+  if (phase !== "open") return { created: false, reason: "not_ready" };
 
   // T20: a new game STARTS online play, so the club must be offered it (the PostHog flag `online-chess`). Asked only
   // of a board otherwise ready to create — after `already` (a recorded game is never refused) and before any token
@@ -358,7 +370,17 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   }
   // DEADLINE_AFTER_MS is the deadline to have the game created (spec §3.6), measured at
   // the create, not where it joined the queue.
-  if (roomPhase(claimAt, plan.anchor) !== "open") return { stage: "refused" };
+  // The same allowance as createGameIfReady's, judged at the dequeue (spec §5.7.8).
+  const dequeuePhase = await boardPhase(claimAt, { fixtureId, anchor: plan.anchor }, {
+    personId: null,
+    bothOnly: true,
+    facts: async () => {
+      const both = await loadSides(g);
+      const ci = await countedCheckIns(g, both.home, both.away, plan.anchor);
+      return { own: false, both: ci.home && ci.away };
+    },
+  });
+  if (dequeuePhase !== "open") return { stage: "refused" };
   if ((await whiteSideOf(g)) !== plan.whiteSide) return { stage: "refused" }; // colours re-allocated
   const sides = await loadSides(g);
   const whiteNow = plan.whiteSide === "home" ? sides.home : sides.away;
@@ -507,6 +529,10 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
     }
   }
 
+  // A game created PAST the deadline (spec §5.7.8: both players' check-ins count and the board's cap has not passed) is expected
+  // to run from its creation; the row's expiry is the deadline for a create inside the window, the board's cap for one past it.
+  const readyExpiresAt = claimAt.getTime() < windowFor(plan.anchor).deadline.getTime() ? windowFor(plan.anchor).deadline : boardCap(plan.anchor);
+
   // Ready: create + accept. T10's first accepted move flips it to `live`;
   // nothing here writes 'live'. white_side and BOTH Lichess ids are what T8's
   // re-entry after the deadline reads to recognise a seated player.
@@ -516,9 +542,12 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
     update fixture_external_play
        set status = 'ready', challenge_id = ${gameId}, white_side = ${plan.whiteSide},
            white_lichess_id = ${plan.white.lichessId}, black_lichess_id = ${plan.black.lichessId},
-           expires_at = ${windowFor(plan.anchor).deadline},
+           expires_at = ${readyExpiresAt},
            ${resetLedger()},
-           mint_claimed_at = null, create_sent_at = null, last_error = null, updated_at = now()
+           mint_claimed_at = null, create_sent_at = null, last_error = null,
+           -- The game's creation time, on the dequeue's clock: the sweep's expected end for a board that never started takes
+           -- its base from it when the game was made past the deadline (spec §5.7.8, m8). A later rewrite of the row only moves that base later.
+           updated_at = ${claimAt}
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claim}
      returning fixture_id`;
   } catch (err) {

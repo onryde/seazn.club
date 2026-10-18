@@ -23,11 +23,13 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
   CAMERA_EVIDENCE_MAX_POLLS,
+  LINE_POLL_MIN_MS,
+  LINE_POLL_MS,
   SEAT_RETRIES,
   SEAT_RETRY_MS,
   cameraEvidenceDelayMs,
 } from "@/components/public-site/match-room/room-snapshot";
-import { cameraRetryDelayMs } from "@/components/public-site/match-room/use-room";
+import { cameraRetryDelayMs, linePollDelayMs } from "@/components/public-site/match-room/use-room";
 import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
 import { SEAT_ASK_LIMIT, SEAT_ASK_ROUTES, SEAT_ASK_WINDOW_S, takeSeatAsk, type SeatAskRoute } from "../seat-ask-limit";
 
@@ -69,8 +71,8 @@ async function outcome(ask: ReturnType<typeof homeAsk>, ms: number): Promise<Htt
 }
 
 describe.skipIf(!DB)("takeSeatAsk - the mechanism", () => {
-  it("the declared routes are exactly the two doors, each with a limit (anti-vacuity: the sweeps below look at both)", () => {
-    expect([...SEAT_ASK_ROUTES].sort()).toEqual(["camera", "seat"]);
+  it("the declared routes are exactly the three doors, each with a limit (anti-vacuity: the sweeps below look at all of them)", () => {
+    expect([...SEAT_ASK_ROUTES].sort()).toEqual(["camera", "line", "seat"]);
     for (const route of SEAT_ASK_ROUTES) expect(SEAT_ASK_LIMIT[route], route).toBeGreaterThan(0);
   });
 
@@ -254,5 +256,56 @@ describe.skipIf(!DB)("the limits sit at the room's own worst case (derived, then
       admitted += 1;
     }
     expect(admitted, "anti-vacuity: every ask of both devices was replayed").toBe(both.length);
+  });
+});
+
+// Capacity test 22 (spec §5.7.9): the `line` door's limit comes from the poll FLOOR, and the client cannot go under it.
+describe.skipIf(!DB)("the line door (spec 5.7.9): the limit is derived from LINE_POLL_MIN_MS, and the client never polls faster than it", () => {
+  /** One device's claims over `spanMs` on a server answering `pollMs`: the first claim, then one per linePollDelayMs, and
+   *  `visible` extra claims at the given offsets (the page coming back into view claims at once). */
+  function lineClaimsOfOneDevice(pollMs: unknown, spanMs: number, visible: number[]): number[] {
+    const offsets = [0, ...visible];
+    for (let t = linePollDelayMs(pollMs); t < spanMs; t += linePollDelayMs(pollMs)) offsets.push(t);
+    return offsets.sort((a, b) => a - b);
+  }
+
+  it("the client clamps what the server sends: pollMs of 1, 0, -5, NaN, absent and 1,999 never poll faster than the floor; an honest 3,000 is kept", () => {
+    let checked = 0;
+    for (const hostile of [1, 0, -5, Number.NaN, undefined, null, "2", 1_999]) {
+      expect(linePollDelayMs(hostile), `server pollMs ${String(hostile)}`).toBeGreaterThanOrEqual(LINE_POLL_MIN_MS);
+      checked += 1;
+    }
+    // An absent, zero, negative or non-numeric pollMs counts as the near cadence; a number under the floor is the floor.
+    for (const absent of [0, -5, Number.NaN, undefined, null, "2"]) expect(linePollDelayMs(absent), String(absent)).toBe(LINE_POLL_MS);
+    expect(linePollDelayMs(1)).toBe(LINE_POLL_MIN_MS);
+    expect(linePollDelayMs(1_999)).toBe(LINE_POLL_MIN_MS);
+    expect(linePollDelayMs(LINE_POLL_MS)).toBe(LINE_POLL_MS);
+    expect(linePollDelayMs(7_000), "slower is the server's to ask for").toBe(7_000);
+    expect(checked, "cases checked").toBe(8);
+  });
+
+  it("the limit: DEVICES x (the polls at the floor over one window + the first claim + one on visibilitychange) - and the product's fastest schedule is never refused", async () => {
+    const perDevice = lineClaimsOfOneDevice(1, WINDOW_MS, [WINDOW_MS / 2]);
+    const both = Array.from({ length: DEVICES }, () => perDevice).flat().sort((a, b) => a - b);
+    expect(densest(both, WINDOW_MS), "the whole schedule sits inside ONE window").toBe(both.length);
+    expect(perDevice.length, "anti-vacuity: a real minute of polling").toBeGreaterThan(WINDOW_MS / LINE_POLL_MIN_MS);
+    expect(SEAT_ASK_LIMIT.line, "the limit is DEVICES x (a window of floor-cadence polls + 2)").toBe(DEVICES * (Math.ceil(WINDOW_MS / LINE_POLL_MIN_MS) + 2));
+    expect(SEAT_ASK_LIMIT.line, "and sits above the schedule it must carry").toBeGreaterThanOrEqual(both.length);
+    let admitted = 0;
+    for (const ms of both) {
+      expect(await outcome(homeAsk("line"), ms), `a line claim the room sends at +${ms} ms`).toBeUndefined();
+      admitted += 1;
+    }
+    expect(admitted, "anti-vacuity: every claim was replayed").toBe(both.length);
+    // Tight, not decoration: the limit's worth, then ONE more.
+    for (let i = both.length; i < SEAT_ASK_LIMIT.line; i += 1) expect(await outcome(homeAsk("line"), WINDOW_MS - 1)).toBeUndefined();
+    expect((await outcome(homeAsk("line"), WINDOW_MS - 1))?.status).toBe(429);
+  });
+
+  it("the line door is its own bucket: a full line bucket leaves the seat door open (the positive pair), and the seat limit still stands at 20", async () => {
+    for (let i = 0; i < SEAT_ASK_LIMIT.line; i += 1) await takeSeatAsk(homeAsk("line"), at(0));
+    expect((await outcome(homeAsk("line"), 1))?.status, "premise: the line bucket is full").toBe(429);
+    expect(await outcome(homeAsk("seat"), 1), "the seat door").toBeUndefined();
+    expect(SEAT_ASK_LIMIT.seat, "the owner's D21-fix-4 number is unchanged").toBe(20);
   });
 });

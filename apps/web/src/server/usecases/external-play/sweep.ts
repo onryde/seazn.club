@@ -49,6 +49,7 @@ import {
 import { EDITOR_ROLES } from "@/lib/types";
 import { anchorOfRow, boardRankSql } from "@/server/external-play/round-open";
 import { liveMintClaimSince, windowFor, type BoardAnchor } from "@/server/external-play/window";
+import { boardPhase } from "@/server/external-play/seat-line";
 import { getFixtureState, listEvents } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
@@ -187,6 +188,16 @@ const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>(["reconcile", "min
  *  the batch's start: before it nothing exists to play. */
 export function playableWindow(anchor: BoardAnchor): { opensAt: Date; deadline: Date } {
   return { opensAt: anchor.at, deadline: windowFor(anchor).deadline };
+}
+
+/** Do BOTH players' check-ins count for this board (spec §5.7.8)? The question the deadline asks once it is past: a board whose
+ *  two players came is owed its create, until the board's cap, whatever kept the game from being made. */
+async function bothCameFor(fixtureId: string, anchor: BoardAnchor): Promise<{ own: boolean; both: boolean }> {
+  const f = await loadOnlinePlayFixture(fixtureId);
+  if (!f) return { own: false, both: false };
+  const { home, away } = await loadSides(f);
+  const came = await checkIns(f, home, away, anchor);
+  return { own: false, both: came.home && came.away };
 }
 
 /** The anchor of a sweep candidate row that carries its round's stamp, the board's rank (`boardRankSql`) and the round's
@@ -391,12 +402,18 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   // board back to the table.
   const f = await loadOnlinePlayFixture(c.fixtureId);
   if (!f) return;
+  const { home, away } = await loadSides(f);
+  const came = await checkIns(f, home, away, c.anchor);
+  // Spec §5.7.8 - the check-in line's skip, with its `not_started` hold, under ONE cap: a board with a PROTECTED player on either
+  // side (the call budget was holding them in line; they arrived in time) is not judged until the board's cap, and nor is a
+  // board whose two players both came while its create is still owed (T9 can still recover a sent create there, so the
+  // unknown-create hold waits for the cap too). At the cap, and after, it is judged normally.
+  const held = await boardPhase(pass.now, { fixtureId: c.fixtureId, anchor: c.anchor }, { personId: null, facts: { own: false, both: came.home && came.away } });
+  if (held === "open") return;
   if (c.createSentAt !== null) {
     await holdUnknownCreate(pass, c, deadline);
     return;
   }
-  const { home, away } = await loadSides(f);
-  const came = await checkIns(f, home, away, c.anchor);
   if (came.home && came.away) {
     // Controller ruling C2 (spec §3.2; §9's deadlineReason): both players
     // came and no game was made — a create Lichess throttled to the end, or
@@ -519,7 +536,7 @@ async function holdUnknownCreate(pass: Pass, c: NoShowCandidate, deadline: Date)
     reason: "create_outcome_unknown",
     detail:
       `sweep: a create was sent at ${c.createSentAt!.toISOString()} and never recorded; ` +
-      `past the deadline (${deadline.toISOString()}) nothing can recover it`,
+      `past the deadline (${deadline.toISOString()}) and any hold the check-in line had on the board, nothing can recover it`,
   });
   if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
 }
@@ -610,9 +627,14 @@ export function throttledRetryAt(lastError: string): Date | null {
 }
 
 async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<SweepDeps["createGameIfReady"]>): Promise<void> {
-  // Only the deadline bounds it: a marker is written after the open, so a
-  // pass can never see one before the window opened.
-  if (pass.now.getTime() >= playableWindow(c.anchor).deadline.getTime()) return;
+  // Only the deadline bounds it: a marker is written after the open, so a pass can never see one before the window opened.
+  // Past the deadline the create is still owed until the board's cap iff BOTH players' check-ins count (spec §5.7.8).
+  const phase = await boardPhase(pass.now, { fixtureId: c.fixtureId, anchor: c.anchor }, {
+    personId: null,
+    bothOnly: true,
+    facts: () => bothCameFor(c.fixtureId, c.anchor),
+  });
+  if (phase !== "open") return;
   if (c.lastError !== null) {
     // 1. A throttle's marker: Lichess's hold is honoured.
     const retryAt = throttledRetryAt(c.lastError);
@@ -685,12 +707,16 @@ async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
   return rows.map((r) => ({ ...r, anchor: candidateAnchor(r) }));
 }
 
-function meetingIsDone(pass: Pass, c: TeardownCandidate): boolean {
+async function meetingIsDone(pass: Pass, c: TeardownCandidate): Promise<boolean> {
   if (c.bridgeStatus === "finished") return true;
   if (!isPlayableFixtureStatus(c.fixtureStatus)) return true;
   if (c.anchor === null) return false;
   const { deadline } = playableWindow(c.anchor);
-  return pass.now.getTime() >= deadline.getTime() && !gameMayBeOnFile(pass, c);
+  if (pass.now.getTime() < deadline.getTime() || gameMayBeOnFile(pass, c)) return false;
+  // Spec §5.7.8: "nobody played" is not true of a board the check-in line (or a create still owed) is holding open past its
+  // deadline: those players' rooms stay up until the board's cap.
+  const held = await boardPhase(pass.now, { fixtureId: c.fixtureId, anchor: c.anchor }, { personId: null, facts: () => bothCameFor(c.fixtureId, c.anchor!) });
+  return held !== "open";
 }
 
 async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<SweepDeps["endMeeting"]>): Promise<void> {
@@ -707,7 +733,7 @@ async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<Sweep
     });
     return;
   }
-  if (!meetingIsDone(pass, c)) return;
+  if (!(await meetingIsDone(pass, c))) return;
   await end(c.meetingId);
   pass.report.meetingsEnded++;
 }
@@ -831,6 +857,9 @@ type ReconcileCandidate = {
   /** The board's anchor; null when its round was never opened. */
   anchor: BoardAnchor | null;
   clock: BoardgameClockInput | null;
+  /** When the game was created (the bridge row's `updated_at`, stamped by the ready write): the base of a never-started board's
+   *  expected end when that is later than the deadline (spec §5.7.8, m8). */
+  gameCreatedAt: Date | null;
 };
 
 async function reconcileCandidates(pass: Pass): Promise<ReconcileCandidate[]> {
@@ -838,7 +867,7 @@ async function reconcileCandidates(pass: Pass): Promise<ReconcileCandidate[]> {
     select ep.fixture_id as "fixtureId", ep.status as "bridgeStatus", ep.challenge_id as "gameId",
            ep.started_at as "startedAt", date_trunc('milliseconds', ep.last_polled_at) as "lastPolledAt",
            ep.sweep_no_truth_reads as "noTruthReads", o.opened_at as "openedAt", o.staggered,
-           ${boardRankSql(sql)} as rank, d.config->'clock' as clock
+           ${boardRankSql(sql)} as rank, d.config->'clock' as clock, ep.updated_at as "gameCreatedAt"
       from fixture_external_play ep
       join fixtures f on f.id = ep.fixture_id
       join divisions d on d.id = f.division_id
@@ -876,10 +905,15 @@ function expectedEnd(c: ReconcileCandidate): Date | null {
     log.error({ fixtureId: c.fixtureId }, "external-play sweep: a live game on file has no started_at");
     return null;
   }
-  // Never started on our side. T9 creates no game after the round's deadline
-  // and Lichess aborts one whose first move does not come, so the deadline is
-  // its base; any read that brings the truth resets the count regardless.
-  return c.anchor === null ? null : expectedEndAt(playableWindow(c.anchor).deadline, tc);
+  // Never started on our side. T9 creates no game after the board's cap (spec §5.7.8: the deadline, or - both players having come
+  // while the check-in line held the create back - up to LINE_DEADLINE_GRACE_MS past it) and Lichess aborts one whose first move
+  // does not come, so the base is the LATER of the board's deadline and the game's creation, or a game created late would be
+  // judged overdue the moment it exists. The creation is the bridge row's `updated_at`, which the ready write stamps on the dequeue's clock;
+  // a later rewrite of the row only moves it later (a longer wait, never a false overdue). Any read that brings the truth resets the count regardless.
+  if (c.anchor === null) return null;
+  const deadline = playableWindow(c.anchor).deadline;
+  const base = c.gameCreatedAt !== null && c.gameCreatedAt.getTime() > deadline.getTime() ? c.gameCreatedAt : deadline;
+  return expectedEndAt(base, tc);
 }
 
 async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullable<SweepDeps["reconcile"]>): Promise<void> {

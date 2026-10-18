@@ -54,15 +54,22 @@ type ReaderId = (typeof READERS)[number];
 
 /** Call sites of the consumers, per production file (under `src`). `readers` names who they serve. */
 const SITES: readonly { file: string; fn: Consumer; times: number; readers: readonly ReaderId[] }[] = [
-  { file: "server/usecases/external-play/preflight.ts", fn: "roomPhase", times: 1, readers: ["seat"] },
-  { file: "server/usecases/external-play/room.ts", fn: "checkInCounts", times: 2, readers: ["checkin-counts"] },
+  // The check-in line (spec §5.7.8) took the seat's, the create's and the dequeue's question "is this board's window open?" and
+  // mint-retry's deadline test into ONE reader, `boardPhase`: the window's own answer, held open past the deadline (until the
+  // cap) for a protected player. Its two call sites into window.ts are the readers' now.
+  { file: "server/external-play/seat-line.ts", fn: "roomPhase", times: 1, readers: ["seat", "create", "dequeue", "mint-retry"] },
+  { file: "server/external-play/seat-line.ts", fn: "windowFor", times: 1, readers: ["seat", "create", "dequeue", "mint-retry"] },
+  // The counted check-ins moved out of room.ts into their own module (the sweep's no-show and the create read them too).
+  { file: "server/usecases/external-play/check-ins.ts", fn: "checkInCounts", times: 2, readers: ["checkin-counts"] },
   { file: "server/usecases/external-play/room.ts", fn: "roomPhaseWire", times: 2, readers: ["compose", "claim"] },
   { file: "server/usecases/external-play/room.ts", fn: "windowWire", times: 1, readers: ["compose"] },
-  { file: "server/usecases/external-play/create-game.ts", fn: "roomPhase", times: 2, readers: ["create", "dequeue"] },
-  { file: "server/usecases/external-play/create-game.ts", fn: "windowFor", times: 1, readers: ["expires-at"] },
-  // The one definition; its four consumers below are the sweep's readers.
+  // claimRoomSeat hands the check-in stamp its board's window, so a counted check-in is never re-stamped out of it (test 28).
+  { file: "server/usecases/external-play/room.ts", fn: "windowFor", times: 1, readers: ["claim"] },
+  // The ready row's `expires_at`: the deadline, or the cap when the game was created past the deadline (twice in one expression).
+  { file: "server/usecases/external-play/create-game.ts", fn: "windowFor", times: 2, readers: ["expires-at"] },
+  // The one definition; its three consumers below are the sweep's readers (mint-retry now asks `boardPhase`).
   { file: "server/usecases/external-play/sweep.ts", fn: "windowFor", times: 1, readers: ["sweep-window"] },
-  { file: "server/usecases/external-play/sweep.ts", fn: "playableWindow", times: 4, readers: ["no-show", "mint-retry", "teardown", "expected-end"] },
+  { file: "server/usecases/external-play/sweep.ts", fn: "playableWindow", times: 3, readers: ["no-show", "teardown", "expected-end"] },
   { file: "server/usecases/external-play/invite.ts", fn: "windowFor", times: 1, readers: ["invite"] },
   { file: "server/usecases/external-play/invite.ts", fn: "roomPhase", times: 1, readers: ["resend"] },
   { file: "server/usecases/external-play/open-round.ts", fn: "roomPhase", times: 1, readers: ["reinvite"] },

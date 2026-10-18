@@ -29,6 +29,8 @@ export type SeatRefusal =
   | "not_a_player"
   | "round_not_open"
   | "checkin_not_open"
+  // Spec §5.7: the call budget is holding this claim in the check-in line; the answer carries `line`.
+  | "queued"
   | "fixture_not_playable"
   | "video_unavailable"
   | "lichess_link_required"
@@ -93,6 +95,51 @@ export const CAMERA_EVIDENCE_MAX_POLLS = (() => {
  *  (seat-ask-limit.ts) must sit above what this screen legitimately sends, and a test derives it from these. */
 export const SEAT_RETRY_MS = 1_500;
 export const SEAT_RETRIES = 3;
+
+// ─── The check-in line (spec §5.7): what the server and the client must agree on ────────────────────────────────────────
+// The client's declarations live here, beside SEAT_RETRY_MS and the camera back-off, because the server derives its liveness
+// grace (LINE_RELEASE_GRACE_MS) and its dead-camera bound (ADMIT_HOLD_MS) from them, and a test derives both floors from these
+// and not from numbers typed twice.
+
+/** ASSUMPTION, not a measurement (a real-device measurement is owed, spec §13): the longest a person takes to answer the
+ *  browser's camera prompt before the line lets their place go. */
+export const CAMERA_PROMPT_ALLOWANCE_MS = 20_000;
+/** ASSUMPTION, not a measurement: the SDK's join on a slow phone. */
+export const CAMERA_JOIN_ALLOWANCE_MS = 10_000;
+/** From a mint's answer to the read that follows it: the token arrives and `useOwnCamera` starts the join, a person answers
+ *  the prompt, the SDK joins, and `room-shell.tsx` claims again once the camera is live, SEAT_RETRY_MS later. */
+export const MINT_TO_READ_MS = CAMERA_PROMPT_ALLOWANCE_MS + CAMERA_JOIN_ALLOWANCE_MS + SEAT_RETRY_MS;
+
+/** How often a queued claim is repeated: every LINE_POLL_MS for the first LINE_NEAR_POSITIONS places, every LINE_POLL_SLOW_MS
+ *  behind them, and NEVER faster than LINE_POLL_MIN_MS (the server clamps what it sends, and the client clamps again). */
+export const LINE_POLL_MS = 3_000;
+export const LINE_POLL_SLOW_MS = 5_000;
+export const LINE_NEAR_POSITIONS = 5;
+export const LINE_POLL_MIN_MS = 2_000;
+/** A stay whose last gate event was a HOLD and whose client has not claimed for this long is not in line: four missed slow polls.
+ *  Declared here because the card tells the player the same number ("if you leave it for more than 20 seconds…"); the server
+ *  (seat-line.ts) re-exports it, so the sentence and the rule cannot drift. */
+export const LINE_ABANDON_AFTER_MS = 20_000;
+/** The window every per-seat ask limit (seat-ask-limit.ts) is counted in, and the longest a 429's `Retry-After` can say: the
+ *  room's seat-wait countdown (seat-wait.ts) clamps to it. */
+export const SEAT_ASK_WINDOW_S = 60;
+
+/** The longest from a stay's first read to its verdict: the server waits CAMERA_EVIDENCE_DEADLINE_MS for a camera it has seen
+ *  join, and the verdict needs a read after it, up to one back-off step late. Added to the estimate in `mayTimeOut`, because
+ *  the estimate ends at ADMISSION and the player is not seated until the camera has come on. */
+export const LINE_SERVE_TAIL_S = (CAMERA_EVIDENCE_DEADLINE_MS + Math.max(...CAMERA_EVIDENCE_BACKOFF_MS)) / 1_000;
+
+/** A `queued` answer (spec §5.7.3): the player's place in the line. `left` exists ONLY here, inside `line`, on the claim that
+ *  starts a replacement stay: `"silent"` after a lapse of silence, `"camera"` after an admitted hold ran out, `null` for a
+ *  stay that was never in line. */
+export type LineWire = {
+  position: number;
+  etaS: number;
+  pollMs: number;
+  closesAt: string;
+  mayTimeOut: boolean;
+  left: "silent" | "camera" | null;
+};
 
 export type RoomGame = {
   gameId: string;

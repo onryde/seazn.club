@@ -28,12 +28,16 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { CAMERA_FAULT_PING_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { takeSeatAsk } from "@/server/external-play/seat-ask-limit";
+import { boardPhase, endStay, ownStayArrival, ownStayInLine, settleDeferral } from "@/server/external-play/seat-line";
 import { log } from "@/server/logger";
 import { routes } from "@/lib/routes";
 import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlayLobby } from "@/lib/realtime";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { boardOpenFor, roundOpenFor, type BoardOpen } from "@/server/external-play/round-open";
-import { checkInCounts, type BoardAnchor } from "@/server/external-play/window";
+import { windowFor, type BoardAnchor } from "@/server/external-play/window";
+import { countedCheckIns as checkIns } from "./check-ins";
+// T13's no-show sweep judges "who came" by exactly this reading.
+export { checkIns };
 import { isSeatHold } from "@/server/external-play/types";
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, GUARD_FAULT_MAX_STAMPS, hasOpenGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
@@ -54,6 +58,7 @@ import {
   ROOM_BEING_REPAIRED,
   type Colour,
   type RoomGame,
+  type LineWire,
   type RoomSnapshot,
   type SeatRefusal,
 } from "@/components/public-site/match-room/room-snapshot";
@@ -73,7 +78,8 @@ import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
 import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } from "./play";
 import { fenAfter } from "@/server/external-play/fen";
-import { cameraTokenForSeat, isPlayableFixtureStatus, seatPlayer, storedPlayerParticipant, type CameraToken, type SeatResult } from "./preflight";
+import { cameraTokenForSeat, isPlayableFixtureStatus, seatPlayer, storedPlayerParticipant, type CameraToken, type PreflightDeps, type SeatResult } from "./preflight";
+import { currentBudgetKey } from "@/server/external-play/video/realtimekit";
 import { lichessGrantDowngraded } from "../external-accounts";
 import { RECONCILED_WHILE_HELD, reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
@@ -94,6 +100,8 @@ export type RoomDeps = {
   reconcile?: (fixtureId: string, trigger: "game_end" | "clock_zero") => Promise<unknown>;
   /** P10: Lichess's word on a user's grant (external-accounts.ts `lichessGrantDowngraded`). */
   grantDowngraded?: (userId: string | null) => Promise<boolean>;
+  /** The check-in line's two test seams (seat-line.ts): the clock of its decisions, and a hook inside the gate's transaction. */
+  line?: PreflightDeps["line"];
 };
 
 /** A seat answer as the CLIENT receives it: the caller's own participant
@@ -102,7 +110,9 @@ export type SeatWire =
   // `cameraRetry`: an OPTIONAL camera's token was held back by the platform's call budget - ask for it again at
   // POST …/room/camera (D21-fix-3). Present on that seat and no other: a tokenless seat without it is final.
   | { seated: true; participant: ParticipantToken | null; cameraRetry?: true }
-  | { seated: false; reason: SeatRefusal; participant: ParticipantToken | null };
+  | { seated: false; reason: SeatRefusal; participant: ParticipantToken | null }
+  // Spec §5.7.3: the call budget is holding the claim in the check-in line. No token (the room keeps the one it holds).
+  | { seated: false; reason: "queued"; participant: null; line: LineWire };
 
 export type RoomClaim = {
   snapshot: RoomSnapshot;
@@ -215,33 +225,6 @@ async function boardBeingRepaired(identity: RoomIdentity, fixtureId: string): Pr
   return row?.entrant === true;
 }
 
-/** Check-in state for both sides, scoped by fixture_id AND the two resolved
- *  person ids, judged against the open's window. Exported for T13's no-show
- *  sweep, which must judge "who came" by exactly this reading. */
-export async function checkIns(
-  f: OnlinePlayFixture,
-  home: SidePlayer,
-  away: SidePlayer,
-  anchor: BoardAnchor | null,
-): Promise<{ home: boolean; away: boolean }> {
-  // An unopened round has no window, so no check-in can count toward it —
-  // and one stamped during a PREVIOUS round's window must not either (D12).
-  if (anchor === null) return { home: false, away: false };
-  const ids = [home.personId, away.personId].filter((p): p is string => p !== null);
-  const rows =
-    ids.length === 0
-      ? []
-      : await sql<{ person_id: string; checked_in_at: Date | null }[]>`
-          select person_id, checked_in_at from fixture_availability
-           where fixture_id = ${f.fixtureId}
-             and person_id in ${sql(ids)}`;
-  const at = (p: string | null) => (p === null ? null : (rows.find((r) => r.person_id === p)?.checked_in_at ?? null));
-  return {
-    home: checkInCounts(at(home.personId), anchor),
-    away: checkInCounts(at(away.personId), anchor),
-  };
-}
-
 /** Display and lifecycle facts the guard's snapshot does not carry. */
 type RoomFacts = {
   divisionName: string;
@@ -313,13 +296,33 @@ async function opponentCameraReport(
   return row.state === "live" ? "live" : row.state === "off" ? "off" : "unknown";
 }
 
+/** The room's phase for ONE viewer (spec §5.7.8): the window's own, held open by `boardPhase` for a protected player. */
+async function viewerPhase(a: {
+  fixtureId: string;
+  anchor: BoardAnchor | null;
+  now: Date;
+  player: SidePlayer;
+  ci: { home: boolean; away: boolean };
+}) {
+  const base = roomPhaseWire({ now: a.now, anchor: a.anchor });
+  if (a.anchor === null || base !== "closed") return base;
+  return boardPhase(
+    a.now,
+    { fixtureId: a.fixtureId, anchor: a.anchor },
+    { personId: a.player.personId, facts: { own: a.ci[a.player.side], both: a.ci.home && a.ci.away } },
+  );
+}
+
 async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnapshot> {
   const { f, player, home, away, open } = r;
   const anchor = open?.anchor ?? null;
   const bridge = effectiveBridge(f);
   const facts = await roomFacts(f.fixtureId);
-  const phase = roomPhaseWire({ now, anchor });
   const ci = await checkIns(f, home, away, anchor);
+  // Spec §5.7.8: the phase is PER VIEWER - past the deadline and before the board's cap it is still `open` for a player the
+  // call budget is holding in the check-in line (or who is seated while the board's create is owed), and `closed` for anyone
+  // else. Without it a queued player would see the closed card.
+  const phase = await viewerPhase({ fixtureId: f.fixtureId, anchor, now, player, ci });
   const opponent = player.side === "home" ? away : home;
 
   // T10 review carry: once a game exists its RECORDED colours are the truth;
@@ -520,6 +523,7 @@ function seatWire(seat: SeatResult): SeatWire {
       ? { seated: true, participant: seat.participant, cameraRetry: true }
       : { seated: true, participant: seat.participant };
   }
+  if (seat.reason === "queued") return { seated: false, reason: "queued", participant: null, line: seat.line };
   // The camera refusals, and only they, carry the caller's own token (preflight CameraRefusal).
   if ("participant" in seat) return { seated: false, reason: seat.reason, participant: seat.participant };
   return { seated: false, reason: seat.reason, participant: null };
@@ -546,7 +550,12 @@ export async function claimRoomSeat(
   let r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   // D21-fix-4 (review I2): this player's ask, counted - AFTER identity (a stranger is the 404 and leaves no row) and BEFORE
   // anything that can reach the vendor or write. Past the limit: 429, and nothing below runs.
-  await takeSeatAsk({ fixtureId, personId: r.player.personId, route: "seat" }, { at: deps.now });
+  // Spec §5.7.3, "Which door counts": a claim from a player whose OWN stay is in the check-in line counts under `line`, with its
+  // own limit, so a queued player's polls cannot eat the asks a check-in attempt needs; every other claim counts under `seat`.
+  // One primary-key read of the stay, through `lineLiveSql`. When the gate then lets a `line` claim spend, seatPlayer counts a
+  // `seat` ask too (`viaLine`), so nothing that can reach the vendor escapes the per-seat bound.
+  const viaLine = await ownStayInLine({ fixtureId, personId: r.player.personId, at: deps.line?.at });
+  await takeSeatAsk({ fixtureId, personId: r.player.personId, route: viaLine ? "line" : "seat" }, { at: deps.now });
   await resetStaleBridge(r.f);
   // Every read of the board in the seat call tells a re-pair (m2): an Unpair can land between any two of them.
   r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
@@ -559,7 +568,16 @@ export async function claimRoomSeat(
     if (!offered) return { snapshot: await compose(r, now, deps), seat: null, create: null };
   }
 
-  const seat = await (deps.seat ?? seatPlayer)({ fixtureId, personId: r.player.personId, heldParticipantId: ask.heldParticipantId ?? null }, { now });
+  let seat: SeatResult = await (deps.seat ?? seatPlayer)(
+    { fixtureId, personId: r.player.personId, heldParticipantId: ask.heldParticipantId ?? null, ...(viaLine ? { viaLine } : {}) },
+    { now, ...(deps.line ? { line: deps.line } : {}) },
+  );
+  // Spec §5.7.3 step 4 - a deferral MID-CLAIM (exempt traffic took the tokens an admitted stay was funded with, or an idle-line
+  // claim met a dry bucket): a stay never admitted becomes a waiting stay and is answered `queued`; an ADMITTED one keeps its
+  // admission and is answered `camera_starting`, with no number to show.
+  if (!seat.seated && seat.reason === "camera_starting" && "budgetDeferred" in seat && seat.budgetDeferred === true) {
+    seat = await queueDeferred(r, fixtureId, seat, deps);
+  }
   // Seated again (a reload's way back after a guard fault): our gap is over,
   // even if the page that opened it never said so (I-1).
   if (seat.seated && (await closeGuardFault(sql, { fixtureId, side: r.player.side, personId: r.player.personId, at: now }))) {
@@ -567,11 +585,30 @@ export async function claimRoomSeat(
   }
   let create: CreateOutcome | null = null;
   const anchor = r.open?.anchor ?? null;
-  if (seat.seated && !gameOnFile && roomPhaseWire({ now, anchor }) === "open") {
-    await stampFixtureCheckIn(r.player.personId, fixtureId, r.f.orgId);
-    await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
-    const ci = await checkIns(r.f, r.home, r.away, anchor);
-    if (ci.home && ci.away) create = await (deps.create ?? ((id: string) => createGameIfReady(id, { now })))(fixtureId);
+  if (seat.seated && !gameOnFile && anchor !== null) {
+    // Spec §5.7.8: inside the window, or - for a player the check-in line was holding - past the deadline and before the
+    // board's cap. The stamp is dated at the ARRIVAL for the second (inside the window by the protection's own condition) and
+    // never moves a COUNTED check-in out of it (the window is handed to the stamp, which keeps one that lies inside).
+    const base = roomPhaseWire({ now, anchor });
+    const open =
+      base === "open" ||
+      (base === "closed" &&
+        (await viewerPhase({ fixtureId, anchor, now, player: r.player, ci: await checkIns(r.f, r.home, r.away, anchor) })) === "open");
+    if (open) {
+      const arrival = base === "closed" ? await ownStayArrival({ fixtureId, personId: r.player.personId }) : null;
+      const w = windowFor(anchor);
+      // `deps.now` is the seam of every clock in this call (production passes nothing, and the stamp is the database's now()).
+      await stampFixtureCheckIn(r.player.personId, fixtureId, r.f.orgId, { at: arrival ?? deps.now, window: { opensAt: w.opensAt, deadline: w.deadline } });
+      await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
+      const ci = await checkIns(r.f, r.home, r.away, anchor);
+      if (ci.home && ci.away) create = await (deps.create ?? ((id: string) => createGameIfReady(id, { now })))(fixtureId);
+    }
+  }
+  // Spec §5.7.3 step 5 - service ends after the WHOLE claim, create included: a seat serves the stay; the two answers no wait
+  // can fix end it. Every other answer keeps it in line (and funded): `camera_required` is the NORMAL answer to a first claim.
+  if (seat.seated) await endStay({ fixtureId, personId: r.player.personId, how: "served", at: deps.line?.at });
+  else if (seat.reason === "camera_blocked" || seat.reason === "video_unavailable") {
+    await endStay({ fixtureId, personId: r.player.personId, how: "ended", at: deps.line?.at });
   }
   const fresh = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   const snapshot = await compose(fresh, now, deps);
@@ -579,6 +616,28 @@ export async function claimRoomSeat(
   // word on it, whatever the room's own read raced to (review m3).
   const refusedOff = create !== null && !create.created && create.reason === "online_chess_disabled";
   return { snapshot: refusedOff ? { ...snapshot, onlineChessOff: true } : snapshot, seat: seatWire(seat), create };
+}
+
+/** The deferral of step 4 (see claimRoomSeat): settle the stay and say what the room is told. */
+async function queueDeferred(r: Resolved, fixtureId: string, seat: SeatResult, deps: RoomDeps): Promise<SeatResult> {
+  const budgetKey = currentBudgetKey();
+  const anchor = r.open?.anchor ?? null;
+  // A deferral exists only where a vendor is configured and the round is open; either missing is not a line to join.
+  if (budgetKey === null || anchor === null) return seat;
+  const ci = await checkIns(r.f, r.home, r.away, anchor);
+  const other = r.player.side === "home" ? r.away : r.home;
+  const answer = await settleDeferral({
+    fixtureId,
+    personId: r.player.personId,
+    otherPersonId: other.personId,
+    otherCounted: ci[other.side],
+    budgetKey,
+    anchor,
+    at: deps.line?.at,
+  });
+  return answer.kind === "queued"
+    ? { seated: false, reason: "queued", participant: null, line: answer.line }
+    : { seated: false, reason: "camera_starting", participant: null };
 }
 
 /** The camera door's answer as the CLIENT receives it (D21-fix-3): the caller's own token, if there is one yet, and whether

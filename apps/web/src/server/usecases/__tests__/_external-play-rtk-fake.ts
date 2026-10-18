@@ -11,6 +11,7 @@ import {
   refreshParticipantToken,
   seatCameraEvidence,
 } from "@/server/external-play/video/realtimekit";
+import type { CallBudget } from "../../external-play/video/budget";
 import type { PreflightDeps, SeatResult } from "../external-play/preflight";
 
 /** The instant a fake peer "joined a second before": the clock the preflight suite seats at. */
@@ -55,7 +56,7 @@ export function json(status: number, body: unknown): Response {
  *  2026-10-09 (rtk-token-regen.log): two tabs on one participant are one
  *  session row carrying both peers, and a regenerated token does not
  *  invalidate the earlier one. Nothing here touches the network. */
-export function fakeRealtimeKit() {
+export function fakeRealtimeKit(opts: { budget?: CallBudget } = {}) {
   /** HTTP requests, `METHOD /path` relative to the app. */
   const http: string[] = [];
   /** Adapter functions seatPlayer called, in order. */
@@ -147,19 +148,19 @@ export function fakeRealtimeKit() {
   const video: NonNullable<PreflightDeps["video"]> = {
     ensureMeeting: (fixtureId, side) => {
       adapter.push("ensureMeeting");
-      return ensureMeeting(fixtureId, side, { fetch });
+      return ensureMeeting(fixtureId, side, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
     },
     addParticipant: (a) => {
       adapter.push(`addParticipant:${a.preset}`);
-      return addParticipant(a, { fetch });
+      return addParticipant(a, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
     },
     seatCameraEvidence: (a) => {
       adapter.push("seatCameraEvidence");
-      return seatCameraEvidence(a, { fetch });
+      return seatCameraEvidence(a, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
     },
     refreshParticipantToken: (a) => {
       adapter.push("refreshParticipantToken");
-      return refreshParticipantToken(a, { fetch });
+      return refreshParticipantToken(a, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
     },
   };
 

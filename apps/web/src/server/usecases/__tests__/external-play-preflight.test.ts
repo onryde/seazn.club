@@ -44,6 +44,7 @@ import { withdrawEntrantCascade } from "../withdrawal";
 import { PLAY_SCOPES, unlinkLichess } from "../external-accounts";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 import { RUN, RTK_ENV, configureRealtimeKit, fakeRealtimeKit, json, type FailRule } from "./_external-play-rtk-fake";
+import { clearBucket, putStay, stubBucket } from "./_external-play-line";
 
 /** The round is opened ten minutes before the scheduled time in these
  *  fixtures, so `now = NOW` sits inside the window (D12: the window hangs
@@ -1075,6 +1076,9 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
       "checkin_not_open",
       // Fix round 2: the play grant, checked before any token is minted.
       "lichess_link_required", "lichess_reconsent_required",
+      // Spec §5.7: the call budget is holding the claim in the check-in line. It carries `participant: null` - a key with no
+      // token - and `line`; the room keeps the token it already holds, so the answer hands out none.
+      "queued",
     ]);
     expect(
       [...SEAT_REFUSAL_REASONS].sort(),
@@ -1103,6 +1107,20 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
       const s = await req();
       await sql`update fixtures set status = 'decided' where id = ${s.fixtureId}`;
       seen.set("fixture_not_playable", await claim(s, "home", fakeRealtimeKit()));
+    }
+    {
+      // `queued`: an earlier arrival is WAITING on this claimant's bucket (a bucket and a line of its own, so no other test is
+      // in it), and the claimant joins the tail: refused before any vendor call.
+      const s = await req();
+      const ahead = await req();
+      const key = stubBucket();
+      await putStay({ fixtureId: ahead.fixtureId, personId: ahead.home.personId, budgetKey: key, firstClaimAt: new Date(Date.now() - 5_000), seenAt: new Date(), queuedAt: new Date(Date.now() - 5_000) });
+      const rtk = fakeRealtimeKit();
+      seen.set("queued", await claim(s, "home", rtk));
+      expect(rtk.http, "queued spends nothing: the vendor heard nothing").toEqual([]);
+      await clearBucket(key);
+      vi.stubEnv("REALTIMEKIT_BASE_URL", undefined);
+      vi.stubEnv("REALTIMEKIT_METER_ANY_BASE", undefined);
     }
     {
       const s = await req();
@@ -1154,7 +1172,9 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     let checked = 0;
     for (const [reason, got] of seen) {
       expect(!got.seated && got.reason, `premise: the ${reason} case produced ${reason}`).toBe(reason);
-      expect("participant" in got, `${reason}: token present?`).toBe(TOKEN_BEARING.has(reason));
+      // `queued` carries the key with a null in it (no token), so it is judged by the token itself.
+      if (reason === "queued") expect(!got.seated && "participant" in got ? got.participant : "absent", "queued: no token").toBeNull();
+      else expect("participant" in got, `${reason}: token present?`).toBe(TOKEN_BEARING.has(reason));
       checked += 1;
     }
     await expectOwnToken(camS, "home", seen.get("camera_required")!);
