@@ -239,8 +239,10 @@ describe.skipIf(!HAS_DB)("R2004: composed provisioning — two inputs, the outpu
       const { sessionId } = await r.start("composed");
       const token = r.runner.created[0]!.jobToken;
       await expect(sessionFactsForJob(sessionId, token, r.deps), `${missing}: premise — the facts serve before the wipe`).resolves.toMatchObject({ mode: "composed" });
-      if (missing === "programme") await sql`update fixture_stream_inputs set ingest_rtmps_url = null, ingest_rtmps_key_enc = null where role = 'programme' and session_id = ${sessionId}`;
-      else await sql`update fixture_stream_inputs set playback_srt_url = null, playback_srt_key_enc = null where role = 'camera' and session_id = ${sessionId}`;
+      // The bare url alone: either half missing is a missing credential, and the sealed half is a stream column only
+      // server/relay/** may name (enc-boundary r3).
+      if (missing === "programme") await sql`update fixture_stream_inputs set ingest_rtmps_url = null where role = 'programme' and session_id = ${sessionId}`;
+      else await sql`update fixture_stream_inputs set playback_srt_url = null where role = 'camera' and session_id = ${sessionId}`;
       await expect(sessionFactsForJob(sessionId, token, r.deps), missing).rejects.toThrow(message);
       checked++;
     }
