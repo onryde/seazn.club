@@ -14,6 +14,7 @@ import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { venueTzForDivision } from "@/server/venue-tz";
 import { foldFrom, loadFoldInputs, type FoldedFixture } from "@/server/engine-db/fold";
+import { HttpError } from "@/lib/errors";
 import { publicFixture } from "@/server/usecases/public";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentDerived, RecentEvent, RecentPerson } from "@/lib/overlay-recent-types";
@@ -100,29 +101,34 @@ const EMPTY_CRICKET: OverlayCricketBundleIds = {
  *
  *  The key is `overlay-fold-v4`: the VALUE's shape changed (highlights on the
  *  cricket bundle), and a live entry written under v3 would deserialise wrong. */
-function cachedFold(fixtureId: string, lastSeq: number): () => Promise<CachedOverlay> {
-  return unstable_cache(
-    async () =>
-      sql.begin(async (tx) => {
-        const inputs = await loadFoldInputs(tx, fixtureId);
-        if (inputs === null) return { folded: null, derived: {}, cricket: EMPTY_CRICKET };
-        const folded = foldFrom(fixtureId, inputs);
-        const { bySeq } = replayDerived({
-          sportKey: inputs.sportKey,
-          module: inputs.module,
-          cfg: inputs.cfg,
-          lineups: inputs.lineups,
-          active: folded.active,
-        });
-        return {
-          folded,
-          derived: Object.fromEntries([...bySeq].map(([seq, d]) => [String(seq), d])),
-          cricket: overlayCricketBundleIds(inputs, folded.active),
-        };
-      }) as Promise<CachedOverlay>,
-    ["overlay-fold-v4", fixtureId, String(lastSeq)],
-    { revalidate: 300 },
-  );
+/** R2005 change 1: the RELAY read (a composed session's compositor, `relay-access.ts`) folds under its own key,
+ *  `overlay-fold-relay-v4`, so the bypass read never shares a cache entry with the public read — even where the VALUE
+ *  would be the same, one namespace per door means no reasoning about which entries a public read may be handed. Two
+ *  literal keys at two call sites, so the cache-site ledger (`public-not-found-uncached.test.ts`) classifies each. */
+type FoldNamespace = "public" | "relay";
+
+function cachedFold(fixtureId: string, lastSeq: number, ns: FoldNamespace): () => Promise<CachedOverlay> {
+  const fold = async () =>
+    sql.begin(async (tx) => {
+      const inputs = await loadFoldInputs(tx, fixtureId);
+      if (inputs === null) return { folded: null, derived: {}, cricket: EMPTY_CRICKET };
+      const folded = foldFrom(fixtureId, inputs);
+      const { bySeq } = replayDerived({
+        sportKey: inputs.sportKey,
+        module: inputs.module,
+        cfg: inputs.cfg,
+        lineups: inputs.lineups,
+        active: folded.active,
+      });
+      return {
+        folded,
+        derived: Object.fromEntries([...bySeq].map(([seq, d]) => [String(seq), d])),
+        cricket: overlayCricketBundleIds(inputs, folded.active),
+      };
+    }) as Promise<CachedOverlay>;
+  return ns === "relay"
+    ? unstable_cache(fold, ["overlay-fold-relay-v4", fixtureId, String(lastSeq)], { revalidate: 300 })
+    : unstable_cache(fold, ["overlay-fold-v4", fixtureId, String(lastSeq)], { revalidate: 300 });
 }
 
 /**
@@ -143,9 +149,9 @@ function cachedFold(fixtureId: string, lastSeq: number): () => Promise<CachedOve
  * scorebug keeps showing the score and simply loses the clock / innings block.
  * A wrong clock on air is worse than no clock; a blank overlay is worse still.
  */
-async function foldOrNull(fixtureId: string, lastSeq: number): Promise<CachedOverlay> {
+async function foldOrNull(fixtureId: string, lastSeq: number, ns: FoldNamespace): Promise<CachedOverlay> {
   try {
-    return await cachedFold(fixtureId, lastSeq)();
+    return await cachedFold(fixtureId, lastSeq, ns)();
   } catch (err) {
     log.error({ err, fixtureId, lastSeq }, "overlay: fold failed, serving the row without it");
     return { folded: null, derived: {}, cricket: EMPTY_CRICKET };
@@ -232,13 +238,32 @@ async function overlayPersonOf(row: PublicRow, bundle: CachedOverlay): Promise<P
   }
 }
 
-export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiveData> {
-  const row = (await publicFixture(fixtureId)) as PublicRow;
+/** R2005 change 1 — the RELAY read of the row `publicFixture` serves: the same columns, off the BASE tables (fixtures +
+ *  match_states, the two `public_fixtures_v` reads them from), NOT visibility-filtered and UNCACHED. Call ONLY behind
+ *  `relayPageAccess`. Unlike the view it publishes the row of a division still in setup unmasked — no column read here
+ *  is one the view masks for setup (`scheduled_at`, `venue`, `court_label`, `stream_url` are not read). */
+async function relayFixtureRow(fixtureId: string): Promise<PublicRow> {
+  const [row] = await sql<PublicRow[]>`
+    select f.id, f.division_id, f.status, f.outcome, m.summary, m.last_seq, f.home_entrant_id, f.away_entrant_id
+    from fixtures f left join match_states m on m.fixture_id = f.id
+    where f.id = ${fixtureId}`;
+  if (!row) throw new HttpError(404, "fixture not found");
+  return row;
+}
+
+export interface OverlayLoadOptions {
+  /** The caller passed `relayPageAccess`: read the row off the base tables and fold under the relay namespace. */
+  relay?: boolean;
+}
+
+export async function loadOverlayLiveData(fixtureId: string, opts: OverlayLoadOptions = {}): Promise<OverlayLiveData> {
+  const ns: FoldNamespace = opts.relay === true ? "relay" : "public";
+  const row = ns === "relay" ? await relayFixtureRow(fixtureId) : ((await publicFixture(fixtureId)) as PublicRow);
   const venueTz = await venueTzForDivision(row.division_id);
   const bundle: CachedOverlay =
     row.last_seq === null
       ? { folded: null, derived: {}, cricket: EMPTY_CRICKET }
-      : await foldOrNull(fixtureId, row.last_seq);
+      : await foldOrNull(fixtureId, row.last_seq, ns);
   const personOf = await overlayPersonOf(row, bundle);
   const recent = recentOrEmpty(row, bundle, personOf);
   const cricket = cricketBundleNamed(bundle, personOf);

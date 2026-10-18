@@ -5,9 +5,18 @@
 // (via `publicFixtureSlugs` + `getPublicFixture`, the same reads the public
 // match page makes) and the `streaming.overlay` entitlement. The client never
 // decides. No redirect anywhere on this route (R8).
+//
+// R2005 change 1 — the compositor's door. A composed stream session's
+// `overlayUrl` carries `sid` + `st`; with BOTH present the visibility gate is
+// replaced by `relayPageAccess` (the relay page token for that session, the
+// session on this fixture, composed, not terminal) and the facts come from the
+// uncached base-table read (`relayOverlayPageFacts`), so a private
+// competition's fixture streams with its score bug. Any failure there is the
+// same `notFound()`. The entitlement gate applies on both doors. Without
+// `sid`/`st` nothing below differs from before, `?host=` included: the
+// compositor's signals are turned on only behind a verified relay access.
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { getPublicFixture, publicFixtureSlugs } from "@/server/public-site/data";
 import { hasFeature } from "@/lib/entitlements";
 import { getDictionary } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
@@ -15,6 +24,9 @@ import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { overlayStartLabel } from "@/lib/overlay-model";
 import { loadOverlayLiveData } from "@/server/overlay/load";
+import { publicOverlayPageFacts, relayOverlayPageFacts } from "@/server/overlay/page-facts";
+import { relayPageAccess, relayParamsOf, type RelayPageAccess } from "@/server/overlay/relay-access";
+import { COMPOSITOR_HOST, isCompositorHost } from "@/lib/overlay-compositor";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { resolveTemplate, templateParam } from "@/components/overlay/template-registry";
 import { resolveDelayMs } from "@/lib/overlay-delay";
@@ -52,7 +64,16 @@ type Params = { fixtureId: string };
 /** RT: the signed key rides under the token route's own parameter name, so the panel that writes it, this page that
  *  reads it and the route that verifies it spell it once (lib/realtime-purpose.ts). */
 /** R2007 decision 2: `template` is read first; `style` is the alias every pre-R2007 OBS URL carries, kept forever. */
-type Query = { template?: string | string[]; style?: string | string[]; lang?: string; delay?: string } & {
+/** R2005: `sid` + `st` are the composed session's relay page access, `host=compositor` its signals switch. */
+type Query = {
+  template?: string | string[];
+  style?: string | string[];
+  lang?: string;
+  delay?: string;
+  sid?: string | string[];
+  st?: string | string[];
+  host?: string | string[];
+} & {
   [K in typeof OVERLAY_KEY_PARAM]?: string | string[];
 };
 
@@ -77,21 +98,17 @@ export default async function OverlayPage({
   // `dynamic = "force-dynamic"` comment above).
   const delayMs = resolveDelayMs(delay);
 
-  const slugs = await publicFixtureSlugs(fixtureId);
-  if (!slugs) notFound();
-  const data = await getPublicFixture(slugs.orgSlug, slugs.compSlug, slugs.divSlug, fixtureId);
-  if (!data) notFound();
-  const {
-    org,
-    competition,
-    division,
-    fixture,
-    entrantNames,
-    realtime,
-    venueTz,
-    matchCentre,
-    stageName,
-  } = data;
+  // R2005 change 1: both present ⇒ the relay door, and ONLY the relay door — a refusal there is a 404, never a quiet
+  // fall-through to the public read (the compositor's page must not render whatever the public door happens to allow).
+  const relayParams = relayParamsOf(query);
+  let access: RelayPageAccess | null = null;
+  if (relayParams) {
+    access = await relayPageAccess(fixtureId, relayParams);
+    if (!access) notFound();
+  }
+  const facts = access ? await relayOverlayPageFacts(fixtureId) : await publicOverlayPageFacts(fixtureId);
+  if (!facts) notFound();
+  const { org, competition, sportKey, fixture, sides, realtime, venueTz, stageName } = facts;
 
   // Competition-scoped, like every other spectator-side entitlement read here:
   // an Event Pass grants for the competition it was bought for.
@@ -109,25 +126,6 @@ export default async function OverlayPage({
   const locale = toLocale(lang ?? org.default_locale);
   const dict = (await getDictionary(locale, "public")) as Record<string, string>;
 
-  const mcSides = matchCentre.header.sides;
-  const sides: [
-    { id: string; name: string; short?: string | null; colour?: string | null },
-    { id: string; name: string; short?: string | null; colour?: string | null },
-  ] = [
-    {
-      id: fixture.home_entrant_id ?? "home",
-      name: fixture.home_entrant_id ? (entrantNames[fixture.home_entrant_id] ?? mcSides[0].name) : "—",
-      short: mcSides[0].short,
-      colour: mcSides[0].colour,
-    },
-    {
-      id: fixture.away_entrant_id ?? "away",
-      name: fixture.away_entrant_id ? (entrantNames[fixture.away_entrant_id] ?? mcSides[1].name) : "—",
-      short: mcSides[1].short,
-      colour: mcSides[1].colour,
-    },
-  ];
-
   // Formatted HERE, where the locale is, through the ONE formatter
   // (`overlayStartLabel`, Task 2) and the VENUE zone Task 0 puts on the payload
   // — never UTC, and never `Intl` inlined at this call site.
@@ -138,7 +136,10 @@ export default async function OverlayPage({
   // last_seq. `venueTz` here and on `initial` come from the same
   // `resolveVenueTz` call chain; the page keeps `getPublicFixture`'s copy for
   // the start label because that read already happened for the gate.
-  const initial = await loadOverlayLiveData(fixture.id);
+  // R2005: the relay door reads the row off the base tables and folds under its own cache namespace, and the first
+  // paint carries the stored beat's phase as the route's relay answer does (fallback B).
+  const live = await loadOverlayLiveData(fixture.id, access ? { relay: true } : {});
+  const initial = access?.programmePhase ? { ...live, programmePhase: access.programmePhase } : live;
 
   // RT (lane-close fix, ruled 2026-09-29): the signed key the organiser's panel put in this URL (`?key=`). Passed to the
   // stage WITH the overlay purpose, so its transport asks the token route for realtime even on a plan without it; the
@@ -151,7 +152,7 @@ export default async function OverlayPage({
       fixtureId={fixture.id}
       initial={initial}
       realtime={realtime}
-      sportKey={division.sport_key}
+      sportKey={sportKey}
       // Owner answer 18 (Q7): resolved against the REGISTRY, and only the id
       // crosses to the client — never the template's `component`, which would
       // be a React element type travelling as an RSC prop. R2007 decision 2:
@@ -159,7 +160,7 @@ export default async function OverlayPage({
       // misspelt or sport-unsuitable id lands on this sport's default and a
       // retired one on its replacement, never an error: an OBS browser source
       // cannot fix a typo mid-match.
-      style={resolveTemplate(templateParam(query), division.sport_key).id}
+      style={resolveTemplate(templateParam(query), sportKey).id}
       sides={sides}
       startLabel={startLabel}
       slateMeta={{
@@ -171,6 +172,9 @@ export default async function OverlayPage({
       decidedTemplates={decidedOutcomeTemplates((k, v) => msgFor(locale, k, v))}
       delayMs={delayMs}
       {...(overlayKey ? { realtimePurpose: OVERLAY_REALTIME_PURPOSE, overlayKey } : {})}
+      // R2005: the relay access rides every poll; `host` only behind it (and the page never passes `sceneOverride`).
+      {...(access ? { relay: { sid: access.sid, st: access.st } } : {})}
+      {...(access && isCompositorHost(query.host) ? { host: COMPOSITOR_HOST } : {})}
       fit
     />
   );
