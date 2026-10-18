@@ -1,4 +1,4 @@
-// Capacity tests 27 (the cap), 28 (a counted check-in is never re-stamped) and 15 (c) (a place past the deadline), through the
+// Capacity tests 27 (the cap), 28 (a counted check-in is never re-stamped, the room's claim AND the QR scan) and 15 (c) (a place past the deadline), through the
 // REAL claim, the REAL sweep and the REAL create (spec §8.1, §5.7.8). Every instant is derived from `DEADLINE_AFTER_MS` and
 // `LINE_DEADLINE_GRACE_MS` (via window.ts's `boardCap`), never typed. The vendor is the in-memory RealtimeKit behind the REAL
 // bucket; a camera that comes on late is `cameraOn` on its peer report, never a hand-set row.
@@ -8,7 +8,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { LINE_DEADLINE_GRACE_MS, boardAnchor, boardCap } from "@/server/external-play/window";
 import { LINE_RESERVATION } from "@/server/external-play/seat-line";
-import { stampFixtureCheckIn } from "../me";
+import { checkInToFixture, stampFixtureCheckIn } from "../me";
 import { createGameIfReady } from "../external-play/create-game";
 import { stayRow } from "./_external-play-line";
 import { CAMERA_ON_EVENTS } from "./_external-play-rtk-fake";
@@ -165,7 +165,7 @@ describe.skipIf(!DB)("the cap, through the real claim (test 27, 15 (c))", () => 
 });
 
 describe.skipIf(!DB)("a counted check-in is never re-stamped (test 28)", () => {
-  it("stampFixtureCheckIn with a window KEEPS a stamp inside it and replaces one outside; with no window (the QR path) it re-stamps as it always did", async () => {
+  it("stampFixtureCheckIn with a window KEEPS a stamp inside it and replaces one outside; with no window the primitive re-stamps (its callers choose: the room's claim and the QR scan of an opened round both hand it the window, below)", async () => {
     const b = await seedBoard();
     const win = { opensAt: ANCHOR.at, deadline: DEADLINE };
     const first = new Date(DEADLINE.getTime() - 5 * MIN);
@@ -177,9 +177,9 @@ describe.skipIf(!DB)("a counted check-in is never re-stamped (test 28)", () => {
     await sql`update fixture_availability set checked_in_at = ${new Date(ANCHOR.at.getTime() - MIN)} where fixture_id = ${b.fixtureId} and person_id = ${b.home.personId}`;
     const moved = await stampFixtureCheckIn(b.home.personId, b.fixtureId, b.orgId, { at: first, window: win });
     expect(new Date(moved.checked_in_at!), "a stamp outside the window is replaced").toEqual(first);
-    // No window: today's behaviour - re-stamped.
+    // No window: the primitive's own contract (a fixture whose round was never opened has no window to hand) - re-stamped.
     const restamped = await stampFixtureCheckIn(b.home.personId, b.fixtureId, b.orgId, { at: new Date(first.getTime() + MIN) });
-    expect(new Date(restamped.checked_in_at!), "the QR path (no window) re-stamps").toEqual(new Date(first.getTime() + MIN));
+    expect(new Date(restamped.checked_in_at!), "with no window the primitive re-stamps").toEqual(new Date(first.getTime() + MIN));
     // The window's edges are the window's own: the stamp AT the deadline is outside it.
     await sql`update fixture_availability set checked_in_at = ${DEADLINE} where fixture_id = ${b.fixtureId} and person_id = ${b.home.personId}`;
     const edge = await stampFixtureCheckIn(b.home.personId, b.fixtureId, b.orgId, { at: first, window: win });
@@ -201,4 +201,54 @@ describe.skipIf(!DB)("a counted check-in is never re-stamped (test 28)", () => {
     expect(again.seat?.seated, "re-seated past the deadline: both counted, the create is owed").toBe(true);
     expect((await availability(b.fixtureId, b.home.personId))?.checked_in_at, "the stamp did not move").toEqual(stamped);
   }, 60_000);
+
+  // The QR self check-in (`checkInToFixture`, POST /api/checkin/[token]) is the OTHER writer of the stamp. It runs on the real clock, and
+  // these boards' round opened at OPENED (a fixed past instant), so a scan here is always "after the deadline": that is asserted, not assumed.
+  it("[reader:qr-checkin] the QR scan hands the board's window: a COUNTED check-in survives a scan after the deadline in an opened round; a fixture whose round was never opened keeps the re-stamp (2 cases, reported)", async () => {
+    expect(Date.now(), "premise: the real clock is past this round's deadline, so every scan below is a late scan").toBeGreaterThan(DEADLINE.getTime());
+    let checked = 0;
+
+    // (1) An opened round: HOME is counted inside the window; the late scan keeps that stamp.
+    const opened = await seedBoard();
+    const counted = inWindow(3 * MIN);
+    await stampFixtureCheckIn(opened.home.personId, opened.fixtureId, opened.orgId, { at: counted });
+    const scanned = await checkInToFixture(opened.home.userId, opened.fixtureId);
+    expect(new Date(scanned!.checked_in_at!), "the late scan kept the counted check-in").toEqual(counted);
+    expect((await availability(opened.fixtureId, opened.home.personId))?.checked_in_at, "and so does the row").toEqual(counted);
+    checked += 1;
+
+    // (2) The control: no stamp row for the round, so no window - the scan re-stamps as it always did (a different answer from (1),
+    // so (1) is not satisfied by a scan that never writes).
+    const never = await seedBoard({ roundOpenedAt: undefined });
+    const old = new Date(Date.now() - 60 * MIN);
+    await stampFixtureCheckIn(never.home.personId, never.fixtureId, never.orgId, { at: old });
+    const before = Date.now();
+    const re = await checkInToFixture(never.home.userId, never.fixtureId);
+    expect(new Date(re!.checked_in_at!).getTime(), "never opened: re-stamped to the scan's own instant").toBeGreaterThanOrEqual(before - 2_000);
+    checked += 1;
+
+    expect(checked, "cases driven").toBe(2);
+  }, 60_000);
+
+  it("the sequence: HOME checks in on time through the real claim, the QR is scanned after the deadline, the no-show sweep runs - HOME gets the walkover (AWAY forfeits), not a forfeit by both", async () => {
+    const w = world();
+    const b = await seedBoard();
+    await seatAndCount(w, b, "home", inWindow(3 * MIN));
+    const stamped = (await availability(b.fixtureId, b.home.personId))?.checked_in_at;
+    expect(stamped, "premise: HOME is counted inside the window").toBeTruthy();
+    expect(Date.now(), "premise: the scan below is after the deadline").toBeGreaterThan(DEADLINE.getTime());
+
+    await checkInToFixture(b.home.userId, b.fixtureId);
+    expect((await availability(b.fixtureId, b.home.personId))?.checked_in_at, "the late scan did not move the counted check-in").toEqual(stamped);
+
+    const pass = await sweepBoard(b, new Date(DEADLINE.getTime() + MIN));
+    expect(pass.report.noShows, "the sweep judged the board").toBe(1);
+    expect(await fixtureStatus(b.fixtureId)).toBe("forfeited");
+    const written = await sql<{ payload: { by: string; reason: string } }[]>`
+      select payload from score_events where fixture_id = ${b.fixtureId} and type = 'core.forfeit' order by seq`;
+    expect(
+      written.map((e) => e.payload),
+      "ONE walkover, against the absent AWAY - the player who came is not forfeited with them",
+    ).toEqual([{ by: b.away.entrantId, reason: "walkover" }]);
+  }, 120_000);
 });

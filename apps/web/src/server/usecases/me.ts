@@ -36,6 +36,8 @@ import { playerLinkId } from "@/lib/name-display";
 import { courtLabelsByOrg } from "./cross-org-court-labels";
 import { omit } from "@/lib/omit";
 import { activeAbandonReasonSql } from "@/server/engine-db/recorded-abandon";
+import { boardOpenFor } from "@/server/external-play/round-open";
+import { windowFor } from "@/server/external-play/window";
 
 export type AvailabilityStatus = "in" | "out" | "maybe";
 
@@ -302,7 +304,9 @@ export async function stampFixtureCheckIn(
 
 /**
  * QR self check-in: resolves the caller's claimed person on the fixture,
- * then stamps presence via stampFixtureCheckIn. Returns null when the
+ * then stamps presence via stampFixtureCheckIn (with the board's window when
+ * the fixture's round has been opened: a counted online check-in is kept, the
+ * capacity build's I-1). Returns null when the
  * caller has no claimed person on the fixture — the route turns that into
  * the claim-first interstitial.
  */
@@ -315,7 +319,13 @@ export async function checkInToFixture(
   if (mine.fixture_status === "finalized" || mine.fixture_status === "cancelled") {
     throw new HttpError(422, `This match is ${mine.fixture_status} — check-in is closed`);
   }
-  return stampFixtureCheckIn(mine.person_id, fixtureId, mine.org_id);
+  // Spec §5.7.8 - an online board's check-in counts only inside its window, so the QR must not move a COUNTED one out of it. A scan
+  // after the deadline would otherwise turn a player who came into one who never did, and the no-show sweep would forfeit BOTH sides
+  // instead of giving the player who came the walkover. A fixture whose round has been opened can reach an online board (`openRound`
+  // is the only writer of `stage_round_opens`), and the page shows this QR for any scheduled board, so it is handed the board's window,
+  // exactly as `claimRoomSeat` hands it. Any other fixture keeps today's re-stamp.
+  const open = await boardOpenFor(sql, fixtureId);
+  return stampFixtureCheckIn(mine.person_id, fixtureId, mine.org_id, open ? { window: windowFor(open.anchor) } : {});
 }
 
 export interface FixtureAvailability {

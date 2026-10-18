@@ -12,7 +12,8 @@
 //      inside the call that turns it into an anchor (`boardAnchor(...)`, `anchorOfRow(...)`).
 //   3. THE CONSTANTS. `DEADLINE_AFTER_MS`, `WINDOW_OPEN_LEAD_MS` and `EMAIL_LEAD_MS` are used in arithmetic nowhere but window.ts
 //      (a reader may print `DEADLINE_AFTER_MS / 60_000` as a count of minutes, the one listed exception).
-// And the table of READERS (the spec names 15; the scan found a 16th - openRound's re-invite skip) is closed over the tests: each
+// And the table of READERS (the spec names 15; the scan found a 16th - openRound's re-invite skip; the build's review found a 17th - the
+// QR self check-in, which hands the stamp the board's window) is closed over the tests: each
 // reader id appears in exactly one test title as `[reader:<id>]`, and no title carries an id that is not in the table.
 //
 // Anti-vacuity: every sweep reports what it scanned and zero is a failure; the scanner is tested on a fixture that must pass
@@ -49,6 +50,7 @@ const READERS = [
   "resend",
   "open-round-view",
   "reinvite",
+  "qr-checkin",
 ] as const;
 type ReaderId = (typeof READERS)[number];
 
@@ -65,6 +67,9 @@ const SITES: readonly { file: string; fn: Consumer; times: number; readers: read
   { file: "server/usecases/external-play/room.ts", fn: "windowWire", times: 1, readers: ["compose"] },
   // claimRoomSeat hands the check-in stamp its board's window, so a counted check-in is never re-stamped out of it (test 28).
   { file: "server/usecases/external-play/room.ts", fn: "windowFor", times: 1, readers: ["claim"] },
+  // The QR self check-in (`checkInToFixture`) hands the check-in stamp the board's window too, for any fixture whose round was opened, so a
+  // late scan cannot move a counted check-in out of it (test 28, the build review's I-1).
+  { file: "server/usecases/me.ts", fn: "windowFor", times: 1, readers: ["qr-checkin"] },
   // The ready row's `expires_at`: the deadline, or the cap when the game was created past the deadline (twice in one expression).
   { file: "server/usecases/external-play/create-game.ts", fn: "windowFor", times: 2, readers: ["expires-at"] },
   // The one definition; its three consumers below are the sweep's readers (mint-retry now asks `boardPhase`).
@@ -243,7 +248,7 @@ describe("the reader table is closed over the tests", () => {
     const all = titles();
     const seen = new Map<string, number>();
     for (const t of all) for (const m of t.text.matchAll(/\[reader:([a-z-]+)\]/g)) seen.set(m[1]!, (seen.get(m[1]!) ?? 0) + 1);
-    expect(READERS.length, "readers in the table (the spec's 15 and openRound's re-invite)").toBe(16);
+    expect(READERS.length, "readers in the table (the spec's 15, openRound's re-invite and the QR self check-in)").toBe(17);
     expect([...seen.keys()].sort(), "ids in titles = ids in the table").toEqual([...READERS].sort());
     for (const id of READERS) expect(seen.get(id), `[reader:${id}] in test titles`).toBe(1);
     expect(all.length, "titled tests found").toBeGreaterThanOrEqual(READERS.length - 6);
