@@ -53,6 +53,15 @@ export const LINE_TOKEN_CALLS = 1;
  *  a camera still starting, and the seating read with the token handed with the seat. DERIVED, never typed. */
 export const LINE_RESERVATION =
   LINE_MINT_CALLS + LINE_READ_CALLS * CAMERA_EVIDENCE_MAX_POLLS + (LINE_READ_CALLS + LINE_TOKEN_CALLS);
+/* UNCOVERED OVERSPEND (the capacity build's P1; measured by external-play-line-cost.test.ts, "P1"): the reservation above covers the
+ * stay's own schedule, not the room's CLIENT re-claims. After a dead camera's verdict (`camera_required`) the check-in screen, with its
+ * camera live, claims the seat again SEAT_RETRIES (3) times, SEAT_RETRY_MS (1.5 s) apart (room-shell.tsx). The stay is admitted and live,
+ * so the gate lets each one through with no level check, and each costs a read (LINE_READ_CALLS) and a fresh token (LINE_TOKEN_CALLS)
+ * = 4 calls: up to 12 calls a dead-camera stay spends beyond LINE_RESERVATION (a verdict at the fifth read costs 18, then 12 more).
+ * Reserving them would raise the reservation from 21 to 33 and move every figure the spec derives from it (the drain, the ETA, the
+ * B-slow bound), so it is left out on purpose. The bucket still caps what leaves for the vendor: the overspend borrows from the pool the
+ * NEXT admission would have used, so the line's ETAs run optimistic by at most 6 s a dead-camera stay in flight. All of it falls inside
+ * LINE_RELEASE_GRACE_MS (the re-claims take 4.5 s), after which the silent stay lapses and its reservation is returned. */
 /** The opponent's re-verify (T9's three reads), held beside the reservation of a stay whose seat could complete its board. */
 export const LINE_RECHECK_COST = 3;
 /** The most ONE claim spends (a re-paired board's minting claim: two stale meetings ended, its own created, the participant

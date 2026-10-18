@@ -11,6 +11,8 @@ import {
   CAMERA_EVIDENCE_DEADLINE_MS,
   CAMERA_EVIDENCE_MAX_POLLS,
   MINT_TO_READ_MS,
+  SEAT_RETRIES,
+  SEAT_RETRY_MS,
   cameraEvidenceDelayMs,
 } from "@/components/public-site/match-room/room-snapshot";
 import { RETIRED_PAIR } from "@/server/external-play/video/realtimekit";
@@ -71,7 +73,7 @@ function readOffsetMs(k: number): number {
 }
 
 type Case = { name: string; warmupMs: number | "never"; vendorAheadMs?: number };
-type Stay = { name: string; reads: number; realized: number; verdict: string; seated: boolean };
+type Stay = { name: string; reads: number; realized: number; verdict: string; seated: boolean; verdictAt: Date };
 
 /** One stay, from its mint to its verdict, claim by claim on the schedule. The camera turns on `warmupMs` after the join (or
  *  never); `vendorAheadMs` is how far the vendor's clock runs ahead of ours (the join is read as later by that much). */
@@ -98,6 +100,7 @@ async function driveStay(w: World, b: Board, c: Case): Promise<Stay> {
         realized: w.rtk.http.length - before,
         verdict: got.seat?.seated ? "seated" : String(got.seat?.reason),
         seated: got.seat?.seated === true,
+        verdictAt: at,
       };
     }
   }
@@ -174,6 +177,39 @@ describe.skipIf(!DB)("a whole stay costs what the reservation says (test 14 (c))
     expect(LINE_RESERVATION, "the reservation is built from the three counts and the room's polls").toBe(
       LINE_MINT_CALLS + LINE_READ_CALLS * CAMERA_EVIDENCE_MAX_POLLS + (LINE_READ_CALLS + LINE_TOKEN_CALLS),
     );
+  }, 120_000);
+
+  it("P1 - the client re-claims a refused seat SEAT_RETRIES times after a dead camera's verdict, and each re-claim costs vendor calls the reservation does NOT cover: measured, listed, and bounded by the grace", async () => {
+    const w = world();
+    const b = await seedBoard();
+    const dead = await driveStay(w, b, { name: "a camera that never comes on", warmupMs: "never" });
+    expect(dead.verdict, "premise: the verdict is the camera refusal, the answer that sets the client re-claiming").toBe("camera_required");
+    expect(dead.realized, "premise: the stay itself cost its reservation exactly (the table's 18, under LINE_RESERVATION)").toBeLessThanOrEqual(LINE_RESERVATION);
+
+    // The room's own schedule (room-shell.tsx: a refusal for want of a camera, the camera live): SEAT_RETRIES more claims, SEAT_RETRY_MS apart.
+    const perReclaim: { reads: number; tokens: number; mints: number; other: number; total: number }[] = [];
+    for (let n = 1; n <= SEAT_RETRIES; n++) {
+      const c0 = w.rtk.http.length;
+      const again = await claimRoom(w, b, "home", new Date(dead.verdictAt.getTime() + n * SEAT_RETRY_MS));
+      expect(again.seat, `re-claim ${n}: the refusal stands`).toMatchObject({ seated: false, reason: "camera_required" });
+      const log = w.rtk.http.slice(c0);
+      const reads = count(log, ROUTES.session) + count(log, ROUTES.participants) + count(log, ROUTES.peerReport);
+      const tokens = count(log, ROUTES.token);
+      const mints = count(log, ROUTES.create) + count(log, ROUTES.add);
+      perReclaim.push({ reads, tokens, mints, other: log.length - reads - tokens - mints, total: log.length });
+    }
+    expect(perReclaim.length, "anti-vacuity: the client's whole re-claim budget was driven").toBe(SEAT_RETRIES);
+    // What a re-claim is, from the fixture's own log: one read (its three requests) and a fresh token, never a mint.
+    for (const r of perReclaim) expect(r, "a re-claim is a read and a token").toEqual({ reads: 3, tokens: 1, mints: 0, other: 0, total: 4 });
+
+    const overspend = perReclaim.reduce((a, r) => a + r.total, 0);
+    const stayTotal = w.rtk.http.length; // every request this world's fixture has seen: the stay and its re-claims
+    expect(stayTotal, "the stay's whole spend is its schedule's cost plus the re-claims").toBe(dead.realized + overspend);
+    expect(stayTotal, "the re-claims take the stay PAST its reservation: the overspend is real and is not covered (seat-line.ts lists it)").toBeGreaterThan(LINE_RESERVATION);
+    // The listed figure (the comment beside LINE_RESERVATION): SEAT_RETRIES x (one read + one token), from the declared counts.
+    expect(overspend, "SEAT_RETRIES x (a read and a token)").toBe(SEAT_RETRIES * (LINE_READ_CALLS + LINE_TOKEN_CALLS));
+    // It all lands inside the release grace, so the stay's silence after it still ends its reservation on the grace's clock.
+    expect(SEAT_RETRIES * SEAT_RETRY_MS, "the re-claims finish well inside the release grace").toBeLessThan(LINE_RELEASE_GRACE_MS);
   }, 120_000);
 
   it("the largest ONE claim (a minting claim on a re-paired board: two stale meetings ended, a create, an add) is LINE_CLAIM_COST, and the reservation is at least that; the re-verify costs LINE_RECHECK_COST (m4)", async () => {
