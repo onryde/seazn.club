@@ -7,7 +7,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { LINE_DEADLINE_GRACE_MS, boardAnchor, boardCap } from "@/server/external-play/window";
-import { LINE_RECHECK_COST, LINE_RESERVATION } from "@/server/external-play/seat-line";
+import { LINE_RESERVATION } from "@/server/external-play/seat-line";
 import { stampFixtureCheckIn } from "../me";
 import { createGameIfReady } from "../external-play/create-game";
 import { stayRow } from "./_external-play-line";
@@ -35,7 +35,6 @@ import {
 
 const DB = !!process.env.DATABASE_URL;
 const L = LINE_RESERVATION;
-const R = LINE_RECHECK_COST;
 const ANCHOR = boardAnchor(OPENED, 0, false);
 const CAP = boardCap(ANCHOR);
 
