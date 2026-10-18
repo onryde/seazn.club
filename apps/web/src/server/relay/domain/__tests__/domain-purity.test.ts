@@ -39,10 +39,10 @@ const ENV_READERS: ReadonlySet<string> = (() => {
 const ALLOWED_SOURCE = /^(\.\.\/config|\.\/[\w-]+|@\/server\/api-v1\/capture-schemas)$/;
 
 describe("server/relay/domain is pure", () => {
-  it("has the sixteen units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost; PR-2 T2's auto-stream, phone-health; T6's health-reasons; the record upload's capture-record)", () => {
+  it("has the seventeen units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost; PR-2 T2's auto-stream, phone-health; T6's health-reasons; the record upload's capture-record; the 2026-10-18 sizing alarm's ladder)", () => {
     expect(files.map((f) => f.name).sort()).toEqual([
-      "auto-stream.ts", "beat-answer.ts", "capture-record.ts", "credits.ts", "end-reason.ts", "expiry.ts", "health-reasons.ts", "pairing.ts", "phone-health.ts",
-      "phone-lost.ts", "poll-seconds.ts", "retention.ts", "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
+      "auto-stream.ts", "beat-answer.ts", "capture-record.ts", "credits.ts", "end-reason.ts", "expiry.ts", "health-reasons.ts", "ladder.ts", "pairing.ts",
+      "phone-health.ts", "phone-lost.ts", "poll-seconds.ts", "retention.ts", "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
     ]);
   });
   it("imports nothing impure and never reads the clock", () => {
@@ -78,7 +78,7 @@ describe("server/relay/domain is pure", () => {
   it("every domain file api-v1/schemas.ts imports (the generator loads it with no resolver) imports nothing at all", () => {
     const schemas = readFileSync(resolve(DOMAIN, "../../api-v1/schemas.ts"), "utf8");
     const loaded = [...codeOf(schemas).matchAll(/from "\.\.\/relay\/domain\/([\w-]+\.ts)"/g)].map((m) => m[1]!);
-    expect(loaded, "anti-vacuity: the constants schemas.ts takes from the domain").toEqual(expect.arrayContaining(["auto-stream.ts", "health-reasons.ts"]));
+    expect(loaded, "anti-vacuity: the constants schemas.ts takes from the domain").toEqual(expect.arrayContaining(["auto-stream.ts", "health-reasons.ts", "ladder.ts"]));
     for (const name of loaded) {
       const f = files.find((x) => x.name === name);
       expect(f, `${name} is a domain file`).toBeDefined();

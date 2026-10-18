@@ -32,6 +32,7 @@ import {
   type Command, type Decision, type Effect, type HoldState, type PhoneStanding, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
+import { steppedDownTo } from "@/server/relay/domain/ladder";
 import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, stoppedBeatTrigger, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
@@ -2173,6 +2174,7 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
               egress_bytes = coalesce(${beat.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;
   await sampleBeat(sessionId, before.org_id, beat, deps);
+  raiseSizingAlarm(before, beat);
   let s = (await applyExpiry(sessionId, deps))!;
   // The runner's own callbacks are lifecycle triggers (plan §"Fly machine lifecycle"): playing/stopped, nothing else moves the table from a beat.
   // m1 (lane C final review): each callback is re-decided on the LOCKED row (T5-a) — another writer may have moved the row
@@ -2200,6 +2202,36 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
       ? { type: "runner", trigger: stopped } : null), deps)) ?? s;
   }
   return { desiredState: s.desiredState };
+}
+
+/** The relay sizing alarm (owner ruling 2026-10-18, compositor `docs/_INDEX.md` Owed 20: "no lite mode; if CPU impacts,
+ *  measure and raise the CPU size"). The compositor's ladder is `full → overlay_half_rate` and the bottom holds, so a
+ *  composed beat that STEPPED DOWN says its Machine is short of CPU. It is raised once per step and per attempt
+ *  (domain/ladder.ts `steppedDownTo`, against the previous beat's STORED rung — so a web restart keeps the dedupe — when
+ *  that beat belongs to this attempt), on two channels: a structured warning (`alarm: "sizing"`)
+ *  and the house alerting path, Sentry, under route `relay.sizing_alarm` with ONE message so every alarm groups as one
+ *  issue. Ops answer it by raising the Machine size (compositor C17 runbook). A passthrough session has no Machine, so it
+ *  never alarms. Telemetry, like the sample: it never throws into the beat. */
+function raiseSizingAlarm(before: Row, beat: RelayHeartbeat): void {
+  if (before.mode !== "composed") return;
+  // #980 review M2: the dedupe is per ATTEMPT. A retry boots a new Machine — a new process, whose ladder starts on
+  // `full` — and restarts the beat window (beat_window_at, I4: "booted a replacement … restarts the window here"). A
+  // stored beat from before that anchor is the OLD Machine's, so its rung says nothing about this one: the new attempt's
+  // first stepped beat alarms. (The stale-beat arm moves the anchor too; a re-alarm after it is the safe direction.)
+  const storedIsThisAttempt = before.beat_window_at == null
+    || (before.heartbeat_at != null && new Date(before.heartbeat_at).getTime() > new Date(before.beat_window_at).getTime());
+  const previousRung = storedIsThisAttempt ? (before.last_heartbeat?.rung ?? null) : null;
+  const rung = steppedDownTo(previousRung, beat.rung);
+  if (rung === null) return;
+  const facts = { sessionId: before.id, rung, previousRung, attempt: before.runner_attempts, machineId: before.machine_id };
+  try {
+    log.warn({ sid: before.id, orgId: before.org_id, alarm: "sizing", rung, previousRung, attempt: facts.attempt, machineId: facts.machineId },
+      `relay sizing alarm: the compositor's degrade ladder stepped down to ${rung} — the Machine is short of CPU; raise the Machine size (compositor C17 runbook)`);
+    captureError(new Error("relay sizing alarm: the compositor's degrade ladder stepped down — raise the Machine size"),
+      { orgId: before.org_id, route: "relay.sizing_alarm", extra: facts });
+  } catch (err) {
+    log.error({ sid: before.id, err: String(err) }, "stream session: the sizing alarm was not raised — the beat is answered anyway");
+  }
 }
 
 /** Ruling 13: every beat is a SAMPLE — typed columns from the fields RelayHeartbeat (Task 9) declares, the whole body in
