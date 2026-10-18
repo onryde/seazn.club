@@ -21731,6 +21731,7 @@ async function arbiterSuite(): Promise<void> {
   const anon = newSession();
   const base = `/api/v1/fixtures/${fixtureId}/external-play`;
   const note = { note: "smoke: never written" };
+  const side = { side: "home" };
   const calls: [string, Session, string, unknown, number, string | null][] = [
     ["join, no identity", anon, `${base}/arbiter`, undefined, 401, null],
     ["resync, no identity", anon, `${base}/resync`, undefined, 401, null],
@@ -21740,7 +21741,10 @@ async function arbiterSuite(): Promise<void> {
     ["join, a signed-in stranger", stranger, `${base}/arbiter`, undefined, 401, "UNAUTHENTICATED"],
     ["resync, a signed-in stranger", stranger, `${base}/resync`, undefined, 401, "UNAUTHENTICATED"],
     ["override, a signed-in stranger", stranger, `${base}/video-override`, note, 401, "UNAUTHENTICATED"],
-    ["join, the organiser, over the board", owner, `${base}/arbiter`, undefined, 404, "NOT_FOUND"],
+    // D16 (§5.6.4): the join names a player's side, so the body is `{ side }` and a missing one is a 400 - judged before the board is
+    // looked up. The over-the-board refusal is asked with a VALID body, or it would answer the validation instead of the 404.
+    ["join, the organiser, over the board", owner, `${base}/arbiter`, side, 404, "NOT_FOUND"],
+    ["join, the organiser, no side", owner, `${base}/arbiter`, undefined, 400, "VALIDATION"],
     ["override, the organiser, over the board", owner, `${base}/video-override`, note, 404, "NOT_FOUND"],
     ["resync, the organiser, over the board", owner, `${base}/resync`, undefined, 404, "NOT_FOUND"],
   ];
@@ -21764,7 +21768,7 @@ async function arbiterSuite(): Promise<void> {
     check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
     answered += 1;
   }
-  check("arbiter API: anti-vacuity, twelve calls", answered === calls.length + leaves.length && answered === 12);
+  check("arbiter API: anti-vacuity, thirteen calls", answered === calls.length + leaves.length && answered === 13);
 
   // The page: the division's slugs from the organiser's own links.
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[] | { orgs?: { slug: string }[] };
