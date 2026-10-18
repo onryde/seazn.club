@@ -6,15 +6,15 @@
 // Single sport, deliberately: the gate does not know a sport, and online play exists for `boardgame` only (guard.ts).
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
-import { LINE_ABANDON_AFTER_MS, MINT_TO_READ_MS } from "@/components/public-site/match-room/room-snapshot";
+import { MINT_TO_READ_MS } from "@/components/public-site/match-room/room-snapshot";
 import { LINE_RECHECK_COST, LINE_RELEASE_GRACE_MS, LINE_RESERVATION } from "@/server/external-play/seat-line";
-import { LINE_DEADLINE_GRACE_MS, boardCap } from "@/server/external-play/window";
+import { boardAnchor, boardCap } from "@/server/external-play/window";
 import { stayRow } from "./_external-play-line";
-import { CAMERA_ON_EVENTS } from "./_external-play-rtk-fake";
 import {
   DEADLINE,
   MIN,
   OPENED,
+  SEC,
   availability,
   cameraOn,
   claimRoom,
@@ -22,32 +22,19 @@ import {
   fund,
   inWindow,
   joinAt,
+  seatAndCount,
   seedBoard,
   world,
-  type Board,
-  type World,
 } from "./_external-play-line-route";
 
 const DB = !!process.env.DATABASE_URL;
 const L = LINE_RESERVATION;
 const R = LINE_RECHECK_COST;
-const SEC = 1_000;
 
 afterEach(dropWorlds);
 afterAll(async () => {
   if (DB) await sql.end();
 });
-
-/** `side`'s first two claims at `at` and `at + 1 s`: the mint, a browser that joins with a camera ON, and the seat. The line is
- *  idle and the bucket funded, so this is today's path. Leaves the player SEATED and COUNTED. */
-async function seatAndCount(w: World, b: Board, side: "home" | "away", at: Date): Promise<void> {
-  await fund(w.key, 300);
-  const minted = await claimRoom(w, b, side, at);
-  expect(minted.seat, `${side}: the mint answers camera_required with a token`).toMatchObject({ seated: false, reason: "camera_required" });
-  joinAt(w, minted.seat, at, CAMERA_ON_EVENTS);
-  const seated = await claimRoom(w, b, side, new Date(at.getTime() + SEC));
-  expect(seated.seat?.seated, `${side}: seated`).toBe(true);
-}
 
 describe.skipIf(!DB)("a place survives the pass: mint, then read, through the real route (test 15)", () => {
   it("(a)(b) a mint DEFERRED by the budget is `queued`; once funded the claim is admitted and answers the real camera_required with a token, the stay stays in line and funded across the read, a later arrival is blocked (not overtaking), and the read needs no second admission", async () => {
@@ -106,7 +93,7 @@ describe.skipIf(!DB)("a place survives the pass: mint, then read, through the re
     const served = await stayRow(b.fixtureId, b.home.personId);
     expect(served?.admitted_at, "no second admission: the admission is the mint's").toEqual(t2);
     expect(served?.served_at, "served by the seat").not.toBeNull();
-    expect(read.create, "both sides counted: the game is asked for").toHaveBeenCalledTimes(1);
+    expect(read.spies.create, "both sides counted: the game is asked for").toHaveBeenCalledTimes(1);
     expect(w.rtk.adapter.filter((c) => c === "addParticipant:player").length, "one participant minted in the whole stay").toBe(2);
   }, 60_000);
 
@@ -126,7 +113,7 @@ describe.skipIf(!DB)("a place survives the pass: mint, then read, through the re
     joinAt(w, minted.seat, mintAt);
     const readAt = new Date(mintAt.getTime() + MINT_TO_READ_MS);
     expect(readAt.getTime(), "premise: the read is PAST the deadline").toBeGreaterThan(DEADLINE.getTime());
-    expect(readAt.getTime(), "premise: and inside the cap").toBeLessThan(boardCap(boardOfOpened()).getTime());
+    expect(readAt.getTime(), "premise: and inside the cap").toBeLessThan(boardCap(boardAnchor(OPENED, 0, false)).getTime());
     cameraOn(w, minted.seat, new Date(readAt.getTime() - 4 * SEC));
     await fund(w.key, 10);
     const read = await claimRoom(w, b, "home", readAt);
@@ -134,15 +121,6 @@ describe.skipIf(!DB)("a place survives the pass: mint, then read, through the re
     expect((await availability(b.fixtureId, b.home.personId))?.checked_in_at, "dated at the ARRIVAL, inside the window").toEqual(arrival);
     expect(read.snapshot.you.checkedIn, "and it counts").toBe(true);
     expect(read.snapshot.phase, "the room is still open for this player").toBe("open");
-    expect(read.create, "the game is created at the read").toHaveBeenCalledTimes(1);
+    expect(read.spies.create, "the game is created at the read").toHaveBeenCalledTimes(1);
   }, 60_000);
 });
-
-function boardOfOpened() {
-  // The scenes' batch-0 anchor for the round opened at OPENED.
-  return boardAnchorOfOpened;
-}
-import { boardAnchor } from "@/server/external-play/window";
-const boardAnchorOfOpened = boardAnchor(OPENED, 0, false);
-
-void [LINE_ABANDON_AFTER_MS, LINE_DEADLINE_GRACE_MS];

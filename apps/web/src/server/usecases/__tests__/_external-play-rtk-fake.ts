@@ -88,6 +88,9 @@ export function fakeRealtimeKit(opts: { budget?: CallBudget } = {}) {
       seq += 1;
       return json(201, { success: true, data: { id: `mtg-${FAKE}-${seq}` } });
     }
+    if (method === "POST" && (m = path.match(/^\/meetings\/([^/]+)\/active-session\/kick-all$/))) {
+      return json(200, { success: true, data: { id: m[1] } });
+    }
     if (method === "PATCH" && (m = path.match(/^\/meetings\/([^/]+)$/))) {
       return json(200, { success: true, data: { id: m[1], status: "INACTIVE" } });
     }

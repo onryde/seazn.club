@@ -1,0 +1,64 @@
+{
+  "header": {
+    "what": "The vendor calls the RealtimeKit fixture server saw, step by step, for ONE board with the check-in line EMPTY (capacity test 18, spec 2026-10-09-chess-in-page-board-and-camera-design.md section 8.1).",
+    "recordedFrom": [
+      "00e5179b632c146848e219cb6c685675154d9134",
+      "467003930c763675643fe5fb9f9acb7fe6d793e7"
+    ],
+    "recordedAs": "_external-play-line-golden-driver.ts, run UNCHANGED in a detached worktree of each commit (the code of that commit, not this tree's); the two recordings were byte-identical. 00e5179b6 is the pre-amendment commit the spec names; 467003930 is the tip of this branch before the capacity build (00e5179b6 is not an ancestor of it after the rebase onto main). The driver runs on the REAL clock because the pre-amendment tree stamps a check-in with the real time.",
+    "driverSha256": "b35c62e835b3fda8bebb44497544d6a6dd971e52d6274afb0dbf34cbe8c67df4",
+    "neverRegenerated": "Nothing in this repo writes this file. Re-recording it means running the driver at a pre-amendment commit and pasting the result; the header test fails if the driver changes without it."
+  },
+  "record": {
+    "steps": [
+      {
+        "step": "home: the mint",
+        "answer": "camera_required",
+        "calls": [
+          "POST /meetings",
+          "POST /meetings/:id/participants"
+        ],
+        "publishes": 0,
+        "creates": 0
+      },
+      {
+        "step": "home: the seat",
+        "answer": "seated",
+        "calls": [
+          "GET /meetings/:id/active-session",
+          "GET /sessions/:id/participants",
+          "GET /sessions/peer-report/:peer",
+          "POST /meetings/:id/participants/:pid/token"
+        ],
+        "publishes": 1,
+        "creates": 0
+      },
+      {
+        "step": "away: the mint",
+        "answer": "camera_required",
+        "calls": [
+          "POST /meetings",
+          "POST /meetings/:id/participants"
+        ],
+        "publishes": 0,
+        "creates": 0
+      },
+      {
+        "step": "away: the seat",
+        "answer": "seated",
+        "calls": [
+          "GET /meetings/:id/active-session",
+          "GET /sessions/:id/participants",
+          "GET /sessions/peer-report/:peer",
+          "POST /meetings/:id/participants/:pid/token"
+        ],
+        "publishes": 1,
+        "creates": 1
+      }
+    ],
+    "checkedIn": {
+      "home": true,
+      "away": true
+    }
+  }
+}
