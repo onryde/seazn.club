@@ -365,15 +365,24 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
         trace(why);
         return { kind: "queued", line: lineWire({ position, pool, need, now, anchor: a.anchor, left: first.left }) };
       };
+      // Could this claim's seat complete its board? (The other side has an open stay or a counted check-in.) Such a seat triggers the
+      // create and its T9 re-verify of the opponent, LINE_RECHECK_COST reads that are exempt from the line but not from the bucket.
+      const completing = st.otherOpen || a.otherCounted;
       // A new arrival joins the tail without spending: a stay is never admitted ahead of an earlier stay that is waiting.
-      if (st.ahead > 0) return hold(reservationIf(st.otherOpen || a.otherCounted), "hold_blocked");
+      if (st.ahead > 0) return hold(reservationIf(completing), "hold_blocked");
       // Idle - this stay is not waiting, nobody is, and no admitted stay is live: today's path, nothing written but the upsert.
+      // EXCEPT a COMPLETING claim, which goes only while the bucket holds its re-verify (`tokens >= LINE_RECHECK_COST`): on an idle
+      // line nothing is reserved for it, so a bucket that cannot pay the re-verify would defer it INSIDE the create, and the board
+      // would wait for the sweep (spec §5.7.3, test 37 (e)). Below it the claim is held like any stay that meets a dry bucket
+      // (step 4): it becomes a waiting stay, and its next claim pays the pool test with the reservation it would hold.
       if (st.waiting === 0 && st.admittedLive === 0) {
-        trace("go_idle");
-        return { kind: "go", decision: "idle" } as GateAnswer;
+        if (!completing || st.tokens >= LINE_RECHECK_COST) {
+          trace("go_idle");
+          return { kind: "go", decision: "idle" } as GateAnswer;
+        }
+        return hold(reservationIf(completing), "hold_recheck");
       }
       // Next in order: a candidate. It is admitted only while the pool holds the reservation it WOULD hold.
-      const completing = st.otherOpen || a.otherCounted;
       const need = reservationIf(completing);
       if (pool >= need) {
         await writeStay(tx, ids, { gate: "passed", admittedAt: now, completing, releasedAt: now });

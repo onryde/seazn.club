@@ -278,3 +278,77 @@ describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", 
     void (null as unknown as World);
   }, 120_000);
 });
+
+// (e) THE IDLE PATH. (d) names the residual of an ADMITTED stay: the reservation covers its schedule to the fifth read, and a seat past it
+// meets a dry bucket at the re-verify. A stay that passed on an IDLE line holds no reservation at all, so before this test's fix the same
+// deferral met a COMPLETING claim whenever the bucket was low when it arrived (the capacity load's spec B, instant cameras: one board in
+// thirty created 268.7 s late by the sweep, twice). A completing claim on an idle line now goes only while the bucket holds its
+// re-verify (`tokens >= LINE_RECHECK_COST`), and is otherwise held like any stay that meets a dry bucket.
+describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its re-verify (test 37 (e))", () => {
+  /** AWAY is seated and counted on an idle line; HOME's mint comes next, with the bucket at `tokens`. */
+  async function homeArrives(tokens: number) {
+    const w = world();
+    const board = await seedBoard();
+    const t = inWindow(3 * MIN);
+    await seatAndCount(w, board, "away", t);
+    await fund(w.key, tokens);
+    const before = w.rtk.http.length;
+    const got = await claimRoom(w, board, "home", new Date(t.getTime() + 10 * SEC));
+    return { w, board, t, got, spent: w.rtk.http.length - before };
+  }
+
+  it("one token under the re-verify: HOME is held and spends nothing; at exactly the re-verify's price it is still held (a waiting stay pays the pool test); once the pool holds its reservation it is admitted, seats, and the create's re-verify reads equal LINE_RECHECK_COST, none deferred - no late create", async () => {
+    const { w, board, t, got, spent } = await homeArrives(R - 1);
+    expect(got.seat, "held: the bucket cannot pay the opponent's re-verify").toMatchObject({ seated: false, reason: "queued" });
+    expect(spent, "a held claim spends nothing at the vendor").toBe(0);
+    const held = await stayRow(board.fixtureId, board.home.personId);
+    expect([held?.queued_at != null, held?.admitted_at, held?.last_gate], "held: in line, not admitted").toEqual([true, null, "held"]);
+
+    // Re-asks while the bucket recovers. At the re-verify's price alone it is not enough: a waiting stay needs the reservation it would hold.
+    let reAsks = 0;
+    for (const tokens of [R, L + R - 1]) {
+      await fund(w.key, tokens);
+      const c0 = w.rtk.http.length;
+      const again = await claimRoom(w, board, "home", new Date(t.getTime() + (20 + reAsks) * SEC));
+      expect(again.seat, `re-ask at ${tokens} tokens`).toMatchObject({ seated: false, reason: "queued" });
+      expect(w.rtk.http.length - c0, `re-ask at ${tokens} tokens spends nothing`).toBe(0);
+      reAsks += 1;
+    }
+    expect(reAsks, "re-asks driven").toBe(2);
+
+    // The pool holds the reservation: admitted, minted, and the seat's create is funded for the re-verify.
+    await fund(w.key, L + R);
+    const mintAt = new Date(t.getTime() + 30 * SEC);
+    const minted = await claimRoom(w, board, "home", mintAt);
+    expect(minted.seat, "admitted and minted").toMatchObject({ reason: "camera_required" });
+    const admitted = await stayRow(board.fixtureId, board.home.personId);
+    expect([admitted?.admitted_at != null, admitted?.completing], "admitted, holding the re-verify's surcharge").toEqual([true, true]);
+    const joined = new Date(mintAt.getTime() + 2 * SEC);
+    joinAt(w, minted.seat, new Date(joined.getTime() + 8_500)); // the vendor's clock runs ahead: no read is a verdict before the camera is on
+    cameraOn(w, minted.seat, new Date(joined.getTime() - SEC));
+    let verify: { seated: boolean; calls: number } | null = null;
+    let created: unknown = null;
+    const seated = await claimRoom(w, board, "home", joined, {
+      create: async () => {
+        const c0 = w.rtk.http.length;
+        const later = new Date(joined.getTime() + SEAT_RECHECK_TRUST_MS + SEC);
+        const re = await seatPlayer({ fixtureId: board.fixtureId, personId: board.away.personId, recheck: true }, { now: later, video: w.rtk.video, line: { at: later } });
+        verify = { seated: re.seated, calls: w.rtk.http.length - c0 };
+        created = re.seated ? { created: true as const, gameId: "g-idle" } : { created: false as const, reason: "not_ready" as const };
+        return created as never;
+      },
+    });
+    expect(seated.seat?.seated, "HOME is seated").toBe(true);
+    expect(verify, "the create asked for the opponent's re-verify").not.toBeNull();
+    expect(verify!.seated, "the re-verify is not deferred").toBe(true);
+    expect(verify!.calls, "the opponent's re-verify reads equal LINE_RECHECK_COST").toBe(R);
+    expect(created, "the game is created inside the claim: no late create for the sweep to make").toEqual({ created: true, gameId: "g-idle" });
+  }, 120_000);
+
+  it("at exactly LINE_RECHECK_COST the claim goes: the line stays idle (nothing queued, nothing admitted) and HOME mints", async () => {
+    const { board, got } = await homeArrives(R);
+    expect(got.seat, "the claim went").toMatchObject({ seated: false, reason: "camera_required" });
+    const row = await stayRow(board.fixtureId, board.home.personId);
+    expect([row?.queued_at, row?.admitted_at], "the idle path writes nothing but the upsert").toEqual([null, null]);
+  }, 60_000);
+});

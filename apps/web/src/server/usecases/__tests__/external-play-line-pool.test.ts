@@ -10,11 +10,13 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { sql } from "@/lib/db";
 import {
   ADMIT_HOLD_MS,
+  LINE_ABANDON_AFTER_MS,
   LINE_RECHECK_COST,
   LINE_RELEASE_GRACE_MS,
   LINE_RESERVATION,
   endStay,
   gateClaim,
+  ownStayInLine,
   settleDeferral,
   type GateAnswer,
 } from "@/server/external-play/seat-line";
@@ -266,6 +268,99 @@ describe.skipIf(!DB)("a new arrival joins the tail (test 17)", () => {
     const row = await stayRow(a.fixtureId, a.home.personId);
     expect([row!.queued_at, row!.admitted_at]).toEqual([null, null]);
     expect(row!.last_gate).toBe("passed");
+  });
+});
+
+// ─── The idle line and a COMPLETING claim (test 37 (e)) ─────────────────────────────────────────────────────────────────────
+// On an idle line a claim passes with no admission and no reservation - except a COMPLETING one, whose seat triggers the create and
+// its T9 re-verify (LINE_RECHECK_COST reads): that claim goes only while the bucket holds the re-verify, and is otherwise held like
+// any stay that meets a dry bucket. The threshold is the declaration `LINE_RECHECK_COST`; the expectation below is the rule, written
+// out per cause and per level, never read back from the gate.
+describe.skipIf(!DB)("an idle line's COMPLETING claim must find the opponent's re-verify in the bucket (test 37 (e))", () => {
+  /** The three causes of `completing` (§5.7.2), as in test 14 (a), and the levels around the threshold. */
+  const causes = [
+    { name: "the other side is COUNTED", completing: true, open: false, counted: true },
+    { name: "the other side has an OPEN stay", completing: true, open: true, counted: false },
+    { name: "neither (a non-completing claim)", completing: false, open: false, counted: false },
+  ] as const;
+  const levels = [0, R - 1, R, R + 1, L + R] as const;
+
+  async function idleClaim(cause: (typeof causes)[number], tokens: number) {
+    const key = scene();
+    const c = await seedBoard();
+    if (cause.open) {
+      await putStay({ fixtureId: c.fixtureId, personId: c.away.personId, budgetKey: key, firstClaimAt: sceneAt(0), seenAt: sceneAt(1_000), gate: "passed" });
+    }
+    await setBucket(key, tokens, sceneAt(1_000));
+    const got = await claimAt(key, c, "home", sceneAt(1_000), { otherCounted: cause.counted });
+    return { key, c, got, row: await stayRow(c.fixtureId, c.home.personId) };
+  }
+
+  it("a completing claim goes only at tokens >= LINE_RECHECK_COST and is held (queued, position 1, nothing admitted) below it; a non-completing claim goes at every level, 0 included - in all three causes", async () => {
+    const seen = { go: 0, queued: 0, completingGo: 0, completingQueued: 0 };
+    for (const cause of causes) {
+      for (const tokens of levels) {
+        const { got, row } = await idleClaim(cause, tokens);
+        const mayGo = !cause.completing || tokens >= R;
+        const label = `${cause.name}, tokens ${tokens}`;
+        expect(kindOf(got), label).toBe(mayGo ? "go:idle" : "queued");
+        expect(row!.admitted_at, `${label}: nothing is ever admitted on the idle path`).toBeNull();
+        if (mayGo) {
+          expect([row!.queued_at, row!.last_gate], `${label}: the idle pass writes nothing but the upsert`).toEqual([null, "passed"]);
+          seen.go += 1;
+          if (cause.completing) seen.completingGo += 1;
+        } else {
+          expect(row!.queued_at, `${label}: the budget has held it`).not.toBeNull();
+          expect(row!.last_gate, `${label}: held`).toBe("held");
+          if (got.kind === "queued") expect(got.line.position, `${label}: first in an otherwise empty line`).toBe(1);
+          seen.queued += 1;
+          seen.completingQueued += 1;
+        }
+      }
+    }
+    // Anti-vacuity: every outcome of the rule was reached, on the completing causes and on the control.
+    expect(seen.go + seen.queued, "claims driven").toBe(causes.length * levels.length);
+    expect(seen.completingQueued, "completing claims held below the threshold (2 causes x 2 levels)").toBe(4);
+    expect(seen.completingGo, "completing claims let through at or above it (2 causes x 3 levels)").toBe(6);
+    expect(seen.go - seen.completingGo, "the control: a non-completing claim went at all 5 levels").toBe(levels.length);
+  });
+
+  it("the sequence: the held stay is WAITING, so its re-ask pays the pool test (not the idle level check), a later arrival queues behind it, and it is admitted when the pool holds its reservation", async () => {
+    const key = scene();
+    const s = await seedBoard();
+    await setBucket(key, R - 1, sceneAt(1_000));
+    const first = await claimAt(key, s, "home", sceneAt(1_000), { otherCounted: true });
+    expect(kindOf(first), "held: the bucket cannot pay the re-verify").toBe("queued");
+    // The line has formed: a later, NON-completing arrival is blocked behind it whatever the bucket holds.
+    const later = await seedBoard();
+    await setBucket(key, 10 * L, sceneAt(2_000));
+    const blocked = await claimAt(key, later, "home", sceneAt(2_000));
+    expect(kindOf(blocked), "a later arrival joins the tail").toBe("queued");
+    if (blocked.kind === "queued") expect(blocked.line.position, "behind the held stay").toBe(2);
+    // The held stay's re-ask is a candidate: LINE_RECHECK_COST is no longer enough; it needs the reservation it would hold.
+    let reAsks = 0;
+    for (const [tokens, want] of [[R, "queued"], [L + R - 1, "queued"], [L + R, "go:admit"]] as const) {
+      await setBucket(key, tokens, sceneAt(3_000 + reAsks * 1_000));
+      expect(kindOf(await claimAt(key, s, "home", sceneAt(3_000 + reAsks * 1_000), { otherCounted: true })), `re-ask at tokens ${tokens}`).toBe(want);
+      reAsks += 1;
+    }
+    expect(reAsks, "re-asks driven").toBe(3);
+    const row = await stayRow(s.fixtureId, s.home.personId);
+    expect([row!.admitted_at !== null, row!.completing], "admitted, and holding the re-verify's surcharge").toEqual([true, true]);
+  });
+
+  it("after a withdrawal: a held completing stay whose player went silent for LINE_ABANDON_AFTER_MS no longer holds the line, and the next completing claim at the threshold goes (the idle path again)", async () => {
+    const key = scene();
+    const gone = await seedBoard();
+    await setBucket(key, R - 1, sceneAt(1_000));
+    expect(kindOf(await claimAt(key, gone, "home", sceneAt(1_000), { otherCounted: true })), "premise: held").toBe("queued");
+    const inLine = (ms: number) => ownStayInLine({ fixtureId: gone.fixtureId, personId: gone.home.personId, at: sceneAt(ms) });
+    // One ms before the abandon the stay is still in line; at it the stay is gone, and the line is idle.
+    expect(await inLine(1_000 + LINE_ABANDON_AFTER_MS - 1), "still in line one ms before the abandon").toBe(true);
+    expect(await inLine(1_000 + LINE_ABANDON_AFTER_MS), "gone at the abandon").toBe(false);
+    const next = await seedBoard();
+    await setBucket(key, R, sceneAt(1_000 + LINE_ABANDON_AFTER_MS));
+    expect(kindOf(await claimAt(key, next, "home", sceneAt(1_000 + LINE_ABANDON_AFTER_MS), { otherCounted: true })), "the line is idle again and the level check passes").toBe("go:idle");
   });
 });
 
