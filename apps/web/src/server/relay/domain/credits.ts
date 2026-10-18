@@ -37,6 +37,20 @@ export function restartIsFree(a: { windowOpen: boolean; used: number }, limit: n
   return a.windowOpen && a.used < limit;
 }
 
+/** R2004 (owner ruling 2026-10-18, option (a)): how many recordings a session of each mode makes while it runs. A composed
+ *  session's camera input (A) keeps recording — Cloudflare serves an input's HLS only while it records, and the phone's
+ *  delivery watch reads A's — and its programme input (B) records the product. Passthrough records its one input. */
+export const RECORDINGS_PER_SESSION: Readonly<Record<"passthrough" | "composed", number>> = { passthrough: 1, composed: 2 };
+
+/** C3 + R2004: the storage minutes one session reserves while it runs — a full match per recording it makes. A duration
+ *  that is not a whole non-negative number is refused by name: read as a number it would reserve a fraction, or nothing. */
+export function reservationMinutes(mode: "passthrough" | "composed", maxDurationMinutes: number): number {
+  if (!Number.isInteger(maxDurationMinutes) || maxDurationMinutes < 0) {
+    throw new RangeError(`reservationMinutes: maxDurationMinutes must be a whole non-negative number, got ${maxDurationMinutes}`);
+  }
+  return RECORDINGS_PER_SESSION[mode] * maxDurationMinutes;
+}
+
 /** C3: limit − used − Σ reservations. Poll-then-admit is unsound, not imprecise. */
 export function headroomAfterReservations(
   usage: { totalStorageMinutes: number; totalStorageMinutesLimit: number },

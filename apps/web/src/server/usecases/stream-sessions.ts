@@ -18,14 +18,17 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStreamSession, RelayHeartbeat, RelayJobSession, StreamSessionCurrent } from "@/server/api-v1/schemas";
+import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
+import { RelayJobSession } from "@/server/api-v1/schemas";
+import { resolveTemplate } from "@/components/overlay/template-registry";
 import { checkDestination } from "@/lib/stream-destinations";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
   CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
-  RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
+  RECORDING_RETENTION_DAYS, RELAY_HEARTBEAT_INTERVAL_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS,
+  RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, relayOutputProfile, tunable,
 } from "@/server/relay/config";
 import {
   ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, admitMode, decide, eventRowsOf, holdStateOf, isTerminal,
@@ -38,10 +41,12 @@ import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, stoppedBeatTrigger, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
 import { type Ask10Phone, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
-import { headroomAfterReservations } from "@/server/relay/domain/credits";
+import { headroomAfterReservations, reservationMinutes } from "@/server/relay/domain/credits";
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
-import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials, wipeStreamCodeTok } from "@/server/relay/secret-columns";
+import {
+  TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
+} from "@/server/relay/secret-columns";
 import { scrubBeatText } from "@/server/relay/sanitise";
 import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
@@ -752,11 +757,13 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
     switch (e.type) {
       case "add_output": {
         const { inputId, target } = (await sql.begin(async (tx) => {
-          const input = await readFirstInput(tx, current.id);
+          // R2004: the session's OUTPUT input — passthrough's camera (the phone's input), composed's programme (Input B,
+          // the compositor's), so a composed destination key reaches Cloudflare and never the Machine (spec §5.3).
+          const input = await readFirstInput(tx, current.id, current.mode === "composed" ? "programme" : "camera");
           return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, current.orgId, (await readRow(current.id, tx))!.target_id) };
         })) as { inputId: string | null; target: { url: string; streamKey: string } };
         if (inputId) {
-          const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target, { sessionId: current.id }), { inputUid: inputId });   // C9: exactly one, passthrough only
+          const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target, { sessionId: current.id }), { inputUid: inputId });   // C9: exactly one, on the session's output input
           // Dg: the slot-0 destination output's uid, beside ingest_input_uid (not a secret). The port
           // RETURNS it (Tasks 3/4); throwing that return away is what would leave the column inert.
           // coalesce so a re-run of an idempotent effect cannot move a recorded uid.
@@ -925,13 +932,37 @@ export function storageUsageForColumns(u: StorageUsage): StorageUsage {
   return { totalStorageMinutes: Math.ceil(u.totalStorageMinutes), totalStorageMinutesLimit: Math.floor(u.totalStorageMinutesLimit), videoCount: u.videoCount };
 }
 
-export async function storageHeadroomMinutes(exec: Tx | typeof sql, usage: StorageUsage, now: Date): Promise<number> {
+/** C3 + R2004: every session's claim on the one recording pool, per session (exported for its test — the pool is the
+ *  whole database's, so a test reads its OWN rows out of this, never the sum).
+ *   - a RUNNING session reserves a full match per recording it makes (`reservationMinutes`): one for passthrough, two
+ *     for composed — owner ruling 2026-10-18, option (a): the camera (A) keeps recording so the phone's delivery watch
+ *     keeps its HLS, and the programme (B) records the product;
+ *   - an ENDED composed session keeps the camera's share (ONE match) until the daily sweep has deleted A's recordings
+ *     (`fixture_stream_inputs.recordings_deleted_at`, written by the daily sweep's camera pass, phase 1c) — the ruling's "released once A's
+ *     recording is deleted". Bounded by the retention horizon (ended + RECORDING_RETENTION_DAYS): by then retention has
+ *     deleted every recording that old, so a delete that never succeeds cannot hold the pool forever. A camera input
+ *     the provider never made recorded nothing and reserves nothing. Conservative by construction: once the recording
+ *     is finalised Cloudflare's own usage counts it too, so for up to a day an ended composed match is counted twice —
+ *     an under-statement of the room, never an over-statement.
+ *  An ended passthrough session reserves nothing (its recording is in Cloudflare's usage), as before. */
+export async function storageReservations(exec: Tx | typeof sql, now: Date): Promise<{ sessionId: string; minutes: number }[]> {
   const rows = await exec<Row[]>`select ${cols()} from fixture_stream_sessions where state in ${sql([...ACTIVE_STATES])}`;
-  const reservations = rows
+  const running = rows
     .map(toSession)
     .filter((s) => { const x = evaluate(s, now).kind; return x === "none" || x === "stale_beat" || x === "grace_expired"; })   // a Machine being replaced or flushed still records
-    .map((s) => s.maxDurationMinutes);
-  return headroomAfterReservations(usage, reservations);
+    .map((s) => ({ sessionId: s.id, minutes: reservationMinutes(s.mode, s.maxDurationMinutes) }));
+  const horizon = new Date(now.getTime() - RECORDING_RETENTION_DAYS * 86_400_000);
+  const cameras = await exec<{ id: string; max_duration_minutes: number }[]>`
+    select s.id, s.max_duration_minutes from fixture_stream_sessions s
+     where s.mode = 'composed' and s.state in ${sql([...TERMINAL_STATES])}
+       and coalesce(s.ended_at, s.created_at) > ${horizon}
+       and exists (select 1 from fixture_stream_inputs i
+                    where i.session_id = s.id and i.role = 'camera' and i.ingest_input_id is not null and i.recordings_deleted_at is null)`;
+  return [...running, ...cameras.map((c) => ({ sessionId: c.id, minutes: c.max_duration_minutes }))];
+}
+
+export async function storageHeadroomMinutes(exec: Tx | typeof sql, usage: StorageUsage, now: Date): Promise<number> {
+  return headroomAfterReservations(usage, (await storageReservations(exec, now)).map((r) => r.minutes));
 }
 
 async function fixtureContext(fixtureId: string): Promise<{ orgId: string; competitionId: string }> {
@@ -1060,11 +1091,12 @@ async function tearDownPriorMachines(
   return { sameFixture: null, otherFixture: null };
 }
 
-/** C1 (lane C final review; orchestrator ruling — mirror tearDownPriorMachines). A passthrough session that ended with
+/** C1 (lane C final review; orchestrator ruling — mirror tearDownPriorMachines). A session that ended with
  *  its output release FAILED may still be simulcasting to its destination, and V421's one-active index covers active
  *  states only — so a new session on the same destination would add a SECOND output to the same key while the first
- *  phone still publishes. Admission therefore retries the release first, for every terminal passthrough session of THIS
- *  fixture or on THIS destination (inside the caller's org) whose output is recorded and not released, and refuses only
+ *  phone still publishes. Admission therefore retries the release first, for every terminal session of THIS
+ *  fixture or on THIS destination (inside the caller's org) whose output is recorded and not released — either mode since
+ *  R2004 (a composed session's output is on its programme input) — and refuses only
  *  when the retry fails: this fixture's → `active_session` naming it, another fixture's → `target_in_use` naming its
  *  court — the same two refusals, for the same reason, as a Machine that survived its destroy. The provider is asked
  *  only when such a row exists, so an ordinary start makes no extra call. */
@@ -1079,16 +1111,16 @@ async function releasePriorOutputs(
       left join courts c on c.id = f.court_id
       ${terminalHolderJoins()}
      where s.org_id = ${orgId} and (s.fixture_id = ${fixtureId} or s.target_id = ${targetId})
-       and s.mode = 'passthrough' and s.state in ${sql([...TERMINAL_STATES])}
+       and s.state in ${sql([...TERMINAL_STATES])}   -- R2004: either mode holds an output (composed's on its programme input)
        and s.output_uid is not null and s.output_released_at is null
      order by s.created_at`;
   for (const p of prior) {
     if (await releaseOutput(p.id, "admission", deps)) continue;
     if (p.fixture_id !== fixtureId) {
-      log.warn({ sid: p.id, fixtureId, holderFixtureId: p.fixture_id, targetId }, "stream session: another fixture's ended passthrough session may still be broadcasting on this destination and its output release failed — start refused");
+      log.warn({ sid: p.id, fixtureId, holderFixtureId: p.fixture_id, targetId }, "stream session: another fixture's ended session may still be broadcasting on this destination and its output release failed — start refused");
       return { sameFixture: null, otherFixture: terminalHolder(p) };
     }
-    log.warn({ sid: p.id, fixtureId }, "stream session: this fixture's previous passthrough session may still be broadcasting and its output release failed — start refused");
+    log.warn({ sid: p.id, fixtureId }, "stream session: this fixture's previous session may still be broadcasting and its output release failed — start refused");
     return { sameFixture: p.id, otherFixture: null };
   }
   return { sameFixture: null, otherFixture: null };
@@ -1415,7 +1447,8 @@ export async function startBroadcast(
   // destination doors above still answer first (§17.10).
   const early = admit({
     overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone, mode: body.mode, composedUnavailable: composedRunnerDown,
-    headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,
+    // R2004: room for every recording THIS mode makes, so the probe can never refuse on storage (it has not read it).
+    headroomMinutes: reservationMinutes(body.mode, MAX_DURATION_MINUTES), maxDurationMinutes: MAX_DURATION_MINUTES,
     activeSessionId: (await activeSessionIdFor(fixtureId)) ?? priorMachineSessionId,
   });
   if (!early.ok && (early.refusal === "phone_not_paired" || early.refusal === "phone_not_responding")) refuse(early, 0);
@@ -1426,7 +1459,7 @@ export async function startBroadcast(
   // authority for everything that row lock protects.
   await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
     overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone, mode: body.mode, composedUnavailable: composedRunnerDown,
-    headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here
+    headroomMinutes: reservationMinutes(body.mode, MAX_DURATION_MINUTES), maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here (R2004: in either mode)
     activeSessionId: activeSessionId ?? priorMachineSessionId,
   }).ok);
   const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns);   // outside the transaction; G7: fitted to the integer columns
@@ -1476,21 +1509,31 @@ export async function startBroadcast(
                                            storage_minutes_at_admission, reserved_minutes, destination_kind,
                                            sport_key, competition_id, division_id, fixture_scheduled_at,
                                            venue_id, venue_address, org_timezone, entitlement_via_override,
-                                           start_cause, code_id, pairing_id)
-      select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId}, ${body.themeId ?? null}, ${MAX_DURATION_MINUTES}, ${actorUserId},
-             ${usage.totalStorageMinutes}, ${MAX_DURATION_MINUTES}, (select kind from org_stream_targets where id = ${body.targetId}),
+                                           start_cause, code_id, pairing_id, overlay_delay_ms)
+      select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId},
+             -- R2004 decision 7: the organiser's template CHOICE is copied, never resolved here (a retired id still reads,
+             -- then resolves at every reader); a themeId the create names wins. The running session never moves with it.
+             coalesce(${body.themeId ?? null}::text, st.overlay_template),
+             ${MAX_DURATION_MINUTES}, ${actorUserId},
+             ${usage.totalStorageMinutes}, ${reservationMinutes(body.mode, MAX_DURATION_MINUTES)}, (select kind from org_stream_targets where id = ${body.targetId}),
              d.sport_key, d.competition_id, f.division_id, f.scheduled_at,
              c.venue_id, v.address, o.timezone, ${viaOverride},
-             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId}
+             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId},
+             -- R2004 decision 4: the EFFECTIVE delay (the fixture's override, else the default) for composed; passthrough
+             -- keeps the column's 0 (the field is unused in that mode). Copied, so a running session never changes.
+             ${body.mode === "composed" ? sql`coalesce(st.overlay_delay_ms, ${RELAY_OVERLAY_DELAY_DEFAULT_MS}::int)` : sql`0`}
         from fixtures f
         join divisions d on d.id = f.division_id
         join organizations o on o.id = ${orgId}
         left join courts c on c.id = f.court_id          -- a fixture with no court leaves venue_* null
         left join venues v on v.id = c.venue_id
+        left join fixture_stream_settings st on st.fixture_id = f.id   -- R2004: the fixture's stored overlay choices
        where f.id = ${fixtureId}
       returning id`;
     const sid = s!.id;
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
+    // R2004: a composed session's programme input (Input B) — the compositor publishes to it and the output attaches to it.
+    if (body.mode === "composed") await tx`insert into fixture_stream_inputs (session_id, slot, role) values (${sid}, 0, 'programme')`;
     // Final review m-1: "once per match" commits WITH the session it records — never in a statement of its own after this
     // transaction, where a failure (or a dead process) left an automatic session with no stamp, and the next beat past the
     // retry spacing started a second one. The claim's row (`maybeAutoStart`) is the one stamped; a start that finds none
@@ -1530,13 +1573,42 @@ export async function startBroadcast(
   return { sessionId };
 }
 
+/** R2004: a composed camera input with no SRT playback credential cannot be read by the compositor — refused by name at
+ *  provisioning, never discovered by a Machine that boots and has nothing to read. */
+class CameraPlaybackMissing extends Error {
+  constructor(inputId: string) {
+    super(`stream session: the camera input ${inputId} came back without an SRT playback credential — a composed session cannot read it`);
+    this.name = "CameraPlaybackMissing";
+  }
+}
+
 async function provisionSession(sessionId: string, deps: SessionDeps): Promise<void> {
   const provisioning = (await apply(sessionId, { type: "provision" }, deps))!;
-  let creds;
+  const composed = provisioning.mode === "composed";
+  let creds: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["createLiveInput"]>> | undefined;
+  let programme: typeof creds;
   try {
     creds = await recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 }), { slot: 0 });
+    if (composed) {
+      // R2004 (spec §5.3): Input A is the camera, read by the compositor over SRT PLAYBACK; Input B is the programme, which
+      // the compositor publishes to and the destination output attaches to. A first, so a camera the compositor could not
+      // read never costs a second input.
+      if (!creds.srtPlayback) throw new CameraPlaybackMissing(creds.inputId);
+      programme = await recordEffect(provisioning, "create_live_input", "ingest",
+        () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0, role: "programme" }), { slot: 0, role: "programme" });
+    }
   } catch (err) {
-    log.error({ sid: sessionId, err }, "stream session: ingest create failed");
+    log.error({ sid: sessionId, err: String(err) }, "stream session: ingest create failed");
+    // R2004: an input this attempt DID make is not left at the provider — nothing has connected to it, so it holds no
+    // recording for the delete to leak (C2). A failed cleanup is reported with the uid; the sweep cannot reclaim an input
+    // whose row is about to go with its session, so the alarm is the only trace.
+    if (creds) {
+      const orphan = creds.inputId;
+      await deps.drivers.ingest.deleteInput(orphan).catch((cleanup: unknown) => {
+        captureError(cleanup, { orgId: provisioning.orgId, route: "relay.provision_cleanup", extra: { sessionId, inputUid: orphan } });
+        log.error({ sid: sessionId, inputUid: orphan, err: String(cleanup) }, "stream session: a provisioned input was NOT deleted after the create failed — it is orphaned at the provider");
+      });
+    }
     // No §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger
     // allows). Final review m-1: an automatic start's stamp goes WITH its session, in one transaction — the FK's
     // `on delete set null` would clear only the id and leave `auto_started_at`, so a start that never existed would block
@@ -1547,12 +1619,22 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
     });
     throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
   }
+  const camera = creds!;
   await sql.begin(async (tx) => {
-    const [inp] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and slot = 0`;
-    await storeInputCredentials(tx, inp!.id, creds.inputId, creds);
-    await tx`update fixture_stream_sessions set provisioned_at = coalesce(provisioned_at, ${deps.now()}), ingest_input_uid = ${creds.inputId} where id = ${sessionId}`;   // ruling 13 facts: when, and which input (the uid is not a secret; the keys stayed *_enc)
+    const [inp] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' and slot = 0`;
+    await storeInputCredentials(tx, inp!.id, camera.inputId, camera);
+    if (programme) {
+      await storePlaybackCredentials(tx, inp!.id, camera.srtPlayback!);
+      const [prog] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and role = 'programme' and slot = 0`;
+      await storeInputCredentials(tx, prog!.id, programme.inputId, programme);
+    }
+    // ruling 13 facts: when, and which input (the uid is not a secret; the keys stayed *_enc). R2004: the session's OUTPUT
+    // input — the one its destination output attaches to and whose recording is the session's: the camera for
+    // passthrough, the programme for composed.
+    const outputInput = programme ? programme.inputId : camera.inputId;
+    await tx`update fixture_stream_sessions set provisioned_at = coalesce(provisioned_at, ${deps.now()}), ingest_input_uid = ${outputInput} where id = ${sessionId}`;
   });
-  if (provisioning.mode === "composed") {
+  if (composed) {
     // The lifecycle's first edge: none → creating (intent persisted) → create_machine → create_ok | create_failed.
     // m4 (fix round 1): only while the row is STILL provisioning, decided on the LOCKED row (the null command writes and
     // runs nothing). Nothing holds a lock across the ingest call above, so the organiser's stop — or the provision timeout
@@ -1567,7 +1649,7 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
   // in flight — and `decide` THROWS InvalidTransition on `provisioned` from any of those, turning a
   // routine race into a 500 on the organiser's own create. Re-read and skip if it moved.
   const afterIngest = await readRow(sessionId);
-  if (afterIngest?.state === "provisioning") await apply(sessionId, { type: "provisioned" }, deps);   // effects: add_output for passthrough (C9)
+  if (afterIngest?.state === "provisioning") await apply(sessionId, { type: "provisioned" }, deps);   // effects: add_output (C9; R2004: composed's on B)
 }
 
 // ---------------------------------------------------------------------------
@@ -2171,10 +2253,11 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
   // JWT-shaped, everything from the first `?`), so last_heartbeat and the sample's raw hold the same detail.
   const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, [token]) };
+  const previousRung = await previousRungOf(before);   // read BEFORE this beat is stored or sampled
   await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
               egress_bytes = coalesce(${beat.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;
   await sampleBeat(sessionId, before.org_id, beat, deps);
-  raiseSizingAlarm(before, beat);
+  raiseSizingAlarm(before, beat, previousRung);
   let s = (await applyExpiry(sessionId, deps))!;
   // The runner's own callbacks are lifecycle triggers (plan §"Fly machine lifecycle"): playing/stopped, nothing else moves the table from a beat.
   // m1 (lane C final review): each callback is re-decided on the LOCKED row (T5-a) — another writer may have moved the row
@@ -2204,6 +2287,38 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   return { desiredState: s.desiredState };
 }
 
+/** The rung the sizing alarm's dedupe compares a beat with: the previous beat's, when that beat belongs to this attempt.
+ *
+ *  #980 review M2: the dedupe is per ATTEMPT. A retry boots a new Machine — a new process, whose ladder starts on
+ *  `full` — and restarts the beat window (beat_window_at, I4: "booted a replacement … restarts the window here"). A
+ *  stored beat from before that anchor is the OLD Machine's, so its rung says nothing about this one: the new attempt's
+ *  first stepped beat alarms. (The stale-beat arm moves the anchor too; a re-alarm after it is the safe direction.)
+ *
+ *  #980 review, carried into R2004: a `stopped` beat is a process's FINAL beat and reports no rung. Fly restarts a
+ *  crashed compositor IN PLACE (the same Machine and attempt), so the dedupe reads THROUGH that beat to the attempt's
+ *  last live beat — kept whole in the beat samples — and the restarted process's first beat on the rung its predecessor
+ *  held is no new step. Read only after a final beat, so an ordinary beat costs no query. A read that fails answers
+ *  null: an extra alarm is the safe direction for a sizing alarm, a lost one is not. */
+async function previousRungOf(before: Row): Promise<unknown> {
+  if (before.mode !== "composed") return null;
+  const storedIsThisAttempt = before.beat_window_at == null
+    || (before.heartbeat_at != null && new Date(before.heartbeat_at).getTime() > new Date(before.beat_window_at).getTime());
+  if (!storedIsThisAttempt) return null;
+  if (before.last_heartbeat?.state !== "stopped") return before.last_heartbeat?.rung ?? null;
+  try {
+    const since = before.beat_window_at;
+    const [r] = await sql<{ rung: string | null }[]>`
+      select raw->>'rung' as rung from fixture_stream_samples
+       where session_id = ${before.id} and source = 'heartbeat' and raw->>'state' is distinct from 'stopped'
+         ${since == null ? sql`` : sql`and sampled_at > ${since}`}
+       order by sampled_at desc, id desc limit 1`;
+    return r?.rung ?? null;
+  } catch (err) {
+    log.error({ sid: before.id, err: String(err) }, "stream session: the sizing alarm's previous rung could not be read — the beat may re-alarm");
+    return null;
+  }
+}
+
 /** The relay sizing alarm (owner ruling 2026-10-18, compositor `docs/_INDEX.md` Owed 20: "no lite mode; if CPU impacts,
  *  measure and raise the CPU size"). The compositor's ladder is `full → overlay_half_rate` and the bottom holds, so a
  *  composed beat that STEPPED DOWN says its Machine is short of CPU. It is raised once per step and per attempt
@@ -2212,15 +2327,8 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
  *  and the house alerting path, Sentry, under route `relay.sizing_alarm` with ONE message so every alarm groups as one
  *  issue. Ops answer it by raising the Machine size (compositor C17 runbook). A passthrough session has no Machine, so it
  *  never alarms. Telemetry, like the sample: it never throws into the beat. */
-function raiseSizingAlarm(before: Row, beat: RelayHeartbeat): void {
+function raiseSizingAlarm(before: Row, beat: RelayHeartbeat, previousRung: unknown): void {
   if (before.mode !== "composed") return;
-  // #980 review M2: the dedupe is per ATTEMPT. A retry boots a new Machine — a new process, whose ladder starts on
-  // `full` — and restarts the beat window (beat_window_at, I4: "booted a replacement … restarts the window here"). A
-  // stored beat from before that anchor is the OLD Machine's, so its rung says nothing about this one: the new attempt's
-  // first stepped beat alarms. (The stale-beat arm moves the anchor too; a re-alarm after it is the safe direction.)
-  const storedIsThisAttempt = before.beat_window_at == null
-    || (before.heartbeat_at != null && new Date(before.heartbeat_at).getTime() > new Date(before.beat_window_at).getTime());
-  const previousRung = storedIsThisAttempt ? (before.last_heartbeat?.rung ?? null) : null;
   const rung = steppedDownTo(previousRung, beat.rung);
   if (rung === null) return;
   const facts = { sessionId: before.id, rung, previousRung, attempt: before.runner_attempts, machineId: before.machine_id };
@@ -2268,9 +2376,38 @@ async function sampleBeat(sessionId: string, orgId: string, body: RelayHeartbeat
 export async function sessionFactsForJob(sessionId: string, token: string, deps: SessionDeps): Promise<RelayJobSession> {
   const s = await jobSession(sessionId, token, deps);
   const row = (await readRow(sessionId))!;
-  const target = (await sql.begin((tx) => readTargetSecret(tx, s.orgId, row.target_id))) as { url: string; streamKey: string };
   const pageToken = await mintRelayToken({ sid: sessionId, scope: "relay-page", expiresAt: relayTokenExpiry(s) });
-  return { sessionId, fixtureId: s.fixtureId, mode: s.mode, themeId: row.theme_id, overlayDelayMs: row.overlay_delay_ms, maxDurationMinutes: s.maxDurationMinutes, target, pageToken };
+  const base = { sessionId, fixtureId: s.fixtureId, mode: s.mode, themeId: row.theme_id, overlayDelayMs: row.overlay_delay_ms, maxDurationMinutes: s.maxDurationMinutes, pageToken };
+  if (s.mode !== "composed") {
+    // Passthrough has no Machine; its shape is today's, for contract completeness.
+    const target = (await sql.begin((tx) => readTargetSecret(tx, s.orgId, row.target_id))) as { url: string; streamKey: string };
+    return { ...base, target };
+  }
+  // R2004 (spec §5.3): the Machine READS the camera (Input A) over SRT playback and PUBLISHES to the programme (Input B)
+  // over RTMPS. The destination is a Cloudflare output on B, so its key is never read here and never reaches the Machine.
+  const { programme, playback, sportKey } = (await sql.begin(async (tx) => ({
+    programme: await readFirstInput(tx, sessionId, "programme"),
+    playback: await readCameraPlayback(tx, sessionId),
+    sportKey: (await tx<{ sport_key: string }[]>`select sport_key from fixture_stream_sessions where id = ${sessionId}`)[0]!.sport_key,
+  }))) as { programme: Awaited<ReturnType<typeof readFirstInput>>; playback: Awaited<ReturnType<typeof readCameraPlayback>>; sportKey: string };
+  // Provisioning stores both before the Machine is asked for, so a composed session past `provisioned` always has them. A
+  // row without either is refused by name — never a session served with a guessed or empty credential.
+  if (!programme?.rtmps) throw new Error(`stream session ${sessionId}: a composed session has no programme input credential to publish to`);
+  if (!playback) throw new Error(`stream session ${sessionId}: a composed session has no camera playback credential to read`);
+  // R2004 decision 5 / 7: the overlay page the compositor renders. `sid` because verifyRelayToken needs the expected sid;
+  // `template` RESOLVED from the session's copy, so the URL always names a live, non-retired template.
+  const overlay = new URL(`/overlay/fixtures/${s.fixtureId}`, deps.appUrl);
+  overlay.search = new URLSearchParams({
+    sid: sessionId, st: pageToken, host: "compositor", delay: String(row.overlay_delay_ms), template: resolveTemplate(row.theme_id, sportKey).id,
+  }).toString();
+  return RelayJobSession.parse({
+    ...base,
+    target: { url: programme.rtmps.url, streamKey: programme.rtmps.streamKey },
+    input: { protocol: "srt", url: playback.url, streamId: playback.streamId, passphrase: playback.passphrase },
+    output: relayOutputProfile(),
+    heartbeatIntervalMs: RELAY_HEARTBEAT_INTERVAL_MS,
+    overlayUrl: overlay.toString(),
+  });
 }
 
 /** Ruling F / design §12.6: on completed, when fixtures.stream_url is null and

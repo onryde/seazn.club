@@ -4,7 +4,7 @@
 // millisecond test, and Task 10's DB test proves the SAME function is wired.
 import { describe, expect, it } from "vitest";
 import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW } from "../../config";
-import { InsufficientCredits, credit, debit, headroomAfterReservations, restartIsFree, withinReuseWindow } from "../credits";
+import { InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, headroomAfterReservations, reservationMinutes, restartIsFree, withinReuseWindow } from "../credits";
 
 describe("debit / credit", () => {
   it("debit 1 from 1 → 0 (exactly zero is allowed); from 0 → InsufficientCredits", () => {
@@ -25,6 +25,25 @@ describe("withinReuseWindow (24 h same-fixture rule, m5's pure twin)", () => {
     expect(withinReuseWindow(null, now)).toBe(false);
     expect(withinReuseWindow(new Date(now.getTime() - (CREDIT_REUSE_HOURS * 3600 - 1) * 1000), now)).toBe(true);
     expect(withinReuseWindow(new Date(now.getTime() - CREDIT_REUSE_HOURS * 3600 * 1000), now)).toBe(false);
+  });
+});
+
+// R2004 (owner ruling 2026-10-18, option (a)): a composed session's camera (A) AND programme (B) both record while it
+// runs, so it reserves two full matches; passthrough records its one input. The counts are the RULING's, typed here.
+describe("reservationMinutes (R2004, owner ruling 2026-10-18)", () => {
+  it("passthrough reserves ONE recording of the match, composed TWO — the ruling's 1× and 2×, at two durations", () => {
+    expect(RECORDINGS_PER_SESSION).toEqual({ passthrough: 1, composed: 2 });
+    expect(reservationMinutes("passthrough", 300)).toBe(300);
+    expect(reservationMinutes("composed", 300)).toBe(600);
+    expect(reservationMinutes("passthrough", 90)).toBe(90);
+    expect(reservationMinutes("composed", 90)).toBe(180);
+  });
+  it("the empty case: a zero-length reservation is zero in both modes, and a duration that is not a whole non-negative number is refused by name", () => {
+    expect(reservationMinutes("passthrough", 0)).toBe(0);
+    expect(reservationMinutes("composed", 0)).toBe(0);
+    for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => reservationMinutes("composed", bad), String(bad)).toThrow(/reservationMinutes: maxDurationMinutes must be a whole non-negative number/);
+    }
   });
 });
 

@@ -5,6 +5,7 @@
 // persist `next`, log `events`, run `effects` through the ports. No I/O, no
 // clock: `now` is an argument. Domain events are records in an array — there
 // is no bus, because nothing present subscribes.
+import { reservationMinutes } from "./credits";
 import type { DbEndReason } from "./end-reason";
 import type { Expiry } from "./expiry";
 import {
@@ -126,7 +127,8 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
   if (i.phone === "silent") return { ok: false, refusal: "phone_not_responding" };
   if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
-  if (i.headroomMinutes < i.maxDurationMinutes) return { ok: false, refusal: "storage_exhausted" };
+  // R2004: room for every recording the session makes — two for composed (owner ruling 2026-10-18, option (a)).
+  if (i.headroomMinutes < reservationMinutes(i.mode, i.maxDurationMinutes)) return { ok: false, refusal: "storage_exhausted" };
   return { ok: true };
 }
 
@@ -149,7 +151,7 @@ export type Effect =
   | { type: "consume_credit" } | { type: "add_output" }
   | { type: "runner"; effect: RunnerEffect } | { type: "retry_runner" }
   | { type: "complete_now" } | { type: "fill_replay" }
-  | { type: "release_output" };   // C1: remove the passthrough output — never the input (deleting it leaks recordings, C2)
+  | { type: "release_output" };   // C1: remove the session's output — never the input (deleting it leaks recordings, C2)
 
 export interface Decision { next: Session; events: DomainEvent[]; effects: Effect[] }
 
@@ -335,7 +337,11 @@ export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["creat
  *  every passthrough command on one. The release goes FIRST, ahead of the replay fill, so a failing later effect cannot
  *  skip it. Killer: session.test.ts "C1 (lane C final review) … the sweep". */
 const releasesOutput = (before: Session, d: Decision): boolean =>
-  before.mode === "passthrough" && before.outputUid !== null && isTerminal(d.next.state);
+  // R2004: both modes hold an output now (composed's on its programme input). ENTERING a terminal state, never being in
+  // one: a terminal composed session still takes its runner's cleanup triggers (C27), and each of those lands terminal
+  // again. A passthrough decision never starts terminal (decideCell refuses every command there), so for passthrough the
+  // first conjunct is the predicate it always was.
+  !isTerminal(before.state) && before.outputUid !== null && isTerminal(d.next.state);
 
 export function decide(s: Session, c: Command, now: Date): Decision {
   const d = decideCell(s, c, now);
@@ -359,7 +365,7 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
       return {
         next: { ...s, state: "warming" },
         events: [{ type: "SessionWarming" }],
-        effects: s.mode === "passthrough" ? [{ type: "add_output" }] : [],   // C9: exactly one output, passthrough only
+        effects: [{ type: "add_output" }],   // C9: exactly one output — passthrough's on its camera input, composed's on its programme input (R2004)
       };
     case "ingest_connected":
       if (s.state !== "warming" || s.mode !== "passthrough") throw illegal();

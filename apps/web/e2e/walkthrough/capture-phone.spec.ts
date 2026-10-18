@@ -394,7 +394,7 @@ async function inputIdBySql(sessionId: string): Promise<string> {
   await expect
     .poll(async () => {
       const [r] = await withDb((sql) => sql<{ id: string | null }[]>`
-        select ingest_input_id as id from fixture_stream_inputs where session_id = ${sessionId} order by slot limit 1`);
+        select ingest_input_id as id from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' order by slot limit 1`);
       uid = r?.id ?? null;
       return uid;
     }, { message: "the session's fake input exists", timeout: POLL_WAIT_MS, intervals: [200] })

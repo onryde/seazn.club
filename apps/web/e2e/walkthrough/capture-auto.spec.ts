@@ -658,7 +658,7 @@ test("A12 alone: before the match, a hand-started broadcast that never ingested 
     let input: string | null = null;
     await expect.poll(async () => {
       const [r] = await withDb((sql) => sql<{ id: string | null }[]>`
-        select ingest_input_id as id from fixture_stream_inputs where session_id = ${s.id} order by slot limit 1`);
+        select ingest_input_id as id from fixture_stream_inputs where session_id = ${s.id} and role = 'camera' order by slot limit 1`);
       input = r?.id ?? null;
       return input;
     }, { message: "the session's fake input exists", timeout: POLL_WAIT_MS, intervals: [200] }).not.toBeNull();

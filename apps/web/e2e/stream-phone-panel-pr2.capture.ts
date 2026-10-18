@@ -271,7 +271,7 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
       await expect.poll(async () => {
         const [r] = await withDb((sql) => sql<{ id: string | null }[]>`
           select i.ingest_input_id as id from fixture_stream_inputs i join fixture_stream_sessions s on s.id = i.session_id
-           where s.fixture_id = ${rig.fixtureId} order by s.created_at desc, i.slot limit 1`);
+           where s.fixture_id = ${rig.fixtureId} and i.role = 'camera' order by s.created_at desc, i.slot limit 1`);
         uid = r?.id ?? null;
         return uid;
       }, { timeout: POLL_WAIT_MS }).not.toBeNull();
