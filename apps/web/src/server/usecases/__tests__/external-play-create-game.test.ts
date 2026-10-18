@@ -21,6 +21,7 @@ import {
   CHECKIN_BATCH_SIZE,
   DEADLINE_AFTER_MS,
   LICHESS_TIMEOUT_MS,
+  LINE_DEADLINE_GRACE_MS,
   MINT_CLAIM_STALE_MS,
   WINDOW_OPEN_LEAD_MS,
   windowFor,
@@ -2451,6 +2452,55 @@ describe.skipIf(!process.env.DATABASE_URL)("createGameIfReady — timed batches"
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("[reader:dequeue] the create's allowance (spec §5.7.8) is judged at the DEQUEUE too: past the deadline and before the cap, a queued create runs iff BOTH check-ins count - one side alone, or the cap itself, refuses (4 dequeues)", async () => {
+    const stamp = async (s: Awaited<ReturnType<typeof seedAt>>, who: ("home" | "away")[], at: Date) => {
+      for (const side of who) {
+        await sql`
+          insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
+          values (${s.fixtureId}, ${s[side].personId}, ${s.orgId}, 'in', ${at})
+          on conflict (fixture_id, person_id) do update set checked_in_at = excluded.checked_in_at`;
+      }
+    };
+    const rank = 2 * CHECKIN_BATCH_SIZE;
+    const arrived = new Date(startOf(2).getTime() + 60_000);
+    const cases = [
+      { name: "both came, dequeued 30 s past the deadline", who: ["home", "away"] as ("home" | "away")[], dequeueAt: new Date(closesOf(2).getTime() + 30_000), want: { created: true } },
+      { name: "both came, dequeued 1 ms before the cap", who: ["home", "away"] as ("home" | "away")[], dequeueAt: new Date(closesOf(2).getTime() + LINE_DEADLINE_GRACE_MS - 1), want: { created: true } },
+      { name: "both came, dequeued AT the cap", who: ["home", "away"] as ("home" | "away")[], dequeueAt: new Date(closesOf(2).getTime() + LINE_DEADLINE_GRACE_MS), want: { created: false, reason: "not_ready" } },
+      { name: "one side alone came, dequeued 30 s past the deadline", who: ["home"] as ("home" | "away")[], dequeueAt: new Date(closesOf(2).getTime() + 30_000), want: { created: false, reason: "not_ready" } },
+    ];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let checked = 0;
+    try {
+      for (const c of cases) {
+        const s = await seedAt(rank);
+        await stamp(s, c.who, arrived);
+        board.createChallengeToUser.mockClear();
+        board.acceptChallenge.mockClear();
+        vi.setSystemTime(arrived);
+        const blocker = blockQueue();
+        const pending = createGameIfReady(s.fixtureId);
+        await waitUntilQueued(s.fixtureId);
+        vi.setSystemTime(c.dequeueAt);
+        await blocker.release();
+        const got = await pending;
+        expect(got.created, c.name).toBe(c.want.created);
+        if (c.want.created) {
+          expect(got, c.name).toEqual({ created: true, gameId: GM });
+          GM = freshGameId();
+          board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+        } else {
+          expect(got, c.name).toEqual(c.want);
+          noHttp();
+        }
+        checked += 1;
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(checked, "anti-vacuity: dequeues checked").toBe(cases.length);
   });
 
   it("test 9: the game is created when the SECOND side is seated, however late in its batch - DEADLINE_AFTER_MS - 1 min after the batch opened, no clock penalty", async () => {
