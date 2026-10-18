@@ -71,6 +71,10 @@ export interface RealtimeKitFixtureCall {
   query: Record<string, string>;
   body: unknown;
   at: number;
+  /** The meeting the call concerns, traced from the ids in its path (a session, or a peer's report, back to its meeting; a new
+   *  meeting's creation to the id it got): the load run attributes each vendor call to a player's own meeting with it. Null for a
+   *  call that names none, or whose id the fixture does not know. */
+  meetingId: string | null;
 }
 
 export interface FixtureParticipant {
@@ -263,6 +267,19 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
     ended_at: s.endedAt,
   });
 
+  /** The meeting a path's ids lead to (see `RealtimeKitFixtureCall.meetingId`). */
+  const meetingOfPath = (p: string): string | null => {
+    let mm: RegExpExecArray | null;
+    if ((mm = /^\/meetings\/([^/]+)/.exec(p))) return mm[1]!;
+    if ((mm = /^\/sessions\/peer-report\/([^/]+)$/.exec(p))) {
+      const cam = peerCameras.get(mm[1]!);
+      const row = cam ? rows.find((r) => r.id === cam.rowId) : undefined;
+      return row ? (sessions.get(row.sessionId)?.meetingId ?? null) : null;
+    }
+    if ((mm = /^\/sessions\/([^/]+)\/participants$/.exec(p))) return sessions.get(mm[1]!)?.meetingId ?? null;
+    return null;
+  };
+
   const server: Server = createServer((req, res) => {
     void (async () => {
       const body = await readBody(req);
@@ -272,7 +289,7 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       const full = url.pathname;
       const inKit = full.startsWith(kitPath + "/") || full === kitPath;
       const path = inKit ? full.slice(kitPath.length) || "/" : full;
-      const call: RealtimeKitFixtureCall = { method, path, route: "unhandled", query, body, at: Date.now() };
+      const call: RealtimeKitFixtureCall = { method, path, route: "unhandled", query, body, at: Date.now(), meetingId: meetingOfPath(path) };
       calls.push(call);
       const route = (r: string) => {
         call.route = r;
@@ -299,6 +316,7 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
         route("POST /meetings");
         const mt: Meeting = { id: next("mtg"), title: String(b.title ?? ""), status: "ACTIVE", createdAt: iso() };
         meetings.set(mt.id, mt);
+        call.meetingId = mt.id;
         return ok(res, { id: mt.id, title: mt.title, status: mt.status, created_at: mt.createdAt });
       }
       if ((m = /^\/meetings\/([^/]+)$/.exec(path)) && method === "PATCH") {
