@@ -19437,7 +19437,9 @@ async function captureV2Suite(): Promise<void> {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 26;
+  // R2004: an environment naming a compositor image runs the composed Go live AND its Stop (two steps) where the
+  // imageless one runs the single 503 refusal.
+  const EXPECTED_STEPS = process.env.RELAY_IMAGE ? 27 : 26;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
