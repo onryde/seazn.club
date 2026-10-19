@@ -9,7 +9,8 @@
 // straight back to this step with their answers. The page reads the link state for the signed-in viewer (the page is
 // force-dynamic), so on the way back the card says who it is linked as.
 import { useLocaleOrDefault, usePlural, useT } from "@/components/i18n/dict-provider";
-import { lichessFlashKey, lichessLinkStartHref, type LichessFlashCode } from "@/lib/lichess-link";
+import { LichessFlashNotice } from "@/components/lichess-flash-notice";
+import { lichessLinkStartHref, type LichessFlashCode } from "@/lib/lichess-link";
 
 /** What the page knows for this viewer: whether this server can link at all, the linked Lichess name (null when
  *  signed out or not linked), and the `?lichess=` outcome a return from the start carried. */
@@ -59,9 +60,9 @@ export function RegisterLichessCard({
   const plural = usePlural();
   const locale = useLocaleOrDefault();
   const names = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(divisions);
-  // A `linked` outcome is shown as the linked row itself; any other outcome is a failure to say. "linked" with no
-  // account on file (a stale or hand-typed URL) is not a success to announce.
-  const failure = state.flash !== null && state.flash !== "linked" ? lichessFlashKey(state.flash) : null;
+  // A `linked` outcome is shown as the linked row itself; the notice says only a failure. "linked" with no account on
+  // file (a stale or hand-typed URL) is not a success to announce - the notice draws nothing for it, which is the ONE
+  // place that rule lives (components/lichess-flash-notice.tsx, shared with the match room).
   return (
     <section
       data-testid="register-lichess-card"
@@ -95,11 +96,8 @@ export function RegisterLichessCard({
           <h4 className="m-0 mt-1 text-sm font-semibold text-[#2e1065]">{t("settings.account.lichess.consent.title")}</h4>
           <p className="m-0 text-xs leading-[1.45] text-[#4a3a6b]">{t("settings.account.lichess.consent.body")}</p>
           <p className="m-0 text-xs leading-[1.4] text-[#6b5b8a]">{t("settings.account.lichess.consent.scopes")}</p>
-          {failure !== null && (
-            <p role="alert" data-testid="register-lichess-flash" className="m-0 text-sm text-red-700">
-              {t(failure)}
-            </p>
-          )}
+          {/* The same notice the match room's link card says it with: the sentence, and for already_linked the next step. */}
+          <LichessFlashNotice code={state.flash} testId="register-lichess-flash" />
           {state.configured ? (
             <>
               <a

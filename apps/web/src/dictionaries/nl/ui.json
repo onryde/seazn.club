@@ -6375,5 +6375,7 @@
   "externalPlay.room.state.wrongAccount.switch": "Van account wisselen",
   "externalPlay.room.state.wrongAccount.failed": "We konden je niet uitloggen. Probeer het opnieuw.",
   "externalPlay.room.state.noAccount.title": "Deze plek is nog niet gekoppeld aan een Seazn-account",
-  "externalPlay.room.state.noAccount.body": "Vraag het aan de organisator."
+  "externalPlay.room.state.noAccount.body": "Vraag het aan de organisator.",
+  "settings.account.lichess.flashNext.already_linked": "Log in op het Seazn-account dat dit Lichess-account heeft en ontkoppel het in Instellingen, of schakel op Lichess over naar een ander account en koppel dat hier.",
+  "settings.account.lichess.flashNext.already_linked_game": "Log in op het Seazn-account dat dit Lichess-account heeft en ontkoppel het in Instellingen; kom daarna terug en koppel het hier."
 }

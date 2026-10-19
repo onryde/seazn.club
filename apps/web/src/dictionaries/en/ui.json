@@ -6375,5 +6375,7 @@
   "externalPlay.room.state.wrongAccount.switch": "Switch account",
   "externalPlay.room.state.wrongAccount.failed": "We couldn't sign you out. Try again.",
   "externalPlay.room.state.noAccount.title": "This seat isn't tied to a Seazn account yet",
-  "externalPlay.room.state.noAccount.body": "Ask the organiser."
+  "externalPlay.room.state.noAccount.body": "Ask the organiser.",
+  "settings.account.lichess.flashNext.already_linked": "Sign in to the Seazn account that has this Lichess account and unlink it in Settings, or switch to a different account on Lichess and link that one here.",
+  "settings.account.lichess.flashNext.already_linked_game": "Sign in to the Seazn account that has this Lichess account and unlink it in Settings, then come back and link it here."
 }

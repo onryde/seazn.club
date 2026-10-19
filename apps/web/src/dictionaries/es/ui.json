@@ -6375,5 +6375,7 @@
   "externalPlay.room.state.wrongAccount.switch": "Cambiar de cuenta",
   "externalPlay.room.state.wrongAccount.failed": "No pudimos cerrar tu sesión. Inténtalo de nuevo.",
   "externalPlay.room.state.noAccount.title": "Este asiento aún no está vinculado a una cuenta de Seazn",
-  "externalPlay.room.state.noAccount.body": "Pregúntaselo al organizador."
+  "externalPlay.room.state.noAccount.body": "Pregúntaselo al organizador.",
+  "settings.account.lichess.flashNext.already_linked": "Inicia sesión en la cuenta de Seazn que tiene esta cuenta de Lichess y desvincúlala en Configuración, o cambia a otra cuenta en Lichess y vincúlala aquí.",
+  "settings.account.lichess.flashNext.already_linked_game": "Inicia sesión en la cuenta de Seazn que tiene esta cuenta de Lichess y desvincúlala en Configuración; después vuelve y vincúlala aquí."
 }
