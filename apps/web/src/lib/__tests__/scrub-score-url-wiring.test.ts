@@ -7,9 +7,11 @@
 // NOTE: the client's Sentry.init lives in src/instrumentation-client.ts, the one client file the Turbopack build loads.
 // (A sentry.client.config.ts is only picked up by @sentry/nextjs's WEBPACK integration, config/webpack.js
 // `getClientSentryConfigFile`; this app never bundled it, so until the init moved to instrumentation-client no browser
-// Sentry ran at all.) Session replay is OFF (owner decision 2026-10-19): the client tests below prove that the init hands
-// every scrub hook to the SDK AND registers no replay; the replay guard's own behaviour is sentry-replay-guard.test.ts.
-// What the whole option set is, hook by hook and by identity, is sentry-client-init.test.ts.
+// Sentry ran at all.) The client is ERRORS ONLY and has session replay OFF (owner decisions 2026-10-19): it builds no
+// transaction and sends no log, so it sets beforeSend and beforeBreadcrumb (plus the event processor, which still scrubs a
+// transaction or replay_event were one ever built), and the client tests below prove the init hands those to the SDK AND
+// registers no replay; the replay guard's own behaviour is sentry-replay-guard.test.ts. What the whole option set is, hook by
+// hook and by identity, is sentry-client-init.test.ts. The server and edge configs keep all four hooks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { routes } from "@/lib/routes";
@@ -48,6 +50,14 @@ type Fn = (...args: unknown[]) => unknown;
 const run = (fn: unknown, ...args: unknown[]): unknown => {
   expect(typeof fn, "the option is a function").toBe("function");
   return (fn as Fn)(...args);
+};
+
+type Named = { name: string; processEvent?: unknown };
+/** The client init's integrations as the SDK would build them from an empty default list: the init extends the SDK's own list
+ *  (a function), so what it adds on its own is what this returns. */
+const integrationList = (options: Options): Named[] => {
+  expect(typeof options.integrations, "the client init extends the SDK's default integrations (a function)").toBe("function");
+  return (options.integrations as (defaults: Named[]) => Named[])([]);
 };
 
 function expectScrubbed(value: unknown): void {
@@ -209,21 +219,21 @@ describe("Sentry edge (sentry.edge.config.ts, loaded by instrumentation.ts on ed
 });
 
 describe("Sentry client (src/instrumentation-client.ts)", () => {
-  it("scrubs errors, transactions, breadcrumbs and logs", async () => {
+  // Errors only (owner rulings 2026-10-19): the client builds no transaction and sends no log, so beforeSendTransaction and
+  // beforeSendLog are not set (sentry-client-init.test.ts pins that). What it still hands the SDK is proven here.
+  it("scrubs errors and breadcrumbs", async () => {
     const options = await sentryInitOptions(CLIENT_INIT);
     expectScrubbed(run(options.beforeSend, errorEvent(), {}));
-    expectScrubbed(run(options.beforeSendTransaction, transactionEvent(), {}));
     expectScrubbed(run(options.beforeBreadcrumb, { category: "navigation", data: { to: `/score/${TOKEN}` } }, {}));
-    expectScrubbed(run(options.beforeSendLog, logRecord()));
   });
 
-  it("registers an event processor that scrubs a replay_event's URL list (beforeSend never sees one)", async () => {
+  it("registers an event processor that scrubs a replay_event's URL list and a transaction (beforeSend never sees either)", async () => {
     const options = await sentryInitOptions(CLIENT_INIT);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
-    const scrubbers = integrations.filter((i) => typeof i.processEvent === "function");
+    const scrubbers = integrationList(options).filter((i) => typeof i.processEvent === "function");
     expect(scrubbers.map((i) => i.name)).toEqual(["ScrubScoreTokens"]);
     const out = run(scrubbers[0]!.processEvent, { type: "replay_event", urls: [PAGE] }, {}, {});
     expect(out).toEqual({ type: "replay_event", urls: ["https://seazn.club/score/[token]"] });
+    expectScrubbed(run(scrubbers[0]!.processEvent, transactionEvent(), {}, {}));
   });
 
   // Session replay is OFF (owner decision 2026-10-19). A replay would also bring rrweb into every page's first-load chunk
@@ -232,25 +242,14 @@ describe("Sentry client (src/instrumentation-client.ts)", () => {
     const options = await sentryInitOptions(CLIENT_INIT);
     const Sentry = await import("@sentry/nextjs");
     expect(vi.mocked(Sentry.replayIntegration), "replayIntegration is never called").not.toHaveBeenCalled();
-    expect((options.integrations as { name: string }[]).map((i) => i.name)).not.toContain("Replay");
+    expect(integrationList(options).map((i) => i.name)).not.toContain("Replay");
     expect(Object.hasOwn(options, "replaysSessionSampleRate")).toBe(false);
     expect(Object.hasOwn(options, "replaysOnErrorSampleRate")).toBe(false);
   });
 
   it("sets exactly this option set (a new option is a decision, so it is a red here first)", async () => {
     const options = await sentryInitOptions(CLIENT_INIT);
-    expect(Object.keys(options).sort()).toEqual([
-      "beforeBreadcrumb",
-      "beforeSend",
-      "beforeSendLog",
-      "beforeSendTransaction",
-      "dsn",
-      "enableLogs",
-      "enabled",
-      "environment",
-      "integrations",
-      "tracesSampleRate",
-    ]);
+    expect(Object.keys(options).sort()).toEqual(["beforeBreadcrumb", "beforeSend", "dsn", "enabled", "environment", "integrations"]);
   });
 
   // The replay used to run on every page but a credential one (lib/replay-guard). With it off, no page has one: not an
@@ -264,13 +263,13 @@ describe("Sentry client (src/instrumentation-client.ts)", () => {
       vi.resetModules();
       vi.clearAllMocks();
       vi.stubGlobal("window", { location: new URL(href) });
-      const integrations = (await sentryInitOptions(CLIENT_INIT)).integrations as { name: string }[];
+      const integrations = integrationList(await sentryInitOptions(CLIENT_INIT));
       const Sentry = await import("@sentry/nextjs");
       expect(vi.mocked(Sentry.replayIntegration), `${href}: no replay is built`).not.toHaveBeenCalled();
       names.push(integrations.map((i) => i.name));
     }
     expect(names.length).toBe(pages.length + 1);
-    expect(names[0], "the scrubbers and the console logs are there").toEqual(["ConsoleLogs", "ScrubScoreTokens"]);
+    expect(names[0], "the scrub processor is there, and nothing that records or forwards logs").toEqual(["ScrubScoreTokens"]);
     for (const n of names) expect(n).toEqual(names[0]);
   });
 });
@@ -373,8 +372,7 @@ describe("the match-room token (review I1): every config's real hooks scrub it",
     const { token, room, start, login } = await roomUrls();
     expectScrubbedOf(run(options.beforeSend, { event_id: "e1", request: { url: room } }, {}), token);
     expectScrubbedOf(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: room } }, {}), token);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
-    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    const scrubber = integrationList(options).find((i) => typeof i.processEvent === "function")!;
     expectScrubbedOf(run(scrubber.processEvent, { type: "replay_event", urls: [room, start, login] }, {}, {}), token);
   });
 });
@@ -452,8 +450,7 @@ describe("the one-time sign-in token: every config's real hooks scrub it", () =>
     const { login, verify, magicUrl, verifyUrl } = await signInUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: magicUrl, query_string: `token=${login}` } }, {}), login);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: verifyUrl, to: magicUrl } }, {}), login, verify);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
-    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    const scrubber = integrationList(options).find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [magicUrl, verifyUrl] }, {}, {}), login, verify);
   });
 });
@@ -516,8 +513,7 @@ describe("the profile-claim secret: every config's real hooks scrub it", () => {
     const { secret, page, accept, login } = claimUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: page } }, {}), secret);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: page } }, {}), secret);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
-    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    const scrubber = integrationList(options).find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [page, accept, login] }, {}, {}), secret);
   });
 });
@@ -590,8 +586,7 @@ describe("the invite token and the check-in code: every config's real hooks scru
     const { invite, checkin, joinUrl, claimApiUrl, checkinUrl } = await pathSecretUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: joinUrl } }, {}), invite);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: joinUrl, to: checkinUrl } }, {}), invite, checkin);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
-    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    const scrubber = integrationList(options).find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [joinUrl, checkinUrl, claimApiUrl] }, {}, {}), invite, checkin);
   });
 });
@@ -648,8 +643,7 @@ describe("a credential in a request body: every Sentry config's real hooks drop 
     expectBodyGone(run(options.beforeSend, consume, {}), login);
     expectBodyGone(run(options.beforeSend, claim, {}), invite);
     expectBodyKept(run(options.beforeSend, lookup, {}));
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
-    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    const scrubber = integrationList(options).find((i) => typeof i.processEvent === "function")!;
     expectBodyGone(run(scrubber.processEvent, consume, {}, {}), login);
   });
 });
@@ -700,16 +694,14 @@ describe("a one-time token in a span's bare query, and a join code: every Sentry
     });
   }
 
-  it("Sentry client: beforeSend, beforeSendTransaction and the event processor do it too", async () => {
+  it("Sentry client: beforeSend and the event processor do it (no transaction is built, but one would be scrubbed by the processor)", async () => {
     const options = await sentryInitOptions(CLIENT_INIT);
     const { login, code, tx, child, joinTx, error, joinError } = await spanEvents();
-    expect(data(run(options.beforeSendTransaction, tx, {}))["http.query"]).toBe("?token=[token]&next=%2Fdashboard");
-    expect(spanData(run(options.beforeSendTransaction, child, {}))["url.query"]).toBe("?token=[token]&next=%2Fdashboard");
-    expect(data(run(options.beforeSendTransaction, joinTx, {}))["http.query"]).toBe("?join_code=[code]");
     expect(JSON.stringify(run(options.beforeSend, error, {}))).not.toContain(login);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
-    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    const scrubber = integrationList(options).find((i) => typeof i.processEvent === "function")!;
     expect(data(run(scrubber.processEvent, tx, {}, {}))["http.query"]).toBe("?token=[token]&next=%2Fdashboard");
+    expect(spanData(run(scrubber.processEvent, child, {}, {}))["url.query"]).toBe("?token=[token]&next=%2Fdashboard");
+    expect(data(run(scrubber.processEvent, joinTx, {}, {}))["http.query"]).toBe("?join_code=[code]");
     expect(JSON.stringify(run(scrubber.processEvent, joinError, {}, {}))).not.toContain(code);
   });
 });

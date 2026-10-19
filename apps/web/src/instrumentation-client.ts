@@ -6,6 +6,7 @@ import posthog from "posthog-js";
 import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
 import { stopReplayBeforeNavigatingTo } from "@/lib/replay-guard";
+import { sentryEnvironment } from "@/lib/sentry-environment";
 import {
   posthogBeforeSend,
   scrubScoreTokens,
@@ -15,51 +16,43 @@ import {
 
 // Browser Sentry is initialised HERE. @sentry/nextjs picks up a `sentry.client.config.ts` only in its WEBPACK integration
 // (config/webpack.js, getClientSentryConfigFile); `next build` here is Turbopack, which never bundled that file, so until
-// this init moved in (owner decision 2026-10-19: browser Sentry ON, session replay OFF) no browser error, trace, log or
-// scrub hook ever ran. The server/edge counterparts are not auto-loaded either: ../instrumentation.ts is what runs
-// sentry.server.config / sentry.edge.config.
+// this init moved in no browser error or scrub hook ever ran. The server/edge counterparts are not auto-loaded either:
+// ../instrumentation.ts is what runs sentry.server.config / sentry.edge.config.
 //
-// SESSION REPLAY IS OFF, on purpose: no replayIntegration and neither replays*SampleRate. Importing `replayIntegration` (or
-// `getReplay`) here would pull @sentry/replay and rrweb (~23 KB gzipped) into the first-load chunk of every page, so
-// nothing in this file may; scripts/check-client-sentry.ts fails a build whose chunks hold rrweb. lib/replay-guard.ts is the
-// guard that must go with a replay, and it stays in place, inert: with no Replay integration the router hook below finds
-// nothing to stop. Turning a replay back on is a decision that needs that guard wired (replayMayRunAt, REPLAY_BLOCK_SELECTORS,
-// recordingEventHook; see its header), not just an integration added.
+// ERRORS ONLY (owner rulings 2026-10-19), on the client alone: no tracing (no tracesSampleRate, so no transaction or span is
+// ever built), no log capture (no enableLogs, no console-to-logs forwarder, no beforeSendLog), and SESSION REPLAY IS OFF (no
+// replayIntegration, neither replays*SampleRate). Importing `replayIntegration` (or `getReplay`) here would pull @sentry/replay
+// and rrweb (~23 KB gzipped) into the first-load chunk of every page, so nothing in this file may; scripts/check-client-sentry.ts
+// fails a build whose chunks hold rrweb or the console-to-logs forwarder. lib/replay-guard.ts is the guard that must go with a
+// replay, and it stays in place, inert: with no Replay integration the router hook below finds nothing to stop. Turning a replay
+// back on is a decision that needs that guard wired (replayMayRunAt, REPLAY_BLOCK_SELECTORS, recordingEventHook; see its header),
+// not just an integration added.
 //
-// A device link's URL (/score/<token>) is a live scoring credential, as are the other one-time links lib/scrub-score-url
-// knows: every hook below scrubs them from errors, transactions, breadcrumbs and logs before anything leaves. Sentry reports
-// nothing without a DSN (`enabled`), so a build with no NEXT_PUBLIC_SENTRY_DSN (local, CI) sends nothing.
+// The SDK's own default integrations that serve something other than an error are taken out (by name, below). That is runtime
+// only: @sentry/nextjs's client imports its BrowserTracing integration unconditionally, so the code stays in the bundle (the only
+// switch that removes it, `__SENTRY_TRACING__=false` via compiler.define, is global in Next and would turn the server's tracing off
+// too).
+//
+// A device link's URL (/score/<token>) is a live scoring credential, as are the other one-time links lib/scrub-score-url knows:
+// every hook below scrubs them from errors and breadcrumbs before anything leaves. Sentry reports nothing without a DSN
+// (`enabled`), so a build with no NEXT_PUBLIC_SENTRY_DSN (local, CI) sends nothing.
+const NOT_FOR_ERRORS = new Set([
+  "BrowserTracing", // page-load and navigation spans, web-vitals observers, fetch/XHR timing: tracing is off
+  "BrowserSession", // a session envelope per page load (release health): not an error
+  "ConversationId", // an AI-chat id for LLM monitoring: none here
+]);
+
 try {
   Sentry.init({
     dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
-    environment: process.env.NODE_ENV,
+    // stg vs prod: NODE_ENV is "production" for both, so the baked origin tells them apart (lib/sentry-environment).
+    environment: sentryEnvironment(process.env.NEXT_PUBLIC_BASE_URL, process.env.NODE_ENV),
 
-    // Capture 10% of traces in production; 100% in dev
-    tracesSampleRate: process.env.NODE_ENV === "production" ? 0.1 : 1.0,
-
-    enableLogs: true,
-
-    integrations: [
-      // Forward console.warn/error as structured Sentry logs
-      Sentry.consoleLoggingIntegration({ levels: ["warn", "error"] }),
-      // An event that skips beforeSend (a replay's, were one ever added) still goes through an event processor.
-      scrubScoreTokensIntegration(),
-    ],
+    // The SDK's defaults minus what is not for errors, plus the processor an event that skips beforeSend still goes through.
+    integrations: (defaults) => [...defaults.filter((integration) => !NOT_FOR_ERRORS.has(integration.name)), scrubScoreTokensIntegration()],
 
     beforeSend: scrubSentryEvent,
-    beforeSendTransaction: scrubSentryEvent,
     beforeBreadcrumb: scrubScoreTokens,
-
-    beforeSendLog(log) {
-      // Debug/trace are dev-only noise; keep prod log volume down
-      if (
-        process.env.NODE_ENV === "production" &&
-        (log.level === "debug" || log.level === "trace")
-      ) {
-        return null;
-      }
-      return scrubScoreTokens(log);
-    },
 
     // Don't send events when DSN is absent (local dev without Sentry)
     enabled: !!process.env.NEXT_PUBLIC_SENTRY_DSN,

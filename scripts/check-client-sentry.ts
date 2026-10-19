@@ -1,20 +1,27 @@
-// Browser Sentry, checked against a REAL production build (owner decision 2026-10-19: browser Sentry ON, session replay OFF).
+// Browser Sentry, checked against a REAL production build (owner decisions 2026-10-19: browser Sentry ON with session replay OFF,
+// then ERRORS ONLY: no tracing, no logs).
 //
 // Why a build check and not a unit test. `@sentry/nextjs` bundles a `sentry.client.config.ts` only under WEBPACK; `next build`
-// here is Turbopack, so for as long as the client Sentry.init lived in that file nothing reached a browser: no error, trace,
-// log or scrub hook, and every unit test of the file stayed green. tsc, eslint and ~4,000 vitest tests cannot see which
-// modules a bundle holds; only the emitted chunks can. This reads them, after `next build`, and fails when:
+// here is Turbopack, so for as long as the client Sentry.init lived in that file nothing reached a browser: no error or scrub hook,
+// and every unit test of the file stayed green. tsc, eslint and ~4,000 vitest tests cannot see which modules a bundle holds; only
+// the emitted chunks can. This reads them, after `next build`, and fails when:
 //
 //   1. the client init is not in a FIRST-LOAD chunk (the shared chunks every route bootstraps with: build-manifest.json's
-//      rootMainFiles + polyfillFiles, the same pair scripts/check-build-chunks.ts treats as global). The marker is a string only
-//      the init's own wiring leaves behind, absent from the bundle before the init moved to instrumentation-client.ts: the
-//      scrub processor's name (`ScrubScoreTokens`, scrubScoreTokensIntegration) and the scrubber's `query_string` handling
-//      (scrubSentryEvent). They live in apps/web/src/lib/scrub-score-url.ts and are bundled only because the init passes
-//      them to Sentry.init, which is why they witness the init and not merely the scrubber's presence; Turbopack drops an
-//      unused export.
-//   2. `checkoutEveryNms` (rrweb's recorder option, the one string every session-replay recorder carries) is in ANY chunk
-//      under .next/static/chunks. Session replay is off; a `replayIntegration` or `getReplay` reference anywhere reachable
-//      from a first-load module drags @sentry/replay and rrweb (~23 KB gzipped) into every page.
+//      rootMainFiles + polyfillFiles, the same pair scripts/check-build-chunks.ts treats as global). Each marker is a string only
+//      the init's own wiring leaves behind, absent from the bundle before the init moved to instrumentation-client.ts: the scrub
+//      processor's name (`ScrubScoreTokens`, scrubScoreTokensIntegration), the scrubber's `query_string` handling
+//      (scrubSentryEvent), and the staging host of the environment mapping (`stg.seazn.club`, lib/sentry-environment). They are
+//      bundled only because the init uses them, which is why they witness the init and not merely the module's presence;
+//      Turbopack drops an unused export.
+//   2. a FORBIDDEN marker is in ANY chunk under .next/static/chunks:
+//        - `checkoutEveryNms`, rrweb's recorder option, the one string every session-replay recorder carries. Session replay is
+//          off; a `replayIntegration` or `getReplay` reference anywhere reachable from a first-load module drags @sentry/replay
+//          and rrweb (~23 KB gzipped) into every page.
+//        - `auto.log.console`, the origin the console-to-logs forwarder stamps on every log (consoleLoggingIntegration). Log
+//          capture is off.
+//      Tracing cannot be pinned this way: @sentry/nextjs's client imports its BrowserTracing integration unconditionally, so
+//      that code is in the bundle however the init is written (the init takes the integration out at RUNTIME, which
+//      sentry-client-init.test.ts proves on the real client, and e2e/sentry-client-init.spec.ts proves on the built page).
 //   3. it scanned nothing (no first-load files, or no chunks at all): zero checked is a failure, not a pass.
 //
 // It also prints the first-load size (raw and gzipped, rootMainFiles + polyfillFiles), so a change to what the shared chunks
@@ -30,10 +37,27 @@ import { gzipSync } from "node:zlib";
 import { isMainModule } from "./lib/main-module.ts";
 
 /** Strings the client init leaves in a first-load chunk; each is absent from the bundle without it. See the header. */
-export const INIT_MARKERS = ["ScrubScoreTokens", "query_string"] as const;
+export const INIT_MARKERS = ["ScrubScoreTokens", "query_string", "stg.seazn.club"] as const;
 
 /** rrweb's recorder option: present in any bundle that holds a session-replay recorder. */
 export const REPLAY_MARKER = "checkoutEveryNms";
+
+/** The origin consoleLoggingIntegration stamps on every log it forwards: present in any bundle that holds the forwarder. */
+export const LOG_MARKER = "auto.log.console";
+
+/** Strings that must be in NO chunk, each with what it would mean and the usual cause. */
+export const FORBIDDEN: readonly { marker: string; what: string; cause: string }[] = [
+  {
+    marker: REPLAY_MARKER,
+    what: "a session-replay recorder: rrweb",
+    cause: "session replay is off; something reachable from a first-load module references replayIntegration / getReplay",
+  },
+  {
+    marker: LOG_MARKER,
+    what: "the console-to-logs forwarder: consoleLoggingIntegration",
+    cause: "log capture is off; something reachable from a first-load module calls consoleLoggingIntegration / sets enableLogs",
+  },
+];
 
 export interface ClientBuildReport {
   /** rootMainFiles + polyfillFiles, relative to the .next dir. */
@@ -44,8 +68,8 @@ export interface ClientBuildReport {
   chunksScanned: number;
   /** For each init marker, the first-load files that hold it. */
   initMarkers: Record<string, string[]>;
-  /** Every chunk under static/chunks that holds the replay marker. */
-  replayChunks: string[];
+  /** For each forbidden marker, every chunk under static/chunks that holds it. */
+  forbiddenChunks: Record<string, string[]>;
 }
 
 type BuildManifest = { rootMainFiles?: string[]; polyfillFiles?: string[] };
@@ -74,8 +98,12 @@ export function inspectClientBuild(nextDir: string): ClientBuildReport {
   }
 
   const chunks = jsFiles(join(nextDir, "static/chunks"));
-  const replayChunks = chunks.filter((file) => readFileSync(join(nextDir, file), "utf8").includes(REPLAY_MARKER));
-  return { firstLoadFiles, firstLoadRawBytes, firstLoadGzipBytes, chunksScanned: chunks.length, initMarkers, replayChunks };
+  const forbiddenChunks: Record<string, string[]> = Object.fromEntries(FORBIDDEN.map((f) => [f.marker, [] as string[]]));
+  for (const file of chunks) {
+    const text = readFileSync(join(nextDir, file), "utf8");
+    for (const { marker } of FORBIDDEN) if (text.includes(marker)) forbiddenChunks[marker]!.push(file);
+  }
+  return { firstLoadFiles, firstLoadRawBytes, firstLoadGzipBytes, chunksScanned: chunks.length, initMarkers, forbiddenChunks };
 }
 
 /** What is wrong with a build, one sentence each; empty when nothing is. */
@@ -89,11 +117,9 @@ export function failures(report: ClientBuildReport): string[] {
       out.push(`"${marker}" is in no first-load chunk: the client Sentry.init (src/instrumentation-client.ts) is not in the bundle every page loads`);
     }
   }
-  if (report.replayChunks.length > 0) {
-    out.push(
-      `"${REPLAY_MARKER}" (a session-replay recorder: rrweb) is in ${report.replayChunks.length} chunk(s): ${report.replayChunks.join(", ")}. ` +
-        "Session replay is off; something reachable from a first-load module references replayIntegration / getReplay.",
-    );
+  for (const { marker, what, cause } of FORBIDDEN) {
+    const chunks = report.forbiddenChunks[marker] ?? [];
+    if (chunks.length > 0) out.push(`"${marker}" (${what}) is in ${chunks.length} chunk(s): ${chunks.join(", ")}. ${cause[0]!.toUpperCase()}${cause.slice(1)}.`);
   }
   return out;
 }
@@ -115,16 +141,16 @@ function main(argv: string[]): number {
   else {
     console.log(
       `[client-sentry] first-load (${report.firstLoadFiles.length} files, ${relative(root, nextDir)}): ` +
-        `${report.firstLoadRawBytes} B raw, ${report.firstLoadGzipBytes} B gzip; ${report.chunksScanned} chunks scanned for ${REPLAY_MARKER}`,
+        `${report.firstLoadRawBytes} B raw, ${report.firstLoadGzipBytes} B gzip; ${report.chunksScanned} chunks scanned for ${FORBIDDEN.map((f) => f.marker).join(", ")}`,
     );
     for (const marker of INIT_MARKERS) console.log(`[client-sentry] init marker "${marker}": ${report.initMarkers[marker]!.join(", ") || "ABSENT"}`);
-    console.log(`[client-sentry] replay marker "${REPLAY_MARKER}": ${report.replayChunks.join(", ") || "in no chunk"}`);
+    for (const { marker } of FORBIDDEN) console.log(`[client-sentry] forbidden marker "${marker}": ${report.forbiddenChunks[marker]!.join(", ") || "in no chunk"}`);
   }
   if (problems.length > 0) {
     for (const problem of problems) console.error(`[client-sentry] FAILED: ${problem}`);
     return 1;
   }
-  if (!asJson) console.log("[client-sentry] OK: the client Sentry.init is in the first-load chunks and no replay recorder is in any chunk.");
+  if (!asJson) console.log("[client-sentry] OK: the client Sentry.init is in the first-load chunks; no replay recorder and no console-to-logs forwarder is in any chunk.");
   return 0;
 }
 

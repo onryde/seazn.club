@@ -1,15 +1,20 @@
 /**
- * Browser Sentry on the PRODUCTION build (owner decision 2026-10-19: ON, session replay OFF).
+ * Browser Sentry on the PRODUCTION build (owner decisions 2026-10-19: ON, session replay OFF, then ERRORS ONLY with the real
+ * environment).
  *
  * Until then no browser Sentry ran at all: the client options sat in sentry.client.config.ts, which @sentry/nextjs bundles
  * only under webpack, and this app builds with Turbopack. src/instrumentation-client.ts now holds the Sentry.init. Unit tests
  * prove the options (sentry-client-init.test.ts) and scripts/check-client-sentry.ts proves the bundle holds the init and no
- * replay recorder; this spec proves the part neither can see - that the built page RUNS the init without breaking:
+ * replay recorder or log forwarder; this spec proves the part neither can see - that the built page RUNS the init without
+ * breaking:
  *
  *  - a public page, a public fixture page and the personal match room (the page that pulls in the most client code) each
  *    load on the standalone production server with a quiet console and no uncaught error;
- *  - on each, the SDK's client exists in the page and carries the options the init set: the scrub processor, the scrub
- *    hooks, a production sample rate, and NO Replay integration and NO replay sample rate;
+ *  - on each, the SDK's client exists in the page and carries what the init set: the scrub processor and the scrub hooks, NO
+ *    tracing option, NO log capture, NO Replay, and none of the SDK's performance/session default integrations, with the
+ *    error-capture ones (global handlers, breadcrumbs, ...) still there;
+ *  - the environment is the deployment's: the deploy config whose origin this build baked in (NEXT_PUBLIC_BASE_URL, read from
+ *    the same env the build was made with) names it; a build with no origin (CI) is a production build, so "production";
  *  - a client-side navigation (the match room's way back, a Next Link) runs through the init's `onRouterTransitionStart`
  *    with a live client and still leaves the console quiet.
  *
@@ -20,6 +25,8 @@
  * The probe reads the SDK's own global carrier (`window.__SENTRY__`), the one window into the client a page without a
  * debugger has. It is an SDK internal: a bump that moves it fails the spec on the "carrier" line, loudly, not quietly green.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type Page } from "@playwright/test";
 import { longName, seedMatchRoom } from "./match-room-kit";
 
@@ -42,10 +49,28 @@ function listen(page: Page): string[] {
 
 interface SentryView {
   enabled: boolean | undefined;
+  environment: string | undefined;
   integrations: string[];
-  tracesSampleRate: number | undefined;
+  /** Option keys that mean tracing, profiling, logs or replay, whatever their value. */
+  forbiddenOptionKeys: string[];
   hooks: Record<"beforeSend" | "beforeSendTransaction" | "beforeBreadcrumb" | "beforeSendLog", string>;
-  replayOptions: string[];
+}
+
+/** What a deploy config says its environment is: its app ends in -prod or -stg; the origin it bakes is NEXT_PUBLIC_BASE_URL. */
+function deployConfig(file: string): { environment: string; baseUrl: string } {
+  const text = readFileSync(fileURLToPath(new URL(`../../../${file}`, import.meta.url)), "utf8");
+  const app = /^app\s*=\s*"([^"]+)"/m.exec(text)?.[1] ?? "";
+  const baseUrl = /^\s*NEXT_PUBLIC_BASE_URL\s*=\s*"([^"]+)"/m.exec(text)?.[1] ?? "";
+  const environment = app.endsWith("-prod") ? "production" : app.endsWith("-stg") ? "staging" : "";
+  if (!environment || !baseUrl) throw new Error(`${file}: cannot read the app name / origin (${app} / ${baseUrl})`);
+  return { environment, baseUrl };
+}
+
+/** The environment this build must report: the deployment whose origin it baked in, else a plain production build. */
+function expectedEnvironment(): string {
+  const baked = process.env.NEXT_PUBLIC_BASE_URL;
+  const known = ["fly.toml", "fly.stg.toml"].map(deployConfig);
+  return known.find((c) => c.baseUrl === baked)?.environment ?? "production";
 }
 
 /** The Sentry client as the page holds it, read from the SDK's carrier; null when the page has no Sentry client at all. */
@@ -61,15 +86,15 @@ async function sentryClient(page: Page): Promise<SentryView | null> {
     const kind = (key: string) => typeof options[key];
     return {
       enabled: options.enabled as boolean | undefined,
+      environment: options.environment as string | undefined,
       integrations: (options.integrations ?? []).map((i) => i.name),
-      tracesSampleRate: options.tracesSampleRate as number | undefined,
+      forbiddenOptionKeys: Object.keys(options).filter((k) => /trac|profil|replay|enableLogs|beforeSendLog|beforeSendTransaction/i.test(k) && options[k] !== undefined),
       hooks: {
         beforeSend: kind("beforeSend"),
         beforeSendTransaction: kind("beforeSendTransaction"),
         beforeBreadcrumb: kind("beforeBreadcrumb"),
         beforeSendLog: kind("beforeSendLog"),
       },
-      replayOptions: Object.keys(options).filter((k) => /replay/i.test(k)),
     };
   });
 }
@@ -78,17 +103,22 @@ async function sentryClient(page: Page): Promise<SentryView | null> {
 async function expectInitialised(page: Page, where: string): Promise<void> {
   const view = await sentryClient(page);
   expect(view, `${where}: window.__SENTRY__ holds no client (carrier shape moved, or Sentry.init never ran)`).not.toBeNull();
-  expect(view!.integrations, `${where}: the scrub processor is registered`).toContain("ScrubScoreTokens");
-  expect(view!.integrations, `${where}: no Replay integration`).not.toContain("Replay");
-  expect(view!.replayOptions, `${where}: no replay option of any kind`).toEqual([]);
-  expect(view!.hooks, `${where}: every scrub hook is a function`).toEqual({
+  const live = view!.integrations;
+  expect(live, `${where}: the scrub processor is registered`).toContain("ScrubScoreTokens");
+  // Errors only: nothing for performance, sessions, AI chats, logs or replay...
+  for (const name of ["BrowserTracing", "BrowserSession", "ConversationId", "ConsoleLogs", "Replay"]) expect(live, `${where}: no ${name}`).not.toContain(name);
+  expect(view!.forbiddenOptionKeys, `${where}: no tracing, profiling, log or replay option is set`).toEqual([]);
+  // ...and everything that captures an error is still there.
+  for (const name of ["GlobalHandlers", "BrowserApiErrors", "LinkedErrors", "Breadcrumbs", "Dedupe", "HttpContext", "NextjsClientStackFrameNormalization"]) {
+    expect(live, `${where}: ${name} still captures errors`).toContain(name);
+  }
+  expect(view!.hooks, `${where}: both scrub hooks are functions, and there is no transaction or log hook to set`).toEqual({
     beforeSend: "function",
-    beforeSendTransaction: "function",
+    beforeSendTransaction: "undefined",
     beforeBreadcrumb: "function",
-    beforeSendLog: "function",
+    beforeSendLog: "undefined",
   });
-  expect(view!.tracesSampleRate, `${where}: a production sample rate (the dev rate is 1)`).toBeGreaterThan(0);
-  expect(view!.tracesSampleRate).toBeLessThan(1);
+  expect(view!.environment, `${where}: the environment is the deployment's, not NODE_ENV`).toBe(expectedEnvironment());
   expect(view!.enabled, `${where}: no DSN in this build, so the client is disabled and sends nothing`).toBe(false);
 }
 
