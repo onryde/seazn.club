@@ -33,3 +33,22 @@ describe("proxy: a mutating /api call from another origin is refused", () => {
     expect(res.headers.get("x-middleware-next")).toBe("1");
   });
 });
+
+// The emailed claim link now SIGNS IN on a POST (V464): POST /api/claims/{token}/accept mints a session
+// when the caller has none, so it is exactly the kind of mutation a third-party page must not be able to
+// fire from a visitor's browser. It rides the same Origin check as every other mutating /api call — no
+// route-level exemption — and these pin that this path is inside it.
+describe("proxy: the claim accept route (which can mint a session) is Origin-checked", () => {
+  const ACCEPT = "/api/claims/pc_0123456789abcdef/accept";
+
+  it("a foreign origin → 403 before the route runs", async () => {
+    const res = proxy(post(ACCEPT, { origin: "https://evil.example" }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ ok: false, error: "Forbidden" });
+  });
+
+  it("the app's own origin reaches the route (positive pair)", () => {
+    const res = proxy(post(ACCEPT, { origin: "https://seazn.club" }));
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+  });
+});

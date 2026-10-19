@@ -6375,5 +6375,10 @@
   "externalPlay.room.state.wrongAccount.switch": "Switch account",
   "externalPlay.room.state.wrongAccount.failed": "We couldn't sign you out. Try again.",
   "externalPlay.room.state.noAccount.title": "This seat isn't tied to a Seazn account yet",
-  "externalPlay.room.state.noAccount.body": "Ask the organiser."
+  "externalPlay.room.state.noAccount.body": "Ask the organiser.",
+  "claim.signin.invited": "Invitation sent to {email}",
+  "claim.signin.cta": "Claim and sign in",
+  "claim.signin.busy": "Signing you in…",
+  "claim.signin.hint": "You opened this from your inbox, so there's no password and no second email.",
+  "claim.signin.failed": "Couldn't claim this profile. Try again."
 }

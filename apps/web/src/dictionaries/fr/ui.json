@@ -6375,5 +6375,10 @@
   "externalPlay.room.state.wrongAccount.switch": "Changer de compte",
   "externalPlay.room.state.wrongAccount.failed": "Nous n'avons pas pu vous déconnecter. Réessayez.",
   "externalPlay.room.state.noAccount.title": "Cette place n'est pas encore liée à un compte Seazn",
-  "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur."
+  "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur.",
+  "claim.signin.invited": "Invitation envoyée à {email}",
+  "claim.signin.cta": "Réclamer et me connecter",
+  "claim.signin.busy": "Connexion en cours…",
+  "claim.signin.hint": "Vous l'avez ouvert depuis votre boîte de réception : pas de mot de passe, pas de second e-mail.",
+  "claim.signin.failed": "Impossible de réclamer ce profil. Réessayez."
 }

@@ -1,14 +1,23 @@
 // Claim a player profile (PROMPT-53): the emailed/QR link lands here. Logged
-// out → the auth card (magic-link) with next back to this page; logged in →
-// one-tap confirm. Each dead-end token state gets its own copy — never a
-// vague shared error.
+// in → one-tap confirm. Logged out → depends on WHICH link this is (a claim has
+// two secrets, V464):
+//   - the one that went into the invite EMAIL proves the inbox, so the page
+//     offers "Claim and sign in" (one tap; never on load — mail scanners open
+//     links);
+//   - the organiser's console link proves nothing about its holder, so it
+//     shows the auth card (magic-link) with next back to this page.
+// Each dead-end token state gets its own copy — never a vague shared error.
 import { getCurrentUser } from "@/lib/auth";
 import { HttpError } from "@/lib/errors";
 import { maskEmail } from "@/lib/mask-email";
-import { resolveClaimToken, type ResolvedClaim } from "@/server/usecases/person-claims";
+import { resolveClaimToken, type ResolvedTokenClaim } from "@/server/usecases/person-claims";
 import { AuthForm } from "@/components/auth-form";
 import { NightStage } from "@/components/night-stage";
 import { ClaimAccept } from "@/components/claim-accept";
+import { ClaimSignIn } from "@/components/claim-sign-in";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { getDictionary } from "@/lib/i18n";
+import { resolveLocale } from "@/lib/resolve-locale";
 
 const DEAD_ENDS: Record<string, { title: string; body: string }> = {
   CLAIM_INVALID: {
@@ -37,7 +46,7 @@ export default async function ClaimPage({
   const { token } = await params;
   const user = await getCurrentUser();
 
-  let claim: ResolvedClaim | null = null;
+  let claim: ResolvedTokenClaim | null = null;
   let deadEnd: { title: string; body: string } | null = null;
   try {
     claim = await resolveClaimToken(token);
@@ -45,6 +54,12 @@ export default async function ClaimPage({
     const code = err instanceof HttpError ? err.code : undefined;
     deadEnd = DEAD_ENDS[code ?? "CLAIM_INVALID"] ?? DEAD_ENDS.CLAIM_INVALID;
   }
+
+  // Only the emailed-link card below is localised (the rest of this page is the
+  // long-standing English copy); its provider is scoped to that card alone, so
+  // the console-link path renders exactly as it did.
+  const locale = await resolveLocale();
+  const ui = await getDictionary(locale, "ui");
 
   return (
     <NightStage maxW="max-w-md">
@@ -101,6 +116,14 @@ export default async function ClaimPage({
                 </p>
               </div>
             )
+          ) : claim.via === "email" ? (
+            // The link that was emailed to the invited address: opening it IS
+            // the proof, so one tap signs in and claims. The island's copy
+            // comes from the visitor's locale (this page carries no provider
+            // of its own).
+            <DictProvider dict={ui} locale={locale}>
+              <ClaimSignIn token={token} email={maskEmail(claim.email)} />
+            </DictProvider>
           ) : (
             <>
               <p className="mb-4 text-center text-sm text-cream/70">

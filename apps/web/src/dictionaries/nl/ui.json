@@ -6375,5 +6375,10 @@
   "externalPlay.room.state.wrongAccount.switch": "Van account wisselen",
   "externalPlay.room.state.wrongAccount.failed": "We konden je niet uitloggen. Probeer het opnieuw.",
   "externalPlay.room.state.noAccount.title": "Deze plek is nog niet gekoppeld aan een Seazn-account",
-  "externalPlay.room.state.noAccount.body": "Vraag het aan de organisator."
+  "externalPlay.room.state.noAccount.body": "Vraag het aan de organisator.",
+  "claim.signin.invited": "Uitnodiging verstuurd naar {email}",
+  "claim.signin.cta": "Claimen en inloggen",
+  "claim.signin.busy": "Bezig met inloggen…",
+  "claim.signin.hint": "Je hebt dit vanuit je inbox geopend, dus geen wachtwoord en geen tweede e-mail.",
+  "claim.signin.failed": "Dit profiel kon niet worden geclaimd. Probeer het opnieuw."
 }
