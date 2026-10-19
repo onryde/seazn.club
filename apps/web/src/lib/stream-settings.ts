@@ -3,7 +3,7 @@
 //
 //  - The MODE: the score is the default. A stored `passthrough` is the organiser's "Camera only"; anything else streams
 //    the score whenever this deployment can run a composed session, and the camera only when it cannot — the organiser
-//    is never blocked (V465). Availability is the deployment's (drivers.ts `composedUnavailable()`), handed in by the
+//    is never blocked (V466). Availability is the deployment's (drivers.ts `composedUnavailable()`), handed in by the
 //    caller: this module never restates that rule.
 //  - The TEMPLATE: a stored id is written only if the fixture's sport is offered it now (`isPickableTemplate`); a stored
 //    id that is later retired still READS and resolves (template-registry.ts `resolveTemplate`).

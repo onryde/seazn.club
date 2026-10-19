@@ -1706,7 +1706,7 @@ export type StreamCodeShown = z.infer<typeof StreamCodeShown>;
  *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */
 /** R2006 (owner ruling 2026-10-19, "Option C"): three more preferences, each written only when the body names it.
  *  `streamMode` — null resets to the default (the score whenever the deployment can run it), `passthrough` is "Camera
- *  only", `composed` is "Add the score back"; every start path reads it (V465). `overlayTemplate` — null resets to the
+ *  only", `composed` is "Add the score back"; every start path reads it (V466). `overlayTemplate` — null resets to the
  *  sport's default; an id the fixture's sport is not offered is a 400 and writes nothing; 40 matches
  *  `CreateStreamSession.themeId`. `overlayDelayMs` — whole ms, 0–30000 (V462's check; lib/stream-settings.ts
  *  `OVERLAY_DELAY_MAX_MS`), null resets to the server's default and 0 is a real override. */

@@ -1,4 +1,4 @@
--- V465 — Relay Release 2, R2006 (owner ruling 2026-10-19, "Option C"): the fixture's stream MODE is a stored setting.
+-- V466 — Relay Release 2, R2006 (owner ruling 2026-10-19, "Option C"): the fixture's stream MODE is a stored setting.
 --
 -- The score is the DEFAULT: a stream goes out with the score composited whenever this deployment can run a composed
 -- session, and "Camera only" is the organiser's explicit choice. Every start path reads the same stored answer — the
@@ -10,9 +10,8 @@
 -- `composed` on a deployment that cannot run one still streams the camera: the setting is a preference, availability is
 -- the deployment's (drivers.ts `composedUnavailable()`), and the organiser is never blocked.
 --
--- Numbered V465: V463 is W2c's (feat/format-matrix-w2c, unmerged) and V464 is PR #991's (feat/claim-email-signin). The
--- required merge order is V463 (W2c) → V464 (#991) → V465 (this, #989), strictly ascending with no prod tag cut in
--- between — Flyway runs without outOfOrder, so a lower number landing after this one resolves IGNORED and every later
--- validate fails. The PR body says so.
+-- Numbered V466: main's max is V464 (#991) and PR #992 (feat/chess-checkin-extend, open) holds V465. Flyway runs
+-- without outOfOrder, so this must stay ABOVE main's max at merge time — a lower number landing after a higher one
+-- resolves IGNORED and every later validate fails. If something higher lands first, renumber again. The PR body says so.
 alter table fixture_stream_settings
   add column stream_mode text null check (stream_mode in ('composed', 'passthrough'));
