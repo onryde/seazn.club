@@ -16,7 +16,9 @@
 // the matcher is proven able to fail on a synthetic route before it is trusted on the real tree.
 //
 // DB objects: `users.password_hash` and `password_resets` still EXIST (the owner decides separately about dropping
-// them). Code must not read or write them, with ONE exception pinned below: account deletion nulls the stored hash.
+// them). Code must not read or write them, except the ERASURES pinned below: a line that only ever NULLS a legacy hash
+// (account deletion; Google verifying an unverified account). Each is allowed by its exact line in its exact file, and
+// the test beside it proves the line is still there.
 //
 // Sport: not applicable. This is auth plumbing.
 import { describe, expect, it } from "vitest";
@@ -68,19 +70,39 @@ function codeOf(source: string): string {
 /** A route that reads or accepts a password: any code mention of `password` that is not the word "passwordless". */
 const PASSWORD_FIELD = /password(?!less)/i;
 
-/** The single allowed mention, as the exact line: account deletion erases the stored credential hash. */
-const ERASURE = { file: "users/me/route.ts", line: /^\s*password_hash\s*=\s*null,\s*$/ };
+/**
+ * The allowed mentions, each the exact line in the exact route: a legacy credential hash is only ever ERASED, never read
+ * back or compared. `context` is the statement the line must sit in (so it is the erasure it claims to be, not a read).
+ * A new entry needs the owner's reason in `why`; the profile-claim sign-in (verifyByInbox) will want one too when it lands.
+ */
+const ERASURES = [
+  {
+    file: "users/me/route.ts",
+    line: /^\s*password_hash\s*=\s*null,\s*$/,
+    context: /update users set[\s\S]*?password_hash\s*=\s*null[\s\S]*?deleted_at\s*=\s*now\(\)/,
+    why: "account deletion erases the stored credential hash with the rest of the PII",
+  },
+  {
+    file: "auth/google/callback/route.ts",
+    line: /^\s*password_hash\s*=\s*case when email_verified then password_hash else null end,\s*$/,
+    context: /update users set[\s\S]*?google_sub\s*=[\s\S]*?email_verified\s*=\s*true,[\s\S]*?password_hash\s*=\s*case when email_verified then password_hash else null end/,
+    why: "Google verifying an unverified account drops a squatter's legacy hash (a verified account's column is left as it was)",
+  },
+] as const;
 
-/** The lines of `source` (as a route under app/api) that read or accept a password, less the allowed erasure. */
+/** Is this line, in this route file (relative to app/api/), one of the pinned erasures? */
+const isErasure = (relFile: string, line: string) => ERASURES.some((e) => relFile === e.file && e.line.test(line));
+
+/** The lines of `source` (as a route under app/api) that read or accept a password, less the allowed erasures. */
 function passwordLines(relFile: string, source: string): string[] {
   return codeOf(source)
     .split("\n")
     .filter((l) => PASSWORD_FIELD.test(l))
-    .filter((l) => !(relFile === ERASURE.file && ERASURE.line.test(l)));
+    .filter((l) => !isErasure(relFile, l));
 }
 
 describe("no route under app/api reads or accepts a password", () => {
-  it("scans every route: none carries a password field, the account-deletion erasure aside", () => {
+  it("scans every route: none carries a password field, the pinned erasures aside", () => {
     const routes = filesUnder(API, (n) => /^route\.[cm]?[jt]sx?$/.test(n));
     expect(routes.length, "anti-vacuity: the walker found the route tree").toBeGreaterThan(100);
 
@@ -103,17 +125,22 @@ describe("no route under app/api reads or accepts a password", () => {
     expect(flagged("const u = 'https://seazn.club/x'; // see password docs")).toBe(0);
   });
 
-  it("the one allowed mention is exactly the account-deletion erasure, and it is still there (delete this allowance with the column)", () => {
-    const file = `${API}${ERASURE.file}`;
-    const source = fs.readFileSync(file, "utf8");
-    const hits = codeOf(source).split("\n").filter((l) => PASSWORD_FIELD.test(l));
-    expect(hits.length, "the deletion route still erases the legacy hash").toBe(1);
-    expect(ERASURE.line.test(hits[0]!)).toBe(true);
-    // And the allowance applies to that file only: the same line anywhere else is an offender.
-    expect(passwordLines("v1/other/route.ts", hits[0]!).length).toBe(1);
-    expect(passwordLines(ERASURE.file, hits[0]!).length).toBe(0);
-    // It sits in the soft-delete anonymisation, beside the other PII it clears, not in a read.
-    expect(source).toMatch(/update users set[\s\S]*?password_hash\s*=\s*null[\s\S]*?deleted_at\s*=\s*now\(\)/);
+  it("each allowed mention is exactly its erasure, still there once, in its own file only (delete an allowance with the column)", () => {
+    let checked = 0;
+    for (const erasure of ERASURES) {
+      const source = fs.readFileSync(`${API}${erasure.file}`, "utf8");
+      const hits = codeOf(source).split("\n").filter((l) => PASSWORD_FIELD.test(l));
+      expect(hits.length, `${erasure.file} still has the one line (${erasure.why})`).toBe(1);
+      expect(erasure.line.test(hits[0]!), `${erasure.file}: the line is the pinned erasure`).toBe(true);
+      // The allowance applies to that file only: the same line anywhere else is an offender.
+      expect(passwordLines("v1/other/route.ts", hits[0]!).length, `${erasure.file}: elsewhere it is a hit`).toBe(1);
+      expect(passwordLines(erasure.file, hits[0]!).length, `${erasure.file}: in its own file it is allowed`).toBe(0);
+      // And it is the erasure it claims to be: inside the UPDATE that clears it, not a read of the hash.
+      expect(source, `${erasure.file}: the statement around it`).toMatch(erasure.context);
+      checked++;
+    }
+    expect(checked).toBe(ERASURES.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -190,16 +217,15 @@ describe("the password code and its DB objects are not touched by the app", () =
   it("no source reads or writes users.password_hash or password_resets, or hashes a password", () => {
     const files = appSource();
     expect(files.length).toBeGreaterThan(500);
-    // `bcrypt` is matched as an IMPORT, not as a word: the privacy policy page says in prose that legacy passwords were
-    // hashed with bcrypt, which stays true while the hashes remain in the table, and is not code.
+    // `bcrypt` is matched as an IMPORT, not as a word: a mention of it in prose or a test title is not code.
     const NEEDLE = /\b(?:password_hash|password_resets|hashPassword|verifyPassword|createPasswordResetToken|consumePasswordReset|sendPasswordResetEmail)\b|from\s+["']bcrypt(?:js)?["']|require\(["']bcrypt/;
     const hits: string[] = [];
     for (const f of files) {
       const rel = path.relative(SRC, f);
       for (const line of codeOf(fs.readFileSync(f, "utf8")).split("\n")) {
         if (!NEEDLE.test(line)) continue;
-        // The account-deletion erasure is pinned by its own test above.
-        if (rel === `app/api/${ERASURE.file}` && ERASURE.line.test(line)) continue;
+        // The pinned erasures have their own test above.
+        if (rel.startsWith("app/api/") && isErasure(rel.slice("app/api/".length), line)) continue;
         hits.push(`${rel}: ${line.trim()}`);
       }
     }
