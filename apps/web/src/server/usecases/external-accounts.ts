@@ -6,7 +6,7 @@ import "server-only";
 // external-play/secrets.ts; `access_token_enc` is named HERE and nowhere else
 // (enc-boundary.test.ts holds every other file to that). Touched only via
 // privileged `sql` (FORCE RLS with no app_user policy).
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { LICHESS_OAUTH_SCOPES, LICHESS_TOKEN_URL } from "@/lib/oauth";
 import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
@@ -261,7 +261,12 @@ export async function unlinkLichess(userId: string): Promise<void> {
      where user_id = ${userId} and provider = 'lichess'`;
 }
 
-/** True when the person's linked Seazn user has a Lichess account row. */
+/** True when the person's linked Seazn user has a Lichess account row.
+ *
+ *  OPENS ITS OWN POOLED CONNECTIONS (a `withTenant`, then a pooled `getLichessLink`) — so it must never be called
+ *  from inside a `withTenant` callback: with the pool at `max` that is the permanent self-deadlock lib/db.ts
+ *  describes. A transaction that needs the answer for a roster reads `personIdsWithLichessLink` in its
+ *  `privilegedPrelude` instead (createEntrants does). */
 export async function personHasLichessLink(orgId: string, personId: string): Promise<boolean> {
   const userId = await withTenant(orgId, async (tx) => {
     const rows = await tx<{ user_id: string | null }[]>`
@@ -293,19 +298,36 @@ export async function assertUserHasLichessForOnlinePlay(userId: string | null): 
   }
 }
 
-export async function assertPersonIdsLinkedForOnlinePlay(
-  orgId: string,
-  personIds: string[],
-): Promise<void> {
-  for (const personId of personIds) {
-    if (!(await personHasLichessLink(orgId, personId))) {
-      throw new HttpError(
-        422,
-        "Every player must link a Lichess account before entering online play",
-        "LICHESS_LINK_REQUIRED",
-      );
-    }
-  }
+/** The org's persons whose Seazn user holds a Lichess account row — the same answer `personHasLichessLink` gives,
+ *  for every person at once, on a connection the caller already holds.
+ *
+ *  `user_external_accounts` is sealed from `app_user` (V451: FORCE RLS, no grant), so this can only run BEFORE a tenant
+ *  transaction's role drop: pass it as `withTenant`'s `privilegedPrelude`, which runs on the transaction's own
+ *  connection. Called from inside the callback it fails with `42501`; reaching for the pooled `sql` instead would be a
+ *  second connection while the first is held (see lib/db.ts). Scoped to `orgId` by `persons.org_id`, which is also what
+ *  RLS scoped the per-person check to. */
+export async function personIdsWithLichessLink(tx: Tx, orgId: string): Promise<Set<string>> {
+  const rows = await tx<{ id: string }[]>`
+    select p.id
+      from persons p
+      join user_external_accounts a on a.user_id = p.user_id and a.provider = 'lichess'
+     where p.org_id = ${orgId}`;
+  return new Set(rows.map((r) => r.id));
+}
+
+/** The organiser-side REGISTRATION gate for an online division: every rostered person must hold a Lichess link.
+ *  `linked` is `personIdsWithLichessLink`'s answer for the org. `null` is "never read for this transaction" (the
+ *  division turned online after the prelude looked) — no answer, so it REFUSES, like an unasked flag does. */
+export function assertPersonIdsLinkedForOnlinePlay(
+  linked: ReadonlySet<string> | null,
+  personIds: readonly string[],
+): void {
+  if (personIds.every((personId) => linked?.has(personId) === true)) return;
+  throw new HttpError(
+    422,
+    "Every player must link a Lichess account before entering online play",
+    "LICHESS_LINK_REQUIRED",
+  );
 }
 
 /** Whether a stored grant is enough to PLAY: a consent timestamp AND every scope in PLAY_SCOPES. The one authority —
