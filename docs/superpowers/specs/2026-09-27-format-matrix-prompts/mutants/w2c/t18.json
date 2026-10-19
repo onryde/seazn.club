@@ -1,0 +1,951 @@
+[
+  {
+    "id": "t18-gate",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (!canCustom) return \"gate\";",
+    "replace": "if (false) return \"gate\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "Community org sees the gate"
+      }
+    ]
+  },
+  {
+    "id": "t18-inexpressible-first",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (!expressible) return \"inexpressible\";",
+    "replace": "if (!canCustom) return \"gate\"; if (!expressible) return \"inexpressible\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "pointsSectionState: inexpressible first"
+      }
+    ]
+  },
+  {
+    "id": "t18-inexpressible-off",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (!expressible) return \"inexpressible\";",
+    "replace": "if (false) return \"inexpressible\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "pointsSectionState: inexpressible first"
+      }
+    ]
+  },
+  {
+    "id": "t18-takes-all",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return (DRAW_KINDS as ReadonlySet<string>).has(kind);",
+    "replace": "return true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "mounted on table stages only"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "every sport, on every table kind"
+      }
+    ]
+  },
+  {
+    "id": "t18-takes-none",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return (DRAW_KINDS as ReadonlySet<string>).has(kind);",
+    "replace": "return false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "mounted on table stages only"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "every sport, on every table kind"
+      }
+    ]
+  },
+  {
+    "id": "t18-q1-open",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return pointsRuleExpressible(divisionPointsCfg(module, divisionConfig));",
+    "replace": "return { ok: true } as never;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "Q1: the section"
+      }
+    ]
+  },
+  {
+    "id": "t18-q1-raw-cfg",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return (parsed.success ? parsed.data : raw) as Record<string, unknown>;",
+    "replace": "return raw as Record<string, unknown>;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "Q1: the section"
+      }
+    ]
+  },
+  {
+    "id": "t18-i3-always",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return pointsRuleAwardReachesTable(module);",
+    "replace": "return true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "I3: the walkover SCORE is offered exactly"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "I3: the walkover SCORE is shown"
+      }
+    ]
+  },
+  {
+    "id": "t18-i3-never",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return pointsRuleAwardReachesTable(module);",
+    "replace": "return false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "I3: the walkover SCORE is offered exactly"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "I3: the walkover SCORE is shown"
+      }
+    ]
+  },
+  {
+    "id": "t18-bonus-validate",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "validatePointsRule(PointsRule.parse({ base: ZERO_BASE, bonuses: [{ when, param: 0, points: 0 }] }), module.metrics);",
+    "replace": "void 0;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the bonus kinds offered are the ones"
+      }
+    ]
+  },
+  {
+    "id": "t18-bonus-draw",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (when === \"draw\" && !hasDraw) return false;",
+    "replace": "if (false) return false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a draw bonus is offered only"
+      }
+    ]
+  },
+  {
+    "id": "t18-bonus-noresult",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (when === \"no_result\" && !recordsNoResult) return false;",
+    "replace": "if (false) return false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a draw bonus is offered only"
+      }
+    ]
+  },
+  {
+    "id": "t18-param-kinds",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "new Set<BonusWhen>([\"loss_margin_lte\", \"win_margin_gte\", \"score_ratio_gte\"])",
+    "replace": "new Set<BonusWhen>([\"loss_margin_lte\", \"win_margin_gte\"])",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the kinds that read a threshold"
+      }
+    ]
+  },
+  {
+    "id": "t18-base-win-spelling",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "let win = firstFinite(pts, [\"win\", \"w\"]);",
+    "replace": "let win = firstFinite(pts, [\"win\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the division's base numbers"
+      }
+    ]
+  },
+  {
+    "id": "t18-base-draw-spelling",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "const draw = firstFinite(pts, [\"draw\", \"d\"]);",
+    "replace": "const draw = firstFinite(pts, [\"draw\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the division's base numbers"
+      }
+    ]
+  },
+  {
+    "id": "t18-base-scoring",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "const pts = isObj(cfg.points) ? cfg.points : isObj(cfg.scoring) ? cfg.scoring : {};",
+    "replace": "const pts = isObj(cfg.points) ? cfg.points : {};",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the division's base numbers"
+      }
+    ]
+  },
+  {
+    "id": "t18-base-pointsmap-single",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (distinct.size === 1)",
+    "replace": "if (distinct.size >= 1)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the division's base numbers"
+      }
+    ]
+  },
+  {
+    "id": "t18-draw-zero",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "draw: text(b.draw ?? 0),",
+    "replace": "draw: text(b.draw),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "starts from the division's numbers"
+      }
+    ]
+  },
+  {
+    "id": "t18-blank-zero",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (raw.trim() === \"\") return null;",
+    "replace": "if (false) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a blank box is not zero"
+      }
+    ]
+  },
+  {
+    "id": "t18-nan",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return Number.isFinite(n) ? n : null;",
+    "replace": "return n;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a blank box is not zero"
+      }
+    ]
+  },
+  {
+    "id": "t18-walkover-pair",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if ((ww === null) !== (wl === null)) return { ok: false, problem: \"walkover\" };",
+    "replace": "if (false) return { ok: false, problem: \"walkover\" };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the walkover row is both numbers or neither"
+      }
+    ]
+  },
+  {
+    "id": "t18-score-pair",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if ((scoreW === null) !== (scoreL === null)) return { ok: false, problem: \"score\" };",
+    "replace": "if (false) return { ok: false, problem: \"score\" };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the walkover row is both numbers or neither"
+      }
+    ]
+  },
+  {
+    "id": "t18-score-reaches",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "const score: [number, number] | undefined = reaches && scoreW !== null && scoreL !== null ? [scoreW, scoreL] : undefined;",
+    "replace": "const score: [number, number] | undefined = scoreW !== null && scoreL !== null ? [scoreW, scoreL] : undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the walkover row is both numbers or neither"
+      }
+    ]
+  },
+  {
+    "id": "t18-score-pays-base-w",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "const winnerPoints = ww ?? (score === undefined ? null : win);",
+    "replace": "const winnerPoints = ww ?? null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the walkover row is both numbers or neither"
+      }
+    ]
+  },
+  {
+    "id": "t18-score-pays-base-l",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "const loserPoints = wl ?? (score === undefined ? null : loss);",
+    "replace": "const loserPoints = wl ?? null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the walkover row is both numbers or neither"
+      }
+    ]
+  },
+  {
+    "id": "t18-bonus-points-needed",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (points === null) return { ok: false, problem: \"bonus\" };",
+    "replace": "if (false) return { ok: false, problem: \"bonus\" };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a threshold kind needs its number"
+      }
+    ]
+  },
+  {
+    "id": "t18-bonus-param-needed",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (param === null) return { ok: false, problem: \"bonus\" };",
+    "replace": "if (false) return { ok: false, problem: \"bonus\" };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a threshold kind needs its number"
+      }
+    ]
+  },
+  {
+    "id": "t18-bonus-param-leak",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "bonuses.push({ when: b.when, points });",
+    "replace": "bonuses.push({ when: b.when, param: parseNumber(b.param) ?? 0, points });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a threshold kind needs its number"
+      }
+    ]
+  },
+  {
+    "id": "t18-use-division-null",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (draft.useDivision) return { ok: true, rule: null };",
+    "replace": "if (false) return { ok: true, rule: null };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "is points: null"
+      }
+    ]
+  },
+  {
+    "id": "t18-dirty-always",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return canonical(next.rule) !== canonical(storedPointsRule(stored));",
+    "replace": "return true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "dirty only against a stored rule"
+      }
+    ]
+  },
+  {
+    "id": "t18-dirty-invalid",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (!next.ok) return true;",
+    "replace": "if (!next.ok) return false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "dirty only against a stored rule"
+      }
+    ]
+  },
+  {
+    "id": "t18-stored-parse",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return parsed.success ? parsed.data : null;",
+    "replace": "return (stored as PointsRule | null) ?? null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "a stored row the schema refuses reads as NO rule"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "config.points opens the section"
+      }
+    ]
+  },
+  {
+    "id": "t18-held-forfeit",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return rule !== null && (rule.bonuses.length > 0 || rule.forfeit !== undefined);",
+    "replace": "return rule !== null && rule.bonuses.length > 0;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "what the gate withholds"
+      }
+    ]
+  },
+  {
+    "id": "t18-held-bonus",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return rule !== null && (rule.bonuses.length > 0 || rule.forfeit !== undefined);",
+    "replace": "return rule !== null && rule.forfeit !== undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "what the gate withholds"
+      }
+    ]
+  },
+  {
+    "id": "t18-preview-division",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "draft.useDivision ? { ...draftFromStored(module, divisionConfig, null), useDivision: false } : draft",
+    "replace": "draft",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "the preview says the walkover score only"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "nothing stored"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-score-shown",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "{reaches && (",
+    "replace": "{true && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "I3: the walkover SCORE is shown"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-score-hidden",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "{reaches && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "I3: the walkover SCORE is shown"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-held",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "const heldByGate = gate && storedHasCustomParts(inForce);",
+    "replace": "const heldByGate = false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "the gate holds a stored walkover row"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-held-always",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "const heldByGate = gate && storedHasCustomParts(inForce);",
+    "replace": "const heldByGate = gate;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "the gate holds a stored walkover row"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-readonly",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "if (readOnly) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a started stage, or a viewer, reads the section"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-gate-rows",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "{gate ? (",
+    "replace": "{false ? (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "the section's three states"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-can-draw",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "const canDraw = divisionBasePoints(module, divisionConfig).draw !== null;",
+    "replace": "const canDraw = true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a sport that cannot draw gets the two-part sentence"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-inexpressible",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "if (state === \"inexpressible\") {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "the section's three states"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-save-needs-valid",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "disabled={saving || !dirty || problem !== null}",
+    "replace": "disabled={saving}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "Save is offered but not yet enabled"
+      }
+    ]
+  },
+  {
+    "id": "t18-sec-add-menu",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "{offered.length > 0 && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "the add menu offers the kinds"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-kind",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "{stageTakesPoints(kind) && (",
+    "replace": "{true && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "every sport, on every table kind"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-stored",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "stored={stageConfig.points}",
+    "replace": "stored={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "config.points opens the section"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-readonly",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "readOnly={readOnly}",
+    "replace": "readOnly={false}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "a started stage and a viewer read the section"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-gate-mount",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "        pointsDict={pointsDict}\n        customPointsAllowed={customPointsAllowed}\n        readOnly={readOnly}",
+    "replace": "        pointsDict={pointsDict}\n        customPointsAllowed={true}\n        readOnly={readOnly}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "customPointsAllowed false"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-dict-mount",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "        pointsDict={pointsDict}\n        customPointsAllowed={customPointsAllowed}\n        readOnly={readOnly}",
+    "replace": "        pointsDict={undefined}\n        customPointsAllowed={customPointsAllowed}\n        readOnly={readOnly}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "the points slice of the public dictionary"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-gate-pass",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "                    customPointsAllowed={customPointsAllowed}",
+    "replace": "                    customPointsAllowed={true}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "customPointsAllowed false"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-dict-pass",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "                    pointsDict={pointsDict}",
+    "replace": "                    pointsDict={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "the points slice of the public dictionary"
+      }
+    ]
+  },
+  {
+    "id": "t18-panel-default-allowed",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "customPointsAllowed = true,",
+    "replace": "customPointsAllowed = false,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "an omitted customPointsAllowed reads as allowed"
+      }
+    ]
+  },
+  {
+    "id": "t18-page-feature-key",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "await hasFeature(auth.orgId, \"standings.custom_points\")",
+    "replace": "await hasFeature(auth.orgId, \"standings.custom_pointz\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "customPointsAllowed is the SERVER's gate"
+      }
+    ]
+  },
+  {
+    "id": "t18-page-viewer-asked",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "tab === \"fixtures\" && editable ? await hasFeature(auth.orgId, \"standings.custom_points\") : true;",
+    "replace": "await hasFeature(auth.orgId, \"standings.custom_points\");",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "a viewer is not asked"
+      }
+    ]
+  },
+  {
+    "id": "t18-page-gate-pass",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "customPointsAllowed={customPointsAllowed}",
+    "replace": "customPointsAllowed={true}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "customPointsAllowed is the SERVER's gate"
+      }
+    ]
+  },
+  {
+    "id": "t18-page-dict-pass",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "pointsDict={pointsDict}",
+    "replace": "pointsDict={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "StagesPanel gets the format.points"
+      }
+    ]
+  },
+  {
+    "id": "t18-page-dict-whole",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "pointsLineDict(fixturesPublicDict)",
+    "replace": "fixturesPublicDict",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "StagesPanel gets the format.points"
+      }
+    ]
+  },
+  {
+    "id": "t18-page-with-competition",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "await hasFeature(auth.orgId, \"standings.custom_points\")",
+    "replace": "await hasFeature(auth.orgId, \"standings.custom_points\", competition.id)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "customPointsAllowed is the SERVER's gate"
+      }
+    ]
+  },
+  {
+    "id": "t18-rules-line-prefix",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "if (key.startsWith(POINTS_LINE_DICT_PREFIX)) out[key] = dict[key];",
+    "replace": "if (key.startsWith(\"format.\")) out[key] = dict[key];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "StagesPanel gets the format.points"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "pointsLineDict carries every key"
+      }
+    ]
+  }
+]

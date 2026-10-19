@@ -210,6 +210,10 @@ describe("stage points model (I9 killers for t18)", () => {
       swept++;
     }
     expect(swept).toBeGreaterThan(10);
+    // A pointsMap that pays TWO different pairs has no one win / loss: null, never the first pair's numbers. (Q1 keeps such a
+    // division out of the editor, so this guards the reader itself - a base invented from one of two pairs would be a lie.)
+    expect(divisionBasePoints(badminton, { pointsMap: { "2-0": [3, 0], "2-1": [2, 1] } })).toEqual({ win: null, draw: null, loss: null });
+    expect(divisionBasePoints(badminton, { pointsMap: { "2-0": [3, 0], "2-1": [3, 0] } }), "the same pair twice is one pair").toEqual({ win: 3, draw: null, loss: 0 });
   });
 
   it("an unchecked 'Use the division's points' starts from the division's numbers, and a sport that cannot draw sends draw 0", () => {
@@ -285,6 +289,17 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(draftIsDirty(football, { ...inherit, useDivision: false }, null), "unchecking with nothing stored pins the division's numbers: a change").toBe(true);
     // jsonb gives keys back in its own order
     expect(draftIsDirty(football, opened, { bonuses: [], base: { loss: 0, win: 3, draw: 1 } })).toBe(false);
+  });
+
+  it("a stored row the schema refuses reads as NO rule: the stage inherits rather than opening on garbage", () => {
+    const junk: unknown[] = [undefined, null, 5, "rule", [], {}, { bonuses: [] }, { base: { win: "x", draw: 1, loss: 0 }, bonuses: [] }, { base: BASE, bonuses: "none" }];
+    for (const stored of junk) {
+      expect(storedPointsRule(stored), JSON.stringify(stored)).toBeNull();
+      expect(draftFromStored(football, football.variants["11-a-side"], stored).useDivision, `${JSON.stringify(stored)} opens inheriting`).toBe(true);
+      expect(storedHasCustomParts(stored)).toBe(false);
+    }
+    expect(junk.length, "rows tried").toBeGreaterThan(5);
+    expect(storedPointsRule({ base: BASE, bonuses: [] }), "and a real rule is still a rule").not.toBeNull();
   });
 
   it("what the gate withholds: a stored walkover row or any bonus", () => {

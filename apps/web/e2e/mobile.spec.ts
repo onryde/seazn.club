@@ -30,6 +30,8 @@ import {
 } from "./helpers";
 import { roundGameSql, seedOnlineRound } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
+import { pointsRuleExpressible } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
 import {
   HIT_TARGET_FLOOR_PX,
   consentedAnonymousState,
@@ -5827,4 +5829,100 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await assertTapFloor(page.getByTestId("stage-rule-sequence-tiebreakRungs-reset"), "division use default order");
   await expectNoHorizontalScroll(page);
   if (shots) await dlist.screenshot({ path: `${shots}/division-sequence-${projectWidth}.png` });
+});
+
+test("W2c stage points section at every width: the sentence, More, the walkover row, the bonus menu and Save hold the 44px floor, nothing clips or scrolls, the visible control set matches 1280, and the refusal card fits", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const seed = async (sport: string, variant: string | undefined, label: string, config?: Record<string, unknown>): Promise<{ divisionId: string; stageId: string }> => {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `W2c T18 ${label} ${TAG}-${testInfo.project.name}`,
+      visibility: "private",
+    });
+    expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: `${label} division`,
+      sport_key: sport,
+      ...(variant === undefined ? {} : { variant_key: variant }),
+      ...(config === undefined ? {} : { config }),
+    });
+    expect(div.status, `division ${sport}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+    expect(stage.status, `stage ${sport}: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+    return { divisionId: div.data!.id, stageId: stage.data!.id };
+  };
+  const projectWidth = page.viewportSize()!.width;
+  /** The section's visible controls in DOM order (the phone toggle left out: it is the one phone-only control), by testid. */
+  const visibleControls = (section: Locator) =>
+    section.evaluate((root) =>
+      Array.from(root.querySelectorAll<HTMLElement>("input, select, button"))
+        .filter((el) => el.getAttribute("data-role") !== "phone-disclosure-toggle")
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        })
+        .map((el) => el.getAttribute("data-testid") ?? el.tagName),
+    );
+  const openMoreHere = async (section: Locator): Promise<void> => {
+    const toggle = section.locator('[data-role="phone-disclosure-toggle"]');
+    if ((await toggle.isVisible()) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  };
+
+  // --- football: the editor ---------------------------------------------------------------------------------------------
+  const footballVariant = Object.keys(builtinModules.find((m) => m.key === "football")!.variants)[0]!;
+  const fb = await seed("football", footballVariant, "football", { points: { win: 4, draw: 2, loss: 1 } });
+  await page.goto(await divisionPath(page.request, fb.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = page.getByTestId(`stage-points-${fb.stageId}`);
+  await expect(section).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+  await assertTapFloor(section.locator("label").first(), "Use the division's points");
+  await section.getByTestId("stage-points-use-division").uncheck();
+  for (const id of ["stage-points-win", "stage-points-draw", "stage-points-loss"]) await assertTapFloor(section.getByTestId(id), id);
+  const toggle = section.locator('[data-role="phone-disclosure-toggle"]');
+  const phone = projectWidth < 768;
+  expect(await toggle.isVisible(), `More is a phone control (${projectWidth})`).toBe(phone);
+  if (phone) {
+    await assertTapFloor(toggle, "More");
+    await expect(section.getByTestId("stage-points-walkover-w"), "the walkover row is folded on a phone").toBeHidden();
+  }
+  await openMoreHere(section);
+  for (const id of ["stage-points-walkover-w", "stage-points-walkover-l", "stage-points-award-w", "stage-points-award-l", "stage-points-bonus-add"]) await assertTapFloor(section.getByTestId(id), id);
+  await section.getByTestId("stage-points-bonus-add").selectOption({ index: 1 });
+  await expect(section.getByTestId("stage-points-bonus-0")).toBeVisible();
+  await assertTapFloor(section.getByTestId("stage-points-bonus-points-0"), "bonus points");
+  await assertTapFloor(section.getByTestId("stage-points-bonus-remove-0"), "remove bonus");
+  await section.getByTestId("stage-points-win").fill("5");
+  await assertTapFloor(section.getByTestId("stage-points-save"), "Save points");
+  const clip = await overflowingIn(page, `[data-testid="stage-points-${fb.stageId}"]`, "*", "the stage points section is missing");
+  expect(clip.clipped, `nothing in the points section is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `${projectWidth}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+  const here = await visibleControls(section);
+  expect(here.length, "the section's controls were read").toBeGreaterThan(8);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openMoreHere(section);
+  expect(here, `the points section's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(section));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- ice hockey (a division that scores overtime separately): the refusal card ----------------------------------------
+  const hockey = builtinModules.find((m) => m.key === "icehockey")!;
+  const splitVariant = Object.keys(hockey.variants).find((v) => {
+    const r = hockey.configSchema.safeParse(hockey.variants[v]);
+    return !pointsRuleExpressible((r.success ? r.data : hockey.variants[v]) as Record<string, unknown>).ok;
+  });
+  expect(splitVariant, "premise: the engine has a splitting ice-hockey variant").toBeDefined();
+  const ih = await seed("icehockey", splitVariant, "icehockey");
+  await page.goto(await divisionPath(page.request, ih.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  const card = page.getByTestId(`stage-points-${ih.stageId}`);
+  await expect(card).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
+  await expect(card.getByTestId("stage-points-inexpressible")).toBeVisible();
+  await expect(card.locator("input, select, button")).toHaveCount(0);
+  const cclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the refusal card is missing");
+  expect(cclip.clipped, `nothing in the refusal card is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
 });

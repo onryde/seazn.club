@@ -12,14 +12,19 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { randomBytes } from "node:crypto";
+import { pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
 import { BRACKET_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
-import { TAG, apiJson, divisionPath, seedScoredDivision } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, invalidateOrgEntitlements, seedScoredDivision, setBoolEntitlementOverrideSql } from "./helpers";
+import { signInAs } from "./overlay-kit";
+import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
 import { stageFieldsFor } from "../src/lib/rule-scope";
-import { rulesChipText } from "../src/lib/rules-line";
+import { pointsLine } from "../src/lib/points-line";
+import { rulesChipText, rulesLineText } from "../src/lib/rules-line";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
 
@@ -34,7 +39,7 @@ const PER_SPORT_MS = 90_000;
 interface StageRow {
   id: string;
   kind: string;
-  config: { rules?: Record<string, unknown> | null };
+  config: { rules?: Record<string, unknown> | null; points?: Record<string, unknown> | null };
 }
 
 /** A competition + one division of `sport` (its first variant, or `variant`) + one stage of `kind`, through the API. */
@@ -545,4 +550,384 @@ test("chess stage under a division that holds a tie-break list: the blank stage 
   await row2.getByTestId("stage-format-save").click();
   await expect(row2.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
   expect(Object.hasOwn((await storedRules(request, divisionId, stageId)) ?? {}, "tiebreakRungs"), "the reset drops the stage's own list").toBe(false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W2c Task 18 (S3) - the stage points section, driven the way an organiser drives it: the stage card on the Fixtures tab,
+// the win / draw / loss sentence, "More" for the walkover row and bonuses, Save, and what the API and the TABLE then say.
+//
+// WHERE THE EXPECTED VALUES COME FROM. Whether a sport shows the walkover SCORE is the engine's `pointsRuleAwardReachesTable`;
+// whether a division can have a stage rule at all is the engine's `pointsRuleExpressible`; the division's own base points are
+// the numbers the test STORES on the division (distinct from the defaults, so a prefill from the wrong place is visible); the
+// preview sentence is the public line's own words (`pointsLine` + the public dictionary); and the proof that a walkover pays
+// what the section says is the stage's STANDINGS, read after a real walkover - not the stored JSON alone.
+// ---------------------------------------------------------------------------------------------------------------------
+const sectionOf = (page: Page, stageId: string): Locator => page.getByTestId(`stage-points-${stageId}`);
+/** Phones fold the walkover row and the bonuses behind "More" (`md:hidden` toggle); open it only where the toggle is shown and
+ *  closed (AGENTS.md class 22: gate on the toggle, never on a width literal). */
+async function openMore(section: Locator): Promise<void> {
+  const toggle = section.locator('[data-role="phone-disclosure-toggle"]');
+  if ((await toggle.isVisible()) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+}
+async function storedPoints(request: APIRequestContext, divisionId: string, stageId: string): Promise<Record<string, unknown> | null> {
+  const res = await apiJson<StageRow[]>(request, `/api/v1/divisions/${divisionId}/stages`);
+  expect(res.status, "GET stages").toBe(200);
+  const row = res.data!.find((s) => s.id === stageId);
+  expect(row, `stage ${stageId} in the read`).toBeDefined();
+  return row!.config.points ?? null;
+}
+const parsedCfg = (sport: string, variant: string): Record<string, unknown> => {
+  const m = builtinModules.find((x) => x.key === sport)!;
+  const r = m.configSchema.safeParse(m.variants[variant]);
+  return (r.success ? r.data : m.variants[variant]) as Record<string, unknown>;
+};
+/** A started league of two entrants: the division started, one fixture with both sides seated. */
+async function seedPointsLeague(
+  request: APIRequestContext,
+  sport: string,
+  opts: { label: string; variant?: string; config?: Record<string, unknown>; entrantKind?: "individual" | "team" },
+): Promise<{ divisionId: string; stageId: string; fixtureId: string; home: string; away: string; variant: string; start: () => Promise<void> }> {
+  const { entrantKind = "individual", ...stageOpts } = opts;
+  const seeded = await seedStage(request, sport, { kind: "league", ...stageOpts });
+  const added = await addEntrantsViaApi(request, seeded.divisionId, [`Asha ${TAG}`, `Bala ${TAG}`], entrantKind);
+  expect(added.ids, `two entrants seated (HTTP ${added.status})`).toHaveLength(2);
+  const gen = await apiJson<{ fixtures: { id: string; home_entrant_id: string; away_entrant_id: string }[] }>(request, `/api/v1/stages/${seeded.stageId}/generate`, "POST");
+  expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  const fx = gen.data!.fixtures[0]!;
+  return {
+    ...seeded,
+    fixtureId: fx.id,
+    home: fx.home_entrant_id,
+    away: fx.away_entrant_id,
+    start: async () => {
+      const started = await apiJson(request, `/api/v1/divisions/${seeded.divisionId}/start`, "POST");
+      expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    },
+  };
+}
+async function walkover(request: APIRequestContext, fixtureId: string, by: string): Promise<void> {
+  const tip = (await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`)).data!.last_seq;
+  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: tip, type: "core.forfeit", payload: { by, reason: "walkover" } });
+  expect(res.status, `walkover: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+}
+async function tableOf(request: APIRequestContext, stageId: string): Promise<Map<string, { points: number; metrics: Record<string, number> }>> {
+  const st = await apiJson<{ rows: { entrantId: string; points: number; metrics: Record<string, number> }[] }>(request, `/api/v1/stages/${stageId}/standings`);
+  expect(st.status, "GET standings").toBe(200);
+  return new Map((st.data?.rows ?? []).map((r) => [r.entrantId, r]));
+}
+/** The PUT the section sends, caught as it leaves the page. */
+function nextPointsPut(page: Page, stageId: string) {
+  return page.waitForRequest((r) => r.method() === "PUT" && new URL(r.url()).pathname === `/api/v1/stages/${stageId}/rules`, { timeout: STEP_MS });
+}
+
+const DIVISION_BASE = { win: 4, draw: 2, loss: 1 };
+
+/** Only for the owner's per-screen verdict capture: the section cropped at 1280 / 768 / 320 into a SCRATCH dir, no page scroll
+ *  at any of them. Unset in CI - never the repo. A tall viewport so the section is not clipped by the fold. */
+const SHOTS = process.env.T18_SHOTS_DIR;
+async function shootSection(page: Page, section: Locator, state: string, prepare?: () => Promise<void>): Promise<void> {
+  if (!SHOTS) return;
+  const original = page.viewportSize();
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 2600 });
+    if (prepare) await prepare();
+    await expectNoHorizontalScroll(page);
+    const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+    expect(dims.scroll, `${state} at ${width}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await section.screenshot({ path: `${SHOTS}/${state}-${width}.png` });
+  }
+  if (original) await page.setViewportSize(original);
+}
+
+test("football league: the section prefills the DIVISION's points, saves a walkover row with a score - the PUT carries only {points} - and the table pays it after a real walkover", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const rig = await seedPointsLeague(request, "football", { label: "points-football", config: { points: DIVISION_BASE }, entrantKind: "team" });
+  const m = builtinModules.find((x) => x.key === "football")!;
+  expect(pointsRuleAwardReachesTable(m), "premise: a goal sport's table reads a walkover score").toBe(true);
+  await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = sectionOf(page, rig.stageId);
+  await expect(section, "the points section is on a table stage").toBeVisible({ timeout: STEP_MS });
+  await expect(section).toHaveAttribute("data-stage-points-state", "editor");
+  // Nothing stored: it inherits, says so, shows the division's sentence, offers no inputs and nothing to save.
+  await expect(section.getByTestId("stage-points-use-division")).toBeChecked();
+  await expect(section.getByTestId("stage-points-win")).toHaveCount(0);
+  await expect(section.getByTestId("stage-points-save")).toHaveCount(0);
+  const divisionSentence = rulesLineText(PUB, pointsLine({ base: DIVISION_BASE, bonuses: [] }));
+  await expect(section.getByTestId("stage-points-preview")).toHaveText(divisionSentence);
+
+  // Own points: the boxes start at the division's numbers (the prefill is the division, not a default of the editor's).
+  await section.getByTestId("stage-points-use-division").uncheck();
+  await expect(section.getByTestId("stage-points-win")).toHaveValue(String(DIVISION_BASE.win));
+  await expect(section.getByTestId("stage-points-draw")).toHaveValue(String(DIVISION_BASE.draw));
+  await expect(section.getByTestId("stage-points-loss")).toHaveValue(String(DIVISION_BASE.loss));
+  await openMore(section);
+  // I3, in the browser: a goal sport shows the walkover score beside the walkover points.
+  await expect(section.getByTestId("stage-points-award-w")).toBeVisible();
+  // Unchecked with nothing stored, the division's own numbers are a rule the stage can pin: Save is offered (the stage would
+  // then keep these numbers even if the division's change).
+  await expect(section.getByTestId("stage-points-save")).toBeEnabled();
+  await section.getByTestId("stage-points-walkover-w").fill("7");
+  await section.getByTestId("stage-points-walkover-l").fill("2");
+  await section.getByTestId("stage-points-award-w").fill("3");
+  await section.getByTestId("stage-points-award-l").fill("0");
+  const want = { base: DIVISION_BASE, bonuses: [], forfeit: { winnerPoints: 7, loserPoints: 2, awardScore: [3, 0] as [number, number] } };
+  await shootSection(page, section, "editor", () => openMore(section));
+  await expect(section.getByTestId("stage-points-preview"), "the live preview is the public line's own words").toHaveText(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
+  const put = nextPointsPut(page, rig.stageId);
+  await section.getByTestId("stage-points-save").click();
+  const sent = (await put).postDataJSON() as Record<string, unknown>;
+  expect(Object.keys(sent), "the PUT body is strict: only the arm that changed").toEqual(["points"]);
+  expect(sent.points).toEqual(want);
+  await expect.poll(() => storedPoints(request, rig.divisionId, rig.stageId), { timeout: STEP_MS }).toEqual(want);
+  await expect(section.getByTestId("stage-points-save"), "saved: nothing left to save").toBeDisabled({ timeout: STEP_MS });
+
+  // Reload: the stored rule comes back, and the form is the same as before the reload (the sequence test).
+  await page.reload({ waitUntil: "load" });
+  const again = sectionOf(page, rig.stageId);
+  await expect(again.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
+  await openMore(again);
+  await expect(again.getByTestId("stage-points-walkover-w")).toHaveValue("7");
+  await expect(again.getByTestId("stage-points-award-w")).toHaveValue("3");
+  await expect(again.getByTestId("stage-points-save")).toBeDisabled();
+  // Saving again after a change and a change back stores the same rule (idempotent, no stray keys).
+  await again.getByTestId("stage-points-win").fill("9");
+  await expect(again.getByTestId("stage-points-save")).toBeEnabled();
+  await again.getByTestId("stage-points-win").fill(String(DIVISION_BASE.win));
+  await expect(again.getByTestId("stage-points-save"), "changed back: not dirty").toBeDisabled();
+
+  // The table: a REAL walkover pays what the section said (7 / 2 points, 3-0 in goals), not the division's 4 / 1.
+  await rig.start();
+  await walkover(request, rig.fixtureId, rig.away);
+  await expect
+    .poll(async () => {
+      const t = await tableOf(request, rig.stageId);
+      return [t.get(rig.home)?.points, t.get(rig.away)?.points, t.get(rig.home)?.metrics.gf, t.get(rig.home)?.metrics.ga];
+    }, { timeout: 30_000 })
+    .toEqual([7, 2, 3, 0]);
+
+  // A started stage is read-only: the same lock as the format row, said in words, with no control (and the API agrees).
+  await page.reload({ waitUntil: "load" });
+  const locked = sectionOf(page, rig.stageId);
+  await expect(locked).toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
+  await expect(locked.locator("input, select, button:not([data-role='phone-disclosure-toggle'])")).toHaveCount(0);
+  await expect(locked.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
+  await expect(locked.getByTestId("stage-points-preview")).toHaveText(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
+  const refused = await apiJson(request, `/api/v1/stages/${rig.stageId}/rules`, "PUT", { points: null });
+  expect(refused.status, "the server holds the same lock").toBe(409);
+  expect(await storedPoints(request, rig.divisionId, rig.stageId), "and the stored rule is untouched").toEqual(want);
+});
+
+test("badminton league: a set sport shows the walkover points and NO score box, saves the walkover row without a score, and the table credits 2-0 in games whatever it pays in points", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const rig = await seedPointsLeague(request, "badminton", { label: "points-badminton" });
+  const m = builtinModules.find((x) => x.key === "badminton")!;
+  expect(pointsRuleAwardReachesTable(m), "premise: a set sport's table never reads a walkover score").toBe(false);
+  const pair = (parsedCfg("badminton", rig.variant).pointsMap as Record<string, [number, number]>)["*"]!;
+  const base = { win: pair[0], draw: 0, loss: pair[1] };
+  await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = sectionOf(page, rig.stageId);
+  await expect(section).toBeVisible({ timeout: STEP_MS });
+  await section.getByTestId("stage-points-use-division").uncheck();
+  await expect(section.getByTestId("stage-points-draw"), "a sport that cannot draw has no draw box").toHaveCount(0);
+  await expect(section.getByTestId("stage-points-win")).toHaveValue(String(base.win));
+  await openMore(section);
+  await expect(section.getByTestId("stage-points-walkover-w")).toBeVisible();
+  await expect(section.getByTestId("stage-points-award-w"), "I3: the server refuses a walkover score here, so none is offered").toHaveCount(0);
+  await expect(section.getByTestId("stage-points-award-l")).toHaveCount(0);
+  await section.getByTestId("stage-points-walkover-w").fill("5");
+  await section.getByTestId("stage-points-walkover-l").fill("1");
+  const put = nextPointsPut(page, rig.stageId);
+  await section.getByTestId("stage-points-save").click();
+  const sent = (await put).postDataJSON() as { points: { forfeit?: Record<string, unknown> } };
+  expect(Object.keys(sent)).toEqual(["points"]);
+  expect(sent.points.forfeit, "no awardScore key on a set sport").toEqual({ winnerPoints: 5, loserPoints: 1 });
+  const want = { base, bonuses: [], forfeit: { winnerPoints: 5, loserPoints: 1 } };
+  await expect.poll(() => storedPoints(request, rig.divisionId, rig.stageId), { timeout: STEP_MS }).toEqual(want);
+  await rig.start();
+  await walkover(request, rig.fixtureId, rig.away);
+  await expect
+    .poll(async () => {
+      const t = await tableOf(request, rig.stageId);
+      const h = t.get(rig.home);
+      return h === undefined ? null : [h.points, t.get(rig.away)?.points, h.metrics.sets_won, h.metrics.points_won];
+    }, { timeout: 30_000 })
+    .toEqual([5, 1, 2, 42]);
+});
+
+test("use the division's points: unchecking and saving removes the stage's rule, a reload inherits it again, and a stage that never had one cannot be saved as one", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { divisionId, stageId } = await seedStage(request, "generic", { kind: "league", label: "points-inherit", variant: "score" });
+  const first = await apiJson<{ points: unknown }>(request, `/api/v1/stages/${stageId}/rules`, "PUT", { points: { base: { win: 5, draw: 2, loss: 0 }, bonuses: [] } });
+  expect(first.status, `seed a stage rule: ${JSON.stringify(first.error)}`).toBe(200);
+  expect(await storedPoints(request, divisionId, stageId), "premise: the stage holds its own points").not.toBeNull();
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = sectionOf(page, stageId);
+  await expect(section.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
+  await expect(section.getByTestId("stage-points-win")).toHaveValue("5");
+  await section.getByTestId("stage-points-use-division").check();
+  await expect(section.getByTestId("stage-points-win"), "inheriting: the inputs go").toHaveCount(0);
+  const put = nextPointsPut(page, stageId);
+  await section.getByTestId("stage-points-save").click();
+  const sent = (await put).postDataJSON() as Record<string, unknown>;
+  expect(sent, "the removal is {points: null}, nothing else").toEqual({ points: null });
+  await expect.poll(() => storedPoints(request, divisionId, stageId), { timeout: STEP_MS }).toBeNull();
+  await page.reload({ waitUntil: "load" });
+  const again = sectionOf(page, stageId);
+  await expect(again.getByTestId("stage-points-use-division"), "a reload inherits").toBeChecked({ timeout: STEP_MS });
+  await expect(again.getByTestId("stage-points-save"), "nothing stored, nothing to save").toHaveCount(0);
+});
+
+test("generic bonus editor: the margin bonuses are offered where the sport feeds them, a threshold bonus saves with its param, and a half-filled bonus blocks Save", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { divisionId, stageId } = await seedStage(request, "generic", { kind: "league", label: "points-bonus", variant: "score" });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = sectionOf(page, stageId);
+  await expect(section).toBeVisible({ timeout: STEP_MS });
+  await section.getByTestId("stage-points-use-division").uncheck();
+  await openMore(section);
+  const add = section.getByTestId("stage-points-bonus-add");
+  const offered = await add.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value).filter((v) => v !== ""));
+  expect(offered, "generic emits for/against/diff, so the margin bonuses are on offer").toContain("loss_margin_lte");
+  await add.selectOption("loss_margin_lte");
+  await expect(section.getByTestId("stage-points-bonus-0")).toBeVisible();
+  await expect(section.getByTestId("stage-points-problem"), "a bonus with no points is not a rule").toBeVisible();
+  await expect(section.getByTestId("stage-points-problem")).toHaveText(L["stagePoints.invalid.bonus"]!);
+  await expect(section.getByTestId("stage-points-save")).toBeDisabled();
+  await section.getByTestId("stage-points-bonus-param-0").fill("7");
+  await section.getByTestId("stage-points-bonus-points-0").fill("1");
+  await expect(section.getByTestId("stage-points-problem")).toHaveCount(0);
+  const put = nextPointsPut(page, stageId);
+  await section.getByTestId("stage-points-save").click();
+  const sent = (await put).postDataJSON() as { points: { bonuses: unknown[] } };
+  expect(sent.points.bonuses).toEqual([{ when: "loss_margin_lte", param: 7, points: 1 }]);
+  await expect.poll(async () => ((await storedPoints(request, divisionId, stageId)) as { bonuses: unknown[] } | null)?.bonuses, { timeout: STEP_MS }).toEqual([{ when: "loss_margin_lte", param: 7, points: 1 }]);
+  // The walkover pair is both-or-neither: one filled alone blocks Save with the reason, and clearing it frees Save.
+  await section.getByTestId("stage-points-walkover-w").fill("3");
+  await expect(section.getByTestId("stage-points-problem")).toHaveText(L["stagePoints.invalid.walkover"]!);
+  await expect(section.getByTestId("stage-points-save")).toBeDisabled();
+  await section.getByTestId("stage-points-walkover-w").fill("");
+  await expect(section.getByTestId("stage-points-problem")).toHaveCount(0);
+  // Removing the bonus and saving stores the base sentence alone (no bonuses left behind).
+  await section.getByTestId("stage-points-bonus-remove-0").click();
+  await section.getByTestId("stage-points-save").click();
+  await expect.poll(async () => ((await storedPoints(request, divisionId, stageId)) as { bonuses: unknown[] } | null)?.bonuses, { timeout: STEP_MS }).toEqual([]);
+});
+
+test("ice hockey: a division that scores overtime separately says why a stage cannot set its points - no inputs - and the server answers the same; a recreational variant has the editor", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const m = builtinModules.find((x) => x.key === "icehockey")!;
+  const variants = Object.keys(m.variants);
+  const split = variants.find((v) => !pointsRuleExpressible(parsedCfg("icehockey", v)).ok);
+  const plain = variants.find((v) => pointsRuleExpressible(parsedCfg("icehockey", v)).ok);
+  expect(split, "premise: the engine has a splitting variant").toBeDefined();
+  expect(plain, "premise: and one that does not").toBeDefined();
+  const a = await seedStage(request, "icehockey", { kind: "league", label: "points-split", variant: split });
+  await page.goto(await divisionPath(request, a.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = sectionOf(page, a.stageId);
+  await expect(section).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
+  await expect(section.getByTestId("stage-points-inexpressible")).toContainText(/can't be set per stage/i);
+  await expect(section.locator("input, select, button")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  await shootSection(page, section, "inexpressible");
+  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } });
+  expect(refused.status).toBe(422);
+  expect((refused.error as { code?: string } | undefined)?.code).toBe("POINTS_RULE_INEXPRESSIBLE");
+  const b = await seedStage(request, "icehockey", { kind: "league", label: "points-plain", variant: plain });
+  await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await expect(sectionOf(page, b.stageId)).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+});
+
+test("a knockout stage has no points section (no table to rank), a league of the same division does", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const a = await seedStage(request, "football", { kind: "knockout", label: "points-ko" });
+  await page.goto(await divisionPath(request, a.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await expect(page.getByTestId(`stage-format-row-${a.stageId}`), "premise: the stage row is there").toBeVisible({ timeout: STEP_MS });
+  await expect(page.locator('[data-testid^="stage-points-"]'), "and carries no points section").toHaveCount(0);
+  const b = await seedStage(request, "football", { kind: "league", label: "points-league" });
+  await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await expect(sectionOf(page, b.stageId)).toBeVisible({ timeout: STEP_MS });
+});
+
+// ---- The plan gate: an org whose plan or override DENIES `standings.custom_points`. ----------------------------------------
+/** A fresh org of its own on `pro`, signed in on `page` (an override is org-wide, so it is only ever written on an org made
+ *  for the test). `deny` writes the override BEFORE the page first resolves the key, then drops the cache (a 300 s TTL). */
+async function freshPointsOrg(page: Page, opts: { deny: boolean }): Promise<{ orgId: string }> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const email = `delivered+pts-${tag}@resend.dev`;
+  const { orgId } = await withDb(async (sql) => {
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, ${"Points Gate Owner " + tag}, true) returning id`;
+    const [{ id: newOrgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status, created_by) values (${"Points Gate Org " + tag}, ${"pts-org-" + tag}, 'active', ${userId}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
+    const [{ id: subId }] = await sql<{ id: string }[]>`
+      insert into subscriptions (owner_user_id, plan_key, status) values (${userId}, 'pro', 'active') returning id`;
+    await sql`update organizations set subscription_id = ${subId} where id = ${newOrgId}`;
+    return { orgId: newOrgId };
+  });
+  if (opts.deny) await setBoolEntitlementOverrideSql(orgId, "standings.custom_points", false);
+  await invalidateOrgEntitlements(page.request, orgId);
+  await signInAs(page, email);
+  return { orgId };
+}
+
+test("the plan gate: an org WITHOUT standings.custom_points gets the base sentence and an upgrade note where the walkover and bonus rows would be - the server's 402 agrees - and an org with it gets the editor", async ({ page }) => {
+  test.setTimeout(240_000);
+  // The differential: the SAME seed and page in two fresh orgs that differ only in the override row.
+  const openOrg = await freshPointsOrg(page, { deny: false });
+  const open = await seedStage(page.request, "football", { kind: "league", label: "gate-open" });
+  await page.goto(await divisionPath(page.request, open.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const editor = sectionOf(page, open.stageId);
+  await expect(editor, "an org with the feature gets the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await editor.getByTestId("stage-points-use-division").uncheck();
+  await openMore(editor);
+  await expect(editor.getByTestId("stage-points-walkover-w")).toBeVisible();
+  await expect(editor.getByTestId("stage-points-upgrade")).toHaveCount(0);
+  // The plan changes UNDER the open editor: the organiser's Save is answered 402, and the section says so in words (not a
+  // raw error string), stores nothing, and keeps what was typed.
+  await editor.getByTestId("stage-points-walkover-w").fill("6");
+  await editor.getByTestId("stage-points-walkover-l").fill("1");
+  await setBoolEntitlementOverrideSql(openOrg.orgId, "standings.custom_points", false);
+  await invalidateOrgEntitlements(page.request, openOrg.orgId);
+  await editor.getByTestId("stage-points-save").click();
+  await expect(editor.getByTestId("stage-points-error"), "the 402 is said in the app's words").toHaveText(L["stagePoints.upgrade"]!, { timeout: STEP_MS });
+  expect(await storedPoints(page.request, open.divisionId, open.stageId), "a refused save stores nothing").toBeNull();
+  await expect(editor.getByTestId("stage-points-walkover-w"), "and keeps what was typed").toHaveValue("6");
+
+  await freshPointsOrg(page, { deny: true });
+  const denied = await seedStage(page.request, "football", { kind: "league", label: "gate-closed" });
+  await page.goto(await divisionPath(page.request, denied.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const gate = sectionOf(page, denied.stageId);
+  await expect(gate, "an org without it gets the gate").toHaveAttribute("data-stage-points-state", "gate", { timeout: STEP_MS });
+  await gate.getByTestId("stage-points-use-division").uncheck();
+  await expect(gate.getByTestId("stage-points-upgrade")).toHaveText(L["stagePoints.upgrade"]!);
+  for (const id of ["stage-points-walkover-w", "stage-points-award-w", "stage-points-bonus-add"]) await expect(gate.getByTestId(id), id).toHaveCount(0);
+  await shootSection(page, gate, "gate");
+  // The base sentence is free: it saves on this org.
+  await gate.getByTestId("stage-points-win").fill("5");
+  const put = nextPointsPut(page, denied.stageId);
+  await gate.getByTestId("stage-points-save").click();
+  expect(((await put).postDataJSON() as { points: { base: { win: number } } }).points.base.win).toBe(5);
+  await expect.poll(async () => ((await storedPoints(page.request, denied.divisionId, denied.stageId)) as { base: { win: number } } | null)?.base.win, { timeout: STEP_MS }).toBe(5);
+  // And the server refuses what the gate withheld: a walkover row or a bonus is 402 on this org, so the section never offers it.
+  const base = { win: 5, draw: 1, loss: 0 };
+  const forfeit = await apiJson<unknown>(page.request, `/api/v1/stages/${denied.stageId}/rules`, "PUT", { points: { base, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0 } } });
+  expect(forfeit.status, "a walkover row needs the feature").toBe(402);
+  const bonus = await apiJson<unknown>(page.request, `/api/v1/stages/${denied.stageId}/rules`, "PUT", { points: { base, bonuses: [{ when: "draw", points: 1 }] } });
+  expect(bonus.status, "a bonus needs the feature").toBe(402);
+  // Reload: the stored plain rule is not held (the gate holds only what the org could not re-send).
+  await page.reload({ waitUntil: "load" });
+  const again = sectionOf(page, denied.stageId);
+  await expect(again.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
+  await expect(again.getByTestId("stage-points-gate-held")).toHaveCount(0);
+  await expect(again.getByTestId("stage-points-win")).toBeEnabled();
 });
