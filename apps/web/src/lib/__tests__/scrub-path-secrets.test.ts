@@ -21,7 +21,6 @@
 // Sport: not applicable — invites and check-in are sport-agnostic.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -37,6 +36,7 @@ vi.mock("@/lib/db", async (importOriginal) => ({
 }));
 
 import { USER_ID } from "./_fake-sql";
+import { VERDICTS, secretRoutes, SRC_DIR } from "./_route-scan";
 import { createInvite } from "@/server/usecases/invites";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { routes } from "@/lib/routes";
@@ -48,8 +48,6 @@ import { posthogBeforeSend, scrubRecordingEvent, scrubScoreUrl, scrubSentryEvent
 
 const ORIGIN = "https://seazn.club";
 const PLACEHOLDER = "[token]";
-const SRC_DIR = fileURLToPath(new URL("../../", import.meta.url));
-const APP_DIR = path.join(SRC_DIR, "app");
 
 const without = (url: string, ...secrets: string[]) => secrets.reduce((s, secret) => s.split(secret).join(PLACEHOLDER), url);
 const encode = (value: string, depth: number) => {
@@ -95,67 +93,7 @@ describe("premise: the tokens are real and varied", () => {
   });
 });
 
-// ---- every route with a secret segment, from the file system -------------------------------------------------------
-
-/** A route directory name that is a secret: `[token]`, `[code]`, `[secret]` or `[ref]`. */
-const SECRET_SEGMENT = /^\[(token|code|secret|ref)\]$/;
-const hasEntry = (dir: string) => ["page.tsx", "route.ts", "route.tsx"].some((f) => fs.existsSync(path.join(dir, f)));
-
-interface SecretRoute {
-  /** The directory under app/, route groups kept: the key the verdicts below are written against. */
-  key: string;
-  /** Every URL under it that serves something, with the secret segment filled in by `secret`. */
-  urls: (secret: string) => string[];
-}
-
-/** Every `app/**` directory named like a secret, with the URLs beneath it (its own, its children's, its image). */
-function secretRoutes(): SecretRoute[] {
-  const found: SecretRoute[] = [];
-  const walk = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const full = path.join(dir, entry.name);
-      if (SECRET_SEGMENT.test(entry.name)) {
-        const key = path.relative(APP_DIR, full);
-        const suffixes: string[] = [];
-        const below = (d: string, rel: string) => {
-          if (hasEntry(d)) suffixes.push(rel);
-          if (fs.existsSync(path.join(d, "opengraph-image.tsx"))) suffixes.push(`${rel}/opengraph-image`);
-          for (const e of fs.readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) below(path.join(d, e.name), `${rel}/${e.name}`);
-        };
-        below(full, "");
-        const toUrl = (secret: string, suffix: string) =>
-          "/" +
-          key
-            .split("/")
-            .filter((seg) => !/^\(.*\)$/.test(seg))
-            .map((seg) => (SECRET_SEGMENT.test(seg) ? secret : /^\[.*\]$/.test(seg) ? "00000000-0000-4000-8000-000000000001" : seg))
-            .join("/") +
-          suffix;
-        found.push({ key, urls: (secret) => suffixes.map((s) => toUrl(secret, s)) });
-      }
-      walk(full);
-    }
-  };
-  walk(APP_DIR);
-  return found;
-}
-
-/** The verdict on each secret route: `true` = a credential, scrubbed; a string = why it is deliberately not scrubbed. */
-const VERDICTS: Record<string, true | string> = {
-  "join/[token]": true,
-  "checkin/[token]": true,
-  "claim/[token]": true,
-  "score/[token]": true,
-  "api/invites/[token]": true,
-  "api/checkin/[token]": true,
-  "api/claims/[token]": true,
-  "api/orgs/[id]/invites/[token]": true,
-  "api/v1/capture/codes/[code]": true,
-  "refer/[code]": "a referral link is shared in public on purpose; it only drops an attribution cookie",
-  "(public)/r/[ref]": "a registration reference is a lookup, not auth; the emailed ?token= authorises a withdrawal",
-  "api/v1/public/registrations/by-ref/[ref]": "the same reference; the withdrawal token rides the request body",
-};
+// ---- every route with a secret segment, from the file system (_route-scan.ts) -----------------------------------------------
 
 describe("every route with a secret segment is scrubbed, or is knowingly public", () => {
   const routesFound = secretRoutes();

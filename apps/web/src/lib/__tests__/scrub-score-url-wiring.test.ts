@@ -537,3 +537,61 @@ describe("the invite token and the check-in code: every config's real hooks scru
     expectGone(run(replayOptions.beforeAddRecordingEvent, frame), invite);
   });
 });
+
+// A one-time token that rides a request BODY (the sign-in consume POSTs `{ token, next }`) reaches Sentry in
+// `request.data` after the URL has been scrubbed. Proven route by route in scrub-request-body.test.ts; this half proves
+// each REAL config hands the drop to its SDK, on events carrying a REAL minted token (the sign-in link, the
+// verification token, an invite), through every hook an event can take: `beforeSend`, `beforeSendTransaction`, and the
+// client's event processor.
+describe("a credential in a request body: every Sentry config's real hooks drop the body", () => {
+  async function bodyEvents() {
+    const login = await createLoginLink(USER_ID);
+    const verify = await createVerificationToken(USER_ID);
+    const invite = (await createInvite("00000000-0000-4000-8000-000000000002", USER_ID, { role: "admin", max_uses: 1 })).token;
+    const request = (url: string, data: unknown) => ({ method: "POST", url, headers: { "content-type": "application/json" }, data });
+    const consume = { event_id: "b1", request: request("https://seazn.club/api/auth/magic-link/consume", JSON.stringify({ token: login, next: "/dashboard" })) };
+    const verifyTx = {
+      type: "transaction",
+      transaction: "POST /api/auth/verify-email",
+      request: { method: "POST", data: { token: verify, next: "/dashboard" } },
+    };
+    const claim = { event_id: "b3", request: request(`https://seazn.club/api/invites/${invite}/claim`, { token: invite }) };
+    const lookup = { event_id: "b4", request: request("https://seazn.club/api/auth/magic-link", { email: "a@example.test", next: "/dashboard" }) };
+    return { login, verify, invite, consume, verifyTx, claim, lookup };
+  }
+  type Out = { request?: { method?: string; headers?: Record<string, string>; data?: unknown } };
+  const expectBodyGone = (out: unknown, ...secrets: string[]) => {
+    const request = (out as Out).request ?? {};
+    expect(Object.hasOwn(request, "data"), "the body is gone").toBe(false);
+    expect(request.method, "the rest of the request stays").toBe("POST");
+    for (const secret of secrets) expect(JSON.stringify(out)).not.toContain(secret);
+  };
+  const expectBodyKept = (out: unknown) => {
+    expect((out as Out).request?.data, "an ordinary route keeps its body (the positive pair)").toEqual({ email: "a@example.test", next: "/dashboard" });
+  };
+
+  for (const [name, config] of [
+    ["Sentry server", "../../../sentry.server.config"],
+    ["Sentry edge", "../../../sentry.edge.config"],
+  ] as const) {
+    it(`${name}: the sign-in consume and an invite claim lose their body in beforeSend, the verification POST in beforeSendTransaction; the sign-in request keeps its`, async () => {
+      const options = await sentryInitOptions(config);
+      const { login, verify, invite, consume, verifyTx, claim, lookup } = await bodyEvents();
+      expectBodyGone(run(options.beforeSend, consume, {}), login);
+      expectBodyGone(run(options.beforeSend, claim, {}), invite);
+      expectBodyGone(run(options.beforeSendTransaction, verifyTx, {}), verify);
+      expectBodyKept(run(options.beforeSend, lookup, {}));
+    });
+  }
+
+  it("Sentry client: beforeSend and the event processor drop the body too", async () => {
+    const options = await sentryInitOptions("../../../sentry.client.config");
+    const { login, invite, consume, claim, lookup } = await bodyEvents();
+    expectBodyGone(run(options.beforeSend, consume, {}), login);
+    expectBodyGone(run(options.beforeSend, claim, {}), invite);
+    expectBodyKept(run(options.beforeSend, lookup, {}));
+    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    expectBodyGone(run(scrubber.processEvent, consume, {}, {}), login);
+  });
+});

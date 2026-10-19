@@ -18,7 +18,6 @@
 // Sport: not applicable — sign-in is sport-agnostic.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CaptureResult } from "posthog-js";
@@ -69,6 +68,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
 });
 
 import { inserts, USER_ID } from "./_fake-sql";
+import { APP_DIR, linkBuilders, NOT_ONE_TIME } from "./_route-scan";
 import { createLoginLink } from "@/lib/login-link";
 import { createVerificationToken } from "@/lib/verification";
 import { createPasswordResetToken } from "@/lib/password-reset";
@@ -86,8 +86,6 @@ import { POST as ORG_INVITES } from "@/app/api/orgs/[id]/invites/route";
 
 const ORIGIN = "https://seazn.club";
 const PLACEHOLDER = "[token]";
-const SRC_DIR = fileURLToPath(new URL("../../", import.meta.url));
-const APP_DIR = path.join(SRC_DIR, "app");
 
 /** The string with every occurrence of each minted secret swapped for the placeholder: the expected value of a case. */
 const without = (url: string, ...secrets: string[]) => secrets.reduce((s, secret) => s.split(secret).join(PLACEHOLDER), url);
@@ -259,34 +257,7 @@ describe("the link the real forgot-password route emails", () => {
   });
 });
 
-// ---- which links carry a one-time token: the app's own builders ---------------------------------------------------
-
-/** Every `<path>?…token=${…}` template the app builds: the route a link is built FOR, mapped to where it is built. */
-let scanned: Map<string, string> | undefined;
-function linkBuilders(): Map<string, string> {
-  if (scanned) return scanned;
-  const found = new Map<string, string>();
-  const builder = /(\/[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)\?(?:[^`\s]*&)?token=\$\{/g;
-  const walk = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "__tests__" && entry.name !== "node_modules") walk(full);
-      } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\./.test(entry.name) && entry.name !== "scrub-score-url.ts") {
-        const text = fs.readFileSync(full, "utf8");
-        if (!text.includes("token=${")) continue;
-        for (const m of text.matchAll(builder)) if (!found.has(m[1]!)) found.set(m[1]!, path.relative(SRC_DIR, full));
-      }
-    }
-  };
-  walk(SRC_DIR);
-  return (scanned = found);
-}
-
-/** Builders whose token is NOT a one-time credential, each with the reason; the scrubber must leave them alone. */
-const NOT_ONE_TIME: Record<string, string> = {
-  "/register/status": "the cart's access token (RS006): reusable, the status page is re-opened to view and withdraw",
-};
+// ---- which links carry a one-time token: the app's own builders (linkBuilders, _route-scan.ts) -----------------------
 
 describe("every emailed ?token= link is scrubbed, or is knowingly not a one-time token", () => {
   const builders = linkBuilders();
