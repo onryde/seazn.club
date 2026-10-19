@@ -8,11 +8,11 @@
 // rulebook (11 sports, 7 families) and is held to the registry by count, so a twelfth sport fails here until it is placed.
 import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { deciderKeysFor, stageDefaultsFor, stageKeysFor } from "@seazn/engine/sport";
+import { bracketMayEndLevel, deciderKeysFor, stageDefaultsFor, stageKeysFor } from "@seazn/engine/sport";
 import { BRACKET_KINDS, DRAW_KINDS, type StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
-import { postedStageCfg } from "@/lib/stage-decider-off";
+import { decidersOffRules, postedStageCfg } from "@/lib/stage-decider-off";
 import { resolveLatestModule } from "@/server/engine-db";
 import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
@@ -285,6 +285,66 @@ describe("describeDeciders - how a tied match ends, from the engine's own declar
     expect(says.youth!.kicks, "the witness needs the two counts apart").not.toBe(says["11-a-side"]!.kicks);
     expect(text(describeDeciders(football, "knockout", postedStageCfg(football, divisionCfg(football, "11-a-side"), "knockout", "11-a-side"))))
       .toBe(`Extra time (2 × ${says["11-a-side"]!.et} min), penalties (${says["11-a-side"]!.kicks} each)`);
+  });
+
+  // W2c Task 17, review M-3: where a decider is on but a match can still end level behind it, the line says the stage
+  // waits for the organiser after the deciders. WHICH setups those are is the engine's declaration (`canEndLevel`, itself
+  // proven against folded streams in the engine's can-end-level.test.ts), asked through `bracketMayEndLevel` - the same
+  // call the stage editor's notice makes - never a table here.
+  it("M-3: 'then the organiser decides' is said exactly where the engine says a match can still end level, never with 'none' (counted)", () => {
+    const THEN = "format.rules.decider.thenOrganiser";
+    const NONE = "format.rules.decider.none";
+    let checked = 0;
+    let withThen = 0;
+    let withoutThen = 0;
+    for (const m of modules)
+      for (const v of Object.keys(m.variants))
+        for (const kind of BRACKETS) {
+          // every setup the editor can produce for this stage: the sport's own preset, each decider switched off alone
+          // (the engine's off value for it), and all of them off
+          const preset = stageDefaultsFor(m, kind, v);
+          const off = decidersOffRules(m, v, kind);
+          const setups: Record<string, unknown>[] = [{}, preset, off];
+          for (const key of Object.keys(off)) setups.push({ ...preset, [key]: off[key] });
+          for (const rules of setups) {
+            const cfg = postedStageCfg(m, divisionCfg(m, v), kind, v, rules) as Record<string, unknown>;
+            const line = describeDeciders(m, kind, cfg);
+            const keys = line.map((x) => x.key);
+            const label = `${m.key}/${v}/${kind}/${JSON.stringify(rules)}`;
+            expect(keys.includes(THEN) && keys.includes(NONE), `${label}: 'none' and 'then' are exclusive`).toBe(false);
+            if (keys.includes(THEN)) {
+              expect(bracketMayEndLevel(m, kind, cfg), label).toBe(true);
+              expect(keys.length, `${label}: 'then' follows at least one decider`).toBeGreaterThan(1);
+              expect(keys.at(-1), `${label}: it comes last`).toBe(THEN);
+              withThen++;
+            } else {
+              withoutThen++;
+            }
+            checked++;
+          }
+        }
+    expect(checked).toBeGreaterThan(modules.length * BRACKETS.length);
+    expect(withThen, "some setup in the registry can end level behind a decider").toBeGreaterThan(0);
+    expect(withoutThen, "and some cannot").toBeGreaterThan(0);
+  });
+
+  it("M-3 concrete cases: football extra time alone, ice hockey overtime alone and a repeating super over still end level; penalties and a shoot-out do not", () => {
+    const football = mod("football");
+    const d = divisionCfg(football, "11-a-side");
+    const et = { extraTime: { enabled: true, halfMinutes: 15 }, shootout: false };
+    const line = describeDeciders(football, "knockout", { ...d, ...et });
+    expect(line.map((x) => x.key)).toEqual(["format.rules.decider.extraTime", "format.rules.decider.thenOrganiser"]);
+    expect(text(line)).toBe("Extra time (2 × 15 min), a match still level after that waits for the organiser");
+    const pens = describeDeciders(football, "knockout", { ...d, ...et, shootout: true });
+    expect(pens.map((x) => x.key)).not.toContain("format.rules.decider.thenOrganiser");
+    // a league's drawn match is a result: nothing is waiting, whatever the deciders say
+    expect(describeDeciders(football, "league", { ...d, ...et }).map((x) => x.key)).not.toContain("format.rules.decider.thenOrganiser");
+    const ice = mod("icehockey");
+    const iceDiv = divisionCfg(ice, Object.keys(ice.variants)[0]!);
+    const ot = describeDeciders(ice, "knockout", { ...iceDiv, overtime: { minutes: 5, ...(typeof iceDiv.overtime === "object" && iceDiv.overtime !== null ? iceDiv.overtime : {}) }, shootout: null });
+    expect(ot.at(-1)?.key).toBe("format.rules.decider.thenOrganiser");
+    const so = describeDeciders(ice, "knockout", { ...iceDiv, shootout: (stageDefaultsFor(ice, "knockout", Object.keys(ice.variants)[0]!) as { shootout: unknown }).shootout });
+    expect(so.map((x) => x.key)).not.toContain("format.rules.decider.thenOrganiser");
   });
 
   it("football with no stored kick count plays the engine's declared default (whenAbsent), and says it", () => {

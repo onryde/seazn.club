@@ -420,6 +420,7 @@
   "format.rules.decider.armageddon": "Armageddon",
   "format.rules.decider.extraBoard": "extra bord",
   "format.rules.decider.none": "gelijke wedstrijden wachten op de organisator",
+  "format.rules.decider.thenOrganiser": "blijft het gelijk, dan beslist de organisator",
   "format.rules.abandon.replay": "een gestaakte wedstrijd wordt opnieuw gespeeld",
   "format.rules.abandon.award": "de uitslag van een gestaakte wedstrijd blijft staan",
   "format.rules.abandon.q4_stands": "de uitslag van een gestaakte wedstrijd blijft staan vanaf het 4e kwart, anders wordt hij opnieuw gespeeld",

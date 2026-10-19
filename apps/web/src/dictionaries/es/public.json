@@ -420,6 +420,7 @@
   "format.rules.decider.armageddon": "Armagedón",
   "format.rules.decider.extraBoard": "tablero extra",
   "format.rules.decider.none": "los empates esperan al organizador",
+  "format.rules.decider.thenOrganiser": "si el empate persiste, decide el organizador",
   "format.rules.abandon.replay": "un partido suspendido se repite",
   "format.rules.abandon.award": "el resultado de un partido suspendido se mantiene",
   "format.rules.abandon.q4_stands": "el resultado de un partido suspendido se mantiene desde el 4.º cuarto; si no, se repite",

@@ -20,8 +20,8 @@
 // THE MODULE IS PASSED IN, for `describe-format.ts`'s reason: a division pins
 // its module version, and every read path honours that pin.
 //
-// EVERY SPORT (W2c Task 16, spec item 15). The line used to answer for four sports
-// (`STAGE_RULES_SPORTS`) and null for the rest, so seven sports' public pages kept a preset
+// EVERY SPORT (W2c Task 16, spec item 15). The line used to answer for the four sets-based sports
+// (the stage rules API's old allow-list, deleted in Task 17) and null for the rest, so seven sports' public pages kept a preset
 // name that is false for a stage that changed anything. Now there is one describer per RULE
 // FAMILY, picked from the keys the module DECLARES (`ruleKeys`) - never from its sport key -
 // so a twelfth sport that reuses a family is described the day it lands, and one that fits
@@ -29,7 +29,7 @@
 // format (the family's describer), then how a tied match ENDS (`describeDeciders`), then an
 // abandon policy the stage changed (`describeAbandon`).
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
-import { deciderKeysFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { bracketMayEndLevel, deciderKeysFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { configKeysFor } from "@/lib/match-rules";
 import { GAME_UNIT_SPORTS } from "@/lib/public-site";
@@ -440,7 +440,8 @@ export function deciderIsOn(module_: AnySportModule, key: string, c: Record<stri
  * (`deciderKeysFor`) and the parsed, BRACKET-RESOLVED config:
  *  - a decider that is ON is said, with its numbers (the stage's, never the division's);
  *  - in a BRACKET stage (`forbidsLevelResult`) where none is on, "level matches wait for the organiser" is said - that
- *    stage cannot end level, so the spectator is told what happens instead. A TABLE stage says nothing for a decider
+ *    stage cannot end level, so the spectator is told what happens instead; where one IS on but the engine says a match can
+ *    still end level behind it (`canEndLevel`), "still level after that, the organiser decides" follows the deciders. A TABLE stage says nothing for a decider
  *    that is off: a drawn league match is a result, not a pending decision;
  *  - a bracket stage plays the sport's `bracketDeciders` on top (carrom's extra board, whatever the division's
  *    `tieBoard`): they are laid over the config here too, so the answer is the same whether or not the caller resolved
@@ -467,12 +468,14 @@ export function describeDeciders(
   const out: RulesLineT = [];
   let considered = 0;
   let on = false;
+  let undescribed = false;
   for (const key of declared) {
     if (!applicable.has(key) && !Object.hasOwn(forced, key)) continue;
     considered++;
     // A decider no describer knows is never read as off: saying "none" over it would be a lie.
     if (!Object.hasOwn(DECIDERS, key)) {
       on = true;
+      undescribed = true;
       continue;
     }
     const said = DECIDERS[key]!(c, module_);
@@ -481,6 +484,12 @@ export function describeDeciders(
     out.push(...said);
   }
   if (!on && bracket && considered > 0) return [{ key: "format.rules.decider.none" }];
+  // M-3: a decider is on and the ENGINE says a match can still end level behind it (`SportModule.canEndLevel`: extra
+  // time with no shoot-out, an overtime with no shoot-out, a super over that may tie again), so the stage still waits
+  // for the organiser after the deciders. Said only then: a sudden-death shoot-out always settles it, and a table stage
+  // has no level match to hold. The stage editor's notice reads the same declaration.
+  // A decider no describer knows may be what settles it, so the clause is not said over one.
+  if (on && !undescribed && bracket && bracketMayEndLevel(module_, (kind ?? null) as StageKind, base)) out.push({ key: "format.rules.decider.thenOrganiser" });
   return out;
 }
 

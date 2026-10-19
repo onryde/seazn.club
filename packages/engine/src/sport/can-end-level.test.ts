@@ -212,4 +212,15 @@ describe("bracketMayEndLevel: the helper the web asks", () => {
   it("a cfg the schema refuses makes no claim (the same safe direction as the describer)", () => {
     expect(bracketMayEndLevel(football, "knockout", { halfMinutes: -1 })).toBe(false);
   });
+
+  it("a hand-built module with no bracketDeciders is asked nothing of them: the declaration reads the parsed cfg alone", () => {
+    // The web's describer already tolerates such a double; the helper it now calls must not throw where the describer
+    // does not. Football's own overlay is empty, so the real module is the control: both must answer the same.
+    const double = { ...football, bracketDeciders: undefined } as unknown as AnySportModule;
+    expect(typeof double.bracketDeciders).toBe("undefined");
+    expect(() => bracketMayEndLevel(double, "knockout", off)).not.toThrow();
+    expect(bracketMayEndLevel(double, "knockout", off)).toBe(bracketMayEndLevel(football, "knockout", off));
+    expect(bracketMayEndLevel(double, "knockout", off)).toBe(true);
+    expect(bracketMayEndLevel(double, "knockout", pens)).toBe(false);
+  });
 });

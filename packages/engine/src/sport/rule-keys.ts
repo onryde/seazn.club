@@ -49,7 +49,9 @@ export function bracketMayEndLevel(m: AnySportModule, kind: string | null | unde
   if (!forbidsLevelResult(kind) || m.canEndLevel === undefined) return false;
   const parsed = m.configSchema.safeParse(cfg);
   if (!parsed.success) return false;
-  return m.canEndLevel({ ...parsed.data, ...m.bracketDeciders(parsed.data) });
+  // A hand-built module may declare no `bracketDeciders` (the web's describer guards the same way): then nothing is laid over.
+  const forced = typeof m.bracketDeciders === "function" ? m.bracketDeciders(parsed.data) : {};
+  return m.canEndLevel({ ...parsed.data, ...forced });
 }
 
 /** The declaration that owns a cfg path: the most specific declared prefix ("overtime.minutes" over "overtime").

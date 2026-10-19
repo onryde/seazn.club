@@ -420,6 +420,7 @@
   "format.rules.decider.armageddon": "Armageddon",
   "format.rules.decider.extraBoard": "extra board",
   "format.rules.decider.none": "level matches wait for the organiser",
+  "format.rules.decider.thenOrganiser": "a match still level after that waits for the organiser",
   "format.rules.abandon.replay": "an abandoned match is replayed",
   "format.rules.abandon.award": "an abandoned match's result stands",
   "format.rules.abandon.q4_stands": "an abandoned match's result stands from the 4th quarter, otherwise it is replayed",

@@ -420,6 +420,7 @@
   "format.rules.decider.armageddon": "Armageddon",
   "format.rules.decider.extraBoard": "plateau supplémentaire",
   "format.rules.decider.none": "les matchs à égalité attendent l'organisateur",
+  "format.rules.decider.thenOrganiser": "si l'égalité persiste, l'organisateur tranche",
   "format.rules.abandon.replay": "un match abandonné est rejoué",
   "format.rules.abandon.award": "le résultat d'un match abandonné est conservé",
   "format.rules.abandon.q4_stands": "le résultat d'un match abandonné est conservé à partir du 4e quart-temps, sinon il est rejoué",
