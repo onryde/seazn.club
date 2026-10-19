@@ -5,8 +5,10 @@
 // field's declared options not already in it.
 //
 // Three states, because a blank raw value means "unset" everywhere in the editor:
-//   - blank  -> the engine's own default (every declared option, in declared order). Shown as the list, so it can be
-//               reordered; the first edit makes it the stage's own list, and "Use the default order" puts it back.
+//   - blank  -> what the control INHERITS: the division's list where the stage editor hands it one (`inheritedValue`, round 2
+//               - the stage plays the division's list, so that is the list shown), else the engine's own default (every
+//               declared option, in declared order). Shown as the list, so it can be reordered; the first edit makes it the
+//               stage's own list, and "Use the default order" / "Use the division's order" puts it back.
 //   - a list -> the stage's own list, in the order shown.
 //   - EMPTY  -> `field.emptyValue` ("no tie-break games"): a drawn game is held for the organiser, who decides it. This
 //               is a value of its own, never a blank - a blank would drop the stage's saved empty list on the next save
@@ -48,15 +50,20 @@ export function SequenceField({
   value,
   onChange,
   disabled = false,
+  inheritedValue,
 }: {
   field: RuleField;
   value: string;
   onChange: (raw: string) => void;
   disabled?: boolean;
+  /** The raw list a BLANK value inherits from the division (its `field.read`), when the division holds one. Only the stage
+   *  editor passes it: in the division editor a blank list is the engine's default (its reset removes the stored list). */
+  inheritedValue?: string;
 }) {
   const msg = useMsg();
-  const items = sequenceItems(field, value);
+  const items = sequenceItems(field, value === "" ? (inheritedValue ?? "") : value);
   const isDefault = value === "";
+  const fromDivision = inheritedValue !== undefined;
   const labelOf = (v: string): string => field.options?.find((o) => o.value === v)?.label ?? v;
   const remaining = (field.options ?? []).filter((o) => !items.includes(o.value));
   const set = (next: readonly string[]) => onChange(sequenceValue(field, next));
@@ -134,12 +141,12 @@ export function SequenceField({
           )}
           {!isDefault && (
             <button type="button" className="btn btn-ghost min-h-11 px-3 text-xs" data-testid={`${testId}-reset`} disabled={disabled} onClick={() => onChange("")}>
-              {msg("stageRules.sequence.reset")}
+              {msg(fromDivision ? "stageRules.sequence.resetInherited" : "stageRules.sequence.reset")}
             </button>
           )}
         </div>
       )}
-      {isDefault && <p className="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-600">{msg("stageRules.sequence.default")}</p>}
+      {isDefault && <p className="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-600">{msg(fromDivision ? "stageRules.sequence.inherited" : "stageRules.sequence.default")}</p>}
     </div>
   );
 }

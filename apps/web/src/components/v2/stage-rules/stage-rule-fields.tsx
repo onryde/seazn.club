@@ -104,6 +104,7 @@ export function StageRuleFields({
                       onEdit={(raw) => edit(field.key, raw)}
                       disabled={disabled || inert}
                       inherited={divisionConfig}
+                      sequenceInherits={divisionConfig}
                       optionStates={s.id === "abandon" ? optionStates : undefined}
                       describedBy={s.id === "abandon" && reasons.length > 0 ? reasonId : undefined}
                     />

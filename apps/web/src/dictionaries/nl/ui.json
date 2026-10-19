@@ -2108,6 +2108,8 @@
   "stageRules.sequence.empty": "Geen beslissers: een gelijke wedstrijd wacht op jou",
   "stageRules.sequence.default": "Standaardvolgorde: elke partij in de lijst wordt in deze volgorde gespeeld tot één kant wint.",
   "stageRules.sequence.reset": "Standaardvolgorde gebruiken",
+  "stageRules.sequence.inherited": "Volgorde van de divisie: elke partij in de lijst wordt in deze volgorde gespeeld tot één kant wint.",
+  "stageRules.sequence.resetInherited": "Volgorde van de divisie gebruiken",
   "stageRules.detail.off": "Alleen in gebruik als ‘{decider}’ aan staat",
   "stageRules.source.division": "Divisie",
   "stageRules.source.stage": "Deze fase",

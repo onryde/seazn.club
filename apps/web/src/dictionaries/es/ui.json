@@ -2108,6 +2108,8 @@
   "stageRules.sequence.empty": "Sin desempates: un partido empatado espera tu decisión",
   "stageRules.sequence.default": "Orden predeterminado: se juega cada partida de la lista, en este orden, hasta que gane un bando.",
   "stageRules.sequence.reset": "Usar el orden predeterminado",
+  "stageRules.sequence.inherited": "Orden de la división: se juega cada partida de la lista, en este orden, hasta que gane un bando.",
+  "stageRules.sequence.resetInherited": "Usar el orden de la división",
   "stageRules.detail.off": "Solo se usa cuando «{decider}» está activado",
   "stageRules.source.division": "División",
   "stageRules.source.stage": "Esta fase",

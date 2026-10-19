@@ -2108,6 +2108,8 @@
   "stageRules.sequence.empty": "No tie-breaks: a level match waits for you",
   "stageRules.sequence.default": "Default order: every game listed is played, in this order, until one side wins.",
   "stageRules.sequence.reset": "Use the default order",
+  "stageRules.sequence.inherited": "Division order: every game listed is played, in this order, until one side wins.",
+  "stageRules.sequence.resetInherited": "Use the division's order",
   "stageRules.detail.off": "Only used when {decider} is on",
   "stageRules.source.division": "Division",
   "stageRules.source.stage": "This stage",

@@ -39,6 +39,7 @@ export function RuleFieldControl({
   onEdit,
   disabled = false,
   inherited,
+  sequenceInherits,
   optionStates,
   describedBy,
 }: {
@@ -49,6 +50,9 @@ export function RuleFieldControl({
   onEdit: (raw: string) => void;
   disabled?: boolean;
   inherited?: Record<string, unknown>;
+  /** The config an ordered list's BLANK value inherits - the stage editor's division. Left out by the division editor, where a
+   *  blank list is the engine's default order (G1, round 2). */
+  sequenceInherits?: Record<string, unknown>;
   /** Per option value: unavailable, with why (the abandon select's `share`). */
   optionStates?: ReadonlyMap<string, OptionState>;
   /** The id of the element that says why an option is unavailable, so the select is described by it. */
@@ -62,7 +66,13 @@ export function RuleFieldControl({
     return (
       <div className="block">
         <span className="label">{field.label}</span>
-        <SequenceField field={field} value={value} onChange={onEdit} disabled={disabled} />
+        <SequenceField
+          field={field}
+          value={value}
+          onChange={onEdit}
+          disabled={disabled}
+          inheritedValue={sequenceInherits === undefined ? undefined : field.read?.(sequenceInherits)}
+        />
         {field.help && <span className="mt-0.5 block text-[11px] text-slate-600">{field.help}</span>}
       </div>
     );

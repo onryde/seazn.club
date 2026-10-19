@@ -2108,6 +2108,8 @@
   "stageRules.sequence.empty": "Aucun départage : un match à égalité attend votre décision",
   "stageRules.sequence.default": "Ordre par défaut : chaque partie de la liste est jouée, dans cet ordre, jusqu'à ce qu'un camp gagne.",
   "stageRules.sequence.reset": "Utiliser l'ordre par défaut",
+  "stageRules.sequence.inherited": "Ordre de la division : chaque partie de la liste est jouée, dans cet ordre, jusqu'à ce qu'un camp gagne.",
+  "stageRules.sequence.resetInherited": "Utiliser l'ordre de la division",
   "stageRules.detail.off": "Utilisé seulement lorsque « {decider} » est activé",
   "stageRules.source.division": "Division",
   "stageRules.source.stage": "Cette phase",

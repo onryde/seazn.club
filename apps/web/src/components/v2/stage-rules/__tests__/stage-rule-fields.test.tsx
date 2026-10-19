@@ -14,6 +14,7 @@ import { SPORT_RULES } from "@/lib/match-rules";
 import { stageFieldsFor } from "@/lib/rule-scope";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { resolvedStageCfg } from "../stage-row-model";
+import { MatchRuleFields } from "../../match-rules";
 import { StageRuleFields } from "../stage-rule-fields";
 
 const KINDS = ["league", ...BRACKET_KINDS] as StageKind[];
@@ -140,6 +141,64 @@ describe("the abandon field follows the engine's declarations (carries 'share on
     expect(after).not.toMatch(/<option value="share" disabled=""/);
     expect(after).not.toContain("stage-abandon-unavailable");
     expect(after).toMatch(/<option value="share"/);
+  });
+});
+
+// Round 2 (re-review residual 4, G1): a stage whose tie-break list is BLANK inherits its division's list, so the editor shows
+// THAT list (the division's stored one, else the engine's default order) - never the default order while the stage plays
+// the division's. Only the stage editor inherits: the division editor's blank list IS the default (its reset removes the
+// stored list), so it keeps showing the default order.
+describe("a blank stage tie-break list shows the list it inherits (G1)", () => {
+  const TIEBREAK = SPORT_RULES.boardgame!.find((f) => f.kind === "sequence")!;
+  const labelFor = (v: string): string => TIEBREAK.options!.find((o) => o.value === v)!.label;
+  const itemsOf = (markup: string): string[] =>
+    [...markup.matchAll(/data-testid="stage-rule-sequence-tiebreakRungs-item-(\d+)"[^>]*><span[^>]*>([^<]*)<\/span>/g)].map((m) => m[2]!);
+  const stage = (values: Record<string, string>, division: Record<string, unknown>): string => render("boardgame", "knockout", values, division);
+  const allRungs = TIEBREAK.options!.map((o) => labelFor(o.value));
+
+  it("the division holds [rapid]: a blank stage lists Rapid only, says it is the division's order, and resets to it", () => {
+    const markup = stage({}, { tiebreakRungs: ["rapid"] });
+    expect(itemsOf(markup)).toEqual([labelFor("rapid")]);
+    expect(markup).toContain("Division order");
+    expect(markup).not.toContain("Default order");
+    expect(markup).not.toContain("stage-rule-sequence-tiebreakRungs-reset"); // blank: nothing of its own to reset
+  });
+
+  it("the division holds an ordered pair: the blank stage lists it in the division's ORDER", () => {
+    expect(itemsOf(stage({}, { tiebreakRungs: ["blitz", "rapid"] }))).toEqual([labelFor("blitz"), labelFor("rapid")]);
+    expect(itemsOf(stage({}, { tiebreakRungs: ["blitz", "rapid"] }))).not.toEqual(allRungs);
+  });
+
+  it("the division holds the EMPTY list: the blank stage shows 'no tie-breaks', not the default rungs", () => {
+    const markup = stage({}, { tiebreakRungs: [] });
+    expect(itemsOf(markup)).toEqual([]);
+    expect(markup).toContain('data-testid="stage-rule-sequence-tiebreakRungs-empty"');
+  });
+
+  it("the division holds no list: the blank stage shows the engine's default order (positive pair)", () => {
+    const markup = stage({}, { variant: "classical" });
+    expect(itemsOf(markup)).toEqual(allRungs);
+    expect(markup).toContain("Default order");
+    expect(markup).not.toContain("Division order");
+  });
+
+  it("the stage's OWN list wins over the division's, and offers 'Use the division's order' to go back", () => {
+    const markup = stage({ [TIEBREAK.key]: "armageddon" }, { tiebreakRungs: ["rapid"] });
+    expect(itemsOf(markup)).toEqual([labelFor("armageddon")]);
+    expect(markup).toContain("stage-rule-sequence-tiebreakRungs-reset");
+    expect(markup).toContain("Use the division&#x27;s order");
+    // the stage's own EMPTY list is its own value too, over a division that has a list
+    expect(itemsOf(stage({ [TIEBREAK.key]: TIEBREAK.emptyValue! }, { tiebreakRungs: ["rapid"] }))).toEqual([]);
+  });
+
+  it("the DIVISION editor does not inherit: a blank list there is the default order even beside a stored list", () => {
+    const markup = renderToStaticMarkup(
+      <DictProvider dict={enUi as Dict} locale="en">
+        <MatchRuleFields sportKey="boardgame" values={{}} onChange={() => undefined} inherited={{ tiebreakRungs: ["rapid"] }} />
+      </DictProvider>,
+    );
+    expect(itemsOf(markup)).toEqual(allRungs);
+    expect(markup).toContain("Default order");
   });
 });
 
