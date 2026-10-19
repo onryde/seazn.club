@@ -207,6 +207,16 @@ export function StreamSessionProvider({
 }
 
 /**
+ * The provider's session for THIS fixture, or null — never a poll of its own. For a reader that only wants to KNOW what
+ * the page's one session is (the OBS tab's "applies to the next stream" line, PR #989 review m1), where a second poll
+ * would be a cost and a missing provider simply means "nothing known".
+ */
+export function useProvidedPhoneSession(fixtureId: string): PhoneSession | null {
+  const shared = useContext(SessionCtx);
+  return shared !== null && shared.fixtureId === fixtureId ? shared : null;
+}
+
+/**
  * The provider's session when one for THIS fixture is mounted above; otherwise this caller's own poll (the panel's unit
  * harness renders it bare). Hooks run unconditionally; the own poll is disabled under a matching provider. A provider for
  * ANOTHER fixture is not this fixture's session — that caller polls its own rather than reading the wrong one.

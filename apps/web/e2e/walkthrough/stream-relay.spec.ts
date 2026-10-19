@@ -38,6 +38,7 @@ import {
   setEntitlementOverrideSql,
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
+import { storeCameraOnly } from "../helpers/stream-mode";
 import {
   closeQrEnlarged,
   expectQrDecodesAsPainted,
@@ -241,6 +242,9 @@ async function seedRelayRig(page: Page, opts: { plan?: string; entrants?: number
   // A league of n plays n(n-1)/2 — the rig's own premise, so a generator change cannot hand a case fewer rows than
   // it indexes into.
   expect(fixtureIds.length, "relay rig: a league's fixture count").toBe((n * (n - 1)) / 2);
+  // R2006: this file follows the CAMERA's lifecycle; on a server with a compositor image every start is the score by
+  // default, so each fixture stores Camera only (helpers/stream-mode.ts).
+  await storeCameraOnly(request, fixtureIds);
   const fixtures = await withDb(async (sql) => [
     ...(await sql<RelayFixture[]>`select id, fixture_no as no from fixtures where division_id = ${div.data!.id} order by fixture_no`),
   ]);

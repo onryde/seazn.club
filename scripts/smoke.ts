@@ -19453,8 +19453,8 @@ async function captureV2Suite(): Promise<void> {
     return;
   }
   // R2004: an environment naming a compositor image runs the composed Go live AND its Stop (two steps) where the
-  // imageless one runs the single 503 refusal.
-  const EXPECTED_STEPS = process.env.RELAY_IMAGE ? 27 : 26;
+  // imageless one runs the single 503 refusal. R2006 adds 12c (the stored stream mode) to both.
+  const EXPECTED_STEPS = process.env.RELAY_IMAGE ? 28 : 27;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -19735,11 +19735,35 @@ async function captureV2Suite(): Promise<void> {
     });
 
     // 12. The organiser's switch (§7.1): on, over the API — the answer names it and leaves the destination unchosen.
+    // R2006: the answer carries the score preferences too, all unset (null = the server's default) — a body naming one
+    // field writes only that field.
     const autoBefore = await readPhone(autoFx.fixtureId);
     const switched = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/stream-settings`, "PUT", { autoStream: true });
+    const unsetPrefs = { streamMode: null, overlayTemplate: null, overlayDelayMs: null };
+    // PR #989 confirm N1: every answer also carries the row's revision, a number every write moves. It is compared apart.
+    const answerOf = (data: unknown) => {
+      const { revision, ...rest } = (data ?? {}) as { revision?: unknown };
+      return { revision, rest: JSON.stringify(rest) };
+    };
+    const switchedAnswer = answerOf(switched.json.data);
     step(
-      `PUT stream-settings {autoStream: true} → 200 {targetId: null, autoStream: true} (got ${switched.status} ${JSON.stringify(switched.json.data)})`,
-      switched.status === 200 && JSON.stringify(switched.json.data) === JSON.stringify({ targetId: null, autoStream: true }),
+      `PUT stream-settings {autoStream: true} → 200 {targetId: null, autoStream: true}, the score preferences unset, a revision (got ${switched.status} ${JSON.stringify(switched.json.data)})`,
+      switched.status === 200 && switchedAnswer.rest === JSON.stringify({ targetId: null, autoStream: true, ...unsetPrefs })
+        && typeof switchedAnswer.revision === "number",
+    );
+
+    // 12c. R2006 (owner ruling 2026-10-19, "Option C"): the organiser's "Camera only", stored — the automatic start in step
+    // 15 READS it (lib/stream-settings.ts effectiveStreamMode). On a server naming a compositor image the default is the
+    // score, so step 15's passthrough session is the witness that the stored mode was read; on an imageless one the
+    // default is the camera as well. The switch from step 12 survives a body that names only the mode.
+    const cameraOnly = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/stream-settings`, "PUT", { streamMode: "passthrough" });
+    const cameraOnlyAnswer = answerOf(cameraOnly.json.data);
+    step(
+      `PUT stream-settings {streamMode: "passthrough"} → 200, stored, the switch still on, a later revision (got ${cameraOnly.status} ${JSON.stringify(cameraOnly.json.data)})`,
+      cameraOnly.status === 200
+        && cameraOnlyAnswer.rest === JSON.stringify({ targetId: null, autoStream: true, ...unsetPrefs, streamMode: "passthrough" })
+        && typeof cameraOnlyAnswer.revision === "number" && typeof switchedAnswer.revision === "number"
+        && cameraOnlyAnswer.revision > switchedAnswer.revision,
     );
 
     // 12b. The organiser's read (§9, PR-2 T6) serves the switch: `auto` null before it (the empty case — a fixture with
@@ -19780,11 +19804,12 @@ async function captureV2Suite(): Promise<void> {
 
     // 15. AUTO START (§7.2): the phone's beat starts the broadcast; it hears go-live, started automatically — one session.
     const autoLive = await beatUntil("go-live", () => automatic, { q: qrAuto, phone: phoneC });
-    const autoSessions = await db<{ id: string; start_cause: string }[]>`
-      select id, start_cause from fixture_stream_sessions where fixture_id = ${autoFx.fixtureId}`;
+    const autoSessions = await db<{ id: string; start_cause: string; mode: string }[]>`
+      select id, start_cause, mode from fixture_stream_sessions where fixture_id = ${autoFx.fixtureId}`;
     step(
-      `phone C's beat hears go-live startedBy automatic, and the fixture has ONE session, start_cause automatic (got ${JSON.stringify(autoLive)}, ${JSON.stringify(autoSessions)})`,
-      autoLive?.startedBy === "automatic" && autoSessions.length === 1 && autoSessions[0].start_cause === "automatic" && autoLive.sid === autoSessions[0].id,
+      `phone C's beat hears go-live startedBy automatic, and the fixture has ONE session, start_cause automatic, Camera only as stored in 12c (got ${JSON.stringify(autoLive)}, ${JSON.stringify(autoSessions)})`,
+      autoLive?.startedBy === "automatic" && autoSessions.length === 1 && autoSessions[0].start_cause === "automatic" && autoLive.sid === autoSessions[0].id
+        && autoSessions[0].mode === "passthrough",
     );
     const autoSid = autoSessions[0]?.id;
     if (!autoSid) return done();

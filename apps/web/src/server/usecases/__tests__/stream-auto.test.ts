@@ -192,7 +192,7 @@ describe("autoStartRefusalOf — the mapper from startBroadcast's refusals to th
     expect(checked).toBe(2);
   });
 
-  it("R2001, an assumption made a guard: composed_unavailable cannot reach an auto start (it passes no mode — passthrough) — refused by name, never mapped to `unavailable` the panel would show", () => {
+  it("R2001, an assumption made a guard: composed_unavailable cannot reach an auto start (R2006: its mode is resolved against the same composedUnavailable()) — refused by name, never mapped to `unavailable` the panel would show", () => {
     const err = new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable");
     expect(() => autoStartRefusalOf(err)).toThrow(/answered composed_unavailable to an automatic start/);
     // The positive pair: the ingest's own 503 on the same status IS mapped — the guard is on the code, not the status.
@@ -884,11 +884,11 @@ describe.skipIf(!HAS_DB)("startBroadcast refuses an automatic start attributed t
     const { r, phone } = await autoRig();
     const pairingId = await pairingIdOf(r, phone);
     const other = await rigUser();
-    await expect(startBroadcast({ userId: other, orgId: r.auth.orgId, source: "auto", pairingId }, r.fixtureId, { targetId: r.target.id, startCause: "automatic", phone: "present" }, r.deps))
+    await expect(startBroadcast({ userId: other, orgId: r.auth.orgId, source: "auto", pairingId }, r.fixtureId, { mode: "passthrough", targetId: r.target.id, startCause: "automatic", phone: "present" }, r.deps))
       .rejects.toThrow(/attributed to its stream code's issuer/);
     expect(await sessionsOf(r.fixtureId)).toHaveLength(0);
     const issuer = await issuerOf(r.fixtureId);
-    const ok = await startBroadcast({ userId: issuer, orgId: r.auth.orgId, source: "auto", pairingId }, r.fixtureId, { targetId: r.target.id, startCause: "automatic", phone: "present", autoStartedAt: r.now() }, r.deps);
+    const ok = await startBroadcast({ userId: issuer, orgId: r.auth.orgId, source: "auto", pairingId }, r.fixtureId, { mode: "passthrough", targetId: r.target.id, startCause: "automatic", phone: "present", autoStartedAt: r.now() }, r.deps);
     expect((await sessionsOf(r.fixtureId)).find((s) => s.id === ok.sessionId)).toMatchObject({ start_cause: "automatic", created_by: issuer });
   });
 });
@@ -945,8 +945,8 @@ describe.skipIf(!HAS_DB)("final review m-1 — the automatic start's stamp commi
     const pairingId = await pairingIdOf(r, phone);
     const issuer = await issuerOf(r.fixtureId);
     const cases: [string, Parameters<typeof startBroadcast>[0], Parameters<typeof startBroadcast>[2]][] = [
-      ["auto, no instant", { userId: issuer, orgId: r.auth.orgId, source: "auto", pairingId }, { targetId: r.target.id, startCause: "automatic", phone: "present" }],
-      ["phone, an instant", { userId: issuer, orgId: r.auth.orgId, source: "phone", pairingId }, { targetId: r.target.id, startCause: "operator", phone: "present", autoStartedAt: r.now() }],
+      ["auto, no instant", { userId: issuer, orgId: r.auth.orgId, source: "auto", pairingId }, { mode: "passthrough", targetId: r.target.id, startCause: "automatic", phone: "present" }],
+      ["phone, an instant", { userId: issuer, orgId: r.auth.orgId, source: "phone", pairingId }, { mode: "passthrough", targetId: r.target.id, startCause: "operator", phone: "present", autoStartedAt: r.now() }],
     ];
     let checked = 0;
     for (const [label, actor, opts] of cases) {

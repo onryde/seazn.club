@@ -38720,6 +38720,18 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 40
+                  },
+                  "overlayDelayMs": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 30000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -38731,7 +38743,8 @@
               "example": {
                 "mode": "passthrough",
                 "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "themeId": "example"
+                "themeId": "example",
+                "overlayDelayMs": 0
               }
             }
           }
@@ -39293,6 +39306,38 @@
                                 "composed"
                               ]
                             },
+                            "overlay": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "themeId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "delayMs": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "themeId",
+                                    "delayMs"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "state": {
                               "type": "string",
                               "enum": [
@@ -39669,6 +39714,7 @@
                             "id",
                             "fixtureId",
                             "mode",
+                            "overlay",
                             "state",
                             "desiredState",
                             "failReason",
@@ -39707,6 +39753,10 @@
                     "id": "example",
                     "fixtureId": "example",
                     "mode": "passthrough",
+                    "overlay": {
+                      "themeId": "example",
+                      "delayMs": 0
+                    },
                     "state": "requested",
                     "desiredState": "live",
                     "failReason": "no_inbound_timeout",
@@ -40000,6 +40050,38 @@
                           "enum": [
                             "passthrough",
                             "composed"
+                          ]
+                        },
+                        "overlay": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "themeId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "delayMs": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "themeId",
+                                "delayMs"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "state": {
@@ -40378,6 +40460,7 @@
                         "id",
                         "fixtureId",
                         "mode",
+                        "overlay",
                         "state",
                         "desiredState",
                         "failReason",
@@ -40411,6 +40494,10 @@
                     "id": "example",
                     "fixtureId": "example",
                     "mode": "passthrough",
+                    "overlay": {
+                      "themeId": "example",
+                      "delayMs": 0
+                    },
                     "state": "requested",
                     "desiredState": "live",
                     "failReason": "no_inbound_timeout",
@@ -48109,7 +48196,7 @@
     },
     "/api/v1/fixtures/{id}/stream-settings": {
       "put": {
-        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it) and the automatic-streaming switch (`autoStream`). Send either or both; a field left out is left as it is. The answer's `targetId` is the saved choice. 404 when the target is not this org's, is archived, or does not exist",
+        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it), the automatic-streaming switch (`autoStream`), and the stream's score preferences — `streamMode` (`passthrough` streams the camera only; null or `composed` streams the score whenever the deployment can run it, and every start reads it), `overlayTemplate` (null is the sport's default; an id the fixture's sport is not offered is a 400 and writes nothing) and `overlayDelayMs` (0–30000 whole ms; null is the server's default, 0 a real override). Send any of them; a field left out is left as it is. The answer's `targetId` is the saved choice, and its `revision` orders it against any other answer or read of these settings (higher is newer). 404 when the target is not this org's, is archived, or does not exist",
         "tags": [
           "fixtures"
         ],
@@ -48146,13 +48233,53 @@
                   },
                   "autoStream": {
                     "type": "boolean"
+                  },
+                  "streamMode": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "passthrough",
+                          "composed"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "overlayTemplate": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 40
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "overlayDelayMs": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 30000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false
               },
               "example": {
                 "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "autoStream": true
+                "autoStream": true,
+                "streamMode": "passthrough",
+                "overlayTemplate": "example"
               }
             }
           }
@@ -48190,11 +48317,63 @@
                         },
                         "autoStream": {
                           "type": "boolean"
+                        },
+                        "streamMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "passthrough",
+                                "composed"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayTemplate": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayDelayMs": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "revision": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
                         "targetId",
-                        "autoStream"
+                        "autoStream",
+                        "streamMode",
+                        "overlayTemplate",
+                        "overlayDelayMs",
+                        "revision"
                       ],
                       "additionalProperties": false
                     },
@@ -48208,7 +48387,11 @@
                   "ok": true,
                   "data": {
                     "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                    "autoStream": true
+                    "autoStream": true,
+                    "streamMode": "passthrough",
+                    "overlayTemplate": "example",
+                    "overlayDelayMs": -9007199254740991,
+                    "revision": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

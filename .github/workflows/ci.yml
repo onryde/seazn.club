@@ -1809,7 +1809,7 @@ jobs:
       # composed Go live's 503 composed_unavailable. A SECOND server from the SAME build names a dummy compositor image
       # (the fake drivers never pull it), and captureV2 runs alone against it, so the composed 201 — two inputs, the
       # output on the programme, two matches reserved — and its Stop are witnessed over real HTTP too. The image is on
-      # BOTH processes: the server admits on it, and the smoke process takes its composed branch (27 steps, not 26) on
+      # BOTH processes: the server admits on it, and the smoke process takes its composed branch (28 steps, not 27) on
       # it. The greps are the gate, not the exit code: the same suite run against the imageless server, or without the
       # image in the smoke process's env, exits 0 having run the 503 branch instead.
       - name: Start a second server with a compositor image (R2004)
@@ -1847,7 +1847,7 @@ jobs:
           npm run test:smoke 2>&1 | tee composed-smoke.log
           grep -F "PASS  capture-v2 smoke: R2004: a composed Go live with a compositor image → 201" composed-smoke.log
           grep -F "PASS  capture-v2 smoke: R2004: the composed session's Stop → 200, and it completes" composed-smoke.log
-          grep -F "PASS  capture-v2 smoke: all 27 steps ran (ran 27)" composed-smoke.log
+          grep -F "PASS  capture-v2 smoke: all 28 steps ran (ran 28)" composed-smoke.log
 
       # The Playwright UI e2e suite moved to its own workflow (e2e.yml): it
       # runs on pushes to main, or on demand against a PR by number.

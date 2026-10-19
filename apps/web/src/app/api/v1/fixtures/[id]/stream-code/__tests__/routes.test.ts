@@ -62,6 +62,9 @@ afterAll(async () => {
 });
 
 const BASE = "https://test.local/api/v1";
+/** R2006: the three score preferences, never chosen — each `null` ("the default") — and the row's revision after the
+ *  write (PR #989 confirm N1: a number on every answer; its ORDER is pinned where it is the point). */
+const NO_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: expect.any(Number) as number } as const;
 
 interface Envelope<T = unknown> {
   ok: boolean;
@@ -183,7 +186,7 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
     const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
     const saved = await read<StreamSettings>(await settingsRaw(o.fixtureId, { targetId: target.id }));
     expect(saved.status).toBe(200);
-    expect(StreamSettings.parse(saved.body.data)).toEqual({ targetId: target.id, autoStream: false });
+    expect(StreamSettings.parse(saved.body.data)).toEqual({ targetId: target.id, autoStream: false, ...NO_PREFS });
     const other = await organiser();
     const theirs = await createStreamTarget(other.auth, other.auth.orgId, { kind: "youtube", label: "Theirs", streamKey: `k-${randomUUID().slice(0, 8)}` });
     authState.userId = o.auth.userId!;
@@ -193,7 +196,7 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
     const [row] = await sql<{ target_id: string | null }[]>`select target_id from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
     expect(row!.target_id).toBe(target.id);
     const cleared = await read<StreamSettings>(await settingsRaw(o.fixtureId, { targetId: null }));
-    expect(StreamSettings.parse(cleared.body.data)).toEqual({ targetId: null, autoStream: false });
+    expect(StreamSettings.parse(cleared.body.data)).toEqual({ targetId: null, autoStream: false, ...NO_PREFS });
   });
 
   // FP4 (plan 2026-10-07): PR-1 pinned `{}` and `{ targetId: null, autoStream: true }` as REJECTED; the switch makes the second
@@ -208,7 +211,7 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
       expect(r.status, JSON.stringify(body)).toBe(400);
       expect(r.body.error?.code, JSON.stringify(body)).toBe("VALIDATION");
       // The refine's own sentence rides the 400's `issues` (v1's ZodError branch): the one thing that tells the refine from any other layer.
-      if (Object.keys(body).length === 0) expect(JSON.stringify(r.body.error?.issues), "{} is refused by the schema's own sentence").toContain("targetId or autoStream is required");
+      if (Object.keys(body).length === 0) expect(JSON.stringify(r.body.error?.issues), "{} is refused by the schema's own sentence").toContain("targetId, autoStream, streamMode, overlayTemplate or overlayDelayMs is required");
       checked++;
     }
     expect(checked).toBe(4);
@@ -219,9 +222,9 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
   it("the accepted bodies: {autoStream}, {targetId: null, autoStream}, and the panel's PR-1 {targetId} — each answers 200 with the new two-field shape", async () => {
     // One fresh organiser per body, so each answer is that fixture's FIRST write.
     const cases: [string, (targetId: string) => unknown, (targetId: string) => StreamSettings][] = [
-      ["the switch alone", () => ({ autoStream: true }), () => ({ targetId: null, autoStream: true })],
-      ["a cleared pick with the switch", () => ({ targetId: null, autoStream: true }), () => ({ targetId: null, autoStream: true })],
-      ["the panel's PR-1 body", (t) => ({ targetId: t }), (t) => ({ targetId: t, autoStream: false })],
+      ["the switch alone", () => ({ autoStream: true }), () => ({ targetId: null, autoStream: true, ...NO_PREFS })],
+      ["a cleared pick with the switch", () => ({ targetId: null, autoStream: true }), () => ({ targetId: null, autoStream: true, ...NO_PREFS })],
+      ["the panel's PR-1 body", (t) => ({ targetId: t }), (t) => ({ targetId: t, autoStream: false, ...NO_PREFS })],
     ];
     let checked = 0;
     for (const [label, body, want] of cases) {
@@ -238,13 +241,104 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
   it("the switch survives a destination pick and the pick survives the switch, over HTTP — and a second identical PUT changes nothing", async () => {
     const o = await organiser();
     const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
-    const put = async (body: unknown) => StreamSettings.parse((await read<StreamSettings>(await settingsRaw(o.fixtureId, body))).body.data);
-    expect(await put({ autoStream: true })).toEqual({ targetId: null, autoStream: true });
-    expect(await put({ targetId: target.id }), "pick after the switch").toEqual({ targetId: target.id, autoStream: true });
-    expect(await put({ autoStream: false }), "switch off after the pick").toEqual({ targetId: target.id, autoStream: false });
-    expect(await put({ autoStream: false }), "the same PUT twice").toEqual({ targetId: target.id, autoStream: false });
+    const revisions: number[] = [];
+    const put = async (body: unknown) => {
+      const answer = StreamSettings.parse((await read<StreamSettings>(await settingsRaw(o.fixtureId, body))).body.data);
+      revisions.push(answer.revision!);
+      return answer;
+    };
+    expect(await put({ autoStream: true })).toEqual({ targetId: null, autoStream: true, ...NO_PREFS });
+    expect(await put({ targetId: target.id }), "pick after the switch").toEqual({ targetId: target.id, autoStream: true, ...NO_PREFS });
+    expect(await put({ autoStream: false }), "switch off after the pick").toEqual({ targetId: target.id, autoStream: false, ...NO_PREFS });
+    expect(await put({ autoStream: false }), "the same PUT twice").toEqual({ targetId: target.id, autoStream: false, ...NO_PREFS });
+    // PR #989 confirm N1: every write, an identical one included, answers a strictly higher revision over HTTP.
+    expect(revisions, "four answers, four revisions").toHaveLength(4);
+    for (let i = 1; i < revisions.length; i++) expect(revisions[i]!, `answer ${i + 1} is newer than answer ${i}`).toBeGreaterThan(revisions[i - 1]!);
     const rows = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
     expect(rows[0]!.n).toBe(1);
+  });
+});
+
+// R2006 (owner ruling 2026-10-19, "Option C"): the three score preferences ride the same PUT, each written only when the
+// body names it. Expected values are the brief's (task R2006, "Route" + P1), never read back from the writer.
+describe.skipIf(!HAS_DB)("PUT …/stream-settings: the score preferences (R2006)", () => {
+  type Row = { stream_mode: string | null; overlay_template: string | null; overlay_delay_ms: number | null; target_id: string | null; target_chosen: boolean; auto_stream: boolean };
+  const rowOf = async (fixtureId: string): Promise<Row | undefined> =>
+    (await sql<Row[]>`select stream_mode, overlay_template, overlay_delay_ms, target_id, target_chosen, auto_stream
+                        from fixture_stream_settings where fixture_id = ${fixtureId}`)[0];
+  const putOk = async (fixtureId: string, body: unknown): Promise<StreamSettings> => {
+    const r = await read<StreamSettings>(await settingsRaw(fixtureId, body));
+    expect(r.status, JSON.stringify(body)).toBe(200);
+    return StreamSettings.parse(r.body.data);
+  };
+
+  it("overlayDelayMs: 2500 persists; 0 persists as 0, never null; null resets; a body without it leaves it; each answer says so", async () => {
+    const o = await organiser();
+    expect((await putOk(o.fixtureId, { overlayDelayMs: 2500 })).overlayDelayMs).toBe(2500);
+    expect((await rowOf(o.fixtureId))!.overlay_delay_ms).toBe(2500);
+    expect((await putOk(o.fixtureId, { autoStream: true })).overlayDelayMs, "absent leaves it").toBe(2500);
+    expect((await rowOf(o.fixtureId))!.overlay_delay_ms).toBe(2500);
+    expect((await putOk(o.fixtureId, { overlayDelayMs: 0 })).overlayDelayMs, "0 is a real override").toBe(0);
+    expect((await rowOf(o.fixtureId))!.overlay_delay_ms).toBe(0);
+    expect((await putOk(o.fixtureId, { overlayDelayMs: null })).overlayDelayMs, "null resets to the default").toBeNull();
+    expect((await rowOf(o.fixtureId))!.overlay_delay_ms).toBeNull();
+  });
+
+  it("overlayDelayMs out of bounds or fractional is a 400 VALIDATION and writes nothing", async () => {
+    const o = await organiser();
+    let checked = 0;
+    for (const overlayDelayMs of [-1, 30_001, 2500.5, "2500"]) {
+      const r = await read(await settingsRaw(o.fixtureId, { overlayDelayMs }));
+      expect(r.status, String(overlayDelayMs)).toBe(400);
+      expect(r.body.error?.code, String(overlayDelayMs)).toBe("VALIDATION");
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(await rowOf(o.fixtureId), "no row was written").toBeUndefined();
+  });
+
+  it("overlayTemplate (P1): 'bar' persists and the answer says 'bar'; alone it passes the refine; absent leaves it; null resets; the pick is never touched", async () => {
+    const o = await organiser();
+    const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
+    await putOk(o.fixtureId, { targetId: target.id });
+    expect((await putOk(o.fixtureId, { overlayTemplate: "bar" })).overlayTemplate).toBe("bar");
+    const after = (await rowOf(o.fixtureId))!;
+    expect(after.overlay_template).toBe("bar");
+    expect({ target: after.target_id, chosen: after.target_chosen }, "a template write never moves the pick").toEqual({ target: target.id, chosen: true });
+    expect((await putOk(o.fixtureId, { autoStream: true })).overlayTemplate, "absent leaves it").toBe("bar");
+    expect((await putOk(o.fixtureId, { overlayTemplate: null })).overlayTemplate, "null resets to the sport default").toBeNull();
+    expect((await rowOf(o.fixtureId))!.overlay_template).toBeNull();
+  });
+
+  it("overlayTemplate the sport is not offered ('nope') is a 400 naming why, documented, and writes nothing — not even the other fields of the same body", async () => {
+    const o = await organiser();
+    await putOk(o.fixtureId, { overlayTemplate: "bug", overlayDelayMs: 1200 });
+    const refused = await read(await settingsRaw(o.fixtureId, { overlayTemplate: "nope", overlayDelayMs: 4000, streamMode: "passthrough" }));
+    expect(refused.status).toBe(400);
+    expect(refused.body.error?.message).toBe("overlay template not available for this fixture");
+    expect(documented("/fixtures/{id}/stream-settings", "put")).toContain("400");
+    const row = (await rowOf(o.fixtureId))!;
+    expect({ t: row.overlay_template, d: row.overlay_delay_ms, m: row.stream_mode }, "the whole body rolled back").toEqual({ t: "bug", d: 1200, m: null });
+  });
+
+  it("streamMode: 'passthrough' (Camera only) and 'composed' (Add the score back) persist; null resets; absent leaves it; an unknown mode is a 400", async () => {
+    const o = await organiser();
+    expect((await putOk(o.fixtureId, { streamMode: "passthrough" })).streamMode).toBe("passthrough");
+    expect((await rowOf(o.fixtureId))!.stream_mode).toBe("passthrough");
+    expect((await putOk(o.fixtureId, { overlayDelayMs: 900 })).streamMode, "absent leaves it").toBe("passthrough");
+    expect((await putOk(o.fixtureId, { streamMode: "composed" })).streamMode).toBe("composed");
+    expect((await putOk(o.fixtureId, { streamMode: null })).streamMode, "null resets to the default").toBeNull();
+    expect((await rowOf(o.fixtureId))!.stream_mode).toBeNull();
+    const bad = await read(await settingsRaw(o.fixtureId, { streamMode: "obs" }));
+    expect(bad.status).toBe(400);
+    expect(bad.body.error?.code).toBe("VALIDATION");
+  });
+
+  it("a preference written alone creates a row that chose no destination: the fixture keeps the org's default target, and the switch stays off", async () => {
+    const o = await organiser();
+    await putOk(o.fixtureId, { streamMode: "passthrough" });
+    const row = (await rowOf(o.fixtureId))!;
+    expect({ target: row.target_id, chosen: row.target_chosen, auto: row.auto_stream }).toEqual({ target: null, chosen: false, auto: false });
   });
 });
 

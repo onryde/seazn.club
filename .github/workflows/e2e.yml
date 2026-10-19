@@ -921,8 +921,12 @@ jobs:
           ONLINE_CHESS_ALWAYS: "1"
           # R2005: overlay-compositor.spec.ts starts COMPOSED sessions through the API, and a deployment whose env
           # names no compositor image refuses every one 503 composed_unavailable (drivers.ts `composedUnavailable()`).
-          # A dummy, as on the smoke job's second server: the fake drivers never pull it. The organiser's panel still
-          # starts passthrough only (fixture-stream-panel.tsx), so no other spec's sessions change.
+          # A dummy, as on the smoke job's second server: the fake drivers never pull it. R2006 (owner ruling 2026-10-19,
+          # "Option C"): with it set, the SCORE is every start's default here — the organiser's Go live, the phone's own
+          # start and the automatic start (lib/stream-settings.ts `effectiveStreamMode`). overlay-compositor.spec.ts drives
+          # that default; a spec that walks the camera's lifecycle stores "Camera only" (PUT stream-settings
+          # `streamMode: "passthrough"`) on its fixture first. e2e-serial and e2e-mobile set no image, so there the
+          # panel says the score is unavailable and every start streams the camera.
           RELAY_IMAGE: registry.fly.io/e2e-fake-compositor:dummy
           # The fake ingest reports the phone "connected" this long after a stream's input is
           # made (server/relay/fakes.ts; default 3000). stream-relay.spec.ts asserts the QR the

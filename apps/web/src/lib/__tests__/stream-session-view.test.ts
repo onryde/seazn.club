@@ -70,7 +70,7 @@ function inEveryLocale(keys: readonly string[]): number {
 
 const NOW = new Date("2026-09-14T12:10:00Z");
 const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
-  id: "s", fixtureId: "f", mode: "passthrough", state: "live", desiredState: "live", failReason: null,
+  id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "live", desiredState: "live", failReason: null,
   health: null, ingest: { state: "connected", protocol: "srt" }, output: null, balance: 2,
   startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null,
   target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,

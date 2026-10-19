@@ -37,6 +37,7 @@ import {
   setBoolEntitlementOverrideSql,
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
+import { storeCameraOnly } from "../helpers/stream-mode";
 import {
   disposeFakePhones,
   fakeCapturePhone,
@@ -264,6 +265,9 @@ async function seedRig(page: Page, opts: { plan?: string; entrants?: number } = 
   if (ents.status >= 300 || ents.ids.length !== n) throw new Error(`capture rig: entrants -> ${ents.status} (${ents.ids.length}/${n})`);
   const { fixtureIds } = await createStageAndGenerate(page.request, div.data.id);
   expect(fixtureIds.length, "capture rig: a league's fixture count").toBe((n * (n - 1)) / 2);
+  // R2006: this file follows the CAMERA's lifecycle; on a server with a compositor image every start is the score by
+  // default, so each fixture stores Camera only (helpers/stream-mode.ts).
+  await storeCameraOnly(page.request, fixtureIds);
   const fixtures = await withDb(async (sql) => [
     ...(await sql<Fx[]>`select id, fixture_no as no from fixtures where division_id = ${div.data!.id} order by fixture_no`),
   ]);

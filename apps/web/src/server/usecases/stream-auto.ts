@@ -14,7 +14,7 @@ import { AUTO_START_RETRY_SECONDS, PHONE_SILENT_FLOOR_SECONDS, tunable } from "@
 import { autoStartVerdict, type AutoStartRefusal, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { isPresent } from "@/server/relay/domain/pairing";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
-import { fixtureStreamTarget } from "./stream-codes";
+import { fixtureStreamTarget, startModeFor } from "./stream-codes";
 import { startBroadcast, type SessionDeps } from "./stream-sessions";
 
 export type AutoStartResult =
@@ -46,10 +46,11 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
     case "phone_not_paired":
     case "phone_not_responding":
       throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, which passes phone: "present"`);
-    // R2001, the same kind of guard: an automatic start passes no mode, so it is passthrough and the composed gate cannot
-    // answer it.
+    // R2001, the same kind of guard (R2006): an automatic start passes the mode `startModeFor` resolved against the SAME
+    // `composedUnavailable()` startBroadcast asks — composed only when that says the deployment can run it — so the
+    // composed gate cannot answer it.
     case "composed_unavailable":
-      throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, which passes no mode (passthrough)`);
+      throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, whose mode was resolved against composedUnavailable()`);
   }
   // admit's target_not_found (the destination vanished between the read and the row lock) has no code.
   if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return "no_destination";
@@ -126,11 +127,14 @@ export async function maybeAutoStart(
   };
   const pick = await fixtureStreamTarget(sql, { orgId: a.orgId, fixtureId: a.fixtureId });
   if (pick === null) return refuse("no_destination");
+  // R2006 (owner ruling 2026-10-19): the fixture's stored mode, exactly as the phone's own start reads it — so the
+  // switch's caption ("Starts with the score…" / "…the camera only…") is what the automatic start streams.
+  const mode = await startModeFor(sql, a.fixtureId);
   try {
     const { sessionId } = await startBroadcast(
       { userId: facts.issued_by, orgId: a.orgId, source: "auto", pairingId: a.pairingId },
       a.fixtureId,
-      { targetId: pick.id, startCause: "automatic", phone: "present", autoStartedAt: now },
+      { targetId: pick.id, startCause: "automatic", phone: "present", autoStartedAt: now, mode },
       deps,
     );
     return { fired: true, sessionId };

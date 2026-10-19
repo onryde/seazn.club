@@ -43,13 +43,31 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
   },
 }));
 
+// R2006: the fixture's stored score preferences — ONE read for every listed fixture, doubled at the usecase the loader
+// calls so a test reads what it asked (org, fixture ids) and decides the answer.
+const prefs = vi.hoisted(() => ({
+  streamPrefsOf: vi.fn<(orgId: string, fixtureIds: readonly string[]) => Promise<Record<string, unknown>>>(async () => ({})),
+}));
+vi.mock("@/server/usecases/stream-codes", () => ({
+  streamPrefsOf: (orgId: string, fixtureIds: readonly string[]) => prefs.streamPrefsOf(orgId, fixtureIds),
+}));
+
+// I3 (PR #987 review): the preview's sides come from the overlay page's OWN loader — doubled at that module, so a test
+// reads which fixtures it asked for and decides what the page would air.
+const pageFacts = vi.hoisted(() => ({
+  relayOverlayPageFacts: vi.fn<(fixtureId: string) => Promise<{ org: { id: string }; sides: unknown } | null>>(async () => null),
+}));
+vi.mock("@/server/overlay/page-facts", () => ({
+  relayOverlayPageFacts: (fixtureId: string) => pageFacts.relayOverlayPageFacts(fixtureId),
+}));
+
 import { CAPTURE_FLAG_TTL_MS, forgetCaptureFlagCache, loadStreamPanelContext } from "../stream-panel-context";
 import { getDictionary } from "@/lib/i18n";
 import { hasFeature } from "@/lib/entitlements";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { verifyOverlayKey } from "@/server/overlay/overlay-key";
 import { SUPPORTED_CURRENCIES } from "@/lib/currency";
-import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES } from "@/server/relay/config";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 const AUTH = { orgId: "org-1", userId: "user-1", role: "owner", via: "session", keyId: null } as unknown as AuthCtx;
@@ -72,7 +90,10 @@ beforeEach(() => {
   vi.mocked(hasFeature).mockReset().mockImplementation(async () => true);
   vi.mocked(getDictionary).mockClear();
   flags.isServerFeatureEnabled.mockReset().mockResolvedValue(false);
+  prefs.streamPrefsOf.mockReset().mockResolvedValue({});
+  pageFacts.relayOverlayPageFacts.mockReset().mockResolvedValue(null);
   vi.stubEnv("CAPTURE_QR_V2_ALWAYS", undefined);
+  vi.stubEnv("RELAY_IMAGE", undefined);
   forgetCaptureFlagCache();
 });
 afterEach(() => {
@@ -83,13 +104,13 @@ describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and
   it("offered:false reads NOTHING — no entitlement query, no reconcile, no credits, no currency, no dictionary (a read-only viewer or a frozen page)", async () => {
     const got = await load({ status: "success", sessionId: "cs_1" }, { offered: false });
     expect(got).toBeUndefined();
-    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled] as const;
+    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled, prefs.streamPrefsOf, pageFacts.relayOverlayPageFacts] as const;
     let checked = 0;
     for (const dep of deps) {
       expect(dep).not.toHaveBeenCalled();
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(8);
   });
 
   it("the loader's reads: offered:true calls each dependency AT MOST once per render (hasFeature exactly twice, both competition-scoped) — the count cannot grow unnoticed", async () => {
@@ -102,13 +123,14 @@ describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and
       ["streaming.overlay", "comp-1"],
       ["streaming.relay", "comp-1"],
     ]);
-    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled] as const;
+    // The overlay page's loader runs once per LISTED fixture (one here, the fixture page's).
+    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled, prefs.streamPrefsOf, pageFacts.relayOverlayPageFacts] as const;
     let checked = 0;
     for (const dep of once) {
       expect(dep).toHaveBeenCalledTimes(1);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(7);
   });
 });
 
@@ -506,5 +528,83 @@ describe("§7.1: the panel is handed the auto stop's delay the tick judges by, i
     expect(off?.autoStopMinutes).toBe(5);
     checked++;
     expect(checked).toBe(2 * rows.length + 3);
+  });
+});
+
+// R2006 (owner ruling 2026-10-19, "Option C"): the panel opens on the fixture's STORED score preferences and offers the
+// score only where this deployment can run it. `composedAvailable` is drivers.ts `composedUnavailable()` — R2001's one
+// predicate, the same the start's refusal reads — never a second copy; the expected values below are its declared
+// inputs (the relay, and RELAY_IMAGE), set here, not read back from the loader.
+describe("R2006: the score preferences and whether the score can stream", () => {
+  it("composedAvailable: the relay entitled AND running AND a compositor image — each conjunct falsified alone answers false", async () => {
+    const cases: [string, () => void, boolean][] = [
+      ["relay on, image set", () => { vi.stubEnv("RELAY_IMAGE", "registry.fly.io/seazn-relay:ctx-test"); }, true],
+      ["relay on, NO image", () => { vi.stubEnv("RELAY_IMAGE", undefined); }, false],
+      ["relay NOT entitled, image set", () => {
+        vi.stubEnv("RELAY_IMAGE", "registry.fly.io/seazn-relay:ctx-test");
+        vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
+      }, false],
+      ["relay entitled but this deployment has none (R5), image set", () => {
+        vi.stubEnv("RELAY_IMAGE", "registry.fly.io/seazn-relay:ctx-test");
+        setRelayDriversForTest(disabledRelayDrivers());
+      }, false],
+    ];
+    let checked = 0;
+    try {
+      for (const [label, arrange, want] of cases) {
+        vi.mocked(hasFeature).mockReset().mockImplementation(async () => true);
+        setRelayDriversForTest(null);
+        arrange();
+        expect((await load())?.composedAvailable, label).toBe(want);
+        checked++;
+      }
+    } finally {
+      setRelayDriversForTest(null);
+    }
+    console.log(`composed availability cases checked: ${checked}`);
+    expect(checked).toBe(cases.length);
+  });
+
+  it("the stored preferences are read ONCE for every listed fixture, for THIS org, and handed over keyed by fixture; a fixture with no row is at the defaults", async () => {
+    prefs.streamPrefsOf.mockResolvedValue({ "fx-1": { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0, revision: 1_792_000_000_000_000 } });
+    const got = await load(undefined, { fixtureIds: ["fx-1", "fx-2"] });
+    expect(prefs.streamPrefsOf).toHaveBeenCalledTimes(1);
+    expect(prefs.streamPrefsOf.mock.calls[0]).toEqual([AUTH.orgId, ["fx-1", "fx-2"]]);
+    expect(got?.streamPrefs).toEqual({
+      "fx-1": { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0, revision: 1_792_000_000_000_000 },
+      // No row: the defaults, at no revision — older than any write (PR #989 confirm N1).
+      "fx-2": { streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: null },
+    });
+  });
+
+  it("the server's delay default is handed over as the server serves it (config.ts), so the panel never types a number", async () => {
+    const got = await load();
+    expect(got?.overlayDelayDefaultMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+  });
+
+  it("no panel (overlay switched off) reads no preferences — the switched-off org still costs one entitlement query", async () => {
+    vi.mocked(hasFeature).mockImplementation(async () => false);
+    const got = await load();
+    expect(prefs.streamPrefsOf).not.toHaveBeenCalled();
+    expect(got).toMatchObject({ entitled: false, composedAvailable: false, streamPrefs: {} });
+  });
+});
+
+describe("I3 (PR #987 review): the preview's sides are the overlay page's own — per listed fixture, the org's only", () => {
+  const SIDES = [{ id: "e1", name: "Lee Chong Wei", short: "WEI" }, { id: "e2", name: "Viktor Axelsen", short: "AXE" }];
+  it("each listed fixture's AIRED sides, as the loader answers them; another org's fixture and an unknown one are left out", async () => {
+    pageFacts.relayOverlayPageFacts.mockImplementation(async (id) =>
+      id === "fx-1" ? { org: { id: "org-1" }, sides: SIDES } : id === "fx-2" ? { org: { id: "org-OTHER" }, sides: SIDES } : null);
+    const got = await load(undefined, { fixtureIds: ["fx-1", "fx-2", "fx-3"] });
+    expect(pageFacts.relayOverlayPageFacts.mock.calls.map((c) => c[0])).toEqual(["fx-1", "fx-2", "fx-3"]);
+    expect(got!.overlaySides).toEqual({ "fx-1": SIDES });
+  });
+
+  it("the overlay switched off: no panel, so the loader is never asked", async () => {
+    vi.mocked(hasFeature).mockImplementation(async () => false);
+    pageFacts.relayOverlayPageFacts.mockResolvedValue({ org: { id: "org-1" }, sides: SIDES });
+    const got = await load();
+    expect(pageFacts.relayOverlayPageFacts).not.toHaveBeenCalled();
+    expect(got!.overlaySides).toEqual({});
   });
 });

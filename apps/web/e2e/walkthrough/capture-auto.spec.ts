@@ -26,6 +26,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
+import { storeCameraOnly } from "../helpers/stream-mode";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import {
   disposeFakePhones,
@@ -238,6 +239,13 @@ async function addTargetApi(page: Page, orgId: string, label: string): Promise<{
   return res.data!;
 }
 
+/** R2006: the settings answer carries the score preferences too; a fixture that stored none answers them null (the
+ *  defaults). A fixture this file STARTS stores Camera only first (helpers/stream-mode.ts): it follows the camera's
+ *  lifecycle, and on a server with a compositor image every start is the score by default. */
+// PR #989 confirm N1: every settings answer also carries the row's revision, a number that every write moves.
+const UNSET_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: expect.any(Number) as unknown as number } as const;
+const CAMERA_ONLY_PREFS = { ...UNSET_PREFS, streamMode: "passthrough" } as const;
+
 /** The organiser's switch, through the real route. Returns the answer, parsed by its schema. */
 async function putAutoStream(page: Page, f: Fx, on: boolean): Promise<StreamSettings> {
   const res = await apiJson<StreamSettings>(page.request, `/api/v1/fixtures/${f.id}/stream-settings`, "PUT", { autoStream: on });
@@ -438,7 +446,8 @@ test("auto start from the courtside pad: switch on, a phone in Automatic, the ma
   const off = rig.fixtures.find((f) => ![on.home, on.away].includes(f.home) && ![on.home, on.away].includes(f.away));
   expect(off, "premise: the league has a fixture disjoint from the first").toBeTruthy();
 
-  expect(await putAutoStream(page, on, true), "the switch's answer: on, no destination chosen").toEqual({ targetId: null, autoStream: true });
+  await storeCameraOnly(page.request, [on.id]);
+  expect(await putAutoStream(page, on, true), "the switch's answer: on, no destination chosen").toEqual({ targetId: null, autoStream: true, ...CAMERA_ONLY_PREFS });
   expect(await settingsOf(off!.id), "premise: the other fixture's switch was never touched (off by default, no row)").toBeNull();
 
   const phoneOn = await pairPhoneOnFixture(page, fixturePath(rig, on), { captureMode: "automatic" });
@@ -521,6 +530,7 @@ test("auto stop: the match streams automatically, the result goes in on the devi
   expect(rig.monthlyRate, "premise: the plan's month pays for two broadcasts").toBeGreaterThanOrEqual(2);
   const target = await addTargetApi(page, rig.orgId, "Auto stop destination");
   const f = rig.fixtures[0]!;
+  await storeCameraOnly(page.request, [f.id]);
   await putAutoStream(page, f, true);
   const phone = await pairPhoneOnFixture(page, fixturePath(rig, f), { captureMode: "automatic" });
   phone.keepAlive("publishing");
@@ -582,6 +592,7 @@ test("A12 + A15: an automatic broadcast, the organiser's Stop on the panel → b
   expect(rig.monthlyRate, "premise: the plan's month pays for two broadcasts").toBeGreaterThanOrEqual(2);
   await addTargetApi(page, rig.orgId, "A12 destination");
   const f = rig.fixtures[0]!;
+  await storeCameraOnly(page.request, [f.id]);
   await putAutoStream(page, f, true);
   const body = await openPhoneTab(page, rig, f);
   const phone = await pairedPhone(page, { captureMode: "automatic", mode: "publishing" });
@@ -645,6 +656,7 @@ test("A12 alone: before the match, a hand-started broadcast that never ingested 
   const blockedF = rig.fixtures[0]!;
   const freeF = rig.fixtures.find((x) => ![blockedF.home, blockedF.away].includes(x.home) && ![blockedF.home, blockedF.away].includes(x.away))!;
   expect(freeF, "premise: a second fixture sharing no entrant").toBeTruthy();
+  await storeCameraOnly(page.request, [blockedF.id, freeF.id]);
   await putAutoStream(page, blockedF, true);
   await putAutoStream(page, freeF, true);
 
@@ -724,6 +736,7 @@ test("refusal: balance 0 → the automatic start is refused, the read serves aut
   const rig = await seedRig(page);
   await addTargetApi(page, rig.orgId, "Refusal destination");
   const f = rig.fixtures[0]!;
+  await storeCameraOnly(page.request, [f.id]);
   // The panel's read grants the month (R3b, idempotent per month) — granted HERE, so the start's own ensure cannot grant
   // it again after the drain below.
   await openPhoneTab(page, rig, f);
@@ -805,14 +818,16 @@ test("the switch over the API: the organiser's PUT answers 200 and the paired ph
 
   let checked = 0;
   for (const on of [true, false, true]) {
-    expect(await putAutoStream(page, f, on), `PUT {autoStream: ${on}}`).toEqual({ targetId: null, autoStream: on });
+    expect(await putAutoStream(page, f, on), `PUT {autoStream: ${on}}`).toEqual({ targetId: null, autoStream: on, ...UNSET_PREFS });
     expect((await phone.beat()).ok?.autoAllowed, `the phone's next beat hears the switch ${on ? "on" : "off"}`).toBe(on);
     expect((await readPhone(page, f)).auto?.enabled, "the organiser's read follows").toBe(on);
     checked++;
   }
   expect(checked).toBe(3);
+  const once = await putAutoStream(page, f, true);
   const again = await putAutoStream(page, f, true);
-  expect(again, "the same PUT twice answers the same").toEqual({ targetId: null, autoStream: true });
+  expect(again, "the same PUT twice answers the same").toEqual({ targetId: null, autoStream: true, ...UNSET_PREFS });
+  expect(again.revision!, "…at a later revision: an identical write is still a write").toBeGreaterThan(once.revision!);
 
   const rowsBefore = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where org_id = ${rig.orgId}`);
   const unknown = await apiJson(page.request, `/api/v1/fixtures/${randomUUID()}/stream-settings`, "PUT", { autoStream: true });

@@ -47,6 +47,7 @@ const WORD_KEYS: Record<ChainWord, MessageKey> = {
   starting: "stream.chain.word.starting",
   reconnecting: "stream.chain.word.reconnecting",
   waitingVideo: "stream.chain.word.waitingVideo",
+  sending: "stream.chain.word.sending",
 };
 
 const ICON = "h-5 w-5";

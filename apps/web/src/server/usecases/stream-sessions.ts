@@ -1330,7 +1330,10 @@ export async function createSession(
   const started = await startBroadcast(
     { userId: actorUserId, orgId, source: "organiser", pairingId: phone?.pairingId ?? null },
     fixtureId,
-    { targetId: body.targetId, startCause: "organiser", phone: phone?.standing ?? "unpaired", mode: body.mode, themeId: body.themeId ?? null },
+    {
+      targetId: body.targetId, startCause: "organiser", phone: phone?.standing ?? "unpaired", mode: body.mode,
+      themeId: body.themeId ?? null, overlayDelayMs: body.overlayDelayMs,
+    },
     deps,
   );
   // T6 (§6.6): the destination this Go live used becomes the fixture's pre-pick, which the phone's own start reads.
@@ -1354,7 +1357,15 @@ export async function startBroadcast(
   actor: StartActor,
   fixtureId: string,
   opts: {
-    targetId: string; startCause: StartCause; phone: PhoneStanding; mode?: CreateStreamSession["mode"]; themeId?: string | null;
+    targetId: string; startCause: StartCause; phone: PhoneStanding;
+    /** R2006: REQUIRED, so no start path can stream a mode it did not decide. The organiser's Go live states the mode its
+     *  panel showed; the phone's start and the automatic start read the fixture's stored choice (stream-codes.ts
+     *  `startModeFor`). */
+    mode: CreateStreamSession["mode"];
+    themeId?: string | null;
+    /** PR #989 review m2: the organiser's Go live states the timing its panel showed (null: the server's default).
+     *  Absent — the phone's start, the automatic start — the fixture's stored timing. Composed only. */
+    overlayDelayMs?: number | null;
     /** The automatic start's instant (§7.2, final review m-1): stamped as `auto_started_at` IN the insert's transaction, so
      *  the session and "once per match" commit together. Given exactly when `actor.source` is `auto`. */
     autoStartedAt?: Date;
@@ -1364,7 +1375,7 @@ export async function startBroadcast(
   const { orgId, competitionId } = await fixtureContext(fixtureId);
   if (orgId !== actor.orgId) throw new HttpError(404, "fixture not found");
   const actorUserId = actor.userId;
-  const body = { mode: opts.mode ?? "passthrough", targetId: opts.targetId, themeId: opts.themeId ?? null };
+  const body = { mode: opts.mode, targetId: opts.targetId, themeId: opts.themeId ?? null, overlayDelayMs: opts.overlayDelayMs };
   // R2001: can this deployment run a composed session at all (drivers.ts `composedUnavailable()`, the ONE authority the
   // organiser UI reads too)? Read ONCE, here, and handed to every `admit` below. Asked only for a composed start — a
   // passthrough start reads no new fact and its path is unchanged.
@@ -1561,7 +1572,13 @@ export async function startBroadcast(
              ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId},
              -- R2004 decision 4: the EFFECTIVE delay (the fixture's override, else the default) for composed; passthrough
              -- keeps the column's 0 (the field is unused in that mode). Copied, so a running session never changes.
-             ${body.mode === "composed" ? sql`coalesce(st.overlay_delay_ms, ${RELAY_OVERLAY_DELAY_DEFAULT_MS}::int)` : sql`0`}
+             -- PR #989 review m2: a delay the create names wins over the stored one (null: the default), so the
+             -- organiser's Go live streams the timing its panel showed even while that timing's own save is in flight.
+             ${body.mode !== "composed"
+               ? sql`0`
+               : body.overlayDelayMs === undefined
+                 ? sql`coalesce(st.overlay_delay_ms, ${RELAY_OVERLAY_DELAY_DEFAULT_MS}::int)`
+                 : sql`${body.overlayDelayMs ?? RELAY_OVERLAY_DELAY_DEFAULT_MS}::int`}
         from fixtures f
         join divisions d on d.id = f.division_id
         join organizations o on o.id = ${orgId}
@@ -2193,6 +2210,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   }) : null;
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
+    overlay: row.mode === "composed" ? { themeId: row.theme_id, delayMs: row.overlay_delay_ms } : null,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
     ingest: ingestState, output,
     balance: await creditBalance(sql, row.org_id),

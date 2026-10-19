@@ -437,11 +437,13 @@ describe.skipIf(!HAS_DB)("automatic stop — A12 + A15 regression (test 5)", () 
     const r = await captureRig({ credits: 5, connectAfterMs: CONNECT_MS });
     const phone = phoneId("a");
     await beat(r, phone, { claim: "new", mode: "automatic" });
-    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+    // R2006: the automatic start streams the STORED mode, and the score is the default while RELAY_IMAGE is set (it is,
+    // for this file's composed case). This case walks the camera's lifecycle (goLive's premise), so it is Camera only.
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true, streamMode: "passthrough" });
     await setStatus(r.fixtureId, "in_play");
     await beat(r, phone);   // the AUTOMATIC start
-    const [auto] = await sql<{ id: string; start_cause: string }[]>`select id, start_cause from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
-    expect(auto).toMatchObject({ start_cause: "automatic" });
+    const [auto] = await sql<{ id: string; start_cause: string; mode: string }[]>`select id, start_cause, mode from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+    expect(auto).toMatchObject({ start_cause: "automatic", mode: "passthrough" });
     await goLive(r, phone, auto!.id);
     // The organiser's Stop: the A12 stamp, and the broadcast ends.
     await stopSession(r.auth, r.fixtureId, auto!.id, r.deps);

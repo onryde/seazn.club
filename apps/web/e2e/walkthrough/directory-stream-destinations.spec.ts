@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
+import { storeCameraOnly } from "../helpers/stream-mode";
 import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import {
@@ -181,6 +182,9 @@ async function seedRig(page: Page, opts: { entrants?: number } = {}): Promise<Ri
     if (ents.status >= 300 || ents.ids.length !== n) throw new Error(`rig: entrants -> ${ents.status}`);
     const { fixtureIds } = await createStageAndGenerate(request, div.data.id);
     expect(fixtureIds.length, "rig: a league's fixture count").toBe((n * (n - 1)) / 2);
+    // R2006: this file follows the CAMERA's lifecycle; on a server with a compositor image every start is the score by
+    // default, so each fixture stores Camera only (helpers/stream-mode.ts).
+    await storeCameraOnly(request, fixtureIds);
     fixtures = await withDb(async (sql) => [
       ...(await sql<Rig["fixtures"]>`select id, fixture_no as no from fixtures where division_id = ${div.data!.id} order by fixture_no`),
     ]);

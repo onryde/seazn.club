@@ -7,6 +7,12 @@ import "server-only";
 // Stream offered, including each `router.refresh()` after a scoring `send`. Each dependency is read AT MOST once per
 // call (pinned: stream-panel-context.test.ts "the loader's reads"), and `offered: false` — a spectator, a scorer without
 // `canEdit`, a frozen page — returns before any read.
+//
+// I3 (PR #987 review) added one more dependency, named here so its cost is not discovered (PR #989 review m7): for an
+// entitled org, `overlayPreviewSides` runs the overlay page's own relay loader (`relayOverlayPageFacts`) once PER LISTED
+// FIXTURE — two selects (the fixture with `org_has_feature`, then its sides) plus the public name masking — so the
+// thumbnails preview the aired codes. One fixture per fixture page; it runs in the same `Promise.all` as the other reads,
+// and an unentitled org reads none of it. A mount point that listed many fixtures would pay it per fixture.
 import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
 import { hasFeature } from "@/lib/entitlements";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -14,9 +20,13 @@ import { preferredCurrency } from "@/lib/currency-server";
 import { isServerFeatureEnabled } from "@/lib/posthog-server";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
+import { relayOverlayPageFacts } from "@/server/overlay/page-facts";
+import type { OverlaySideInput } from "@/lib/overlay-model";
 import { overlayDictOf } from "@/lib/overlay-dict";
-import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, tunable } from "@/server/relay/config";
-import { relayUnavailable } from "@/server/relay/drivers";
+import { NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS, tunable } from "@/server/relay/config";
+import { composedUnavailable, relayUnavailable } from "@/server/relay/drivers";
+import { streamPrefsOf } from "@/server/usecases/stream-codes";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { relayCredits } from "@/server/usecases/stream-sessions";
 
@@ -33,14 +43,18 @@ import { relayCredits } from "@/server/usecases/stream-sessions";
  *  it reads as unavailable too (drivers.ts `relayUnavailable`).
  *
  *  `competitionId` scopes both reads the way the overlay route's own gate does (an Event Pass grants for the competition
- *  it was bought for); without one — the org-wide Directory — they resolve for the org. */
+ *  it was bought for); without one — the org-wide Directory — they resolve for the org.
+ *
+ *  R2006: `composedAvailable` — the score can stream here: the relay entitled, and R2001's own predicate
+ *  (drivers.ts `composedUnavailable()`, which includes "no relay") says this deployment runs a composed session. The
+ *  start's refusal reads the same predicate, so the panel never offers the score the API would refuse. */
 export async function relayOffer(
   orgId: string, competitionId?: string,
-): Promise<{ entitled: boolean; relayEntitled: boolean; relayDisabled: boolean }> {
+): Promise<{ entitled: boolean; relayEntitled: boolean; relayDisabled: boolean; composedAvailable: boolean }> {
   const entitled = await hasFeature(orgId, "streaming.overlay", competitionId);
   const relayEntitled = entitled && (await hasFeature(orgId, "streaming.relay", competitionId));
   const relayDisabled = relayEntitled && relayUnavailable();
-  return { entitled, relayEntitled, relayDisabled };
+  return { entitled, relayEntitled, relayDisabled, composedAvailable: relayEntitled && !composedUnavailable() };
 }
 
 /** Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag that offers the phone-camera option — UI-only (the routes
@@ -76,6 +90,21 @@ async function phoneCaptureOffered(auth: AuthCtx): Promise<boolean> {
   return on;
 }
 
+const NO_STORED_PREFS: Record<string, StreamPrefsRead> = {};
+type PreviewSides = Record<string, [OverlaySideInput, OverlaySideInput]>;
+const NO_PREVIEW_SIDES: PreviewSides = {};
+
+/** I3 (PR #987 review): the sides the style grid's thumbnails render — the AIRED sides, read through the overlay page's
+ *  own loader (`relayOverlayPageFacts`: the composed session's door; the public door OBS opens masks names and
+ *  disambiguates codes by the same rules, page-facts.ts header). So a person pair previews the codes it airs (Lee Chong
+ *  Wei v Viktor Axelsen: WEI / AXE, never the names re-coded as teams), a masked name previews masked, and whatever the
+ *  overlay's side rule becomes, the preview follows it. The relay door reads the base tables unfiltered, so a fixture
+ *  that is not `orgId`'s is dropped here — the panel never previews another org's sides. */
+export async function overlayPreviewSides(orgId: string, fixtureIds: readonly string[]): Promise<PreviewSides> {
+  const facts = await Promise.all(fixtureIds.map(async (id) => [id, await relayOverlayPageFacts(id)] as const));
+  return Object.fromEntries(facts.flatMap(([id, f]) => (f !== null && f.org.id === orgId ? [[id, f.sides] as const] : [])));
+}
+
 export async function loadStreamPanelContext(args: {
   auth: AuthCtx;
   competitionId: string;
@@ -96,7 +125,7 @@ export async function loadStreamPanelContext(args: {
   // Everything after the FIRST read is behind `entitled`. Since V426 (Task 14b) every plan grants both keys, so the
   // reads below run; an org a staff override switched off still costs exactly one entitlement query and neither the
   // second read, the `public` dictionary import, nor a byte of it on the RSC flight.
-  const { entitled, relayEntitled, relayDisabled } = await relayOffer(auth.orgId, competitionId);
+  const { entitled, relayEntitled, relayDisabled, composedAvailable } = await relayOffer(auth.orgId, competitionId);
   // G1 (Task 14 fix round 1): the match-credit checkout returns to the FIXTURE page now (relay-checkout/route.ts,
   // `?checkout=success&session_id=…`), and this render can beat Stripe's webhook — so reconcile the session before
   // reading the balance, exactly as the billing, upgrade and registration pages do on their own returns. Best-effort and
@@ -111,15 +140,28 @@ export async function loadStreamPanelContext(args: {
   // balance split by bucket beside the plan's monthly allowance — the chip stays the total.
   // The capture-qr-v2 flag rides the same Promise.all: an independent read, only with the panel (`entitled`).
   const relayOn = relayEntitled && !relayDisabled;
-  const [credits, currency, phoneCapture] = await Promise.all([
+  // R2006: the listed fixtures' stored score preferences — one read, only with the panel (`entitled`).
+  // I3: the aired sides for the preview — only with the panel.
+  const [credits, currency, phoneCapture, storedPrefs, previewSides] = await Promise.all([
     relayOn ? relayCredits(auth, auth.orgId) : null,
     relayOn ? preferredCurrency(auth.orgId) : ("gbp" as const),
     entitled ? phoneCaptureOffered(auth) : false,
+    entitled ? streamPrefsOf(auth.orgId, args.fixtureIds) : NO_STORED_PREFS,
+    entitled ? overlayPreviewSides(auth.orgId, args.fixtureIds) : NO_PREVIEW_SIDES,
   ]);
   return {
     entitled,
     relayEntitled,
     relayDisabled,
+    composedAvailable,
+    // R2006: each listed fixture's stored score preferences; a fixture with no row is at the defaults (the panel opens
+    // on the score, the sport's template and the server's delay).
+    streamPrefs: entitled ? Object.fromEntries(args.fixtureIds.map((id) => [id, storedPrefs[id] ?? NO_STREAM_PREFS_READ])) : {},
+    // R2006: the delay a composed session serves when the fixture sets none — the number the session create copies
+    // (stream-sessions.ts), so the panel's "Default {seconds}s" is the server's, never a typed one. No read.
+    overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
+    // I3: each listed fixture's sides as the overlay airs them (`overlayPreviewSides`).
+    overlaySides: previewSides,
     // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before any
     // session exists (C1). Read only when the relay is entitled and running — otherwise the tab shows its switched-off
     // or unavailable state (fixture-stream-panel.tsx), which reads no balance.
