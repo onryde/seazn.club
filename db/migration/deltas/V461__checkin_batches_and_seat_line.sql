@@ -1,7 +1,8 @@
 -- V461 — the capacity work: staggered check-in batches and the check-in line (spec §3.2.1, §5.6.8, §5.7.2; owner decisions
 -- C1-C7, 2026-10-15/16).
 --
--- Renumber at merge if main has moved past (V462 is W2c's, controller ruling 2026-10-16; V451-V460 are this branch's).
+-- Renumber at merge if main has moved past (V462 is r2's, #981, and V463 is W2c's, per the migration ledger of 2026-10-18;
+-- V451-V460 are this branch's).
 --
 -- It does three things.
 --
