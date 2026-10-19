@@ -13,6 +13,8 @@ export type ChainWord =
   | "notReceiving" | "noSignal" | "ending"
   // Capture QR v2 §6.12 (T11): the phone node's own words once the phone has a read model.
   | "paired" | "notAnswering" | "starting" | "reconnecting"
+  // R2008 (confirm review m-C2): a composed session live whose camera has NEVER appeared is not "reconnecting".
+  | "waitingCamera"
   // Owner ruling 2026-10-08: the Seazn node while the server's health verdict is `stalled` (live, the input up).
   | "waitingVideo"
   // R2006 (owner ruling 2026-10-19, Owed 26): a composed session's destination while live — not observed, so neutral.
@@ -64,6 +66,9 @@ function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts)
         if (health === "stalled") return node("amber", row.phone.word, "bang");
         return row.phone;
       }
+      // R2008 (m-C2): the never-live countdown is about a camera that never connected — nothing to reconnect, so the node
+      // says what the strip says (waiting), with the "!" as every countdown has it.
+      if (capture.countdown?.reason === "camera_never_live") return node("amber", "waitingCamera", "bang");
       const bang = capture.countdown !== null || (d3Warning(view) === "phone" && reconnectReasonOf(capture.phone) === null);
       return node("amber", "reconnecting", bang ? "bang" : null);
     }

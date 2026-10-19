@@ -1478,6 +1478,13 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       const sentence = m(`stream.phone.countdown.${countdown.kind}.${countdown.reason}` as MessageKey).split("{")[0]!;
       expect(html, `${where}: the strip's sentence`).toContain(esc(sentence));
       const isLost = countdown.reason === "phone_lost" || countdown.reason === "camera_never_live";
+      // R2008 (m-C2): a camera that NEVER connected is "waiting for camera", not "reconnecting" — rendered, node word included.
+      const neverLive = countdown.reason === "camera_never_live";
+      // Read off the PHONE NODE only: "Waiting for camera" is also the phone's own state label elsewhere in the panel.
+      const phoneNode = html.match(/data-node="phone"[^]*?data-node="seazn"/)?.[0] ?? "";
+      expect(phoneNode, `${where}: PREMISE: the phone node rendered`).not.toBe("");
+      expect(phoneNode.includes(`>${m("stream.chain.word.waitingCamera")}<`), `${where}: the node says it is waiting for the camera iff the camera never appeared`).toBe(neverLive);
+      if (state === "live") expect(phoneNode.includes(`>${m("stream.chain.word.reconnecting")}<`), `${where}: and says Reconnecting… otherwise`).toBe(!neverLive);
       expect(PHONE_BANG.test(html), `${where}: the '!' on the node`).toBe(isLost);
       expect(html.match(FOLD_DOT)?.[1], `${where}: the fold's dot`).toBe(isLost ? "amber" : "lime");
       // Item 6 (coordinator ruling): link 1 is the fourth voice — `problem` (amber dashes) exactly when the phone is lost.

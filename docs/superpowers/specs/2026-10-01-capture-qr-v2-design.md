@@ -2139,7 +2139,9 @@ logged phase is written, because it ends that run and a compositor bug must neve
   writer a staff refund uses (`org_stream_credits`, reason `refund`, linked to the session, returned to the bucket the consume was
   drawn from, `created_by` null), exactly once: a refund a staff member already issued, or a session that consumed nothing (a free
   restart), writes none. The organiser sees "No video has reached the stream yet" while it counts down and, after the end, copy
-  saying nothing was ever received and the credit was returned. The storage reservation is independent of credits and is
+  saying nothing was ever received and they were not charged (true whether the credit was refunded, never taken on a free
+  restart, or already refunded by staff; the copy never says a credit "was returned"). The Phone node reads "Waiting for
+  camera" with the "!" under that countdown, not "Reconnecting…": the camera never connected. The storage reservation is independent of credits and is
   unchanged (a composed session keeps its camera share until the daily sweep). A log that began later than one composed stale-beat
   window after `startedAt` (a deploy that landed mid-broadcast) is not judged, so no session is refunded on evidence this build
   never saw.

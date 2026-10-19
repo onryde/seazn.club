@@ -46,6 +46,7 @@ const WORD_KEYS: Record<ChainWord, MessageKey> = {
   notAnswering: "stream.chain.word.notAnswering",
   starting: "stream.chain.word.starting",
   reconnecting: "stream.chain.word.reconnecting",
+  waitingCamera: "stream.chain.word.waitingCamera",
   waitingVideo: "stream.chain.word.waitingVideo",
   sending: "stream.chain.word.sending",
 };

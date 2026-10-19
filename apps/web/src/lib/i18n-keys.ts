@@ -7004,6 +7004,7 @@ export type DictionaryKey =
   | "stream.chain.word.sending"
   | "stream.chain.word.starting"
   | "stream.chain.word.waiting"
+  | "stream.chain.word.waitingCamera"
   | "stream.chain.word.waitingVideo"
   | "stream.code.error"
   | "stream.code.paired"

@@ -401,7 +401,8 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
     "live.phone_lost": { key: "stream.phone.countdown.live.phone_lost", node: n("amber", "reconnecting", "bang"), link1: "problem", dot: "amber" },
     // R2008 (owner ruling 2026-10-19): a COMPOSED session that went live and never had a camera — the stream will be cancelled
     // because of the phone's camera, so the node, link 1 and the dot say what a lost phone says.
-    "live.camera_never_live": { key: "stream.phone.countdown.live.camera_never_live", node: n("amber", "reconnecting", "bang"), link1: "problem", dot: "amber" },
+    // The node does NOT say "Reconnecting…": the camera never connected (confirm review m-C2). The "!", link 1 and the dot are a lost phone's.
+    "live.camera_never_live": { key: "stream.phone.countdown.live.camera_never_live", node: n("amber", "waitingCamera", "bang"), link1: "problem", dot: "amber" },
   };
   /** The reasons that are about a lost phone: the '!', link 1's `problem` and the amber dot go with exactly these. */
   const LOST: readonly string[] = ["phone_lost", "camera_never_live"];

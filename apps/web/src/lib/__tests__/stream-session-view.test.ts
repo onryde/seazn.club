@@ -770,6 +770,13 @@ describe("the countdown copy and its durations (W24, T11)", () => {
     }
     expect(checked).toBe(4 * LOCALES.length);
     expect(msg("stream.phone.countdown.live.phone_lost")).toBe("No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back.");
+    // R2008 (confirm review m-C1): the never-live lines claim only what is true in every case — refunded, a free restart (nothing
+    // was taken) and a staff refund first: the organiser was not charged. They never say a credit "was returned".
+    expect(msg("stream.phone.countdown.live.camera_never_live")).toBe("No video has reached the stream yet — it is cancelled in {remaining} if none arrives, and you won't be charged.");
+    expect(msg("stream.fail.camera_never_live")).toBe("No video ever reached the stream, so it was cancelled and you weren't charged. Check the phone's camera and try again.");
+    for (const l of LOCALES) for (const k of ["stream.phone.countdown.live.camera_never_live", "stream.fail.camera_never_live"] as const) {
+      expect(dict(l)[k], `${l} ${k}`).not.toMatch(/return|devuel|rend[uo]|teruggegeven|terug/i);
+    }
     expect(msg("stream.phone.countdown.warming.no_inbound_timeout")).toBe("No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.");
   });
 
