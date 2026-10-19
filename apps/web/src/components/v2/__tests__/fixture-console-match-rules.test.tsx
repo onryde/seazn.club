@@ -39,8 +39,10 @@ function consoleHtml(withBlock: boolean, override: Record<string, unknown> | nul
               stageLine: "Best of 3",
               stageResolved: stage,
               effective: override === null ? stage : { ...stage, ...override },
+              effectiveLine: "Best of 3",
               override,
               state: "unstarted",
+              cancelled: false,
               fields: matchFieldsFor({ module: badminton, stageKind: "league", variant: "short" }),
             })
           : undefined

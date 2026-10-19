@@ -12,6 +12,7 @@ import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status"
 import { getDictionary } from "@/lib/i18n";
 import { matchFieldsFor } from "@/lib/rule-scope";
 import { appendEvent } from "@/server/engine-db";
+import { formatLineOf } from "@/server/engine-db/rules-version";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, playBadminton, rowsOf, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { loadFixtureMatchRules } from "../fixtures";
@@ -33,6 +34,12 @@ const mod = (key: string): AnySportModule => {
   if (!m) throw new Error(`no builtin module ${key}`);
   return m;
 };
+/** The describer's line over a cfg, in a dictionary's language: the engine-side expectation for `stageLine`/`effectiveLine`
+ *  (never read off the loader). The division's own config is the loader's `divisionCfg` argument. */
+async function divisionConfigOf(divisionId: string): Promise<unknown> {
+  const [d] = await sql<{ config: unknown }[]>`select config from divisions where id = ${divisionId}`;
+  return d!.config;
+}
 const parsedVariant = (key: string, variant: string): Record<string, unknown> =>
   mod(key).configSchema.parse(mod(key).variants[variant]) as Record<string, unknown>;
 
@@ -52,6 +59,9 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     expect(want.length, "badminton has match fields").toBeGreaterThan(0);
     expect(r.fields.map((f) => f.key)).toEqual(want.map((f) => f.key));
     expect(r.stageLine.length, "the stage's format is said in words").toBeGreaterThan(0);
+    // No override: the match plays the stage's format, so the two lines are one (and the block shows neither a chip nor the line).
+    expect(r.effectiveLine, "no override: the played format is the stage's").toBe(r.stageLine);
+    expect(r.cancelled).toBe(false);
   });
 
   it("override -> started -> finalized -> reset: effective follows the override, state follows the ledger and the lock", async () => {
@@ -64,10 +74,17 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     const other = Number(bestOfField.options!.map((o) => o.value).find((v) => Number(v) !== stageBestOf));
     expect(other, "the sport offers a best-of the stage does not play").not.toBe(stageBestOf);
 
+    const divisionCfg = await divisionConfigOf(b.divisionId);
+    const lineOf = (cfg: unknown): string | null => formatLineOf("badminton", mod("badminton"), cfg, "league", divisionCfg, dict);
+
     await writeFixtureRulesOverride(b.auth, [id], { bestOf: other });
     let r = await loadFixtureMatchRules(b.auth, id, dict);
     expect(r.override).toEqual({ bestOf: other });
     expect(r.effective).toMatchObject({ bestOf: other });
+    // I2: the format it plays, in words - the describer over what it plays - and NOT the stage's.
+    expect(r.effectiveLine, "the describer over `effective`").toBe(lineOf(r.effective));
+    expect(r.effectiveLine.length, "a line the describer has").toBeGreaterThan(0);
+    expect(r.effectiveLine, "the override moved the line off the stage's").not.toBe(r.stageLine);
     expect(r.stageResolved, "the stage's own format is untouched by the match override").toMatchObject({ bestOf: stageBestOf });
     expect(r.state).toBe("unstarted");
 
@@ -76,9 +93,15 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     r = await loadFixtureMatchRules(b.auth, id, dict);
     expect(r.state).toBe("live");
     expect(r.effective, "a started match reads its frozen cfg").toMatchObject({ bestOf: other });
+    expect(r.effectiveLine, "started: the describer over the frozen cfg").toBe(lineOf(r.effective));
 
     await sql`update fixtures set status = 'finalized' where id = ${id}`;
-    expect((await loadFixtureMatchRules(b.auth, id, dict)).state, "after finalize: locked").toBe("locked");
+    r = await loadFixtureMatchRules(b.auth, id, dict);
+    expect(r.state, "after finalize: locked").toBe("locked");
+    // The match was PLAYED under the override: finished, it still says so (the stage's format is another line).
+    expect(r.effectiveLine, "finished: the format it was played under").toBe(lineOf(r.effective));
+    expect(r.effectiveLine).not.toBe(r.stageLine);
+    expect(r.cancelled, "finalized is not cancelled").toBe(false);
 
     // Set back to the stage's: a finished match refuses the write, so reset on a sibling that is not finished.
     const second = b.fixtureIds[1];
@@ -89,6 +112,7 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
       r = await loadFixtureMatchRules(b.auth, second, dict);
       expect(r.override, "reset clears the override").toBeNull();
       expect(r.effective).toMatchObject({ bestOf: stageBestOf });
+      expect(r.effectiveLine, "after a reset the played format is the stage's again").toBe(r.stageLine);
     }
   });
 
@@ -98,9 +122,13 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     const dict = await getDictionary("en", "public");
     let locked = 0;
     let open = 0;
+    let cancelled = 0;
     for (const status of FIXTURE_STATUSES) {
       await sql`update fixtures set status = ${status} where id = ${id}`;
-      const state = (await loadFixtureMatchRules(b.auth, id, dict)).state;
+      const loaded = await loadFixtureMatchRules(b.auth, id, dict);
+      const state = loaded.state;
+      expect(loaded.cancelled, `${status}: only a cancelled match says so`).toBe(status === "cancelled");
+      if (status === "cancelled") cancelled++;
       if (LOCKED_FIXTURE_STATUSES.has(status)) {
         expect(state, status).toBe("locked");
         locked++;
@@ -116,6 +144,30 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     expect(locked).toBe(LOCKED_FIXTURE_STATUSES.size);
     expect(locked + open).toBe(FIXTURE_STATUSES.length);
     expect(open, "some statuses are not locked").toBeGreaterThan(0);
+    expect(cancelled, "the cancelled status was reached, and is a locked one").toBe(1);
+    expect(LOCKED_FIXTURE_STATUSES.has("cancelled")).toBe(true);
+  });
+
+  it("M4 - the stage's line and the played line are said in the reader's language, in every locale (counted)", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const id = b.fixtureIds[0]!;
+    const divisionCfg = await divisionConfigOf(b.divisionId);
+    await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 });
+    const en = await loadFixtureMatchRules(b.auth, id, await getDictionary("en", "public"));
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const dict = await getDictionary(locale, "public");
+      const r = await loadFixtureMatchRules(b.auth, id, dict);
+      // Both lines are the describer's own, in THIS locale's dictionary.
+      expect(r.stageLine, `${locale} stage line`).toBe(formatLineOf("badminton", mod("badminton"), r.stageResolved, "league", divisionCfg, dict));
+      expect(r.effectiveLine, `${locale} played line`).toBe(formatLineOf("badminton", mod("badminton"), r.effective, "league", divisionCfg, dict));
+      if (locale !== "en") {
+        expect(r.stageLine, `${locale} is not the English stage line`).not.toBe(en.stageLine);
+        expect(r.effectiveLine, `${locale} is not the English played line`).not.toBe(en.effectiveLine);
+      }
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("a forfeit EVENT recorded (not finalized) is live - played - and the writer's own 'started' agrees", async () => {

@@ -227,8 +227,14 @@ export interface FixtureMatchRules {
   readonly override: Record<string, unknown> | null;
   readonly stageResolved: Record<string, unknown>;
   readonly effective: Record<string, unknown>;
+  /** The format the match plays (or played) in words: the describer over `effective`, so the frozen snapshot once it has
+   *  started. The block states it whenever the match carries its own override (review I2: a finished match with an override
+   *  used to show a chip and the STAGE's format, never the one it was played under). */
+  readonly effectiveLine: string;
   readonly fields: readonly RuleField[];
   readonly state: MatchRulesState;
+  /** Status `cancelled` (the lock sentence says so; `state` is `locked` for it and for `finalized` alike). */
+  readonly cancelled: boolean;
 }
 
 const isCfgObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -279,8 +285,10 @@ export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, di
       override: isCfgObject(row.rules_override) ? row.rules_override : null,
       stageResolved,
       effective,
+      effectiveLine: formatLineOf(row.sport_key, sportModule, effective, row.stage_kind, row.division_config, dict) ?? "",
       fields: matchFieldsFor({ module: sportModule, stageKind, variant: row.variant_key }),
       state: matchRulesState(row.outcome, standing),
+      cancelled: row.status === "cancelled",
     };
   });
 }

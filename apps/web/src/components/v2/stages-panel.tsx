@@ -16,7 +16,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ruleRefusalText } from "@/lib/rule-errors";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
-import { settingsSaveErrorText } from "@/lib/config-issue-copy";
+import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -2377,7 +2377,7 @@ function StageFormatRow({
       onSaved();
     } catch (err) {
       // W2c P-5: a refused fragment names its problem (CONFIG_INVALID `issues`), localized where this app owns it.
-      setError(err instanceof ApiV1Error ? settingsSaveErrorText(err, msg, msg("schedule.error.failed")) : String(err));
+      setError(rulesWriteErrorText(err, msg));
     } finally {
       setSaving(false);
     }
@@ -2396,7 +2396,7 @@ function StageFormatRow({
       onSaved();
     } catch (err) {
       // W2c Task 19: the same reader as Save - a rule-lock refusal in the reader's language, never the wire's English.
-      setError(err instanceof ApiV1Error ? settingsSaveErrorText(err, msg, msg("schedule.error.failed")) : String(err));
+      setError(rulesWriteErrorText(err, msg));
     } finally {
       setSaving(false);
     }

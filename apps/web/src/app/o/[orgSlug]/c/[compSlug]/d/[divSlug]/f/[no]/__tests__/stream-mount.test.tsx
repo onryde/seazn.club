@@ -121,8 +121,10 @@ const MATCH_RULES = {
   override: null,
   stageResolved: { halfMinutes: 45 },
   effective: { halfMinutes: 45 },
+  effectiveLine: "2 halves of 45 min",
   fields: [{ key: "halfMinutes", build: () => ({}) }],
   state: "unstarted",
+  cancelled: false,
 };
 
 const CONTEXT = { entitled: true, relayEntitled: true, relayDisabled: false, orgId: "org-1", streamBalance: 2 };
@@ -303,7 +305,8 @@ describe("the organiser fixture page mounts the match rules block (W2c Task 19, 
     const props = await consoleProps();
     expect(spies.matchRules).toHaveBeenCalledTimes(1);
     expect(spies.matchRules.mock.calls[0][1], "read for this fixture").toBe("fx-7");
-    const { fields: _fields, ...facts } = MATCH_RULES;
+    // Every fact the loader answers but the function-valued `fields`.
+    const facts = Object.fromEntries(Object.entries(MATCH_RULES).filter(([k]) => k !== "fields"));
     expect(props.matchRules).toEqual({ fixtureId: "fx-7", ...facts });
     expect(JSON.parse(JSON.stringify(props.matchRules)), "what crosses the RSC boundary survives JSON").toEqual(props.matchRules);
   });

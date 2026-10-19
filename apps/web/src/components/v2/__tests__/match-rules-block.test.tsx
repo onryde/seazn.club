@@ -12,9 +12,12 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { rulesLineText } from "@/lib/rules-line";
 import { moduleFor } from "@/lib/rule-scope";
 import { mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
+import { matchRulesLine } from "@/server/public-site/describe-rules";
 import { MatchRulesBlock, type MatchRulesBlockProps, type MatchRulesState } from "../match-rules-block";
+import { blockSeedKey } from "../match-rules-block-model";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -38,8 +41,10 @@ const props = (over: Partial<MatchRulesBlockProps> & Pick<MatchRulesBlockProps, 
   variant: null,
   stageLine: "Best of 3 to 21",
   effective: over.stageResolved,
+  effectiveLine: "Best of 3 to 21",
   override: null,
   state: "unstarted",
+  cancelled: false,
   ...over,
 });
 const render = (p: MatchRulesBlockProps, dict: Dict = enUi as Dict, locale: "en" | "es" = "en"): string =>
@@ -118,17 +123,83 @@ describe("the block in each state (badminton league)", () => {
     expect(has(html, "match-rules-correct")).toBe(true);
   });
 
-  it("locked (finished): the lock sentence and NO form, no save, no reset, no correct button - even with an override in force", () => {
-    const override = { bestOf: 1 };
-    const html = render({ ...base, state: "locked", override, effective: mergeRulesOverride(stage, override) as Record<string, unknown> });
+  /** The public describer's line over a cfg, in a dictionary's language - the expected "format it plays", read off the
+   *  describer itself (the loader's `effectiveLine` is this over `effective`), never typed. */
+  const lineOver = (cfg: Record<string, unknown>, dict: Dict = enUi as Dict): string => {
+    const line = matchRulesLine("badminton", mod("badminton"), cfg, stage, "league");
+    expect(line, "the describer has a line for badminton").not.toBeNull();
+    return rulesLineText(dict, line!);
+  };
+  const override = { bestOf: 1 };
+  const overridden = mergeRulesOverride(stage, override) as Record<string, unknown>;
+  const stageLine = lineOver(stage);
+  const playedLine = lineOver(overridden);
+  const playedAs = (line: string, dict: Record<string, string> = EN): string => dict["matchRules.playedAs"]!.replace("{format}", line);
+
+  it("locked (finished) with an override: the lock sentence and NO form - and the format it was PLAYED under, in words (review I2)", () => {
+    expect(playedLine, "premise: the override moves the line, so the stage's line is the wrong answer").not.toBe(stageLine);
+    const html = render({ ...base, state: "locked", override, effective: overridden, stageLine, effectiveLine: playedLine });
     expect(html).toContain('data-state="locked"');
     expect(has(html, "match-rules-locked")).toBe(true);
     expect(text(html)).toContain(EN["matchRules.locked"]);
     for (const absent of ["match-rules-save", "match-rules-reset", "match-rules-correct", "match-rules-warning"]) expect(has(html, absent), absent).toBe(false);
     expect(fieldIds(html)).toEqual([]);
     expect(html, "no input or select left to change").not.toMatch(/<(select|input)\b/);
-    // The override that was in force stays readable.
+    // The override that was in force stays readable - and so does what it made the match play.
     expect(has(html, "match-rules-overridden")).toBe(true);
+    expect(has(html, "match-rules-played-as")).toBe(true);
+    expect(text(html)).toContain(playedAs(playedLine));
+    expect(text(html), "the stage's own format is still named, as the stage's").toContain(EN["matchRules.fromStage"]!.replace("{format}", stageLine));
+  });
+
+  it("the played format is stated in EVERY state when the match carries its own, and in none when it does not - in English and Spanish (counted)", () => {
+    const states: MatchRulesState[] = ["unstarted", "live", "decided", "locked"];
+    let checked = 0;
+    for (const state of states) {
+      const withOverride = render({ ...base, state, override, effective: overridden, stageLine, effectiveLine: playedLine });
+      expect(has(withOverride, "match-rules-played-as"), `${state} with an override`).toBe(true);
+      expect(text(withOverride), `${state}`).toContain(playedAs(playedLine));
+      const es = render({ ...base, state, override, effective: overridden, stageLine: lineOver(stage, esUi as Dict), effectiveLine: lineOver(overridden, esUi as Dict) }, esUi as Dict, "es");
+      expect(text(es), `${state} in Spanish`).toContain(playedAs(lineOver(overridden, esUi as Dict), ES));
+      // After a reset the page hands no override (and the stage's line as the played one): nothing to state.
+      const reset = render({ ...base, state, override: null, effective: stage, stageLine, effectiveLine: stageLine });
+      expect(has(reset, "match-rules-played-as"), `${state} after a reset`).toBe(false);
+      expect(text(reset), `${state} after a reset`).not.toContain(playedAs(""));
+      checked++;
+    }
+    expect(checked).toBe(states.length);
+  });
+
+  it("an override whose format the describer has no words for states nothing (no 'This match:' with nothing after it)", () => {
+    for (const state of ["unstarted", "locked"] as const) {
+      const html = render({ ...base, state, override, effective: overridden, effectiveLine: "" });
+      expect(has(html, "match-rules-played-as"), state).toBe(false);
+      expect(has(html, "match-rules-overridden"), `${state}: the chip still says it differs`).toBe(true);
+    }
+  });
+
+  it("a CANCELLED match says it was cancelled, not that it finished; a finalized one still says finished (review: a wrong fact)", () => {
+    const cancelled = render({ ...base, state: "locked", cancelled: true });
+    expect(cancelled).toContain('data-reason="cancelled"');
+    expect(text(cancelled)).toContain(EN["matchRules.lockedCancelled"]);
+    expect(text(cancelled), "not the finished-match sentence").not.toContain(EN["matchRules.locked"]);
+    const finalized = render({ ...base, state: "locked", cancelled: false });
+    expect(finalized).toContain('data-reason="finished"');
+    expect(text(finalized)).toContain(EN["matchRules.locked"]);
+    expect(text(finalized)).not.toContain(EN["matchRules.lockedCancelled"]);
+    // In the reader's language too: the Spanish sentence, not the English one.
+    const es = render({ ...base, state: "locked", cancelled: true }, esUi as Dict, "es");
+    expect(text(es)).toContain(ES["matchRules.lockedCancelled"]);
+    expect(es).not.toContain(EN["matchRules.lockedCancelled"]!);
+    // A bye keeps its own words whatever else is true.
+    expect(render({ ...base, state: "decided" })).toContain('data-reason="decided"');
+  });
+
+  it("the block is keyed on blockSeedKey(props), so a refreshed page re-seeds the form (the e2e-only seam, pinned here)", () => {
+    const p = { ...base, state: "locked" as const, override, effective: overridden, effectiveLine: playedLine };
+    expect(MatchRulesBlock(p).key).toBe(blockSeedKey(p));
+    expect(MatchRulesBlock(base).key, "a different page answer, a different key").not.toBe(MatchRulesBlock(p).key);
+    expect(MatchRulesBlock(p).key, "and a key at all").toEqual(expect.any(String));
   });
 
   it("each state exposes exactly its own controls (counted)", () => {

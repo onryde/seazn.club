@@ -16,7 +16,8 @@ import { useRouter } from "next/navigation";
 import { useId, useMemo, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { settingsSaveErrorText } from "@/lib/config-issue-copy";
+import { rulesWriteErrorText } from "@/lib/config-issue-copy";
+import type { MessageKey } from "@/lib/messages";
 import { FIXTURE_LOCK_KEYS } from "@/lib/rule-errors";
 import { moduleFor } from "@/lib/rule-scope";
 import { setRuleValue } from "@/lib/match-rules";
@@ -35,6 +36,13 @@ import {
 
 export type { MatchRulesBlockProps, MatchRulesState } from "./match-rules-block-model";
 
+type LockReason = "decided" | "cancelled" | "finished";
+const LOCK_KEY = {
+  decided: FIXTURE_LOCK_KEYS.decided,
+  cancelled: "matchRules.lockedCancelled",
+  finished: "matchRules.locked",
+} as const satisfies Record<LockReason, MessageKey>;
+
 /** The testid segment of a field: the top segment of the first key it edits (the stage row's own, `stage-rule-field-*`). */
 const topSegment = (edits: readonly string[]): string => edits[0]!.split(".")[0]!;
 
@@ -43,7 +51,7 @@ export function MatchRulesBlock(props: MatchRulesBlockProps) {
   return <MatchRulesBlockBody key={blockSeedKey(props)} {...props} />;
 }
 
-function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLine, stageResolved, effective, override, state }: MatchRulesBlockProps) {
+function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLine, stageResolved, effective, effectiveLine, override, state, cancelled }: MatchRulesBlockProps) {
   const msg = useMsg();
   const router = useRouter();
   const formId = useId();
@@ -72,6 +80,8 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
   const dirty = matchFormDirty(opened, values);
   // Finished, or decided without play with no award to refit (a bye): either way the writer refuses every change.
   const locked = state === "locked" || state === "decided";
+  // Why it is locked: a bye (decided without play), a cancelled match, or a finished one - each in its own words.
+  const lockReason: LockReason = state === "decided" ? "decided" : cancelled ? "cancelled" : "finished";
   // A finished match has no form (X-SR-3); a live one opens it only on "Correct format" (X-SR-5); an unstarted one always.
   const formOpen = state === "unstarted" || (state === "live" && correcting);
 
@@ -84,7 +94,7 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
       router.refresh();
     } catch (err) {
       // A refusal is said in the reader's language off its code (`FORMAT_DOES_NOT_FIT_PLAY`, `RULE_NOT_SETTABLE`, a lock...).
-      setError(settingsSaveErrorText(err, msg, msg("schedule.error.failed")));
+      setError(rulesWriteErrorText(err, msg));
     } finally {
       setSaving(false);
     }
@@ -140,9 +150,18 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
         </p>
       )}
 
+      {/* The format this match plays (or played) whenever it carries its own: the chip alone says THAT it differs, not WHAT it
+          plays - in a finished or live-closed match nothing else on the card does (review I2). The page's `override` and its
+          `effectiveLine` are one answer (a refresh brings both), so the line follows the page, as the form re-seeds from it. */}
+      {override !== null && effectiveLine !== "" && (
+        <p data-testid="match-rules-played-as" className="min-w-0 text-xs font-medium text-slate-800 [overflow-wrap:anywhere]">
+          {msg("matchRules.playedAs", { format: effectiveLine })}
+        </p>
+      )}
+
       {locked && (
-        <p data-testid="match-rules-locked" data-reason={state === "decided" ? "decided" : "finished"} className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          {msg(state === "decided" ? FIXTURE_LOCK_KEYS.decided : "matchRules.locked")}
+        <p data-testid="match-rules-locked" data-reason={lockReason} className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          {msg(LOCK_KEY[lockReason])}
         </p>
       )}
 

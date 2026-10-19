@@ -268,6 +268,37 @@ describe("the fragment is what differs from the stage - and nothing else", () =>
     expect(checkFixtureOverride(mod("badminton"), "league", "bwf", stage, frag).ok).toBe(true);
   });
 
+  it("best of 1 reached from a best of 3 override that set the pair APART: the stored shadow key follows the number played (review M1)", () => {
+    const ctx = ctxOf("badminton", "league", "bwf");
+    const stage = variantCfg("badminton", "bwf");
+    const field = (k: string) => matchFieldsFor(ctx).find((f) => f.key === k)!;
+    // Two numbers the engine's own field limits allow, apart from each other and from the stage's.
+    const played = field(BEST_OF_ONE_PAIR.shown).min!;
+    const shadow = played + 4;
+    for (const n of [played, shadow]) {
+      expect(n >= field(BEST_OF_ONE_PAIR.shown).min! && n <= field(BEST_OF_ONE_PAIR.shown).max!, `${n} is inside the field's limits`).toBe(true);
+      expect(n, `${n} is not the stage's own value, so it is a real override`).not.toBe(stage[BEST_OF_ONE_PAIR.shown]);
+      expect(n).not.toBe(stage[BEST_OF_ONE_PAIR.shadow]);
+    }
+    expect(played, "premise: the pair is apart").not.toBe(shadow);
+
+    // The override as the best-of-3 form wrote it: a different number for each game and for the deciding one.
+    const stored = { [BEST_OF_ONE_PAIR.shadow]: shadow, [BEST_OF_ONE_PAIR.shown]: played };
+    const stageValues = hydrateMatchValues(ctx, stage, stage, LABELS);
+    const open = hydrateMatchValues(ctx, stage, mergeRulesOverride(stage, stored) as Record<string, unknown>, LABELS);
+    expect(open[BEST_OF_ONE_PAIR.shadow]).toBe(String(shadow));
+    expect(open[BEST_OF_ONE_PAIR.shown]).toBe(String(played));
+    // The organiser only switches to best of 1: the single "Points to win" shows the deciding number and is not touched.
+    const one = setRuleValue("badminton", open, "bestOf", "1", stage);
+    expect(one[BEST_OF_ONE_PAIR.shadow], "premise: switching the format alone leaves the hidden key where it was").toBe(String(shadow));
+
+    const frag = matchFragment(ctx, one, stageValues, stage, stored);
+    // On best of 1 the engine plays the deciding number (`finalSetTo`) and the stage and division editors store the hidden key
+    // equal to it. Sent apart, the stored shadow would be a number nothing plays.
+    expect(frag).toEqual({ bestOf: 1, [BEST_OF_ONE_PAIR.shown]: played, [BEST_OF_ONE_PAIR.shadow]: played });
+    expect(checkFixtureOverride(mod("badminton"), "league", "bwf", stage, frag).ok).toBe(true);
+  });
+
   it("a stored override's key that a match field edits is the form's to say: set back to the stage's, it leaves the fragment", () => {
     const ctx = ctxOf("badminton", "league", "short");
     const stage = variantCfg("badminton", "short");
@@ -309,7 +340,14 @@ describe("the fragment is what differs from the stage - and nothing else", () =>
 describe("every sport and stage kind: what the form offers, the engine accepts (counted)", () => {
   it("each match field's offered options and number extremes, fed through checkFixtureOverride, are never refused", () => {
     let cells = 0;
-    let offeredChecked = 0;
+    // Review M3: three outcomes for a candidate, counted apart so none reads as "checked" - a fragment that is empty (the
+    // candidate IS the stage's value: nothing to send), one the sport's schema refuses (a declared refinement), and one
+    // the engine's bound was actually asked (`checkFixtureOverride`).
+    let candidates = 0;
+    let empty = 0;
+    let schemaRefused = 0;
+    let boundChecked = 0;
+    const refusedSports = new Set<string>();
     let withFields = 0;
     for (const m of builtinModules) {
       for (const kind of StageKind.options) {
@@ -327,23 +365,32 @@ describe("every sport and stage kind: what the form offers, the engine accepts (
           for (const f of fields) for (const k of f.field.edits) expect(matchKeys.has(k), `${m.key}/${kind}/${variant} ${f.field.key} edits ${k}`).toBe(true);
           for (const f of fields) {
             if (f.held) continue;
-            const candidates: string[] =
+            const offered: string[] =
               f.field.kind === "number" ? [f.field.min, f.field.max].filter((n): n is number => n !== undefined).map(String)
               : f.field.kind === "bool" ? ["on", "off"]
               : (f.field.options ?? []).map((o) => o.value);
-            for (const c of candidates) {
+            for (const c of offered) {
+              candidates++;
               const values = { ...stageValues, [f.field.key]: c };
               const frag = matchFragment(ctx, values, stageValues, stage);
-              if (Object.keys(frag).length === 0) { offeredChecked++; continue; }
+              if (Object.keys(frag).length === 0) { empty++; continue; }
               // The writer parses the corrected format first (a refusal there is CONFIG_INVALID, the schema's, not the bound's):
               // only a corrected format the schema takes is asked of the bound.
               const merged = mergeRulesOverride(stage, frag);
-              if (!m.configSchema.safeParse(merged).success) { offeredChecked++; continue; }
+              const parsedMerged = m.configSchema.safeParse(merged);
+              if (!parsedMerged.success) {
+                // A refusal must be a DECLARED refinement (a cross-field rule), never a field offered outside its own range or type.
+                for (const issue of parsedMerged.error.issues)
+                  expect(issue.code, `${m.key}/${kind}/${variant}: ${f.field.key}=${c} is refused as ${issue.code} - an option outside the field's own range, not a refinement`).toBe("custom");
+                refusedSports.add(m.key);
+                schemaRefused++;
+                continue;
+              }
               const parsedStage = m.configSchema.parse(stage) as Record<string, unknown>;
               const whole = Object.fromEntries(Object.keys(frag).map((k) => [k, (m.configSchema.parse(merged) as Record<string, unknown>)[k]]));
               const verdict = checkFixtureOverride(m, kind, variant, parsedStage, whole);
               expect(verdict.ok, `${m.key}/${kind}/${variant}: ${f.field.key}=${c} -> ${JSON.stringify(frag)}`).toBe(true);
-              offeredChecked++;
+              boundChecked++;
             }
           }
         }
@@ -351,7 +398,17 @@ describe("every sport and stage kind: what the form offers, the engine accepts (
     }
     expect(cells, "the whole registry was swept").toBe(builtinModules.reduce((n, m) => n + StageKind.options.length * Object.keys(m.variants).length, 0));
     expect(withFields, "some cells have match fields").toBeGreaterThan(0);
-    expect(offeredChecked, "options were checked").toBeGreaterThan(50);
+    const counts = `candidates ${candidates}: ${boundChecked} bound-checked, ${empty} empty, ${schemaRefused} schema-refused`;
+    expect(empty + schemaRefused + boundChecked, `every candidate is in exactly one bucket (${counts})`).toBe(candidates);
+    expect(boundChecked, `the bound was asked of a real number of candidates (${counts})`).toBeGreaterThan(50);
+    expect(empty, `some candidates are the stage's own value (${counts})`).toBeGreaterThan(0);
+    expect(schemaRefused, `the refusal branch is reached - else "only refinements refuse" is vacuous (${counts})`).toBeGreaterThan(0);
+    // The sports whose schema is refused are sports whose schema DECLARES refinements (zod: checks on the config object).
+    const withRefinements = new Set(
+      builtinModules.filter((m) => ((m.configSchema as unknown as { _zod?: { def?: { checks?: unknown[] } } })._zod?.def?.checks?.length ?? 0) > 0).map((m) => m.key),
+    );
+    expect(withRefinements.size, "the registry declares refinements somewhere").toBeGreaterThan(0);
+    for (const k of refusedSports) expect(withRefinements.has(k), `${k} is refused by a schema that declares no refinement`).toBe(true);
   });
 });
 
@@ -367,7 +424,7 @@ describe("the page seam: a sport with nothing to change for one match gets no bl
           const stage = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
           const fields = matchFieldsFor(ctx).map((f) => f);
           const props = matchRulesBlockProps("f", {
-            sportKey: m.key, stageKind: kind, variant, stageLine: "", stageResolved: stage, effective: stage, override: null, state: "unstarted", fields,
+            sportKey: m.key, stageKind: kind, variant, stageLine: "", stageResolved: stage, effective: stage, effectiveLine: "", override: null, state: "unstarted", cancelled: false, fields,
           });
           cells++;
           if (fixtureKeysFor(m, kind, variant).length === 0) expect(props, `${m.key}/${kind}/${variant}: no match key, no block`).toBeUndefined();
@@ -382,7 +439,7 @@ describe("the page seam: a sport with nothing to change for one match gets no bl
   it("a finished match with no override is still offered where the sport has fields (the lock sentence is the content)", () => {
     const stage = variantCfg("badminton", "short");
     const props = matchRulesBlockProps("f", {
-      sportKey: "badminton", stageKind: "league", variant: "short", stageLine: "", stageResolved: stage, effective: stage, override: null, state: "locked",
+      sportKey: "badminton", stageKind: "league", variant: "short", stageLine: "", stageResolved: stage, effective: stage, effectiveLine: "", override: null, state: "locked", cancelled: false,
       fields: matchFieldsFor(ctxOf("badminton", "league", "short")),
     });
     expect(props?.state).toBe("locked");
@@ -405,7 +462,7 @@ describe("the page seam: who is offered the block", () => {
 });
 
 describe("the page seam: what crosses from the server page to the console is JSON, and only the named facts", () => {
-  it("the mapper keeps the nine facts, drops anything else the loader grows (a function-valued `fields`), and survives a JSON round trip", () => {
+  it("the mapper keeps the eleven facts, drops anything else the loader grows (a function-valued `fields`), and survives a JSON round trip", () => {
     const stage = variantCfg("badminton", "short");
     const loaded = {
       sportKey: "badminton",
@@ -414,15 +471,17 @@ describe("the page seam: what crosses from the server page to the console is JSO
       stageLine: "Best of 3 to 21",
       stageResolved: stage,
       effective: stage,
+      effectiveLine: "Best of 3 to 21",
       override: null,
       state: "unstarted" as const,
+      cancelled: false,
       // What the real loader also returns: function-valued rule fields, which an RSC payload cannot carry.
       fields: matchFormFields(ctxOf("badminton", "league", "short"), stage, {}, LABELS).map((f) => f.field),
     };
     const props = matchRulesBlockProps("fx-1", loaded);
     expect(props, "the sport has fields, so the block is offered").toBeDefined();
     if (props === undefined) return;
-    expect(Object.keys(props).sort()).toEqual(["effective", "fixtureId", "override", "sportKey", "stageKind", "stageLine", "stageResolved", "state", "variant"]);
+    expect(Object.keys(props).sort()).toEqual(["cancelled", "effective", "effectiveLine", "fixtureId", "override", "sportKey", "stageKind", "stageLine", "stageResolved", "state", "variant"]);
     const facts = Object.fromEntries(Object.entries(loaded).filter(([k]) => k !== "fields"));
     expect(props, "each fact arrives as the loader gave it").toEqual({ fixtureId: "fx-1", ...facts });
     expect(props.fixtureId).toBe("fx-1");

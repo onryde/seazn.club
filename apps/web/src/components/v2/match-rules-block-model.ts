@@ -20,7 +20,7 @@
 import type { StageKind } from "@seazn/engine/core";
 import { ruleKeyOwning, type AnySportModule, type RuleKeyFact } from "@seazn/engine/sport";
 import type { MatchRulesState } from "@/lib/fixture-status";
-import { visibleRuleFields, type RuleField } from "@/lib/match-rules";
+import { alignBestOfOnePoints, visibleRuleFields, type RuleField } from "@/lib/match-rules";
 import { buildFragment, matchFieldsFor, type RuleContext } from "@/lib/rule-scope";
 import { detailIsInert } from "./stage-rules/stage-row-model";
 
@@ -37,8 +37,13 @@ export interface MatchRulesBlockProps {
   readonly stageLine: string;
   readonly stageResolved: Record<string, unknown>;
   readonly effective: Record<string, unknown>;
+  /** The format this match plays (or played) in words, in the reader's language: the describer over `effective`, which is
+   *  the frozen snapshot once the match has started. "" when the describer has none to say. */
+  readonly effectiveLine: string;
   readonly override: Record<string, unknown> | null;
   readonly state: MatchRulesState;
+  /** The match was cancelled (its status, not its outcome): the lock sentence says so instead of "finished". */
+  readonly cancelled: boolean;
 }
 
 /**
@@ -67,8 +72,10 @@ export function matchRulesBlockProps(
     stageLine: r.stageLine,
     stageResolved: r.stageResolved,
     effective: r.effective,
+    effectiveLine: r.effectiveLine,
     override: r.override,
     state: r.state,
+    cancelled: r.cancelled,
   };
 }
 
@@ -230,8 +237,11 @@ export function matchFragment(
   const all = allAdapted(ctx, stageResolved, { off: "", halfMinutes: () => "" });
   const sent = all.filter((f) => !f.held && matchSource(f.field.key, values, stageValues) === "match");
   // Built over EVERY field, the best-of-1 shadow key too: `setRuleValue` keeps the pair equal in the values, so a changed
-  // "Points to win" writes both keys (`BEST_OF_ONE_PAIR`), as the stage and division editors do - no later alignment needed.
-  const built = buildFragment(sent.map((f) => f.field), values, stageResolved);
+  // "Points to win" writes both keys (`BEST_OF_ONE_PAIR`), as the stage and division editors do. It cannot keep them equal
+  // when the pair was already set apart at best of 3 (an override of setTo 15 / finalSetTo 11) and the organiser only
+  // switches to best of 1: both keys differ from the stage's, so both are sent, apart. `alignBestOfOnePoints` is the stage
+  // editor's own answer (the number actually played, `finalSetTo`, goes to the shadow too), so the stored shadow agrees.
+  const built = alignBestOfOnePoints(ctx.sportKey, buildFragment(sent.map((f) => f.field), values, stageResolved), stageResolved);
   if (storedOverride === null) return built;
   // Top-level keys some match field edits: those are the form's to say. Any other key the override carries stays.
   const edited = new Set(all.flatMap((a) => a.field.edits.map((k) => k.split(".")[0]!)));

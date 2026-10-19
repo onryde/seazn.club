@@ -345,7 +345,16 @@ test("X-SR-3 a finished match shows the lock and no form - and the server refuse
   await expect(block.getByTestId("match-rules-reset")).toHaveCount(0);
   await expect(block.getByTestId("match-rules-correct")).toHaveCount(0);
   await expect(block.locator("select, input"), "nothing left to change").toHaveCount(0);
-  await expect(block.getByTestId("match-rules-overridden"), "the format it was played under stays readable").toBeVisible();
+  await expect(block.getByTestId("match-rules-overridden")).toBeVisible();
+  // Class 4 (review I2): the chip says THAT it differs, the line says WHAT it was played under. The words are the API's own
+  // (`format_line`, the describer over the cfg the match was folded under), framed by the dictionary's sentence - and they are
+  // not the stage's format, which the stage line above still names as the stage's.
+  const played = (await rulesOf(request, id)).format_line;
+  expect(played, "the line says the override (best of 1)").toMatch(/\b1\b/);
+  await expect(block.getByTestId("match-rules-played-as"), "the format it was played under").toHaveText(L["matchRules.playedAs"]!.replace("{format}", played));
+  const stageSentence = (await block.getByTestId("match-rules-stage-line").innerText()).trim();
+  expect(stageSentence, "the stage line names the stage's own format").toContain(L["matchRules.fromStage"]!.replace("{format}", "").trim());
+  expect(stageSentence, "...which is not the format the match was played under").not.toContain(played);
 
   const refused = await apiJson(request, `/api/v1/fixtures/${id}/rules`, "PUT", { rules: null });
   expect(refused.status, "the server refuses on the same predicate").toBe(409);

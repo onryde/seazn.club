@@ -63,3 +63,10 @@ export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string):
   if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");
   return err instanceof Error ? err.message : fallback;
 }
+
+/** What a failed RULES write says, wherever the organiser made it: the match block's Save and "Use stage rules", the stage
+ *  row's Save and "Use division rules". One reader for all four, so a refusal (a locked match, a format the play does not
+ *  fit) is said in the reader's language off its code at every one of them - never the wire's English (W2c Task 19). */
+export function rulesWriteErrorText(err: unknown, msg: Msg): string {
+  return settingsSaveErrorText(err, msg, msg("schedule.error.failed"));
+}
