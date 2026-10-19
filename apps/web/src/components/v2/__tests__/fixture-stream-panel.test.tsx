@@ -1464,11 +1464,11 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     type Countdown = StreamLostCountdown;
     const wire: Countdown[] = StreamLostCountdown.options.flatMap((o) => {
       const reason = o.shape.reason;
-      const reasons = ("options" in reason ? reason.options : [reason.value]) as Countdown["reason"][];
+      const reasons = ("options" in reason ? reason.options : [(reason as { value: string }).value]) as Countdown["reason"][];
       return reasons.map((r) => ({ kind: o.shape.kind.value, reason: r, elapsedMs: 40_000, remainingMs: 20_000 }) as Countdown);
     });
     /** Where each kind is served: `warming` before any video; `live` in live AND in a warming reconnect (§5.4). */
-    const states = (c: Countdown): ("warming" | "live")[] => (c.kind === "live" ? ["live", "warming"] : ["warming"]);
+    const states = (c: Countdown): ("warming" | "live")[] => (c.kind === "warming" ? ["warming"] : c.reason === "camera_never_live" ? ["live"] : ["live", "warming"]);   // a never-live end (R2008) is live only
     let checked = 0;
     let lost = 0;
     for (const countdown of wire) for (const state of states(countdown)) {
@@ -1477,7 +1477,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={view} balance={2} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
       const sentence = m(`stream.phone.countdown.${countdown.kind}.${countdown.reason}` as MessageKey).split("{")[0]!;
       expect(html, `${where}: the strip's sentence`).toContain(esc(sentence));
-      const isLost = countdown.reason === "phone_lost";
+      const isLost = countdown.reason === "phone_lost" || countdown.reason === "camera_never_live";
       expect(PHONE_BANG.test(html), `${where}: the '!' on the node`).toBe(isLost);
       expect(html.match(FOLD_DOT)?.[1], `${where}: the fold's dot`).toBe(isLost ? "amber" : "lime");
       // Item 6 (coordinator ruling): link 1 is the fourth voice — `problem` (amber dashes) exactly when the phone is lost.
@@ -1485,8 +1485,8 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       if (isLost) lost++;
       checked++;
     }
-    expect(checked, "warming timeout, ask 10, W19 in live and in a warming reconnect").toBe(4);
-    expect(lost).toBe(3);
+    expect(checked, "warming timeout, ask 10, W19 in live and in a warming reconnect, R2008's never-live end in live").toBe(5);
+    expect(lost).toBe(4);
     // The positive pair, no countdown: the same present phone's dot is lime (the read model) — the dot moved above
     // because of the countdown, not because the fold always paints amber.
     const quiet = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session()} balance={2} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
@@ -1778,9 +1778,9 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
         checked++;
       }
     }
-    // 2 restart + 8 code + 3 countdown + 5 paused + 5 phone sentences + phone_not_paired + phone_not_responding (owner
+    // 2 restart + 8 code + 4 countdown + 5 paused + 5 phone sentences + phone_not_paired + phone_not_responding (owner
     // ruling 2026-10-09).
-    expect(keys.length, "PREMISE: the sweep found §6.12's keys").toBe(25);
+    expect(keys.length, "PREMISE: the sweep found §6.12's keys").toBe(26);
     expect(checked).toBe(keys.length * LOCALES.length);
     expect(sentences).toBeGreaterThan(0);
     // The countdown sentences name the time left; the live one also the time gone (W24).

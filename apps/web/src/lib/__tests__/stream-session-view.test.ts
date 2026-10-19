@@ -753,8 +753,8 @@ describe("the countdown copy and its durations (W24, T11)", () => {
     return (reason.options ?? [reason.value!]).map((r) => [o.shape.kind.value, r] as const);
   });
 
-  it("one key per (kind, reason) the union declares — 3 — each in all four locales, with the placeholders its kind needs", () => {
-    expect(combos).toHaveLength(3);
+  it("one key per (kind, reason) the union declares — 4 — each in all four locales, with the placeholders its kind needs", () => {
+    expect(combos).toHaveLength(4);
     let checked = 0;
     for (const [kind, reason] of combos) {
       const key = countdownKey({ kind, reason, elapsedMs: 0, remainingMs: 0 } as never);
@@ -763,11 +763,12 @@ describe("the countdown copy and its durations (W24, T11)", () => {
         const text = dict(l)[key]!;
         expect(text, `${l} ${key}`).toBeTruthy();
         expect(text, `${l} ${key}: remaining`).toContain("{remaining}");
-        if (kind === "live") expect(text, `${l} ${key}: elapsed`).toContain("{elapsed}");
+        // The elapsed time is the phone's silence (W19); a NEVER-live end counts from go-live and says "yet", not "for {elapsed}".
+        if (kind === "live" && reason === "phone_lost") expect(text, `${l} ${key}: elapsed`).toContain("{elapsed}");
         checked++;
       }
     }
-    expect(checked).toBe(3 * LOCALES.length);
+    expect(checked).toBe(4 * LOCALES.length);
     expect(msg("stream.phone.countdown.live.phone_lost")).toBe("No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back.");
     expect(msg("stream.phone.countdown.warming.no_inbound_timeout")).toBe("No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.");
   });

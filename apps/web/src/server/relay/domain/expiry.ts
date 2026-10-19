@@ -10,7 +10,10 @@ import type { Session } from "./session";
 // EVERY non-terminal state owns a kind here, and the sweep in expiry.test.ts walks ACTIVE_STATES to prove it.
 export type Expiry =
   | { kind: "none" } | { kind: "requested_timeout" } | { kind: "provision_timeout" } | { kind: "warming_timeout" }
-  | { kind: "wall_clock" } | { kind: "stale_beat" } | { kind: "grace_expired" } | { kind: "ending_timeout" };
+  | { kind: "wall_clock" } | { kind: "stale_beat" } | { kind: "grace_expired" } | { kind: "ending_timeout" }
+  // R2008: never returned by `evaluate` — a COMPOSED session's camera never appearing is judged on the compositor's own phase
+  // log, which only the use-case reads (stream-sessions.ts `phoneLostEnd`), as m-5's warming rule is.
+  | { kind: "camera_never_live" };
 
 /** `staleHeartbeatSeconds` times a composed runner that has PLAYED (and the idle states that re-fire on the same window);
  *  `staleBootAllowanceSeconds` one that has not yet played in this attempt (R2003, owner ruling 2026-10-15, option A). */

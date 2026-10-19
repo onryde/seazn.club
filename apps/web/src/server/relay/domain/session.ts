@@ -15,7 +15,7 @@ import {
 export type SessionState = "requested" | "provisioning" | "warming" | "live" | "ending" | "completed" | "failed";
 /** `output_failed` (R2004, PR #981 review I3): the destination output could not be ADDED at provisioning — the session
  *  had no destination, so it fails closed rather than broadcast to nobody and be charged for it. */
-export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "output_failed" | "no_credits" | "relay_disabled" | RunnerFailReason;
+export type FailReason = "no_inbound_timeout" | "camera_never_live" | "provision_timeout" | "admission_timeout" | "target_rejected" | "output_failed" | "no_credits" | "relay_disabled" | RunnerFailReason;
 export type Mode = "passthrough" | "composed";
 
 export const ACTIVE_STATES: readonly SessionState[] = ["requested", "provisioning", "warming", "live", "ending"];
@@ -151,6 +151,9 @@ export type DomainEvent =
 
 export type Effect =
   | { type: "consume_credit" } | { type: "add_output" }
+  // R2008 (owner ruling 2026-10-19): the go-live consume is returned. Runs INSIDE apply's transaction, under the org's money
+  // lock (like consume_credit), so the refund and the failure commit together or not at all. Emitted by exactly one cell.
+  | { type: "refund_credit" }
   | { type: "runner"; effect: RunnerEffect } | { type: "retry_runner" }
   | { type: "complete_now" } | { type: "fill_replay" }
   | { type: "release_output" };   // C1: remove the session's output — never the input (deleting it leaks recordings, C2)
@@ -449,6 +452,22 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
         return { next: f.next, events: [...torn.events.filter(keptBeforeFailure), ...f.events], effects: [...torn.effects, ...f.effects] };
       }
       return fail(s, "no_inbound_timeout", now);
+    case "camera_never_live": {
+      // R2008 (owner ruling 2026-10-19): a COMPOSED session went live (the first `playing` beat — and the credit) but no
+      // camera ever appeared: no `live` programme phase, from any attempt, for PHONE_LOST_LIVE_MINUTES. The viewer never saw
+      // video, so the stream is cancelled and the credit returned. The use-case decides WHEN (`phoneLostEnd`, on the
+      // compositor's own phase log); the domain admits the one cell. Torn down exactly as `output_failed` tears a composed
+      // Machine down — the runner's `session_stop` step, then fail, dropping the stop step's SessionEnding (P1-F-b) — with
+      // desiredState `ending` so nothing re-wants it live. Passthrough has no compositor and no phase: it never reaches here.
+      if (s.state !== "live" || s.mode !== "composed") throw illegal();
+      const torn = s.runner.state !== "none" ? runner(s, { type: "session_stop" }, now, illegal) : null;
+      const f = fail({ ...(torn?.next ?? s), desiredState: "ending" }, "camera_never_live", now);
+      return {
+        next: f.next,
+        events: [...(torn?.events.filter(keptBeforeFailure) ?? []), ...f.events],
+        effects: [...(torn?.effects ?? []), ...f.effects, { type: "refund_credit" }],
+      };
+    }
     case "requested_timeout":
       if (s.state !== "requested") throw illegal();
       // F18: admitted by nobody. No provider was ever called, so there is nothing to tear down.

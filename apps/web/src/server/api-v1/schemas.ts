@@ -1560,6 +1560,9 @@ export type StreamSessionState = z.infer<typeof StreamSessionState>;
 /** §6.4 — NOT storage_exhausted (E5: a create-time refusal with no row). */
 export const StreamFailReason = z.enum([
   "no_inbound_timeout", "target_rejected", "no_credits",
+  // R2008 (owner ruling 2026-10-19): a COMPOSED session went live and no camera ever appeared for PHONE_LOST_LIVE_MINUTES —
+  // cancelled, and its credit returned (nothing was ever received).
+  "camera_never_live",
   // the Fly machine lifecycle's reasons (plan §"Fly machine lifecycle"; domain/runner.ts RunnerFailReason)
   "machine_create_failed", "machine_boot_timeout", "machine_exit_nonzero", "machine_oom", "machine_crash",
   // R2003: the compositor refused its run (exit 78, or a final beat saying `refused`) — never retried
@@ -1567,7 +1570,7 @@ export const StreamFailReason = z.enum([
   // The two TIMED exits the domain's expiry owns (Task 2B `evaluate`): a create
   // that never finished (F16) and a row admitted but never provisioned (F18).
   // They belong HERE and not in StreamEndReason: a failed session carries no
-  // end reason at all (P1-F-b). Thirteen members — the copy map (Task 13) is total
+  // end reason at all (P1-F-b). Fourteen members — the copy map (Task 13) is total
   // over this enum, so adding one here owes four dictionary keys there.
   "provision_timeout", "admission_timeout",
   // M10 (Task 14b review): a deployment with no relay ended a session left up from before.
@@ -1640,7 +1643,9 @@ const countdownClock = { elapsedMs: z.number().int().nonnegative(), remainingMs:
 /** W24 (controller ruling 2026-10-04): the countdown names the end it counts to — `live` only W19's `phone_lost`;
  *  `warming` the warming timeout (`no_inbound_timeout`) or ask 10's `phone_lost`, whichever lands first. */
 export const StreamLostCountdown = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("live"), reason: z.literal("phone_lost"), ...countdownClock }).strict(),
+  // R2008: a COMPOSED live session's countdown names the end it counts to — W19's `phone_lost` (the camera was in and is
+  // gone) or the never-live cancellation (`camera_never_live`: no camera ever appeared; the credit is returned).
+  z.object({ kind: z.literal("live"), reason: z.enum(["phone_lost", "camera_never_live"]), ...countdownClock }).strict(),
   z.object({ kind: z.literal("warming"), reason: z.enum(["no_inbound_timeout", "phone_lost"]), ...countdownClock }).strict(),
 ]);
 export type StreamLostCountdown = z.infer<typeof StreamLostCountdown>;

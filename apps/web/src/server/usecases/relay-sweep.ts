@@ -110,6 +110,8 @@ const failureBucket = (reason: FailReason | null): BackstopBucket => {
     // Produced by the organiser's poll (target_rejected) and the go-live consume (no_credits), never by the backstop's
     // expiry + observation — so a visit that reads one raced another request. Counted apart, never folded into a timeout.
     case "target_rejected": case "no_credits": return "otherFailures";
+    // R2008: produced by the TICK's phone-lost judgement (the compositor's phase log), never by the backstop's expiry.
+    case "camera_never_live": return "otherFailures";
     // M10 (Task 14b review): produced by the organiser's poll on a deployment with no relay, where this sweep does not
     // run at all (its route returns `disabled` first) — a visit that ever sees one raced a mode change.
     case "relay_disabled": return "otherFailures";

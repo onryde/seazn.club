@@ -1493,6 +1493,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
     none: { kind: "none" }, requested_timeout: { kind: "requested_timeout" }, provision_timeout: { kind: "provision_timeout" },
     warming_timeout: { kind: "warming_timeout" }, wall_clock: { kind: "wall_clock" }, stale_beat: { kind: "stale_beat" },
     grace_expired: { kind: "grace_expired" }, ending_timeout: { kind: "ending_timeout" },
+    camera_never_live: { kind: "camera_never_live" },   // R2008
   };
   const COMMANDS: Record<Command["type"], Command[]> = {
     provision: [{ type: "provision" }], provisioned: [{ type: "provisioned" }], ingest_connected: [{ type: "ingest_connected" }],
@@ -1629,5 +1630,76 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
       }
     }
     expect(checked).toBe(TERMINAL_STATES.length * Object.values(COMMANDS).flat().length);
+  });
+});
+
+// R2008 (owner ruling 2026-10-19): a COMPOSED session that went live and whose camera NEVER appeared is failed
+// `camera_never_live` and its credit is refunded — the viewer never saw video. The use-case decides WHEN (stream-sessions.ts
+// `phoneLostEnd`); the domain admits exactly one cell and names the money effect.
+describe("decide — R2008: expire × camera_never_live fails a composed LIVE session and owes its credit back", () => {
+  const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
+  const LIVE = (over: Partial<Session> = {}): Session => S({ mode: "composed", state: "live", startedAt: T0, runner: PLAYING, ...over });
+  const NEVER_LIVE: Command = { type: "expire", expiry: { kind: "camera_never_live" } };
+  const refunds = (effects: Effect[]) => effects.filter((e) => e.type === "refund_credit").length;
+
+  it("the Machine is torn down (SIGINT), the session is failed with that reason and NO end reason, desiredState ending, and exactly one refund_credit effect", () => {
+    const d = decide(LIVE(), NEVER_LIVE, T0);
+    expect(d.next).toMatchObject({ state: "failed", failReason: "camera_never_live", endReason: null, endedAt: T0, desiredState: "ending", runner: { state: "stopping", stopRequestedAt: T0 } });
+    expect(d.effects).toEqual([{ type: "runner", effect: { type: "stop_machine", signal: "SIGINT", timeoutSeconds: RUNNER_STOP_GRACE_SECONDS } }, { type: "refund_credit" }]);
+    expect(d.events).toEqual([{ type: "RunnerChanged", from: "playing", to: "stopping", trigger: "session_stop" }, { type: "SessionEnded", reason: "camera_never_live" }]);
+    // A session that holds a destination output releases it, first, exactly once (C1's one predicate).
+    const held = decide(LIVE({ outputUid: "out-1" }), NEVER_LIVE, T0);
+    expect(held.effects.map((e) => e.type)).toEqual(["release_output", "runner", "refund_credit"]);
+    // No Machine to tear down: nothing torn, still failed and still refunded.
+    const bare = decide(LIVE({ runner: RUNNER_NONE }), NEVER_LIVE, T0);
+    expect(bare.next).toMatchObject({ state: "failed", failReason: "camera_never_live", runner: RUNNER_NONE });
+    expect(bare.effects).toEqual([{ type: "refund_credit" }]);
+  });
+
+  it("only a COMPOSED LIVE session admits it: every other state x mode throws InvalidTransition (anti-vacuity: counted both ways)", () => {
+    let legal = 0, refused = 0;
+    for (const state of ALL_STATES) {
+      for (const mode of ["passthrough", "composed"] as const) {
+        const s = S({ state, mode, startedAt: T0, runner: mode === "composed" ? PLAYING : RUNNER_NONE });
+        if (state === "live" && mode === "composed") { decide(s, NEVER_LIVE, T0); legal++; }
+        else { expect(() => decide(s, NEVER_LIVE, T0), `${mode} ${state}`).toThrow(InvalidTransition); refused++; }
+      }
+    }
+    expect(legal).toBe(1);
+    expect(refused).toBe(ALL_STATES.length * 2 - 1);
+  });
+
+  it("refund_credit is emitted by that one cell and by no other: every state x mode x command (and every other expiry) that decides emits none", () => {
+    const others: Command[] = [
+      { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" },
+      { type: "stop", reason: "stopped" }, { type: "stop", reason: "phone_lost" }, { type: "complete" }, { type: "relay_disabled" }, { type: "output_failed" },
+      ...(["none", "requested_timeout", "provision_timeout", "warming_timeout", "wall_clock", "stale_beat", "grace_expired", "ending_timeout"] as const)
+        .map((kind): Command => ({ type: "expire", expiry: { kind } })),
+      { type: "runner", trigger: { type: "callback_playing" } }, { type: "runner", trigger: { type: "callback_crashed" } },
+    ];
+    let decided = 0, checked = 0;
+    for (const state of ALL_STATES) {
+      for (const mode of ["passthrough", "composed"] as const) {
+        for (const c of others) {
+          checked++;
+          let d;
+          try { d = decide(S({ state, mode, startedAt: T0, runner: mode === "composed" ? PLAYING : RUNNER_NONE, outputUid: "out-1" }), c, T0); } catch { continue; }
+          decided++;
+          expect(refunds(d.effects), `${state} ${mode} ${JSON.stringify(c)}`).toBe(0);
+        }
+      }
+    }
+    expect(checked).toBe(ALL_STATES.length * 2 * others.length);
+    expect(decided, "anti-vacuity: many cells decide, so 'no refund' was tested on real decisions").toBeGreaterThan(20);
+    // The empty case: the cell itself is the only one that refunds.
+    expect(refunds(decide(LIVE(), NEVER_LIVE, T0).effects)).toBe(1);
+  });
+
+  it("C27: the failed session still takes the runner's cleanup triggers, and a SECOND camera_never_live on it throws — one refund per session, never two", () => {
+    const failed = decide(LIVE(), NEVER_LIVE, T0).next;
+    expect(() => decide(failed, NEVER_LIVE, T0)).toThrow(InvalidTransition);
+    const exited = decide(failed, { type: "runner", trigger: { type: "callback_stopped" } }, T0);
+    expect(exited.next).toMatchObject({ state: "failed", failReason: "camera_never_live", runner: { state: "exited" } });
+    expect(refunds(exited.effects)).toBe(0);
   });
 });

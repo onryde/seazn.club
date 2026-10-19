@@ -3,9 +3,13 @@
 import { describe, expect, it } from "vitest";
 import {
   PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, POLL_NEAR_SECONDS,
-  POLL_STARTING_SECONDS, RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES,
+  POLL_STARTING_SECONDS, RECONNECT_QUIET_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
 } from "../../config";
-import { type CountdownRead, composedCameraGone, composedCameraLost, livePhoneLost, lostCountdown, phoneSilentFor, warmingPhoneLost } from "../phone-lost";
+import { PROGRAMME_PHASES } from "@/lib/relay-phase";
+import {
+  type CountdownRead, cameraEvidenceMatters, composedCameraGone, composedCameraLost, composedCameraWatched, composedNeverLive, livePhoneLost, lostCountdown,
+  phoneSilentFor, programmePhaseRowMatters, warmingPhoneLost,
+} from "../phone-lost";
 import { OPEN_SESSION_MAX_POLL_SECONDS, pollSecondsFor } from "../poll-seconds";
 import { ACTIVE_STATES, TERMINAL_STATES } from "../session";
 
@@ -433,5 +437,234 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
         expect(c).toEqual({ kind: "warming", reason: "phone_lost", elapsedMs: QUIET_MS, remainingMs: Math.max(10, POLL_STARTING_SECONDS + PHONE_SILENT_SLACK_SECONDS) * S - QUIET_MS });
       });
     });
+  });
+});
+
+// R2008 (owner ruling 2026-10-19, "apply rec"): a COMPOSED session that went live (the first `playing` beat — the credit) and
+// whose camera NEVER appeared ends after PHONE_LOST_LIVE_MINUTES counted from when it went live, and the credit is returned.
+// "Never appeared" is the compositor's own log: every phase it ever reported is `waiting`, from a log that began when the
+// session did. No phone clause, no read — there was never a camera to lose.
+describe("composedNeverLive / lostCountdown (composed) — R2008: the never-live end and the composed countdown", () => {
+  const FIRST_LOG_SLACK_MS = STALE_HEARTBEAT_SECONDS_COMPOSED * S;
+  const never = { state: "live" as const, startedAt: ago(LOST_MS), liveOnceAt: null, waitedOnly: true, logBeganAt: ago(LOST_MS) };
+
+  it("exactly PHONE_LOST_LIVE_MINUTES after going live → ends; 1 ms short → does not (the boundary on both sides)", () => {
+    expect(composedNeverLive(never, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(true);
+    expect(composedNeverLive({ ...never, startedAt: ago(LOST_MS - 1) }, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
+    expect(composedNeverLive({ ...never, startedAt: ago(LOST_MS * 5), logBeganAt: ago(LOST_MS * 5) }, NOW, PHONE_LOST_LIVE_MINUTES), "long after").toBe(true);
+  });
+
+  it("a `live` programme phase at ANY point means the camera appeared, so the rule never fires — a `live` at minute 10 (and one at minute 1) leaves it off at minute 15 and at hour 5", () => {
+    for (const liveAtMin of [0, 1, 10, 14]) {
+      for (const ageMin of [PHONE_LOST_LIVE_MINUTES, PHONE_LOST_LIVE_MINUTES * 20]) {
+        const i = { ...never, startedAt: ago(ageMin * MIN), liveOnceAt: ago((ageMin - liveAtMin) * MIN) };
+        expect(composedNeverLive(i, NOW, PHONE_LOST_LIVE_MINUTES), `live at minute ${liveAtMin}, now minute ${ageMin}`).toBe(false);
+      }
+    }
+  });
+
+  it("each condition ALONE keeps it off (a guard nothing kills is not tested): only waiting ever reported, a log that began with the session, a start instant, the live state", () => {
+    expect(composedNeverLive({ ...never, waitedOnly: false }, NOW, PHONE_LOST_LIVE_MINUTES), "other phases in the log (reconnecting/null mean it was live, or the log is not the whole story)").toBe(false);
+    expect(composedNeverLive({ ...never, logBeganAt: null }, NOW, PHONE_LOST_LIVE_MINUTES), "no phase ever reported: an older compositor says nothing, so nothing is judged").toBe(false);
+    expect(composedNeverLive({ ...never, startedAt: null }, NOW, PHONE_LOST_LIVE_MINUTES), "never went live").toBe(false);
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES].filter((x) => x !== "live")) {
+      expect(composedNeverLive({ ...never, state }, NOW, PHONE_LOST_LIVE_MINUTES), state).toBe(false);
+    }
+  });
+
+  it("the log must cover the session from going live: first phase at the start, or within one composed stale-beat window after it → judged; later → not (a session already running when the log began)", () => {
+    const at = (offsetMs: number) => ({ ...never, logBeganAt: new Date(never.startedAt.getTime() + offsetMs) });
+    expect(composedNeverLive(at(-S), NOW, PHONE_LOST_LIVE_MINUTES), "a beat BEFORE live (warming)").toBe(true);
+    expect(composedNeverLive(at(FIRST_LOG_SLACK_MS), NOW, PHONE_LOST_LIVE_MINUTES), "at the slack").toBe(true);
+    expect(composedNeverLive(at(FIRST_LOG_SLACK_MS + 1), NOW, PHONE_LOST_LIVE_MINUTES), "1 ms past it").toBe(false);
+    expect(composedNeverLive(at(LOST_MS - S), NOW, PHONE_LOST_LIVE_MINUTES), "log began just before now").toBe(false);
+  });
+
+  it("lostMinutes is the parameter: at 1 minute a 1-minute-old never-live session ends", () => {
+    const i = { ...never, startedAt: ago(MIN), logBeganAt: ago(MIN) };
+    expect(composedNeverLive(i, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
+    expect(composedNeverLive(i, NOW, 1)).toBe(true);
+  });
+
+  describe("the countdown (W24): shown IFF the end will fire at the deadline it names — both rules, both sides", () => {
+    const cfg = { lostMinutes: PHONE_LOST_LIVE_MINUTES, warmingMinutes: WARMING_TIMEOUT_MINUTES, quietSeconds: RECONNECT_QUIET_SECONDS, silentFloorSeconds: FLOOR };
+    const BEATING = { hasCurrentPairing: true, lastBeatAt: ago(S), answeredPollSeconds: POLL_STARTING_SECONDS, heardGoLive: true };
+    const DOWN: CountdownRead = { fresh: "disconnected", served: "disconnected", failed: false };
+    const camera = (over: Partial<{ startedAt: Date | null; liveOnceAt: Date | null; reconnectingSince: Date | null; waitedOnly: boolean; logBeganAt: Date | null }>) =>
+      ({ startedAt: ago(LOST_MS), liveOnceAt: null, reconnectingSince: null, waitedOnly: true, logBeganAt: ago(LOST_MS), ...over });
+    const composed = (cam: ReturnType<typeof camera>, over: object = {}) => ({
+      state: "live" as const, firstIngestAt: null, warmingAt: ago(LOST_MS * 3), phoneBeatAt: ago(LOST_MS), read: DOWN, lastConnectedSampleAt: null,
+      phone: BEATING, camera: cam, ...over,
+    });
+
+    it("never-live: nothing before the quiet hold; from it, `camera_never_live` counting from the start, remaining to PHONE_LOST_LIVE_MINUTES — and the end FIRES at exactly that deadline", () => {
+      let shown = 0, silent = 0;
+      for (const ageMs of [0, S, QUIET_MS - S]) {
+        expect(lostCountdown(composed(camera({ startedAt: ago(ageMs), logBeganAt: ago(ageMs) })), NOW, cfg), `${ageMs} ms in`).toBeNull();
+        silent++;
+      }
+      for (const ageMs of [QUIET_MS, 5 * MIN, LOST_MS - S, LOST_MS, LOST_MS + 2 * MIN]) {
+        const cam = camera({ startedAt: ago(ageMs), logBeganAt: ago(ageMs) });
+        const c = lostCountdown(composed(cam), NOW, cfg);
+        expect(c, `${ageMs} ms in`).toEqual({ kind: "live", reason: "camera_never_live", elapsedMs: ageMs, remainingMs: Math.max(0, LOST_MS - ageMs) });
+        // THE IFF, the shown side: at the deadline it names, the end fires; one ms before it, it does not.
+        const deadline = new Date(NOW.getTime() + c!.remainingMs);
+        expect(composedNeverLive({ state: "live", ...cam }, deadline, PHONE_LOST_LIVE_MINUTES), `fires at the deadline, ${ageMs} ms in`).toBe(true);
+        if (c!.remainingMs > 0) expect(composedNeverLive({ state: "live", ...cam }, new Date(deadline.getTime() - 1), PHONE_LOST_LIVE_MINUTES), "not a ms earlier").toBe(false);
+        shown++;
+      }
+      expect({ shown, silent }).toEqual({ shown: 5, silent: 3 });
+    });
+
+    it("never-live, THE IFF's other side: every condition that stops the end stops the countdown — a `live` at minute 10, other phases in the log, a late-starting log, no phase ever, not live, no start", () => {
+      const old = { startedAt: ago(LOST_MS), logBeganAt: ago(LOST_MS) };
+      const off: [string, Partial<ReturnType<typeof camera>>, Partial<{ state: string }>][] = [
+        ["a live phase at minute 10", { ...old, liveOnceAt: ago(LOST_MS - 10 * MIN) }, {}],
+        ["other phases in the log", { ...old, waitedOnly: false }, {}],
+        ["a log that began late", { ...old, logBeganAt: ago(MIN) }, {}],
+        ["no phase ever reported", { ...old, logBeganAt: null }, {}],
+        ["no start instant", { ...old, startedAt: null }, {}],
+        ["not live (warming)", old, { state: "warming" }],
+        ["not live (ending)", old, { state: "ending" }],
+      ];
+      for (const [why, over, extra] of off) {
+        expect(lostCountdown(composed(camera(over), extra), NOW, cfg), why).toBeNull();
+      }
+      expect(off).toHaveLength(7);
+      // The pair: the same session with none of them is counting.
+      expect(lostCountdown(composed(camera(old)), NOW, cfg)?.reason).toBe("camera_never_live");
+    });
+
+    it("camera gone (W19's composed analogue): needs a FRESH `disconnected` — `connected`, `unknown`, a carried word and a failed read each show nothing, as W19's does", () => {
+      const cam = camera({ liveOnceAt: ago(LOST_MS * 3), reconnectingSince: ago(5 * MIN), waitedOnly: false, logBeganAt: ago(LOST_MS * 3) });
+      const i = (read: CountdownRead) => composed(cam, { read, phoneBeatAt: ago(5 * MIN) });
+      expect(lostCountdown(i(DOWN), NOW, cfg)).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: 5 * MIN, remainingMs: LOST_MS - 5 * MIN });
+      let silent = 0;
+      for (const read of [
+        { fresh: "connected", served: "connected", failed: false }, { fresh: "unknown", served: "unknown", failed: false },
+        { fresh: undefined, served: "disconnected", failed: false }, { fresh: undefined, served: null, failed: true },
+      ] as CountdownRead[]) {
+        expect(lostCountdown(i(read), NOW, cfg), JSON.stringify(read)).toBeNull();
+        silent++;
+      }
+      expect(silent).toBe(4);
+    });
+
+    it("camera gone: counts down from the SHORTER of the phone's silence and the reconnecting run (W19 needs both), after the quiet hold, and the end FIRES at the deadline it names", () => {
+      const cases: [string, number, number, number | null][] = [
+        // [label, beat age, run age, expected elapsed (null = nothing shown)]
+        ["inside the quiet hold on the run", 20 * MIN, QUIET_MS - S, null],
+        ["inside the quiet hold on the beat (the phone still beats)", QUIET_MS - S, 20 * MIN, null],
+        ["at the quiet hold on both", QUIET_MS, QUIET_MS, QUIET_MS],
+        ["beat 12 min, run 9 min -> the shorter, 9", 12 * MIN, 9 * MIN, 9 * MIN],
+        ["beat 9 min, run 12 min -> the shorter, 9 (the other order)", 9 * MIN, 12 * MIN, 9 * MIN],
+        ["both past the limit", LOST_MS + MIN, LOST_MS + 2 * MIN, LOST_MS + MIN],
+      ];
+      for (const [label, beatAgeMs, runAgeMs, expectedElapsed] of cases) {
+        const cam = camera({ liveOnceAt: ago(LOST_MS * 4), reconnectingSince: ago(runAgeMs), waitedOnly: false, logBeganAt: ago(LOST_MS * 4) });
+        const c = lostCountdown(composed(cam, { phoneBeatAt: ago(beatAgeMs) }), NOW, cfg);
+        if (expectedElapsed === null) { expect(c, label).toBeNull(); continue; }
+        expect(c, label).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: expectedElapsed, remainingMs: Math.max(0, LOST_MS - expectedElapsed) });
+        const deadline = new Date(NOW.getTime() + c!.remainingMs);
+        const facts = { state: "live" as const, phoneBeatAt: ago(beatAgeMs), liveOnceAt: cam.liveOnceAt, reconnectingSince: ago(runAgeMs) };
+        expect(composedCameraGone(facts, deadline, PHONE_LOST_LIVE_MINUTES), `${label}: the end fires at the deadline`).toBe(true);
+        if (c!.remainingMs > 0) expect(composedCameraGone(facts, new Date(deadline.getTime() - 1), PHONE_LOST_LIVE_MINUTES), `${label}: not a ms earlier`).toBe(false);
+      }
+    });
+
+    it("camera gone, the other side: not reconnecting, never live (the never-live rule owns it), or not live → nothing; and the two rules never both show", () => {
+      const reconnecting = camera({ liveOnceAt: ago(LOST_MS * 4), reconnectingSince: ago(5 * MIN), waitedOnly: false, logBeganAt: ago(LOST_MS * 4) });
+      expect(lostCountdown(composed({ ...reconnecting, reconnectingSince: null }, { phoneBeatAt: ago(5 * MIN) }), NOW, cfg), "the phase is not reconnecting").toBeNull();
+      expect(lostCountdown(composed(reconnecting, { phoneBeatAt: ago(5 * MIN), state: "ending" }), NOW, cfg), "not live").toBeNull();
+      const both = lostCountdown(composed(reconnecting, { phoneBeatAt: ago(5 * MIN) }), NOW, cfg);
+      expect(both?.reason, "a session that WAS live is judged by the camera-gone rule, never never-live").toBe("phone_lost");
+    });
+
+    it("a passthrough session (no camera facts) is untouched: its live countdown is W19's, the composed branch never runs", () => {
+      const passthrough = { state: "live" as const, firstIngestAt: ago(LOST_MS * 2), warmingAt: ago(LOST_MS * 3), phoneBeatAt: ago(2 * MIN), read: DOWN, lastConnectedSampleAt: ago(10 * MIN), phone: BEATING };
+      expect(lostCountdown(passthrough, NOW, cfg)).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: 2 * MIN, remainingMs: LOST_MS - 2 * MIN });
+      expect(lostCountdown({ ...passthrough, camera: null }, NOW, cfg)?.reason).toBe("phone_lost");
+    });
+  });
+});
+
+// R2008 review minors: which rows the beat route writes, and when the camera evidence is read at all.
+describe("cameraEvidenceMatters / programmePhaseRowMatters / composedCameraWatched — R2008", () => {
+  it("the evidence is read only for a LIVE session whose stored phase is `waiting` or `reconnecting` — every state x every phase the compositor declares (and none), counted both ways", () => {
+    const phases = [...PROGRAMME_PHASES, null];
+    let yes = 0, no = 0;
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES]) {
+      for (const storedPhase of phases) {
+        const want = state === "live" && (storedPhase === "waiting" || storedPhase === "reconnecting");
+        expect(cameraEvidenceMatters({ state, storedPhase }), `${state} x ${storedPhase}`).toBe(want);
+        if (want) yes++; else no++;
+      }
+    }
+    expect(yes, "anti-vacuity: exactly the two phases that open a rule, on the live state").toBe(2);
+    expect(no).toBe((ACTIVE_STATES.length + TERMINAL_STATES.length) * phases.length - 2);
+    expect(cameraEvidenceMatters({ state: "live", storedPhase: "an unheard-of phase" }), "a phase this build does not know decides nothing").toBe(false);
+  });
+
+  it("a phase row is written for a CHANGE that matters and for nothing else — a new attempt's first beat; a run's end; never a blip back to the phase the log holds, a `frozen` out of `live`, or a second 'no phase'", () => {
+    const att = 2;
+    const last = (to: string | null, attempt: number | null = att) => ({ to, attempt });
+    const table: [string, string | null, ReturnType<typeof last> | null, boolean][] = [
+      // [why, the beat's phase, the last row logged, written?]
+      ["nothing logged, a phase arrives", "waiting", null, true],
+      ["nothing logged, no phase either (a compositor that reports none)", null, null, false],
+      ["live -> reconnecting", "reconnecting", last("live"), true],
+      ["reconnecting -> live", "live", last("reconnecting"), true],
+      ["waiting -> live", "live", last("waiting"), true],
+      ["live -> live again after a frozen blip (the log still says live)", "live", last("live"), false],
+      ["live -> frozen: a blip, not an outage", "frozen", last("live"), false],
+      ["reconnecting -> frozen: a break in a run is a row", "frozen", last("reconnecting"), true],
+      ["waiting -> frozen: a break in a run is a row", "frozen", last("waiting"), true],
+      ["live -> final", "final", last("live"), true],
+      ["live -> no phase: a compositor that stopped reporting ends any run", null, last("live"), true],
+      ["reconnecting -> no phase", null, last("reconnecting"), true],
+      ["no phase -> no phase", null, last(null), false],
+      ["a NEW attempt's first beat on the phase the old one ended on: its own row", "reconnecting", last("reconnecting", att - 1), true],
+      ["a new attempt's first beat, after a `live` of the old one: its own row", "live", last("live", att - 1), true],
+      ["a new attempt, no phase, after a phase: a row (the old attempt's phase is not this one's)", null, last("reconnecting", att - 1), true],
+      ["a new attempt, no phase, after no phase: nothing", null, last(null, att - 1), false],
+      ["a row with no attempt (never written by the beat route) is another attempt's", "live", last("live", null), true],
+    ];
+    let written = 0;
+    for (const [why, phase, lastRow, want] of table) {
+      expect(programmePhaseRowMatters(phase, lastRow, att), why).toBe(want);
+      if (want) written++;
+    }
+    expect(table.length, "anti-vacuity: the table was walked").toBe(18);
+    expect(written, "…and it writes some and skips some").toBe(13);
+  });
+
+  it("composedCameraWatched: the tick reads the camera's input from the quiet hold on the SHORTER of the phone's silence and the outage — the clocks the countdown arms on — and from no other evidence", () => {
+    const base = { state: "live" as const, phoneBeatAt: ago(MIN), liveOnceAt: ago(LOST_MS * 2), reconnectingSince: ago(QUIET_MS) };
+    expect(composedCameraWatched(base, NOW, RECONNECT_QUIET_SECONDS), "both clocks at the quiet hold").toBe(true);
+    expect(composedCameraWatched({ ...base, reconnectingSince: ago(QUIET_MS - 1) }, NOW, RECONNECT_QUIET_SECONDS), "the outage 1 ms short").toBe(false);
+    expect(composedCameraWatched({ ...base, phoneBeatAt: ago(QUIET_MS - 1) }, NOW, RECONNECT_QUIET_SECONDS), "the phone beat 1 ms ago-short").toBe(false);
+    expect(composedCameraWatched({ ...base, phoneBeatAt: null, liveOnceAt: ago(QUIET_MS) }, NOW, RECONNECT_QUIET_SECONDS), "no beat ever: the first live is the floor").toBe(true);
+    expect(composedCameraWatched({ ...base, liveOnceAt: null }, NOW, RECONNECT_QUIET_SECONDS), "never live: the never-live rule's, which reads nothing").toBe(false);
+    expect(composedCameraWatched({ ...base, reconnectingSince: null }, NOW, RECONNECT_QUIET_SECONDS), "not in an outage").toBe(false);
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES].filter((x) => x !== "live")) expect(composedCameraWatched({ ...base, state }, NOW, RECONNECT_QUIET_SECONDS), state).toBe(false);
+  });
+
+  it("the read is due EXACTLY when the countdown would show on a `disconnected` word (one authority for 'armed'): swept over beat ages x outage ages", () => {
+    const cfg = { lostMinutes: PHONE_LOST_LIVE_MINUTES, warmingMinutes: WARMING_TIMEOUT_MINUTES, quietSeconds: RECONNECT_QUIET_SECONDS, silentFloorSeconds: FLOOR };
+    const ages = [0, S, QUIET_MS - 1, QUIET_MS, QUIET_MS + 1, 5 * MIN, LOST_MS - 1, LOST_MS, LOST_MS + MIN];
+    let due = 0, notDue = 0;
+    for (const beatAge of ages) {
+      for (const runAge of ages) {
+        const camera = { startedAt: ago(LOST_MS * 4), liveOnceAt: ago(LOST_MS * 4), reconnectingSince: ago(runAge), waitedOnly: false, logBeganAt: ago(LOST_MS * 4) };
+        const i = { state: "live" as const, firstIngestAt: null, warmingAt: null, phoneBeatAt: ago(beatAge), read: { fresh: "disconnected" as const, served: "disconnected" as const, failed: false }, lastConnectedSampleAt: null, phone: { hasCurrentPairing: true, lastBeatAt: ago(S), answeredPollSeconds: POLL_STARTING_SECONDS, heardGoLive: true }, camera };
+        const shows = lostCountdown(i, NOW, cfg) !== null;
+        const watched = composedCameraWatched({ state: "live", phoneBeatAt: ago(beatAge), liveOnceAt: camera.liveOnceAt, reconnectingSince: camera.reconnectingSince }, NOW, RECONNECT_QUIET_SECONDS);
+        expect(watched, `beat ${beatAge} ms, outage ${runAge} ms`).toBe(shows);
+        if (watched) due++; else notDue++;
+      }
+    }
+    expect(due + notDue).toBe(ages.length * ages.length);
+    expect(due, "anti-vacuity: some due").toBeGreaterThan(10);
+    expect(notDue, "anti-vacuity: some not").toBeGreaterThan(10);
   });
 });
