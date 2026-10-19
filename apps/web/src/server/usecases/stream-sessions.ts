@@ -48,7 +48,7 @@ import {
   TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
 } from "@/server/relay/secret-columns";
 import { scrubBeatText } from "@/server/relay/sanitise";
-import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
+import { latestLiveRung, recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
@@ -943,7 +943,9 @@ async function createRunner(s: Session, deps: SessionDeps) {
   // outcome UNKNOWN (which ran lost → force_destroy → retry → the same refusal, alarming on every attempt).
   let spec: RunnerSpec;
   try {
-    const jobToken = await mintRelayToken({ sid: s.id, scope: "relay-job", expiresAt: relayTokenExpiry(s) });
+    // #983 review r1: the token names THIS attempt (`att`), so a beat this Machine sends after a retry superseded it is
+    // told from the replacement's. Each create mints its own: the retry's create_machine runs this again with attempt + 1.
+    const jobToken = await mintRelayToken({ sid: s.id, scope: "relay-job", expiresAt: relayTokenExpiry(s), attempt: s.runner.attempt });
     // A2 (lane-b carry 1): the Machine's hard stop is `runnerDeadlineOf` — the session's wall clock PLUS
     // MAX_ANCHOR_DRIFT_SECONDS (whole-branch review I1). `deadlineOf` would let the Machine's own clock, which can run
     // ahead of ours, cut the broadcast before the session's wall-clock expiry ends it cleanly. Witness: "A2: …".
@@ -2303,29 +2305,72 @@ async function beatSecretsOf(sessionId: string, mode: string, token: string): Pr
 }
 
 export async function heartbeat(sessionId: string, token: string, body: RelayHeartbeat, deps: SessionDeps): Promise<{ desiredState: "live" | "ending" }> {
-  await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
-  const before = await readRow(sessionId);
-  if (!before) throw new HttpError(404, "session not found");
-  if (isTerminal(before.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
-  // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
-  // G5 (Task 11 review): `egressBytes` is optional, and an omitted field leaves the stored count alone — only a Machine
-  // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero).
+  const { att } = await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
   // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
   // JWT-shaped, everything from the first `?`), so last_heartbeat and the sample's raw hold the same detail.
-  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, await beatSecretsOf(sessionId, before.mode, token)) };
-  const previousRung = await previousRungOf(before);   // read BEFORE this beat is stored or sampled
-  await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
-              egress_bytes = coalesce(${beat.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;
+  // A PEEK (unlocked, pooled) for the one read that cannot run inside the beat's transaction (lib/db's nesting guard):
+  // the secrets to scrub with (R2004 m1), a pooled read of its own. The peek decides NOTHING else — it can be stale by
+  // the time the lock is granted (#983 r2): the 410, the superseded attempt, the Owed 37 guard and the sizing alarm's
+  // previous rung are all taken on the LOCKED row below.
+  const peek = await readRow(sessionId);
+  if (!peek) throw new HttpError(404, "session not found");
+  if (isTerminal(peek.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
+  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, await beatSecretsOf(sessionId, peek.mode, token)) };
+  // #983 review r1: a beat whose token names an attempt OLDER than the row's (`superseded`) is a replaced Machine's —
+  // received after the retry moved on, where the beat_window_at anchor cannot tell it from the replacement's first beat.
+  // It is a SAMPLE only: no row write, no expiry tick, no callback, no sizing alarm, and the reply is `ending` (drain).
+  // Decided on the locked row below, and again on each callback's own locked row.
+  // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
+  // Owed 37 (compositor PR #27): the compositor sends its FINAL beat on a lane of its own, so a periodic beat it sent
+  // BEFORE the final can be received — and committed — AFTER it. So whether this beat may overwrite the stored one is
+  // decided on the LOCKED row, in the transaction that writes it (an unlocked read let a beat that read the row before
+  // the final committed overwrite the final after it). Once this attempt's stored beat is a final that closed the
+  // attempt (`closesAttempt`), a non-final beat is a SAMPLE only: last_heartbeat keeps the exit's record, heartbeat_at
+  // keeps the stale window running from the final (a late beat would delay `lost`), and the egress count stands. A
+  // final beat still writes (a replayed final is the same fact), and so does a beat of a NEW attempt
+  // (`storedBeatIsThisAttempt`). The row lock is taken alone — never the org lock — like recordEffect's (A7).
+  // G5 (Task 11 review): `egressBytes` is optional, and an omitted field leaves the stored count alone — only a Machine
+  // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero). Within ONE attempt the count never goes
+  // backwards (Owed 37: the GREATEST is kept — a lower count is an overtaken beat); a new attempt's count is its own.
+  const { row: before, superseded, previousRung } = (await sql.begin(async (tx) => {
+    const cur = await lockRow(tx, sessionId);
+    if (!cur) throw new HttpError(404, "session not found");
+    if (isTerminal(cur.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
+    if (supersededAttempt(att, cur.runner_attempts)) return { row: cur, superseded: true, previousRung: null };
+    // Read BEFORE this beat is stored or sampled, on the locked row (#983 r2).
+    const previousRung = await previousRungOf(tx, cur);
+    const thisAttempt = storedBeatIsThisAttempt(cur);
+    if (thisAttempt && closesAttempt(cur.last_heartbeat) && beat.state !== "stopped") {
+      log.info({ sid: sessionId, state: beat.state }, "stream session: a beat received after this attempt's final beat is a sample only — the stored final stands");
+      return { row: cur, superseded: false, previousRung };
+    }
+    const egress = beat.egressBytes ?? null;
+    await tx`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
+               egress_bytes = case when ${thisAttempt}::boolean then greatest(${egress}::bigint, egress_bytes)
+                                   else coalesce(${egress}::bigint, egress_bytes) end
+              where id = ${sessionId}`;
+    return { row: cur, superseded: false, previousRung };
+  })) as { row: Row; superseded: boolean; previousRung: unknown };
   await sampleBeat(sessionId, before.org_id, beat, deps);
+  if (superseded) {
+    log.info({ sid: sessionId, state: beat.state, att, attempt: before.runner_attempts }, "stream session: a beat from a superseded attempt's Machine is a sample only — the current attempt is untouched; the Machine is told to drain");
+    // #983 review r2 (coordinator ruling): the superseded Machine is answered `ending` whatever the session's own
+    // desired state — it is a stray (its force-destroy failed, or has not landed), and a stray told `live` keeps
+    // publishing. `ending` drains it; the final beat it then sends is a superseded beat too, so a sample only.
+    return { desiredState: "ending" };
+  }
   raiseSizingAlarm(before, beat, previousRung);
   let s = (await applyExpiry(sessionId, deps))!;
   // The runner's own callbacks are lifecycle triggers (plan §"Fly machine lifecycle"): playing/stopped, nothing else moves the table from a beat.
   // m1 (lane C final review): each callback is re-decided on the LOCKED row (T5-a) — another writer may have moved the row
   // since `s` was read, and a plain apply the table no longer accepts was InvalidTransition, a 500 on the Machine's beat.
   // callback_playing is refused on a TERMINAL session (it is not a runner cleanup trigger); callback_stopped is one, so a
-  // terminal row still takes it.
+  // terminal row still takes it. #983 r1: neither is fed to a runner of a LATER attempt than the beat's token names — a
+  // retry can land between this beat's write and its callback, and the replacement must not be played (or stopped) by
+  // the Machine it replaced.
   if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing") && body.state === "playing") {
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && !isTerminal(cur.state) && (cur.runner.state === "booting" || cur.runner.state === "playing")
+      && !supersededAttempt(att, cur.runner.attempt)
       ? { type: "runner", trigger: { type: "callback_playing" } } : null), deps)) ?? s;
   }
   // R2003: a COMPOSED stopped beat is routed by its exit reason (stoppedBeatTrigger): `ended` / `deadline` end the
@@ -2341,7 +2386,7 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   const stopped = s.mode === "composed" && body.state === "stopped" ? stoppedBeatTrigger(body.exitReason) : null;
   if (stopped && (s.runner.state === "stopping" || s.runner.state === "playing" || s.runner.state === "booting")) {
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && (cur.runner.state === "stopping" || cur.runner.state === "playing" || cur.runner.state === "booting")
-      && (stopped.type !== "callback_crashed" || !isTerminal(cur.state))
+      && (stopped.type !== "callback_crashed" || !isTerminal(cur.state)) && !supersededAttempt(att, cur.runner.attempt)
       ? { type: "runner", trigger: stopped } : null), deps)) ?? s;
   }
   return { desiredState: s.desiredState };
@@ -2359,24 +2404,49 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
  *  last live beat — kept whole in the beat samples — and the restarted process's first beat on the rung its predecessor
  *  held is no new step. Read only after a final beat, so an ordinary beat costs no query. A read that fails answers
  *  null: an extra alarm is the safe direction for a sizing alarm, a lost one is not. */
-async function previousRungOf(before: Row): Promise<unknown> {
+async function previousRungOf(tx: Tx, before: Row): Promise<unknown> {
   if (before.mode !== "composed") return null;
-  const storedIsThisAttempt = before.beat_window_at == null
-    || (before.heartbeat_at != null && new Date(before.heartbeat_at).getTime() > new Date(before.beat_window_at).getTime());
-  if (!storedIsThisAttempt) return null;
+  if (!storedBeatIsThisAttempt(before)) return null;
   if (before.last_heartbeat?.state !== "stopped") return before.last_heartbeat?.rung ?? null;
+  // #983 r2: read on the beat's own row-lock transaction (the LOCKED row's anchor, no second pooled connection), in a
+  // SAVEPOINT: a read that fails rolls back to it and answers null, and the beat's write still commits — without the
+  // savepoint a failed read would abort the whole transaction and 500 the beat.
   try {
-    const since = before.beat_window_at;
-    const [r] = await sql<{ rung: string | null }[]>`
-      select raw->>'rung' as rung from fixture_stream_samples
-       where session_id = ${before.id} and source = 'heartbeat' and raw->>'state' is distinct from 'stopped'
-         ${since == null ? sql`` : sql`and sampled_at > ${since}`}
-       order by sampled_at desc, id desc limit 1`;
-    return r?.rung ?? null;
+    return await tx.savepoint((sp) => latestLiveRung(sp, before.id, before.beat_window_at));
   } catch (err) {
     log.error({ sid: before.id, err: String(err) }, "stream session: the sizing alarm's previous rung could not be read — the beat may re-alarm");
     return null;
   }
+}
+
+/** #983 review r1: whether a beat's job token names an attempt OLDER than the session's current one (runner_attempts,
+ *  the create calls made) — i.e. it is the beat of a Machine a retry replaced. `att` null is a token minted before the
+ *  claim existed (a session in flight across the deploy): never superseded, so it keeps the behaviour it had. */
+function supersededAttempt(att: number | null, currentAttempt: number): boolean {
+  return att !== null && att < currentAttempt;
+}
+
+/** Whether the row's STORED beat belongs to the current attempt. #980 review M2: a retry boots a new Machine — a new
+ *  process — and restarts the beat window (beat_window_at, I4: "booted a replacement … restarts the window here"), so a
+ *  stored beat from before that anchor is the OLD Machine's. (The stale-beat arm moves the anchor too: after it a stored
+ *  beat reads as another attempt's, so a rung re-alarms and the next beat writes — the direction that never drops a live
+ *  process's beat.) The sizing alarm's dedupe and the beat route's Owed 37 guard read it. It judges the STORED beat,
+ *  which carries no attempt of its own; the INCOMING beat's attempt is its token's `att` (`supersededAttempt`). */
+function storedBeatIsThisAttempt(row: Pick<Row, "beat_window_at" | "heartbeat_at">): boolean {
+  return row.beat_window_at == null
+    || (row.heartbeat_at != null && new Date(row.heartbeat_at).getTime() > new Date(row.beat_window_at).getTime());
+}
+
+/** Owed 37: a stored beat that is a FINAL after which no live process of this attempt is left to beat. Every stopped beat
+ *  but one: a `fatal` final is a crash Fly restarts IN PLACE on the SAME attempt (R2003b, `stoppedBeatTrigger` →
+ *  callback_crashed, runner-fly.ts `on-failure`), and the restarted process's beats are what hold the composed stale
+ *  window off — so they must still write (AGENTS.md class 13). A late beat of the crashed process is indistinguishable
+ *  from them without a seq, and writes too. The rest (R2003): no reason tears the Machine down (its retry is a NEW
+ *  attempt), `ended` / `deadline` / `refused` end the session, `signalled` is exit 0 (Fly never restarts it), and
+ *  `session_gone` is a run whose session is already over. */
+function closesAttempt(stored: Row["last_heartbeat"]): boolean {
+  if (stored?.state !== "stopped") return false;
+  return stoppedBeatTrigger(stored.exitReason as RelayHeartbeat["exitReason"])?.type !== "callback_crashed";
 }
 
 /** The relay sizing alarm (owner ruling 2026-10-18, compositor `docs/_INDEX.md` Owed 20: "no lite mode; if CPU impacts,

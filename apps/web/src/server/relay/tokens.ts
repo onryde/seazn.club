@@ -8,6 +8,7 @@
 //
 // A job token is a Fly Machine's credential for calling back into us; a page
 // token is a viewer's credential for a relay page. Claims are { sid, scope }
+// (a job token also names its runner attempt, `att` — #983 review r1)
 // with `exp` = the session's own deadline + TOKEN_GRACE_MINUTES, and the
 // audience pins a token to this seam, so a token minted for another seam
 // cannot be replayed at the heartbeat route even if two secrets were ever
@@ -36,6 +37,12 @@ export interface RelayClaims {
   sid: string;
   scope: RelayScope;
   exp: number;
+  /** #983 review r1: the runner attempt a JOB token was minted for (its `att` claim — the session's runner_attempts at
+   *  the create), so the beat route can tell a superseded Machine's late beat from the current attempt's. `null` = the
+   *  token carries none: a page token, or a job token minted before the claim existed (a session in flight across the
+   *  deploy), whose caller keeps the behaviour it had before. The compositor treats the token as opaque — relay-job.v1
+   *  pins no claim — so this is not a wire change. */
+  att: number | null;
 }
 
 const AUDIENCE = "seazn-relay";
@@ -57,8 +64,10 @@ const refuse = (): HttpError => new HttpError(401, "relay token is not valid for
 
 const isSid = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 const isScope = (v: unknown): v is RelayScope => v === "relay-job" || v === "relay-page";
+/** An attempt is a create call made — 1 for the first Machine, counted up by each retry (runner_attempts). */
+const isAttempt = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
 
-export async function mintRelayToken(input: { sid: string; scope: RelayScope; expiresAt: Date }): Promise<string> {
+export async function mintRelayToken(input: { sid: string; scope: RelayScope; expiresAt: Date; attempt?: number }): Promise<string> {
   // Lane-A minors, Task 6 review m7: mint asserts its OWN inputs. TypeScript was
   // the only guard, and a Task 10 misuse showed up as jose's wording three frames
   // away — `new Date(NaN)` threw a raw `TypeError: Invalid setExpirationTime
@@ -69,7 +78,11 @@ export async function mintRelayToken(input: { sid: string; scope: RelayScope; ex
   if (!isSid(input?.sid)) throw new Error("mintRelayToken: sid must be a non-empty string");
   if (!isScope(input.scope)) throw new Error(`mintRelayToken: scope must be relay-job or relay-page, got ${JSON.stringify(input.scope)}`);
   if (!(input.expiresAt instanceof Date) || Number.isNaN(input.expiresAt.getTime())) throw new Error("mintRelayToken: expiresAt must be a valid Date");
-  return new SignJWT({ sid: input.sid, scope: input.scope })
+  // #983 r1: only a JOB token names an attempt — a page token is a viewer's, and no attempt is the viewer's.
+  if (input.attempt !== undefined && (input.scope !== "relay-job" || !isAttempt(input.attempt))) {
+    throw new Error(`mintRelayToken: attempt must be a positive integer on a relay-job token, got ${JSON.stringify(input.attempt)} on ${input.scope}`);
+  }
+  return new SignJWT(input.attempt === undefined ? { sid: input.sid, scope: input.scope } : { sid: input.sid, scope: input.scope, att: input.attempt })
     .setProtectedHeader({ alg: ALGORITHM, typ: "JWT" })
     .setIssuedAt()
     .setExpirationTime(Math.floor(input.expiresAt.getTime() / 1000))
@@ -129,7 +142,11 @@ export async function verifyRelayToken(
   // true, {}, []) with a 401 before this line is reached. This guard's own teeth
   // are the ABSENT case, and the "a token minted without exp" test kills that.
   if (typeof payload.exp !== "number") throw refuse();
-  return { sid: expected.sid, scope: expected.scope, exp: payload.exp };
+  // #983 r1: an ABSENT att is the pre-claim token (null, today's behaviour); a PRESENT one that is not an attempt is
+  // an unexpected claim shape — refused like the rest, never read as "no attempt".
+  if (!("att" in payload)) return { sid: expected.sid, scope: expected.scope, exp: payload.exp, att: null };
+  if (!isAttempt(payload.att)) throw refuse();
+  return { sid: expected.sid, scope: expected.scope, exp: payload.exp, att: payload.att };
 }
 
 /** When a token for `session` expires: the session's own hard stop plus the

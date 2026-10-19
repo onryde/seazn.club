@@ -100,7 +100,7 @@ describe("relay tokens", () => {
     });
   });
 
-  it("a minted token carries exactly { aud, exp, iat, scope, sid } under alg HS256 — no secret, no spare claim", async () => {
+  it("a minted token carries exactly { aud, exp, iat, scope, sid } under alg HS256 — no secret, no spare claim (a JOB token minted for an attempt adds `att`: its own describe below)", async () => {
     const t = await mintRelayToken({ sid: SID, scope: "relay-job", expiresAt: future() });
     const payload = decodeJwt(t);
     expect(Object.keys(payload).sort()).toEqual(["aud", "exp", "iat", "scope", "sid"]);
@@ -453,5 +453,49 @@ describe("the module checks its OWN arguments, not just the token's claims", () 
     await expect(mintRelayToken({ sid: "", scope: "relay-job", expiresAt: ok })).rejects.not.toMatchObject({ status: 401 });
     // The positive twin: a well-formed mint still round-trips.
     await expect(mintRelayToken({ sid: "s1", scope: "relay-page", expiresAt: ok })).resolves.toMatch(/^ey/);
+  });
+});
+
+// #983 review r1 (coordinator ruling): a JOB token names the runner attempt it was minted for (`att`, the session's
+// runner_attempts at the create), so the beat route can tell a superseded Machine's late beat from the current
+// attempt's. The compositor treats the token as opaque (relay-job.v1 pins no claim). A token minted without one — every
+// token already in flight when this deploys — verifies to `att: null`, and its caller keeps today's behaviour.
+describe("the job token's attempt claim (att)", () => {
+  it("a job token minted FOR an attempt carries exactly { att, aud, exp, iat, scope, sid } and verifies to that attempt; one minted without carries none and verifies to null", async () => {
+    let checked = 0;
+    for (const attempt of [1, 2, 7]) {
+      const t = await mintRelayToken({ sid: SID, scope: "relay-job", expiresAt: future(), attempt });
+      expect(Object.keys(decodeJwt(t)).sort(), `attempt ${attempt}`).toEqual(["att", "aud", "exp", "iat", "scope", "sid"]);
+      expect(await verifyRelayToken(t, JOB), `attempt ${attempt}`).toMatchObject({ sid: SID, scope: "relay-job", att: attempt });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // The empty case: no attempt given — a page token, and the pre-deploy job token shape.
+    const legacy = await mintRelayToken({ sid: SID, scope: "relay-job", expiresAt: future() });
+    expect(Object.keys(decodeJwt(legacy)).sort()).toEqual(["aud", "exp", "iat", "scope", "sid"]);
+    expect(await verifyRelayToken(legacy, JOB)).toMatchObject({ sid: SID, att: null });
+    expect(await verifyRelayToken(await forge({}), JOB), "a hand-made pre-deploy token").toMatchObject({ sid: SID, att: null });
+  });
+
+  it("a PRESENT att that is not a positive safe integer is refused 401 — deny by default, never read as 'no attempt' — beside its positive twin", async () => {
+    const bad: unknown[] = [0, -1, 1.5, "1", null, true, [1], {}, Number.MAX_SAFE_INTEGER + 1];
+    let checked = 0;
+    for (const att of bad) {
+      const err = await refusalOf(verifyRelayToken(await forge({ claims: { sid: SID, scope: "relay-job", att } }), JOB));
+      expect(err, `att ${JSON.stringify(att)} must be refused`).toMatchObject({ status: 401, code: CODE });
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
+    await expect(verifyRelayToken(await forge({ claims: { sid: SID, scope: "relay-job", att: 3 } }), JOB)).resolves.toMatchObject({ att: 3 });
+  });
+
+  it("mint refuses a bad attempt loudly (a plain Error, never the 401), and an attempt on a PAGE token — a page is not a Machine", async () => {
+    const ok = future();
+    for (const attempt of [0, -1, 1.5, Number.NaN]) {
+      await expect(mintRelayToken({ sid: SID, scope: "relay-job", expiresAt: ok, attempt }), String(attempt)).rejects.toThrow(/attempt/);
+    }
+    await expect(mintRelayToken({ sid: SID, scope: "relay-page", expiresAt: ok, attempt: 1 })).rejects.toThrow(/attempt/);
+    await expect(mintRelayToken({ sid: SID, scope: "relay-job", expiresAt: ok, attempt: 0 })).rejects.not.toMatchObject({ status: 401 });
+    await expect(mintRelayToken({ sid: SID, scope: "relay-job", expiresAt: ok, attempt: 1 })).resolves.toMatch(/^ey/);
   });
 });
