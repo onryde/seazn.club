@@ -5,7 +5,7 @@
 // eligibility + guardian-consent validation, Community fee gate (402).
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
 const stripeMock = vi.hoisted(() => {
@@ -112,6 +112,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { HANDLED_EVENT_TYPES, processStripeEvent } from "../billing-events";
 import { createCompetition } from "../competitions";
+import { resolveClaimToken } from "../person-claims";
 import { createDivision, patchDivision } from "../divisions";
 import {
   ageAt,
@@ -3889,6 +3890,28 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     const pendingClaims = await sql<{ id: string }[]>`
       select id from person_claims where person_id = ${personIdByName.get("Jordan Pending")!}`;
     expect(pendingClaims).toHaveLength(0);
+  });
+
+  it("the registration invite mails the EMAIL secret — the one that signs the player in — never the console one", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
+      { fullName: "Sam Signin", email: "samsignin@test.local", consentStatus: "granted" },
+    ]);
+
+    await inviteUnclaimedMembers(orgId, entrantId);
+
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
+    const [, args] = emailMock.claimInvite.mock.calls[0]!;
+    const mailedToken = /\/claim\/(pc_[A-Za-z0-9_-]+)/.exec((args as { claimUrl: string }).claimUrl)![1]!;
+    const sha256 = (x: string) => createHash("sha256").update(x, "utf8").digest("hex");
+    const [row] = await sql<{ token_hash: string; email_token_hash: string | null }[]>`
+      select token_hash, email_token_hash from person_claims
+      where person_id = ${personIdByName.get("Sam Signin")!}`;
+    // The mailed link IS the email secret (and so is not the console secret that sits in token_hash).
+    expect(row!.email_token_hash).toBe(sha256(mailedToken));
+    expect(row!.token_hash).not.toBe(sha256(mailedToken));
+    expect((await resolveClaimToken(mailedToken)).via).toBe("email");
   });
 
   it("never invites a signed-in (already-linked) player", async () => {

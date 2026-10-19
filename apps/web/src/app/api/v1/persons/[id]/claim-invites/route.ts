@@ -13,21 +13,25 @@ import { baseUrl } from "@/lib/oauth";
 type Ctx = { params: Promise<{ id: string }> };
 
 /** Invite the person to claim their profile (PROMPT-53). Session editors
- *  only (enforced in the usecase); the claim_url embeds the one-time secret.
- *  Email delivery is best-effort — the console shows the copyable link + QR. */
+ *  only (enforced in the usecase); the claim_url embeds the one-time CONSOLE
+ *  secret. The invite EMAIL carries a different secret (`emailSecret`) that
+ *  signs the invitee in with one tap — it goes into the mail and nowhere else:
+ *  never into this response, never into a log. Email delivery is best-effort —
+ *  the console shows the copyable link + QR. */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const { email } = await parseBody(req, CreateClaimInvite);
     const auth = await requireResourceAuth(req, "person", id, "write");
-    const { secret, person_name, org_name, ...claim } = await createClaimInvite(auth, id, email);
+    const { secret, emailSecret, person_name, org_name, ...claim } = await createClaimInvite(auth, id, email);
     const claim_url = `${baseUrl(req)}${routes.claim(secret)}`;
+    const emailClaimUrl = `${baseUrl(req)}${routes.claim(emailSecret)}`;
     // Email is the primary channel (owner decision 2026-07-13); the console
     // shows the send outcome honestly and keeps the copyable link as fallback.
     const email_sent = await sendClaimInviteEmail(email, {
       orgName: org_name,
       personName: person_name,
-      claimUrl: claim_url,
+      claimUrl: emailClaimUrl,
     });
     return reply(201, { ...claim, claim_url, email_sent });
   });

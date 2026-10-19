@@ -1,5 +1,9 @@
 import "server-only";
-import { sql } from "@/lib/db";
+import type postgres from "postgres";
+import { sql, type Tx } from "@/lib/db";
+
+/** The pooled client, or a transaction the caller already holds. */
+type AnySql = Tx | postgres.Sql;
 
 /** Turn an email into a friendly default display name (the part before @). */
 export function displayNameFromEmail(email: string): string {
@@ -19,13 +23,17 @@ export function displayNameFromEmail(email: string): string {
  * account carries no session and stays unverified until an emailed link (magic
  * link or email invite) is opened, so a create is harmless — this is the shared
  * passwordless sign-up path.
+ *
+ * `db` is the pooled client unless the caller runs this inside its own
+ * transaction (the emailed claim link finds-or-creates the account atomically
+ * with linking the person), in which case a refused attempt leaves no account.
  */
-export async function resolveOrCreateUser(email: string): Promise<string | null> {
-  const existing = await sql<{ id: string }[]>`
+export async function resolveOrCreateUser(email: string, db: AnySql = sql): Promise<string | null> {
+  const existing = await db<{ id: string }[]>`
     select id from users where email = ${email} and deleted_at is null limit 1`;
   if (existing[0]) return existing[0].id;
 
-  const created = await sql<{ id: string }[]>`
+  const created = await db<{ id: string }[]>`
     insert into users (email, display_name, email_verified)
     values (${email}, ${displayNameFromEmail(email)}, false)
     on conflict (email) do nothing
@@ -33,7 +41,7 @@ export async function resolveOrCreateUser(email: string): Promise<string | null>
   if (created[0]) return created[0].id;
 
   // Lost a create race (or the email is held by a soft-deleted row) — re-read.
-  const again = await sql<{ id: string }[]>`
+  const again = await db<{ id: string }[]>`
     select id from users where email = ${email} and deleted_at is null limit 1`;
   return again[0]?.id ?? null;
 }

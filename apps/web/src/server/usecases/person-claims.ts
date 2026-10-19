@@ -5,10 +5,23 @@ import "server-only";
 // resolution runs on the superuser connection because the claimant is not an
 // org member. Claim rows are never deleted — claimed_at/revoked_at/invited_by
 // are the audit trail for claim and staff unlink.
+//
+// TWO secrets per claim (V464, owner-approved 2026-10-19 "split design"):
+//   - the CONSOLE secret (`token_hash`) is shown to the organiser as a copyable
+//     link + QR. Whoever holds it must sign in to claim — the organiser can hand
+//     it to anyone, so it proves nothing about who is holding it.
+//   - the EMAIL secret (`email_token_hash`) goes ONLY into the invite email and
+//     is never returned by any API. Opening it proves control of the invited
+//     inbox — the same basis a magic link relies on — so `claimByEmailLink` can
+//     sign the invitee in and claim in one step.
+// Both live on the SAME row, so revoke / re-invite / unlink / expiry / "already
+// claimed" mean the same for either, and `resolveClaimToken` reports which one
+// opened the claim (`via`).
 import { createHash, randomBytes } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
+import { AuthError, HttpError } from "@/lib/errors";
+import { resolveOrCreateUser } from "@/lib/users";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 export const CLAIM_PREFIX = "pc_";
@@ -30,6 +43,17 @@ export function hashClaimToken(secret: string): string {
 /** Mint a new claim secret. Shown once; only the sha256 is stored. */
 export function mintClaimSecret(): string {
   return CLAIM_PREFIX + randomBytes(32).toString("base64url");
+}
+
+/** The two secrets minted together for one claim. `secret` is the CONSOLE one
+ *  (shown to the organiser); `emailSecret` goes only into the invite email. */
+export interface ClaimSecrets {
+  secret: string;
+  emailSecret: string;
+}
+
+function mintClaimSecrets(): ClaimSecrets {
+  return { secret: mintClaimSecret(), emailSecret: mintClaimSecret() };
 }
 
 export interface ClaimRow {
@@ -83,14 +107,17 @@ async function reviveClaimInvite(
   personId: string,
   email: string,
   invitedBy: string | null,
-  secret: string,
+  secrets: ClaimSecrets,
 ): Promise<ClaimRow | undefined> {
+  // Revoking the OPEN row kills both of its secrets at once — they share the row.
   await db`
     update person_claims set revoked_at = now()
     where person_id = ${personId} and claimed_at is null and revoked_at is null`;
   const [created] = await db<ClaimRow[]>`
-    insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
-    values (${orgId}, ${personId}, ${email}, ${hashClaimToken(secret)},
+    insert into person_claims
+      (org_id, person_id, email, token_hash, email_token_hash, invited_by, expires_at)
+    values (${orgId}, ${personId}, ${email}, ${hashClaimToken(secrets.secret)},
+            ${hashClaimToken(secrets.emailSecret)},
             ${invitedBy}, now() + ${`${CLAIM_DAYS} days`}::interval)
     returning ${db(COLS)}`;
   return created;
@@ -107,15 +134,18 @@ function isPooledSql(db: AnySql): db is postgres.Sql {
 
 /**
  * Invite a person to claim their profile. One open claim per person: minting
- * revokes any prior open invite. Secret returned exactly once.
+ * revokes any prior open invite (both secrets with it). Secrets returned
+ * exactly once: `secret` is the console one (the organiser's copyable link +
+ * QR), `emailSecret` is for the invite email and must NEVER reach the
+ * organiser — every caller destructures it out before building a response.
  */
 export async function createClaimInvite(
   auth: AuthCtx,
   personId: string,
   email: string,
-): Promise<ClaimRow & { secret: string; person_name: string; org_name: string }> {
+): Promise<ClaimRow & ClaimSecrets & { person_name: string; org_name: string }> {
   requireSessionEditor(auth);
-  const secret = mintClaimSecret();
+  const secrets = mintClaimSecrets();
   const row = await withTenant(auth.orgId, async (tx) => {
     const [person] = await tx<{ id: string; full_name: string; user_id: string | null }[]>`
       select id, full_name, user_id from persons
@@ -131,10 +161,10 @@ export async function createClaimInvite(
     // createSystemClaimInvite's own `if (!created) return null` guard below
     // treats as needing a runtime check only because THAT function's
     // contract is "never throws"; this one's is not.
-    const created = (await reviveClaimInvite(tx, auth.orgId, personId, email, auth.userId, secret))!;
+    const created = (await reviveClaimInvite(tx, auth.orgId, personId, email, auth.userId, secrets))!;
     return { ...created, person_name: person.full_name, org_name: org?.name ?? "" };
   });
-  return { ...row, secret };
+  return { ...row, ...secrets };
 }
 
 /**
@@ -162,8 +192,8 @@ export async function createSystemClaimInvite(
   orgId: string,
   personId: string,
   email: string,
-): Promise<{ secret: string; person_name: string; org_name: string } | null> {
-  const secret = mintClaimSecret();
+): Promise<(ClaimSecrets & { person_name: string; org_name: string }) | null> {
+  const secrets = mintClaimSecrets();
   const [person] = await db<{ id: string; full_name: string; user_id: string | null }[]>`
     select id, full_name, user_id from persons
      where id = ${personId} and org_id = ${orgId} and merged_into is null`;
@@ -178,10 +208,13 @@ export async function createSystemClaimInvite(
   // instead passes an already-open `Tx` runs the pair directly on it,
   // already atomic with the rest of that transaction.
   const created = isPooledSql(db)
-    ? await db.begin((tx) => reviveClaimInvite(tx, orgId, personId, email, null, secret))
-    : await reviveClaimInvite(db, orgId, personId, email, null, secret);
+    ? await db.begin((tx) => reviveClaimInvite(tx, orgId, personId, email, null, secrets))
+    : await reviveClaimInvite(db, orgId, personId, email, null, secrets);
   if (!created) return null;
-  return { secret, person_name: person.full_name, org_name: org?.name ?? "" };
+  // No organiser console ever shows this invite, so only `emailSecret` is ever
+  // used (the registration mail); `secret` is minted for the row's NOT NULL
+  // column and never leaves the server.
+  return { ...secrets, person_name: person.full_name, org_name: org?.name ?? "" };
 }
 
 /** Revoke the person's open invite, if any (idempotent). */
@@ -219,12 +252,23 @@ export interface ResolvedClaim {
   is_official: boolean;
 }
 
+/** Which of the claim's two secrets opened it: `email` is the secret that only
+ *  ever went into the invite email, `console` the organiser's copyable link. */
+export type ClaimVia = "email" | "console";
+
+/** A claim resolved from a pc_ token — the claim plus which secret it was. */
+export interface ResolvedTokenClaim extends ResolvedClaim {
+  via: ClaimVia;
+}
+
 type ClaimLookupRow = ResolvedClaim & {
   expires_at: string;
   claimed_at: string | null;
   revoked_at: string | null;
   user_id: string | null;
 };
+
+type TokenLookupRow = ClaimLookupRow & { via_email: boolean };
 
 /** Distinct error codes so a dead-end renders its own copy, whichever way the
  *  claim was looked up: CLAIM_INVALID / CLAIM_REVOKED / CLAIM_EXPIRED /
@@ -251,19 +295,37 @@ function settleClaimRow(claim: ClaimLookupRow | undefined): ResolvedClaim {
   };
 }
 
-/** Resolve a pc_ token for the /claim page. */
-export async function resolveClaimToken(token: string): Promise<ResolvedClaim> {
-  const [claim] = await sql<ClaimLookupRow[]>`
+/** The claim a pc_ token opens — by EITHER secret — with no state check. The
+ *  one lookup behind resolveClaimToken and claimByEmailLink, so the two can
+ *  never disagree about which secret is which. `forUpdate` locks the claim row
+ *  (inside a transaction) so a racing revoke or second tap queues behind it. */
+async function lookupClaimByToken(
+  db: AnySql,
+  token: string,
+  forUpdate = false,
+): Promise<TokenLookupRow | undefined> {
+  const hash = hashClaimToken(token);
+  const [claim] = await db<TokenLookupRow[]>`
     select pc.id, pc.org_id, o.name as org_name, pc.person_id,
            p.full_name as person_name, pc.email,
            exists(select 1 from officials off where off.person_id = pc.person_id)
              as is_official,
-           pc.expires_at, pc.claimed_at, pc.revoked_at, p.user_id
+           pc.expires_at, pc.claimed_at, pc.revoked_at, p.user_id,
+           coalesce(pc.email_token_hash = ${hash}, false) as via_email
     from person_claims pc
     join persons p on p.id = pc.person_id
     join organizations o on o.id = pc.org_id
-    where pc.token_hash = ${hashClaimToken(token)} limit 1`;
-  return settleClaimRow(claim);
+    where pc.token_hash = ${hash} or pc.email_token_hash = ${hash}
+    limit 1
+    ${forUpdate ? db`for update of pc` : db``}`;
+  return claim;
+}
+
+/** Resolve a pc_ token for the /claim page, reporting which secret it was. */
+export async function resolveClaimToken(token: string): Promise<ResolvedTokenClaim> {
+  const claim = await lookupClaimByToken(sql, token);
+  const settled = settleClaimRow(claim);
+  return { ...settled, via: claim!.via_email ? "email" : "console" };
 }
 
 /**
@@ -306,6 +368,48 @@ export function assertClaimEmail(claim: ResolvedClaim, userEmail: string): void 
   }
 }
 
+/** The link itself, inside a transaction the caller owns: the person row's
+ *  null-user_id guard means two racing accepts can't both win; the loser gets
+ *  CLAIM_CLAIMED. Locks `persons` before `person_claims` — the same order
+ *  every writer here takes (unlinkPerson, the signed-in accept), so two of
+ *  them cannot deadlock. */
+async function linkPerson(tx: Tx, claim: ResolvedClaim, userId: string): Promise<void> {
+  const [updated] = await tx<{ id: string }[]>`
+    update persons set user_id = ${userId}
+    where id = ${claim.person_id} and user_id is null
+    returning id`;
+  if (!updated) {
+    throw new HttpError(409, "This profile has already been claimed", "CLAIM_CLAIMED");
+  }
+  await tx`
+    update person_claims set claimed_at = now()
+    where id = ${claim.id} and claimed_at is null`;
+}
+
+/** A thrown link failure, as the caller should see it. #402 —
+ *  persons_org_user_lane_uq, which is scoped to `lane = 'player'`. So the only
+ *  collision reachable here is two PLAYER persons for one human in one org:
+ *  exactly the duplicate #402 exists to eliminate, and exactly what the
+ *  message says. Route it to the merge tool (#404), never a 500.
+ *
+ *  Do NOT widen that index to cover every lane. `inviteOfficial` mints a
+ *  fresh official-lane person per officials row and cannot dedupe (the
+ *  person is unclaimed at invite time), so a human on one org's officials
+ *  roster twice holds two official-lane persons by design — widening it
+ *  makes their second officiating claim fail with this 409 and the wrong
+ *  message. Covered by the second-officiating-claim test in
+ *  __tests__/person-claims.test.ts. */
+function linkFailure(e: unknown): unknown {
+  if (isUniqueViolation(e, "persons_org_user_lane_uq")) {
+    return new HttpError(
+      409,
+      "You already have a player profile in this organisation",
+      "PERSON_ALREADY_LINKED",
+    );
+  }
+  return e;
+}
+
 /**
  * The shared accept core (v11.1 extraction): link the person to the logged-in
  * user. Transactional — the person row's null-user_id guard means two racing
@@ -315,39 +419,9 @@ export function assertClaimEmail(claim: ResolvedClaim, userEmail: string): void 
  */
 export async function acceptResolvedClaim(claim: ResolvedClaim, userId: string): Promise<ResolvedClaim> {
   try {
-    await sql.begin(async (tx) => {
-      const [updated] = await tx<{ id: string }[]>`
-        update persons set user_id = ${userId}
-        where id = ${claim.person_id} and user_id is null
-        returning id`;
-      if (!updated) {
-        throw new HttpError(409, "This profile has already been claimed", "CLAIM_CLAIMED");
-      }
-      await tx`
-        update person_claims set claimed_at = now()
-        where id = ${claim.id} and claimed_at is null`;
-    });
+    await sql.begin((tx) => linkPerson(tx, claim, userId));
   } catch (e) {
-    // #402 — persons_org_user_lane_uq, which is scoped to `lane = 'player'`.
-    // So the only collision reachable here is two PLAYER persons for one human
-    // in one org: exactly the duplicate #402 exists to eliminate, and exactly
-    // what the message says. Route it to the merge tool (#404), never a 500.
-    //
-    // Do NOT widen that index to cover every lane. `inviteOfficial` mints a
-    // fresh official-lane person per officials row and cannot dedupe (the
-    // person is unclaimed at invite time), so a human on one org's officials
-    // roster twice holds two official-lane persons by design — widening it
-    // makes their second officiating claim fail with this 409 and the wrong
-    // message. Covered by the second-officiating-claim test in
-    // __tests__/person-claims.test.ts.
-    if (isUniqueViolation(e, "persons_org_user_lane_uq")) {
-      throw new HttpError(
-        409,
-        "You already have a player profile in this organisation",
-        "PERSON_ALREADY_LINKED",
-      );
-    }
-    throw e;
+    throw linkFailure(e);
   }
   return claim;
 }
@@ -367,7 +441,8 @@ function isUniqueViolation(e: unknown, constraint: string): boolean {
 
 /**
  * Link the person to the logged-in user via the pc_ token (the /claim page).
- * Strict email match, then the shared accept core.
+ * Strict email match, then the shared accept core. Either secret works here:
+ * a signed-in account whose address matches the invite proves itself.
  */
 export async function claimPerson(
   token: string,
@@ -377,6 +452,83 @@ export async function claimPerson(
   const claim = await resolveClaimToken(token);
   assertClaimEmail(claim, userEmail);
   return acceptResolvedClaim(claim, userId);
+}
+
+/**
+ * Sign the invitee in AND claim, from the secret that only ever went into the
+ * invite email. The caller has NO session. Opening the emailed link proves
+ * control of the invited inbox — the same basis a magic link relies on — so
+ * this mirrors `consumeLoginLink` + the magic-link route: find or create the
+ * account for the invited address (`resolveOrCreateUser`), mark the address
+ * verified, and hand back the user id for the caller to mint a session. What
+ * consume does NOT do is mirrored too: an existing account's password_hash and
+ * google_sub are left exactly as they were, whatever its verified state.
+ *
+ * Refuses, as 401 "not authenticated" (what the route always answered to a
+ * sessionless accept), anything that is not the EMAIL secret — the console link
+ * is shown to the organiser and proves nothing about its holder, so it still
+ * has to sign in first. A dead email link answers with its own CLAIM_* code.
+ *
+ * One transaction: re-validates under a row lock (a racing revoke or second tap
+ * queues behind it), finds or creates the account, marks it verified and links
+ * the person. A failure anywhere rolls the whole thing back, so a refused claim
+ * leaves no new account and no half-verified one. Two taps: one wins, the other
+ * is CLAIM_CLAIMED.
+ */
+export async function claimByEmailLink(
+  token: string,
+): Promise<{ userId: string; claim: ResolvedClaim }> {
+  const found = await lookupClaimByToken(sql, token);
+  if (!found || !found.via_email) throw new AuthError("Not authenticated");
+  settleClaimRow(found);
+
+  try {
+    return await sql.begin(async (tx) => {
+      // persons before person_claims — see linkPerson.
+      await tx`select 1 from persons where id = ${found.person_id} for update`;
+      // Under both locks the state may have moved since the first read (a racing
+      // tap claimed it, the organiser revoked it, it just expired). Which secret
+      // this is cannot move — it is a column of the row the token's hash names —
+      // so only the state is settled again. Claim rows are never deleted; a row
+      // that has vanished is CLAIM_INVALID, not an expectation.
+      const claim = settleClaimRow(await lookupClaimByToken(tx, token, true));
+
+      const userId = await accountForInvitedAddress(tx, claim.email);
+      await tx`update users set email_verified = true where id = ${userId}`;
+      await linkPerson(tx, claim, userId);
+      return { userId, claim };
+    });
+  } catch (e) {
+    throw linkFailure(e);
+  }
+}
+
+/** The account that holds the invited address, or a new one. The address on a
+ *  claim is whatever the organiser typed (not normalised), while an account's
+ *  is exactly-cased and unique, so an exact match wins and a case-insensitive
+ *  one is next — a claim for "Sam@x.com" must reach the account "sam@x.com"
+ *  rather than mint a twin the player would never log into. A new account is
+ *  created lower-cased. */
+async function accountForInvitedAddress(tx: Tx, email: string): Promise<string> {
+  const [exact] = await tx<{ id: string }[]>`
+    select id from users where email = ${email} and deleted_at is null limit 1`;
+  if (exact) return exact.id;
+  const [loose] = await tx<{ id: string }[]>`
+    select id from users
+    where lower(email) = lower(${email}) and deleted_at is null
+    order by created_at limit 1`;
+  if (loose) return loose.id;
+  const created = await resolveOrCreateUser(email.toLowerCase(), tx);
+  if (!created) {
+    // The address is held by a soft-deleted account (resolveOrCreateUser re-reads
+    // with deleted_at is null and finds nothing): there is no account to sign in.
+    throw new HttpError(
+      409,
+      "This address can't be signed in right now — contact the organiser or support",
+      "CLAIM_SIGNIN_UNAVAILABLE",
+    );
+  }
+  return created;
 }
 
 /**

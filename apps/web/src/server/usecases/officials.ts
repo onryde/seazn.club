@@ -199,7 +199,15 @@ export async function inviteOfficial(
   auth: AuthCtx,
   officialId: string,
   email: string,
-): Promise<{ official: OfficialRow; claim: ClaimRow; secret: string; person_name: string; org_name: string }> {
+): Promise<{
+  official: OfficialRow;
+  claim: ClaimRow;
+  secret: string;
+  /** The invite EMAIL's secret — for the mail only, never the console response. */
+  emailSecret: string;
+  person_name: string;
+  org_name: string;
+}> {
   const official = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<OfficialRow[]>`
       select ${tx(COLS)} from officials where id = ${officialId}`;
@@ -225,12 +233,12 @@ export async function inviteOfficial(
       where id = ${officialId} returning ${tx(COLS)}`;
     return updated!;
   });
-  const { secret, person_name, org_name, ...claim } = await createClaimInvite(
+  const { secret, emailSecret, person_name, org_name, ...claim } = await createClaimInvite(
     auth,
     official.person_id!,
     email.trim().toLowerCase(),
   );
-  return { official, claim, secret, person_name, org_name };
+  return { official, claim, secret, emailSecret, person_name, org_name };
 }
 
 export async function createOfficial(auth: AuthCtx, input: CreateOfficialInput): Promise<OfficialRow> {
