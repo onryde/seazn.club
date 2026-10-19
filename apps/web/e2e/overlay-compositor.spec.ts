@@ -1142,9 +1142,9 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
 // on THIS leg, because only a deployment that can run the score renders the card at all (mobile.spec.ts runs imageless,
 // so its seven projects never see it). At each width: every control is reachable (a 44 px target below 768 and 36 px
 // from it, hit-tested with elementFromPoint — paint is not a tap), nothing inside the card is clipped (`overflowingIn`'s
-// split: a reachable scrolling box is a feature and must be focusable; any other overhang is a defect), no page scroll;
-// and the sequence the brief names — Camera only and back, a style and 2.5 s that survive a reload, Reset, Go live —
-// with the mode read back through the API.
+// split: a reachable scrolling box is a feature and must be focusable; any other overhang is a defect), no page scroll,
+// and Camera only and back. Then, once at 320, the rest of the sequence the brief names: a style and 2.5 s that survive
+// a reload, Reset, and Go live, with the mode read back through the API.
 // ---------------------------------------------------------------------------------------------------------------------
 const SCORE_CARD_WIDTHS = [320, 360, 375, 390, 430, 768, 834, 1280] as const;
 
@@ -1186,20 +1186,31 @@ async function expectReachable(page: Page, loc: import("@playwright/test").Locat
   expect(r.own, `${width}px ${label}: a tap at its centre lands on it`).toBe(true);
 }
 
-for (const width of SCORE_CARD_WIDTHS) {
-  test(`R2006 Step 3 at ${width}px: the Phone tab's score card is reachable and unclipped; Camera only and back; a style and 2.5 s survive a reload; Reset; Go live streams the score`, async ({ page }) => {
-    test.setTimeout(SEED_MS + POOL_HOLD.holdMs + 90_000);
-    const { rig, path, targetId } = await streamRig(page);
-    await pairPhoneOnFixture(page, path);
+/** Wall clock one width's walk may take: a reload at that width, ~11 hit-tests, three settled scans, two PUTs. */
+const PER_WIDTH_MS = 20_000;
+
+// ONE rig walks every width. Each Go live takes the whole stream-slot pool (`streamRig` → takeWholePool), so eight
+// separately seeded tests serialised on it and pushed e2e-parallel's slowest shard past its 20-minute timeout (run
+// 39305103748). Layout is the only thing that varies by width, so each width reloads the card AT that width (mount
+// matches the viewport) and is walked there; the persistence sequence, which does not vary by width, runs once at 320.
+test(`R2006 Step 3: the Phone tab's score card at ${SCORE_CARD_WIDTHS.join(", ")} px is reachable and unclipped, Camera only and back at each; then at 320 a style and 2.5 s survive a reload, Reset, and Go live streams the score`, async ({ page }) => {
+  test.setTimeout(SEED_MS + POOL_HOLD.holdMs + SCORE_CARD_WIDTHS.length * PER_WIDTH_MS + 90_000);
+  const { rig, path, targetId } = await streamRig(page);
+  await pairPhoneOnFixture(page, path);
+  const card = page.getByTestId("stream-score");
+  const picker = card.getByTestId("stream-template-picker");
+  const options = picker.locator('[role="radio"][data-template]');
+  const checked = picker.locator('[role="radio"][data-template][aria-checked="true"]');
+  const toggle = page.getByTestId("stream-mode-toggle");
+  const goLive = page.getByTestId("stream-go-live");
+  const summary = page.getByTestId("stream-timing").locator("summary");
+  const input = page.getByTestId("stream-timing-input");
+
+  const walked: number[] = [];
+  for (const width of SCORE_CARD_WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await openReady(page, path);
-    const card = page.getByTestId("stream-score");
-    const picker = card.getByTestId("stream-template-picker");
-    const options = picker.locator('[role="radio"][data-template]');
-    const checked = picker.locator('[role="radio"][data-template][aria-checked="true"]');
-    const toggle = page.getByTestId("stream-mode-toggle");
-    const goLive = page.getByTestId("stream-go-live");
-    await expect(card, "the score is the default here").toBeVisible();
+    await expect(card, `${width}px: the score is the default here`).toBeVisible();
     await expect(goLive).toHaveAttribute("data-mode", "composed");
 
     // Reachable and unclipped — the default card, then with Score timing open (its input and Reset are inside).
@@ -1209,11 +1220,7 @@ for (const width of SCORE_CARD_WIDTHS) {
     for (const id of ids) { await expectReachable(page, picker.locator(`[role="radio"][data-template="${id}"]`), `option ${id}`, width); reached++; }
     const scenes = await picker.locator('[data-testid^="stream-scene-"][role="radio"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")!));
     expect(scenes.length, "premise: the scene toggle has segments").toBeGreaterThanOrEqual(2);
-    for (const scene of scenes) {
-      await expectReachable(page, page.getByTestId(scene), scene, width);
-      reached++;
-    }
-    const summary = page.getByTestId("stream-timing").locator("summary");
+    for (const scene of scenes) { await expectReachable(page, page.getByTestId(scene), scene, width); reached++; }
     await expectReachable(page, summary, "the Score timing summary", width);
     await expectReachable(page, goLive, "Go live", width);
     await expectReachable(page, toggle, "Camera only", width);
@@ -1222,16 +1229,14 @@ for (const width of SCORE_CARD_WIDTHS) {
     await expectNoHorizontalScroll(page);
     await summary.click();
     // Scanned straight after the tap, while the chevron is still turning, so the helper's settle wait is exercised on
-    // every run. With the wait removed, one local run went red at 390, 430 and 1280 (CI's own red was 320): whichever
+    // every width. With the wait removed, one local run went red at 390, 430 and 1280 (CI's own red was 320): whichever
     // widths happen to sample mid-turn.
     await expectScoreCardUnclipped(page, `${width}px timing open`);
-    const input = page.getByTestId("stream-timing-input");
     await expectReachable(page, input, "the timing input", width);
     await expectReachable(page, page.getByTestId("stream-timing-reset"), "Reset", width);
     reached += 2;
     await expectNoHorizontalScroll(page);
-    console.log(`${width}px: ${reached} controls reached`);
-    expect(reached, "every option, every scene, the summary, Go live, the link, the input and Reset").toBe(ids.length + scenes.length + 3 + 2);
+    expect(reached, `${width}px: every option, every scene, the summary, Go live, the link, the input and Reset`).toBe(ids.length + scenes.length + 3 + 2);
 
     // Camera only, then the score back — the link is the secondary choice under the one Go live.
     let put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
@@ -1246,50 +1251,57 @@ for (const width of SCORE_CARD_WIDTHS) {
     await toggle.click();
     expect((await put).request().postDataJSON()).toEqual({ streamMode: "composed" });
     await expect(card).toBeVisible();
+    console.log(`${width}px: ${reached + 1} controls reached`);
+    walked.push(width);
+  }
+  expect(walked, "every width was walked").toEqual([...SCORE_CARD_WIDTHS]);
 
-    // A style and 2.5 s, saved, surviving a reload.
-    const before = await checked.getAttribute("data-template");
-    const other = ids.find((id) => id !== before)!;
-    put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
-    await picker.locator(`[role="radio"][data-template="${other}"]`).click();
-    expect((await put).request().postDataJSON()).toEqual({ overlayTemplate: other });
-    if (!(await input.isVisible())) await summary.click();
-    put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
-    await input.fill("2.5");
-    await input.press("Enter");
-    expect((await put).request().postDataJSON()).toEqual({ overlayDelayMs: 2500 });
-    await openReady(page, path);
-    await expect(checked, `${width}px: the style after a reload`).toHaveAttribute("data-template", other);
-    await expect(page.getByTestId("stream-timing-value"), `${width}px: 2.5 s after a reload`).toHaveText(en("stream.timing.value", { seconds: "2.5" }));
-    await expect(page.getByTestId("stream-timing-default")).toHaveCount(0);
+  // The sequence, once, at the narrowest width: a style and 2.5 s, saved, surviving a reload.
+  const width = SCORE_CARD_WIDTHS[0];
+  await page.setViewportSize({ width, height: 900 });
+  await openReady(page, path);
+  const ids = await options.evaluateAll((els) => els.map((el) => el.getAttribute("data-template")!));
+  const before = await checked.getAttribute("data-template");
+  const other = ids.find((id) => id !== before)!;
+  let put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+  await picker.locator(`[role="radio"][data-template="${other}"]`).click();
+  expect((await put).request().postDataJSON()).toEqual({ overlayTemplate: other });
+  if (!(await input.isVisible())) await summary.click();
+  put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+  await input.fill("2.5");
+  await input.press("Enter");
+  expect((await put).request().postDataJSON()).toEqual({ overlayDelayMs: 2500 });
+  await openReady(page, path);
+  await expect(checked, `${width}px: the style after a reload`).toHaveAttribute("data-template", other);
+  await expect(page.getByTestId("stream-timing-value"), `${width}px: 2.5 s after a reload`).toHaveText(en("stream.timing.value", { seconds: "2.5" }));
+  await expect(page.getByTestId("stream-timing-default")).toHaveCount(0);
 
-    // Reset: the server's default again.
-    await summary.click();
-    put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
-    await page.getByTestId("stream-timing-reset").click();
-    expect((await put).request().postDataJSON()).toEqual({ overlayDelayMs: null });
-    await expect(page.getByTestId("stream-timing-default"), "Reset: the default").toBeVisible();
+  // Reset: the server's default again.
+  await summary.click();
+  put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+  await page.getByTestId("stream-timing-reset").click();
+  expect((await put).request().postDataJSON()).toEqual({ overlayDelayMs: null });
+  await expect(page.getByTestId("stream-timing-default"), "Reset: the default").toBeVisible();
 
-    // Go live: the score, read back through the organiser's own API.
-    const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
-    const created = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
-    await goLive.click();
-    expect((await posted).postDataJSON()).toEqual({ mode: "composed", targetId, themeId: other, overlayDelayMs: null });
-    const res = await created;
-    const made = (await res.json()) as { data?: { sessionId?: string } };
-    if (made.data?.sessionId) sessionsThisTest.push({ request: page.request, fixtureId: rig.fixtureId, sid: made.data.sessionId });
-    expect(res.status(), `${width}px Go live: ${JSON.stringify(made)}`).toBeLessThan(300);
-    const current = await apiJson<{ mode: string; overlay: { themeId: string | null; delayMs: number } | null }>(
-      page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`,
-    );
-    expect(current.data?.mode, `${width}px: the API reads the score`).toBe("composed");
-    expect(current.data?.overlay?.themeId).toBe(other);
-    // The settings route answers PUT only, so the stored row is read where the start paths read it.
-    const [stored] = await withDb((sql) => sql<{ stream_mode: string | null; overlay_template: string | null; overlay_delay_ms: number | null }[]>`
-      select stream_mode, overlay_template, overlay_delay_ms from fixture_stream_settings where fixture_id = ${rig.fixtureId}`);
-    expect(stored, `${width}px: the stored preferences`).toEqual({ stream_mode: "composed", overlay_template: other, overlay_delay_ms: null });
-  });
-}
+  // Go live: the score, read back through the organiser's own API.
+  const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
+  const created = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
+  await goLive.click();
+  expect((await posted).postDataJSON()).toEqual({ mode: "composed", targetId, themeId: other, overlayDelayMs: null });
+  const res = await created;
+  const made = (await res.json()) as { data?: { sessionId?: string } };
+  if (made.data?.sessionId) sessionsThisTest.push({ request: page.request, fixtureId: rig.fixtureId, sid: made.data.sessionId });
+  expect(res.status(), `${width}px Go live: ${JSON.stringify(made)}`).toBeLessThan(300);
+  const current = await apiJson<{ mode: string; overlay: { themeId: string | null; delayMs: number } | null }>(
+    page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`,
+  );
+  expect(current.data?.mode, `${width}px: the API reads the score`).toBe("composed");
+  expect(current.data?.overlay?.themeId).toBe(other);
+  // The settings route answers PUT only, so the stored row is read where the start paths read it.
+  const [stored] = await withDb((sql) => sql<{ stream_mode: string | null; overlay_template: string | null; overlay_delay_ms: number | null }[]>`
+    select stream_mode, overlay_template, overlay_delay_ms from fixture_stream_settings where fixture_id = ${rig.fixtureId}`);
+  expect(stored, `${width}px: the stored preferences`).toEqual({ stream_mode: "composed", overlay_template: other, overlay_delay_ms: null });
+});
 
 /** End a session this test started and wait until it is terminal, so the next start on the fixture is not refused. */
 async function endNow(page: Page, fixtureId: string, sid: string): Promise<void> {
