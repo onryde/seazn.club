@@ -7,6 +7,12 @@ import "server-only";
 // Stream offered, including each `router.refresh()` after a scoring `send`. Each dependency is read AT MOST once per
 // call (pinned: stream-panel-context.test.ts "the loader's reads"), and `offered: false` — a spectator, a scorer without
 // `canEdit`, a frozen page — returns before any read.
+//
+// I3 (PR #987 review) added one more dependency, named here so its cost is not discovered (PR #989 review m7): for an
+// entitled org, `overlayPreviewSides` runs the overlay page's own relay loader (`relayOverlayPageFacts`) once PER LISTED
+// FIXTURE — two selects (the fixture with `org_has_feature`, then its sides) plus the public name masking — so the
+// thumbnails preview the aired codes. One fixture per fixture page; it runs in the same `Promise.all` as the other reads,
+// and an unentitled org reads none of it. A mount point that listed many fixtures would pay it per fixture.
 import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
 import { hasFeature } from "@/lib/entitlements";
 import { getDictionary, type Locale } from "@/lib/i18n";
