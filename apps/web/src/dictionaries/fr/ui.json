@@ -6411,5 +6411,5 @@
   "externalPlay.checkinExtend.why.gameStarted": "La partie a commencé",
   "externalPlay.checkinExtend.why.capReached": "Plus de prolongation possible",
   "externalPlay.checkinExtend.helper": "Ajoute {minutes} minutes tant que l'enregistrement est ouvert. Jusqu'à {max} fois par échiquier.",
-  "externalPlay.checkinExtend.why.roundNoneOpen": "L'enregistrement d'aucun échiquier n'est ouvert pour le moment"
+  "externalPlay.checkinExtend.why.roundNoneOpen": "Aucun échiquier ne peut être prolongé pour le moment"
 }

@@ -6411,5 +6411,5 @@
   "externalPlay.checkinExtend.why.gameStarted": "Game started",
   "externalPlay.checkinExtend.why.capReached": "No extensions left",
   "externalPlay.checkinExtend.helper": "Adds {minutes} minutes while check-in is open. Up to {max} times per board.",
-  "externalPlay.checkinExtend.why.roundNoneOpen": "No board's check-in is open right now"
+  "externalPlay.checkinExtend.why.roundNoneOpen": "No board can be extended right now"
 }

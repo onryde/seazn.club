@@ -1497,7 +1497,7 @@ describe("the round bar's reason: one cause says its own words, a mix says the r
     expect(checked, "anti-vacuity: 4 locales x 4 causes x 3 rounds").toBe(48);
   });
 
-  it("a MIX - every pair of the four causes - is 'No board's check-in is open right now', in every locale", () => {
+  it("a MIX - every pair of the four causes - is 'No board can be extended right now', in every locale", () => {
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
       const d = LOCALES[locale] as Record<string, string>;
@@ -1512,7 +1512,12 @@ describe("the round bar's reason: one cause says its own words, a mix says the r
       }
     }
     expect(checked, "anti-vacuity: 4 locales x 12 ordered pairs").toBe(48);
-    expect(EN["externalPlay.checkinExtend.why.roundNoneOpen"]).toBe("No board's check-in is open right now");
+    expect(EN["externalPlay.checkinExtend.why.roundNoneOpen"]).toBe("No board can be extended right now");
+    // True of ALL FIVE causes, so it claims nothing about the check-in's state: a board with no press left (cap_reached) has its
+    // check-in OPEN, and a sentence that said "closed" or "not open" would be false of it, one that said "open" false of the rest.
+    expect(EN["externalPlay.checkinExtend.why.roundNoneOpen"], "no claim about the check-in being open or closed").not.toMatch(/check-in|open|closed/i);
+    // ... and the pair that made the old wording false is among the 12 the loop above walked.
+    expect(CAUSES.includes("cap_reached") && CAUSES.includes("not_open"), "premise: cap_reached beside not_open is a walked pair").toBe(true);
   });
 
   it("a board that would accept a press means the button, never a reason; and while the press is in flight the bar is the button's", () => {

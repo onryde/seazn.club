@@ -463,7 +463,7 @@ request is in flight at a time across the panel and the control.
 
 **The round bar's reason (owner, 2026-10-19).** Where "+5 min to the round" is not offered, the bar does not vanish: it says why. When every
 board that has a reason gives the same one, that board-level sentence (the table above); when they differ, one new sentence true of all of
-them, "No board's check-in is open right now" (`externalPlay.checkinExtend.why.roundNoneOpen`). A board that is over is silent and does not
+them, "No board can be extended right now" (`externalPlay.checkinExtend.why.roundNoneOpen`). A board that is over is silent and does not
 make a mix; a round that lists no boards, or none with a check-in, says nothing, and a round with a button needs no reason. `roundWhy`
 (`lib/checkin-extend.ts`) is the one function that turns each board's refusal at an instant into that sentence, and both screens feed it:
 the arbiter panel the refusal of every board it lists (`liveExtendRefusal` on the ticking clock), the Open round control its two facts - the

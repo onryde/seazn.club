@@ -272,7 +272,7 @@ describe("roundWhy - one cause says its own words; a mix says the round's", () =
     expect(checked, "anti-vacuity: 4 causes x 4 rounds").toBe(16);
   });
 
-  it("TWO causes, every pair of the four, in either order, is the one sentence true of all of them: 'No board's check-in is open right now'", () => {
+  it("TWO causes, every pair of the four, in either order, is the one sentence true of all of them: 'No board can be extended right now'", () => {
     let pairs = 0;
     for (const a of SPOKEN) {
       for (const b of SPOKEN) {

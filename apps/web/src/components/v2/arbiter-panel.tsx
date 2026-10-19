@@ -442,7 +442,7 @@ function RoundExtend({
   const reach = liveExtendableBoards(round.boards, nowMs, round.extendableBoards);
   const offered = reach > 0 || state.busy;
   // Where the button is not offered, the reason stands in its place (owner, 2026-10-19), never a bar that silently vanishes: the one
-  // cause every board gives, or "No board's check-in is open right now" when they differ. Nothing for a round that lists no boards.
+  // cause every board gives, or "No board can be extended right now" when they differ. Nothing for a round that lists no boards.
   const why = offered ? null : roundExtendWhy(round.boards, nowMs);
   if (!offered && lines.length === 0 && why === null) return null;
   return (

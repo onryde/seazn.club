@@ -16,7 +16,7 @@
  *     a 44px target. The answers are ASSERTED: a board press then a round press leaves only the round's answer (and the other way
  *     round), and the time a board's answer names is the time the board's own "Check-in closes" line names.
  *     At the cap the round bar's button goes and a REASON stands where it was (owner, 2026-10-19): here a game on one board and the other
- *     capped is a mix - "No board's check-in is open right now" - on the panel's bar and on the Fixtures tab's control alike.
+ *     capped is a mix - "No board can be extended right now" - on the panel's bar and on the Fixtures tab's control alike.
  *  4. The window's edges, LIVE (owner, 2026-10-19: +5 only inside the check-in window): with no reload and no poll to lean on, the
  *     button arrives AT a board's opening and leaves AT its deadline, with the short reason ("Check-in hasn't opened yet" /
  *     "Check-in has closed") standing in its place.

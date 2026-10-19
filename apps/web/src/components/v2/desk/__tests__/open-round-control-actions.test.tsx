@@ -398,7 +398,7 @@ describe("+5 min to the round - the control's ticking clock", () => {
 });
 
 // Owner copy (2026-10-19): where "+5 min to the round" is not offered the round says why - the one cause every board gives in its own
-// words, "No board's check-in is open right now" for a mix, nothing for a round that lists no boards. The control's two facts: the
+// words, "No board can be extended right now" for a mix, nothing for a round that lists no boards. The control's two facts: the
 // server's tally of the boards no clock can change (`extendRefusals`) and the windows it counts on the ticking clock.
 describe("+5 min to the round - the control's reason where it is not offered", () => {
   const OPENS = Date.parse("2026-10-16T18:14:00.000Z");
@@ -451,7 +451,7 @@ describe("+5 min to the round - the control's reason where it is not offered", (
     expect(rows.length, "anti-vacuity: four causes").toBe(4);
   });
 
-  it("a MIX is 'No board's check-in is open right now': a game on one board and the other not open yet", () => {
+  it("a MIX is 'No board can be extended right now': a game on one board and the other not open yet", () => {
     vi.setSystemTime(OPENS - 1);
     const ui = mount(VIEW({ tally: { game_started: 1 }, windows: [WIN()] }));
     vi.advanceTimersByTime(0);
@@ -495,7 +495,7 @@ describe("+5 min to the round - the control's reason where it is not offered", (
   it("every locale has the round's sentence, and none carries an unfilled slot", () => {
     const sentence = (locale: Record<string, string>) => locale["externalPlay.checkinExtend.why.roundNoneOpen"];
     const dict = (l: string) => JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>;
-    expect(sentence(en)).toBe("No board's check-in is open right now");
+    expect(sentence(en)).toBe("No board can be extended right now");
     let checked = 0;
     for (const l of ["es", "fr", "nl"]) {
       expect(sentence(dict(l)), `${l}: translated`).toBeTruthy();

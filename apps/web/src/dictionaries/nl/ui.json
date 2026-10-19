@@ -6411,5 +6411,5 @@
   "externalPlay.checkinExtend.why.gameStarted": "Partij is begonnen",
   "externalPlay.checkinExtend.why.capReached": "Geen verlengingen meer",
   "externalPlay.checkinExtend.helper": "Voegt {minutes} minuten toe zolang de check-in open is. Maximaal {max} keer per bord.",
-  "externalPlay.checkinExtend.why.roundNoneOpen": "Bij geen enkel bord is de check-in nu open"
+  "externalPlay.checkinExtend.why.roundNoneOpen": "Geen enkel bord kan nu worden verlengd"
 }

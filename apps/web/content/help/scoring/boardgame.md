@@ -34,7 +34,7 @@ On a division that plays its chess online, players check in before each game. If
 - It works **only while check-in is open** — from the moment a board's check-in opens until its deadline. Before it opens, or once it has closed, there is nothing to add to, and the panel says so ("Check-in hasn't opened yet", "Check-in has closed").
 - Each board can be extended **up to three times**. After that the panel says "No extensions left" for that board.
 - The round button **skips** boards whose check-in has not opened yet or has already closed, boards whose game has started, and boards with no extensions left. It also skips any board you are playing on yourself. It tells you how many it extended and why it left the rest.
-- When the round has nothing left to extend, the round button gives way to a short reason. If every board gives the same one it says so ("Check-in has closed", "Game started", and so on); if the boards differ it says "No board's check-in is open right now".
+- When the round has nothing left to extend, the round button gives way to a short reason. If every board gives the same one it says so ("Check-in has closed", "Game started", and so on); if the boards differ it says "No board can be extended right now".
 - Players don't need to do anything: the check-in countdown on their board updates to the new deadline.
 - **Every use is logged.** Each board extended gets a row in the online-chess audit log — the same log that records a video override — with who pressed it, which board and the new deadline.
 
