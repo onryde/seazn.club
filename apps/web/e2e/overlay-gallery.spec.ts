@@ -27,7 +27,9 @@ import { signInStaff } from "./overlay-kit";
 //   4d. side codes          two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every
 //                           template — the bug, the bar's tightest rung, the tiles and the short Result rung — and
 //                           each side ONE code everywhere (the public site's `disambiguatedShorts`, owner 2026-10-19)
-//                           and every four-letter code inside the bug's 96px code column (#987 review M6)
+//                           and the widest four-letter codes the ladder mints (WOME, TOWN; WWWW, MMMM, ÆÆÆÆ, ØØØØ)
+//                           fit the bug's code column, the bar's tightest rung and the tiles, at 1920, 844 and 390
+//                           (#987 confirm pass N2 / M6)
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -222,6 +224,84 @@ const inside = (b: Box, area: Box) =>
 const intersects = (a: Box, b: Box) =>
   a.x + TOL < b.x + b.width && b.x + TOL < a.x + a.width && a.y + TOL < b.y + b.height && b.y + TOL < a.y + a.height;
 const fmt = (b: Box | null) => (b === null ? "none" : `{x:${b.x.toFixed(1)}, y:${b.y.toFixed(1)}, w:${b.width.toFixed(1)}, h:${b.height.toFixed(1)}}`);
+
+/**
+ * Check 4d's fit sweep (#987 confirm pass N2 / M6): name pairs whose codes — resolved by the REAL producer, the public
+ * site's pair rule through the gallery's `?name=` / `?away=` — are the widest four-letter codes on air. The two real
+ * cases are the review's own (fontkit, Barlow Condensed SemiBold 48 px, against the bug's 96 px column): WOME 100.4 and
+ * TOWN 99.1. The other two are the face's widest capitals, four of each (Æ 35.3, W 31.9, Ø 28.7, M 25.8 px a glyph):
+ * a code made of them is the worst any four-letter code can be, so a fit that holds here holds for every code the
+ * ladder can mint in a Latin script. `codes` is the premise (each pair resolves to its widest code), checked off the
+ * page before anything is measured — never the verdict.
+ */
+const WIDE_CODE_PAIRS = [
+  { name: "Manchester United", away: "Manchester United Women", codes: ["UNIT", "WOME"] },
+  { name: "St. Ives", away: "St Ives Town", codes: ["IVES", "TOWN"] },
+  { name: "Wwww Wwww", away: "Wwww Wwww Mmmm", codes: ["WWWW", "MMMM"] },
+  { name: "Ææææ Ææææ", away: "Ææææ Ææææ Øøøø", codes: ["ÆÆÆÆ", "ØØØØ"] },
+] as const;
+const FIT_FRAMES = ["", "844", "390"] as const;
+
+interface CodeFit {
+  where: string;
+  code: string;
+  /** The code's painted width, in canvas px (the preview's scale divided back out). */
+  ink: number;
+  /** The room it has, in canvas px: the bug's column, the bar name box plus its slack, the tile's content box. */
+  room: number;
+  /** Bar only: the name ladder settled on a rung that fits. */
+  settled?: boolean;
+  /** Tiles only: the tile sits inside its card. */
+  inCard?: boolean;
+}
+
+/** Check 4d's in-page read of every code a cell draws — the bug's code column, the bar's tightest rung (the LAST probe
+ *  of each side's name ladder, the code it steps down to), the tiles — against the room each has. Self-contained. */
+function probeCodeFit(canvasW: number) {
+  const out = { bug: [] as CodeFit[], bar: [] as CodeFit[], tiles: [] as CodeFit[] };
+  for (const cell of document.querySelectorAll<HTMLElement>("[data-gallery-cell]")) {
+    const root = cell.querySelector<HTMLElement>('[data-testid="ovl-root"]');
+    if (!root) continue;
+    const where = cell.dataset.galleryCell ?? "?";
+    const scale = root.getBoundingClientRect().width / canvasW;
+    const inkOf = (el: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return range.getBoundingClientRect().width / scale;
+    };
+    const text = (el: Element) => (el.textContent ?? "").trim();
+    for (const el of root.querySelectorAll<HTMLElement>(".ovl-bug-code")) {
+      if (text(el) === "") continue;
+      out.bug.push({ where, code: text(el), ink: inkOf(el), room: el.getBoundingClientRect().width / scale });
+    }
+    for (const box of root.querySelectorAll<HTMLElement>(".ovl-team-name")) {
+      const probes = box.querySelectorAll<HTMLElement>(".ovl-team-name-probe");
+      const last = probes[probes.length - 1];
+      if (!last) continue;
+      // `availableNameWidth`'s room, in canvas px: the box plus the slack before the next in-flow sibling.
+      const rect = box.getBoundingClientRect();
+      let room = rect.width / scale;
+      const next = box.nextElementSibling;
+      if (next instanceof HTMLElement && getComputedStyle(next).position !== "absolute") {
+        const gap = parseFloat(getComputedStyle(box.parentElement!).columnGap) || 0;
+        room += Math.max(0, (next.getBoundingClientRect().left - rect.right) / scale - gap);
+      }
+      out.bar.push({ where, code: text(last), ink: last.getBoundingClientRect().width / scale, room, settled: box.dataset.ladderSettled === "true" });
+    }
+    for (const el of root.querySelectorAll<HTMLElement>(".ovl-slate-tile-code")) {
+      const tile = el.closest<HTMLElement>(".ovl-slate-tile");
+      if (!tile || text(el) === "") continue;
+      const cs = getComputedStyle(tile);
+      const room = tile.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+      const card = tile.closest<HTMLElement>('[data-testid="ovl-slate-card"]');
+      const t = tile.getBoundingClientRect();
+      const c = card?.getBoundingClientRect();
+      const inCard = c === undefined || (t.left >= c.left - 1 && t.right <= c.right + 1);
+      out.tiles.push({ where, code: text(el), ink: inkOf(el), room, inCard });
+    }
+  }
+  return out;
+}
 
 /** 400 characters with no digit, so check 8's "an ellipsised box holds a numeral" half never reads the name itself. */
 const HOSTILE_NAME = "Wolfeschlegelsteinhausenbergerdorff ".repeat(12).slice(0, 400);
@@ -623,10 +703,12 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect(total.forced, "the forced sentence reached every card that names a winner").toBe(total.winnerBearing);
     for (const r of ["full", "short", "compact"]) expect(total.rungs[r] ?? 0, `anti-vacuity: rung ${r} reached`).toBeGreaterThan(0);
 
-    // The last rung: a long explicit short name (`?code=`, the model's own `short`) runs even the compact short sentence
-    // past one line — the highlights give way, and the card still hides nothing.
-    const reach = await sweep("fr", "fixture.decidedBy.settled.organiser", JSON.parse(readFileSync(`${dictRoot}fr/ui.json`, "utf8"))["fixture.decidedBy.settled.organiser"], { code: "HARUTO-KENJI-FC" });
-    console.log(`[4c] last rung (fr, organiser, a 15-character code): cards ${reach.cells}, rungs ${JSON.stringify(reach.rungs)}, hidden ${reach.hidden.length}`);
+    // The last rung: the widest code the badge bound allows (`?code=`, the model's own `short` — cut to BADGE_MAX_CHARS,
+    // four, since #987's confirm pass, so a longer one would air as its first four) runs even the compact short sentence
+    // past one line in the narrowest card — the highlights give way, and the card still hides nothing. ÆÆÆÆ is the
+    // face's widest four capitals (check 4d's `WIDE_CODE_PAIRS`).
+    const reach = await sweep("fr", "fixture.decidedBy.settled.organiser", JSON.parse(readFileSync(`${dictRoot}fr/ui.json`, "utf8"))["fixture.decidedBy.settled.organiser"], { code: "ÆÆÆÆ" });
+    console.log(`[4c] last rung (fr, organiser, the widest four-character code): cards ${reach.cells}, rungs ${JSON.stringify(reach.rungs)}, hidden ${reach.hidden.length}`);
     expect(reach.rungs.yield ?? 0, "anti-vacuity: the last rung reached").toBeGreaterThan(0);
     expect(reach.hidden.slice(0, 25)).toEqual([]);
   });
@@ -637,11 +719,11 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // Every cell of every template, read off the RENDERED page: the two sides' codes differ wherever both are drawn, each
   // side has ONE code across every template, and every short Result rung names the credited side (the cell's own
   // `data-result-winner`, read off the snapshot) by that side's code.
-  test("check 4d: two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every template — bug, bar, tiles, short Result rung — and a four-letter code fits the bug's column", async ({
+  test("check 4d: two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every template — bug, bar, tiles, short Result rung — and the widest four-letter codes fit the bug, the bar and the tiles at 1920, 844 and 390", async ({
     page,
     baseURL,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(900_000);
     await signInStaff(page);
     const NAMES = ["Harlow", "Harrow"] as const;
     expect(NAMES[0].slice(0, 3), "premise: three letters per name collide").toBe(NAMES[1].slice(0, 3));
@@ -669,7 +751,6 @@ test.describe("the staff overlay gallery (R2007)", () => {
           winnerBearing: 0,
           shortRungs: 0,
           wrongShort: [] as string[],
-          bugFit: { checked: 0, fourChar: 0, misfit: [] as string[] },
         };
         for (const cell of document.querySelectorAll<HTMLElement>("[data-gallery-cell]")) {
           const where = cell.dataset.galleryCell ?? "?";
@@ -687,19 +768,6 @@ test.describe("the staff overlay gallery (R2007)", () => {
           // The bug's code column — both rows, where both are drawn (cricket's bug carries one hero row).
           const bug = [...cell.querySelectorAll(".ovl-bug-code")].map(text);
           if (bug.length === 2) pair("bug", bug[0]!, bug[1]!);
-          // #987 review M6 — a four-letter code in the bug's fixed code column (`.ovl-bug-code`, 96px, no clip): the
-          // text's own box must sit inside the column, or it paints into the gap before the cells.
-          for (const el of cell.querySelectorAll<HTMLElement>(".ovl-bug-code")) {
-            const code = text(el);
-            if (code === "") continue;
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            const ink = range.getBoundingClientRect().width;
-            const column = el.getBoundingClientRect().width;
-            out.bugFit.checked++;
-            if ([...code].length === 4) out.bugFit.fourChar++;
-            if (ink > column + 0.5) out.bugFit.misfit.push(`${where}: "${code}" ${ink.toFixed(1)}px in a ${column.toFixed(1)}px column`);
-          }
           // The bar's tightest rung — the LAST probe of each side's name ladder, the code it steps down to.
           const rungOf = (side: string) => {
             const probes = [...cell.querySelectorAll(`[data-testid="${side}"] .ovl-team-name-probe`)];
@@ -729,7 +797,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
     );
     const unique = (xs: string[]) => [...new Set(xs)];
     console.log(
-      `[4d] cells ${read.cells}, pairs ${JSON.stringify(read.pairs)}, per template ${JSON.stringify(read.perTemplate)}, codes ${JSON.stringify(read.codes.map(unique))}, short Result rungs ${read.shortRungs}/${read.winnerBearing}, bug codes measured ${read.bugFit.checked} (four letters: ${read.bugFit.fourChar}), overflowing the column ${read.bugFit.misfit.length}`,
+      `[4d] cells ${read.cells}, pairs ${JSON.stringify(read.pairs)}, per template ${JSON.stringify(read.perTemplate)}, codes ${JSON.stringify(read.codes.map(unique))}, short Result rungs ${read.shortRungs}/${read.winnerBearing}`,
     );
     // Anti-vacuity: every template the registry ships drew codes to compare, and every surface was read.
     const templates = Object.keys(read.perTemplate);
@@ -745,10 +813,41 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect(read.winnerBearing, "anti-vacuity: Result cards whose outcome names a winner").toBeGreaterThan(0);
     expect(read.wrongShort.slice(0, 25), `short Result rungs naming the wrong side or an ambiguous code (${read.wrongShort.length})`).toEqual([]);
     expect(read.shortRungs).toBe(read.winnerBearing);
-    // Four-letter codes fit the bug's code column (#987 review M6): every bug code drawn here is four letters, measured.
-    expect(read.bugFit.checked, "anti-vacuity: bug codes measured").toBeGreaterThan(0);
-    expect(read.bugFit.fourChar, "every bug code measured is a four-letter code (HARL / HARR)").toBe(read.bugFit.checked);
-    expect(read.bugFit.misfit.slice(0, 25), `four-letter codes overflowing the bug's code column (${read.bugFit.misfit.length})`).toEqual([]);
+
+    // The fit (#987 confirm pass N2 / M6): the widest four-letter codes the ladder mints, at all three frames, on the
+    // bug, the bar's tightest rung and the tiles. Harlow / Harrow alone measured HARL / HARR (86.8 / 89.0 px), which
+    // fit a column that WOME (100.4) and TOWN (99.1) overflow — one lucky sample, so the sweep carries the widest.
+    for (const frame of FIT_FRAMES) {
+      for (const { name, away, codes } of WIDE_CODE_PAIRS) {
+        const params = new URLSearchParams({ name, away });
+        if (frame !== "") params.set("frame", frame);
+        await openGallery(page, `?${params.toString()}`);
+        await page.evaluate(() => document.fonts.ready);
+        // A ladder whose tightest rung does not fit never settles: wait for it, and let the verdict below report it.
+        await expect
+          .poll(() => page.locator('.ovl-team-name:not([data-ladder-settled="true"])').count(), { timeout: 10_000 })
+          .toBe(0)
+          .catch(() => undefined);
+        const fit = await page.evaluate(probeCodeFit, CANVAS_W);
+        const at = `${frame || "1920"} ${codes.join("/")}`;
+        const widest = (xs: CodeFit[]) => xs.reduce((m, x) => (x.ink > m.ink ? x : m), { ink: 0, room: 0, code: "", where: "" });
+        const summary = (["bug", "bar", "tiles"] as const).map((s) => {
+          const w = widest(fit[s]);
+          return `${s} ${fit[s].length} (widest "${w.code}" ${w.ink.toFixed(1)} in ${w.room.toFixed(1)})`;
+        });
+        console.log(`[4d fit] frame ${at}: ${summary.join(", ")}`);
+        for (const surface of ["bug", "bar", "tiles"] as const) {
+          expect(fit[surface].length, `anti-vacuity: ${surface} codes measured at ${at}`).toBeGreaterThan(0);
+          // The premise: this load drew the codes it is here for, on this surface.
+          const drawn = new Set(fit[surface].map((f) => f.code));
+          for (const code of codes) expect(drawn.has(code), `premise: ${surface} drew "${code}" at ${at} (drew ${[...drawn].join(", ")})`).toBe(true);
+          const misfit = fit[surface]
+            .filter((f) => f.ink > f.room + 0.5 || f.settled === false || f.inCard === false)
+            .map((f) => `${f.where}: "${f.code}" ${f.ink.toFixed(1)}px in ${f.room.toFixed(1)}px${f.settled === false ? ", ladder unsettled" : ""}${f.inCard === false ? ", tile out of its card" : ""}`);
+          expect.soft(misfit.slice(0, 25), `${surface} codes that do not fit at ${at} (${misfit.length})`).toEqual([]);
+        }
+      }
+    }
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {

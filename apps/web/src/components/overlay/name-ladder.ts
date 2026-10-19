@@ -79,3 +79,24 @@ export function availableNameWidth(el: HTMLElement): number {
   const slack = next.getBoundingClientRect().left - el.getBoundingClientRect().right - gap;
   return box + Math.max(0, slack);
 }
+
+/**
+ * The bug's code column, measured too (#987 confirm pass N2). `_THEMES.md` §4 draws the code at Barlow 48/600 in a
+ * 96 px column — a width chosen for three-letter codes. The pair rule (`disambiguatedShorts`) mints four, and the widest
+ * of them paint past the column into the gap before the cells: WOME 100.4 px, TOWN 99.1, and four of the face's widest
+ * capital (ÆÆÆÆ) 141.1.
+ *
+ * The column stays, and a code that does not fit it SCALES DOWN to it — a transform on the code alone, so the column,
+ * the row and every other box keep their place, and a code that fits (every three-letter code, HARL at 86.8) is drawn
+ * exactly as before. Uniform, so the glyphs keep their shape; the worst Latin case lands at 0.68, about 33 px a glyph,
+ * above the 30 px text floor (D9).
+ *
+ * @param natural  the code's natural (unscaled) width, in layout px
+ * @param room  the column's width, in layout px
+ * @returns 1 when the code fits, or when either box is unmeasured — a box that is not laid out reads 0 (or NaN), and
+ *          a code is never shrunk on a measurement that did not happen; else `room / natural`
+ */
+export function codeFitScale(natural: number, room: number): number {
+  if (!Number.isFinite(natural) || !Number.isFinite(room) || !(natural > 0) || !(room > 0)) return 1;
+  return natural > room ? room / natural : 1;
+}
