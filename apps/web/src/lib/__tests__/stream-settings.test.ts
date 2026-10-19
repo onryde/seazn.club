@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultTemplateFor, type OverlayTemplateDef, type TemplateRegistry } from "@/components/overlay/template-registry";
 import { OVERLAY_SPORT_KEYS } from "@/components/overlay/overlay-tokens";
-import { PutStreamSettings, StreamMode } from "@/server/api-v1/schemas";
+import { CreateStreamSession, PutStreamSettings, StreamMode } from "@/server/api-v1/schemas";
 import { OVERLAY_DELAY_MAX_MS, effectiveStreamMode, isPickableTemplate } from "@/lib/stream-settings";
 
 describe("effectiveStreamMode — the score is the default; only Camera only or an unavailable compositor turns it off", () => {
@@ -73,5 +73,21 @@ describe("OVERLAY_DELAY_MAX_MS — the panel's bound is the write schema's bound
     expect(PutStreamSettings.safeParse({ overlayDelayMs: OVERLAY_DELAY_MAX_MS + 1 }).success).toBe(false);
     expect(PutStreamSettings.safeParse({ overlayDelayMs: -1 }).success).toBe(false);
     expect(PutStreamSettings.safeParse({ overlayDelayMs: 2500.5 }).success, "whole milliseconds only").toBe(false);
+  });
+
+  it("PR #989 review m2: Go live's own overlayDelayMs takes the SAME bound — 0, the max and null (the default) parse, absent too; one past either end and a fraction are refused", () => {
+    const create = (over: Record<string, unknown>) =>
+      CreateStreamSession.safeParse({ mode: "composed", targetId: "00000000-0000-4000-8000-000000000001", ...over }).success;
+    const rows: [unknown, boolean][] = [
+      [0, true], [OVERLAY_DELAY_MAX_MS, true], [null, true], [undefined, true],
+      [OVERLAY_DELAY_MAX_MS + 1, false], [-1, false], [2500.5, false], ["2500", false],
+    ];
+    let checked = 0;
+    for (const [overlayDelayMs, ok] of rows) {
+      expect(create(overlayDelayMs === undefined ? {} : { overlayDelayMs }), String(overlayDelayMs)).toBe(ok);
+      expect(PutStreamSettings.safeParse({ overlayDelayMs }).success, `the write agrees: ${String(overlayDelayMs)}`).toBe(overlayDelayMs === undefined ? false : ok);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
   });
 });

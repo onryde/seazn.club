@@ -38720,6 +38720,18 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 40
+                  },
+                  "overlayDelayMs": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 30000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -38731,7 +38743,8 @@
               "example": {
                 "mode": "passthrough",
                 "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "themeId": "example"
+                "themeId": "example",
+                "overlayDelayMs": 0
               }
             }
           }

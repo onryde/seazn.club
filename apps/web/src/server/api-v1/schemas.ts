@@ -1585,8 +1585,21 @@ export type StreamFailReason = z.infer<typeof StreamFailReason>;
 export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);
 export type StreamTargetKind = z.infer<typeof StreamTargetKind>;
 
+/** A fixture's score timing override, whole ms 0–30000 (V462's `overlay_delay_ms` check; lib/stream-settings.ts
+ *  `OVERLAY_DELAY_MAX_MS`, held equal by stream-settings.test.ts). ONE bound for the settings write and the create. */
+const OverlayDelayOverrideMs = z.number().int().min(0).max(30_000);
+
+/** `overlayDelayMs` (PR #989 review m2): the score timing the organiser's panel SHOWED, so Go live never races the
+ *  timing's own save. Absent: the fixture's stored timing (the phone's start and the automatic start send none); null:
+ *  the server's default, whatever is stored; a number: that delay. Read for a composed session only — a passthrough
+ *  session has no compositor to delay. */
 export const CreateStreamSession = z
-  .object({ mode: StreamMode, targetId: z.string().uuid(), themeId: z.string().min(1).max(40).optional() })
+  .object({
+    mode: StreamMode,
+    targetId: z.string().uuid(),
+    themeId: z.string().min(1).max(40).optional(),
+    overlayDelayMs: OverlayDelayOverrideMs.nullable().optional(),
+  })
   .strict();
 export type CreateStreamSession = z.infer<typeof CreateStreamSession>;
 export const StreamSessionCreated = z.object({ sessionId: z.string() });
@@ -1703,7 +1716,7 @@ export const PutStreamSettings = z
     autoStream: z.boolean().optional(),
     streamMode: StreamMode.nullable().optional(),
     overlayTemplate: z.string().min(1).max(40).nullable().optional(),
-    overlayDelayMs: z.number().int().min(0).max(30_000).nullable().optional(),
+    overlayDelayMs: OverlayDelayOverrideMs.nullable().optional(),
   })
   .strict()
   .refine(

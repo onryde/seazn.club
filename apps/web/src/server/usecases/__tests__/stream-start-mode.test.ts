@@ -13,7 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { randomBytes } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureBeat } from "@/server/api-v1/capture-schemas";
-import type { PutStreamSettings, StreamMode } from "@/server/api-v1/schemas";
+import type { CreateStreamSession, PutStreamSettings, StreamMode } from "@/server/api-v1/schemas";
 import { RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { postBeat, postStart } from "../capture-phone";
 import { saveStreamSettings, startModeFor, streamPrefsOf } from "../stream-codes";
@@ -178,6 +178,44 @@ describe.skipIf(!HAS_DB)("R2006 PE2 at the usecase seam: the stored style and ti
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+describe.skipIf(!HAS_DB)("PR #989 review m2: the organiser's Go live states the timing its panel showed, so it never races the timing's save", () => {
+  it("the race: the stored timing is still 4 s (the 2.5 s save has not landed) and Go live names 2.5 s → the session streams 2.5 s; the save landing after moves the SETTINGS, never the running session", async () => {
+    deployment(true);
+    const r = await captureRig({ credits: 3, connectAfterMs: 10 * 60_000 });
+    await saveStreamSettings(r.auth, r.fixtureId, { overlayDelayMs: 4000 });
+    await r.pair(phoneId("a"));
+    const { sessionId } = await createSession(r.auth, r.fixtureId, { mode: "composed", targetId: r.target.id, overlayDelayMs: 2500 }, r.deps);
+    expect((await sessionsOf(r.fixtureId))[0]!.overlay_delay_ms, "the shown timing, not the stale stored one").toBe(2500);
+    await saveStreamSettings(r.auth, r.fixtureId, { overlayDelayMs: 2500 }); // the PUT, landing after the POST
+    expect((await sessionsOf(r.fixtureId))[0]!.overlay_delay_ms).toBe(2500);
+    expect((await streamPrefsOf(r.auth.orgId, [r.fixtureId]))[r.fixtureId]?.overlayDelayMs, "the settings took the save").toBe(2500);
+    const facts = await sessionFactsForJob(sessionId, r.runner.created[0]!.jobToken, r.deps);
+    expect(new URL(facts.overlayUrl!).searchParams.getAll("delay"), "the Machine's overlay page delays by the same").toEqual(["2500"]);
+  });
+
+  it("each shape of the field against a stored 4 s: absent reads the stored, null is the server's default whatever is stored, 0 is a real 0, and passthrough keeps 0 whatever is named", async () => {
+    deployment(true);
+    const rows: [string, CreateStreamSession["mode"], number | null | undefined, number][] = [
+      ["absent: the stored timing (the phone's start and the automatic start send none)", "composed", undefined, 4000],
+      ["null: the server's default, never the stored 4 s", "composed", null, RELAY_OVERLAY_DELAY_DEFAULT_MS],
+      ["0: a real override", "composed", 0, 0],
+      ["passthrough: no compositor to delay", "passthrough", 2500, 0],
+    ];
+    expect(RELAY_OVERLAY_DELAY_DEFAULT_MS, "premise: the default differs from the stored 4 s").not.toBe(4000);
+    let checked = 0;
+    for (const [name, mode, overlayDelayMs, want] of rows) {
+      const r = await captureRig({ credits: 3, connectAfterMs: 10 * 60_000 });
+      await saveStreamSettings(r.auth, r.fixtureId, { overlayDelayMs: 4000 });
+      await r.pair(phoneId("a"));
+      const body = { mode, targetId: r.target.id, ...(overlayDelayMs === undefined ? {} : { overlayDelayMs }) };
+      await createSession(r.auth, r.fixtureId, body, r.deps);
+      expect((await sessionsOf(r.fixtureId))[0]!.overlay_delay_ms, name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
   });
 });
 
