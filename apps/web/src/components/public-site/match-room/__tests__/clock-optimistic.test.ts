@@ -71,6 +71,7 @@ function snap(g: RoomGame | null, o: { at?: number; incrementSeconds?: number; y
     frozen: null,
     canAct: true,
     otherAccount: null,
+    account: { state: "ok" },
     onlineChessOff: false,
     boardClosed: false,
     creation: null,

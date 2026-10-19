@@ -13,11 +13,13 @@ import type { SeatRefusal } from "./room-snapshot";
 
 export type RoomScreen =
   | { kind: "unavailable" } // card 7
+  | { kind: "noAccount" } // review m2: the seat is tied to no Seazn account (met after load; the page paints it on first load)
   | { kind: "repairing" } // fix round 4b: the organiser is re-pairing the round
   | { kind: "offForClub" } // seam B
   | { kind: "revoked" } // seam A
   | { kind: "seatHeld" } // seam A's layout, a hold the viewer did not cause (R2-1)
   | { kind: "relink" } // card 8
+  | { kind: "wrongAccount"; viewerEmail: string } // the viewer is signed in as ANOTHER account: stands where card 8 / seam A's Lichess link prompt would
   | { kind: "over" }
   | { kind: "held" } // seam: a game on file nobody may act on
   | { kind: "live" }
@@ -34,7 +36,7 @@ export type RoomScreen =
 
 /** A seat refusal's card. Total over SeatRefusal: a new reason fails
  *  compilation here rather than falling through to a default. */
-type CardKind = Exclude<RoomScreen, { kind: "creating" }>["kind"];
+type CardKind = Exclude<RoomScreen, { kind: "creating" } | { kind: "wrongAccount" }>["kind"];
 const REFUSAL_SCREEN: Record<SeatRefusal, CardKind> = {
   camera_required: "cameraRequired",
   camera_lost: "cameraLost",
@@ -74,8 +76,24 @@ export function cameraEnds(s: RoomState): boolean {
 }
 
 export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
+  const screen = baseScreen(s, ctx);
+  // Owner staging test 2026-10-19: a personal link opened while signed in as ANOTHER account. Pressing "Link Lichess"
+  // there links the wrong account (the seat is never any the wiser and asks again), so the two screens that offer that
+  // link - card 8 and seam A's notice - give way to the card that says whose board this is and offers to switch. Only
+  // those two: every other screen (the check-in, a live board, a result) is the seat's, whoever is looking, as it was.
+  const account = s.snap.account;
+  if ((screen.kind === "relink" || screen.kind === "revoked") && account.state === "wrong_account") {
+    return { kind: "wrongAccount", viewerEmail: account.viewerEmail };
+  }
+  return screen;
+}
+
+/** The screen before the account question: the precedence the room has always had. */
+function baseScreen(s: RoomState, ctx: ScreenContext): RoomScreen {
   const snap = s.snap;
   if (s.notFound) return { kind: "unavailable" };
+  // Review m2: the seat has no account - nothing of the snapshot in hand is the viewer's to act on.
+  if (s.noAccount) return { kind: "noAccount" };
   // Fix round 4b: the board is being re-paired — the snapshot in hand is the OLD pairing (its opponent, its
   // window), so nothing of it is shown until a read of the re-paired board lands.
   if (s.repairing) return { kind: "repairing" };

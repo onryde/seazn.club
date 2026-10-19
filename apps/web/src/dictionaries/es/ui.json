@@ -3104,7 +3104,7 @@
   "pad.recording.actions.one": "{count} acción en el panel",
   "pad.recording.actions.other": "{count} acciones en el panel",
   "sport.badminton": "Bádminton",
-  "sport.boardgame": "Juego de mesa",
+  "sport.boardgame": "Ajedrez",
   "sport.carrom": "Carrom",
   "sport.cricket": "Críquet",
   "sport.football": "Fútbol",
@@ -6364,5 +6364,16 @@
   "register.lichess.required": "Obligatorio",
   "register.lichess.lead.one": "{divisions} se juega en línea, en el tablero de Seazn. Vincula Lichess ahora, antes de inscribirte.",
   "register.lichess.lead.other": "{divisions} se juegan en línea, en el tablero de Seazn. Vincula Lichess ahora, antes de inscribirte.",
-  "register.lichess.returnHint": "Irás a Lichess y volverás directamente a este paso. Tus respuestas se conservan."
+  "register.lichess.returnHint": "Irás a Lichess y volverás directamente a este paso. Tus respuestas se conservan.",
+  "divset.timeControl.label": "Ritmo de juego",
+  "divset.timeControl.choose": "Elige un ritmo de juego",
+  "divset.timeControl.help": "Las partidas en línea usan uno de estos ritmos de juego de Lichess. Lichess no admite retardo por jugada.",
+  "divset.timeControl.unsupported": "El reloj actual de esta división no se puede jugar en línea. Elige un ritmo de juego para guardar.",
+  "externalPlay.openRound.startFirst": "Inicia la división para abrir rondas de juego en línea.",
+  "externalPlay.room.state.wrongAccount.title": "Este tablero es para {name}",
+  "externalPlay.room.state.wrongAccount.body": "Has iniciado sesión como {email}.",
+  "externalPlay.room.state.wrongAccount.switch": "Cambiar de cuenta",
+  "externalPlay.room.state.wrongAccount.failed": "No pudimos cerrar tu sesión. Inténtalo de nuevo.",
+  "externalPlay.room.state.noAccount.title": "Este asiento aún no está vinculado a una cuenta de Seazn",
+  "externalPlay.room.state.noAccount.body": "Pregúntaselo al organizador."
 }

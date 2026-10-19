@@ -18,7 +18,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { RoomShell } from "@/components/public-site/match-room/room-shell";
-import { RoomHeaderless, RoomRepairingHeaderless } from "@/components/public-site/match-room/room-unavailable";
+import { RoomHeaderless, RoomNoAccountHeaderless, RoomRepairingHeaderless } from "@/components/public-site/match-room/room-unavailable";
 import { getCurrentUser } from "@/lib/auth";
 import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
@@ -26,7 +26,8 @@ import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { publicOrgOrNull } from "@/server/public-site/org-guard";
 import { readRoom, roomGrantDowngraded, type RoomIdentity } from "@/server/usecases/external-play/room";
-import { ROOM_BEING_REPAIRED, type RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
+import { roomViewer } from "@/server/usecases/external-play/room-viewer";
+import { ROOM_BEING_REPAIRED, ROOM_SEAT_NO_ACCOUNT, type RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +55,12 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
 }
 
 async function identityFor(token: string | null): Promise<RoomIdentity | null> {
-  if (token) return { kind: "token", token };
+  // A personal link also carries who is looking, when anyone is signed in: the room tells the seat's own account from
+  // another (owner staging test 2026-10-19). Fail-open, as the room's polls are (match-room-identity.ts).
+  if (token) {
+    const viewer = await roomViewer();
+    return viewer ? { kind: "token", token, viewer } : { kind: "token", token };
+  }
   const user = await getCurrentUser();
   return user ? { kind: "session", userId: user.id } : null;
 }
@@ -78,6 +84,8 @@ export default async function MatchRoomPage({
   let snapshot: RoomSnapshot | null = null;
   // Final re-review 4, I2: the board is being re-paired (the server's 409) — no snapshot yet, but not "not yours".
   let repairing = false;
+  // A VERIFIED link for a seat tied to no Seazn account (the server's 409): no seat to read, and no sign-in fixes it.
+  let noAccount = false;
   // Final review P10: Lichess's word on the player's grant, asked ONCE per page load (never by the room's polls).
   let grantRefused = false;
   const identity = await identityFor(token);
@@ -90,6 +98,7 @@ export default async function MatchRoomPage({
       // is a real fault and goes to the error boundary — save a board being
       // re-paired (fix round 4b), which is its own card (I2).
       if (err instanceof HttpError && err.status === 409 && err.code === ROOM_BEING_REPAIRED) repairing = true;
+      else if (err instanceof HttpError && err.status === 409 && err.code === ROOM_SEAT_NO_ACCOUNT) noAccount = true;
       else if (!(err instanceof HttpError && err.status === 404)) throw err;
     }
   }
@@ -100,6 +109,14 @@ export default async function MatchRoomPage({
     return (
       <DictProvider dict={ui} locale={locale}>
         <RoomRepairingHeaderless t={(k, v) => t(ui, k, v)} />
+      </DictProvider>
+    );
+  }
+
+  if (snapshot === null && noAccount) {
+    return (
+      <DictProvider dict={ui} locale={locale}>
+        <RoomNoAccountHeaderless fixtureHref={fixturePath} t={(k, v) => t(ui, k, v)} />
       </DictProvider>
     );
   }

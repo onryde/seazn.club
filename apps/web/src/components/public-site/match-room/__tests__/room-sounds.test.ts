@@ -293,6 +293,7 @@ describe("through the REAL reducer: the room's own events in, sounds out", () =>
       frozen: null,
       canAct: true,
       otherAccount: null,
+      account: { state: "ok" },
       onlineChessOff: false,
       boardClosed: false,
       creation: null,

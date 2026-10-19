@@ -12,7 +12,7 @@ Scoring opens when you **start** the division ([why starting locks setup](/help/
 - [Football](/help/scoring/football) — goals, cards, substitutions and shoot-outs.
 - [Field hockey](/help/scoring/hockey) — quarters, cards that make the team play short, penalty corners and shoot-outs. [Ice hockey has its own page](/help/scoring/icehockey) for assists, the penalty ladder and game-winning shots.
 - [Carrom](/help/scoring/carrom) — a board at a time, coins and the queen.
-- [Board games](/help/scoring/boardgame) — chess, draughts and go: who won, and how it ended.
+- [Chess](/help/scoring/boardgame) — who won, and how it ended.
 - [Everything else](/help/scoring/generic) — a running tally you tap during play, or a plain result at the end.
 
 ## The flow

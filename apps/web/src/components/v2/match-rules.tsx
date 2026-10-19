@@ -29,6 +29,7 @@ export function MatchRuleFields({
   onChange,
   disabled = false,
   inherited,
+  omit,
 }: {
   sportKey: string;
   values: Record<string, string>;
@@ -40,9 +41,12 @@ export function MatchRuleFields({
    *  the grid shows one "Points to win" field that writes both points keys
    *  (owner ruling 2026-09-25 — see `visibleRuleFields`). */
   inherited?: Record<string, unknown>;
+  /** Field keys another control stands in for (chess under Online play = Lichess: the clock picker). Their values
+   *  stay in `values` and are still built on save — they are only not drawn. */
+  omit?: readonly string[];
 }) {
   const msg = useMsg();
-  const fields = visibleRuleFields(sportKey, values, inherited);
+  const fields = visibleRuleFields(sportKey, values, inherited).filter((f) => !omit?.includes(f.key));
   if (fields.length === 0) return null;
   const edit = (key: string, raw: string) =>
     onChange(setRuleValue(sportKey, values, key, raw, inherited));

@@ -14,6 +14,12 @@ import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
 import {
+  LICHESS_CLOCK_FIELD_KEYS,
+  selectedTimeControlKey,
+  timeControlOptions,
+  timeControlRuleValues,
+} from "@/lib/online-time-control";
+import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
   buildTemplateStages,
@@ -26,6 +32,8 @@ import {
 } from "@/lib/format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { sportLabel } from "@/lib/scoring-vocab";
+import { variantWord } from "@/lib/variant-label-keys";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
@@ -433,6 +441,10 @@ export function DivisionSettings({
   onlineChessOffered: boolean;
 }) {
   const msg = useMsg();
+  // The Format section names the division's sport and variant as WORDS (`sport.<key>`, `variant.<sport>.<variant>`),
+  // never the stored keys: the key is the identity (`boardgame`), the word is what the organiser reads ("Chess").
+  const sportName = sportLabel(division.sport_key, msg);
+  const variantName = variantWord(division.sport_key, division.variant_key, msg);
   const router = useRouter();
   const [name, setName] = useState(division.name);
   const [logoUrl, setLogoUrl] = useState(division.logo_url);
@@ -522,6 +534,11 @@ export function DivisionSettings({
   const storedCameraChoice = cameraChoiceOf(ownCamera);
   const cameraOptions = cameraSelectOptions(msg);
   const onlinePlaySaved = cfg.onlinePlay === "lichess";
+  // While Online play is Lichess (the form's state, not the saved one) the clock is ONE select of the supported time
+  // controls instead of free time/increment/delay inputs. Which option it shows is decided by the form values, else the
+  // saved clock; "" (none of them) renders a prompt, never the first option. See lib/online-time-control.ts.
+  const lichessClock = division.sport_key === "boardgame" && onlinePlay === "lichess";
+  const timeControl = lichessClock ? selectedTimeControlKey(ruleValues, division.config) : "";
   const [cameraChoice, setCameraChoice] = useState<CameraChoice>(storedCameraChoice);
   const cameraHint = cameraInheritHint(cameraChoice, storedCameraChoice, inheritedCamera, msg);
   // Same derive-from-props resync as the config block above: a saved change
@@ -933,14 +950,14 @@ export function DivisionSettings({
         title={msg("divset.format")}
         // T16 (canvas SettingsPhone): the summary states that the division plays online — a fact, shown whatever the
         // flag and even when the format is locked (the select itself is hidden then).
-        summary={`${division.sport_key} · ${locked ? msg("divset.variantLocked", { variant: division.variant_key }) : division.variant_key}${
+        summary={`${sportName} · ${locked ? msg("divset.variantLocked", { variant: variantName }) : variantName}${
           division.sport_key === "boardgame" && onlinePlaySaved ? ` · ${msg("divset.onlinePlay.summaryOn")}` : ""
         }`}
       >
         {locked ? (
           <div data-testid="format-locked" className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
             <p className="font-medium text-slate-700">
-              {division.sport_key} · {division.variant_key}
+              {sportName} · {variantName}
             </p>
             <p className="mt-1">
               {msg("divset.lockedNotePre")}
@@ -1093,6 +1110,35 @@ export function DivisionSettings({
               </div>
             )}
 
+            {lichessClock && (
+              <div>
+                <label className="block text-xs text-slate-500">
+                  {msg("divset.timeControl.label")}
+                  <select
+                    disabled={!canEdit}
+                    value={timeControl}
+                    onChange={(e) => {
+                      const picked = timeControlRuleValues(e.target.value);
+                      if (picked) setRuleValues({ ...ruleValues, ...picked });
+                    }}
+                    className="input mt-1 w-full"
+                    data-testid="division-time-control"
+                  >
+                    {timeControl === "" && <option value="">{msg("divset.timeControl.choose")}</option>}
+                    {timeControlOptions(msg).map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="mt-1 text-[11px] text-slate-500">{msg("divset.timeControl.help")}</p>
+                {timeControl === "" && (
+                  <p className="mt-1 text-[11px] text-amber-700">{msg("divset.timeControl.unsupported")}</p>
+                )}
+              </div>
+            )}
+
             {pointsFieldKeys.length > 0 && (
               <div>
                 <p className="text-xs text-slate-500">{msg("divset.standingsPoints")}</p>
@@ -1121,6 +1167,7 @@ export function DivisionSettings({
               onChange={setRuleValues}
               disabled={!canEdit}
               inherited={(division.config as Record<string, unknown>) ?? {}}
+              omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
             />
 
             {stages.length > 0 && (

@@ -3149,7 +3149,7 @@
   "pad.recording.actions.one": "{count} action on the pad",
   "pad.recording.actions.other": "{count} actions on the pad",
   "sport.badminton": "Badminton",
-  "sport.boardgame": "Board game",
+  "sport.boardgame": "Chess",
   "sport.carrom": "Carrom",
   "sport.cricket": "Cricket",
   "sport.football": "Football",
@@ -6364,5 +6364,16 @@
   "register.lichess.required": "Required",
   "register.lichess.lead.one": "{divisions} is played online, on Seazn's board. Link Lichess now, before you enter.",
   "register.lichess.lead.other": "{divisions} are played online, on Seazn's board. Link Lichess now, before you enter.",
-  "register.lichess.returnHint": "You'll go to Lichess and come straight back to this step. Your answers are kept."
+  "register.lichess.returnHint": "You'll go to Lichess and come straight back to this step. Your answers are kept.",
+  "divset.timeControl.label": "Time control",
+  "divset.timeControl.choose": "Choose a time control",
+  "divset.timeControl.help": "Online games use one of these Lichess time controls. Lichess has no move delay.",
+  "divset.timeControl.unsupported": "This division's current clock can't be played online. Choose a time control to save.",
+  "externalPlay.openRound.startFirst": "Start the division to open rounds for online play.",
+  "externalPlay.room.state.wrongAccount.title": "This board is for {name}",
+  "externalPlay.room.state.wrongAccount.body": "You're signed in as {email}.",
+  "externalPlay.room.state.wrongAccount.switch": "Switch account",
+  "externalPlay.room.state.wrongAccount.failed": "We couldn't sign you out. Try again.",
+  "externalPlay.room.state.noAccount.title": "This seat isn't tied to a Seazn account yet",
+  "externalPlay.room.state.noAccount.body": "Ask the organiser."
 }

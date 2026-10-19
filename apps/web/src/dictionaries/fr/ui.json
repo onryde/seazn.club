@@ -3149,7 +3149,7 @@
   "pad.recording.actions.one": "{count} action sur le pad",
   "pad.recording.actions.other": "{count} actions sur le pad",
   "sport.badminton": "Badminton",
-  "sport.boardgame": "Jeu de société",
+  "sport.boardgame": "Échecs",
   "sport.carrom": "Carrom",
   "sport.cricket": "Cricket",
   "sport.football": "Football",
@@ -6364,5 +6364,16 @@
   "register.lichess.required": "Obligatoire",
   "register.lichess.lead.one": "{divisions} se joue en ligne, sur l'échiquier de Seazn. Liez Lichess maintenant, avant de vous inscrire.",
   "register.lichess.lead.other": "{divisions} se jouent en ligne, sur l'échiquier de Seazn. Liez Lichess maintenant, avant de vous inscrire.",
-  "register.lichess.returnHint": "Vous irez sur Lichess puis reviendrez directement à cette étape. Vos réponses sont conservées."
+  "register.lichess.returnHint": "Vous irez sur Lichess puis reviendrez directement à cette étape. Vos réponses sont conservées.",
+  "divset.timeControl.label": "Cadence",
+  "divset.timeControl.choose": "Choisissez une cadence",
+  "divset.timeControl.help": "Les parties en ligne utilisent l'une de ces cadences Lichess. Lichess n'a pas de délai par coup.",
+  "divset.timeControl.unsupported": "La pendule actuelle de cette division ne peut pas être jouée en ligne. Choisissez une cadence pour enregistrer.",
+  "externalPlay.openRound.startFirst": "Démarrez la division pour ouvrir les rondes du jeu en ligne.",
+  "externalPlay.room.state.wrongAccount.title": "Cet échiquier est pour {name}",
+  "externalPlay.room.state.wrongAccount.body": "Vous êtes connecté avec {email}.",
+  "externalPlay.room.state.wrongAccount.switch": "Changer de compte",
+  "externalPlay.room.state.wrongAccount.failed": "Nous n'avons pas pu vous déconnecter. Réessayez.",
+  "externalPlay.room.state.noAccount.title": "Cette place n'est pas encore liée à un compte Seazn",
+  "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur."
 }

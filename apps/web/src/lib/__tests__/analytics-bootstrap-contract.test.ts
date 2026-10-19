@@ -19,6 +19,7 @@ import { join } from "node:path";
 const BOOTSTRAP = join(__dirname, "..", "..", "components/analytics-bootstrap.tsx");
 const IDENTITY = join(__dirname, "..", "analytics-identity.ts");
 const LOGOUT = join(__dirname, "..", "..", "components/logout-button.tsx");
+const SIGN_OUT = join(__dirname, "..", "..", "lib/sign-out-client.ts");
 const LAYOUT = join(__dirname, "..", "..", "app/layout.tsx");
 const ME_ROUTE = join(__dirname, "..", "..", "app/api/users/me/route.ts");
 
@@ -62,10 +63,14 @@ describe("analytics-bootstrap contract (task-8): root layout stays cookie-free",
     expect(source).not.toMatch(/getCurrentUser/);
   });
 
-  it("logout-button clears the cached identity and resets posthog before navigating (review Critical)", () => {
-    const source = stripComments(readFileSync(LOGOUT, "utf8"));
-    expect(source).toMatch(/clearAnalyticsIdentity\s*\(/);
-    expect(source).toMatch(/posthog\.reset\s*\(/);
+  it("logout-button signs out through the shared helper BEFORE navigating, and the helper clears the cached identity and resets posthog (review Critical)", () => {
+    // The teardown lives in lib/sign-out-client.ts so the match room's Switch account ends a session the same way.
+    const button = stripComments(readFileSync(LOGOUT, "utf8"));
+    expect(button).toMatch(/await\s+signOutClient\s*\(/);
+    expect(button.indexOf("signOutClient("), "signed out before the navigation").toBeLessThan(button.indexOf("router.push("));
+    const helper = stripComments(readFileSync(SIGN_OUT, "utf8"));
+    expect(helper).toMatch(/clearAnalyticsIdentity\s*\(/);
+    expect(helper).toMatch(/posthog\.reset\s*\(/);
   });
 
   it("root layout mounts AnalyticsBootstrap without reading cookies/getCurrentUser itself", () => {

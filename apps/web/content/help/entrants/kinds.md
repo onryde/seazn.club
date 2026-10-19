@@ -18,7 +18,7 @@ Ask: *who is named on a fixture?* If the answer is "Riverside Rockets", it's tea
 
 The sport sets the starting shape, so most divisions need no thought here:
 
-- **Board games** (chess, draughts, go) — one player per side.
+- **Chess** — one player per side.
 - **Tennis, badminton, table tennis, carrom** — a player *or* a pair, so singles and doubles can live in the same division.
 - **Football, cricket, hockey, ice hockey, volleyball** — a squad, with shirt numbers and a captain.
 

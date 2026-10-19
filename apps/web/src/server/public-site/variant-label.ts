@@ -15,50 +15,14 @@ import "server-only";
 // copy through `msgFor` (which reads `ui`), and the division page already
 // loads the `ui` dictionary beside `public`.
 import type { MessageKey } from "@/lib/messages";
+import { VARIANT_LABEL_KEYS, variantWordKey } from "@/lib/variant-label-keys";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { assertTimeControl, lichessSpeedOf } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 
-export const VARIANT_LABEL_KEYS: Readonly<Record<string, Readonly<Record<string, MessageKey>>>> = {
-  badminton: { bwf: "variant.badminton.bwf", short: "variant.badminton.short" },
-  boardgame: {
-    classical: "variant.boardgame.classical",
-    rapid: "variant.boardgame.rapid",
-    blitz: "variant.boardgame.blitz",
-  },
-  carrom: { icf: "variant.carrom.icf", "club-29": "variant.carrom.club29" },
-  cricket: {
-    t20: "variant.cricket.t20",
-    odi: "variant.cricket.odi",
-    hundred: "variant.cricket.hundred",
-    test: "variant.cricket.test",
-  },
-  football: {
-    "11-a-side": "variant.football.elevenASide",
-    youth: "variant.football.youth",
-    "small-sided": "variant.football.smallSided",
-    "mini-soccer": "variant.football.miniSoccer",
-  },
-  generic: { win_loss: "variant.generic.winLoss", score: "variant.generic.score" },
-  hockey: {
-    "fih-outdoor": "variant.hockey.fihOutdoor",
-    "fih-shootout": "variant.hockey.fihShootout",
-    youth: "variant.hockey.youth",
-  },
-  icehockey: { iihf: "variant.icehockey.iihf", recreational: "variant.icehockey.recreational" },
-  tabletennis: {
-    bo5: "variant.tabletennis.bo5",
-    bo7: "variant.tabletennis.bo7",
-    "hardbat-21": "variant.tabletennis.hardbat21",
-  },
-  tennis: {
-    tour: "variant.tennis.tour",
-    "grand-slam": "variant.tennis.grandSlam",
-    fast4: "variant.tennis.fast4",
-    "doubles-noad-mtb10": "variant.tennis.doublesNoAdMatchTiebreak",
-  },
-  volleyball: { indoor: "variant.volleyball.indoor", beach: "variant.volleyball.beach" },
-};
+// Re-exported: the map moved to `lib/variant-label-keys.ts` so a client island can read it; existing importers
+// (and the enumerating test) keep this path.
+export { VARIANT_LABEL_KEYS };
 
 export interface VariantRef {
   sportKey: string;
@@ -90,10 +54,9 @@ function onlineSpeedOf(ref: VariantRef): string | null {
  *  so a division pointing at a variant nobody names still says something.
  *  Online chess is named by its time control's speed first (`onlineSpeedOf`). */
 export function variantLabel(ref: VariantRef, msg: (key: MessageKey) => string): string {
-  const bySport = Object.hasOwn(VARIANT_LABEL_KEYS, ref.sportKey) ? VARIANT_LABEL_KEYS[ref.sportKey]! : undefined;
   const speed = onlineSpeedOf(ref);
-  const variantKey = speed !== null && bySport && Object.hasOwn(bySport, speed) ? speed : ref.variantKey;
-  const key = bySport && Object.hasOwn(bySport, variantKey) ? bySport[variantKey]! : undefined;
+  const variantKey = speed !== null && variantWordKey(ref.sportKey, speed) !== undefined ? speed : ref.variantKey;
+  const key = variantWordKey(ref.sportKey, variantKey);
   if (key !== undefined) return msg(key);
   return ref.storedName ?? ref.variantKey;
 }

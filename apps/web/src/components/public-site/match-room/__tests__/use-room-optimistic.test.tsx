@@ -44,6 +44,7 @@ function snap(): RoomSnapshot {
     frozen: null,
     canAct: true,
     otherAccount: null,
+    account: { state: "ok" },
     onlineChessOff: false,
     boardClosed: false,
     creation: null,

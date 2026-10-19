@@ -2535,7 +2535,8 @@ where a drain or a capacity rests on a measurement, and replaced by the re-run's
 One page, one DOM, phone-first; everything below `md` is `max-md:*`.
 
 **States:** before the window → window open, not seated (preflight + Check in) → seated,
-waiting → game live → over → needs organiser.
+waiting → game live → over → needs organiser. Two account states stand in for the Lichess
+link prompt (§6.2): the signed-in account is not the seat's, and the seat has no Seazn account.
 
 **Always visible during play:** both clocks, both names, whose move it is, the board, your
 own tile, the opponent presence pill.
@@ -2662,6 +2663,57 @@ nothing for up to 60 s. The new behaviour:
      trusts it.
   Where the "one attempt per device" phrase itself appears, it is the progress ruling m-a, not a
   string in the code: the three places above are the sentences that overstate it.
+
+### 6.2 Account states (amended 2026-10-19; owner decision, from the staging test)
+
+A personal match link (`?t=`) works for whoever holds it, so the browser can be signed in as a
+different Seazn account than the seat's. Pressing "Link Lichess" there links the SIGNED-IN account,
+not the seat's: the seat's grant never appears and the prompt comes back. The room now tells the two
+apart on the server and replaces the link prompt in exactly those two cases. Both are public,
+phone-first surfaces (320, 768 and 1280, no horizontal scroll, 44 px targets), every string a key in
+all four locales (`externalPlay.room.state.wrongAccount.*`, `externalPlay.room.state.noAccount.*`).
+
+**Who decides.** The server, in the room read (`room.ts`, `seatAccount`), from two facts: the seat's
+solo user (`guard.ts` `loadSide`: a person with exactly one linked user) and the viewer's session. A
+personal-link identity carries the viewer when the browser is signed in (`RoomIdentity.viewer`, read
+by `match-room-identity.ts` for the routes and by `play/page.tsx` for the first paint; a failed
+session read is a signed-out viewer, never a 500). A session identity IS the seat's user by
+construction (`resolveRoom` matches it to the seat), so it is always `ok`.
+
+**1. The signed-in account is not the seat's (`snapshot.account.state = "wrong_account"`).**
+- Card, in place of card 8 (`RelinkCard`) and of seam A's re-link notice (`RevokedNotice`): "This
+  board is for {seat player's display name}. You're signed in as {the viewer's OWN email}." and ONE
+  action, **Switch account**.
+- Switch account ends the session (`signOutClient`, the logout button's own sign-out) and, only when
+  that SUCCEEDED, goes to `/login?next=<the room's path and query, the personal link included>` by a
+  full navigation. A failed sign-out re-enables the button and says so; it never navigates (the login
+  page sends a signed-in user straight back to `next`, i.e. to this card). Signing in as the right
+  account returns to the same link: the viewer now matches, `account` is `ok` and the normal flow runs.
+- Privacy: the seat account's email is NEVER on the wire or on the card, full or masked; the card
+  names the seat's player (already `you.name`) and the viewer's own address. The card never offers
+  Link Lichess and the Lichess start route is not linked from it.
+- Only those two screens change. The check-in, a live board, a result and every window card show to a
+  mismatched viewer exactly as before: the card replaces the prompt, not the room.
+
+**2. The seat is tied to no Seazn account (409 `ROOM_SEAT_NO_ACCOUNT`).**
+- A seat is a person with a solo user; a person with none has no seat to read, so there is no
+  snapshot. GET and POST room answer 409 `ROOM_SEAT_NO_ACCOUNT` to a link that VERIFIED for this
+  fixture and its round's open and whose person is the ONLY member of a side with no user (`resolveRoom`,
+  `tellNoAccount`). Every other failure stays the one 404, so a probe learns nothing; a side with
+  several members is not a chess seat and stays 404 too.
+- The page shows a calm headerless card, like card 7: "This seat isn't tied to a Seazn account yet" /
+  "Ask the organiser.", with the way back to the fixture and nothing else: no Lichess prompt and no
+  sign-in, since no sign-in can fix it. It does not matter who is looking.
+- Reachability, as found: the invite mints a link only for a seat with a solo user (`invite.ts`
+  `sendFixtureInvite`), so this state is reached by a link minted while the person had an account and
+  opened after the account was removed or the person untied from it.
+
+Signed out, and the seat's own account, keep today's flow, link prompt included.
+
+Tests: `external-play-room-account.test.ts` (the server, through the real read and seat claim, real
+tokens, every case and the sequence), `room-screen.test.ts` and `room-account-cards.test.tsx` (which
+screen, what paints, what the button does), `play/__tests__/page.test.tsx` and
+`match-room-account.test.tsx` (the page's identity and the 409 card), `match-room-identity.test.ts`.
 
 ---
 

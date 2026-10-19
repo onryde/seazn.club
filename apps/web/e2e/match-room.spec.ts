@@ -604,6 +604,116 @@ test("a move through the REAL server: a grant downgraded mid-game is refused by 
   await ctx.close();
 });
 
+test("owner staging 2026-10-19: a personal link opened while signed in as ANOTHER account — the Lichess prompt is the wrong-account card, Switch account signs out and returns to the link at /login; signed out, the prompt stays", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Ada Okonkwo ${Date.now() % 1e5}`, `Bo Lind ${Date.now() % 1e5}`] });
+  // White's grant lost a play scope: the seat call refuses it (lichess_reconsent_required) - the prompt that links Lichess.
+  const dropped = playScopes()[0]!;
+  const narrowed = await withDb(async (sql) => {
+    const rows = await sql<{ scopes: string[] }[]>`
+      update user_external_accounts set scopes = array_remove(scopes, ${dropped})
+       where user_id = ${room.white.userId} and provider = 'lichess'
+      returning scopes`;
+    return rows.length;
+  });
+  expect(narrowed, "White's grant was found and narrowed").toBe(1);
+  const link = `${room.roomPath}?t=${encodeURIComponent(room.white.token)}`;
+
+  // The pair first: signed out, WHITE's own link, the prompt is the Lichess link, as it has always been.
+  const out = await cold(browser);
+  const q = await openRoom(out, room, room.white.token);
+  await q.getByTestId("room-checkin-cta").click();
+  await expect.poll(() => screenOf(q)).toBe("relink");
+  await expect(q.getByTestId("room-relink")).toBeVisible();
+  await expect(q.getByTestId("room-state-wrong-account")).toHaveCount(0);
+  await out.close();
+
+  // Signed in as the OTHER player: the same link, the same refusal - and no Lichess prompt, the card says whose board it is.
+  const ctx = await cold(browser);
+  const p = await ctx.newPage();
+  await loginUi(p, room.black.email, room.roomPath);
+  await p.setViewportSize({ width: 1280, height: 900 });
+  await p.goto(link);
+  await expect(p.getByTestId("match-room")).toBeVisible();
+  expect(await screenOf(p), "the check-in first: the card replaces the prompt, not the room").toBe("checkin");
+  await p.getByTestId("room-checkin-cta").click();
+  await expect.poll(() => screenOf(p)).toBe("wrongAccount");
+  const card = p.getByTestId("room-state-wrong-account");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText(fill("externalPlay.room.state.wrongAccount.title", { name: room.white.name }));
+  await expect(p.getByTestId("room-wrong-account-body")).toHaveText(fill("externalPlay.room.state.wrongAccount.body", { email: room.black.email }));
+  await expect(p.getByTestId("room-switch-account")).toHaveText(uiEn["externalPlay.room.state.wrongAccount.switch"]!);
+  for (const id of ["room-relink", "room-state-relink", "room-revoked-relink"]) await expect(p.getByTestId(id), id).toHaveCount(0);
+  // Never the seat account's address, in any form, on the page.
+  const body = await p.content();
+  expect(body.includes(room.white.email), "the seat's email is nowhere on the page").toBe(false);
+  expect(body.includes(room.white.email.split("@")[0]!), "nor its local part").toBe(false);
+  // The card survives the room's own next read.
+  await p.waitForResponse((r) => r.request().method() === "GET" && /\/external-play\/room$/.test(new URL(r.url()).pathname), { timeout: 15_000 });
+  await p.waitForTimeout(200);
+  expect(await screenOf(p)).toBe("wrongAccount");
+  // Nothing sideways at any width.
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "wrong-account");
+
+  // Switch account: the session ends, and the sign-in returns to THIS link.
+  await p.setViewportSize({ width: 1280, height: 900 });
+  await Promise.all([p.waitForURL(/\/login\?next=/), p.getByTestId("room-switch-account").click()]);
+  expect(new URL(p.url()).pathname).toBe("/login");
+  expect(new URL(p.url()).searchParams.get("next"), "back to the link, token and all").toBe(link);
+  const me = await p.request.get("/api/users/me");
+  expect(me.status(), "the other player's session is gone").toBe(401);
+  await ctx.close();
+});
+
+test("owner staging 2026-10-19: a personal link whose seat is tied to NO Seazn account is its own calm card — no Lichess prompt, no sign-in — and the API answers 409 ROOM_SEAT_NO_ACCOUNT to that link only", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Ada Okonkwo ${Date.now() % 1e5}`, `Bo Lind ${Date.now() % 1e5}`] });
+  // The link was minted while the player had an account; the account is untied afterwards (persons.user_id is the tie).
+  const untied = await withDb(async (sql) => {
+    const rows = await sql`update persons set user_id = null where id = ${room.white.personId} returning id`;
+    return rows.length;
+  });
+  expect(untied, "White's person was found and untied").toBe(1);
+
+  const ctx = await cold(browser);
+  const p = await ctx.newPage();
+  p.on("console", (m) => {
+    if (m.type() === "error" && !SITE_WIDE.has(m.text())) consoleErrors.push(m.text().slice(0, 300));
+  });
+  p.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message.slice(0, 300)}`));
+  await p.setViewportSize({ width: 1280, height: 900 });
+  const res = await p.goto(`${room.roomPath}?t=${encodeURIComponent(room.white.token)}`);
+  expect(res?.status(), "the page renders (the card is the page's answer, not an error page)").toBe(200);
+  const card = p.getByTestId("room-state-no-account");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText(uiEn["externalPlay.room.state.noAccount.title"]!);
+  await expect(card).toContainText(uiEn["externalPlay.room.state.noAccount.body"]!);
+  await expect(p.getByTestId("match-room"), "headerless, no room: the card stands in for it").toHaveAttribute("data-screen", "noAccount");
+  await expect(p.getByTestId("room-board"), "no board").toHaveCount(0);
+  for (const id of ["room-relink", "room-state-relink", "room-revoked-relink", "room-switch-account", "room-checkin-cta", "room-state-wrong-account"]) {
+    await expect(p.getByTestId(id), id).toHaveCount(0);
+  }
+  await expect(p.getByTestId("room-back-to-fixture"), "the way back to the fixture").toHaveAttribute("href", room.fixturePath);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "no-account");
+
+  // The wire: the verified link gets the named 409; the other seat's link and a wrong token keep today's answers.
+  const read = (token: string) => ctx.request.get(`/api/v1/fixtures/${room.fixtureId}/external-play/room?t=${encodeURIComponent(token)}`);
+  const named = await read(room.white.token);
+  expect(named.status()).toBe(409);
+  expect(((await named.json()) as { error?: { code?: string } }).error?.code).toBe("ROOM_SEAT_NO_ACCOUNT");
+  expect((await read(room.black.token)).status(), "the other seat reads on as ever").toBe(200);
+  expect((await read("not-a-token")).status(), "a link that does not verify learns nothing").toBe(404);
+  await ctx.close();
+});
+
 test("T17B fix 2, D12: the live room under a camera policy — clocks, board, camera tile, notice, controls — is painted inside the window at every desktop width (1024–1440), the laptop's 1100 and the phones", async ({
   page,
   browser,

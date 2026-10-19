@@ -56,7 +56,9 @@ import {
   windowWire,
   CAMERA_REPORT_STALE_MS,
   ROOM_BEING_REPAIRED,
+  ROOM_SEAT_NO_ACCOUNT,
   type Colour,
+  type RoomAccount,
   type RoomGame,
   type LineWire,
   type RoomPhaseWire,
@@ -87,7 +89,28 @@ import { throttledRetryAt } from "./sweep";
 
 /** The caller identifies as either a signed-in session (must be one of the
  *  two players) or a personal match-room link token (spec §12.1). */
-export type RoomIdentity = { kind: "session"; userId: string } | { kind: "token"; token: string };
+export type RoomIdentity =
+  | { kind: "session"; userId: string }
+  // `viewer`: who the browser is signed in as, when it is - a personal link works for anyone who holds it, so the room
+  // asks who is LOOKING to tell the seat's own account from another (`seatAccount`). Absent ⇒ signed out. Never an
+  // identity: the token alone decides whose seat this is.
+  | { kind: "token"; token: string; viewer?: RoomViewer | null };
+
+/** The signed-in user looking at a room through a personal link: id to compare, and their OWN email to show them. */
+export type RoomViewer = { userId: string; email: string };
+
+/** Whose seat this is and who is looking - the snapshot's `account` (room-snapshot.ts has the contract).
+ *  A session identity matched the seat's solo user to be here at all, so it is the seat's own account. A token carries
+ *  no account: the seat's user is compared with the viewer's. A resolved seat HAS a solo user (guard.ts `loadSide`
+ *  resolves `personId` and `userId` together), so a null here is a broken premise, refused loudly - the seat tied to
+ *  no account never gets this far (`resolveRoom`: ROOM_SEAT_NO_ACCOUNT). The seat's email never enters this function. */
+export function seatAccount(identity: RoomIdentity, seatUserId: string | null): RoomAccount {
+  if (seatUserId === null) throw new Error("seatAccount: a resolved seat has a solo user");
+  if (identity.kind === "session") return { state: "ok" };
+  const viewer = identity.viewer ?? null;
+  if (viewer !== null && viewer.userId !== seatUserId) return { state: "wrong_account", viewerEmail: viewer.email };
+  return { state: "ok" };
+}
 
 export type RoomDeps = {
   now?: Date;
@@ -143,6 +166,13 @@ const clockZeroInFlight = new Set<string>();
 
 export const ROOM_NOT_FOUND = () => new HttpError(404, "This match room could not be found", "NOT_FOUND");
 const ROOM_REPAIRING = () => new HttpError(409, "This board is being re-paired", ROOM_BEING_REPAIRED);
+const ROOM_NO_ACCOUNT = () => new HttpError(409, "This seat is not tied to a Seazn account", ROOM_SEAT_NO_ACCOUNT);
+
+/** The seat of `personId` is tied to no Seazn account: one of the board's sides whose ONLY member is that person, and which
+ *  resolved no solo user (guard.ts `loadSide`). Several members is not a chess seat and answers nothing here. */
+function seatTiedToNoAccount(sides: readonly SidePlayer[], personId: string): boolean {
+  return sides.some((s) => s.userId === null && s.members.length === 1 && s.members[0]!.person_id === personId);
+}
 
 export type Resolved = {
   f: OnlinePlayFixture;
@@ -160,10 +190,15 @@ export type Resolved = {
  * schedule — a NULL-time board resolves; a token for another round never
  * does). Every failure — no such fixture, not an online fixture, a bad or
  * expired token, another fixture or round, a person on neither side —
- * collapses to the same 404 so a probe learns nothing — save one (fix round 4b, `tellRepairing`: GET and POST room):
- * a board being re-paired, to a caller tied to it (boardBeingRepaired), is the 409 the open room reads on through.
+ * collapses to the same 404 so a probe learns nothing — save two (GET and POST room): a board being re-paired, to a
+ * caller tied to it (boardBeingRepaired, fix round 4b `tellRepairing`), is the 409 the open room reads on through; and a
+ * VERIFIED link for a seat tied to no Seazn account (`tellNoAccount`) is the 409 ROOM_SEAT_NO_ACCOUNT.
  */
-export async function resolveRoom(identity: RoomIdentity, fixtureId: string, opts: { tellRepairing?: boolean } = {}): Promise<Resolved> {
+export async function resolveRoom(
+  identity: RoomIdentity,
+  fixtureId: string,
+  opts: { tellRepairing?: boolean; tellNoAccount?: boolean } = {},
+): Promise<Resolved> {
   const f = await loadOnlinePlayFixture(fixtureId);
   if (!f) throw opts.tellRepairing === true && (await boardBeingRepaired(identity, fixtureId)) ? ROOM_REPAIRING() : ROOM_NOT_FOUND();
   const [{ home, away }, open] = await Promise.all([loadSides(f), boardOpenFor(sql, fixtureId)]);
@@ -175,6 +210,9 @@ export async function resolveRoom(identity: RoomIdentity, fixtureId: string, opt
     if (!claims || claims.fixtureId !== f.fixtureId) throw ROOM_NOT_FOUND();
     if (open === null || claims.roundOpenId !== open.id) throw ROOM_NOT_FOUND();
     player = [home, away].find((s) => s.personId !== null && s.personId === claims.personId);
+    // A link that verified for THIS fixture and ITS open, for a person on the board whose seat is tied to no account (GET and
+    // POST room, `tellNoAccount`): said, not the one 404 - the holder has the link they were sent, and nothing else learns it.
+    if (!player && opts.tellNoAccount === true && seatTiedToNoAccount([home, away], claims.personId)) throw ROOM_NO_ACCOUNT();
   }
   // An empty side has personId null; it can never be the caller.
   if (!player || player.personId === null) throw ROOM_NOT_FOUND();
@@ -315,7 +353,7 @@ async function viewerPhase(a: {
   );
 }
 
-async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnapshot> {
+async function compose(r: Resolved, now: Date, deps: RoomDeps, identity: RoomIdentity): Promise<RoomSnapshot> {
   const { f, player, home, away, open } = r;
   const anchor = open?.anchor ?? null;
   const bridge = effectiveBridge(f);
@@ -490,6 +528,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     frozen,
     canAct,
     otherAccount,
+    account: seatAccount(identity, player.userId),
     onlineChessOff,
     boardClosed,
     creation,
@@ -516,8 +555,8 @@ export async function roomGrantDowngraded(identity: RoomIdentity, fixtureId: str
  *  stale bridge is simply hidden (`effectiveBridge`) until a write path
  *  resets it. */
 export async function readRoom(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<RoomSnapshot> {
-  const r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
-  return compose(r, deps.now ?? new Date(), deps);
+  const r = await resolveRoom(identity, fixtureId, { tellRepairing: true, tellNoAccount: true });
+  return compose(r, deps.now ?? new Date(), deps, identity);
 }
 
 function seatWire(seat: SeatResult): SeatWire {
@@ -550,7 +589,7 @@ export async function claimRoomSeat(
   ask: { heldParticipantId?: string | null } = {},
 ): Promise<RoomClaim> {
   const now = deps.now ?? new Date();
-  let r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
+  let r = await resolveRoom(identity, fixtureId, { tellRepairing: true, tellNoAccount: true });
   // D21-fix-4 (review I2): this player's ask, counted - AFTER identity (a stranger is the 404 and leaves no row) and BEFORE
   // anything that can reach the vendor or write. Past the limit: 429, and nothing below runs.
   // Spec §5.7.3, "Which door counts": a claim from a player whose OWN stay is in the check-in line counts under `line`, with its
@@ -561,14 +600,14 @@ export async function claimRoomSeat(
   await takeSeatAsk({ fixtureId, personId: r.player.personId, route: viaLine ? "line" : "seat" }, { at: deps.now });
   await resetStaleBridge(r.f);
   // Every read of the board in the seat call tells a re-pair (m2): an Unpair can land between any two of them.
-  r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
+  r = await resolveRoom(identity, fixtureId, { tellRepairing: true, tellNoAccount: true });
   const bridge = effectiveBridge(r.f);
   const gameOnFile = bridge !== null && bridge.challenge_id !== null;
   const facts = await roomFacts(fixtureId);
 
   if (!gameOnFile && facts.createSentAt === null) {
     const offered = await (deps.offered ?? onlineChessOffered)({ orgId: r.f.orgId, userId: r.player.userId });
-    if (!offered) return { snapshot: await compose(r, now, deps), seat: null, create: null };
+    if (!offered) return { snapshot: await compose(r, now, deps, identity), seat: null, create: null };
   }
 
   let seat: SeatResult = await (deps.seat ?? seatPlayer)(
@@ -616,8 +655,8 @@ export async function claimRoomSeat(
   else if (seat.reason === "camera_blocked" || seat.reason === "video_unavailable") {
     await endStay({ fixtureId, personId: r.player.personId, how: "ended", at: deps.line?.at });
   }
-  const fresh = await resolveRoom(identity, fixtureId, { tellRepairing: true });
-  const snapshot = await compose(fresh, now, deps);
+  const fresh = await resolveRoom(identity, fixtureId, { tellRepairing: true, tellNoAccount: true });
+  const snapshot = await compose(fresh, now, deps, identity);
   // T9 checks the flag itself at the send (T20): its refusal is the latest
   // word on it, whatever the room's own read raced to (review m3).
   const refusedOff = create !== null && !create.created && create.reason === "online_chess_disabled";

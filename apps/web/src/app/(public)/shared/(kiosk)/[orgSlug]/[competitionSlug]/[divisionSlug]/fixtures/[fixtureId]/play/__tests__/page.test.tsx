@@ -72,14 +72,26 @@ describe("match-room page", () => {
     expect(room.readRoom, "the head never reads the room (it never names the players)").not.toHaveBeenCalled();
   });
 
-  it("a ?t= link reads THAT player's room — the session is not even consulted — and the shell gets the snapshot, the token and its own path", async () => {
+  it("a ?t= link reads THAT player's room — a session never decides whose seat it is — and the shell gets the snapshot, the token and its own path", async () => {
     room.readRoom.mockResolvedValue(SNAP);
+    // Signed out: the session is looked at ONLY to learn who is looking (the wrong-account card, 2026-10-19) - nobody here.
     const els = await render("tok.en/1");
     expect(room.readRoom).toHaveBeenCalledWith({ kind: "token", token: "tok.en/1" }, "f1");
-    expect(auth.getCurrentUser).not.toHaveBeenCalled();
+    expect(auth.getCurrentUser, "asked once, for the viewer").toHaveBeenCalledTimes(1);
     const shell = find(els, RoomShell)!;
     expect(shell.props).toEqual({ initial: SNAP, token: "tok.en/1", selfPath: "/shared/org/comp/div/fixtures/f1/play?t=tok.en%2F1", grantRefused: false });
     expect((find(els, DictProvider)!.props as { locale: string }).locale, "the org's language").toBe("nl");
+
+    // Signed in as SOMEONE ELSE: the link still names the seat - the other account is only the viewer riding along, and
+    // the room is the same (the token, the path), so nothing about the seat moved to the session.
+    room.readRoom.mockClear();
+    auth.getCurrentUser.mockResolvedValue({ id: "u-other", email: "other@example.test" });
+    const signedIn = await render("tok.en/1");
+    expect(room.readRoom).toHaveBeenCalledWith(
+      { kind: "token", token: "tok.en/1", viewer: { userId: "u-other", email: "other@example.test" } },
+      "f1",
+    );
+    expect(find(signedIn, RoomShell)!.props).toEqual(shell.props);
   });
 
   it("no link: the session reads its own seat", async () => {
@@ -151,6 +163,7 @@ describe("match-room page", () => {
       frozen: null,
       canAct: false,
       otherAccount: null,
+      account: { state: "ok" },
       onlineChessOff: false,
       boardClosed: false,
       creation: null,

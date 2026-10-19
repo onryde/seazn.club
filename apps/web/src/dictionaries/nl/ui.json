@@ -3104,7 +3104,7 @@
   "pad.recording.actions.one": "{count} actie op het paneel",
   "pad.recording.actions.other": "{count} acties op het paneel",
   "sport.badminton": "Badminton",
-  "sport.boardgame": "Bordspel",
+  "sport.boardgame": "Schaken",
   "sport.carrom": "Carrom",
   "sport.cricket": "Cricket",
   "sport.football": "Voetbal",
@@ -6364,5 +6364,16 @@
   "register.lichess.required": "Verplicht",
   "register.lichess.lead.one": "{divisions} wordt online gespeeld, op het bord van Seazn. Koppel Lichess nu, voordat je je inschrijft.",
   "register.lichess.lead.other": "{divisions} worden online gespeeld, op het bord van Seazn. Koppel Lichess nu, voordat je je inschrijft.",
-  "register.lichess.returnHint": "Je gaat naar Lichess en komt meteen terug bij deze stap. Je antwoorden blijven bewaard."
+  "register.lichess.returnHint": "Je gaat naar Lichess en komt meteen terug bij deze stap. Je antwoorden blijven bewaard.",
+  "divset.timeControl.label": "Speeltempo",
+  "divset.timeControl.choose": "Kies een speeltempo",
+  "divset.timeControl.help": "Online partijen gebruiken een van deze Lichess-speeltempo's. Lichess kent geen vertraging per zet.",
+  "divset.timeControl.unsupported": "De huidige klok van deze divisie kan niet online worden gespeeld. Kies een speeltempo om op te slaan.",
+  "externalPlay.openRound.startFirst": "Start de divisie om rondes voor online spelen te openen.",
+  "externalPlay.room.state.wrongAccount.title": "Dit bord is voor {name}",
+  "externalPlay.room.state.wrongAccount.body": "Je bent ingelogd als {email}.",
+  "externalPlay.room.state.wrongAccount.switch": "Van account wisselen",
+  "externalPlay.room.state.wrongAccount.failed": "We konden je niet uitloggen. Probeer het opnieuw.",
+  "externalPlay.room.state.noAccount.title": "Deze plek is nog niet gekoppeld aan een Seazn-account",
+  "externalPlay.room.state.noAccount.body": "Vraag het aan de organisator."
 }
