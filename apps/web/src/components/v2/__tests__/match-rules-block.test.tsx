@@ -76,6 +76,8 @@ describe("the block in each state (badminton league)", () => {
     expect(has(html, "match-rules-reset")).toBe(false);
     expect(has(html, "match-rules-locked")).toBe(false);
     expect(has(html, "match-rules-error")).toBe(false);
+    expect(has(html, "match-rules-warning"), "the 'match so far is kept' warning belongs to a live correction").toBe(false);
+    expect(has(html, "match-rules-correct"), "an unstarted match is changed, not corrected").toBe(false);
     expect(html.slice(html.indexOf('data-testid="match-rules-save"') - 80, html.indexOf('data-testid="match-rules-save"') + 200)).toContain("disabled");
   });
 

@@ -116,6 +116,20 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     expect(open, "some statuses are not locked").toBeGreaterThan(0);
   });
 
+  it("a walkover recorded but not finalized is live (decided without play) - the writer's own 'started' agrees", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const id = b.fixtureIds[0]!;
+    const dict = await getDictionary("en", "public");
+    expect((await loadFixtureMatchRules(b.auth, id, dict)).state, "premise: nothing recorded").toBe("unstarted");
+    const [fx] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${id}`;
+    await appendEvent(b.auth.orgId, id, 0, { type: "core.forfeit", payload: { by: fx!.home_entrant_id, reason: "walkover" } });
+    const state = (await loadFixtureMatchRules(b.auth, id, dict)).state;
+    expect(state, "a forfeit is play the format must fit: live, not unstarted").toBe("live");
+    // The writer reports the same fact: the write is a live correction (`started`).
+    const out = await writeFixtureRulesOverride(b.auth, [id], null);
+    expect(out.fixtures[0]!.started, "the writer's started").toBe(true);
+  });
+
   it("another sport (football knockout): the fields are the match keys only - no stage-only decider", async () => {
     const b = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 2 });
     const dict = await getDictionary("en", "public");

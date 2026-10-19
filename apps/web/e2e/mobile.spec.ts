@@ -5948,3 +5948,142 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   expect(legacyHere, `the stored-rule card's visible control set at ${projectWidth} vs 1280`).toEqual(await visibleControls(legacy));
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 });
+
+// W2c Task 19 (S2, S4): the match rules block on the fixture console, and the run sheet's "Format changed" chip, at every
+// width. One DOM, branched with `max-md:*` (AGENTS.md "The phone composition") - the block lives inside ONE phone
+// disclosure: folded below md until its toggle is tapped, a plain card from md up. So the evidence is: the block is ATTACHED
+// at every width (class 22: wait on `toBeAttached`, and open the fold only when its toggle is the visible kind - at 768/834
+// the toggle is `md:hidden`), its controls hold the 44px floor and are hit-testable (`elementFromPoint`, not paint), nothing
+// clips or scrolls, and the visible control SET (membership, order, repeats) is the one 1280 shows. The states are the
+// product's: unstarted, changed, a live match behind "Correct format", and a finished one with its lock.
+test("W2c match rules block at every width: the fold opens, the controls hold the 44px floor, nothing clips or scrolls, the control set matches 1280, and the live, locked and run-sheet states fit", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const projectWidth = page.viewportSize()!.width;
+  const m = builtinModules.find((x) => x.key === "badminton")!;
+  const variant = Object.keys(m.variants)[0]!;
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c T19 ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Match rules widths",
+    sport_key: "badminton",
+    variant_key: variant,
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Mr Alpha", "Mr Bravo", "Mr Charlie"].map((n) => `${n} ${TAG}-${testInfo.project.name}`));
+  expect(added.ids).toHaveLength(3);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+  expect(fixtureIds.length, "a league of three plays three matches").toBe(3);
+  const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  const [unstarted, live, finished] = fixtureIds as [string, string, string];
+
+  const block = page.getByTestId("match-rules-block");
+  /** The block's visible controls in DOM order, by the field block they sit in (the phone toggle is not the block's). */
+  const visibleControls = () =>
+    block.evaluate((root) =>
+      Array.from(root.querySelectorAll<HTMLElement>("input, select, button"))
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        })
+        .map((el) => `${el.closest("[data-testid]")?.getAttribute("data-testid") ?? "-"}:${el.tagName}`),
+    );
+  /** Class 22: attached first, then open the fold only when its toggle is the visible kind. */
+  const openFold = async (): Promise<void> => {
+    await expect(block, "the block is attached at every width").toBeAttached({ timeout: 20_000 });
+    const toggle = page.locator('[data-role="phone-disclosure"]:has([data-testid="match-rules-block"]) > [data-role="phone-disclosure-toggle"]');
+    expect(await toggle.isVisible(), `the fold is a phone control (${projectWidth})`).toBe(projectWidth < 768);
+    if (await toggle.isVisible()) {
+      await assertTapFloor(toggle, "Match rules toggle");
+      await expect(block, "folded on a phone until the toggle is tapped").toBeHidden();
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    }
+    await expect(block).toBeVisible({ timeout: 20_000 });
+  };
+  const fits = async (label: string): Promise<void> => {
+    const clip = await overflowingIn(page, '[data-testid="match-rules-block"]', "*", "the match rules block is missing");
+    expect(clip.clipped, `${label}: nothing in the block is clipped at ${projectWidth}`).toEqual([]);
+    await expectNoHorizontalScroll(page);
+    const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+    expect(dims.scroll, `${label} ${projectWidth}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+  };
+  const go = async (id: string): Promise<void> => {
+    await page.goto(await fixturePath(request, id), { waitUntil: "load" });
+    await dismissCookieBanner(page);
+  };
+
+  // --- unstarted: the form -----------------------------------------------------------------------------------------------
+  await go(unstarted);
+  await openFold();
+  const bestOf = block.getByTestId("stage-rule-field-bestOf").getByRole("combobox");
+  await assertTapFloor(bestOf, "best of");
+  for (const f of await block.locator("select, input").all()) await assertTapFloor(f, "a match field");
+  await bestOf.selectOption("1");
+  await assertTapFloor(block.getByTestId("match-rules-save"), "Save");
+  await fits("unstarted");
+  const unstartedHere = await visibleControls();
+  expect(unstartedHere.length, "the block's controls were read").toBeGreaterThan(4);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(unstartedHere, `unstarted: the block's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls());
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- changed: the chip, the reset, and the chip on the phone's closed row ---------------------------------------------
+  const put = await apiJson(request, `/api/v1/fixtures/${unstarted}/rules`, "PUT", { rules: { bestOf: 1 } });
+  expect(put.status, JSON.stringify(put.error)).toBe(200);
+  await go(unstarted);
+  await openFold();
+  await expect(block.getByTestId("match-rules-overridden")).toBeVisible();
+  await assertTapFloor(block.getByTestId("match-rules-reset"), "Use stage rules");
+  await fits("changed");
+  const changedHere = await visibleControls();
+  expect(changedHere, "premise: the reset joined the form's controls").toContain("match-rules-reset:BUTTON");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(changedHere, `changed: the block's visible control set at ${projectWidth} vs 1280`).toEqual(await visibleControls());
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- the run sheet (before any play: once a stage has started its Fixtures tab folds the list behind "View fixtures"): the chip
+  // is on the changed row only, inside the viewport ----------------------------------------------------------------------
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const chip = page.getByTestId("run-sheet-format-changed");
+  await expect(chip, "exactly the changed match is tagged").toHaveCount(1, { timeout: 20_000 });
+  await expect(chip).toBeVisible();
+  const box = await chip.boundingBox();
+  expect(box, "the chip has a box").not.toBeNull();
+  expect(box!.x, "the chip starts inside the viewport").toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width, "the chip ends inside the viewport").toBeLessThanOrEqual(page.viewportSize()!.width);
+  await expectNoHorizontalScroll(page);
+
+  // --- live: the form stays behind "Correct format", then opens with its warning ---------------------------------------
+  const start = await apiJson(request, `/api/v1/fixtures/${live}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(start.status, JSON.stringify(start.error)).toBe(201);
+  await go(live);
+  await openFold();
+  await assertTapFloor(block.getByTestId("match-rules-correct"), "Correct format");
+  await expect(block.getByTestId("stage-rule-field-bestOf")).toHaveCount(0);
+  await fits("live (closed)");
+  await block.getByTestId("match-rules-correct").click();
+  await expect(block.getByTestId("match-rules-warning")).toBeVisible();
+  await assertTapFloor(block.getByTestId("stage-rule-field-bestOf").getByRole("combobox"), "best of (live)");
+  await fits("live (open)");
+
+  // --- finished: the lock sentence, no controls -----------------------------------------------------------------------
+  const fixtureRead = await apiJson<{ home_entrant_id: string }>(request, `/api/v1/fixtures/${finished}`);
+  let seq = 0;
+  for (const [type, payload] of [["core.forfeit", { by: fixtureRead.data!.home_entrant_id, reason: "walkover" }], ["core.finalize", {}]] as const) {
+    const r = await apiJson(request, `/api/v1/fixtures/${finished}/events`, "POST", { expected_seq: seq++, type, payload });
+    expect(r.status, `${type}: ${JSON.stringify(r.error)}`).toBe(201);
+  }
+  await go(finished);
+  await openFold();
+  await expect(block.getByTestId("match-rules-locked")).toBeVisible();
+  await expect(block.locator("select, input, button")).toHaveCount(0);
+  await fits("locked");
+});

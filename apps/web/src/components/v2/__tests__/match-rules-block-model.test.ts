@@ -15,8 +15,11 @@ import {
 import { StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
-import { moduleFor, type RuleContext } from "@/lib/rule-scope";
+import { SINGLE_SET_POINTS_LABEL, setRuleValue } from "@/lib/match-rules";
+import { BEST_OF_ONE_PAIR } from "@/lib/match-rules/best-of-one";
+import { matchFieldsFor, moduleFor, type RuleContext } from "@/lib/rule-scope";
 import {
+  blockSeedKey,
   hydrateMatchValues,
   matchFormDirty,
   matchFormFields,
@@ -73,7 +76,7 @@ describe("football extra time (the Task 5 carry): opens at the stage's value, of
       const et = matchFormFields(ctx, stage, values0, LABELS).find((f) => f.field.key === "extraTime")!;
       const stageValues = hydrateMatchValues(ctx, stage, stage, LABELS);
       for (const o of et.field.options!) {
-        const fragment = matchFragment(ctx, matchFormFields(ctx, stage, { ...values0, extraTime: o.value }, LABELS), { ...values0, extraTime: o.value }, stageValues, stage);
+        const fragment = matchFragment(ctx, { ...values0, extraTime: o.value }, stageValues, stage);
         const verdict = checkFixtureOverride(m, "knockout", "11-a-side", stage, fragment);
         expect(verdict.ok, `stage ${half}: offered "${o.value}" -> ${JSON.stringify(fragment)}`).toBe(true);
         accepted++;
@@ -92,7 +95,7 @@ describe("football extra time (the Task 5 carry): opens at the stage's value, of
     const stageValues = hydrateMatchValues(ctx, stage, stage, LABELS);
     const send = (extraTime: string) => {
       const values = { ...stageValues, extraTime };
-      return matchFragment(ctx, matchFormFields(ctx, stage, values, LABELS), values, stageValues, stage);
+      return matchFragment(ctx, values, stageValues, stage);
     };
     expect(send("off")).toEqual({ extraTime: { enabled: false, halfMinutes: 10 } });
     expect(send("7")).toEqual({ extraTime: { enabled: true, halfMinutes: 7 } });
@@ -108,7 +111,7 @@ describe("football extra time (the Task 5 carry): opens at the stage's value, of
     expect(et.held).toBe(true);
     expect(et.field.options!.map((o) => o.value)).toEqual(["off"]);
     // Held fields send nothing, even if a value were forced into the form.
-    expect(matchFragment(ctx, matchFormFields(ctx, stage, { ...values, extraTime: "9" }, LABELS), { ...values, extraTime: "9" }, values, stage)).toEqual({});
+    expect(matchFragment(ctx, { ...values, extraTime: "9" }, values, stage)).toEqual({});
     // ...and the engine agrees that it would refuse that very override.
     expect(checkFixtureOverride(mod("football"), "knockout", "11-a-side", stage, { extraTime: { enabled: true, halfMinutes: 9 } }).ok).toBe(false);
   });
@@ -149,10 +152,39 @@ describe("the other bounded keys: a number a match may only shorten opens at its
     const f = matchFormFields(ctx, stage, stageValues, LABELS).find((x) => x.field.key === "shootoutAttempts")!;
     for (const n of [f.field.min!, f.field.max!]) {
       const values = { ...stageValues, shootoutAttempts: String(n) };
-      const fragment = matchFragment(ctx, matchFormFields(ctx, stage, values, LABELS), values, stageValues, stage);
+      const fragment = matchFragment(ctx, values, stageValues, stage);
       expect(checkFixtureOverride(mod("football"), "knockout", "11-a-side", stage, fragment).ok, `kicks ${n}`).toBe(true);
     }
     expect(checkFixtureOverride(mod("football"), "knockout", "11-a-side", stage, { shootoutAttempts: f.field.max! + 1 }).ok).toBe(false);
+  });
+
+  it("a shoot-out the stage does not play holds its kicks - a match cannot add one (the detail follows its decider)", () => {
+    const ctx = ctxOf("football", "knockout", "11-a-side");
+    const on = { ...footballWithEt(10), shootout: true };
+    const off = { ...footballWithEt(10), shootout: false };
+    const kicks = (stage: Record<string, unknown>) =>
+      matchFormFields(ctx, stage, hydrateMatchValues(ctx, stage, stage, LABELS), LABELS).find((f) => f.field.key === "shootoutAttempts")!;
+    expect(kicks(on).held, "premise: played shoot-out, editable kicks").toBe(false);
+    expect(kicks(off).held, "no shoot-out in the stage: its kicks are held").toBe(true);
+    // And a held field sends nothing, whatever the form holds.
+    const values = { ...hydrateMatchValues(ctx, off, off, LABELS), shootoutAttempts: "3" };
+    expect(matchFragment(ctx, values, hydrateMatchValues(ctx, off, off, LABELS), off)).toEqual({});
+  });
+
+  it("a stage value below the field's own minimum lowers the minimum to it - the field never offers a floor above its ceiling", () => {
+    const ctx = ctxOf("icehockey", "knockout", null);
+    const m = mod("icehockey");
+    const fact = ruleKeyOwning(m, ["shootout", "attempts"])!.fact;
+    expect(fact.matchBound).toBe("shorter");
+    const base = variantCfg("icehockey", Object.keys(m.variants)[0]!);
+    const shootout = base.shootout as { attempts: number };
+    const probe = matchFormFields(ctx, base, hydrateMatchValues(ctx, base, base, LABELS), LABELS).find((f) => f.field.key === "shootoutAttempts")!;
+    const floor = probe.field.min!;
+    expect(floor, "premise: the curated field has a floor above 1").toBeGreaterThan(1);
+    const stage = { ...base, shootout: { ...shootout, attempts: floor - 1 } };
+    const f = matchFormFields(ctx, stage, hydrateMatchValues(ctx, stage, stage, LABELS), LABELS).find((x) => x.field.key === "shootoutAttempts")!;
+    expect(f.field.max).toBe(floor - 1);
+    expect(f.field.min, "min follows the ceiling down").toBe(floor - 1);
   });
 
   it("ice hockey overtime minutes (a nested key) opens at the stage's value; held when the stage plays no overtime", () => {
@@ -167,7 +199,7 @@ describe("the other bounded keys: a number a match may only shorten opens at its
     expect(f.held).toBe(false);
     expect(f.field.max).toBe(8);
     const values = { ...v, overtimeMinutes: "5" };
-    const fragment = matchFragment(ctx, matchFormFields(ctx, withOt, values, LABELS), values, v, withOt);
+    const fragment = matchFragment(ctx, values, v, withOt);
     expect(fragment, "the stage's whole overtime object with one number changed").toEqual({ overtime: { kind: "sudden_death", minutes: 5, skaters: 3 } });
     expect(checkFixtureOverride(m, "knockout", null, withOt, fragment).ok).toBe(true);
 
@@ -183,22 +215,62 @@ describe("the fragment is what differs from the stage - and nothing else", () =>
     const stage = variantCfg("badminton", "short");
     const stageValues = hydrateMatchValues(ctx, stage, stage, LABELS);
     const fields = (v: Record<string, string>) => matchFormFields(ctx, stage, v, LABELS);
-    expect(matchFragment(ctx, fields(stageValues), stageValues, stageValues, stage), "untouched").toEqual({});
+    expect(matchFragment(ctx, stageValues, stageValues, stage), "untouched").toEqual({});
     const bestOf = fields(stageValues).find((f) => f.field.key === "bestOf")!.field;
     const other = bestOf.options!.map((o) => o.value).find((v) => v !== stageValues.bestOf)!;
     const changed = { ...stageValues, bestOf: other };
-    const frag = matchFragment(ctx, fields(changed), changed, stageValues, stage);
+    const frag = matchFragment(ctx, changed, stageValues, stage);
     expect(frag, "just the changed key").toEqual({ bestOf: Number(other) });
     expect(checkFixtureOverride(mod("badminton"), "league", "short", stage, frag).ok).toBe(true);
-    expect(matchFragment(ctx, fields(stageValues), stageValues, stageValues, stage), "changed back").toEqual({});
+    expect(matchFragment(ctx, stageValues, stageValues, stage), "changed back").toEqual({});
   });
 
   it("a key the override carries that no match field edits is kept, not dropped, by a whole-fragment replace", () => {
     const ctx = ctxOf("badminton", "league", "short");
     const stage = variantCfg("badminton", "short");
     const stageValues = hydrateMatchValues(ctx, stage, stage, LABELS);
-    const frag = matchFragment(ctx, matchFormFields(ctx, stage, stageValues, LABELS), stageValues, stageValues, stage, { someKeyNoFieldEdits: 7 });
+    const frag = matchFragment(ctx, stageValues, stageValues, stage, { someKeyNoFieldEdits: 7 });
     expect(frag).toEqual({ someKeyNoFieldEdits: 7 });
+  });
+
+  it("best of 1: ONE 'Points to win' field (the shadow key is hidden) and a change writes BOTH keys, as the stage editor does", () => {
+    const ctx = ctxOf("badminton", "league", "bwf");
+    const stage = variantCfg("badminton", "bwf");
+    expect(stage.bestOf as number, "premise: the stage plays more than one set").toBeGreaterThan(1);
+    const keysOf = (v: Record<string, string>) => matchFormFields(ctx, stage, v, LABELS).map((f) => f.field.key);
+    const open = hydrateMatchValues(ctx, stage, stage, LABELS);
+    expect(keysOf(open), "best of 3: both points fields").toEqual(expect.arrayContaining([BEST_OF_ONE_PAIR.shown, BEST_OF_ONE_PAIR.shadow]));
+
+    const one = setRuleValue("badminton", open, "bestOf", "1", stage);
+    const edited = setRuleValue("badminton", one, BEST_OF_ONE_PAIR.shown, "15", stage);
+    expect(keysOf(edited), "best of 1: the shadow key is hidden").not.toContain(BEST_OF_ONE_PAIR.shadow);
+    expect(keysOf(edited), "...and the shown one stays").toContain(BEST_OF_ONE_PAIR.shown);
+    const shownField = matchFormFields(ctx, stage, edited, LABELS).find((f) => f.field.key === BEST_OF_ONE_PAIR.shown)!;
+    expect(shownField.field.label).toBe(SINGLE_SET_POINTS_LABEL);
+
+    const frag = matchFragment(ctx, edited, open, stage);
+    expect(frag, "the hidden key is written too, to the same number").toEqual({ bestOf: 1, [BEST_OF_ONE_PAIR.shown]: 15, [BEST_OF_ONE_PAIR.shadow]: 15 });
+    expect(checkFixtureOverride(mod("badminton"), "league", "bwf", stage, frag).ok).toBe(true);
+  });
+
+  it("a stored override's key that a match field edits is the form's to say: set back to the stage's, it leaves the fragment", () => {
+    const ctx = ctxOf("badminton", "league", "short");
+    const stage = variantCfg("badminton", "short");
+    const stageValues = hydrateMatchValues(ctx, stage, stage, LABELS);
+    const frag = matchFragment(ctx, stageValues, stageValues, stage, { bestOf: 1, someKeyNoFieldEdits: 7 });
+    expect(frag).toEqual({ someKeyNoFieldEdits: 7 });
+    expect("bestOf" in frag, "the edited key is not carried over from the stored override").toBe(false);
+  });
+
+  it("the block re-seeds when the page's facts change, and only then", () => {
+    const stage = variantCfg("badminton", "short");
+    const base = { override: null, state: "unstarted" as const, effective: stage, stageResolved: stage };
+    const key = blockSeedKey(base);
+    expect(blockSeedKey({ ...base })).toBe(key);
+    expect(blockSeedKey({ ...base, override: { bestOf: 1 } }), "override").not.toBe(key);
+    expect(blockSeedKey({ ...base, state: "live" }), "state").not.toBe(key);
+    expect(blockSeedKey({ ...base, effective: { ...stage, bestOf: 1 } }), "effective").not.toBe(key);
+    expect(blockSeedKey({ ...base, stageResolved: { ...stage, bestOf: 5 } }), "stage").not.toBe(key);
   });
 
   it("dirty: equal value sets are clean, a changed value is dirty, a key order difference is not a change", () => {
@@ -236,7 +308,7 @@ describe("every sport and stage kind: what the form offers, the engine accepts (
               : (f.field.options ?? []).map((o) => o.value);
             for (const c of candidates) {
               const values = { ...stageValues, [f.field.key]: c };
-              const frag = matchFragment(ctx, matchFormFields(ctx, stage, values, LABELS), values, stageValues, stage);
+              const frag = matchFragment(ctx, values, stageValues, stage);
               if (Object.keys(frag).length === 0) { offeredChecked++; continue; }
               // The writer parses the corrected format first (a refusal there is CONFIG_INVALID, the schema's, not the bound's):
               // only a corrected format the schema takes is asked of the bound.
@@ -258,6 +330,40 @@ describe("every sport and stage kind: what the form offers, the engine accepts (
   });
 });
 
+describe("the page seam: a sport with nothing to change for one match gets no block", () => {
+  it("every sport x stage kind x variant: the block is offered exactly when the engine declares a match key the form has a field for (counted)", () => {
+    let cells = 0;
+    let offered = 0;
+    let withheld = 0;
+    for (const m of builtinModules)
+      for (const kind of StageKind.options)
+        for (const variant of Object.keys(m.variants)) {
+          const ctx = ctxOf(m.key, kind, variant);
+          const stage = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+          const fields = matchFieldsFor(ctx).map((f) => f);
+          const props = matchRulesBlockProps("f", {
+            sportKey: m.key, stageKind: kind, variant, stageLine: "", stageResolved: stage, effective: stage, override: null, state: "unstarted", fields,
+          });
+          cells++;
+          if (fixtureKeysFor(m, kind, variant).length === 0) expect(props, `${m.key}/${kind}/${variant}: no match key, no block`).toBeUndefined();
+          if (fields.length === 0) { expect(props, `${m.key}/${kind}/${variant}: no field, no block`).toBeUndefined(); withheld++; }
+          else { expect(props, `${m.key}/${kind}/${variant}: has fields, block offered`).toBeDefined(); offered++; }
+        }
+    expect(cells).toBe(builtinModules.reduce((n, m) => n + StageKind.options.length * Object.keys(m.variants).length, 0));
+    expect(offered, "some cells offer the block").toBeGreaterThan(0);
+    expect(withheld, "some cells (a sport with no match key) withhold it").toBeGreaterThan(0);
+  });
+
+  it("a finished match with no override is still offered where the sport has fields (the lock sentence is the content)", () => {
+    const stage = variantCfg("badminton", "short");
+    const props = matchRulesBlockProps("f", {
+      sportKey: "badminton", stageKind: "league", variant: "short", stageLine: "", stageResolved: stage, effective: stage, override: null, state: "locked",
+      fields: matchFieldsFor(ctxOf("badminton", "league", "short")),
+    });
+    expect(props?.state).toBe("locked");
+  });
+});
+
 describe("the page seam: what crosses from the server page to the console is JSON, and only the named facts", () => {
   it("the mapper keeps the nine facts, drops anything else the loader grows (a function-valued `fields`), and survives a JSON round trip", () => {
     const stage = variantCfg("badminton", "short");
@@ -274,7 +380,11 @@ describe("the page seam: what crosses from the server page to the console is JSO
       fields: matchFormFields(ctxOf("badminton", "league", "short"), stage, {}, LABELS).map((f) => f.field),
     };
     const props = matchRulesBlockProps("fx-1", loaded);
+    expect(props, "the sport has fields, so the block is offered").toBeDefined();
+    if (props === undefined) return;
     expect(Object.keys(props).sort()).toEqual(["effective", "fixtureId", "override", "sportKey", "stageKind", "stageLine", "stageResolved", "state", "variant"]);
+    const facts = Object.fromEntries(Object.entries(loaded).filter(([k]) => k !== "fields"));
+    expect(props, "each fact arrives as the loader gave it").toEqual({ fixtureId: "fx-1", ...facts });
     expect(props.fixtureId).toBe("fx-1");
     expect("fields" in props).toBe(false);
     expect(JSON.parse(JSON.stringify(props))).toEqual(props);

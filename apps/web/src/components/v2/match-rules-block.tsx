@@ -22,6 +22,7 @@ import { setRuleValue } from "@/lib/match-rules";
 import { RuleFieldControl } from "./stage-rules/rule-field-control";
 import {
   hydrateMatchValues,
+  blockSeedKey,
   matchFormDirty,
   matchFormFields,
   matchFragment,
@@ -38,7 +39,7 @@ const topSegment = (edits: readonly string[]): string => edits[0]!.split(".")[0]
 
 export function MatchRulesBlock(props: MatchRulesBlockProps) {
   // The page re-reads the rules after a save (`router.refresh()`): a NEW answer re-seeds the form from it.
-  return <MatchRulesBlockBody key={JSON.stringify([props.override, props.state, props.effective, props.stageResolved])} {...props} />;
+  return <MatchRulesBlockBody key={blockSeedKey(props)} {...props} />;
 }
 
 function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLine, stageResolved, effective, override, state }: MatchRulesBlockProps) {
@@ -69,7 +70,8 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
   const fields = matchFormFields(ctx, stageResolved, values, labels);
   const dirty = matchFormDirty(opened, values);
   const locked = state === "locked";
-  const formOpen = !locked && (state === "unstarted" || correcting);
+  // A finished match has no form (X-SR-3); a live one opens it only on "Correct format" (X-SR-5); an unstarted one always.
+  const formOpen = state === "unstarted" || (state === "live" && correcting);
 
   async function put(rules: Record<string, unknown> | null, then: () => void) {
     setSaving(true);
@@ -88,7 +90,7 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
 
   const save = () => {
     if (ctx === null) return;
-    const fragment = matchFragment(ctx, fields, values, stageValues, stageResolved, override);
+    const fragment = matchFragment(ctx, values, stageValues, stageResolved, override);
     // Nothing differs from the stage's any more: `{}` sets the match back to it, as the server reads it.
     void put(fragment, () => {
       setOverridden(Object.keys(fragment).length > 0);

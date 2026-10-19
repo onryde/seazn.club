@@ -19,7 +19,7 @@
 // stored override carries that no field edits (a replace must not drop it silently).
 import type { StageKind } from "@seazn/engine/core";
 import { ruleKeyOwning, type AnySportModule, type RuleKeyFact } from "@seazn/engine/sport";
-import { visibleRuleFields, type RuleField } from "@/lib/match-rules";
+import { alignBestOfOnePoints, visibleRuleFields, type RuleField } from "@/lib/match-rules";
 import { buildFragment, matchFieldsFor, type RuleContext } from "@/lib/rule-scope";
 import { detailIsInert } from "./stage-rules/stage-row-model";
 
@@ -43,8 +43,13 @@ export interface MatchRulesBlockProps {
 /**
  * The loader's answer as the page hands it to the console: exactly the serialisable facts, listed by name so a field the
  * loader grows later (a function-valued one, like `fields`) cannot ride along into an RSC payload that cannot carry it.
+ * `undefined` for a sport with nothing to change for one match (no match field: the block would be an empty card).
  */
-export function matchRulesBlockProps(fixtureId: string, r: Omit<MatchRulesBlockProps, "fixtureId">): MatchRulesBlockProps {
+export function matchRulesBlockProps(
+  fixtureId: string,
+  r: Omit<MatchRulesBlockProps, "fixtureId"> & { readonly fields: readonly unknown[] },
+): MatchRulesBlockProps | undefined {
+  if (r.fields.length === 0) return undefined;
   return {
     fixtureId,
     sportKey: r.sportKey,
@@ -199,24 +204,33 @@ export function matchFormDirty(opened: Record<string, string>, values: Record<st
 }
 
 /**
- * The `rules` a Save PUTs: the fields (not held) whose value differs from the stage's, laid onto the stage's own objects
+ * The `rules` a Save PUTs: every field (not held, VISIBLE OR NOT - the best-of-1 shadow key is hidden but still written, as
+ * the stage and division editors write it) whose value differs from the stage's, laid onto the stage's own objects
  * (`buildFragment`: a decider's length changes one leaf of the stage's object), plus the stored override's keys that no
  * match field edits. `{}` clears the override (the PUT sets the match back to its stage's), which is right when every value
  * has been set back to the stage's.
  */
 export function matchFragment(
   ctx: MatchFormCtx,
-  fields: readonly MatchFormField[],
   values: Record<string, string>,
   stageValues: Record<string, string>,
   stageResolved: Record<string, unknown>,
   storedOverride: Record<string, unknown> | null = null,
 ): Record<string, unknown> {
-  const sent = fields.filter((f) => !f.held && matchSource(f.field.key, values, stageValues) === "match");
-  const built = buildFragment(sent.map((f) => f.field), values, stageResolved);
+  // `build`/`read` never use the labels: the words only decorate the options.
+  const all = allAdapted(ctx, stageResolved, { off: "", halfMinutes: () => "" });
+  const sent = all.filter((f) => !f.held && matchSource(f.field.key, values, stageValues) === "match");
+  // On a best of 1 the one points field writes both keys (`BEST_OF_ONE_PAIR`), as the stage and division editors do.
+  const built = alignBestOfOnePoints(ctx.sportKey, buildFragment(sent.map((f) => f.field), values, stageResolved), stageResolved);
   if (storedOverride === null) return built;
   // Top-level keys some match field edits: those are the form's to say. Any other key the override carries stays.
-  const edited = new Set(allAdapted(ctx, stageResolved, { off: "", halfMinutes: () => "" }).flatMap((a) => a.field.edits.map((k) => k.split(".")[0]!)));
+  const edited = new Set(all.flatMap((a) => a.field.edits.map((k) => k.split(".")[0]!)));
   const kept = Object.fromEntries(Object.entries(storedOverride).filter(([k]) => !edited.has(k)));
   return { ...kept, ...built };
+}
+
+/** What the block re-seeds on: the facts a refreshed page can change under it (`router.refresh()` after a save, a tab
+ *  return). A new key remounts the block from the page's truth. */
+export function blockSeedKey(p: Pick<MatchRulesBlockProps, "override" | "state" | "effective" | "stageResolved">): string {
+  return JSON.stringify([p.override, p.state, p.effective, p.stageResolved]);
 }

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { FixtureConsole, type SideInfo } from "@/components/v2/fixture-console";
 import { matchRulesBlockProps } from "@/components/v2/match-rules-block-model";
-import { moduleFor } from "@/lib/rule-scope";
+import { matchFieldsFor, moduleFor } from "@/lib/rule-scope";
 import enUi from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({
@@ -41,6 +41,7 @@ function consoleHtml(withBlock: boolean, override: Record<string, unknown> | nul
               effective: override === null ? stage : { ...stage, ...override },
               override,
               state: "unstarted",
+              fields: matchFieldsFor({ module: badminton, stageKind: "league", variant: "short" }),
             })
           : undefined
       }
