@@ -35,8 +35,8 @@ import {
   type OpenRoundView,
 } from "@/lib/open-round";
 import { ConfirmDialog } from "../confirm-dialog";
-import { extendEdgesOf, liveExtendableCount } from "@/lib/checkin-extend";
-import { extendFailureText, extendHelperLine, extendRoundLabel, extendRoundLines, type ExtendCopy } from "../checkin-extend-ui";
+import { extendEdgesOf, liveExtendableCount, liveRoundRefusals, roundWhy } from "@/lib/checkin-extend";
+import { extendFailureText, extendHelperLine, extendRoundLabel, extendRoundLines, roundWhyLine, type ExtendCopy } from "../checkin-extend-ui";
 import { useExtendClock } from "../use-extend-clock";
 import {
   initialOpenRoundUi,
@@ -255,6 +255,9 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
   // against the ticking clock, so the button leaves the screen at the deadline and arrives at an opening without a refresh.
   const reach = clockMs === null ? round.extendableBoards : liveExtendableCount(round.extendWindows, clockMs);
   const offersExtend = round.state === "open" && reach > 0;
+  // Where the button is not offered, the reason stands in its place (owner, 2026-10-19), from the same two facts the count is made of:
+  // the windows on the ticking clock and the server's tally of every other board. Nothing for a round not opened or one with no boards.
+  const why = round.state === "open" && !offersExtend ? roundWhy(liveRoundRefusals(round.extendRefusals, round.extendWindows, clockMs)) : null;
   // Each group has its OWN deadline: group 0's no-shows reach the organiser before the last group has even opened, so a
   // staggered round draws the groups and not the one "open until" line, which could only name the last group's close.
   const batches = timedBatches(round);
@@ -300,7 +303,7 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
           {cta}
         </button>
       )}
-      {(offersExtend || extendLines !== null) && (
+      {(offersExtend || extendLines !== null || why !== null) && (
         <div data-testid="open-round-extend" className="mt-2 flex min-w-0 flex-col items-start gap-1">
           {offersExtend && (
             <>
@@ -318,6 +321,11 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
                 {extendHelperLine(copy)} {plural("externalPlay.checkinExtend.roundHint", reach)}
               </p>
             </>
+          )}
+          {why !== null && (
+            <p data-testid="open-round-extend-why" data-why={why.code} className={`text-sm ${SOFT}`}>
+              {roundWhyLine(why, copy)}
+            </p>
           )}
           <div role="status" data-testid="open-round-extend-notice" className={`flex min-w-0 flex-col gap-0.5 text-sm ${SOFT}`}>
             {(extendLines ?? []).map((line, i) => (

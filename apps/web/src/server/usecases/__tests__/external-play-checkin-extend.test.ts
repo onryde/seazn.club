@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { CHECKIN_EXTEND_STEP_MINUTES } from "@/lib/checkin-extend";
+import { CHECKIN_EXTEND_STEP_MINUTES, liveExtendRefusal, liveExtendableCount, liveRoundRefusals, roundWhy } from "@/lib/checkin-extend";
 import {
   CHECKIN_BATCH_GAP_MS,
   CHECKIN_BATCH_SIZE,
@@ -34,6 +34,7 @@ import {
 } from "@/server/external-play/window";
 import { boardOpenFor, lockCheckinWindow } from "@/server/external-play/round-open";
 import { backendPid, pollWaitersBehind } from "../external-play/__tests__/_lock-waiters";
+import { loadOnlinePlayFixture } from "../external-play/guard";
 
 // The email seam (as open-round.test.ts): the real `send` no-ops without RESEND_API_KEY and would report every invite failed.
 const mail = vi.hoisted(() => ({
@@ -52,6 +53,21 @@ vi.mock("@/lib/email", async (importOriginal) => {
   };
 });
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
+// The gap between the extension's read of a board with NO bridge row and its making of one (race rule, checkin-extend.ts): the real
+// `ensureBridgeRow` runs on its own connection, so a create that mints the row AND claims it can land in front of it. The seam lets a
+// test put exactly that create there; every other call - and every other test - goes through the real function untouched.
+const rowGap = vi.hoisted(() => ({ before: null as null | ((fixtureId: string) => Promise<void>), real: null as null | ((f: unknown) => Promise<void>) }));
+vi.mock("../external-play/guard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../external-play/guard")>();
+  rowGap.real = (f) => actual.ensureBridgeRow(f as Parameters<typeof actual.ensureBridgeRow>[0]);
+  return {
+    ...actual,
+    ensureBridgeRow: async (f: Parameters<typeof actual.ensureBridgeRow>[0], o?: Parameters<typeof actual.ensureBridgeRow>[1]) => {
+      await rowGap.before?.(f.fixtureId);
+      return actual.ensureBridgeRow(f, o);
+    },
+  };
+});
 vi.mock("@/server/external-play/lichess/board-api", () => ({
   createChallengeToUser: vi.fn(),
   acceptChallenge: vi.fn(),
@@ -309,6 +325,31 @@ describe.skipIf(!HAS_DB)("extendCheckin - the rule", () => {
     expect(await deadlineOf(id)).toBe(deadlineAfter(1).getTime());
   });
 
+  it("a board with no bridge row whose create mints the row AND claims it in the gap before the press makes one: the press is refused game_started and extends nothing (the rowless race)", async () => {
+    const r = await openedRound(1);
+    const id = r.boards[0]!.fixtureId;
+    await sql`delete from fixture_external_play where fixture_id = ${id}`;
+    expect(await rowOf(id), "premise: no row, so the first read finds nothing to lock").toBeNull();
+    const f = await loadOnlinePlayFixture(id);
+    let landed = 0;
+    // The create's own two steps (guard.ts ensureBridgeRow, then create-game.ts's claim: a conditional UPDATE of `mint_claimed_at`),
+    // landing between the press's read of the missing row and its own make of one.
+    rowGap.before = async () => {
+      landed += 1;
+      await rowGap.real!(f!);
+      await sql`update fixture_external_play set mint_claimed_at = ${EXT_AT}, updated_at = now() where fixture_id = ${id} and status = 'pending' and challenge_id is null`;
+    };
+    try {
+      expect(await refusal(press(r.owner, id)), "a live mint claim is a game on file").toEqual({ status: 409, code: "CHECKIN_GAME_STARTED" });
+    } finally {
+      rowGap.before = null;
+    }
+    expect(landed, "anti-vacuity: the create did land in the gap").toBe(1);
+    expect(await rowOf(id), "the create's row stands, and nothing was extended on it").toMatchObject({ status: "pending", checkin_extra_ms: 0, checkin_extensions: 0 });
+    expect((await auditOf(id)).length, "and nothing was audited").toBe(0);
+    expect(await deadlineOf(id), "the board's deadline is the unextended one").toBe(OLD.getTime());
+  });
+
   it("who: only a signed-in owner or admin who does not play on the board; another club's board is a 404; every refusal writes nothing", async () => {
     const r = await openedRound(2);
     const [a, b] = r.boards as [SeedRoundBoard, SeedRoundBoard];
@@ -405,7 +446,7 @@ describe.skipIf(!HAS_DB)("extendRoundCheckin - one action, the same rule on ever
     expect(JSON.parse((await auditOf(extendedOnce))[0]!.note)).toMatchObject({ scope: "round", extensions: 2 });
   });
 
-  it("[opens-at:open-round-view] a mixed round's windows are exactly the boards the CLOCK alone stands in the way of - not a closed, capped, started or withdrawn board - and their count at NOW is the extendable count", async () => {
+  it("[opens-at:open-round-view] a mixed round's windows are the boards the CLOCK alone stands in the way of - a capped one included, with none left - and every other board is counted by its reason; the windows' count at NOW is the extendable count", async () => {
     // The same round as above, read through the organiser's Open round view at NOW = O + 11 min.
     const NOW = at(O, 11 * MIN);
     const r = await openedRound(6, { camera: "required", ranked: [CHECKIN_BATCH_SIZE, 6 * CHECKIN_BATCH_SIZE] });
@@ -414,17 +455,43 @@ describe.skipIf(!HAS_DB)("extendRoundCheckin - one action, the same rule on ever
     await sql`update fixture_external_play set checkin_extra_ms = ${CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS}, checkin_extensions = ${CHECKIN_EXTEND_MAX} where fixture_id = ${capped}`;
     await sql`update fixture_external_play set create_sent_at = ${at(O, MIN)} where fixture_id = ${gameStarted}`;
     await sql`update fixtures set status = 'abandoned' where id = ${withdrawn}`;
-    const view = (await listOpenRounds(await mintOrgOwnerAuth(r.orgId), r.divisionId, { now: NOW })).find((v) => v.roundNo === 1)!;
-    // Expected from the rule, per board: the once-extended batch-0 board (opens O - lead, now closes one step later), the plain batch-1
-    // board (opens O + 1 gap), the batch-6 board (opens O + 6 gaps) - and none of: batch-0's two closed boards, the capped, the started, the withdrawn.
-    const win = (batch: number, extra: number) => ({
+    const auth = await mintOrgOwnerAuth(r.orgId);
+    const view = (await listOpenRounds(auth, r.divisionId, { now: NOW })).find((v) => v.roundNo === 1)!;
+    // Expected from the rule, per board: the once-extended batch-0 board (opens O - lead, now closes one step later), the capped batch-0
+    // board (three steps later, none left), the plain batch-1 board (opens O + 1 gap), the batch-6 board (opens O + 6 gaps) - and none of:
+    // batch-0's two closed boards and the started one, which the tally counts by their reason (the withdrawn board is not listed).
+    const win = (batch: number, extra: number, left: number) => ({
       opensAt: at(O, batch === 0 ? -WINDOW_OPEN_LEAD_MS : batch * CHECKIN_BATCH_GAP_MS).toISOString(),
       deadlineAt: at(O, batch * CHECKIN_BATCH_GAP_MS + DEADLINE_AFTER_MS + extra).toISOString(),
+      extensionsLeft: left,
     });
-    const expected = [win(0, CHECKIN_EXTEND_STEP_MS), win(1, 0), win(6, 0)];
-    expect([...view.extendWindows].sort((a, b) => a.deadlineAt.localeCompare(b.deadlineAt)), "3 windows of 8 boards").toEqual(expected.sort((a, b) => a.deadlineAt.localeCompare(b.deadlineAt)));
-    expect(view.extendableBoards, "two of them hold NOW").toBe(2);
-    expect(view.extendWindows.filter((w) => new Date(w.opensAt).getTime() <= NOW.getTime() && NOW.getTime() < new Date(w.deadlineAt).getTime()).length).toBe(view.extendableBoards);
+    const expected = [win(0, CHECKIN_EXTEND_STEP_MS, CHECKIN_EXTEND_MAX - 1), win(0, CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS, 0), win(1, 0, CHECKIN_EXTEND_MAX), win(6, 0, CHECKIN_EXTEND_MAX)];
+    const byDeadline = (a: { deadlineAt: string }, b: { deadlineAt: string }) => a.deadlineAt.localeCompare(b.deadlineAt);
+    expect([...view.extendWindows].sort(byDeadline), "4 windows of 8 boards").toEqual(expected.sort(byDeadline));
+    // The withdrawn board is not one of the round's boards at all (an abandoned fixture is not listed by the view): 7 boards, not 8.
+    expect(view.extendRefusals, "the other three, by their reason").toEqual({ not_playable: 0, game_started: 1, closed: 2, not_open: 0, cap_reached: 0 });
+    const listed = view.extendWindows.length + Object.values(view.extendRefusals).reduce((a, n) => a + n, 0);
+    expect(listed, "every board is in the windows or the tally, once").toBe(7);
+    expect(view.extendableBoards, "two of them hold NOW and have a press left").toBe(2);
+    expect(liveExtendableCount(view.extendWindows, NOW.getTime()), "the capped board's window holds NOW and is not counted").toBe(view.extendableBoards);
+
+    // The round's sentence, from this view on a clock and from the arbiter panel's own board list on the same clock, against the SERVER's
+    // reading of the round re-loaded at that instant: the two screens never say what the server would not.
+    const arbiter = (await loadArbiterRound(auth, r.divisionId, { now: NOW }))!;
+    expect(arbiter.boards.length, "premise: the arbiter lists the view's boards and the withdrawn one besides (silent: not_playable)").toBe(listed + 1);
+    expect(arbiter.boards.filter((b) => b.checkin?.refusal === "not_playable").length, "and that one is the withdrawn board").toBe(1);
+    const grid = new Set<number>([NOW.getTime()]);
+    for (const w of view.extendWindows) for (const edge of [w.opensAt, w.deadlineAt]) for (const d of [-1, 0]) if (Date.parse(edge) + d >= NOW.getTime()) grid.add(Date.parse(edge) + d);
+    const seen = new Set<string>();
+    for (const t of [...grid].sort((a, b) => a - b)) {
+      const served = (await loadArbiterRound(auth, r.divisionId, { now: new Date(t) }))!;
+      const want = roundWhy(served.boards.flatMap((b) => (b.checkin === null ? [] : [b.checkin.refusal])));
+      expect(roundWhy(arbiter.boards.flatMap((b) => (b.checkin === null ? [] : [liveExtendRefusal(b.checkin, t)]))), `the arbiter panel at +${t - NOW.getTime()} ms`).toEqual(want);
+      expect(roundWhy(liveRoundRefusals(view.extendRefusals, view.extendWindows, t)), `the Open round control at +${t - NOW.getTime()} ms`).toEqual(want);
+      seen.add(want === null ? "none" : want.code);
+    }
+    expect(grid.size, "anti-vacuity: instants walked").toBeGreaterThan(8);
+    expect([...seen].sort(), "both a round with a button and a round with a reason were met").toEqual(["mixed", "none"]);
   });
 
   it("a second press is the same rule again: an already-extended round extends again until the cap, then reports every board capped", async () => {
@@ -848,13 +915,13 @@ describe.skipIf(!HAS_DB)("the opening of a LATER batch, where the +5 button is d
     const atOpen = await view(LATE_OPENS);
     expect(atOpen.extendableBoards, "at the opening").toBe(3);
     // The windows: one per board that is still to be played with nothing on file and presses left, whatever the clock says.
-    const lateWindow = { opensAt: LATE_OPENS.toISOString(), deadlineAt: at(LATE_OPENS, DEADLINE_AFTER_MS).toISOString() };
-    const plainWindow = { opensAt: at(O, -WINDOW_OPEN_LEAD_MS).toISOString(), deadlineAt: OLD.toISOString() };
+    const lateWindow = { opensAt: LATE_OPENS.toISOString(), deadlineAt: at(LATE_OPENS, DEADLINE_AFTER_MS).toISOString(), extensionsLeft: CHECKIN_EXTEND_MAX };
+    const plainWindow = { opensAt: at(O, -WINDOW_OPEN_LEAD_MS).toISOString(), deadlineAt: OLD.toISOString(), extensionsLeft: CHECKIN_EXTEND_MAX };
     expect([...before.extendWindows].sort((a, b) => a.opensAt.localeCompare(b.opensAt))).toEqual([plainWindow, plainWindow, lateWindow]);
     // The count is the windows' own count at the clock: one authority, read two ways.
     for (const v of [before, atOpen]) {
       const now = v === before ? BEFORE : LATE_OPENS;
-      expect(v.extendWindows.filter((w) => new Date(w.opensAt).getTime() <= now.getTime() && now.getTime() < new Date(w.deadlineAt).getTime()).length).toBe(v.extendableBoards);
+      expect(liveExtendableCount(v.extendWindows, now.getTime())).toBe(v.extendableBoards);
     }
     expect(late.fixtureId, "anti-vacuity: the late board was part of this round").toBeTruthy();
   });
@@ -928,6 +995,36 @@ describe.skipIf(!HAS_DB)("a re-arm inside a running window keeps the board's ext
     expect(await deadlineOf(ext.fixtureId), "the board's deadline is still the extended one").toBe(deadlineAfter(1).getTime());
     expect(mail.sent.every((m) => m.deadlineLabel.length > 0), "anti-vacuity: the mail was written").toBe(true);
     expect(neighbour.fixtureId, "the neighbour was never touched").toBeTruthy();
+  });
+
+  it("a re-open that skips a CLOSED board keeps that board's row, and the sweep that follows does not forfeit it (the row it had is what keeps it out of the no-show)", async () => {
+    // The same round as above, read for the board the open did NOT invite. `plain` was closed by the arbiter (No result, void) and its
+    // own window has passed at P: the re-open answers it `window_closed` and invites nobody into it. Re-arming deletes a bridge row so
+    // the invite can mint a fresh one; a board that is not invited has no fresh one coming, and a board with NO row is a no-show
+    // candidate (sweep.ts noShowCandidates: `ep.fixture_id is null`) - so deleting it would hand the very board the open refused to
+    // the sweep's walkover.
+    const r = await seedOnlineChessRound({ fixtures: 3 });
+    const [ext, plain, neighbour] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: O })).toMatchObject({ opened: true });
+    await press(r.owner, ext.fixtureId);
+    for (const b of [ext, plain]) {
+      expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result")).toEqual({ status: "finished" });
+      const last = await lastEvent(b.fixtureId);
+      await scoreEvent(r.owner, b.fixtureId, { expected_seq: last.seq, type: "core.void", payload: { event_id: last.id } });
+    }
+    const before = await rowOf(plain.fixtureId);
+    expect(before, "premise: the closed board has a row, finished, no game on file").toMatchObject({ status: "finished", challenge_id: null });
+    const noShowKey = (id: string) => sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${id} and idempotency_key = ${`extplay-noshow:${id}`}`;
+
+    const out = await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: P });
+    expect(out, "premise: the plain board is the one the open refused").toMatchObject({ opened: true, skipped: [{ fixtureId: plain.fixtureId, reason: "window_closed" }] });
+    expect(await rowOf(plain.fixtureId), "the refused board keeps the row it had").toEqual(before);
+
+    const report = await sweepExternalPlay({ now: P, orgIds: [r.orgId] });
+    expect(report.noShows, "the sweep forfeits the board nobody refused (the unextended neighbour, closed at P) and no other").toBe(1);
+    expect((await noShowKey(neighbour.fixtureId))[0]!.n, "anti-vacuity: the sweep did act on a candidate").toBe(1);
+    expect((await noShowKey(plain.fixtureId))[0]!.n, "the refused, closed board is not forfeited").toBe(0);
+    expect(await rowOf(plain.fixtureId), "and its row is still the one it had").toEqual(before);
   });
 
   it("a re-open that restarts the window (every neighbour decided) still starts a re-armed board at zero: only a RUNNING window keeps the time", async () => {

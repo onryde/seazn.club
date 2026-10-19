@@ -48,6 +48,8 @@ import {
   liveExtendableBoards,
   roundExtendRunner,
   roundExtendUi,
+  roundExtendWhy,
+  roundWhyLine,
   type RoundExtendState,
 } from "./checkin-extend-ui";
 import { ArbiterGuardError, joinArbiter, type ArbiterCameras, type ArbiterSeat, type ArbiterTileView } from "./arbiter-camera";
@@ -60,6 +62,7 @@ import {
   CHIP_NEUTRAL,
   FlagCard,
   MUTED,
+  noticeLapsed,
   noticeSentence,
   settleChoices,
   settleGuidance,
@@ -437,10 +440,14 @@ function RoundExtend({
   const lines =
     state.notice === null ? [] : state.notice.kind === "answered" ? extendRoundLines(state.notice.result, f) : [extendFailureText(state.notice.code, f)];
   const reach = liveExtendableBoards(round.boards, nowMs, round.extendableBoards);
-  if (reach === 0 && lines.length === 0 && !state.busy) return null;
+  const offered = reach > 0 || state.busy;
+  // Where the button is not offered, the reason stands in its place (owner, 2026-10-19), never a bar that silently vanishes: the one
+  // cause every board gives, or "No board's check-in is open right now" when they differ. Nothing for a round that lists no boards.
+  const why = offered ? null : roundExtendWhy(round.boards, nowMs);
+  if (!offered && lines.length === 0 && why === null) return null;
   return (
     <div data-testid="arbiter-extend-round" className="mx-auto flex w-full max-w-[1232px] min-w-0 flex-col items-start gap-1.5 px-4 pt-3 lg:px-6 lg:pt-5">
-      {(reach > 0 || state.busy) && (
+      {offered && (
         <>
           <button
             type="button"
@@ -457,6 +464,11 @@ function RoundExtend({
             {reach > 0 && <> {f.plural("externalPlay.checkinExtend.roundHint", reach)}</>}
           </p>
         </>
+      )}
+      {why !== null && (
+        <p data-testid="arbiter-extend-round-why" data-why={why.code} className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
+          {roundWhyLine(why, f)}
+        </p>
       )}
       <div role="status" data-testid="arbiter-extend-round-notice" className={`flex min-w-0 flex-col gap-0.5 text-[13px] leading-[1.45] ${SOFT}`}>
         {lines.map((line, i) => (
@@ -773,7 +785,8 @@ function Decision({
   const canSettle = offersSettle(board);
   // The reducer owns "a notice belongs to the board on screen" (R4: a switch
   // clears it, an answer for the board left behind shows nothing).
-  const notice = decision.notice;
+  // An "extended" answer that names a closing time the ticking clock has reached stops showing (`noticeLapsed`).
+  const notice = decision.notice !== null && !noticeLapsed(decision.notice, board.checkin?.deadlineAt ?? null, nowMs) ? decision.notice : null;
   // Spec §3.2.2: offered only on what the server's own reading of the board said it would accept, re-asked of the ticking clock: the
   // snapshot is up to a poll old, and "+5 min" exists only between the board's opening and its deadline (owner, 2026-10-19). Where it
   // is not offered, a short reason stands in its place (never a button that silently vanishes).

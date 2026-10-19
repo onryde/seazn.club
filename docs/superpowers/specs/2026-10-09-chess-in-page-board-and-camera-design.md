@@ -457,8 +457,29 @@ panel, ticks every 500 ms between), so the button arrives and leaves AT the edge
 3 times per board.", the 5 and the 3 from the constants). Where a board's +5 is not available a short reason stands in its place and the button
 never silently vanishes: "Check-in hasn't opened yet", "Check-in has closed", "Game started", "No extensions left" (a board that is over says
 nothing). A board's answer ("Added 5 minutes to board 3. Check-in now closes 19:14.") names the board's LIVE deadline, never a time that differs
-from the "Check-in closes" line beside it, and starting either press clears the other's answer. All copy is in the four locales
-(`externalPlay.checkinExtend.*`). One request is in flight at a time across the panel and the control.
+from the "Check-in closes" line beside it, and starting either press clears the other's answer; an answer that names a closing time stops
+showing when the ticking clock reaches that time (`noticeLapsed`). All copy is in the four locales (`externalPlay.checkinExtend.*`). One
+request is in flight at a time across the panel and the control.
+
+**The round bar's reason (owner, 2026-10-19).** Where "+5 min to the round" is not offered, the bar does not vanish: it says why. When every
+board that has a reason gives the same one, that board-level sentence (the table above); when they differ, one new sentence true of all of
+them, "No board's check-in is open right now" (`externalPlay.checkinExtend.why.roundNoneOpen`). A board that is over is silent and does not
+make a mix; a round that lists no boards, or none with a check-in, says nothing, and a round with a button needs no reason. `roundWhy`
+(`lib/checkin-extend.ts`) is the one function that turns each board's refusal at an instant into that sentence, and both screens feed it:
+the arbiter panel the refusal of every board it lists (`liveExtendRefusal` on the ticking clock), the Open round control its two facts - the
+`extendWindows` it already counted on the clock and a per-cause tally of every other board (`extendRefusals`, from `extendReach`). A window
+now also carries `extensionsLeft`: a board with no press left is in the list so that its verdict follows the clock as the server's does ("No
+extensions left" while its window runs, "Check-in has closed" from its deadline), and is never counted as reached. Windows and tally cover
+every board the viewer does not play on, once each (a DB test counts them), and at every instant from the snapshot on the sentence from the
+panel, the sentence from the control and the sentence from the server's own `extendRefusal` re-read at that instant are the same (a DB test
+and a lib differential both walk the edges).
+
+**Two races the lock closes on a board with no row.** A board nobody has touched has no bridge row for the extension's read to lock, and
+`ensureBridgeRow` runs on its own connection, so a create can mint the row and claim it in the gap. After making the row the extension
+re-reads it `for update` on its own connection and asks `extendRefusal` again; a live claim or marker is a game on file and the press is
+refused `CHECKIN_GAME_STARTED` (a DB test puts the create exactly there). And a re-open that skips a board whose own window has closed
+(`window_closed`) leaves that board's row alone: deleting it for the re-arm would leave a rowless board in an opened round, which the
+sweep's no-show reads as a candidate, so the board the open had just refused was walked over by the next pass (a DB test runs the sweep).
 
 **Capacity.** The extension only adds `extraMs` to the anchor; batch timing, the gap and the line are untouched, so the capacity load test is
 not re-run for it. The cap bounds what it can cost: a board's check-in stays open at most `CHECKIN_EXTEND_MAX × CHECKIN_EXTEND_STEP_MS`

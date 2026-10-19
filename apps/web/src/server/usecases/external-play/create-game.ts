@@ -534,8 +534,9 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
 
   // A game created PAST the deadline (spec §5.7.8: both players' check-ins count and the board's cap has not passed) is expected
   // to run from its creation; the row's expiry is the deadline for a create inside the window, the board's cap for one past it.
-  // An extension cannot land under the claim this create holds (a live mint claim is a game on file: `bridgeGameOnFile`), so the
-  // anchor read at the dequeue is the one the row's expiry is sized from.
+  // Sized from the anchor read at the dequeue, BEFORE the claim above: an extension that landed before that read is in it. One that
+  // lands between that read and the claim is not (it is the claim that makes a game on file, `bridgeGameOnFile`, and an extension
+  // is refused from then on), so the expiry stays on the deadline the board had a moment earlier - never later than the board's own.
   const readyExpiresAt = claimAt.getTime() < windowFor(anchor).deadline.getTime() ? windowFor(anchor).deadline : boardCap(anchor);
 
   // Ready: create + accept. T10's first accepted move flips it to `live`;

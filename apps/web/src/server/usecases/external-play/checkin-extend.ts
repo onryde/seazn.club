@@ -84,28 +84,46 @@ async function extendOneBoard(
   return sql.begin(async (tx): Promise<Step> => {
     await lockCheckinWindow(tx, fixtureId);
     const [fx] = await tx<{ status: string }[]>`select status from fixtures where id = ${fixtureId} for share`;
-    const [row] = await tx<{ status: string; challengeId: string | null; createSentAt: Date | null; mintClaimedAt: Date | null }[]>`
-      select status, challenge_id as "challengeId", create_sent_at as "createSentAt", mint_claimed_at as "mintClaimedAt"
-        from fixture_external_play where fixture_id = ${fixtureId} for update`;
+    const readRow = async () =>
+      (
+        await tx<{ status: string; challengeId: string | null; createSentAt: Date | null; mintClaimedAt: Date | null }[]>`
+          select status, challenge_id as "challengeId", create_sent_at as "createSentAt", mint_claimed_at as "mintClaimedAt"
+            from fixture_external_play where fixture_id = ${fixtureId} for update`
+      )[0];
     const open = await boardOpenFor(tx, fixtureId);
     // Not "cannot happen" in a comment: the caller proved the round open, so a missing fixture or open is the board changing
     // underneath this call (a rebuild removed the fixture) - refused by name. A missing BRIDGE ROW is not: it is a board nobody
     // has touched (the open invites through it, but a board added since, or one that was re-paired, has none yet).
     if (!fx || open === null) throw new HttpError(409, "the board changed while its check-in was being extended - try again", "ROUND_CHANGED");
-    // The decision clock: read AFTER the lock, from the database (the race rule above).
-    const at = deps.now ? deps.now() : (await tx<{ at: Date }[]>`select clock_timestamp() as at`)[0]!.at;
-    const gameOnFile = row ? bridgeGameOnFile(row, at) : false;
-    const refusal = extendRefusal({
-      now: at,
-      anchor: open.anchor,
-      extensions: open.extensions,
-      playable: isPlayableFixtureStatus(fx.status) && row?.status !== "finished",
-      gameOnFile,
-    });
-    if (refusal !== null) return { ok: false, refusal, gameOnFile };
+    // The rule asked of the row as it stands, on the decision clock: read AFTER the lock, from the database (the race rule above), and
+    // read again at every decision, so a decision is never made on a clock older than the row it reads.
+    const decide = async (r: Awaited<ReturnType<typeof readRow>>) => {
+      const at = deps.now ? deps.now() : (await tx<{ at: Date }[]>`select clock_timestamp() as at`)[0]!.at;
+      const gameOnFile = r ? bridgeGameOnFile(r, at) : false;
+      const refusal = extendRefusal({
+        now: at,
+        anchor: open.anchor,
+        extensions: open.extensions,
+        playable: isPlayableFixtureStatus(fx.status) && r?.status !== "finished",
+        gameOnFile,
+      });
+      return { refusal, gameOnFile };
+    };
+    let row = await readRow();
+    let decision = await decide(row);
+    if (decision.refusal !== null) return { ok: false, refusal: decision.refusal, gameOnFile: decision.gameOnFile };
 
-    // Only now, for a board that WILL be extended: the row the extension lives on (idempotent; a no-op when it exists).
-    if (!row) await ensureBridgeRow(a.f);
+    // Only now, for a board that WILL be extended: the row the extension lives on (idempotent; a no-op when it exists). A board with
+    // no row had nothing for the read above to LOCK, and `ensureBridgeRow` runs on its own connection, so a create can mint the row
+    // and claim it in that gap (it needs no lock this transaction holds). The row is therefore read again - locked now, on THIS
+    // connection - and the rule asked of it again: a claim or a marker that landed in the gap is a game on file, and the press is
+    // refused like any other on a board with one. (A refusal here leaves the row the create's own mint made; nothing is extended.)
+    if (!row) {
+      await ensureBridgeRow(a.f);
+      row = await readRow();
+      decision = await decide(row);
+      if (decision.refusal !== null) return { ok: false, refusal: decision.refusal, gameOnFile: decision.gameOnFile };
+    }
     const [moved] = await tx<{ extraMs: number; extensions: number }[]>`
       update fixture_external_play
          set checkin_extra_ms = checkin_extra_ms + ${CHECKIN_EXTEND_STEP_MS},

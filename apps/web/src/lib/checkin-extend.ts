@@ -54,8 +54,11 @@ export type CheckinExtendState = {
   deadlineAt: string;
 };
 
-/** The two instants a board's press is allowed between: `opensAt <= now < deadlineAt`. */
-export type ExtendWindow = { opensAt: string; deadlineAt: string };
+/** The two instants a board's press is allowed between - `opensAt <= now < deadlineAt` - and the presses it has left. A board that
+ *  nothing but the clock stands in the way of a press: still to be played, no game on file, not closed. One with no presses left
+ *  (`extensionsLeft` 0) is in the list too, so that a screen's reading of it follows the clock as the server's does (no extensions
+ *  left while its window runs, closed from its deadline on) - but it is never counted as a board a press would reach. */
+export type ExtendWindow = { opensAt: string; deadlineAt: string; extensionsLeft: number };
 
 /** Is `nowMs` inside the window - the opening included, the deadline excluded (window.ts `roomPhase`: "open" from `opensAt`,
  *  "closed" from the deadline on). */
@@ -76,9 +79,9 @@ export function liveExtendRefusal(c: Pick<CheckinExtendState, "refusal" | "exten
   return c.extensionsLeft === 0 ? "cap_reached" : null;
 }
 
-/** How many of a round's windows a round-wide press reaches at `nowMs`. */
+/** How many of a round's windows a round-wide press reaches at `nowMs`: the ones the instant is inside, that have a press left. */
 export function liveExtendableCount(windows: readonly ExtendWindow[], nowMs: number): number {
-  return windows.filter((w) => inExtendWindow(w, nowMs)).length;
+  return windows.filter((w) => w.extensionsLeft > 0 && inExtendWindow(w, nowMs)).length;
 }
 
 /** The windows of the boards whose answer the CLOCK can still change: not the ones a game, a result or a closed window already settled
@@ -111,6 +114,48 @@ export const EXTEND_WHY_KEYS: Readonly<Record<ExtendRefusal, DictionaryKey | nul
   not_open: "externalPlay.checkinExtend.why.notOpen",
   cap_reached: "externalPlay.checkinExtend.why.capReached",
 };
+
+/** The reason a round has no "+5 min to the round" to offer (owner, 2026-10-19): when every board that has a reason says the SAME one,
+ *  that reason's own words (`EXTEND_WHY_KEYS`); when they differ, the one sentence that is true of all of them. */
+export const EXTEND_ROUND_MIXED_WHY_KEY: DictionaryKey = "externalPlay.checkinExtend.why.roundNoneOpen";
+
+/** What a round says in place of its button: the `data-why` code (a refusal, or `mixed`) and the dictionary key of its words. */
+export type RoundWhy = { code: ExtendRefusal | "mixed"; key: DictionaryKey };
+
+/** The reason a round-wide press has nothing to reach, from each board's refusal at the instant asked (`null`: that board would accept
+ *  a press). Null when ANY board would accept one (the round has its button, and a button needs no reason), and when no board has a
+ *  reason to speak of: a round that lists no boards, and one whose every board is over (`not_playable` is silent, as it is on the
+ *  board). Boards that are over are left out of the count: "Game started" is true of a round whose boards are all either started or over. */
+export function roundWhy(refusals: Iterable<ExtendRefusal | null>): RoundWhy | null {
+  const spoken = new Set<ExtendRefusal>();
+  for (const r of refusals) {
+    if (r === null) return null;
+    if (EXTEND_WHY_KEYS[r] !== null) spoken.add(r);
+  }
+  if (spoken.size === 0) return null;
+  if (spoken.size > 1) return { code: "mixed", key: EXTEND_ROUND_MIXED_WHY_KEY };
+  const [only] = [...spoken] as [ExtendRefusal];
+  return { code: only, key: EXTEND_WHY_KEYS[only]! };
+}
+
+/** A round's boards by the refusal the server gave each (`extendRefusal` at the snapshot), counted per cause. */
+export type ExtendTally = Record<ExtendRefusal, number>;
+export const emptyExtendTally = (): ExtendTally => ({ not_playable: 0, game_started: 0, closed: 0, not_open: 0, cap_reached: 0 });
+
+/** Every board of an Open round view as one refusal at `nowMs`: the boards outside `windows` as the server's tally counted them (no tick
+ *  of a clock changes why a game is on file, a board is over, or a window has closed), and each window board as the clock judges it
+ *  (`liveExtendRefusal`, the arbiter panel's own function: ahead of its opening `not_open`, inside it `null` - it would accept a
+ *  press - or `cap_reached` when it has none left, and past its deadline `closed`). `nowMs` null (the viewer's clock is not known yet):
+ *  the windows read as the snapshot saw them, and a window with presses left that the snapshot saw OPEN would have made the server's
+ *  own count non-zero, which is a round that has its button and is never asked for a reason. */
+export function liveRoundRefusals(tally: Readonly<Record<ExtendRefusal, number>>, windows: readonly ExtendWindow[], nowMs: number | null): (ExtendRefusal | null)[] {
+  const out: (ExtendRefusal | null)[] = [];
+  for (const r of EXTEND_REFUSALS) for (let i = 0; i < tally[r]; i++) out.push(r);
+  for (const w of windows) {
+    out.push(nowMs === null ? (w.extensionsLeft === 0 ? "cap_reached" : "not_open") : liveExtendRefusal({ refusal: null, ...w }, nowMs));
+  }
+  return out;
+}
 
 /** The answer to ONE board's press. */
 export type CheckinExtendBoardResult = {

@@ -6410,5 +6410,6 @@
   "externalPlay.checkinExtend.why.closed": "El registro ha cerrado",
   "externalPlay.checkinExtend.why.gameStarted": "La partida ya empezó",
   "externalPlay.checkinExtend.why.capReached": "No quedan ampliaciones",
-  "externalPlay.checkinExtend.helper": "Añade {minutes} minutos mientras el registro está abierto. Hasta {max} veces por tablero."
+  "externalPlay.checkinExtend.helper": "Añade {minutes} minutos mientras el registro está abierto. Hasta {max} veces por tablero.",
+  "externalPlay.checkinExtend.why.roundNoneOpen": "El registro de ningún tablero está abierto ahora"
 }

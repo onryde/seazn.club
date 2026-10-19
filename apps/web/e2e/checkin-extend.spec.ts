@@ -15,6 +15,8 @@
  *  3. The bar: both surfaces with their answers painted, at 320, 768 and 1280 - no sideways scroll, every button's whole label,
  *     a 44px target. The answers are ASSERTED: a board press then a round press leaves only the round's answer (and the other way
  *     round), and the time a board's answer names is the time the board's own "Check-in closes" line names.
+ *     At the cap the round bar's button goes and a REASON stands where it was (owner, 2026-10-19): here a game on one board and the other
+ *     capped is a mix - "No board's check-in is open right now" - on the panel's bar and on the Fixtures tab's control alike.
  *  4. The window's edges, LIVE (owner, 2026-10-19: +5 only inside the check-in window): with no reload and no poll to lean on, the
  *     button arrives AT a board's opening and leaves AT its deadline, with the short reason ("Check-in hasn't opened yet" /
  *     "Check-in has closed") standing in its place.
@@ -255,6 +257,18 @@ test.describe("the check-in extension", () => {
     await expect(page.getByTestId("arbiter-extend-why"), "the press went, and says why").toHaveText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
     await expect(page.getByTestId("arbiter-extend-round-notice")).toContainText(fill("externalPlay.checkinExtend.notice.round.one", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 1 }));
     expect((await auditRows(b2.fixtureId)).length).toBe(CHECKIN_EXTEND_MAX);
+    // The round bar's button went too, and the bar says why: a game on board 1 and no press left on board 2 are two causes, so the round's
+    // own sentence - not either board's - and the last answer stays beside it.
+    const roundWhy = page.getByTestId("arbiter-extend-round-why");
+    await expect(roundWhy, "the round bar's reason, in place of its button").toHaveText(uiEn["externalPlay.checkinExtend.why.roundNoneOpen"]!);
+    await expect(roundWhy).toHaveAttribute("data-why", "mixed");
+    await shoot(page, "arbiter-panel-round-reason");
+    // The Fixtures tab's control reads the same round the same way.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.fixturesTab);
+    await expect(desk(page).getByTestId("open-round-extend-cta"), "the control's button went with the last press").toHaveCount(0);
+    await expect(desk(page).getByTestId("open-round-extend-why")).toHaveText(uiEn["externalPlay.checkinExtend.why.roundNoneOpen"]!);
+    await shoot(page, "fixtures-tab-round-reason");
 
     // And the cap holds at the door, not only on the screen.
     const over = await apiJson(request, `/api/v1/fixtures/${b2.fixtureId}/external-play/extend-checkin`, "POST");
@@ -349,6 +363,7 @@ test.describe("the check-in extension", () => {
     const press = page.getByTestId("arbiter-extend-board");
     const roundPress = page.getByTestId("arbiter-extend-round-cta");
     const why = page.getByTestId("arbiter-extend-why");
+    const roundWhy = page.getByTestId("arbiter-extend-round-why");
     await page.setViewportSize({ width: 1280, height: 900 });
 
     // THE OPENING. Batch 0 opens WINDOW_OPEN_LEAD_MS before its anchor: stamp the round so that happens a few seconds after the page loads.
@@ -359,6 +374,7 @@ test.describe("the check-in extension", () => {
     await expect(why, "before the opening: the reason, not a silent gap").toHaveText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
     await expect(press).toHaveCount(0);
     await expect(roundPress).toHaveCount(0);
+    await expect(roundWhy, "the round's bar says the same, in the one cause both boards give").toHaveText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
     expect(Date.now(), "premise: the page loaded before the opening").toBeLessThan(opensAt);
     await expect(press, "the button arrives with the opening").toBeVisible({ timeout: OPENS_IN_MS + 15_000 });
     const arrived = Date.now();
@@ -366,6 +382,7 @@ test.describe("the check-in extension", () => {
     expect(arrived - opensAt, "at the opening, not at the next 20 s poll").toBeLessThan(3_000);
     await expect(why, "the reason went with it").toHaveCount(0);
     await expect(roundPress, "and the round's button came with it").toBeVisible();
+    await expect(roundWhy, "the round's reason went with it").toHaveCount(0);
 
     // THE DEADLINE. Stamp the round so the board's deadline (DEADLINE_AFTER_MS after the anchor) is a few seconds ahead; reload to take
     // the new snapshot, then watch the button leave on its own.
@@ -381,5 +398,7 @@ test.describe("the check-in extension", () => {
     expect(left - closesAt, "at the deadline, not at the next 20 s poll").toBeLessThan(3_000);
     await expect(why).toHaveText(uiEn["externalPlay.checkinExtend.why.closed"]!);
     await expect(roundPress, "the round's button leaves with the last board's deadline").toHaveCount(0);
+    await expect(roundWhy, "and the round says why, in the cause both boards now give").toHaveText(uiEn["externalPlay.checkinExtend.why.closed"]!);
+    await expect(roundWhy).toHaveAttribute("data-why", "closed");
   });
 });

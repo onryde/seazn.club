@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import type { OpenRoundView } from "@/lib/open-round";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { emptyExtendTally } from "@/lib/checkin-extend";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -36,6 +37,7 @@ const ROUND = (stageId: string, fixtureId: string): OpenRoundView => ({
   pairings: [{ fixtureId, boardNo: 1, whiteName: "Ada", blackName: "Bo", invitedAt: null, owedSeats: 2, canResend: false }],
   extendableBoards: 0,
   extendWindows: [],
+  extendRefusals: emptyExtendTally(),
 });
 const PROPS = {
   divisionId: "d1", competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",

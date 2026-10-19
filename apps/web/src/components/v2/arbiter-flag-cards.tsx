@@ -7,7 +7,7 @@ import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { fullMoveOf, timelineSegments, type ArbiterBoard, type ArbiterFlag, type CameraOffReport, type NoResultOffer } from "@/lib/arbiter-view";
 import { formatTimeOfDay } from "@/components/public-site/match-room/room-time";
 import type { ArbiterNotice, SettleChoice } from "./arbiter-decision";
-import { extendBoardSentence, extendFailureText } from "./checkin-extend-ui";
+import { extendBoardSentence, extendedNoticeTime, extendFailureText } from "./checkin-extend-ui";
 
 export const MUTED = "text-[#6b5b8a]";
 export const SOFT = "text-[#4a3a6b]";
@@ -264,6 +264,16 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false, liveDeadl
             ? f.t("arbiter.notice.ownBoard")
             : f.t("arbiter.notice.failed");
   }
+}
+
+/** An "extended" answer says when check-in now closes. On a ticking clock that time arrives: from the instant it does, the sentence
+ *  would say "Check-in now closes 19:55" about a moment already past, so the panel stops showing it (the board's own line has already
+ *  turned into the reason "Check-in has closed"). The time is the one the sentence names - the later of the press's and the board's
+ *  live deadline - so the two never part. Every other notice stays until the arbiter's next action replaces it. Not before the
+ *  viewer's clock is known (`nowMs` null). */
+export function noticeLapsed(n: ArbiterNotice, liveDeadlineAt: string | null, nowMs: number | null): boolean {
+  if (n.kind !== "extended" || nowMs === null) return false;
+  return nowMs >= Date.parse(extendedNoticeTime(n.result.deadlineAt, liveDeadlineAt));
 }
 
 /** The settle buttons, by colour as the panel and the queue name the

@@ -133,14 +133,16 @@ export function extendRefusal(a: {
 }
 
 /** The window a screen may ask the CLOCK about (spec §3.2.2, owner 2026-10-19: +5 only inside the check-in window): the board's
- *  `opensAt` and deadline when everything but the clock allows a press - the board still to be played, no game on file, presses
- *  left, and not yet closed at `now` - and null when something else forbids it, which no tick of a clock can change. A screen counts
- *  a board as extendable at an instant iff that instant is inside its window (`liveExtendableCount`), so for any `now` the count of
- *  windows that contain it is the count of boards `extendRefusal` accepts: asserted by the DB tests that read both. */
+ *  `opensAt`, deadline and presses left when only the clock stands between it and a verdict - the board still to be played, no game on
+ *  file, and not yet closed at `now` - and null when something else has settled it, which no tick of a clock can change (a board that is
+ *  over, a game on file, a window already closed). A board with no presses left is in the list (`extensionsLeft` 0): its verdict still
+ *  follows the clock - "no extensions left" while the window runs, "closed" from its deadline on - and a screen counts a board as
+ *  extendable at an instant iff that instant is inside its window AND it has a press left (`liveExtendableCount`), so for any `now` that
+ *  count is the count of boards `extendRefusal` accepts: asserted by the DB tests that read both. */
 export function extendWindowOf(a: { now: Date; anchor: BoardAnchor; extensions: number; playable: boolean; gameOnFile: boolean }): ExtendWindow | null {
-  if (!a.playable || a.gameOnFile || a.extensions >= CHECKIN_EXTEND_MAX || roomPhase(a.now, a.anchor) === "closed") return null;
+  if (!a.playable || a.gameOnFile || roomPhase(a.now, a.anchor) === "closed") return null;
   const w = windowFor(a.anchor);
-  return { opensAt: w.opensAt.toISOString(), deadlineAt: w.deadline.toISOString() };
+  return { opensAt: w.opensAt.toISOString(), deadlineAt: w.deadline.toISOString(), extensionsLeft: extensionsLeft(a.extensions) };
 }
 
 export const LICHESS_NOT_STARTED: ReadonlySet<string> = new Set(["created"]);

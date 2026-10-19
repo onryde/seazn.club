@@ -455,9 +455,16 @@ export async function openRound(
     // on purpose (allow-listed in the source guard).
     // Spec §3.2.2: the arbiter's time on a re-armed board is kept when the window it is invited back into is the one still running
     // (`reinvited`) - the row is made afresh below, so what it carried is read before the delete and written back after the attach.
+    //
+    // Only the boards that WILL be invited: a re-armed board this open refused (`closedSkips`: its own window has closed) keeps the
+    // row it had. Deleting it would leave a board with no row in an opened round - exactly what the sweep's no-show reads as a
+    // candidate (`ep.fixture_id is null`) - so the board the open just answered `window_closed` would be walked over by the next
+    // pass, over an arbiter's No result nobody asked to change. Left as it was, it is where it was before the press: closed, the
+    // organiser's.
     const keptExtension = new Map<string, { extraMs: number; extensions: number }>();
-    if (rearmed.size > 0) {
-      const rearmedIds = [...rearmed];
+    const refusedIds = new Set(closedSkips.map((s) => s.fixtureId));
+    const rearmedIds = [...rearmed].filter((id) => !refusedIds.has(id));
+    if (rearmedIds.length > 0) {
       retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now)));
       if (kind === "reinvited") {
         for (const r of await tx<{ id: string; extraMs: number; extensions: number }[]>`

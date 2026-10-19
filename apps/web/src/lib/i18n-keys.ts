@@ -2444,6 +2444,7 @@ export type DictionaryKey =
   | "externalPlay.checkinExtend.why.closed"
   | "externalPlay.checkinExtend.why.gameStarted"
   | "externalPlay.checkinExtend.why.notOpen"
+  | "externalPlay.checkinExtend.why.roundNoneOpen"
   | "externalPlay.flag.cameraConnectionProblems"
   | "externalPlay.gameExistsCta"
   | "externalPlay.held.aborted"
