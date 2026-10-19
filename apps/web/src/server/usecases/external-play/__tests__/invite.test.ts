@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { backendPid, pollWaitersBehind } from "./_lock-waiters";
 import { HttpError } from "@/lib/errors";
-import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS, WINDOW_OPEN_LEAD_MS, boardAnchor, windowFor } from "@/server/external-play/window";
 
 const mail = vi.hoisted(() => ({
   sent: [] as { to: string; fixtureUrl: string; deadlineLabel: string; opensLabel: string | undefined; locale: string }[],
@@ -572,5 +572,55 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
       code: "WINDOW_CLOSED",
     });
     expect(mail.sent).toHaveLength(0);
+  });
+
+  // Final review M-5: the mail keyed its "opens for check-in at HH:MM" paragraph on the BOARD being in a later batch, not on that
+  // batch still being shut when the mail is SENT. A resend after the batch opened told the player their check-in "opens at" a time
+  // that had already passed, and gave no sign it was open now.
+  it("[reader:resend] (M-5) a resend after the board's batch has OPENED says nothing about when it opens; before it, it still does; at the opening exactly, it is open", async () => {
+    const r = await seedRound();
+    await open(r, OPENED);
+    const opensAt = batchStart(2);
+    const send = async (now: Date) => {
+      mail.sent.length = 0;
+      expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now }), `resend at ${now.toISOString()}`).toEqual({ emailed: 2 });
+      const got = mail.sent.filter((m) => [r.ranked.home.email, r.ranked.away.email].includes(m.to));
+      expect(got, "both players of the ranked board were mailed").toHaveLength(2);
+      return got;
+    };
+    let checked = 0;
+    // (1) BEFORE the batch opens: the mail names when, rounded up as the invite does.
+    for (const m of await send(new Date(opensAt.getTime() - 1))) {
+      expect(m.opensLabel, "1 ms before the opening: still names it").toBe(label(promised(opensAt), m.locale));
+      checked += 1;
+    }
+    // (2) AT the opening and after it (up to the batch's own deadline): the batch is open, so there is no "opens at".
+    const deadline = new Date(opensAt.getTime() + DEADLINE_AFTER_MS);
+    for (const now of [opensAt, new Date(opensAt.getTime() + MIN), new Date(deadline.getTime() - 1)]) {
+      for (const m of await send(now)) {
+        expect(m.opensLabel, `at ${now.toISOString()} the batch is already open: no opens-at line`).toBeUndefined();
+        expect(m.deadlineLabel, "and the deadline named is the batch's own").toBe(label(deadline, m.locale));
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: mails checked (2 players x 4 resends)").toBe(8);
+    expect(opensAt.getTime(), "premise: the resends past the opening are inside the batch's own window").toBeLessThan(deadline.getTime());
+  });
+
+  it("[reader:resend] (M-5) batch 0 never named an opening, and still does not, whenever it is resent - even on a clock far enough behind the stamp that its window has not opened", async () => {
+    const r = await seedRound();
+    await open(r, OPENED);
+    let checked = 0;
+    const behind = new Date(OPENED.getTime() - 2 * WINDOW_OPEN_LEAD_MS);
+    expect(behind.getTime(), "premise: before batch 0's own opening (the lead ahead of the stamp)").toBeLessThan(windowFor(boardAnchor(OPENED, 0, true)).opensAt.getTime());
+    for (const now of [behind, new Date(OPENED.getTime() + 1), new Date(OPENED.getTime() + DEADLINE_AFTER_MS - 1)]) {
+      mail.sent.length = 0;
+      expect(await resendExternalPlayNotice(r.owner, r.boards[0]!.fixtureId, ORIGIN, { now })).toEqual({ emailed: 2 });
+      for (const m of mail.sent) {
+        expect(m.opensLabel, `batch 0 at ${now.toISOString()}`).toBeUndefined();
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(6);
   });
 });

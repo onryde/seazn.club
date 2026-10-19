@@ -143,6 +143,9 @@ export async function sendFixtureInvite(a: {
    *  later is told when. */
   anchor: BoardAnchor;
   origin?: string;
+  /** The instant the mail is sent at (the caller's clock). A later batch is "not open yet" only if this is before its opening:
+   *  a resend after the batch has opened must not tell the player it "opens at" a time already past (final review M-5). */
+  now?: Date;
 }): Promise<boolean> {
   const { fixture: f, seat } = a;
   const origin = (a.origin ?? appOrigin()).replace(/\/$/, "");
@@ -161,9 +164,9 @@ export async function sendFixtureInvite(a: {
   const fixtureUrl = `${origin}${routes.sharedFixturePlay(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId, token)}`;
   const w = windowFor(a.anchor);
   const deadline = w.deadline;
-  // A later batch's check-in has not opened when this is sent: the mail says when (externalPlayInvite.bodyLater). Batch 0
-  // opens at the Open press, so it reads as it always did.
-  const laterBatch = a.anchor.batch > 0;
+  // A later batch's check-in that has not opened YET when this is sent: the mail says when (externalPlayInvite.bodyLater). Batch 0
+  // opens at the Open press, so it reads as it always did - and so does a later batch the mail reaches after its opening.
+  const laterBatch = a.anchor.batch > 0 && (a.now ?? new Date()).getTime() < w.opensAt.getTime();
   let accepted = 0;
   for (const r of seat.player.recipients) {
     const locale = toLocale(r.locale);
@@ -323,6 +326,7 @@ export async function resendExternalPlayNotice(
         roundOpenedAt: decision.open.roundOpenedAt,
         anchor: decision.open.anchor,
         origin,
+        now,
       });
     } catch (err) {
       log.error({ fixtureId, colour: seat.colour, err }, "external-play resend: send threw");

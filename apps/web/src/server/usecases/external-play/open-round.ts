@@ -497,6 +497,7 @@ export async function openRound(
           roundOpenedAt: decision.open.roundOpenedAt,
           anchor: c.anchor,
           origin: deps.origin,
+          now,
         });
       } catch (err) {
         log.error({ fixtureId, colour: c.seat.colour, err }, "openRound: invite send threw");

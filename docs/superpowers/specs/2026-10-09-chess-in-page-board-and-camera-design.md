@@ -307,7 +307,10 @@ the round's open row, below), and a player can read when they are due.
   idle poll. The invite mail names the board's own deadline (`T_batch + 10`) and, for batch 1
   onwards, when check-in opens (rounded UP to the minute like the card, so the mail never names a minute before the door opens; the
   deadline's label is not rounded, because naming it a few seconds early is the safe direction); its body, "is ready to play now", is false for a later batch and
-  gets a variant that says when (`externalPlayInvite.bodyLater`, four locales).
+  gets a variant that says when (`externalPlayInvite.bodyLater`, four locales) - but only while that
+  batch is still shut at the instant the mail is SENT (final review M-5): a resend after the batch
+  opened reads "ready to play now", because "opens at 14:02" in a mail opened at 14:06 is false in the
+  other direction. The sender takes the caller's `now`; batch 0 never carries an opens-at line.
 - **What the organiser sees.** The open-round confirmation says how long the stagger runs before the press, and the existing
   copy has to change to say it (the re-review's m-c): `runsheet.round.confirmWindow` reads "They can
   check in straight away. If a player has not taken their seat {minutes} minutes after you open, that
