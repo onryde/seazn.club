@@ -1,22 +1,76 @@
 // Client-side instrumentation (Next 16 file convention): runs after the HTML
-// loads and before React hydration — the right place to boot analytics so
-// early pageviews are captured. Kept lightweight per the Next docs (<16ms).
+// loads and before React hydration — the right place to boot analytics and
+// error reporting so early pageviews and early errors are captured. Kept
+// lightweight per the Next docs (<16ms).
 import posthog from "posthog-js";
 import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
 import { stopReplayBeforeNavigatingTo } from "@/lib/replay-guard";
-import { posthogBeforeSend } from "@/lib/scrub-score-url";
+import {
+  posthogBeforeSend,
+  scrubScoreTokens,
+  scrubScoreTokensIntegration,
+  scrubSentryEvent,
+} from "@/lib/scrub-score-url";
 
-// Sentry.init is NOT called on the client today. The client options live in ../sentry.client.config.ts, but @sentry/nextjs
-// only picks that file up in its WEBPACK integration (config/webpack.js, getClientSentryConfigFile); this app builds with
-// Turbopack, so the file is never bundled (a prod build holds none of its options). Wiring the client init is an owner
-// decision still pending, and not part of this file. Until then the router hook below has no client to report to and the
-// replay guard finds no Replay integration to stop, so both are no-ops, in place for the day the init is wired. The
-// server/edge counterpart is NOT auto-loaded past @sentry/nextjs v9 either: ../instrumentation.ts is what runs
-// sentry.server.config / sentry.edge.config. The hook is exported because without it Sentry logs an ACTION REQUIRED at
-// build.
-// The replay is stopped before the app navigates to a page whose URL holds a credential (lib/replay-guard). Sentry's own
-// hook runs first, so the guard can never cost the navigation span.
+// Browser Sentry is initialised HERE. @sentry/nextjs picks up a `sentry.client.config.ts` only in its WEBPACK integration
+// (config/webpack.js, getClientSentryConfigFile); `next build` here is Turbopack, which never bundled that file, so until
+// this init moved in (owner decision 2026-10-19: browser Sentry ON, session replay OFF) no browser error, trace, log or
+// scrub hook ever ran. The server/edge counterparts are not auto-loaded either: ../instrumentation.ts is what runs
+// sentry.server.config / sentry.edge.config.
+//
+// SESSION REPLAY IS OFF, on purpose: no replayIntegration and neither replays*SampleRate. Importing `replayIntegration` (or
+// `getReplay`) here would pull @sentry/replay and rrweb (~23 KB gzipped) into the first-load chunk of every page, so
+// nothing in this file may; scripts/check-client-sentry.ts fails a build whose chunks hold rrweb. lib/replay-guard.ts is the
+// guard that must go with a replay, and it stays in place, inert: with no Replay integration the router hook below finds
+// nothing to stop. Turning a replay back on is a decision that needs that guard wired (replayMayRunAt, REPLAY_BLOCK_SELECTORS,
+// recordingEventHook; see its header), not just an integration added.
+//
+// A device link's URL (/score/<token>) is a live scoring credential, as are the other one-time links lib/scrub-score-url
+// knows: every hook below scrubs them from errors, transactions, breadcrumbs and logs before anything leaves. Sentry reports
+// nothing without a DSN (`enabled`), so a build with no NEXT_PUBLIC_SENTRY_DSN (local, CI) sends nothing.
+try {
+  Sentry.init({
+    dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+    environment: process.env.NODE_ENV,
+
+    // Capture 10% of traces in production; 100% in dev
+    tracesSampleRate: process.env.NODE_ENV === "production" ? 0.1 : 1.0,
+
+    enableLogs: true,
+
+    integrations: [
+      // Forward console.warn/error as structured Sentry logs
+      Sentry.consoleLoggingIntegration({ levels: ["warn", "error"] }),
+      // An event that skips beforeSend (a replay's, were one ever added) still goes through an event processor.
+      scrubScoreTokensIntegration(),
+    ],
+
+    beforeSend: scrubSentryEvent,
+    beforeSendTransaction: scrubSentryEvent,
+    beforeBreadcrumb: scrubScoreTokens,
+
+    beforeSendLog(log) {
+      // Debug/trace are dev-only noise; keep prod log volume down
+      if (
+        process.env.NODE_ENV === "production" &&
+        (log.level === "debug" || log.level === "trace")
+      ) {
+        return null;
+      }
+      return scrubScoreTokens(log);
+    },
+
+    // Don't send events when DSN is absent (local dev without Sentry)
+    enabled: !!process.env.NEXT_PUBLIC_SENTRY_DSN,
+  });
+} catch {
+  // Error reporting must never break the app — swallow init failures.
+}
+
+// The replay (if there is one) is stopped before the app navigates to a page whose URL holds a credential (lib/replay-guard).
+// Sentry's own hook runs first, so the guard can never cost the navigation span. The hook is exported because without it
+// Sentry logs an ACTION REQUIRED at build.
 export const onRouterTransitionStart: typeof Sentry.captureRouterTransitionStart = (href, navigationType) => {
   Sentry.captureRouterTransitionStart(href, navigationType);
   stopReplayBeforeNavigatingTo(href);

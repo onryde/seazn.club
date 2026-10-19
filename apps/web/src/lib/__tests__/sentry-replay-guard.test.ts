@@ -7,6 +7,10 @@
 //  - what no hook can reach (rrweb's Meta frame `href`, the DOM snapshot and its mutations): the replay does not run on a page
 //    whose URL holds a credential (`holdsCredential` = the scrubber's own predicate), and blocks `.ph-no-capture` elements.
 //
+// STATUS: session replay is OFF (owner decision 2026-10-19; sentry-client-init.test.ts pins that the init registers none). The
+// guard is inert and READY, not dead: every test here still drives it against the installed SDK, so the day a replay is turned
+// back on it is the guard that was proven, not a stale one.
+//
 // The page URLs come from the real minters and route builders over `_fake-sql` (the same rig as scrub-score-url-wiring.test).
 // There is no DOM in this suite, so the recorder itself (rrweb) is not run: the premises it can only be read from are PINNED to
 // the installed source, and the parts that can run for real (the `replayIntegration` constructor, `BrowserClient`,
@@ -146,7 +150,7 @@ describe("premises: where @sentry/replay writes a page URL (pinned to the instal
     expect(REPLAY_SRC).toMatch(/async stop\(\{\s*forceFlush = false,\s*reason\s*\} = \{\}\) \{\s*if \(!this\._isEnabled\) \{\s*return;\s*\}/);
   });
 
-  it("is reachable from @sentry/nextjs's client entry: getClient (the guard) and replayIntegration (a client init, which is not wired today)", () => {
+  it("is reachable from @sentry/nextjs's client entry: getClient (the guard) and replayIntegration (what an init would register if a replay is turned back on; today's init registers none)", () => {
     expect(typeof nextjsClientEntry.getClient).toBe("function");
     expect(typeof nextjsClientEntry.replayIntegration).toBe("function");
   });
@@ -364,7 +368,7 @@ describe("stopReplayBeforeNavigatingTo (onRouterTransitionStart)", () => {
     expect(stop).toHaveBeenCalledTimes(2);
   });
 
-  it("does nothing, and does not throw, when Sentry has no client (not initialised: today's state) or the client has no Replay", async () => {
+  it("does nothing, and does not throw, when Sentry has no client or the client has no Replay (every client today: replay is off)", async () => {
     const { getClient } = await import("@sentry/nextjs");
     const [first] = await credentialPages();
     setReplay(undefined);

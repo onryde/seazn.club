@@ -15,6 +15,15 @@
 //    navigates to one (`onRouterTransitionStart`), and it is stopped when the replay's own navigation frame names one (a
 //    redirect the router did not announce).
 // Once stopped it stays stopped for that page load; the next load samples afresh.
+//
+// STATUS: session replay is OFF (owner decision 2026-10-19: browser Sentry on, replay off). instrumentation-client.ts registers
+// no replayIntegration and sets neither replays*SampleRate, so nothing here has a Replay to stop: `currentReplay()` finds none
+// and the exports below are inert, ready and tested (sentry-replay-guard.test.ts), not deleted. Turning a replay back on is
+// not just adding the integration. It owes all of: `replayMayRunAt(window.location.href)` gating the integration,
+// `block: REPLAY_BLOCK_SELECTORS`, `beforeAddRecordingEvent: recordingEventHook`, the ScrubScoreTokens processor already in the
+// init, and a decision on the Sentry-replay open item (its Meta href and DOM are not hookable, see above). Keep this module
+// free of anything that imports `replayIntegration` or `getReplay`: either drags @sentry/replay and rrweb into every page's
+// first-load chunk (scripts/check-client-sentry.ts fails a build that holds them).
 import { getClient, type ReplayFrameEvent } from "@sentry/nextjs";
 import { holdsCredential, scrubRecordingEvent } from "@/lib/scrub-score-url";
 
@@ -33,10 +42,10 @@ type ClientIntegration = NonNullable<ReturnType<NonNullable<ReturnType<typeof ge
 export const REPLAY_INTEGRATION_NAME = "Replay";
 
 /**
- * The Replay integration of the initialised client, or undefined when Sentry is not initialised (the case today: see
- * instrumentation-client.ts). This is `getReplay()`'s own body, spelled out on purpose: importing `getReplay` references
- * @sentry/replay and rrweb (~23 KB gzipped), and this module is in the first-load chunk of every page through
- * instrumentation-client.ts. `getClient` and the integration lookup pull none of it.
+ * The Replay integration of the initialised client, or undefined when there is none: no client, or a client without a replay,
+ * which is every client today (session replay is off, see the STATUS note above). This is `getReplay()`'s own body, spelled
+ * out on purpose: importing `getReplay` references @sentry/replay and rrweb (~23 KB gzipped), and this module is in the
+ * first-load chunk of every page through instrumentation-client.ts. `getClient` and the integration lookup pull none of it.
  */
 const currentReplay = (): StoppableReplay | undefined => getClient()?.getIntegrationByName<ClientIntegration & StoppableReplay>(REPLAY_INTEGRATION_NAME);
 
