@@ -12,6 +12,8 @@
 // `camera_connection_problems` flag is NEVER read from its note (controller
 // addendum 2026-10-12): the loader reads it from fixture_video_guard_faults.
 
+import type { CheckinExtendState } from "./checkin-extend.ts";
+
 export type ArbiterColour = "white" | "black";
 /** What the organiser's settle offers in place of a winner (I-3, fix rounds 2 and 3) — the server's one reading
  *  (`noResultOffer`, server/usecases/external-play/no-result.ts), carried on the panel's board and the queue's row and
@@ -163,6 +165,9 @@ export type ArbiterBoard = {
   tiebreakOwed: boolean;
   /** I-3: what the settle offers in place of a winner — No result, a double walkover, or neither (and why). */
   noResultOffer: NoResultOffer;
+  /** Spec §3.2.2: this board's check-in - the deadline it is on, the presses it has left and whether a press would be accepted
+   *  now. null in the Flagged list (no window is being run there) and for a board whose round was never opened. */
+  checkin: CheckinExtendState | null;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
 };
@@ -191,6 +196,9 @@ export type ArbiterRound = {
    *  `?fixture=` pinned an earlier round while a newer one is open, and the
    *  panel offers the way to it (N1). */
   current: boolean;
+  /** Spec §3.2.2: how many of the listed boards a round-wide "+N min" would extend right now (`checkin.canExtend`). The button is
+   *  offered only above zero. */
+  extendableBoards: number;
 };
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;

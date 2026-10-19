@@ -55,7 +55,7 @@ import { EDITOR_ROLES } from "@/lib/types";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { stageCameraPolicy } from "@/server/external-play/camera-policy";
-import { boardRankSql, roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
+import { boardExtraSql, boardRankSql, roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import { RETIRED_PAIR, endMeeting, gameEvidenceOn, retireStaleMeeting } from "@/server/external-play/video/realtimekit";
 import { boardAnchor, roomPhase, type BoardAnchor } from "@/server/external-play/window";
@@ -399,6 +399,13 @@ export async function openRound(
       // at RealtimeKit, after the commit. D16: a board has a meeting PER PLAYER and this deletes BY BOARD on purpose -
       // both rows go, and every one returned is ended below, not the first (allow-listed in the source guard).
       retireBoards = await retireBoardsMeetings(tx, ids, now);
+      // Spec §3.2.2: the window starts now for everyone, so time an arbiter added to the LAST window is not carried into it.
+      // A board a game is or may be on file behind keeps its row as it was (its expiry and expected end were set from the
+      // deadline it ran on). `is not true`, not `not`: on a fresh 'pending' row with no mint claim the evidence predicate is NULL
+      // (`status = 'pending' and mint_claimed_at >= x`), and `not NULL` would skip exactly the boards that have no game.
+      await tx`
+        update fixture_external_play ep set checkin_extra_ms = 0, checkin_extensions = 0, updated_at = now()
+         where ep.fixture_id in ${tx(ids)} and ep.checkin_extensions > 0 and ${gameEvidenceOn(now)} is not true`;
     } else {
       open = existing;
       kind = "reinvited";
@@ -408,15 +415,20 @@ export async function openRound(
     // id)`, read here under the division lock so a board added a moment ago is counted. Its anchor is its batch's start.
     const rankOf = new Map(
       (
-        await tx<{ id: string; rank: number }[]>`
-          select f.id, ${boardRankSql(tx)} as rank from fixtures f where f.stage_id = ${a.stageId} and f.round_no = ${a.roundNo}`
-      ).map((r) => [r.id, r.rank]),
+        await tx<{ id: string; rank: number; extraMs: number }[]>`
+          select f.id, ${boardRankSql(tx)} as rank, ${boardExtraSql(tx)} as "extraMs"
+            from fixtures f left join fixture_external_play ep on ep.fixture_id = f.id
+           where f.stage_id = ${a.stageId} and f.round_no = ${a.roundNo}`
+      ).map((r) => [r.id, r] as const),
     );
     const anchorOf = (fixtureId: string): BoardAnchor => {
-      const rank = rankOf.get(fixtureId);
+      const placed = rankOf.get(fixtureId);
       // Not "cannot happen" in a comment: a board of this open that is not in its own round would be given batch 0's time.
-      if (rank === undefined) throw roundChanged();
-      return boardAnchor(open.roundOpenedAt, rank, open.staggered);
+      if (placed === undefined) throw roundChanged();
+      // Spec §3.2.2: the board's own check-in extension rides on its anchor, so a re-invite does not call an extended board
+      // `window_closed` and a mail names the deadline the board is really on. A re-armed board's row is deleted below (it starts
+      // afresh, extension 0), so it reads 0 here too.
+      return boardAnchor(open.roundOpenedAt, placed.rank, open.staggered, rearmed.has(fixtureId) ? 0 : placed.extraMs);
     };
 
     // A re-open into a window that is already running (nobody-invited and re-arm re-stamped above): a board whose OWN batch

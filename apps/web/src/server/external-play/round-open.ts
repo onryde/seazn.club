@@ -29,14 +29,16 @@ export type RoundOpen = { roundOpenedAt: Date; openedBy: string | null };
 export type RoundOpenRow = RoundOpen & { id: string; staggered: boolean };
 
 /** A board's place in its round's batches: its zero-based RANK among every fixture row of its (stage, round), and the
- *  anchor its window hangs off (spec §3.2.1). */
+ *  anchor its window hangs off (spec §3.2.1). The anchor also carries the board's check-in extension (spec §3.2.2); `extensions`
+ *  is how many presses made it (the cap is judged on the count, the deadline on the milliseconds). */
 export type BoardPlacement = { rank: number; anchor: BoardAnchor };
-export type BoardOpen = RoundOpenRow & BoardPlacement;
+export type BoardOpen = RoundOpenRow & BoardPlacement & { extensions: number };
 
-/** The anchor of a board from a candidate row that carries its round's stamp, its rank and its round's `staggered` flag.
- *  The sweep's four candidate queries select exactly these three beside the board (`boardRankSql` is the rank). */
-export function anchorOfRow(r: { openedAt: Date; rank: number; staggered: boolean }): BoardAnchor {
-  return boardAnchor(r.openedAt, r.rank, r.staggered);
+/** The anchor of a board from a candidate row that carries its round's stamp, its rank, its round's `staggered` flag and the
+ *  board's check-in extension. The sweep's candidate queries select exactly these four beside the board (`boardRankSql` is the
+ *  rank, `boardExtraSql` the extension). */
+export function anchorOfRow(r: { openedAt: Date; rank: number; staggered: boolean; extraMs: number }): BoardAnchor {
+  return boardAnchor(r.openedAt, r.rank, r.staggered, r.extraMs);
 }
 
 /** THE board rank, in SQL: the zero-based position of fixture `f` among EVERY fixture row of its (stage, round), ordered
@@ -48,6 +50,27 @@ export function boardRankSql(db: AnySql) {
   return db`(select count(*)::int from fixtures rk
               where rk.stage_id = f.stage_id and rk.round_no = f.round_no
                 and (rk.seq_in_round, rk.id) < (f.seq_in_round, f.id))`;
+}
+
+/** The lock that serialises a board's check-in EXTENSION (spec §3.2.2) against the sweep's deadline judgements. The deadline is no
+ *  longer a function of the round alone: an arbiter can move it, and a sweep that read the board a moment before the move would
+ *  walk the board over (the no-show) or end its rooms (the teardown) on a deadline that no longer applies. Both sides take THIS
+ *  lock - a transaction-scoped advisory lock, keyed by the board - then READ the deadline under it, so whichever comes second
+ *  sees the other's write. It is a lock of its own (not `fixture:<id>`, which the score-event writer holds for the length of an
+ *  append, nor the fixture row) so that a sweep waiting here never waits behind, or blocks, a score. Taken FIRST in the
+ *  transaction, before any row lock (preflight.ts lock-order rule), so it cannot deadlock against the fixtures/bridge-row order. */
+export const CHECKIN_WINDOW_LOCK_PREFIX = "checkin-window:";
+export async function lockCheckinWindow(tx: AnySql, fixtureId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${CHECKIN_WINDOW_LOCK_PREFIX + fixtureId}))`;
+}
+
+/** THE board's check-in extension, in SQL (spec §3.2.2): the milliseconds the arbiter added to its deadline, 0 for a board with
+ *  no bridge row or none added. The fragment beside `boardRankSql`, and every query that builds an anchor interpolates BOTH
+ *  (batch-anchor-source-guard.test.ts counts them per file): an anchor built without the extension judges the board by a
+ *  deadline its players are no longer on. The caller names its bridge table `ep` (a LEFT join, so a board nobody has touched
+ *  still has a row to read). */
+export function boardExtraSql(db: AnySql) {
+  return db`coalesce(ep.checkin_extra_ms, 0)::int`;
 }
 
 /** THE read of `stage_round_opens` (T19 folded the by-key read in here rather
@@ -96,14 +119,17 @@ export async function roundOpenFor(db: AnySql, fixtureId: string): Promise<Round
  *  a board starts from (the seat, the room, the create, the invite), so none of them can hand `roomPhase` the round's
  *  stamp instead of the board's own. */
 export async function boardOpenFor(db: AnySql, fixtureId: string): Promise<BoardOpen | null> {
-  const [r] = await db<(RoundOpenRow & { rank: number })[]>`
+  const [r] = await db<(RoundOpenRow & { rank: number; extraMs: number; extensions: number })[]>`
     select o.id, o.opened_at as "roundOpenedAt", o.opened_by as "openedBy", o.staggered,
-           ${boardRankSql(db)} as rank
+           ${boardRankSql(db)} as rank, ${boardExtraSql(db)} as "extraMs",
+           coalesce(ep.checkin_extensions, 0)::int as extensions
       from fixtures f
       join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
+      left join fixture_external_play ep on ep.fixture_id = f.id
      where f.id = ${fixtureId}`;
   if (!r) return null;
-  return { ...r, anchor: boardAnchor(r.roundOpenedAt, r.rank, r.staggered) };
+  const { rank, extraMs, extensions, ...open } = r;
+  return { ...open, rank, extensions, anchor: boardAnchor(r.roundOpenedAt, rank, r.staggered, extraMs) };
 }
 
 /** Has ANY round of this division been opened at or before `now`? T6's

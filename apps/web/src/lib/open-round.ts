@@ -94,6 +94,9 @@ export type OpenRoundView = {
   scheduledAt: string | null;
   press: OpenRoundPress;
   pairings: OpenRoundPairing[];
+  /** Spec §3.2.2: how many of this round's boards a round-wide "+N min" would extend right now (check-in open, no game on
+   *  file, under the cap, not a board the viewer plays on). 0 before the open. The control offers the button above zero. */
+  extendableBoards: number;
   /** T16 fix round 1, R1 — this stage's EARLIER rounds that still have games in play (a paired board still to be
    *  played), lowest round first; empty when none. Opening is still allowed (the organiser drives; D8 never blocks):
    *  the confirmation names them so the press is made knowingly. */
