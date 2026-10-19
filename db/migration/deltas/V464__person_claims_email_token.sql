@@ -24,3 +24,11 @@ alter table person_claims add column email_token_hash text;
 create unique index person_claims_email_token_hash_uq
   on person_claims (email_token_hash)
   where email_token_hash is not null;
+
+-- Binding the emailed claim to an ACCOUNT looks the invited address up case-insensitively
+-- (`lower(email) = lower($1)`, users.email being unique but case-sensitive), and that lookup runs
+-- while the person and claim rows are locked. Without this it is a sequential scan of users under
+-- those locks. Partial on the same `deleted_at is null` the query carries, so the planner can use it.
+create index users_email_lower_idx
+  on users (lower(email))
+  where deleted_at is null;

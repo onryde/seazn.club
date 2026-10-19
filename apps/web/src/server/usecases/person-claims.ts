@@ -21,6 +21,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { AuthError, HttpError } from "@/lib/errors";
+import { stampTermsAcceptance } from "@/lib/legal";
 import { resolveOrCreateUser } from "@/lib/users";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
@@ -494,7 +495,11 @@ export async function claimByEmailLink(
       const claim = settleClaimRow(await lookupClaimByToken(tx, token, true));
 
       const userId = await accountForInvitedAddress(tx, claim.email);
-      await tx`update users set email_verified = true where id = ${userId}`;
+      await verifyByInbox(tx, userId);
+      // The button sits under the "By continuing, you agree…" notice, so the tap is the acceptance (GDPR spec
+      // 2026-07-14; first acceptance wins). Inside the transaction: a failure here undoes the claim, the new
+      // account and the verification, instead of leaving a consumed link and an error on screen.
+      await stampTermsAcceptance(userId, tx);
       await linkPerson(tx, claim, userId);
       return { userId, claim };
     });
@@ -503,21 +508,53 @@ export async function claimByEmailLink(
   }
 }
 
-/** The account that holds the invited address, or a new one. The address on a
- *  claim is whatever the organiser typed (not normalised), while an account's
- *  is exactly-cased and unique, so an exact match wins and a case-insensitive
- *  one is next — a claim for "Sam@x.com" must reach the account "sam@x.com"
- *  rather than mint a twin the player would never log into. A new account is
- *  created lower-cased. */
+/** Opening the emailed link proves the inbox, so the account that holds the address is marked verified — what
+ *  magic-link consume does — with one rule consume does not have (PR #991 review I3, "pre-hijack"). An
+ *  account that was UNVERIFIED has never shown its password belongs to the inbox owner: a stranger can sign
+ *  up with someone else's address (signup, and registration's captain email, take any address) and wait.
+ *  Login refuses an unverified account, but verifying it here would switch that password on, for the
+ *  squatter, on an account now linked to the claimed profile. So the password and any pending reset tokens
+ *  are cleared; the invitee is signed in by this tap and can set a fresh password through the usual reset.
+ *  A verified account is left exactly as it is, and so is a Google-linked one (its sign-in is Google's). */
+async function verifyByInbox(tx: Tx, userId: string): Promise<void> {
+  const [acct] = await tx<{ email_verified: boolean; google_sub: string | null }[]>`
+    select email_verified, google_sub from users where id = ${userId} for update`;
+  if (!acct || acct.email_verified) return;
+  if (acct.google_sub === null) {
+    await tx`update users set email_verified = true, password_hash = null where id = ${userId}`;
+    await tx`delete from password_resets where user_id = ${userId} and used = false`;
+  } else {
+    await tx`update users set email_verified = true where id = ${userId}`;
+  }
+}
+
+/** The account the invited address belongs to, or a new one. The address on a claim is whatever the organiser
+ *  typed, while an account's is exactly-cased, unique and case-SENSITIVE (signup and magic-link do not
+ *  lower-case), so "VICTIM@x.com" and "victim@x.com" can be two different accounts. Rules, in order:
+ *    1. an EXACT match always wins, whatever its state;
+ *    2. else a case-insensitive match binds ONLY to a VERIFIED account — an unverified look-alike is somebody
+ *       else's registration, never "the player's account" — and when more than one verified variant matches,
+ *       the claim is refused (409 CLAIM_EMAIL_AMBIGUOUS) rather than guessing;
+ *    3. else a new account is created, lower-cased.
+ *  Soft-deleted accounts never count. The case-insensitive lookup rides users_email_lower_idx (V464). */
 async function accountForInvitedAddress(tx: Tx, email: string): Promise<string> {
   const [exact] = await tx<{ id: string }[]>`
     select id from users where email = ${email} and deleted_at is null limit 1`;
   if (exact) return exact.id;
-  const [loose] = await tx<{ id: string }[]>`
+
+  const variants = await tx<{ id: string }[]>`
     select id from users
-    where lower(email) = lower(${email}) and deleted_at is null
-    order by created_at limit 1`;
-  if (loose) return loose.id;
+    where lower(email) = lower(${email}) and deleted_at is null and email_verified
+    limit 2`;
+  if (variants.length > 1) {
+    throw new HttpError(
+      409,
+      "More than one account matches this address — contact the organiser or support",
+      "CLAIM_EMAIL_AMBIGUOUS",
+    );
+  }
+  if (variants[0]) return variants[0].id;
+
   const created = await resolveOrCreateUser(email.toLowerCase(), tx);
   if (!created) {
     // The address is held by a soft-deleted account (resolveOrCreateUser re-reads

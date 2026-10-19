@@ -1,4 +1,5 @@
-import { sql } from "@/lib/db";
+import type postgres from "postgres";
+import { sql, type Tx } from "@/lib/db";
 
 /** The latest "Last updated" date across /legal/terms + /legal/privacy — bump
  *  when either text changes, so a consent stamp names the text that was shown.
@@ -18,10 +19,11 @@ export const LEGAL_VERSION = "2026-10-15";
 /**
  * Record clickwrap acceptance of Terms + Privacy (GDPR spec 2026-07-14): the
  * user acted under a "By continuing, you agree…" notice. First acceptance
- * wins — later logins must not move the timestamp.
+ * wins — later logins must not move the timestamp. A caller already inside a
+ * transaction passes its `tx`, so the stamp commits or rolls back with the rest.
  */
-export async function stampTermsAcceptance(userId: string): Promise<void> {
-  await sql`
+export async function stampTermsAcceptance(userId: string, db: Tx | postgres.Sql = sql): Promise<void> {
+  await db`
     update users set
       terms_accepted_at = coalesce(terms_accepted_at, now()),
       terms_version     = coalesce(terms_version, ${LEGAL_VERSION})

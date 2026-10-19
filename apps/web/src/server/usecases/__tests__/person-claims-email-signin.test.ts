@@ -205,16 +205,21 @@ describe.skipIf(!HAS_DB)("claimByEmailLink: the emailed secret signs the invitee
     expect((await claimRow(invite.id)).claimed_at).not.toBeNull();
   });
 
-  // Mirror magic-link consume: the account that already holds the address is the
-  // one signed in, verified or not, whatever credentials it carries. What consume
-  // does NOT do — and neither does this — is touch password_hash / google_sub.
+  // The account that already holds the address is the one signed in, verified or not (mirrors magic-link
+  // consume) — with ONE deliberate difference, the pre-hijack rule (PR #991 review I3): an account that was
+  // UNVERIFIED has never proved it belongs to the inbox owner, so whoever typed its password may be a squatter
+  // (public registration puts an arbitrary captain address on the form) and the tap must not hand them a
+  // verified, claimed account. Its password is cleared. A verified account, and a Google-linked one, keep
+  // their credentials. `passwordAfter` is the declared policy, not read back from the code under test.
   const EXISTING = [
-    { name: "password, verified", verified: true, password: true, google: false },
-    { name: "password, NOT yet verified", verified: false, password: true, google: false },
-    { name: "Google (no password)", verified: true, password: false, google: true },
+    { name: "password, verified", verified: true, password: true, google: false, passwordAfter: "kept" },
+    { name: "password, NOT yet verified", verified: false, password: true, google: false, passwordAfter: "cleared" },
+    { name: "Google (no password)", verified: true, password: false, google: true, passwordAfter: "kept" },
+    { name: "Google-linked + password, NOT yet verified", verified: false, password: true, google: true, passwordAfter: "kept" },
+    { name: "no credentials, NOT yet verified (magic-link-only)", verified: false, password: false, google: false, passwordAfter: "cleared" },
   ] as const;
 
-  it.each(EXISTING)("an EXISTING account ($name) is signed in; no second account; credentials untouched", async (acct) => {
+  it.each(EXISTING)("an EXISTING account ($name) is signed in; no second account; password $passwordAfter", async (acct) => {
     const { invite, person, email } = await rig();
     const [existing] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified, password_hash, google_sub)
@@ -230,9 +235,38 @@ describe.skipIf(!HAS_DB)("claimByEmailLink: the emailed secret signs the invitee
     const after = await usersWithEmail(email);
     expect(after).toHaveLength(1);
     expect(after[0]!.email_verified).toBe(true);
-    expect(after[0]!.password_hash).toBe(before.password_hash);
-    expect(after[0]!.google_sub).toBe(before.google_sub);
+    expect(after[0]!.password_hash).toBe(acct.passwordAfter === "cleared" ? null : before.password_hash);
+    expect(after[0]!.google_sub).toBe(before.google_sub); // never touched, whatever the row
     expect(await personUser(person.id)).toBe(existing!.id);
+  });
+
+  it("clearing a squatter's password also drops their PENDING reset tokens; a verified account's tokens are left alone", async () => {
+    const inserts = async (userId: string) => {
+      await sql`insert into password_resets (user_id, token, expires_at, used)
+        values (${userId}, ${"pending-" + randomUUID()}, now() + interval '1 hour', false),
+               (${userId}, ${"used-" + randomUUID()}, now() + interval '1 hour', true)`;
+    };
+    const resets = async (userId: string) =>
+      (await sql<{ used: boolean }[]>`select used from password_resets where user_id = ${userId} order by used`).map((r) => r.used);
+
+    // Unverified squatter: the pending token (their route back in) goes, the spent one is history.
+    const squatted = await rig();
+    const [sq] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, password_hash)
+      values (${squatted.email}, 'Squatter', false, 'x') returning id`;
+    await inserts(sq!.id);
+    expect(await resets(sq!.id)).toEqual([false, true]);
+    await claimByEmailLink(squatted.invite.emailSecret);
+    expect(await resets(sq!.id)).toEqual([true]);
+
+    // Verified account: nothing about its credentials moves, reset tokens included.
+    const real = await rig();
+    const [ok] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, password_hash)
+      values (${real.email}, 'Real', true, 'y') returning id`;
+    await inserts(ok!.id);
+    await claimByEmailLink(real.invite.emailSecret);
+    expect(await resets(ok!.id)).toEqual([false, true]);
   });
 
   it("the invite's address in a different CASE finds the existing account instead of minting a twin", async () => {
@@ -501,5 +535,112 @@ describe.skipIf(!HAS_DB)("claimByEmailLink under lock", () => {
       else claimedByEmail++;
     }
     expect(claimedByEmail + claimedBySession).toBe(ROUNDS); // anti-vacuity: every round had a winner
+  });
+});
+
+// Which account the invited address binds to (PR #991 review I2). `users.email` is unique but CASE-SENSITIVE and
+// signup / magic-link do not lower-case, so "VICTIM@x.com" and "victim@x.com" can both exist. The organiser's
+// address is whatever they typed. Rules: an EXACT match always wins; otherwise a case-insensitive match binds
+// ONLY to a verified account (a stranger's unverified registration is never "the player's account"), refuses
+// with 409 CLAIM_EMAIL_AMBIGUOUS when several verified variants match, and otherwise a fresh lower-cased account
+// is made. Soft-deleted accounts never count.
+describe.skipIf(!HAS_DB)("claimByEmailLink: which account the address binds to", () => {
+  async function account(email: string, o: { verified: boolean; password?: boolean; deleted?: boolean; ageDays?: number }) {
+    const [row] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, password_hash, deleted_at, created_at)
+      values (${email}, 'Variant', ${o.verified}, ${o.password ? "$2a$10$squatter.placeholder" : null},
+              ${o.deleted ? new Date() : null},
+              now() - ${`${o.ageDays ?? 0} days`}::interval)
+      returning id`;
+    return row!.id;
+  }
+  const snapshot = async (id: string) =>
+    (await sql<{ email_verified: boolean; password_hash: string | null }[]>`
+      select email_verified, password_hash from users where id = ${id}`)[0]!;
+
+  it("an older UNVERIFIED squatter and a newer VERIFIED real account: binds to the verified one, squatter untouched", async () => {
+    const local = `victim-${randomUUID().slice(0, 8)}`;
+    const squatter = await account(`${local.toUpperCase()}@test.local`, { verified: false, password: true, ageDays: 30 });
+    const real = await account(`${local[0]!.toUpperCase()}${local.slice(1)}@test.local`, { verified: true, ageDays: 1 });
+    const { invite, person } = await rig(`${local}@test.local`); // typed all-lowercase: an exact match for NEITHER
+
+    const out = await claimByEmailLink(invite.emailSecret);
+
+    expect(out.userId).toBe(real);
+    expect(await personUser(person.id)).toBe(real);
+    expect(await snapshot(squatter)).toEqual({ email_verified: false, password_hash: "$2a$10$squatter.placeholder" });
+    expect(await usersWithEmail(`${local}@test.local`)).toHaveLength(2); // no third account either
+  });
+
+  it("two VERIFIED case-variants: refused 409 CLAIM_EMAIL_AMBIGUOUS, nothing changes, the claim stays open", async () => {
+    const local = `twin-${randomUUID().slice(0, 8)}`;
+    const a = await account(`${local.toUpperCase()}@test.local`, { verified: true, ageDays: 5 });
+    const b = await account(`${local[0]!.toUpperCase()}${local.slice(1)}@test.local`, { verified: true, ageDays: 1 });
+    const { invite, person } = await rig(`${local}@test.local`);
+
+    await expect(claimByEmailLink(invite.emailSecret)).rejects.toMatchObject({ status: 409, code: "CLAIM_EMAIL_AMBIGUOUS" });
+
+    expect(await personUser(person.id)).toBeNull();
+    expect((await claimRow(invite.id)).claimed_at).toBeNull();
+    expect(await usersWithEmail(`${local}@test.local`)).toHaveLength(2);
+    expect(await snapshot(a)).toEqual({ email_verified: true, password_hash: null });
+    expect(await snapshot(b)).toEqual({ email_verified: true, password_hash: null });
+    // The claim is still usable once the ambiguity is gone (a variant removed): the refusal consumed nothing.
+    await sql`update users set deleted_at = now() where id = ${a}`;
+    expect((await claimByEmailLink(invite.emailSecret)).userId).toBe(b);
+  });
+
+  it("an EXACT match always wins over a case-variant, verified or not", async () => {
+    for (const exactVerified of [true, false]) {
+      const local = `exact-${randomUUID().slice(0, 8)}`;
+      const exact = await account(`${local}@test.local`, { verified: exactVerified, ageDays: 1 });
+      await account(`${local.toUpperCase()}@test.local`, { verified: true, ageDays: 20 }); // older, verified variant
+      const { invite, person } = await rig(`${local}@test.local`);
+
+      const out = await claimByEmailLink(invite.emailSecret);
+
+      expect(out.userId).toBe(exact);
+      expect(await personUser(person.id)).toBe(exact);
+    }
+  });
+
+  it("only UNVERIFIED case-variants exist: none is bound; a fresh lower-cased account is made, the squatter untouched", async () => {
+    const local = `lonely-${randomUUID().slice(0, 8)}`;
+    const squatter = await account(`${local.toUpperCase()}@test.local`, { verified: false, password: true });
+    const { invite, person } = await rig(`${local}@test.local`);
+
+    const out = await claimByEmailLink(invite.emailSecret);
+
+    expect(out.userId).not.toBe(squatter);
+    expect(await personUser(person.id)).toBe(out.userId);
+    const made = (await usersWithEmail(`${local}@test.local`)).find((u) => u.id === out.userId)!;
+    expect(made.email).toBe(`${local}@test.local`);
+    expect(made.email_verified).toBe(true);
+    expect(await snapshot(squatter)).toEqual({ email_verified: false, password_hash: "$2a$10$squatter.placeholder" });
+  });
+
+  it("a soft-deleted verified variant does not count: one live verified variant is not ambiguous", async () => {
+    const local = `gone-${randomUUID().slice(0, 8)}`;
+    await account(`${local.toUpperCase()}@test.local`, { verified: true, deleted: true, ageDays: 9 });
+    const live = await account(`${local[0]!.toUpperCase()}${local.slice(1)}@test.local`, { verified: true });
+    const { invite } = await rig(`${local}@test.local`);
+
+    expect((await claimByEmailLink(invite.emailSecret)).userId).toBe(live);
+  });
+});
+
+describe.skipIf(!HAS_DB)("the case-insensitive account lookup is indexed (V464)", () => {
+  it("the planner can serve `lower(email) = lower($1) and deleted_at is null` from users_email_lower_idx", async () => {
+    // Forced off a sequential scan (a near-empty test table would choose one regardless), so this proves the
+    // index EXISTS and that its expression and predicate match the query the claim runs under row locks.
+    const plan = await sql.begin(async (tx) => {
+      await tx`set local enable_seqscan = off`;
+      const rows = await tx<Record<string, string>[]>`
+        explain select id from users
+        where lower(email) = lower(${"anyone@test.local"}) and deleted_at is null and email_verified
+        limit 2`;
+      return rows.map((r) => Object.values(r)[0]).join("\n");
+    });
+    expect(plan).toContain("users_email_lower_idx");
   });
 });
