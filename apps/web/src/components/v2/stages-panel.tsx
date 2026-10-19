@@ -195,6 +195,9 @@ interface FixtureRow {
   winner_to_slot?: number | null;
   loser_to_fixture?: string | null;
   loser_to_slot?: number | null;
+  /** W2c Task 19 (S4): mirrors `FixtureRow.format_changed` - the run sheet's "Format changed" chip. Optional like the
+   *  fields above: hand-built test props predate it. */
+  format_changed?: boolean;
 }
 
 /** Adapts this panel's hand-declared `FixtureRow` to `RunSheetFixture`
@@ -2392,7 +2395,8 @@ function StageFormatRow({
       setOpen(false);
       onSaved();
     } catch (err) {
-      setError(err instanceof ApiV1Error ? err.message : String(err));
+      // W2c Task 19: the same reader as Save - a rule-lock refusal in the reader's language, never the wire's English.
+      setError(err instanceof ApiV1Error ? settingsSaveErrorText(err, msg, msg("schedule.error.failed")) : String(err));
     } finally {
       setSaving(false);
     }

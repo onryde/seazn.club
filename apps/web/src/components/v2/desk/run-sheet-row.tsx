@@ -34,6 +34,7 @@ import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel"
 import { outcomeTagWords, outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
 import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew } from "@/lib/forfeit-tag";
 import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
+import { formatChangedTag } from "./run-sheet-tags";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
@@ -748,6 +749,19 @@ export function RunSheetRow({
               {msg("score.status.needs_decision")}
             </span>
           )}
+          {/* W2c Task 19 (S4): this match plays a format of its own over its stage's - say so on the sheet. A fact about
+              the match, so it shows at every status (the lock is on the fixture page, not here). Not a control. */}
+          {(() => {
+            const tag = formatChangedTag(fixture);
+            return tag === null ? null : (
+              <span
+                data-testid="run-sheet-format-changed"
+                className="badge inline-flex shrink-0 items-center normal-case bg-teal-50 text-teal-800 md:order-first"
+              >
+                {msg(tag)}
+              </span>
+            );
+          })()}
           {/* The ONE action — a plain link for every kind except `set_time`,
               which toggles the inline editor below (≥44px either way). `max-md:ml-auto`: when line 2 wraps (N-1)
               the action keeps the right edge it has on one line. */}

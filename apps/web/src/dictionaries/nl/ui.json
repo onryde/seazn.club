@@ -6587,5 +6587,20 @@
   "stagePoints.invalid.number": "Vul een getal in voor de punten voor winst, gelijkspel en verlies.",
   "stagePoints.invalid.walkover": "Vul beide walkoverpunten in of laat beide leeg.",
   "stagePoints.invalid.score": "Vul beide walkoveruitslagen in of laat beide leeg.",
-  "stagePoints.invalid.bonus": "Vul elke bonus in."
+  "stagePoints.invalid.bonus": "Vul elke bonus in.",
+  "matchRules.title": "Wedstrijdregels",
+  "matchRules.fromStage": "Van de fase: {format}",
+  "matchRules.overridden": "Aangepast voor deze wedstrijd",
+  "matchRules.source.stage": "Fase",
+  "matchRules.source.match": "Deze wedstrijd",
+  "matchRules.reset": "Faseregels gebruiken",
+  "matchRules.correctLive": "Format corrigeren",
+  "matchRules.correctWarning": "Wat al gespeeld is blijft behouden; het nieuwe format geldt vanaf nu",
+  "matchRules.locked": "Deze wedstrijd is afgelopen — het format ligt vast",
+  "matchRules.heldOff": "De fase heeft dit uitgeschakeld — een wedstrijd kan het alleen uitschakelen of inkorten",
+  "matchRules.halfMinutes": "{n} min per helft",
+  "runSheet.formatChanged": "Format gewijzigd",
+  "rules.err.formatDoesNotFitPlayBecause": "Wat tot nu toe gespeeld is, past niet bij dat format: {reason}",
+  "matchRules.show": "Wedstrijdregels tonen",
+  "matchRules.hide": "Wedstrijdregels verbergen"
 }

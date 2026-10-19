@@ -76,6 +76,9 @@ export const RULE_ERROR_SUPPORT_KEYS = {
   /** FIXTURE_RULES_CHANGED when the describer has no line for the corrected format (or the reader's client does not
    *  have it in the reader's language): "the format was corrected", without naming it. */
   fixtureRulesChangedNoLine: "rules.err.fixtureRulesChangedNoLine",
+  /** FORMAT_DOES_NOT_FIT_PLAY whose reason is the ENGINE's own sentence (no `fit_reason`): "The match so far doesn't fit
+   *  that format: {reason}" - the frame is the reader's language, the reason the engine's (W2c Task 19). */
+  formatDoesNotFitPlayBecause: "rules.err.formatDoesNotFitPlayBecause",
 } as const satisfies Record<string, MessageKey>;
 
 /**
@@ -239,4 +242,24 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
       // comes with the reload (`GET /fixtures/{id}/rules`, `format_line`), which the pad's banner says.
       return sentence(code, {}, m);
   }
+}
+
+/**
+ * W2c Task 19 - a rule-lock refusal as an editor SAYS it: `ruleRefusalText`'s sentence where the app owns one, else, for a
+ * FORMAT_DOES_NOT_FIT_PLAY carrying only the ENGINE's own reason (a fold that refused the corrected format), a frame in the
+ * reader's language around that reason - the engine's English sentence is not something this app can translate, but the
+ * organiser should not read a bare English line in a Spanish console. Null when it is neither (the caller keeps its own
+ * copy). `message` is the refusal's own message (the server's English, which IS the engine's reason for that shape).
+ */
+export function ruleRefusalSentence(
+  code: string | undefined,
+  extra: Readonly<Record<string, unknown>> | undefined,
+  message: string,
+  m: Msg,
+): string | null {
+  const text = ruleRefusalText(code, extra, m);
+  if (text !== null) return text;
+  return code === "FORMAT_DOES_NOT_FIT_PLAY" && message !== ""
+    ? m(RULE_ERROR_SUPPORT_KEYS.formatDoesNotFitPlayBecause, { reason: message })
+    : null;
 }

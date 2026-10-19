@@ -40,6 +40,8 @@ export async function GET(req: Request, { params }: Ctx) {
         "abandon_reason",
         // W2c X-AB-5: the console's qualification read of the ledger, not part of the published `Fixture` contract.
         "has_active_abandon",
+        // W2c Task 19 (S4): the run sheet's "Format changed" chip read, not part of the published `Fixture` contract either.
+        "format_changed",
       ),
     );
   });

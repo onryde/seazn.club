@@ -11,6 +11,7 @@ import {
   getFixtureState,
   getLineup,
   listEvents,
+  loadFixtureMatchRules,
   loadFixturePadCfg,
 } from "@/server/usecases/fixtures";
 import { getDivision } from "@/server/usecases/divisions";
@@ -27,6 +28,8 @@ import {
   type LineupSlotIn,
 } from "@/components/v2/fixture-console";
 import { resolveLocale } from "@/lib/resolve-locale";
+import { getDictionary } from "@/lib/i18n";
+import { matchRulesBlockProps } from "@/components/v2/match-rules-block-model";
 import { loadStreamPanelContext } from "@/server/stream-panel-context";
 import { fixtureStreamMode } from "@/lib/fixture-stream-mount";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
@@ -160,17 +163,21 @@ export default async function FixturePage({
   // `canScore && !frozen`. The context loader reads nothing unless the full panel is offered (an organiser on a page that
   // is not billing-frozen), and the session read runs only for an organiser: a scorer's or viewer's refresh pays nothing.
   const frozen = competition.frozen ?? false;
-  const [streamContext, openStreams] = await Promise.all([
+  const locale = await resolveLocale();
+  const [streamContext, openStreams, matchRules] = await Promise.all([
     loadStreamPanelContext({
       auth,
       competitionId: competition.id,
       sportKey: division.sport_key,
       fixtureIds: [id],
-      locale: await resolveLocale(),
+      locale,
       offered: canEdit && !frozen,
       checkout: { status: first(sp.checkout), sessionId: first(sp.session_id) },
     }),
     canEdit ? openStreamStates(auth, [id]) : Promise.resolve({} as Awaited<ReturnType<typeof openStreamStates>>),
+    // W2c Task 19 (S2): the match rules block's facts - organisers only, like the other organiser controls (settle, forfeit):
+    // the writer is organiser auth, so a block shown to a scorer would only earn a 403. A billing-frozen competition shows none.
+    canEdit && !frozen ? loadFixtureMatchRules(auth, id, await getDictionary(locale, "public")) : Promise.resolve(null),
   ]);
   const streamMode = fixtureStreamMode({
     canEdit,
@@ -325,6 +332,7 @@ export default async function FixturePage({
           }
           stream={streamMount}
           streamReturn={first(sp.stream) === "open"}
+          matchRules={matchRules === null ? undefined : matchRulesBlockProps(id, matchRules)}
           viewerPlan={viewerPlan}
         />
       </main>

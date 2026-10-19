@@ -311,6 +311,9 @@ export interface FixtureRow {
   /** W2c X-AB-5 / N2: the row has an ACTIVE `core.abandon` (`hasActiveAbandonSql`) - read by `listDivisionFixtures`
    *  only, for the console's qualification line (a held match is still open to it); the v1 list route strips it. */
   has_active_abandon?: boolean;
+  /** W2c Task 19 (S4): the match has a format of its own over its stage's (`fixtures.rules_override is not null`) - the run
+   *  sheet's "Format changed" chip reads it. Read by `listDivisionFixtures` only; the v1 list route strips it. */
+  format_changed?: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {

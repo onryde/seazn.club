@@ -5,6 +5,7 @@
 // No `server-only`: the settings forms read it.
 import { SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
+import { ruleRefusalSentence } from "@/lib/rule-errors";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -42,9 +43,21 @@ export function configIssueText(issue: ConfigIssue, msg: Msg): string {
   return key === undefined ? issue.message : msg(key);
 }
 
-/** What a failed settings save says. A CONFIG_INVALID that names its problems says them (all of them, in order); any
+/** What a failed settings save says. A rule-lock refusal says itself first (`ruleRefusalSentence`); a CONFIG_INVALID that names its problems says them (all of them, in order); any
  *  other error keeps its own message, and a non-Error falls back to `fallback`. `err.extra` is the envelope's detail. */
 export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string): string {
+  // W2c Task 19: a rule-lock refusal (a walkover that no longer fits the format, a locked stage or match...) is said in the
+  // reader's language off its CODE and facts, never as the server's English message.
+  if (err instanceof Error) {
+    const { code, extra } = err as Error & { code?: unknown; extra?: unknown };
+    const said = ruleRefusalSentence(
+      typeof code === "string" ? code : undefined,
+      typeof extra === "object" && extra !== null ? (extra as Record<string, unknown>) : undefined,
+      err.message,
+      msg,
+    );
+    if (said !== null) return said;
+  }
   const extra = (err as { code?: unknown; extra?: unknown } | null)?.code === "CONFIG_INVALID" ? (err as { extra?: unknown }).extra : undefined;
   const issues = configIssuesOf(extra);
   if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");

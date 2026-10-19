@@ -21,10 +21,14 @@ import { subjectToScorerCapabilityGates } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
 import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./discipline";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
-import { stageForfeitAward } from "@/server/engine-db/fixture-cfg";
+import { liveCfg, stageForfeitAward } from "@/server/engine-db/fixture-cfg";
+import { formatStanding } from "@/server/engine-db/format-standing";
+import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { matchFieldsFor } from "@/lib/rule-scope";
+import type { RuleField } from "@/lib/match-rules";
 import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
-import { validateLineup, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
-import type { ForfeitAward, Lineup } from "@seazn/engine/core";
+import { validateLineup, type AnySportModule, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
+import type { ForfeitAward, Lineup, StageKind } from "@seazn/engine/core";
 import { log } from "@/server/logger";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatLineOf } from "@/server/engine-db/rules-version";
@@ -181,6 +185,89 @@ async function readPadRules(auth: AuthCtx, fixtureId: string) {
   });
 }
 
+/**
+ * W2c Task 19 (S2, X-SR-2, X-SR-3, X-SR-5) - what the fixture console's "Match rules" block reads: the format the match's
+ * STAGE resolves to, the match's own override over it, the format it plays by now, the fields one match may change, and
+ * where the match stands.
+ *
+ * The console reads the RESOLVED cfg, never a raw stored one: `effective` is `resolveFixtureCfg`'s answer (the frozen
+ * snapshot of a started match, else division + stage rules + the match's override), `stageResolved` is the stage's own
+ * (`liveCfg`, what the writer bounds an override against). Both run through the sport's schema so a default the stage
+ * never wrote (football's extra time, off) is a value the form can open at; a cfg the schema refuses is passed as is.
+ *
+ * `state` is the WRITER's own reading (`fixture-rules.ts`): `locked` is exactly the statuses it refuses on
+ * (`LOCKED_FIXTURE_STATUSES`, step 1); otherwise a match is `live` when it counts as started there (`formatStanding`: played
+ * or decided without play, step 7) and `unstarted` when neither.
+ *
+ * `fields` holds functions (`build`/`read`) and so never crosses to a client component: the page hands the client the
+ * serialisable rest, and the block rebuilds the same list from `sportKey`/`stageKind`/`variant` (`matchFieldsFor`).
+ * `dict` is the PUBLIC dictionary in the reader's language, for the stage's line in words.
+ */
+export interface FixtureMatchRules {
+  readonly sportKey: string;
+  readonly stageKind: StageKind | null;
+  readonly variant: string | null;
+  readonly stageLine: string;
+  readonly override: Record<string, unknown> | null;
+  readonly stageResolved: Record<string, unknown>;
+  readonly effective: Record<string, unknown>;
+  readonly fields: readonly RuleField[];
+  readonly state: "unstarted" | "live" | "locked";
+}
+
+const isCfgObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** A cfg through the sport's schema (defaults in), else as it stands; never a non-object. */
+function parsedCfg(m: AnySportModule, cfg: unknown): Record<string, unknown> {
+  const parsed = m.configSchema.safeParse(cfg);
+  const out = parsed.success ? parsed.data : cfg;
+  return isCfgObject(out) ? out : {};
+}
+
+export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, dict: Dict): Promise<FixtureMatchRules> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<
+      {
+        status: string;
+        config_snapshot: unknown;
+        rules_override: unknown;
+        division_config: unknown;
+        sport_key: string;
+        module_version: string;
+        variant_key: string | null;
+        stage_config: Record<string, unknown> | null;
+        stage_kind: string | null;
+      }[]
+    >`
+      select f.status, f.config_snapshot, f.rules_override, d.config as division_config, d.sport_key, d.module_version,
+             d.variant_key, s.config as stage_config, s.kind as stage_kind
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        left join stages s on s.id = f.stage_id
+       where f.id = ${fixtureId}`;
+    // `withTenant` scopes the read to this org: another tenant's fixture is indistinguishable from a missing one.
+    if (!row) throw new HttpError(404, "fixture not found");
+    const sportModule = resolveModule(row.sport_key, row.module_version);
+    const stage = { kind: row.stage_kind, config: row.stage_config };
+    const stageKind = row.stage_kind as StageKind | null;
+    const stageRaw = liveCfg(row.division_config, stage, sportModule);
+    const stageResolved = parsedCfg(sportModule, stageRaw);
+    const effective = parsedCfg(sportModule, resolveFixtureCfg(row, row.division_config, stage, sportModule));
+    const standing = LOCKED_FIXTURE_STATUSES.has(row.status) ? null : await formatStanding(tx, fixtureId);
+    return {
+      sportKey: row.sport_key,
+      stageKind,
+      variant: row.variant_key,
+      stageLine: formatLineOf(row.sport_key, sportModule, stageRaw, row.stage_kind, row.division_config, dict) ?? "",
+      override: isCfgObject(row.rules_override) ? row.rules_override : null,
+      stageResolved,
+      effective,
+      fields: matchFieldsFor({ module: sportModule, stageKind, variant: row.variant_key }),
+      state: standing === null ? "locked" : standing.played || standing.decidedWithoutPlay ? "live" : "unstarted",
+    };
+  });
+}
+
 /** All fixtures of a division in play order — the organiser console read.
  *
  *  The four `*_to_fixture`/`*_to_slot` columns are FOUR EXTRA COLUMNS on this
@@ -211,7 +298,9 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
              ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
              ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
-             ${hasActiveAbandonSql(tx, "f")} as has_active_abandon
+             ${hasActiveAbandonSql(tx, "f")} as has_active_abandon,
+             -- W2c Task 19 (S4): the match plays a format of its own (the run sheet's "Format changed" chip).
+             f.rules_override is not null as format_changed
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}

@@ -6587,5 +6587,20 @@
   "stagePoints.invalid.number": "Introduce un número para los puntos de victoria, empate y derrota.",
   "stagePoints.invalid.walkover": "Introduce los dos puntos de incomparecencia o deja ambos vacíos.",
   "stagePoints.invalid.score": "Introduce los dos resultados de incomparecencia o deja ambos vacíos.",
-  "stagePoints.invalid.bonus": "Completa todas las bonificaciones."
+  "stagePoints.invalid.bonus": "Completa todas las bonificaciones.",
+  "matchRules.title": "Reglas del partido",
+  "matchRules.fromStage": "Desde la fase: {format}",
+  "matchRules.overridden": "Cambiado para este partido",
+  "matchRules.source.stage": "Fase",
+  "matchRules.source.match": "Este partido",
+  "matchRules.reset": "Usar las reglas de la fase",
+  "matchRules.correctLive": "Corregir el formato",
+  "matchRules.correctWarning": "Se conserva lo jugado hasta ahora; el nuevo formato se aplica a partir de aquí",
+  "matchRules.locked": "Este partido ha terminado: su formato está bloqueado",
+  "matchRules.heldOff": "La fase lo tiene desactivado: un partido solo puede desactivarlo o acortarlo",
+  "matchRules.halfMinutes": "{n} min cada parte",
+  "runSheet.formatChanged": "Formato cambiado",
+  "rules.err.formatDoesNotFitPlayBecause": "Lo jugado hasta ahora no encaja con ese formato: {reason}",
+  "matchRules.show": "Mostrar las reglas del partido",
+  "matchRules.hide": "Ocultar las reglas del partido"
 }

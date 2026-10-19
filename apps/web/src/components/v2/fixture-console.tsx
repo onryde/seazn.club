@@ -32,6 +32,7 @@ import { StreamSessionProvider, useSharedPhoneSession } from "@/components/v2/st
 import { nextOpenPanel, streamButtonState, type OpenPanel } from "@/lib/fixture-stream-mount";
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
+import { MatchRulesBlock, type MatchRulesBlockProps } from "@/components/v2/match-rules-block";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
@@ -400,6 +401,9 @@ interface Props {
   stream?: FixtureStreamMount;
   /** `?stream=open` on the URL: open the stream panel on first render (checkout return, run-sheet chip). */
   streamReturn?: boolean;
+  /** W2c Task 19 (S2) - the match rules block's facts (`loadFixtureMatchRules`, minus its function-valued `fields`), decided
+   *  by the page: organisers only. Absent => no block. */
+  matchRules?: MatchRulesBlockProps;
   viewerPlan: ViewerPlan;
 }
 
@@ -544,6 +548,7 @@ export function FixtureConsole({
   deviceHandover = false,
   stream,
   streamReturn = false,
+  matchRules,
   viewerPlan,
 }: Props) {
   const msg = useMsg();
@@ -1592,6 +1597,20 @@ export function FixtureConsole({
             );
           })}
         </div>
+      )}
+
+      {/* W2c Task 19 (S2): the format THIS match plays, over its stage's - change it before the start, correct it live,
+          read it locked. Organisers only (the page decides; absent => nothing here). One DOM: below `md` the disclosure
+          folds it, from `md` up it is a plain card. */}
+      {matchRules && (
+        <PhoneDisclosure
+          summary={msg("matchRules.title")}
+          aside={matchRules.override !== null ? msg("matchRules.overridden") : undefined}
+          showLabel={msg("matchRules.show")}
+          hideLabel={msg("matchRules.hide")}
+        >
+          <MatchRulesBlock {...matchRules} />
+        </PhoneDisclosure>
       )}
 
       {/* THE AUTHORITY BAND (R7/C2, D-12; Finalize in it per R7-3a).

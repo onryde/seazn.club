@@ -120,7 +120,8 @@ describe.skipIf(!HAS_DB)("GET /divisions/{id}/fixtures (G3)", () => {
     for (const row of rows) {
       // W2b loop-F I-2: `expunged` (the console's qualification read) is internal too, and so is W2c X-AB-5's
       // `has_active_abandon` (the same read of the ledger, for the held match).
-      for (const col of ["winner_to_fixture", "winner_to_slot", "loser_to_fixture", "loser_to_slot", "expunged", "has_active_abandon"]) {
+      // W2c Task 19 (S4): `format_changed` (the run sheet's "Format changed" chip) is the same kind of internal read.
+      for (const col of ["winner_to_fixture", "winner_to_slot", "loser_to_fixture", "loser_to_slot", "expunged", "has_active_abandon", "format_changed"]) {
         expect(row, `${col} reached the published v1 payload`).not.toHaveProperty(col);
       }
       // …and the strip did not take a declared field with it.

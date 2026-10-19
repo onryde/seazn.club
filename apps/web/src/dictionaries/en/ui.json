@@ -6587,5 +6587,20 @@
   "stagePoints.invalid.number": "Enter a number for the win, draw and loss points.",
   "stagePoints.invalid.walkover": "Enter both walkover points, or leave both empty.",
   "stagePoints.invalid.score": "Enter both walkover scores, or leave both empty.",
-  "stagePoints.invalid.bonus": "Fill in every bonus."
+  "stagePoints.invalid.bonus": "Fill in every bonus.",
+  "matchRules.title": "Match rules",
+  "matchRules.fromStage": "From the stage: {format}",
+  "matchRules.overridden": "Changed for this match",
+  "matchRules.source.stage": "Stage",
+  "matchRules.source.match": "This match",
+  "matchRules.reset": "Use stage rules",
+  "matchRules.correctLive": "Correct format",
+  "matchRules.correctWarning": "The match so far is kept; the new format applies from here",
+  "matchRules.locked": "This match is finished — its format is locked",
+  "matchRules.heldOff": "The stage has this off — a match can only switch it off or shorten it",
+  "matchRules.halfMinutes": "{n} min each half",
+  "runSheet.formatChanged": "Format changed",
+  "rules.err.formatDoesNotFitPlayBecause": "The match so far doesn't fit that format: {reason}",
+  "matchRules.show": "Show match rules",
+  "matchRules.hide": "Hide match rules"
 }
