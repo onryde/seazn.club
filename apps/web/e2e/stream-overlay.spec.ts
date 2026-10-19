@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { test, expect, type Browser, type Locator, type Page } from "@playwright/test";
 import {
   apiJson,
+  expectNoHorizontalScroll,
   invalidateOrgEntitlements,
   setBoolEntitlementOverrideSql,
 } from "./helpers";
@@ -30,6 +31,7 @@ import {
   OVERLAY_MOMENT_FOLD_MS,
   OVERLAY_MOMENT_HOLD_MS,
 } from "../src/components/overlay/moment-timing";
+import { OVERLAY_SCENES } from "../src/components/overlay/overlay-scenes";
 import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
 import { POLL_MS, SETTLED_POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "../src/components/public-site/live-score-data";
@@ -860,114 +862,157 @@ test.describe("an undo of the deciding write takes the end card down on the OPEN
 });
 
 // ===========================================================================
-// §8's PREVIEW — the organiser console, in a browser for the first time.
+// R2006 (owner ruling 2026-10-19, "Option C"; overlay templates spec §4.4 D5–D7): the OBS tab's score STYLE GRID.
 //
-// The panel shipped `scale(640/1920)`, a constant, inside a `w-full` strip:
-// at a 320 px viewport the panel is ~296 px wide and painted a 640 px canvas
-// into it, so about a third of the frame showed and §3's bar — cricket's
-// DEFAULT theme — lost its score cells off the right edge with nothing to
-// scroll to. §8's second correction binds `scale(w/1920)` for the measured
-// strip width `w`. Node cannot see that: `apps/web` vitest is
-// `environment: "node"`, so `fixture-stream-panel.test.tsx` can pin the pure
-// function and the props but never the paint. This is the only thing that can.
+// It replaced §8's style tabs and the one big preview. What only a browser can see, and so what this test owns:
+//  - PAINT: every thumbnail is the real `<OverlayPreview>`, its 1920×1080 canvas scaled to its OWN measured cell at
+//    1280, 768 and 320 — a constant scale satisfies one width only (§8's shipped defect, now per cell). No page scroll.
+//  - TAP: every option and every scene segment is a real 44px target where the finger lands (elementFromPoint).
+//  - SCENES: each segment moves EVERY thumbnail (data-scene), never persisted.
+//  - THE SEAM: a pick is saved (PUT stream-settings), survives a reload, moves the OBS link (`?template=`, never
+//    `?style=`), and the anonymous overlay page opening that link renders the picked template.
+// The expected default is the overlay page's own (`ovl-root` data-style with no query), never a value typed here.
 //
-// The panel is opened ONCE, at 1280, and the viewport is then narrowed: the
-// Stream control is a desktop button that becomes a strip icon below 768
-// (spec 2026-09-30 §2), and clicking that is a different test's problem
+// The panel is opened ONCE, at 1280, and the viewport is then narrowed: the Stream control is a desktop button that
+// becomes a strip icon below 768 (spec 2026-09-30 §2), and clicking that is a different test's problem
 // (stream-relay.spec.ts opens it at every width). React state survives a resize.
 // ===========================================================================
 
-test.describe("§8's live preview", () => {
-  test("the canvas scales to the strip at every width, not to a constant", async ({ browser }) => {
-    test.setTimeout(120_000);
+test.describe("R2006: the OBS tab's score style grid", () => {
+  test("a real thumbnail per template fits its cell at every width; scenes move them all; a pick persists and moves the OBS link", async ({ browser }) => {
+    test.setTimeout(150_000);
     const owner = await browser.newContext();
     const page = await owner.newPage();
+    const obs = await anonPage(browser);
     try {
+      // The overlay page's own default for this fixture — the producer the picker must agree with.
+      await obs.goto(`/overlay/fixtures/${rig.fixtureId}`);
+      const root = obs.locator('[data-testid="ovl-root"]');
+      await expect(root).toHaveCount(1, { timeout: 30_000 });
+      const pageDefault = await root.getAttribute("data-style");
+      expect(pageDefault, "the overlay page resolves a template with no query").toBeTruthy();
+
       await signInAs(page, rig.ownerEmail);
       await page.setViewportSize({ width: 1280, height: 900 });
-      // Spec 2026-09-30 §2: the panel lives on the fixture page. `openFixture` asserts the console rendered first, so
-      // "no Stream control" stays distinguishable from "no page".
       await openFixture(page, rig);
       const control = streamControl(page);
       await expect(control, "the rig's org holds streaming.overlay, so the fixture page offers Stream").toHaveCount(1);
       await control.click();
-      // Spec 2026-09-30 §3.1 (T9b): Phone is the first tab and the default; OBS overlay is the second, one tap away.
       await expect(page.locator('[data-testid="stream-tab-phone"]'), "the panel opens on its Phone tab").toHaveAttribute("aria-selected", "true");
       await page.locator('[data-testid="stream-tab-obs"]').click();
       await expect(page.locator('[data-testid="stream-tab-obs"]')).toHaveAttribute("aria-selected", "true");
-      await expect(page.locator('[data-testid="stream-preview"]')).toHaveCount(1);
+      // §8's style tabs and big preview are gone (Option C item 4).
+      await expect(page.locator('[data-testid="stream-preview"]')).toHaveCount(0);
+      await expect(page.locator("[data-stream-style]")).toHaveCount(0);
+      const picker = page.locator('[data-testid="stream-template-picker"]');
+      await expect(picker).toHaveCount(1);
+      const options = picker.locator('[role="radio"][data-template]');
+      const ids = await options.evaluateAll((els) => els.map((el) => el.getAttribute("data-template")!));
+      console.log(`templates offered: ${ids.length} (${ids.join(", ")})`);
+      expect(ids.length, "a choice needs at least two templates").toBeGreaterThanOrEqual(2);
+      expect(new Set(ids).size, "one option per template").toBe(ids.length);
+      expect(ids, "the overlay page's default is one of them").toContain(pageDefault);
+      const checked = () => picker.locator('[role="radio"][data-template][aria-checked="true"]');
+      await expect(checked()).toHaveCount(1);
+      await expect(checked(), "nothing stored: the panel opens on the overlay page's own default").toHaveAttribute("data-template", pageDefault!);
+      const link = page.locator('[data-testid="stream-link"]');
+      const linkUrl = async () => new URL(await link.inputValue());
+      await expect.poll(async () => (await linkUrl()).searchParams.get("template"), { timeout: 30_000 }).toBe(pageDefault);
+      expect((await linkUrl()).searchParams.has("style"), "the panel writes ?template=, never ?style=").toBe(false);
 
+      // PAINT + TAP at every width.
       const measure = () =>
-        page.evaluate(() => {
-          const strip = document.querySelector<HTMLElement>('[data-testid="stream-preview"]');
-          const canvas = document.querySelector<HTMLElement>(
-            '[data-testid="stream-preview-canvas"]',
-          );
-          if (!strip || !canvas) return null;
-          const c = canvas.getBoundingClientRect();
-          return {
-            stripW: strip.clientWidth,
-            stripH: strip.clientHeight,
-            canvasW: c.width,
-            canvasH: c.height,
-          };
-        });
-
-      const widths: { viewport: number; strip: number; canvas: number }[] = [];
+        page.evaluate(() =>
+          [...document.querySelectorAll<HTMLElement>('[data-testid="stream-template-picker"] [role="radio"][data-template]')].map((opt) => {
+            const cell = opt.querySelector<HTMLElement>("span[aria-hidden]")!;
+            const canvas = opt.querySelector<HTMLElement>('[data-testid="ovl-preview-canvas"]')!;
+            const c = canvas.getBoundingClientRect();
+            const box = opt.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + Math.min(box.height / 2, 40));
+            return {
+              id: opt.getAttribute("data-template"),
+              cellW: cell.clientWidth, cellH: cell.clientHeight, canvasW: c.width, canvasH: c.height,
+              optH: box.height, hitOwn: hit !== null && opt.contains(hit),
+            };
+          }),
+        );
+      let thumbs = 0;
+      const at: Record<number, number> = {};
       for (const w of [1280, 768, 320]) {
         await page.setViewportSize({ width: w, height: 900 });
-        // The observer fires on the frame AFTER a resize, so the first read at
-        // a new width can legitimately still be the previous scale.
         await expect
-          .poll(
-            async () => {
-              const b = await measure();
-              return b !== null && b.stripW > 0 && Math.abs(b.canvasW - b.stripW) <= 1.5;
-            },
-            {
-              message: `at ${w}: the painted canvas must settle to the strip's own width`,
-              timeout: 15_000,
-              intervals: [250],
-            },
-          )
+          .poll(async () => (await measure()).every((b) => b.cellW > 0 && Math.abs(b.canvasW - b.cellW) <= 1.5), {
+            message: `at ${w}: every thumbnail's canvas must settle to its own cell's width`,
+            timeout: 15_000,
+            intervals: [250],
+          })
           .toBe(true);
-
-        const box = await measure();
-        expect(box, `the preview left the DOM at ${w}`).not.toBeNull();
-        // The whole authored canvas, at every width: painted size = the box it
-        // is painted into. A CONSTANT scale satisfies this at one width only,
-        // which is exactly the defect.
-        expect(
-          Math.abs(box!.canvasW - box!.stripW),
-          `at ${w}: a ${box!.canvasW}px canvas in a ${box!.stripW}px strip`,
-        ).toBeLessThanOrEqual(1.5);
-        expect(
-          Math.abs(box!.canvasH - box!.stripH),
-          `at ${w}: a ${box!.canvasH}px canvas in a ${box!.stripH}px strip, vertically`,
-        ).toBeLessThanOrEqual(1.5);
-        expect(box!.canvasW, "§8 caps the strip at 640").toBeLessThanOrEqual(641);
-        widths.push({ viewport: w, strip: box!.stripW, canvas: box!.canvasW });
+        const boxes = await measure();
+        expect(boxes.map((b) => b.id), `${w}: every option still there`).toEqual(ids);
+        for (const b of boxes) {
+          expect(Math.abs(b.canvasW - b.cellW), `${w} ${b.id}: a ${b.canvasW}px canvas in a ${b.cellW}px cell`).toBeLessThanOrEqual(1.5);
+          expect(Math.abs(b.canvasH - b.cellH), `${w} ${b.id}: a ${b.canvasH}px canvas in a ${b.cellH}px cell, vertically`).toBeLessThanOrEqual(1.5);
+          expect(b.optH, `${w} ${b.id}: the option is a 44px target`).toBeGreaterThanOrEqual(44);
+          expect(b.hitOwn, `${w} ${b.id}: a tap on the option lands on the option`).toBe(true);
+          thumbs++;
+        }
+        for (const scene of OVERLAY_SCENES) {
+          const seg = page.locator(`[data-testid="stream-scene-${scene.id}"]`);
+          const box = (await seg.boundingBox())!;
+          expect(box.height, `${w} ${scene.id}: ${w < 768 ? 44 : 36}px segment`).toBeGreaterThanOrEqual(w < 768 ? 44 : 36);
+          const hitOwn = await seg.evaluate((el) => {
+            const r = el.getBoundingClientRect();
+            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return hit !== null && el.contains(hit);
+          });
+          expect(hitOwn, `${w} ${scene.id}: a tap on the segment lands on it`).toBe(true);
+        }
+        await expectNoHorizontalScroll(page);
+        at[w] = boxes[0]!.canvasW;
       }
+      console.log(`thumbnails checked: ${thumbs}`);
+      expect(thumbs).toBe(ids.length * 3);
+      // The differential: a constant scale would paint the same width everywhere.
+      expect(at[320], `the first thumbnail is ${at[320]}px at 320 and ${at[1280]}px at 1280 — each width measures its own cell`).not.toBe(at[1280]);
 
-      // The differential. Without it "canvas == strip" could in principle be
-      // met by a panel that never changed size at all.
-      const at = (v: number) => widths.find((r) => r.viewport === v)!;
-      expect(
-        at(320).canvas,
-        `the strip is ${at(320).strip}px at a 320 viewport and ${at(1280).strip}px at 1280 — the canvas must follow`,
-      ).toBeLessThan(at(1280).canvas);
+      // SCENES: each segment moves every thumbnail; the first declared scene is where it opens.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const scenesOf = () => picker.locator('[data-testid="ovl-preview"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-scene")));
+      expect(await scenesOf(), "opens on the first declared scene").toEqual(ids.map(() => OVERLAY_SCENES[0].id));
+      let scenes = 0;
+      for (const scene of [...OVERLAY_SCENES].reverse()) {
+        await page.locator(`[data-testid="stream-scene-${scene.id}"]`).click();
+        await expect(page.locator(`[data-testid="stream-scene-${scene.id}"]`)).toHaveAttribute("aria-checked", "true");
+        await expect.poll(scenesOf, { message: `scene ${scene.id} on every thumbnail` }).toEqual(ids.map(() => scene.id));
+        scenes++;
+      }
+      console.log(`scenes checked: ${scenes}`);
+      expect(scenes).toBe(OVERLAY_SCENES.length);
 
-      // Named against the SUPERSEDED constant on purpose. `640/1920` is what
-      // the panel shipped and is what a reverted `transform` would paint here
-      // whatever the strip measures, so this is the assertion that kills that
-      // mutant — and it is the only one anywhere that can, because
-      // `environment: "node"` has no layout and the pure function returns its
-      // own fallback (the same 640/1920) when nothing has been measured.
-      expect(
-        at(320).canvas,
-        `at a 320 viewport the strip is ${at(320).strip}px; a canvas still painting the shipped 640px constant reads 640 here`,
-      ).toBeLessThan(639);
+      // THE SEAM: pick the other template; it is saved, moves the link, survives a reload, and OBS renders it.
+      const other = ids.find((id) => id !== pageDefault)!;
+      const saved = page.waitForResponse(
+        (r) => r.request().method() === "PUT" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-settings`,
+      );
+      await picker.locator(`[role="radio"][data-template="${other}"]`).click();
+      const res = await saved;
+      expect(res.status(), "the pick is saved").toBe(200);
+      expect(res.request().postDataJSON(), "the body names the template alone").toEqual({ overlayTemplate: other });
+      await expect(checked()).toHaveAttribute("data-template", other);
+      await expect.poll(async () => (await linkUrl()).searchParams.get("template")).toBe(other);
+      await page.reload();
+      await expect(page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first()).toBeAttached({ timeout: 30_000 });
+      await streamControl(page).click();
+      await page.locator('[data-testid="stream-tab-obs"]').click();
+      await expect(checked(), "the stored pick, after a reload").toHaveAttribute("data-template", other);
+      await expect.poll(async () => (await linkUrl()).searchParams.get("template"), { timeout: 30_000 }).toBe(other);
+      expect((await linkUrl()).searchParams.has("style")).toBe(false);
+      await obs.goto((await linkUrl()).toString());
+      await expect(root, "OBS opening the copied link renders the picked template").toHaveAttribute("data-style", other, { timeout: 30_000 });
     } finally {
+      // Back to "nothing stored", so no later test in this serial file inherits the pick.
+      await apiJson(page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-settings`, "PUT", { overlayTemplate: null }).catch(() => undefined);
+      await obs.context().close();
       await owner.close();
     }
   });
