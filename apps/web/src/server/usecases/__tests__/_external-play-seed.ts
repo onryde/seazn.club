@@ -154,7 +154,7 @@ export async function seedOnlineChessFixture(
     ends_on: "2026-10-02",
   });
   // `createEntrants` refuses to attach an unlinked person to a division whose
-  // config ALREADY reads onlinePlay 'lichess' (entrants.ts:385,
+  // config ALREADY reads onlinePlay 'lichess' (`createEntrants`' roster check,
   // `assertPersonIdsLinkedForOnlinePlay`) — a real product guard, not this
   // task's to relax. `linked: false` + `onlinePlay: 'lichess'` is still a
   // reachable state in production (a roster built before online play was

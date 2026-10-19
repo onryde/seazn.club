@@ -441,7 +441,7 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
   // The cases above all build a `generic` division, which never reaches the
   // online-play branch of `createEntrants` — the one that demands every
   // rostered person hold a Lichess link. That branch used to ask the link
-  // question through `personHasLichessLink`, which opened a NESTED `withTenant`
+  // question person by person, through a helper that opened a NESTED `withTenant`
   // and then a pooled `getLichessLink` read WHILE the create's own transaction
   // held its connection: pool-max concurrent creates on an online division
   // pinned every slot and queued for one more, for ever. `user_external_accounts`

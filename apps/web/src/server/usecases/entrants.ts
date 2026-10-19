@@ -266,6 +266,24 @@ export async function listEntrants(
   });
 }
 
+/** The people a batch will roster, when that is known BEFORE its transaction: every input names its own members, so
+ *  nothing replaces or seeds them. `undefined` when ANY input's roster is only resolved inside the transaction - a
+ *  copied roster replaces `members`, and a team with none named is seeded from its squad (see `createEntrants`).
+ *  `new_person` members are created in the transaction and hold no account, so they name no one.
+ *
+ *  This restates that resolution rule up front, to scope the privileged link read. If it ever UNDER-names (the rule
+ *  changes here and not there) the missing people are absent from the set and the roster is refused: the failure is
+ *  loud and closed, never an unchecked pass. */
+function explicitRosterPersonIds(inputs: readonly CreateEntrant[]): string[] | undefined {
+  const named = new Set<string>();
+  for (const input of inputs) {
+    const members = input.members ?? [];
+    if (input.copy_roster_from_entrant_id || (input.team_id && members.length === 0)) return undefined;
+    for (const m of members) if (!("new_person" in m)) named.add(m.person_id);
+  }
+  return [...named];
+}
+
 /** Register one entrant or a bulk batch (doc 08 §3 "+ bulk import").
  *  Enrolling an existing team (team_id set) snapshots the display name from the
  *  team, enforces one-entry-per-division (409), and can copy a prior roster. */
@@ -302,17 +320,20 @@ export async function createEntrants(
   // WHO HOLDS A LICHESS LINK, for an online division's roster check below. The answer lives in a sealed table
   // (`user_external_accounts`: no `app_user` grant), so it cannot be read through the ambient `tx` once the role has
   // dropped, and asking the pool from inside the callback is a SECOND connection while this one is held — pool-max
-  // concurrent creates on an online division pinned every slot and queued for one more, for ever (the nested
-  // `personHasLichessLink` did exactly that). `withTenant`'s `privilegedPrelude` is the door built for this: it runs
-  // FIRST, on this transaction's own connection, before the role drops. The roster itself is only known inside the
-  // transaction (inline new persons, a copied roster, a team squad), so the prelude reads the org's whole linked set
-  // and the callback tests the final roster against it. Read only when the division is online as the prelude sees
-  // it, and not when the flag was asked and said no (then no link is demanded).
+  // concurrent creates on an online division pinned every slot and queued for one more, for ever (the per-person
+  // check this replaced did exactly that). `withTenant`'s `privilegedPrelude` is the door built for this: it runs
+  // FIRST, on this transaction's own connection, before the role drops - and the callback still runs as `app_user`,
+  // so RLS still scopes everything it does. The final roster is only known inside the transaction (inline new persons,
+  // a copied roster, a team squad), so the prelude reads a set and the callback tests the roster against it: just the
+  // people the inputs name when every input names its own (`explicitRosterPersonIds`), the org's whole linked set when
+  // some roster is resolved later. Read only when the division is online as the prelude sees it, and not when the
+  // flag was asked and said no (then no link is demanded).
+  const namedPersonIds = explicitRosterPersonIds(inputs);
   let linkedPersonIds: ReadonlySet<string> | null = null;
   const readLinkedPersonIds = async (ptx: Tx): Promise<void> => {
     const [current] = await ptx<{ config: unknown }[]>`select config from divisions where id = ${divisionId}`;
     if (readOnlinePlay(current?.config) === "lichess") {
-      linkedPersonIds = await personIdsWithLichessLink(ptx, auth.orgId);
+      linkedPersonIds = await personIdsWithLichessLink(ptx, auth.orgId, namedPersonIds);
     }
   };
   const { rows, competitionId } = await withTenant(auth.orgId, async (tx) => {

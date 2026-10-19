@@ -10,7 +10,6 @@ import {
   getLichessAccessToken,
   getLichessLink,
   lichessGrantDowngraded,
-  personHasLichessLink,
   personIdsWithLichessLink,
   unlinkLichess,
   upsertLichessLink,
@@ -675,41 +674,6 @@ describe.skipIf(!HAS_DB)("external-accounts — link identity", () => {
     expect(await getLichessLink(userId)).toBeNull();
   });
 
-  it("personHasLichessLink is false when person has no user_id", async () => {
-    const suffix = randomUUID().slice(0, 8);
-    const userId = await newUser(`plh-${suffix}`);
-    const [{ id: orgId }] = await sql<{ id: string }[]>`
-      insert into organizations (name, slug, created_by)
-      values (${"PLH " + suffix}, ${"plh-" + suffix}, ${userId}) returning id`;
-    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'owner')`;
-    const [{ id: personId }] = await sql<{ id: string }[]>`
-      insert into persons (org_id, full_name)
-      values (${orgId}, ${"Unlinked Person"}) returning id`;
-
-    expect(await personHasLichessLink(orgId, personId)).toBe(false);
-  });
-
-  it("personHasLichessLink is true when linked user has Lichess", async () => {
-    const suffix = randomUUID().slice(0, 8);
-    const userId = await newUser(`plh2-${suffix}`);
-    const [{ id: orgId }] = await sql<{ id: string }[]>`
-      insert into organizations (name, slug, created_by)
-      values (${"PLH2 " + suffix}, ${"plh2-" + suffix}, ${userId}) returning id`;
-    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'owner')`;
-    const [{ id: personId }] = await sql<{ id: string }[]>`
-      insert into persons (org_id, full_name, user_id)
-      values (${orgId}, ${"Linked Person"}, ${userId}) returning id`;
-
-    expect(await personHasLichessLink(orgId, personId)).toBe(false);
-    await upsertLichessLink(userId, {
-      externalUserId: `lid2-${suffix}`,
-      username: `U${suffix}`,
-      scopes: [...PLAY_SCOPES],
-      token: "lio_t",
-    });
-    expect(await personHasLichessLink(orgId, personId)).toBe(true);
-  });
-
   // Fix round 1 (review): V451's SECOND unique constraint,
   // (provider, external_user_id) — a Lichess account can only ever be linked
   // to ONE Seazn user. Without a typed catch this surfaced as a raw,
@@ -778,10 +742,24 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     };
     const link = (userId: string, scopes: string[] = [...PLAY_SCOPES]) =>
       upsertLichessLink(userId, { externalUserId: lid(tag), username: tag, scopes, token: "lio_t" });
-    return { suffix, orgId, person, link };
+    /** A person whose own user holds a Lichess link. */
+    const linkedPerson = async (name: string): Promise<string> => {
+      const userId = await newUser(`${tag}-${name.replaceAll(" ", "")}-${suffix}`);
+      await link(userId);
+      return person(name, userId);
+    };
+    return { suffix, orgId, person, link, linkedPerson };
   }
 
-  it("holds exactly the org's persons whose user has a Lichess row — and agrees with the per-person check on every one", async () => {
+  /** The oracle the set must agree with, person by person: the question asked the long way round, as two privileged
+   *  reads (the person's user, then that user's Lichess row) — not the join the set is written as. */
+  async function linkedTheLongWay(personId: string): Promise<boolean> {
+    const [person] = await sql<{ user_id: string | null }[]>`select user_id from persons where id = ${personId}`;
+    if (!person?.user_id) return false;
+    return (await getLichessLink(person.user_id)) !== null;
+  }
+
+  it("holds exactly the org's persons whose user has a Lichess row — and agrees with the long way round on every one", async () => {
     const o = await seedOrgWithPeople("set");
     const linkedUser = await newUser(`set-linked-${o.suffix}`);
     await o.link(linkedUser);
@@ -806,10 +784,9 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
 
     expect([...set].sort()).toEqual([people.linked, people.legacy].sort());
     expect(set.has(otherOrgPerson), "another org's person is not in this org's set").toBe(false);
-    // The older per-person check is the authority this set must agree with, person by person.
     let checked = 0;
     for (const id of Object.values(people)) {
-      expect(set.has(id), id).toBe(await personHasLichessLink(o.orgId, id));
+      expect(set.has(id), id).toBe(await linkedTheLongWay(id));
       checked++;
     }
     expect(checked, "anti-vacuity: persons compared").toBe(4);
@@ -827,16 +804,39 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     expect(set.has(p)).toBe(false);
   });
 
-  it("follows an unlink: the same person drops out of the next set", async () => {
+  it("follows a link and an unlink: the same person enters the next set, then drops out of the one after", async () => {
     const o = await seedOrgWithPeople("unlink");
     const user = await newUser(`unlink-user-${o.suffix}`);
-    await o.link(user);
     const p = await o.person("Linked then not", user);
+    // A user with a person but no Lichess row yet is not in the set; the link brings the person in.
+    expect((await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId))).has(p)).toBe(false);
+    await o.link(user);
     expect((await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId))).has(p)).toBe(true);
 
     await unlinkLichess(user);
 
     expect((await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId))).has(p)).toBe(false);
+  });
+
+  // Scoped to the persons a roster NAMES: the answer for those and no one else. Used when the roster is known up
+  // front (explicit members), so a big org's whole linked list is not read to answer for one player.
+  it("scoped to person ids: holds only the named persons who are linked", async () => {
+    const o = await seedOrgWithPeople("scope");
+    const linkedA = await o.linkedPerson("Linked A");
+    const linkedB = await o.linkedPerson("Linked B");
+    const unlinked = await o.person("Unlinked", await newUser(`scope-u-${o.suffix}`));
+    // Another org's linked person, named explicitly: the org scope still applies to a named id.
+    const other = await seedOrgWithPeople("scope-other");
+    const foreign = await other.linkedPerson("Foreign linked");
+    const read = (ids?: readonly string[]) => sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId, ids));
+
+    expect([...(await read())].sort(), "premise: unscoped is the whole org").toEqual([linkedA, linkedB].sort());
+    expect([...(await read([linkedA]))]).toEqual([linkedA]);
+    expect([...(await read([linkedA, unlinked]))], "a named person who is not linked is absent").toEqual([linkedA]);
+    expect([...(await read([unlinked]))]).toEqual([]);
+    expect([...(await read([]))], "naming nobody asks about nobody").toEqual([]);
+    expect([...(await read([foreign]))], "a named id of another org's person").toEqual([]);
+    expect([...(await read([linkedA, linkedB, linkedA]))].sort(), "a repeated id answers once").toEqual([linkedA, linkedB].sort());
   });
 
   // WHY a prelude and not the ambient `tx`: after `set local role app_user` the sealed table is unreadable. If this
@@ -856,16 +856,19 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     const p = await o.person("Linked", user);
     let loaded: ReadonlySet<string> | null = null;
     let preludePid: number | null = null;
+    let preludeRole: string | null = null;
 
     const seen = await withTenant(
       o.orgId,
       async (tx: Tx) => {
-        const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
-        return { pid, has: loaded?.has(p) ?? false };
+        const [{ pid, role }] = await tx<{ pid: number; role: string }[]>`
+          select pg_backend_pid() as pid, current_user as role`;
+        return { pid, role, has: loaded?.has(p) ?? false };
       },
       {
         privilegedPrelude: async (ptx) => {
-          [{ pid: preludePid }] = await ptx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+          [{ pid: preludePid, role: preludeRole }] = await ptx<{ pid: number; role: string }[]>`
+            select pg_backend_pid() as pid, current_user as role`;
           loaded = await personIdsWithLichessLink(ptx, o.orgId);
         },
       },
@@ -874,6 +877,10 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     expect(seen.has, "the set read in the prelude is the one the transaction uses").toBe(true);
     expect(preludePid, "premise: the prelude ran").not.toBeNull();
     expect(seen.pid, "ONE connection: the prelude read is not a second checkout").toBe(preludePid);
+    // THE SECURITY PIN. A prelude may read what the tenant role cannot, but the callback it precedes must still run
+    // as the tenant role — otherwise every RLS policy is off for the whole transaction the moment a prelude is given.
+    expect(preludeRole, "premise: the prelude is privileged — it is not the tenant role").not.toBe("app_user");
+    expect(seen.role, "the callback runs as app_user whenever a prelude was given").toBe("app_user");
   });
 });
 
