@@ -1792,6 +1792,15 @@ jobs:
       - name: Verify every route's referenced build chunks were written (#19)
         run: npm run check:build-chunks
 
+      # Browser Sentry (owner decision 2026-10-19: ON, session replay OFF). `@sentry/nextjs` bundles a sentry.client.config.ts
+      # only under WEBPACK and this build is Turbopack, so for as long as the client init lived there no browser Sentry
+      # ran, behind a green tsc, eslint and ~4,000 vitest tests. Only the emitted chunks can say what a bundle holds:
+      # scripts/check-client-sentry.ts fails when the init (src/instrumentation-client.ts) is absent from the first-load
+      # chunks, or when a session-replay recorder (rrweb, `checkoutEveryNms`) is in ANY chunk, and prints the first-load
+      # size. This build's NEXT_PUBLIC_SENTRY_DSN is blank on purpose: the init is bundled whether or not it is enabled.
+      - name: Verify the client Sentry init is bundled and no session replay is
+        run: npm run check:client-sentry
+
       - name: Run smoke test
         run: npm run test:smoke
 
