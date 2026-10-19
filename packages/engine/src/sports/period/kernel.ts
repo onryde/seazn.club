@@ -2826,6 +2826,9 @@ export function makePeriodModule(
 
     // W2a: none (hockey/ice hockey deciders stay organiser-configured until W2c, spec §5.2)
     bracketDeciders: () => ({}),
+    // M-3: the shoot-out is sudden death (`shootoutDecision`), so it always produces a winner. An overtime does not,
+    // sudden-death or not: a scoreless one runs out and `resolveEnd` finishes level when no shoot-out follows.
+    canEndLevel: (cfg) => cfg.shootout === null,
 
     declaredPointsSets(cfg) {
       const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];

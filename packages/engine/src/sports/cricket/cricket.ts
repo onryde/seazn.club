@@ -4047,6 +4047,9 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
 
   // W2a: none (cricket's deciders stay organiser-configured until W2c, spec §5.2)
   bracketDeciders: () => ({}),
+  // M-3: without a super over a tied innings pair is a tie. With one, a tied super over is played again only under the
+  // `repeat` policy; `boundary_count` still ties on equal boundaries and `shared` stands as a tie (`decideTie`).
+  canEndLevel: (cfg) => !cfg.superOver || cfg.superOverStillTied !== "repeat",
 
   // W2c X-SR-6, CK-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: the super over ON, wherever the
   // schema takes one (`ruleKeys.superOver.appliesTo` is the one declaration of which variants: a two-innings test match

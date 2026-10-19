@@ -1,6 +1,6 @@
 // W2c (spec §4.1 as amended; plan D1) — the helpers every allowlist, form and label derives its keys from, and the
 // one check a match override passes (X-SR-2). Each reads a module's own `ruleKeys`; none hand-lists a key.
-import type { StageKind } from "../core/types.ts";
+import { forbidsLevelResult, type StageKind } from "../core/types.ts";
 import type { AnySportModule, RuleKeyFact, RuleScope } from "./module.ts";
 
 /** Whether a declared key applies to a stage kind and variant. A null kind (the division level, before any stage)
@@ -31,10 +31,26 @@ export const stageTopKeysFor = (m: AnySportModule, kind: StageKind | null, varia
 /** First segments of every declared key, whatever its scope. */
 export const sportTopKeys = (m: AnySportModule): ReadonlySet<string> => new Set(Object.keys(m.ruleKeys ?? {}).map(topOf));
 /** The WHOLE deciders (`decider: true`) a stage of this kind and variant carries — what the knockout preselection
- *  switches on (spec §4.2, X-SR-6). The "no decider" notice that will check them (`deciders-off-notice.tsx`) is owed
- *  by W2c Task 17 and does not exist yet. */
+ *  switches on (spec §4.2, X-SR-6). The "no decider" notice that checks them is the stage editor's
+ *  (`components/v2/stage-rules/deciders-off-notice.tsx`, W2c Task 17). */
 export const deciderKeysFor = (m: AnySportModule, kind: StageKind | null, variant: string | null): readonly string[] =>
   Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.decider === true && ruleKeyApplies(f, kind, variant)).map(([k]) => k);
+
+/**
+ * W2c Task 17 (review M-3) — may a match of a stage of this `kind` still finish level under `cfg`, after every decider has
+ * run? `cfg` is the stage's cfg (its rules over its division); the sport's `bracketDeciders` are laid over it HERE, as
+ * the resolver does, so the answer is the same whether or not the caller resolved them already (carrom's extra board
+ * replaces a division's drawn game). The result is handed to the module's own `canEndLevel`. Only a BRACKET kind is ever
+ * held (`forbidsLevelResult`): in a table a level result is a result, so the answer there, and for no kind at all (the
+ * division level), is false. A module with no `canEndLevel` (it declares no decider) and a cfg its schema refuses make
+ * no claim: false. A kind is a database string with no parse, so an unknown one is not a bracket.
+ */
+export function bracketMayEndLevel(m: AnySportModule, kind: string | null | undefined, cfg: unknown): boolean {
+  if (!forbidsLevelResult(kind) || m.canEndLevel === undefined) return false;
+  const parsed = m.configSchema.safeParse(cfg);
+  if (!parsed.success) return false;
+  return m.canEndLevel({ ...parsed.data, ...m.bracketDeciders(parsed.data) });
+}
 
 /** The declaration that owns a cfg path: the most specific declared prefix ("overtime.minutes" over "overtime").
  *  Only the module's OWN keys count — an inherited property name ("toString") is never a rule key. */

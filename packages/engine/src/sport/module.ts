@@ -735,9 +735,8 @@ export interface RuleKeyFact {
   readonly whenAbsent?: number;
   /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
    *  super over, chess tie-break games, carrom's tie board). The knockout preselection reads it through
-   *  `deciderKeysFor` (spec §4.2, X-SR-6); the "no decider" notice that will read it the same way
-   *  (`deciders-off-notice.tsx`) is owed by W2c Task 17 and does not exist yet. Stage keys, except football ET, a
-   *  bounded match key.
+   *  `deciderKeysFor` (spec §4.2, X-SR-6); the "no decider" notice reads it the same way
+   *  (`components/v2/stage-rules/deciders-off-notice.tsx`, Task 17). Stage keys, except football ET, a bounded match key.
    *  A decider need not be a boolean or an `{enabled}` object: chess's is the ordered rung LIST `tiebreakRungs`
    *  (BG-KO-1, BG-KO-3), whose off state is the EMPTY list (a drawn game is held for the organiser), and a list that
    *  is merely absent is "every rung", not off. */
@@ -941,6 +940,21 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // of the resolved cfg (resolveFixtureCfg merges it by stage kind; the V347
   // freeze then carries it). `{}` is a legal declaration.
   bracketDeciders(cfg: Cfg): Partial<Cfg>;
+  /**
+   * W2c Task 17 (review M-3) — can a match played under `cfg` still finish LEVEL (a `draw` or a `tie`) once every decider
+   * the cfg switches on has run? `cfg` is the cfg a BRACKET stage plays: the stage's rules over its division, then
+   * `bracketDeciders`. When it can, the server holds the level result for the organiser to settle (ruling 79); when it
+   * cannot, the deciders always produce a winner. The stage editor's "a level match waits for you" notice and the public
+   * format line both read this one answer (`bracketMayEndLevel`), so neither keeps a table of which deciders settle:
+   * football's penalties do and its extra time does not; an ice hockey overtime does not (a scoreless one ends level),
+   * its shoot-out does; a chess rung list does unless it is empty; cricket's super over does only while a tied one is
+   * played again; carrom's extra board does.
+   *
+   * Declared by exactly the sports that declare a `decider: true` key (a sport with none has nothing to say, and
+   * absent means "no claim"). The fold, not this function, is the authority: `can-end-level.test.ts` plays seeded
+   * streams under each setup and fails the day the two disagree.
+   */
+  canEndLevel?(cfg: Cfg): boolean;
   /**
    * W2c (spec §4.2) — the rules a NEW stage of this kind should start with, layered after the variant preset and before
    * the stage's stored rules (the knockout preselection: football ET 2×15 + penalties, …). Stage creation (W2c Task 12)

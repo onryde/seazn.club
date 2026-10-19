@@ -2825,6 +2825,9 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
 
   // W2a: none (football's deciders stay organiser-configured until W2c, spec §5.2)
   bracketDeciders: () => ({}),
+  // M-3: the penalty shoot-out is sudden death (`shootoutDecision` plays on until one side leads), so it always produces a
+  // winner; extra time does not - a level score after it is a draw, held for the organiser.
+  canEndLevel: (cfg) => cfg.shootout !== true,
 
   // W2c X-SR-6, FB-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: extra time 2×15, penalties and 5
   // kicks each (3 in the youth formats), every one the organiser's to switch off; a table stage starts with none. Stage

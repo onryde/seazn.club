@@ -1129,6 +1129,8 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     cfg.abandonPolicy === "share"
       ? { tieBoard: "extra" as const, abandonPolicy: "replay" as const }
       : { tieBoard: "extra" as const },
+  // M-3: the sudden-death extra board always produces a winner; only the 'draw' house rule closes a tied game level.
+  canEndLevel: (cfg) => cfg.tieBoard === "draw",
 
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.
   declaredPointsSets(cfg) {

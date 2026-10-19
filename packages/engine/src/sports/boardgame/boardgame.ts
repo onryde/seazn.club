@@ -1086,6 +1086,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
 
   // BG-KO-1
   bracketDeciders: () => ({ tiebreak: true }),
+  // M-3 (BG-KO-1, BG-KO-3): a drawn game goes to its tie-break when the stage plays one and lists at least one rung
+  // (`decideResult`), and every tie-break event names a winner. Anything else - no tie-break, or an empty rung list -
+  // leaves the draw standing, held for the organiser (ruling 79).
+  canEndLevel: (cfg) => !(cfg.tiebreak === true && effectiveRungs(cfg).length > 0),
   // C12: lots is the organiser's settle (ruling 73) — settleApplies is true while
   // the tie-break is pending. A held double forfeit is phase "done": false (T15-R1).
   awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak",
