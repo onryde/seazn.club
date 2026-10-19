@@ -406,6 +406,32 @@ describe("OpenRoundControl - the check-in groups of an opened, staggered round (
     }
   });
 
+  // The named refusal of `timedBatches`: the producer never makes either state (one open row feeds every batch) but the type allows
+  // both, and a row with a hole in it is worse than no list. Each case is one broken batch among otherwise complete ones.
+  it("a batch with only one of its two times, or a round with only some groups timed, draws no list and keeps the 'open until' line", () => {
+    const full = batchesOf(3);
+    const cases: [string, OpenRoundBatch[]][] = [
+      ["a group with a start and no close", full.map((b, i) => (i === 1 ? { ...b, closesAt: null } : b))],
+      ["a group with a close and no start", full.map((b, i) => (i === 1 ? { ...b, opensAt: null } : b))],
+      ["the LAST group untimed, the others timed", full.map((b, i) => (i === 2 ? { ...b, opensAt: null, closesAt: null } : b))],
+      ["the FIRST group untimed, the others timed", full.map((b, i) => (i === 0 ? { ...b, opensAt: null, closesAt: null } : b))],
+    ];
+    let checked = 0;
+    for (const [name, batches] of cases) {
+      expect(batches.length, `${name}: premise - more than one group, so only the times can refuse it`).toBeGreaterThan(1);
+      const round = OPENED_ROUND(batches, { deadlineAt: full[2]!.closesAt });
+      expect(round.staggered && round.press !== "reopen", `${name}: premise - every other condition for drawing holds`).toBe(true);
+      const h = renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);
+      expect(rowsOf(h), name).toEqual([]);
+      expect(h, name).not.toContain('data-testid="open-round-batches"');
+      expect(h, `${name}: the one deadline is the truth`).toContain(esc(t("runsheet.round.openUntil", { time: fmtTime(TZ, round.deadlineAt!) })));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: cases checked").toBe(4);
+    // The pair: the same round with every time present DOES draw, so the refusal above is the times and nothing else.
+    expect(rowsOf(renderToStaticMarkup(<OpenRoundControl round={OPENED_ROUND(full)} tz={TZ} />))).toHaveLength(3);
+  });
+
   it("a re-invite press on a staggered round still lists every group (the card shows the groups; the confirm names the earliest deadline)", () => {
     const batches = batchesOf(3);
     const round = OPENED_ROUND(batches, { press: "reinvite", pairings: [P(1, { owedSeats: 1, invitedAt: OPENED })] });

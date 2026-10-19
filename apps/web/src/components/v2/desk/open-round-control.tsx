@@ -89,7 +89,12 @@ const boardLabel = (p: OpenRoundPairing, msg: Msg) => msg("arbiter.boardNo", { n
 /** The check-in groups to draw (spec §3.2.1, "What the organiser sees"): a round that staggers over more than one group,
  *  with the times to draw. A single group has one deadline and the "open until" line already says it; an unopened round
  *  has no times yet (`opensAt`/`closesAt` are null, and its span is in the confirmation); a 'reopen' press restamps the
- *  window, so the old times are not the truth. Null means nothing to draw, never an empty list. */
+ *  window, so the old times are not the truth. Null means nothing to draw, never an empty list.
+ *
+ *  A named refusal, not an assumption: `OpenRoundBatch` types each time `string | null` on its own, and the producer
+ *  (open-round-view.ts: one open row feeds every batch) never makes a batch with one time and not the other, or a round with
+ *  some batches timed and some not - but the type allows both, and a row with a hole in it is worse than no list, so either
+ *  draws nothing and the single "open until" line stays the truth. Both are reached by open-round-control.test.tsx. */
 function timedBatches(round: OpenRoundView): (OpenRoundBatch & { opensAt: string; closesAt: string })[] | null {
   if (round.press === "reopen" || !round.staggered || round.batches.length < 2) return null;
   const timed = round.batches.flatMap((b) => (b.opensAt !== null && b.closesAt !== null ? [{ ...b, opensAt: b.opensAt, closesAt: b.closesAt }] : []));
