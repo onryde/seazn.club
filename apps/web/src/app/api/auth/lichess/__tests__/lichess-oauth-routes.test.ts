@@ -492,6 +492,40 @@ describe("GET /api/auth/lichess/callback", () => {
     expect(loc.searchParams.get("lichess")).toBe("already_linked");
   });
 
+  // Owner requirement (match-room silent-link fix, 2026-10-19): the collision names NOBODY. The page the player lands on says
+  // "that Lichess account is already linked to another Seazn account" and what to do - it never shows the Lichess username
+  // or anything about the other account (name, email, id) - so the callback's landing carries the CODE alone. A param
+  // added to the redirect (the Lichess name, the other user's id) would be a way for the page to show it; this pins
+  // that there is none, against an account whose id, name and collision error are all recognisable.
+  it("already_linked lands with the code alone: next's own query plus lichess=, never the Lichess username or any id of the other account", async () => {
+    cookieJar.set(STATE_COOKIE, "st");
+    cookieJar.set(VERIFIER_COOKIE, "ver");
+    cookieJar.set(NEXT_COOKIE, "/shared/o/c/d/fixtures/f1/play?t=tok.en");
+    upsertLichessLink.mockRejectedValueOnce(
+      new HttpError(409, "That Lichess account is already linked to a different Seazn account (user u-other-9, mallory@other.example).", "LICHESS_ALREADY_LINKED"),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/api/token") && init.method === "POST") return Response.json({ access_token: "tok" });
+        if (url.endsWith("/api/account")) return Response.json({ id: "ada_plays", username: "Ada_Plays" });
+        if (url.endsWith("/api/token") && init.method === "DELETE") return new Response(null, { status: 204 });
+        return new Response(null, { status: 500 });
+      }),
+    );
+
+    const res = await CALLBACK(new Request("http://localhost/api/auth/lichess/callback?code=c&state=st"));
+
+    const raw = res.headers.get("location")!;
+    const loc = path(raw);
+    expect(loc.pathname).toBe("/shared/o/c/d/fixtures/f1/play");
+    expect([...loc.searchParams.keys()].sort(), "the personal link's own t= and the outcome, nothing else").toEqual(["lichess", "t"]);
+    expect(loc.searchParams.get("t")).toBe("tok.en");
+    expect(loc.searchParams.get("lichess")).toBe("already_linked");
+    expect(raw, "the Lichess username").not.toMatch(/ada_plays/i);
+    expect(raw, "the other account's id or email").not.toMatch(/u-other-9|mallory|other\.example/i);
+  });
+
   // T17B fix 2 (D6), measured on stg: a LICHESS_TOKEN_KEK that is not 64 hex made the seal throw a plain Error, which
   // the callback rethrew — the player saw a raw 500. The seal here is the REAL one (sealPlayerToken over the real
   // envelope), so the error is the one production throws, not one this test invented.

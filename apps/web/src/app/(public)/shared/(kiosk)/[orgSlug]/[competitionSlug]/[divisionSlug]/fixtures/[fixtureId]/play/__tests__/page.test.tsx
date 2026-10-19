@@ -8,6 +8,7 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { HttpError } from "@/lib/errors";
 import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
+import { LICHESS_FLASH_CODES } from "@/lib/lichess-link";
 
 const room = vi.hoisted(() => ({ readRoom: vi.fn(), roomGrantDowngraded: vi.fn() }));
 vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: room.readRoom, roomGrantDowngraded: room.roomGrantDowngraded }));
@@ -47,8 +48,9 @@ function walk(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
   walk((node.props as { children?: ReactNode }).children, out);
   return out;
 }
-async function render(t?: string | string[], params = PARAMS) {
-  const el = await MatchRoomPage({ params: Promise.resolve(params), searchParams: Promise.resolve(t === undefined ? {} : { t }) });
+async function render(t?: string | string[], params = PARAMS, lichess?: string | string[]) {
+  const searchParams = { ...(t === undefined ? {} : { t }), ...(lichess === undefined ? {} : { lichess }) };
+  const el = await MatchRoomPage({ params: Promise.resolve(params), searchParams: Promise.resolve(searchParams) });
   return walk(el);
 }
 const find = (els: ReactElement[], type: unknown) => els.find((e) => e.type === type);
@@ -92,6 +94,54 @@ describe("match-room page", () => {
       "f1",
     );
     expect(find(signedIn, RoomShell)!.props).toEqual(shell.props);
+  });
+
+  // Owner staging test 2026-10-19: the Lichess link's callback lands on `…/play?t=…&lichess=<code>` and the room never
+  // read the outcome. The page reads it the way /me and settings do - through the shared narrowing - and hands the shell
+  // the code; the personal link the shell re-links with (selfPath) never carries it.
+  it("?lichess=<code> is read through the shared narrowing and handed to the shell; selfPath stays the personal link alone", async () => {
+    room.readRoom.mockResolvedValue(SNAP);
+    let checked = 0;
+    for (const code of LICHESS_FLASH_CODES) {
+      const shell = find(await render("tok", PARAMS, code), RoomShell)!;
+      expect((shell.props as { lichessFlash?: unknown }).lichessFlash, code).toBe(code);
+      expect((shell.props as { selfPath: string }).selfPath, `${code}: no stale outcome in the re-link's way back`).toBe("/shared/org/comp/div/fixtures/f1/play?t=tok");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every code the flow reports").toBe(LICHESS_FLASH_CODES.length);
+  });
+
+  // Owner requirement (2026-10-19): the already_linked message shows neither the Lichess username nor anything of the other
+  // Seazn account. The page takes the CODE from the address and nothing else of the outcome: any other parameter a link
+  // might carry (a name, an email, an id) is not read, so it cannot reach the shell.
+  it("only the code reaches the shell: a username, email or id riding the address is not forwarded", async () => {
+    room.readRoom.mockResolvedValue(SNAP);
+    const el = await MatchRoomPage({
+      params: Promise.resolve(PARAMS),
+      searchParams: Promise.resolve({
+        t: "tok",
+        lichess: "already_linked",
+        username: "ada_plays",
+        lichess_username: "ada_plays",
+        email: "mallory@other.example",
+        other_account: "u-other-9",
+      } as never),
+    });
+    const shell = find(walk(el), RoomShell)!;
+    expect(Object.keys(shell.props as object).sort()).toEqual(["grantRefused", "initial", "lichessFlash", "selfPath", "token"]);
+    expect((shell.props as { lichessFlash: unknown }).lichessFlash).toBe("already_linked");
+    expect(JSON.stringify(shell.props)).not.toMatch(/ada_plays|mallory|u-other-9/i);
+  });
+
+  it("the empty case: no ?lichess=, a hand-typed one, or a repeated one is no outcome (the shell is handed none)", async () => {
+    room.readRoom.mockResolvedValue(SNAP);
+    let checked = 0;
+    for (const v of [undefined, "", "Linked", "already_linked ", "<script>", ["already_linked", "linked"]]) {
+      const shell = find(await render("tok", PARAMS, v), RoomShell)!;
+      expect((shell.props as { lichessFlash?: unknown }).lichessFlash ?? null, JSON.stringify(v)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(6);
   });
 
   it("no link: the session reads its own seat", async () => {
@@ -208,5 +258,43 @@ describe("match-room page", () => {
     room.readRoom.mockResolvedValue(SNAP);
     await render("tok");
     expect(nav.redirect, "the canonical path never redirects").toHaveBeenCalledTimes(1);
+  });
+
+  // PR #990 review, M4a: the Lichess callback lands on the path the link was STARTED from. If the competition was renamed
+  // in between, that path is stale and the page redirects to the canonical room - which used to drop `lichess=`, so the
+  // outcome (the owner's silent loop) vanished on exactly this path. It carries the code, after `t=`, the way the callback
+  // itself builds the landing (`lichessLanding`).
+  it("stale slugs keep ?lichess=<code> as well as ?t= - every code the flow reports, and only the code", async () => {
+    room.readRoom.mockResolvedValue({ ...SNAP, links: { fixture: "/shared/org/new-comp/div/fixtures/f1", standings: "/x" } });
+    let checked = 0;
+    for (const code of LICHESS_FLASH_CODES) {
+      await expect(render("tok", PARAMS, code), code).rejects.toThrow(`CALLED_REDIRECT:/shared/org/new-comp/div/fixtures/f1/play?t=tok&lichess=${code}`);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every code").toBe(LICHESS_FLASH_CODES.length);
+    // A token with characters that need encoding survives byte for byte next to it.
+    await expect(render("a b/c", PARAMS, "already_linked")).rejects.toThrow("CALLED_REDIRECT:/shared/org/new-comp/div/fixtures/f1/play?t=a%20b%2Fc&lichess=already_linked");
+  });
+
+  it("stale slugs: the empty cases - no outcome, a hand-typed one, a repeated one - redirect exactly as before; a session (no link) carries the outcome alone", async () => {
+    room.readRoom.mockResolvedValue({ ...SNAP, links: { fixture: "/shared/org/new-comp/div/fixtures/f1", standings: "/x" } });
+    let checked = 0;
+    for (const v of [undefined, "", "Linked", "<script>", ["already_linked", "linked"]]) {
+      await expect(render("tok", PARAMS, v), JSON.stringify(v)).rejects.toThrow(/^CALLED_REDIRECT:\/shared\/org\/new-comp\/div\/fixtures\/f1\/play\?t=tok$/);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    auth.getCurrentUser.mockResolvedValue({ id: "u1" });
+    await expect(render(undefined, PARAMS, "already_linked")).rejects.toThrow(/^CALLED_REDIRECT:\/shared\/org\/new-comp\/div\/fixtures\/f1\/play\?lichess=already_linked$/);
+    await expect(render(undefined, PARAMS)).rejects.toThrow(/^CALLED_REDIRECT:\/shared\/org\/new-comp\/div\/fixtures\/f1\/play$/);
+  });
+
+  it("stale slugs: nothing but the code is carried (a username, email or id riding the address is not forwarded)", async () => {
+    room.readRoom.mockResolvedValue({ ...SNAP, links: { fixture: "/shared/org/new-comp/div/fixtures/f1", standings: "/x" } });
+    const go = MatchRoomPage({
+      params: Promise.resolve(PARAMS),
+      searchParams: Promise.resolve({ t: "tok", lichess: "already_linked", username: "ada_plays", email: "mallory@other.example", other_account: "u-other-9" } as never),
+    });
+    await expect(go).rejects.toThrow(/^CALLED_REDIRECT:\/shared\/org\/new-comp\/div\/fixtures\/f1\/play\?t=tok&lichess=already_linked$/);
   });
 });

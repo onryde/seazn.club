@@ -6336,6 +6336,8 @@ export type DictionaryKey =
   | "settings.account.lichess.flash.oauth_state"
   | "settings.account.lichess.flash.token"
   | "settings.account.lichess.flash.unavailable"
+  | "settings.account.lichess.flashNext.already_linked"
+  | "settings.account.lichess.flashNext.already_linked_game"
   | "settings.account.lichess.link"
   | "settings.account.lichess.linkedAs"
   | "settings.account.lichess.notConfigured"

@@ -127,6 +127,36 @@ describe("RegisterLichessCard — the consent step's Lichess link (I5, canvas Re
     expect(render({ state: { ...UNLINKED, flash: "linked" } })).not.toContain('data-testid="register-lichess-flash"');
   });
 
+  // Owner staging test 2026-10-19 (the match room looped on this silently). The registration card was not silent - it
+  // said the sentence - but for already_linked a sentence is not enough: that Lichess account belongs to ANOTHER Seazn
+  // account, so retrying the link can never work. It says what to do, from the same component the room uses.
+  it("already_linked says the sentence AND the next step, in every locale, and the start is still offered (link a different account here)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const h = render({ state: { ...UNLINKED, flash: "already_linked" } }, locale);
+      expect(h, `${locale}: sentence`).toContain(esc(s(locale, "settings.account.lichess.flash.already_linked")));
+      expect(h, `${locale}: next step`).toContain(esc(s(locale, "settings.account.lichess.flashNext.already_linked")));
+      expect(h, `${locale}: the host's own test id`).toContain('data-testid="register-lichess-flash"');
+      expect(h, `${locale}: next step id`).toContain('data-testid="register-lichess-flash-next"');
+      expect(h, `${locale}: still starts a link`).toContain('data-testid="register-lichess-start"');
+      expect(h, `${locale}: alert`).toContain('role="alert"');
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The pair: every other failure keeps the sentence alone - no next step.
+    for (const code of ["oauth_state", "token", "account", "not_configured", "unavailable", "key_unavailable"] as const) {
+      const h = render({ state: { ...UNLINKED, flash: code } });
+      expect(h, code).toContain(esc(s("en", `settings.account.lichess.flash.${code}`)));
+      expect(h, `${code}: no next step`).not.toContain("register-lichess-flash-next");
+    }
+  });
+
+  it("an already-linked viewer sees the linked row and neither the flash nor the next step", () => {
+    const h = render({ state: { ...UNLINKED, linkedUsername: "ada_plays", flash: "already_linked" } });
+    expect(h).toContain('data-testid="register-lichess-linked"');
+    expect(h).not.toContain("register-lichess-flash");
+  });
+
   it("no Lichess client on this server: says so, and starts nothing", () => {
     const h = render({ state: { ...UNLINKED, configured: false } });
     expect(h).toContain(esc(s("en", "settings.account.lichess.notConfigured")));

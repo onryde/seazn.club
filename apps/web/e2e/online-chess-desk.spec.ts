@@ -1290,6 +1290,21 @@ test.describe("online chess — registration (I5)", () => {
     }
     expect(await noSidewaysScroll(a)).toBe(3);
     await shoot(a, "register-lichess-unlinked");
+
+    // PR #990 review, M4c: the card says a REFUSED link with the same notice the match room uses (components/lichess-flash-notice.tsx).
+    // The callback lands back here with ?lichess=<code>; the draft and the step live in this tab's sessionStorage, so the stepper is
+    // where they left it. At 320, 768 and 1280: nothing sideways.
+    await a.goto(`${reg.registerPath}?lichess=already_linked`);
+    await expect(a.getByTestId("reg-consent-grant"), "the step restored: CONSENT").toBeVisible({ timeout: 30_000 });
+    const refused = card.getByTestId("register-lichess-flash");
+    await expect(refused).toBeVisible();
+    await expect(refused).toHaveAttribute("data-code", "already_linked");
+    await expect(refused).toHaveAttribute("role", "alert");
+    await expect(refused.getByTestId("register-lichess-flash-text")).toHaveText(uiEn["settings.account.lichess.flash.already_linked"]!);
+    await expect(refused.getByTestId("register-lichess-flash-next")).toHaveText(uiEn["settings.account.lichess.flashNext.already_linked"]!);
+    await expect(card.getByTestId("register-lichess-linked")).toHaveCount(0);
+    expect(await noSidewaysScroll(a)).toBe(3);
+    await shoot(a, "register-lichess-flash");
     await anon.close();
 
     // A signed-in player with a link, as the callback leaves them: back on the register page with ?lichess=linked.
