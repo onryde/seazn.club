@@ -68,6 +68,10 @@ name: E2E
 # was the floor at 994s on run 36337877584 — and was split three ways. See
 # e2e-parallel's own comment for the measurements and the trade.
 #
+# 2026-10-19: `parallel 2/3` then hit the 20-minute `timeout-minutes` below and
+# was cancelled with no test failing. The cure was moving three files into the
+# heavy leg, not a fourth rest leg or a longer timeout; see the same comment.
+#
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
 # is no live database or server to share across jobs (see ci.yml's
@@ -209,10 +213,66 @@ jobs:
     # already predicted to sit under it. A fourth buys no wall clock and pays
     # setup again. Revisit when a rest leg is once more the slowest in a run.
     #
-    # ALSO EXPIRED, NOT FIXED HERE: the heavy leg was carved out to BALANCE
-    # against the rest legs. It now runs 84-117s against rest steps of
-    # 374-774s, the shortest leg in the workflow rather than a balancing one.
-    # Re-deriving PARALLEL_HEAVY is its own change, not part of this one.
+    # THAT TRIGGER FIRED 2026-10-19: a rest leg — 2/3 — became the slowest leg
+    # of every run and then hit `timeout-minutes: 20` above, CANCELLED with no
+    # test failing. Measured (job start -> end / Playwright step):
+    #
+    #   run 39300823701 (push, main)  1/3 537s / 384s   2/3 1062s / 936s
+    #                                 3/3 784s / 618s   heavy 227s / 84s
+    #   run 39312115708 (push, main)  2/3 cancelled at 1207s; its summary line,
+    #                                 288 passed, printed 5s before the cap
+    #   run 39310280257 (PR dispatch) 2/3 cancelled at 20 min, 0 failures
+    #
+    # Same test COUNT in every shard (288), 2.5x the cost in one: Playwright
+    # shards by count, and the files that grew sit side by side in the
+    # alphabet, so they all land in 2/3. 2/3's job time on main pushes:
+    # 290-490s to 10-12 (bar two red runs), 500-580s to 10-18 (run
+    # 39153666111: step 6.5 min), then 881s on 10-19 07:45 when #948 merged
+    # match-room.spec.ts (53 tests) and online-chess-desk.spec.ts (12), 1017s
+    # with overlay-compositor.spec.ts, 1062-1207s as match-room and
+    # overlay-gallery kept growing. Where run 39300823701's 2/3 spent its test
+    # starts (each test is charged the gap to the next start; attributed
+    # seconds, 776s in all):
+    #
+    #   match-room             243s  31%  53 tests
+    #   overlay-compositor     131s  17%  10
+    #   overlay-gallery        108s  14%   7
+    #   online-chess-desk       45s   6%  12
+    #   player-stats-stale-version  ONE test, 5.1 min by Playwright's own
+    #                          "Slow test file" line (it waits out the card
+    #                          page's ISR `revalidate`). It started 10.5 min
+    #                          into the step; the other worker ran out of
+    #                          tests 2.5 min before it finished, so the shard's
+    #                          last 2.5 min was one worker alone. In run
+    #                          39153666111 it WAS the shard: 6.5 min of step
+    #                          around a 5.1 min test.
+    #
+    # THE CHANGE: match-room, online-chess-desk and overlay-gallery join
+    # PARALLEL_HEAVY (playwright.config.ts). The heavy leg had 84s of work
+    # against rest steps of 336-1050s, the shortest leg in the workflow rather
+    # than a balancing one; it has ~500s of room. Four legs before and after:
+    # no runner-minutes added, and no fourth rest leg — plain 4/4 count
+    # shards (no carve-out) replay at 692s for the slowest, against 599s for
+    # this. The split was chosen by replaying every candidate over per-test
+    # costs recovered from the line reporter's start timestamps (runs
+    # 39300823701 and 39312115708) through a two-worker first-free scheduler
+    # over `playwright test --list`'s order; that replay put the OLD split at
+    # 350 / 983 / 573s against 384 / 936 / 618s and 336 / 1050 / 534s measured.
+    # Predicted step now: heavy 509s, rest 321 / 598 / 528s — slowest leg
+    # ~12 min start to end, ~8 under the cap. Two files that cost as much are
+    # left in "rest" on purpose; playwright.config.ts says why.
+    #
+    # `timeout-minutes: 20` STAYS. It is a cost guard against a hung job, and
+    # the data does not show a shard that cannot be brought under ~15 min.
+    # Raising it would have hidden this: 2/3 had been 14.7-20+ min on every
+    # main push since 07:45 that morning before one lost to it.
+    #
+    # NEXT LEG TO WATCH, outside this split: walkthrough 1/3 ran 1000-1147s
+    # on main pushes of 10-19 (19.1 min on run 39288837798) and 3/3 850-1083s,
+    # under the same cap. On run 39300823701 the test starts of 1/3 were
+    # capture-phone 260s, capture-panel-pr2 110s, event-pass 86s; of 3/3,
+    # stream-relay 411s. That is the leg that will be cancelled next, and it is
+    # the walkthrough shard cut, not PARALLEL_HEAVY, that would need to move.
     strategy:
       fail-fast: false # one leg's failure must not hide another's
       matrix:

@@ -78,6 +78,33 @@ const SERIAL_SPECS =
 // leg (84-117s) no longer balances against it. e2e.yml's e2e-parallel comment
 // carries the measurements.
 //
+// Revisited 2026-10-19, after `parallel 2/3` ran into e2e.yml's 20-minute
+// `timeout-minutes` and was cancelled with nothing failing (main push run
+// 39312115708, PR dispatch 39310280257). The three "rest" shards hold EQUAL
+// test counts and had drifted to unequal cost — 371 / 776 / 608s of test
+// starts on run 39300823701 — because the files that grew sit side by side in
+// the alphabet and so all land in 2/3: match-room (53 tests, 243s of that
+// shard's wall clock), overlay-compositor, overlay-gallery, online-chess-desk,
+// and player-stats-stale-version, ONE test of 5.1 min that waits out an ISR
+// window and cannot be divided. Count sharding cannot see any of that, which
+// is what the heavy leg is for. match-room, online-chess-desk and
+// overlay-gallery are carved out HERE, so PARALLEL_HEAVY holds six files now
+// (the "three files" above is the original derivation; the heavy leg had 84s
+// of work and ~500s of room), and two files that cost as much are NOT:
+//   * overlay-compositor — overlay-compositor-e2e-wiring.test.ts pins it in
+//     "rest". Moving it too predicts a 644s heavy leg against 509s without it.
+//   * player-stats-stale-version — its one test would START after the three
+//     newcomers (the alphabet puts it just before scorepad-v3-cricket) and be
+//     the leg's tail: predicted 756s. In "rest" it is the same tail, but there
+//     it overlaps a shard's worth of other work.
+// The choice replays each candidate split over per-test costs recovered from
+// the line reporter's START timestamps on runs 39300823701 / 39312115708 (gap
+// to the next start, times the workers busy; a two-worker first-free scheduler
+// over the order `playwright test --list` prints). That replay put the OLD
+// split at 350 / 983 / 573s against 384 / 936 / 618s and 336 / 1050 / 534s
+// measured. This one is predicted at 509s here and 320 / 599 / 529s on the
+// three "rest" shards.
+//
 // "rest" is a CATCH-ALL by construction: it ignores PARALLEL_HEAVY and nothing
 // else. A new spec file therefore joins the sharded remainder automatically.
 // Only a file NAMED here can leave it — which is the whole reason this is a
@@ -86,7 +113,7 @@ const SERIAL_SPECS =
 // it. apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts pins that property,
 // and proves every file named here is real — a typo would otherwise give the
 // heavy leg fewer tests than it thinks and go green while they run nowhere.
-const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3)\.spec\.ts/;
+const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3|match-room|online-chess-desk|overlay-gallery)\.spec\.ts/;
 const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 
 // --- the walkthrough leg ---------------------------------------------------
