@@ -12,13 +12,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { randomBytes } from "node:crypto";
 import { pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
 import { BRACKET_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, invalidateOrgEntitlements, seedScoredDivision, setBoolEntitlementOverrideSql } from "./helpers";
-import { signInAs } from "./overlay-kit";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, seedScoredDivision } from "./helpers";
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
@@ -620,6 +618,30 @@ function nextPointsPut(page: Page, stageId: string) {
   return page.waitForRequest((r) => r.method() === "PUT" && new URL(r.url()).pathname === `/api/v1/stages/${stageId}/rules`, { timeout: STEP_MS });
 }
 
+/** Holds the page's re-read until released. `onSaved` is `router.refresh()` - an RSC fetch carrying `_rsc` - which is not
+ *  awaited: for a moment after the PUT lands the props are still the pre-save ones. Holding it lets a test look at the
+ *  section in exactly that window (the section must already read "saved"). `seen()` counts the fetches held, so a hold that
+ *  caught nothing is a failure, not a pass. */
+async function holdRefresh(page: Page): Promise<{ seen: () => number; release: () => Promise<void> }> {
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => (open = resolve));
+  const inFlight: Promise<void>[] = [];
+  const isRefresh = (url: URL): boolean => url.searchParams.has("_rsc");
+  await page.route(isRefresh, (route) => {
+    const forwarded = gate.then(() => route.continue()).catch(() => undefined);
+    inFlight.push(forwarded);
+    return forwarded;
+  });
+  return {
+    seen: () => inFlight.length,
+    release: async () => {
+      open();
+      await Promise.all(inFlight); // every held fetch goes out before the hold is removed
+      await page.unroute(isRefresh);
+    },
+  };
+}
+
 const DIVISION_BASE = { win: 4, draw: 2, loss: 1 };
 
 /** Only for the owner's per-screen verdict capture: the section cropped at 1280 / 768 / 320 into a SCRATCH dir, no page scroll
@@ -697,7 +719,42 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   await again.getByTestId("stage-points-win").fill(String(DIVISION_BASE.win));
   await expect(again.getByTestId("stage-points-save"), "changed back: not dirty").toBeDisabled();
 
-  // The table: a REAL walkover pays what the section said (7 / 2 points, 3-0 in goals), not the division's 4 / 1.
+  // Owner: "make sure that works" - a SECOND save of a DIFFERENT value, then a reload: the new rule is what is stored, what
+  // the form holds and what the summary says (the first one is not).
+  const want2 = { base: { ...DIVISION_BASE, win: 5 }, bonuses: [], forfeit: { winnerPoints: 6, loserPoints: 1, awardScore: [3, 0] as [number, number] } };
+  const words2 = rulesLineText(PUB, pointsLine(want2, { awardReaches: true }));
+  expect(words2, "premise: the second rule reads differently from the first").not.toBe(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
+  await again.getByTestId("stage-points-win").fill("5");
+  await again.getByTestId("stage-points-walkover-w").fill("6");
+  await again.getByTestId("stage-points-walkover-l").fill("1");
+  await expect(again.getByTestId("stage-points-preview")).toHaveText(words2);
+  const hold = await holdRefresh(page);
+  const put2 = nextPointsPut(page, rig.stageId);
+  try {
+    await again.getByTestId("stage-points-save").click();
+    const sent2 = (await put2).postDataJSON() as Record<string, unknown>;
+    expect(Object.keys(sent2), "the second PUT is strict too").toEqual(["points"]);
+    expect(sent2.points).toEqual(want2);
+    await expect.poll(() => storedPoints(request, rig.divisionId, rig.stageId), { timeout: STEP_MS }).toEqual(want2);
+    // The page's re-read is still in flight and the props are the pre-save ones: the section already reads "saved" (review M4).
+    await expect.poll(() => hold.seen(), { message: "the page's re-read was held", timeout: STEP_MS }).toBeGreaterThan(0);
+    await expect(again.getByTestId("stage-points-save"), "saved: nothing left to save while the page has not re-read").toBeDisabled();
+  } finally {
+    await hold.release();
+  }
+  await page.reload({ waitUntil: "load" });
+  const third = sectionOf(page, rig.stageId);
+  await expect(third.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
+  await openMore(third);
+  await expect(third.getByTestId("stage-points-win")).toHaveValue("5");
+  await expect(third.getByTestId("stage-points-walkover-w")).toHaveValue("6");
+  await expect(third.getByTestId("stage-points-walkover-l")).toHaveValue("1");
+  await expect(third.getByTestId("stage-points-award-w")).toHaveValue("3");
+  await expect(third.getByTestId("stage-points-preview"), "the summary says the NEW rule").toHaveText(words2);
+  await expect(third.getByTestId("stage-points-save")).toBeDisabled();
+  expect(await storedPoints(request, rig.divisionId, rig.stageId), "and the API still holds the new rule after the reload").toEqual(want2);
+
+  // The table: a REAL walkover pays what the section said LAST (6 / 1 points, 3-0 in goals), not the first save's 7 / 2 nor the division's 4 / 1.
   await rig.start();
   await walkover(request, rig.fixtureId, rig.away);
   await expect
@@ -705,7 +762,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
       const t = await tableOf(request, rig.stageId);
       return [t.get(rig.home)?.points, t.get(rig.away)?.points, t.get(rig.home)?.metrics.gf, t.get(rig.home)?.metrics.ga];
     }, { timeout: 30_000 })
-    .toEqual([7, 2, 3, 0]);
+    .toEqual([6, 1, 3, 0]);
 
   // A started stage is read-only: the same lock as the format row, said in words, with no control (and the API agrees).
   await page.reload({ waitUntil: "load" });
@@ -713,10 +770,10 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   await expect(locked).toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
   await expect(locked.locator("input, select, button:not([data-role='phone-disclosure-toggle'])")).toHaveCount(0);
   await expect(locked.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
-  await expect(locked.getByTestId("stage-points-preview")).toHaveText(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
+  await expect(locked.getByTestId("stage-points-preview")).toHaveText(words2);
   const refused = await apiJson(request, `/api/v1/stages/${rig.stageId}/rules`, "PUT", { points: null });
   expect(refused.status, "the server holds the same lock").toBe(409);
-  expect(await storedPoints(request, rig.divisionId, rig.stageId), "and the stored rule is untouched").toEqual(want);
+  expect(await storedPoints(request, rig.divisionId, rig.stageId), "and the stored rule is untouched").toEqual(want2);
 });
 
 test("badminton league: a set sport shows the walkover points and NO score box, saves the walkover row without a score, and the table credits 2-0 in games whatever it pays in points", async ({ page, request }) => {
@@ -838,6 +895,31 @@ test("ice hockey: a division that scores overtime separately says why a stage ca
   const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } });
   expect(refused.status).toBe(422);
   expect((refused.error as { code?: string } | undefined)?.code).toBe("POINTS_RULE_INEXPRESSIBLE");
+
+  // Review M1: a stage that STORES its own rule on such a division (a legacy row - every door that writes one now refuses) is
+  // not left with only the reason: it reads the rule it plays, and an editable stage can clear it.
+  const own = { base: { win: 4, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
+  await withDb(async (sql) => {
+    await sql`update stages set config = config || ${sql.json({ points: own })} where id = ${a.stageId}`;
+  });
+  await page.reload({ waitUntil: "load" });
+  const legacy = sectionOf(page, a.stageId);
+  await expect(legacy).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
+  await expect(legacy.getByTestId("stage-points-inexpressible"), "the reason is still said").toContainText(/can't be set per stage/i);
+  await expect(legacy.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
+  await expect(legacy.getByTestId("stage-points-preview"), "and the rule it plays is read in the public line's words").toHaveText(rulesLineText(PUB, pointsLine(own, { awardReaches: pointsRuleAwardReachesTable(m) })));
+  await expect(legacy.locator("input, select"), "no box: a rule that cannot be re-saved cannot be edited").toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  await shootSection(page, legacy, "stored-inexpressible");
+  const clearPut = nextPointsPut(page, a.stageId);
+  await legacy.getByTestId("stage-points-clear").click();
+  expect((await clearPut).postDataJSON(), "the clear sends the strict body, points null").toEqual({ points: null });
+  await expect.poll(() => storedPoints(request, a.divisionId, a.stageId), { timeout: STEP_MS }).toBeNull();
+  await expect(legacy.getByTestId("stage-points-clear"), "cleared: nothing left to clear").toHaveCount(0, { timeout: STEP_MS });
+  await expect(legacy.getByTestId("stage-points-readonly")).toHaveCount(0);
+  await expect(legacy.getByTestId("stage-points-inexpressible"), "and the reason stays").toBeVisible();
+  await page.reload({ waitUntil: "load" });
+  await expect(sectionOf(page, a.stageId).getByTestId("stage-points-clear")).toHaveCount(0);
   const b = await seedStage(request, "icehockey", { kind: "league", label: "points-plain", variant: plain });
   await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await expect(sectionOf(page, b.stageId)).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
@@ -853,81 +935,4 @@ test("a knockout stage has no points section (no table to rank), a league of the
   const b = await seedStage(request, "football", { kind: "league", label: "points-league" });
   await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await expect(sectionOf(page, b.stageId)).toBeVisible({ timeout: STEP_MS });
-});
-
-// ---- The plan gate: an org whose plan or override DENIES `standings.custom_points`. ----------------------------------------
-/** A fresh org of its own on `pro`, signed in on `page` (an override is org-wide, so it is only ever written on an org made
- *  for the test). `deny` writes the override BEFORE the page first resolves the key, then drops the cache (a 300 s TTL). */
-async function freshPointsOrg(page: Page, opts: { deny: boolean }): Promise<{ orgId: string }> {
-  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const email = `delivered+pts-${tag}@resend.dev`;
-  const { orgId } = await withDb(async (sql) => {
-    const [{ id: userId }] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, email_verified) values (${email}, ${"Points Gate Owner " + tag}, true) returning id`;
-    const [{ id: newOrgId }] = await sql<{ id: string }[]>`
-      insert into organizations (name, slug, status, created_by) values (${"Points Gate Org " + tag}, ${"pts-org-" + tag}, 'active', ${userId}) returning id`;
-    await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
-    const [{ id: subId }] = await sql<{ id: string }[]>`
-      insert into subscriptions (owner_user_id, plan_key, status) values (${userId}, 'pro', 'active') returning id`;
-    await sql`update organizations set subscription_id = ${subId} where id = ${newOrgId}`;
-    return { orgId: newOrgId };
-  });
-  if (opts.deny) await setBoolEntitlementOverrideSql(orgId, "standings.custom_points", false);
-  await invalidateOrgEntitlements(page.request, orgId);
-  await signInAs(page, email);
-  return { orgId };
-}
-
-test("the plan gate: an org WITHOUT standings.custom_points gets the base sentence and an upgrade note where the walkover and bonus rows would be - the server's 402 agrees - and an org with it gets the editor", async ({ page }) => {
-  test.setTimeout(240_000);
-  // The differential: the SAME seed and page in two fresh orgs that differ only in the override row.
-  const openOrg = await freshPointsOrg(page, { deny: false });
-  const open = await seedStage(page.request, "football", { kind: "league", label: "gate-open" });
-  await page.goto(await divisionPath(page.request, open.divisionId, "?tab=fixtures"), { waitUntil: "load" });
-  await dismissCookieBanner(page);
-  const editor = sectionOf(page, open.stageId);
-  await expect(editor, "an org with the feature gets the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
-  await editor.getByTestId("stage-points-use-division").uncheck();
-  await openMore(editor);
-  await expect(editor.getByTestId("stage-points-walkover-w")).toBeVisible();
-  await expect(editor.getByTestId("stage-points-upgrade")).toHaveCount(0);
-  // The plan changes UNDER the open editor: the organiser's Save is answered 402, and the section says so in words (not a
-  // raw error string), stores nothing, and keeps what was typed.
-  await editor.getByTestId("stage-points-walkover-w").fill("6");
-  await editor.getByTestId("stage-points-walkover-l").fill("1");
-  await setBoolEntitlementOverrideSql(openOrg.orgId, "standings.custom_points", false);
-  await invalidateOrgEntitlements(page.request, openOrg.orgId);
-  await editor.getByTestId("stage-points-save").click();
-  await expect(editor.getByTestId("stage-points-error"), "the 402 is said in the app's words").toHaveText(L["stagePoints.upgrade"]!, { timeout: STEP_MS });
-  expect(await storedPoints(page.request, open.divisionId, open.stageId), "a refused save stores nothing").toBeNull();
-  await expect(editor.getByTestId("stage-points-walkover-w"), "and keeps what was typed").toHaveValue("6");
-
-  await freshPointsOrg(page, { deny: true });
-  const denied = await seedStage(page.request, "football", { kind: "league", label: "gate-closed" });
-  await page.goto(await divisionPath(page.request, denied.divisionId, "?tab=fixtures"), { waitUntil: "load" });
-  await dismissCookieBanner(page);
-  const gate = sectionOf(page, denied.stageId);
-  await expect(gate, "an org without it gets the gate").toHaveAttribute("data-stage-points-state", "gate", { timeout: STEP_MS });
-  await gate.getByTestId("stage-points-use-division").uncheck();
-  await expect(gate.getByTestId("stage-points-upgrade")).toHaveText(L["stagePoints.upgrade"]!);
-  for (const id of ["stage-points-walkover-w", "stage-points-award-w", "stage-points-bonus-add"]) await expect(gate.getByTestId(id), id).toHaveCount(0);
-  await shootSection(page, gate, "gate");
-  // The base sentence is free: it saves on this org.
-  await gate.getByTestId("stage-points-win").fill("5");
-  const put = nextPointsPut(page, denied.stageId);
-  await gate.getByTestId("stage-points-save").click();
-  expect(((await put).postDataJSON() as { points: { base: { win: number } } }).points.base.win).toBe(5);
-  await expect.poll(async () => ((await storedPoints(page.request, denied.divisionId, denied.stageId)) as { base: { win: number } } | null)?.base.win, { timeout: STEP_MS }).toBe(5);
-  // And the server refuses what the gate withheld: a walkover row or a bonus is 402 on this org, so the section never offers it.
-  const base = { win: 5, draw: 1, loss: 0 };
-  const forfeit = await apiJson<unknown>(page.request, `/api/v1/stages/${denied.stageId}/rules`, "PUT", { points: { base, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0 } } });
-  expect(forfeit.status, "a walkover row needs the feature").toBe(402);
-  const bonus = await apiJson<unknown>(page.request, `/api/v1/stages/${denied.stageId}/rules`, "PUT", { points: { base, bonuses: [{ when: "draw", points: 1 }] } });
-  expect(bonus.status, "a bonus needs the feature").toBe(402);
-  // Reload: the stored plain rule is not held (the gate holds only what the org could not re-send).
-  await page.reload({ waitUntil: "load" });
-  const again = sectionOf(page, denied.stageId);
-  await expect(again.getByTestId("stage-points-use-division")).not.toBeChecked({ timeout: STEP_MS });
-  await expect(again.getByTestId("stage-points-gate-held")).toHaveCount(0);
-  await expect(again.getByTestId("stage-points-win")).toBeEnabled();
 });

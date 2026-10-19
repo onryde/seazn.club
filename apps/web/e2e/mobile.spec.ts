@@ -43,6 +43,7 @@ import {
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
+import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -5925,4 +5926,25 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   const cclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the refusal card is missing");
   expect(cclip.clipped, `nothing in the refusal card is clipped at ${projectWidth}`).toEqual([]);
   await expectNoHorizontalScroll(page);
+
+  // --- review M1: the same division, but a stage that still STORES its own rule (a legacy row): the reason, the rule it plays,
+  // and "Use the division's points" to clear it - the one control, on the 44px floor, nothing clipped, the same at 1280 --------
+  await withDb(async (sql) => {
+    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 4, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
+  });
+  await page.reload({ waitUntil: "load" });
+  const legacy = page.getByTestId(`stage-points-${ih.stageId}`);
+  await expect(legacy).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
+  await expect(legacy.getByTestId("stage-points-inexpressible")).toBeVisible();
+  await expect(legacy.getByTestId("stage-points-readonly")).toBeVisible();
+  await expect(legacy.getByTestId("stage-points-preview")).toBeVisible();
+  await assertTapFloor(legacy.getByTestId("stage-points-clear"), "Use the division's points (a stored rule on a splitting division)");
+  const lclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the stored-rule card is missing");
+  expect(lclip.clipped, `nothing in the stored-rule card is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const legacyHere = await visibleControls(legacy);
+  expect(legacyHere, "premise: the clear is the card's one control").toEqual(["stage-points-clear"]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(legacyHere, `the stored-rule card's visible control set at ${projectWidth} vs 1280`).toEqual(await visibleControls(legacy));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 });
