@@ -14,7 +14,7 @@ export default function PrivacyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Privacy Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 19 October 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 20 October 2026</p>
         <div className="prose prose-slate max-w-none space-y-6 text-sm text-slate-700">
 
           <section>
@@ -30,6 +30,7 @@ export default function PrivacyPage() {
               <li><strong>Tournament data:</strong> player names, results, standings, audit logs.</li>
               <li><strong>Billing data:</strong> subscription status, plan. Card details are held by Stripe and never stored on our servers.</li>
               <li><strong>Usage data:</strong> product analytics events (e.g. "first tournament created", page views) collected via PostHog, only with your consent. Withdraw anytime by clearing cookies or rejecting the cookie banner.</li>
+              <li><strong>Error reports:</strong> when something breaks on a page or on our servers, a report is sent to Sentry (Functional Software, Inc.), which processes it in its EU data region. It holds the error details and stack trace, page addresses with any secret link tokens removed, recent activity in the app leading up to the error (page changes, clicks, network requests and console messages), and your browser and device type. A report from your browser carries no name, email address or account; one from our servers may carry an internal user or organisation ID, never a name or email. We do not record your sessions.</li>
               <li><strong>Communication preferences:</strong> email suppression list (bounces / complaints).</li>
               <li><strong>Consent records:</strong> when you create an account or submit a competition registration we record the time and policy version of your acceptance, so we can demonstrate it later.</li>
             </ul>
@@ -39,7 +40,7 @@ export default function PrivacyPage() {
             <h2 className="mb-2 text-lg font-semibold text-slate-800">3. Legal basis (GDPR)</h2>
             <ul className="list-disc space-y-1 pl-5">
               <li><strong>Contract</strong> — processing necessary to provide the service you signed up for.</li>
-              <li><strong>Legitimate interests</strong> — security logging, fraud prevention.</li>
+              <li><strong>Legitimate interests</strong> — security logging, fraud prevention, and error monitoring (Sentry): keeping the service working by finding and fixing the errors you hit. Error reports are not part of the cookie banner choice.</li>
               <li><strong>Consent</strong> — product analytics (PostHog), set only after you accept the cookie banner and withdrawable at any time.</li>
               <li><strong>Legal obligation</strong> — tax records, dispute resolution.</li>
             </ul>
@@ -89,7 +90,7 @@ export default function PrivacyPage() {
 
           <section>
             <h2 className="mb-2 text-lg font-semibold text-slate-800">10. Cookies</h2>
-            <p>We use essential session cookies plus, with your consent, PostHog analytics cookies. No advertising cookies. See our <Link href="/legal/cookie-policy" className="text-purple-600 underline">Cookie Policy</Link>.</p>
+            <p>We use essential session cookies plus, with your consent, PostHog analytics cookies. No advertising cookies. Sentry error monitoring sets no cookies. See our <Link href="/legal/cookie-policy" className="text-purple-600 underline">Cookie Policy</Link>.</p>
           </section>
 
           <section>

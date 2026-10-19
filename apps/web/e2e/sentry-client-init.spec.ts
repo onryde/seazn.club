@@ -16,7 +16,9 @@
  *  - the environment is the deployment's: the deploy config whose origin this build baked in (NEXT_PUBLIC_BASE_URL, read from
  *    the same env the build was made with) names it; a build with no origin (CI) is a production build, so "production";
  *  - a client-side navigation (the match room's way back, a Next Link) runs through the init's `onRouterTransitionStart`
- *    with a live client and still leaves the console quiet.
+ *    with a live client and still leaves the console quiet;
+ *  - the privacy page and the sub-processors list name Sentry (what is sent, the EU data region, the legal basis) and carry
+ *    the LEGAL_VERSION date, at 320, 768 and 1280 without sideways scroll.
  *
  * This build has NEXT_PUBLIC_SENTRY_DSN blank (CI and the local recipe both), so the client is created but DISABLED: nothing
  * is sent anywhere, which the spec asserts rather than assumes. What the SDK does with an enabled client is
@@ -169,5 +171,50 @@ test("a public page, a public fixture page and the personal match room load on t
   expect(checked, "anti-vacuity: four probes ran").toBe(4);
   expect(visitorErrors, "the public pages' browser console stays quiet").toEqual([]);
   expect(playerErrors, "the match room's browser console stays quiet").toEqual([]);
+  await ctx.close();
+});
+
+// The privacy page and the sub-processors list name Sentry (owner ruling 2026-10-19: errors only, disclosed). The date each
+// page shows is LEGAL_VERSION, read from the source that stamps consents, so a bump that forgets the page is red here too.
+const LEGAL_VERSION = /LEGAL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/.exec(
+  readFileSync(fileURLToPath(new URL("../src/lib/legal.ts", import.meta.url)), "utf8"),
+)![1]!;
+const shownDate = (() => {
+  const [y, m, d] = LEGAL_VERSION.split("-").map(Number);
+  return new Date(Date.UTC(y!, m! - 1, d!)).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+})();
+
+test("the privacy page and the sub-processors list name Sentry, dated with LEGAL_VERSION, without sideways scroll at 320, 768 and 1280", async ({ browser }) => {
+  test.setTimeout(120_000);
+  const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] }, baseURL: test.info().project.use.baseURL });
+  const page = await ctx.newPage();
+  const errors = listen(page);
+  let checked = 0;
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+
+    const privacy = await page.goto("/legal/privacy");
+    expect(privacy?.status(), "the privacy page renders").toBe(200);
+    await expect(page.getByText(`Last updated: ${shownDate}`)).toBeVisible();
+    const report = page.locator("li", { hasText: "Error reports:" });
+    await expect(report).toHaveCount(1);
+    for (const phrase of ["Sentry (Functional Software, Inc.)", "EU data region", "stack trace", "We do not record your sessions"]) await expect(report).toContainText(phrase);
+    await expect(page.locator("li", { hasText: "Legitimate interests" })).toContainText("error monitoring");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth), `privacy at ${width}: no sideways scroll`).toBeLessThanOrEqual(width);
+    checked += 1;
+
+    const list = await page.goto("/legal/sub-processors");
+    expect(list?.status(), "the sub-processors list renders").toBe(200);
+    await expect(page.getByText(`Last updated: ${shownDate}`)).toBeVisible();
+    const row = page.locator("tr", { hasText: "Sentry (Functional Software, Inc.)" });
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText("Error monitoring");
+    await expect(row).toContainText("EU");
+    await expect(row.getByRole("link", { name: /Policy/ })).toHaveAttribute("href", "https://sentry.io/privacy/");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth), `sub-processors at ${width}: no sideways scroll`).toBeLessThanOrEqual(width);
+    checked += 1;
+  }
+  expect(checked, "anti-vacuity: both pages at three widths").toBe(6);
+  expect(errors, "the legal pages' console stays quiet").toEqual([]);
   await ctx.close();
 });

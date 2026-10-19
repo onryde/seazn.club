@@ -31,8 +31,8 @@ describe("sub-processors — Cloudflare carries the match-room camera video (I-4
     expect(row).toContain("https://www.cloudflare.com/privacypolicy/");
   });
 
-  it("is dated 14 October 2026", () => {
-    expect(subProcessors).toContain("Last updated: 14 October 2026");
+  it("is dated 20 October 2026: Sentry was added that day", () => {
+    expect(subProcessors).toContain("Last updated: 20 October 2026");
   });
 });
 
@@ -47,8 +47,8 @@ describe("privacy — the online-chess camera and the Lichess account link (I-4)
     expect(section).not.toBe("");
   });
 
-  it("is dated 19 October 2026: the sign-in wording changed that day (the camera sentence, D16, last changed 15 October)", () => {
-    expect(privacy).toContain("Last updated: 19 October 2026");
+  it("is dated 20 October 2026: the error-monitoring wording changed that day (the camera sentence, D16, last changed 15 October)", () => {
+    expect(privacy).toContain("Last updated: 20 October 2026");
   });
 
   it("says what is processed: camera video during a match, the Lichess username and the OAuth token", () => {
